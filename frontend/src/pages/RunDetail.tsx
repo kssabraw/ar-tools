@@ -206,9 +206,15 @@ function ModuleRow({
   costUsd?: number | null
   liveElapsedMs?: number
 }) {
-  const isRunning = runStatus === meta.runningStatus
   const isDone = moduleStatus === 'complete'
   const isFailed = moduleStatus === 'failed'
+  // Brief + SIE run in parallel, but the orchestrator only emits `brief_running`
+  // for that whole phase — `sie_running` is never actually set. Treat both as
+  // running while status is `brief_running` (until each module's own status
+  // flips to complete/failed).
+  const inParallelBriefSiePhase =
+    runStatus === 'brief_running' && (meta.key === 'brief' || meta.key === 'sie')
+  const isRunning = !isDone && !isFailed && (runStatus === meta.runningStatus || inParallelBriefSiePhase)
   const isPending = !isDone && !isFailed && !isRunning
 
   let statusIcon
