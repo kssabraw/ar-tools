@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""
-    pipeline_api_url: str = "http://pipeline.railway.internal:8080"
+    pipeline_api_url: str = "http://ar-tools.railway.internal:8080"
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
