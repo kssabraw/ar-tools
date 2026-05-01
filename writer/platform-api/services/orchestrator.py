@@ -51,6 +51,19 @@ MODULE_PATHS: dict[str, str] = {
     "sources_cited": "/sources-cited",
 }
 
+
+def _extract_schema_version(module: str, result: dict) -> str | None:
+    if module == "brief":
+        return (result.get("metadata") or {}).get("schema_version")
+    if module == "research":
+        return (result.get("citations_metadata") or {}).get("citations_schema_version")
+    if module == "writer":
+        return (result.get("metadata") or {}).get("schema_version")
+    if module == "sources_cited":
+        return (result.get("sources_cited_metadata") or {}).get("schema_version")
+    # SIE returns it at the top level
+    return result.get("schema_version")
+
 NON_TERMINAL_STATUSES = {
     "queued",
     "brief_running",
@@ -244,8 +257,13 @@ async def _call_module(
         await _fail_module_output(output_id, str(exc))
         raise StageError(module, exc) from exc
 
-    # Validate schema version
-    actual_version = result.get("schema_version")
+    # Validate schema version. Each module returns it in a different shape:
+    #   brief         -> metadata.schema_version
+    #   sie           -> schema_version (top level)
+    #   research      -> citations_metadata.citations_schema_version
+    #   writer        -> metadata.schema_version
+    #   sources_cited -> sources_cited_metadata.schema_version
+    actual_version = _extract_schema_version(module, result)
     if module == "writer":
         if actual_version not in WRITER_ACCEPTED_VERSIONS:
             err = SchemaVersionMismatch(module, EXPECTED_MODULE_VERSIONS[module], actual_version)
@@ -282,8 +300,7 @@ async def _call_module(
             raise StageError(module, err)
 
     cost = result.get("cost_usd") or result.get("metadata", {}).get("cost_usd")
-    module_version = actual_version or result.get("metadata", {}).get("schema_version")
-    await _save_module_output(output_id, result, duration_ms, cost, module_version)
+    await _save_module_output(output_id, result, duration_ms, cost, actual_version)
 
     logger.info(
         "stage_complete",
