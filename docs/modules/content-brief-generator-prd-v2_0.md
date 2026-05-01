@@ -1,6 +1,6 @@
 # PRD: Content Brief Generator Module
 
-**Version:** 2.0
+**Version:** 2.0.3
 **Status:** Ready for Engineering Spec
 **Last Updated:** May 1, 2026
 **Part of:** [Parent Content Creation Platform — TBD name]
@@ -211,11 +211,28 @@ The first four constraint-adherence metrics are mathematically guaranteed by the
 
 All sub-sources (2A PAA, 2B Reddit, 2C Autocomplete + Keyword Suggestions, 2D LLM Fan-Out across 4 LLMs) operate identically to v1.7. See v1.7 Section 5 for full specifications. Cross-LLM consensus tracking via `llm_fanout_consensus` (0–4) is preserved.
 
-### Step 3 — Intent Classification (Unchanged from v1.7)
+### Step 3 — Intent Classification (REVISED in v2.0.3 — adds keyword pattern pre-check)
 
-Rules-based classifier on SERP feature signals, with LLM check for borderline ecom/commercial cases. Intent types: `informational`, `listicle`, `how-to`, `comparison`, `ecom`, `local-seo`, `news`, `informational-commercial`. See v1.7 Section 5 Step 3 for full rule mapping.
+The classifier runs in two passes: a deterministic **keyword pattern pre-check** that fires before any SERP analysis, falling through to the v1.7 SERP-feature-signal logic only when the keyword does not match a known pattern. The pre-check exists because SERP-title-based classification fails when the top results don't literally start with the expected phrase (e.g., a "how to open X" query whose top SERP titles are mostly noun-phrase listicles).
 
-**Output:** `intent_type`, `intent_confidence`, `intent_review_required` (true if confidence < 0.75)
+**Step 3.1 — Keyword pattern pre-check (NEW in v2.0.3):**
+
+If the seed keyword (lowercased, leading/trailing whitespace stripped) matches one of the patterns below, classify with the listed intent + confidence and **skip Step 3.2 entirely**. First match wins; patterns are evaluated top-to-bottom:
+
+| Pattern (matched as a leading-prefix or substring) | Intent | Confidence |
+|---|---|---|
+| Starts with `how to`, `how do i`, `how can i`, `ways to`, `steps to`, `guide to` | `how-to` | 0.95 |
+| Starts with `what is`, `what are`, `what does`, `definition of` | `informational` | 0.90 |
+| Starts with `best`, `top`, or matches `^\d+\s+\w+s\b` (number + plural noun, e.g., "10 ways") | `listicle` | 0.90 |
+| Contains ` vs `, ` versus `, ` or `, `compared to` | `comparison` | 0.90 |
+
+When the pre-check matches, `intent_review_required` is set to `false` (the pattern is unambiguous enough not to warrant human review).
+
+**Step 3.2 — SERP-feature-signal classification (UNCHANGED from v1.7):**
+
+If the keyword pattern pre-check did NOT match, fall through to the existing rules-based classifier on SERP feature signals, with LLM check for borderline ecom/commercial cases. Intent types: `informational`, `listicle`, `how-to`, `comparison`, `ecom`, `local-seo`, `news`, `informational-commercial`. See v1.7 Section 5 Step 3 for the full rule mapping.
+
+**Output:** `intent_type`, `intent_confidence`, `intent_review_required` (true if confidence < 0.75 and Step 3.1 did not fire)
 
 ### Step 3.5 — Title + Scope Statement Generation (NEW)
 
@@ -531,6 +548,34 @@ After scope verification, if removals dropped the H2 count below target, the sel
 | LLM returns malformed JSON | One retry; on second failure, accept all H2s as `in_scope` and log warning. Do not abort the run — selection has already produced a valid outline by mathematical constraints. |
 | LLM classifies an H2 not in the input list | Discard the rogue classification; log warning |
 
+**Step 8.5b — Authority Gap H3 scope verification pass (NEW in v2.0.3):**
+
+Step 8.5 originally verified only Step 8's MMR-selected H2s, leaving Authority Gap H3s (Step 9) able to bypass scope discipline entirely. v2.0.3 closes that loop by running a **second scope-verification pass** over the H3s emitted by Step 9 — not over Step 8.6's H3s, which were already drawn from the in-band coverage-graph pool.
+
+The pass runs after Step 9 produces its 3–5 Authority Gap H3s. Inputs match Step 8.5 (title + scope_statement + the new H3 texts). The output schema mirrors Step 8.5's `verified_h2s` array with `verified_h3s`:
+
+```json
+{
+  "verified_h3s": [
+    {
+      "h3_text": "string",
+      "scope_classification": "in_scope" | "borderline" | "out_of_scope",
+      "reasoning": "string (≤200 chars)"
+    }
+  ]
+}
+```
+
+Routing:
+
+| Classification | Action |
+|---|---|
+| `in_scope` | Keep the H3 attached to its parent H2 |
+| `borderline` | Keep the H3, stamp `scope_classification: "borderline"` on the H3 entry, increment `metadata.scope_verification_borderline_count` |
+| `out_of_scope` | Remove from the H3 attachment list; route to `silo_candidates` with `routed_from: "scope_verification_h3"` |
+
+Failure handling matches Step 8.5: malformed JSON triggers one retry; on second failure, fall back to accept-all-as-`in_scope` and log. Authority gap H3s rejected at this pass do NOT reduce the per-H2 cap; the H2 simply ends up with one fewer H3, which is acceptable per Step 11 (H3s optional per H2). The Section 9 cost model adds ~$0.02 per brief for this extra LLM call.
+
 ### Step 8.6 — H3 Selection (NEW)
 
 **Purpose:** For each selected H2, choose 0–2 H3s from the candidate pool that elaborate the H2's scope without restating it. Authority Gap H3s (Step 9) are inserted afterward and may displace lower-priority H3s if the per-H2 cap is exceeded.
@@ -596,17 +641,34 @@ Each selected H2 carries an h3s array (possibly empty), and each H3 carries:
 
 This step adds no new LLM calls — it is pure embedding math and MMR over the same vectors produced in Step 5.
 
-### Step 9 — Authority Gap Analysis (Unchanged from v1.7)
+### Step 9 — Authority Gap Analysis (REVISED in v2.0.3 — adds scope-aware inputs)
 
-Universal Authority Agent with three pillars (Human/Behavioral, Risk/Regulatory, Long-Term Systems). Inputs: aggregated heading list from Step 4 plus Reddit thread summaries from Step 2 as context (not as headings). See v1.7 Section 5 Step 6 for full specification.
+Universal Authority Agent with three pillars (Human/Behavioral, Risk/Regulatory, Long-Term Systems). v2.0.3 extends the agent's input set so it cannot drift outside the article's committed scope.
 
-**Output rules unchanged:**
-- Exactly 3–5 new H3 subheadings
+**Inputs (v2.0.3):**
+- Aggregated heading list from Step 4 (unchanged)
+- Reddit thread summaries from Step 2 as context — not as headings (unchanged)
+- **Title from Step 3.5 (NEW)** — anchors the agent on the reader-facing commitment
+- **Scope statement from Step 3.5 (NEW)** — including the explicit `does not cover` clause
+- **`intent_type` from Step 3 (NEW)** — so the agent's pillars frame their content for the right reader mode (a "how-to" article wants action-oriented authority, not abstract risk analysis)
+
+**System prompt addendum (NEW in v2.0.3):**
+
+The agent's system prompt MUST include the scope_statement (with emphasis on the "does not cover" clause) and the following directive:
+
+> Authority gap content must respect the article's scope boundary. The three pillars (Human/Behavioral, Risk/Regulatory, Long-Term Systems) should explore expertise within the scope, not adjacent to it. If a pillar would naturally produce content outside the scope, prefer leaving that pillar empty over producing off-scope content. It is acceptable to return three H3s instead of five when staying in-scope requires it.
+
+**Output schema (REVISED in v2.0.3):**
+
+Each emitted H3 carries a new `scope_alignment_note` string (≤200 chars) where the agent explains how the H3 stays within the scope_statement. This note is separate from — and complementary to — the post-emission scope verification pass in Step 8.5b. It is surfaced in the final `heading_structure` for any heading with `source: "authority_gap_sme"`.
+
+**Output rules:**
+- Exactly 3–5 new H3 subheadings (still 3 lower bound; up to 5 upper bound)
 - Inserted immediately after the most relevant H2
 - Tagged `source: "authority_gap_sme"`
 - Authority gap H3s count toward the per-H2 limit of 2 H3s (with the cap-displacement rules specified in Step 8.6)
 - Score is computed but `exempt: true` flag set — bypasses 0.55 relevance threshold
-- Authority gap H3s are never discarded
+- Authority gap H3s are not discarded by Step 11's global cap; they MAY be removed by Step 8.5b (the new H3 scope-verification pass) when the pillar drift produces out-of-scope content.
 
 ### Step 10 — FAQ Generation (Mostly Unchanged from v1.7)
 
@@ -657,6 +719,28 @@ Universal structural constants, intent-aware H2/H3 caps, how-to sequential reord
 | FAQ H2 + FAQ H3s | Outside both caps |
 
 **Word budget:** Maximum 2,500 words across content sections; FAQ section excluded; enforcement is the Writer Module's responsibility.
+
+#### Step 11.x — Title Case Normalization (NEW in v2.0.3)
+
+After every prior heading-processing step has run (polish, authority gap injection, scope verification, H3 selection, structure assembly), apply **AP-style / Chicago Manual of Style title case** to every `text` field on every entry in `heading_structure` — H1, H2, H3, FAQ headers, FAQ questions — uniformly.
+
+Title case rules (AP/Chicago):
+- First and last words always capitalized
+- Principal words (nouns, verbs, adjectives, adverbs, pronouns, subordinating conjunctions) capitalized
+- Articles (`a`, `an`, `the`), coordinating conjunctions (`and`, `but`, `or`, `for`, `nor`, `so`, `yet`), and prepositions of ≤3 letters lowercase — except when first or last word
+- Hyphenated compounds: capitalize each significant element
+
+**Reference implementation:** the Python `titlecase` library (https://pypi.org/project/titlecase/) implements AP-style title case correctly out of the box; add it to `requirements.txt`. The normalization step is a single call per heading and adds <1ms total per brief.
+
+**Position in the pipeline:** title case normalization is the LAST heading-text mutation. It runs after Step 9's authority gap injection, after Step 8.5b's scope verification, after Step 8.6's H3 selection, after Step 11's structure assembly. No subsequent step modifies heading text.
+
+**Scope:** applies to `heading_structure[].text` only. It does NOT apply to:
+- `silo_candidates[].suggested_keyword` (content roadmap candidates may use the user's casing)
+- `silo_candidates[].source_headings[].text` (preserved from the original brief output for audit)
+- `discarded_headings[].text` (preserved verbatim for audit)
+- `faqs[].question` (FAQ questions are sentences ending with `?`, not headings — they keep sentence case)
+
+The brief's top-level `title` field (Step 3.5 output) is already produced in title case by the title generation prompt and does not require additional normalization, but is passed through `titlecase` for safety.
 
 ### Step 12 — Silo Cluster Identification (REWRITTEN — Now Reuses Step 5 Regions)
 
@@ -778,7 +862,7 @@ Each silo candidate carries:
 - `cluster_coherence_score`
 - `review_recommended`
 - `recommended_intent`
-- `routed_from`: `"non_selected_region"` (region didn't win H2 competition) or `"scope_verification"` (heading rejected by scope check)
+- `routed_from`: `"non_selected_region"` (region didn't win H2 competition), `"scope_verification"` (H2 rejected by Step 8.5 scope check), or `"scope_verification_h3"` (Authority Gap H3 rejected by Step 8.5b scope check — NEW in v2.0.3)
 - `source_headings[]` (member headings with text, source, title_relevance, heading_priority, discard_reason)
 - `discard_reason_breakdown`: object mapping `discard_reason` values to counts among member headings
 - `search_demand_score` (float, 0.0–1.0)
@@ -811,7 +895,7 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
   "heading_structure": [
     {
       "level": "H1 | H2 | H3",
-      "text": "string",
+      "text": "string (Title Case — AP/Chicago style; see Step 11.x)",
       "type": "content | faq-header | faq-question | conclusion",
       "source": "serp | paa | reddit | authority_gap_sme | synthesized | autocomplete | keyword_suggestion | llm_fanout_chatgpt | llm_fanout_claude | llm_fanout_gemini | llm_fanout_perplexity | llm_response_chatgpt | llm_response_claude | llm_response_gemini | llm_response_perplexity | persona_gap",
       "original_source": "string | null",
@@ -823,7 +907,8 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
       "information_gain_score": 0.0,
       "heading_priority": 0.0,
       "region_id": "string | null",
-      "scope_classification": "in_scope | borderline | null",
+      "scope_classification": "in_scope | borderline | null (populated for content H2s by Step 8.5; for content H3s with source='authority_gap_sme' by Step 8.5b — NEW in v2.0.3; null otherwise)",
+      "scope_alignment_note": "string | null (populated only for source='authority_gap_sme' entries by Step 9; ≤200 chars — NEW in v2.0.3)",
       "parent_h2_text": "string | null",
       "parent_relevance": 0.0,
       "order": 0
@@ -970,6 +1055,7 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
 | All headings rejected by relevance/restatement gates (no eligible candidates) | Lower relevance floor to 0.40, retry; if still <3 eligible, abort with `no_eligible_candidates` |
 | Selection algorithm produces fewer H2s than target | Accept shortfall; flag `h2_shortfall: true` with reason |
 | Scope verification LLM fails twice | Accept all selected H2s as `in_scope`; log warning |
+| Step 8.5b H3 scope verification LLM fails twice | Accept all Authority Gap H3s as `in_scope`; log warning. Do not abort; the parent brief is already valid. |
 | Authority Agent returns malformed JSON | Retry once with stricter prompt; on second failure, return brief without authority gap headings + flag |
 | OpenAI embeddings timeout | Retry 3x with exponential backoff; on final failure, abort |
 | Authority Agent returns wrong heading count | Truncate to 5 if >5; retry if <3; on retry failure, accept what was returned |
@@ -1019,17 +1105,19 @@ Silo viability checks (Step 12.4) add 5–10s when run in parallel (recommended)
 | OpenAI embeddings (text-embedding-3-large) | <$0.001 |
 | **Title + scope statement generation (NEW)** | $0.03–$0.05 |
 | **Persona generation (NEW)** | $0.02–$0.04 |
-| **Scope verification (NEW)** | $0.02–$0.04 |
+| **Scope verification — H2 pass (Step 8.5)** | $0.02–$0.04 |
+| **Scope verification — Authority Gap H3 pass (Step 8.5b, NEW in v2.0.3)** | ~$0.02 |
 | LLM calls (intent borderline, heading polish, authority agent, FAQ extraction, how-to reordering) | $0.10–$0.30 |
 | Coverage graph + Louvain clustering | $0.00 (CPU only, milliseconds) |
 | Silo cluster identification | $0.00 (reuses Step 5 regions) |
 | **Silo viability checks (Step 12.4, up to 10 candidates × $0.01–$0.02 each)** | $0.05–$0.20 |
-| **Estimated total per brief** | **$0.35–$0.89** |
+| Title case normalization (Step 11.x, NEW in v2.0.3) | $0.00 (CPU only via `titlecase` lib) |
+| **Estimated total per brief** | **$0.37–$0.91** |
 | **Budget ceiling** | **$1.00** |
 
-**Monthly operational cost at 10–20 briefs/day:** ~$105–$534/month
+**Monthly operational cost at 10–20 briefs/day:** ~$111–$546/month
 
-Cost increase from v1.7's $0.19–$0.53 range to v2.0's $0.35–$0.89 range reflects four new LLM call sites (title, persona, scope verification, silo viability checks). Silo viability checks scale linearly with eligible silo candidates (capped at 10) and parallelize cleanly. Still under the $1.00 ceiling.
+Cost increase from v1.7's $0.19–$0.53 range to v2.0.3's $0.37–$0.91 range reflects five new LLM call sites (title, persona, H2 scope verification, H3 scope verification added in v2.0.3, silo viability checks). The new H3 scope-verification pass adds a single ~$0.02 LLM call per brief; title case normalization is pure-CPU and free. Still under the $1.00 ceiling.
 
 ---
 
@@ -1054,6 +1142,12 @@ Cost increase from v1.7's $0.19–$0.53 range to v2.0's $0.35–$0.89 range refl
 | LLM fan-out providers | ChatGPT, Claude, Gemini, Perplexity |
 | Intent types | 8 (informational, listicle, how-to, comparison, ecom, local-seo, news, informational-commercial) |
 | Intent confidence threshold for review flag | 0.75 |
+| **Intent classifier keyword pattern pre-check (Step 3.1, NEW in v2.0.3)** | See pattern table below |
+| **Step 3.1 keyword pattern: `how to`, `how do i`, `how can i`, `ways to`, `steps to`, `guide to`** | → `how-to` @ confidence 0.95 |
+| **Step 3.1 keyword pattern: `what is`, `what are`, `what does`, `definition of`** | → `informational` @ confidence 0.90 |
+| **Step 3.1 keyword pattern: starts with `best`, `top`, or `\d+\s+plural-noun`** | → `listicle` @ confidence 0.90 |
+| **Step 3.1 keyword pattern: contains ` vs `, ` versus `, ` or `, `compared to`** | → `comparison` @ confidence 0.90 |
+| **Step 3.1 match → skip Step 3.2 SERP-feature classification** | Yes |
 | Embedding model | OpenAI text-embedding-3-large |
 | **Title + scope statement generated per brief** | Yes (Step 3.5) |
 | **Title max length** | 100 chars |
@@ -1065,6 +1159,11 @@ Cost increase from v1.7's $0.19–$0.53 range to v2.0's $0.35–$0.89 range refl
 | **Region uniqueness in selection** | Max 1 H2 per coverage graph region |
 | **MMR lambda** | 0.7 |
 | **Scope verification runs after MMR selection** | Yes (Step 8.5) |
+| **Authority Gap H3 scope verification pass (Step 8.5b, NEW in v2.0.3)** | Yes |
+| **Authority Agent receives `title`, `scope_statement`, `intent_type` (NEW in v2.0.3)** | Yes |
+| **Authority Agent emits `scope_alignment_note` per H3 (NEW in v2.0.3)** | Yes (≤200 chars) |
+| **Heading capitalization (Step 11.x, NEW in v2.0.3)** | Title Case (AP / Chicago Manual of Style) |
+| **Title-case normalization library** | `titlecase` (PyPI) |
 | **H3 parent_relevance floor (heading-to-parent-H2 cosine minimum)** | 0.60 |
 | **H3 parent_relevance ceiling (heading-to-parent-H2 cosine maximum)** | 0.85 |
 | **Inter-H3 anti-redundancy threshold (max pairwise cosine between H3s under one H2)** | 0.78 |
@@ -1305,7 +1404,8 @@ To validate v2.0 against the failure modes that motivated the rewrite:
    - Within any single H2, no two H3s have pairwise cosine > 0.78 — H3 siblings do not paraphrase each other
    - Every entry in `silo_candidates` has `search_demand_score > 0.0`
    - "TikTok Shop algorithm signals"-type rejects are classified with `viable_as_standalone_article: true` and `estimated_intent` of `how-to` or `informational`
-2. **Fixture B — Sparse SERP.** Run a niche keyword with <10 SERP results. Verify graceful degradation: `low_serp_coverage: true` and reasonable persona-gap-driven outline.
+2. **Fixture B — Sparse SERP + how-to keyword pre-check.** Run a niche keyword with <10 SERP results. Verify graceful degradation: `low_serp_coverage: true` and reasonable persona-gap-driven outline.
+   - Additional v2.0.3 assertion: include a how-to keyword case (e.g., `"how to open a tiktok shop"`) and verify Step 3.1's keyword pattern pre-check fires: `intent_type == "how-to"`, `intent_confidence >= 0.95`, `intent_review_required == false`, AND that the SERP-title-based fallback was NOT consulted (no LLM borderline-ecom check log entry). This guards the production failure mode that motivated v2.0.3.
 3. **Fixture C — Listicle intent.** Run a "best X" keyword. Verify uncapped H2 selection respects intent-specific rules and that each list-item-H2 is a distinct region.
 4. **Fixture D — Constraint exhaustion.** Construct a scenario where eligible candidates cluster heavily in 2–3 regions only. Verify `h2_shortfall: true` and `h2_shortfall_reason: "constraints_exhausted_eligible_pool"`.
 5. **Fixture E — Title generation failure path.** Mock title generation LLM to return malformed JSON twice. Verify run aborts with `title_generation_failed`.
@@ -1314,6 +1414,8 @@ To validate v2.0 against the failure modes that motivated the rewrite:
 8. **Fixture H — H3 sparsity.** Construct a scenario where a selected H2 has very few eligible H3 candidates after parent-relevance filtering (e.g., a niche H2 whose region is small and well-isolated from other regions). Verify `metadata.h2s_with_zero_h3s > 0`, that the brief is still valid, and that Authority Gap H3s still attach to the most-relevant available H2.
 9. **Fixture I — Silo discard reason filtering.** Construct a brief where many headings are discarded with `discard_reason: "above_restatement_ceiling"` (i.e., the LLM fan-out / SERP returned several near-paraphrases of the title). Verify that none of these headings appear in `silo_candidates` and that `metadata.silo_candidates_rejected_by_discard_reason` is incremented to match.
 10. **Fixture J — Silo viability rejection.** Mock the Step 12.4 viability LLM to return `viable_as_standalone_article: false` for a known silo candidate. Verify the candidate is excluded from the final `silo_candidates` array and that `metadata.silo_candidates_rejected_by_viability_check` is incremented by 1.
+11. **Fixture K — Authority Gap H3 scope rejection (NEW in v2.0.3).** Mock Step 9 to emit an Authority Gap H3 that's clearly out of scope (e.g., a "post-launch tax obligations" H3 against a `does not cover` clause excluding post-launch operations). Verify Step 8.5b classifies it `out_of_scope`, removes it from the H2's H3 attachment list, and routes it to `silo_candidates` with `routed_from: "scope_verification_h3"`.
+12. **Fixture L — Title case normalization (NEW in v2.0.3).** Construct a brief where one or more candidate headings arrive in mixed case (e.g., `"how to open a TikTok shop"`, `"WHAT THE ALGORITHM REWARDS"`). Verify every entry in the final `heading_structure` (H1/H2/H3, content + faq-header + faq-question) has `text` that round-trips through the `titlecase` library unchanged — i.e., `titlecase(text) == text`.
 
 ---
 
@@ -1331,3 +1433,4 @@ To validate v2.0 against the failure modes that motivated the rewrite:
 | 1.7 | 2026-04-29 | Added Step 9 Silo Cluster Identification; added `discarded_headings` and `silo_candidates` to output schema; added cluster quality rules, review flag, and failure mode for empty silo results |
 | **2.0** | **2026-05-01** | **Major architectural rewrite. Added Step 3.5 (title + scope statement generation), Step 6 (hypothetical searcher persona generation), Step 8.5 (scope verification), and Step 8.6 (H3 selection — applies the same MMR + region + anti-restatement principles at H2-scope rather than title-scope, with `parent_relevance` floor 0.60 and ceiling 0.85, inter-H3 threshold 0.78, and Authority Gap cap-displacement rules). Replaced lexical-only deduplication with embedding-based pre-filtering (relevance floor 0.55, restatement ceiling 0.78). Replaced ad-hoc heading selection with MMR optimization respecting region uniqueness and inter-heading anti-redundancy (max 0.75 pairwise cosine). Added coverage graph construction via Louvain community detection. Upgraded embedding model from text-embedding-3-small to text-embedding-3-large. Rebalanced heading priority formula to include explicit information_gain_score term. Silo cluster identification now reuses Step 5 regions instead of clustering discarded headings separately. Output schema fundamentally restructured: `semantic_score` renamed to `title_relevance`; new fields `title`, `scope_statement`, `persona`, `region_id`, `scope_classification`, `information_gain_score`, `parent_h2_text`, `parent_relevance`; new discard reasons (including `h3_below_parent_relevance_floor`, `h3_above_parent_restatement_ceiling`, `displaced_by_authority_gap_h3`); new metadata for graph structure, shortfall flags, and H3 distribution (`h3_count_average`, `h2s_with_zero_h3s`). Cost ceiling raised from $0.75 to $1.00. End-to-end target raised from 60s to 75s. Brief generator does not accept ICP context; hypothetical searcher is derived from topic + SERP signal only. Fixes the v1.7 failure modes documented in Section 1: paraphrase-H2 outlines and topical-clone outlines.** |
 | **2.0.2** | **2026-05-01** | **Refined Step 12 (Silo Cluster Identification) into six numbered subsections: 12.1 explicit `discard_reason` filtering (only `scope_verification_out_of_scope`, conditional `below_priority_threshold`, and `global_cap_exceeded` route to silos; restatement ceiling and off-topic rejects are excluded so silos never compete with the parent brief); 12.2 cluster formation (preserves region reuse + coherence + centroid); 12.3 search demand validation with hard threshold 0.30 against a five-signal `search_demand_score` (max SERP frequency, max LLM consensus, PAA / autocomplete / Reddit presence indicators); 12.4 per-candidate viability LLM check with strict JSON output (`viable_as_standalone_article`, `reasoning`, `estimated_intent`) and parallel execution; 12.5 cross-brief deduplication scoped out as a v2.1 requirement; 12.6 expanded silo candidate output with `discard_reason_breakdown`, `search_demand_score`, `viable_as_standalone_article`, `viability_reasoning`, `estimated_intent`, and `cross_brief_occurrence_count`. New metadata counters: `silo_candidates_rejected_by_discard_reason`, `silo_candidates_rejected_by_search_demand`, `silo_candidates_rejected_by_viability_check`, `silo_viability_fallback_applied`. Cost range updated to $0.35–$0.89 reflecting up to 10 parallel viability checks at $0.01–$0.02 each; $1.00 ceiling preserved; end-to-end target stays at 75s under parallel execution. New test fixtures I (discard-reason filtering) and J (viability rejection); Fixture A extended to verify silo `search_demand_score > 0` and `viable_as_standalone_article: true` for in-band scope rejects. No breaking schema changes — new fields are additive.** |
+| **2.0.3** | **2026-05-01** | **Three surgical bug fixes diagnosed from a production run on `"how to open a tiktok shop"`. (1) **Intent classifier keyword pattern pre-check**: Step 3 now runs a deterministic keyword pattern check (Step 3.1) BEFORE the SERP-feature-signal classifier; matching keywords short-circuit at 0.90–0.95 confidence with `intent_review_required=false`. Patterns cover `how to`/`how do i`/`how can i`/`ways to`/`steps to`/`guide to` (→ how-to), `what is`/`what are`/`what does`/`definition of` (→ informational), `best`/`top`/`<n> <plurals>` (→ listicle), and ` vs `/` versus `/` or `/`compared to` (→ comparison). Fixes a production miss where a how-to keyword was classified informational at 0.55 confidence because top SERP titles didn't literally start with "how to". (2) **Authority Gap scope discipline**: Step 9 now receives `title`, `scope_statement`, and `intent_type` as inputs and emits a `scope_alignment_note` per H3. A new Step 8.5b runs scope verification on Authority Gap H3s with the same in_scope / borderline / out_of_scope routing as Step 8.5; out-of-scope H3s route to `silo_candidates` with new `routed_from: "scope_verification_h3"`. Adds ~$0.02 per brief for the extra LLM call. Fixes the production failure mode where compliance / tax / abandonment H3s bypassed scope verification entirely. (3) **Title case normalization**: a new Step 11.x applies AP/Chicago-style title case via the `titlecase` PyPI library to every `heading_structure[].text` after all upstream processing. Pure CPU, free, deterministic. Fixes inconsistent capitalization in published articles. New fixtures: K (Authority Gap H3 scope rejection), L (title case round-trip). Cost range updated to $0.37–$0.91; end-to-end target unchanged at 75s; ceiling unchanged at $1.00.** |
