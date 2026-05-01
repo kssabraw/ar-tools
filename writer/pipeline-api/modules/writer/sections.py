@@ -1,0 +1,367 @@
+"""Step 4 — Section writing.
+
+Sequential per H2 group. Each H2 group = parent H2 + its child H3s. One
+LLM call per group. Body is GitHub-flavored Markdown with {{cit_N}}
+inline markers placed immediately after closing punctuation of cited
+sentences.
+
+Implements:
+- 4A: answer-first paragraphs
+- 4B: intent-specific patterns
+- 4C: term injection with effective targets from reconciliation
+- 4D: format directives (lists, tables)
+- 4E: H3 sub-section writing (authority gap deeper coverage)
+- 4F: citation marker placement
+- 4.4: post-hoc banned-term retry (one retry on body match)
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import re
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+from models.writer import ArticleSection, BrandVoiceCard
+
+from modules.brief.llm import claude_json
+
+from .banned_terms import BannedTermLeakage, find_banned
+from .reconciliation import FilteredSIETerms, ReconciledTerm
+
+logger = logging.getLogger(__name__)
+
+
+SECTION_SYSTEM = """You are an expert blog content writer producing publication-ready Markdown sections.
+
+OUTPUT FORMAT:
+Return a single JSON object: {"sections": [{"order": <int>, "heading": "<text>", "body": "<markdown>"}]}.
+
+The "sections" array must contain one entry for the parent H2 followed by one entry per nested H3.
+- The H2 entry's body is the prose immediately under the H2 (NOT including H3 subsections).
+- Each H3 entry's body is the prose under that H3.
+
+WRITING RULES:
+- Markdown only (GitHub Flavored Markdown). No HTML.
+- DO NOT include the heading text inside the body. Heading goes in the "heading" field.
+- Every H2 section opens with a direct answer sentence (max 25 words). 1-2 supporting detail sentences. Then elaboration.
+- Use bulleted/numbered lists and Markdown tables where they help comprehension. Distribute lists/tables across sections (do not stack in one).
+- No promotional superlatives ("the best", "industry-leading", "world-class").
+- Cite specific facts using {{cit_N}} markers immediately after the closing punctuation of the sentence, like: "Heat pump installations grew 11% year over year.{{cit_001}}"
+- Use the citation_id values provided. Never invent citation IDs.
+- For sentences without a verifiable claim from the provided citations, do not place a marker.
+- Do NOT use any term in the FORBIDDEN_TERMS list anywhere.
+- Use REQUIRED_TERMS naturally where they fit; aim for the target counts listed."""
+
+
+INTENT_GUIDANCE = {
+    "how-to": "This is a how-to article. Write each H2 as a numbered step. First sentence = the action instruction. Use H3s for sub-steps.",
+    "listicle": "This is a listicle. Each H2 is a list item with a clear label. Use parallel structure across items.",
+    "informational": "This is informational. Explanatory prose with answer-first paragraphs. Use evidence and concrete examples.",
+    "comparison": "This is a comparison piece. Each section evaluates the same axis across compared options. Maintain parallel structure.",
+    "local-seo": "Informational base with service framing. Avoid claims tied to specific cities you cannot verify.",
+    "ecom": "Feature-benefit framing focused on practical outcomes. Neutral tone, not promotional.",
+    "informational-commercial": "Buyer-education tone. Compare options. Do not endorse a single product.",
+    "news": "Recency-forward. Lead with the most important information. Be factual.",
+}
+
+
+@dataclass
+class SectionWriteResult:
+    sections: list[ArticleSection]
+    citations_used_in_group: set[str] = field(default_factory=set)
+
+
+def _intent_guidance(intent: str) -> str:
+    return INTENT_GUIDANCE.get(intent, INTENT_GUIDANCE["informational"])
+
+
+def _terms_for_section(filtered: FilteredSIETerms, max_required: int = 10) -> tuple[list[ReconciledTerm], list[str], list[str]]:
+    """Split into (required to use with effective targets, excluded to avoid, raw avoid)."""
+    required = filtered.required[:max_required]
+    excluded_terms = [e["term"] for e in filtered.excluded if e.get("term")]
+    return (required, excluded_terms, filtered.avoid)
+
+
+def _resolve_citations(
+    citation_ids: list[str],
+    citations: list[dict],
+) -> list[dict]:
+    """Look up citations by ID, filter to relevance >= 0.50.
+
+    Per PRD §4F: fallback_stub claims may not be used as factual assertions —
+    we still expose them but mark them so the LLM uses them only as source
+    acknowledgment.
+    """
+    by_id = {c.get("citation_id"): c for c in citations if isinstance(c, dict)}
+    out = []
+    for cid in citation_ids:
+        c = by_id.get(cid)
+        if not c:
+            continue
+        # Filter claims by relevance
+        keep_claims = []
+        for claim in c.get("claims") or []:
+            if not isinstance(claim, dict):
+                continue
+            if (claim.get("relevance_score") or 0) >= 0.50:
+                keep_claims.append(claim)
+        c_copy = dict(c)
+        c_copy["claims"] = keep_claims
+        out.append(c_copy)
+    return out
+
+
+def _build_section_user_prompt(
+    keyword: str,
+    intent: str,
+    h2_item: dict,
+    h3_items: list[dict],
+    section_budgets: dict[int, int],
+    required_terms: list[ReconciledTerm],
+    excluded_terms: list[str],
+    avoid_terms: list[str],
+    forbidden_terms: list[str],
+    citations: list[dict],
+    brand_voice_card: Optional[BrandVoiceCard],
+    is_authority_gap_section: bool,
+    retry_term: Optional[str] = None,
+) -> str:
+    parts: list[str] = []
+    parts.append(f"KEYWORD: {keyword}")
+    parts.append(f"INTENT: {intent}")
+    parts.append(f"INTENT_GUIDANCE: {_intent_guidance(intent)}")
+    parts.append(f"\nH2_HEADING (order {h2_item.get('order')}): {h2_item.get('text')}")
+    parts.append(f"WORD_BUDGET_FOR_H2: {section_budgets.get(h2_item.get('order'), 200)} words")
+
+    if h3_items:
+        parts.append("\nH3_SUBSECTIONS:")
+        for h3 in h3_items:
+            tag = " [authority gap — must add unique substantive insight]" if h3.get("source") == "authority_gap_sme" else ""
+            parts.append(
+                f"  - order {h3.get('order')}: {h3.get('text')}"
+                f" — budget: {section_budgets.get(h3.get('order'), 150)} words{tag}"
+            )
+
+    if brand_voice_card:
+        parts.append("\nBRAND_VOICE:")
+        if brand_voice_card.tone_adjectives:
+            parts.append(f"  tone: {', '.join(brand_voice_card.tone_adjectives)}")
+        if brand_voice_card.voice_directives:
+            parts.append(f"  directives: {' | '.join(brand_voice_card.voice_directives[:5])}")
+        if brand_voice_card.audience_summary:
+            parts.append(f"\nAUDIENCE: {brand_voice_card.audience_summary}")
+        if brand_voice_card.audience_pain_points:
+            parts.append(f"  pain points: {', '.join(brand_voice_card.audience_pain_points[:3])}")
+        if brand_voice_card.client_services or brand_voice_card.client_locations:
+            parts.append("\nCLIENT_CONTEXT (reference naturally where relevant; do not force):")
+            if brand_voice_card.client_services:
+                parts.append(f"  services: {', '.join(brand_voice_card.client_services[:8])}")
+            if brand_voice_card.client_locations:
+                parts.append(f"  locations: {', '.join(brand_voice_card.client_locations[:8])}")
+
+    if required_terms:
+        parts.append("\nREQUIRED_TERMS (use naturally, aim for target count):")
+        for t in required_terms:
+            parts.append(f"  - {t.term} (target: {t.effective_target}, max: {t.effective_max})")
+
+    forbidden_combined = sorted(set([t.lower() for t in forbidden_terms + excluded_terms + avoid_terms if t]))
+    if forbidden_combined:
+        parts.append("\nFORBIDDEN_TERMS (must not appear anywhere in output):")
+        parts.append("  " + ", ".join(forbidden_combined[:50]))
+
+    if retry_term:
+        parts.append(f"\nRETRY: A previous attempt included the forbidden term '{retry_term}'. Rewrite without it.")
+
+    if citations:
+        parts.append("\nCITATIONS (use {{cit_id}} markers after sentences containing these specific facts):")
+        for c in citations:
+            cid = c.get("citation_id", "")
+            url = c.get("url", "")
+            title = c.get("title", "")
+            parts.append(f"  {cid}: {title} — {url}")
+            for claim in c.get("claims", [])[:5]:
+                method = claim.get("extraction_method", "verbatim_extraction")
+                if method == "fallback_stub":
+                    parts.append(
+                        f"    [stub-only — reference as source, do not assert specific stats]: {claim.get('claim_text', '')}"
+                    )
+                else:
+                    parts.append(f"    fact: {claim.get('claim_text', '')}")
+
+    parts.append(
+        "\nWrite the section now. Output the JSON object with the sections array. "
+        "Use {{cit_id}} markers after sentences carrying cited facts."
+    )
+    return "\n".join(parts)
+
+
+def _extract_marker_ids(body: str) -> list[str]:
+    return re.findall(r"\{\{(cit_\d+)\}\}", body)
+
+
+async def write_h2_group(
+    keyword: str,
+    intent: str,
+    h2_item: dict,
+    h3_items: list[dict],
+    section_budgets: dict[int, int],
+    filtered_terms: FilteredSIETerms,
+    citations: list[dict],
+    brand_voice_card: Optional[BrandVoiceCard],
+    banned_regex,
+) -> SectionWriteResult:
+    """Single LLM call for the H2 + nested H3 children. Retries once on
+    body banned-term match. Headings are NOT regenerated by this function —
+    headings come from the brief verbatim, so the only retry source is body."""
+    required_terms, excluded_terms, avoid_terms = _terms_for_section(filtered_terms)
+    forbidden_terms = (brand_voice_card.banned_terms if brand_voice_card else []) or []
+
+    # Resolve citations applicable to the H2 group
+    h2_citation_ids = h2_item.get("citation_ids") or []
+    h3_citation_ids: list[str] = []
+    for h3 in h3_items:
+        h3_citation_ids.extend(h3.get("citation_ids") or [])
+    all_ids = list(dict.fromkeys(h2_citation_ids + h3_citation_ids))
+    resolved_citations = _resolve_citations(all_ids, citations)
+
+    is_auth_gap = any(h3.get("source") == "authority_gap_sme" for h3 in h3_items)
+
+    retry_term: Optional[str] = None
+    last_response: Optional[dict] = None
+
+    for attempt in range(2):
+        user = _build_section_user_prompt(
+            keyword=keyword,
+            intent=intent,
+            h2_item=h2_item,
+            h3_items=h3_items,
+            section_budgets=section_budgets,
+            required_terms=required_terms,
+            excluded_terms=excluded_terms,
+            avoid_terms=avoid_terms,
+            forbidden_terms=forbidden_terms,
+            citations=resolved_citations,
+            brand_voice_card=brand_voice_card,
+            is_authority_gap_section=is_auth_gap,
+            retry_term=retry_term,
+        )
+        try:
+            result = await claude_json(SECTION_SYSTEM, user, max_tokens=3500, temperature=0.4)
+        except Exception as exc:
+            logger.warning("Section writing failed for H2 order %s: %s", h2_item.get("order"), exc)
+            return _placeholder_result(h2_item, h3_items, section_budgets)
+
+        if not isinstance(result, dict):
+            return _placeholder_result(h2_item, h3_items, section_budgets)
+
+        sections_raw = result.get("sections") or []
+        if not isinstance(sections_raw, list) or not sections_raw:
+            return _placeholder_result(h2_item, h3_items, section_budgets)
+
+        # Banned-term check on body content of every produced section
+        body_match: Optional[str] = None
+        for s in sections_raw:
+            if not isinstance(s, dict):
+                continue
+            body = s.get("body") or ""
+            matches = find_banned(body, banned_regex)
+            if matches:
+                body_match = matches[0]
+                break
+
+        if body_match and attempt == 0:
+            retry_term = body_match
+            last_response = result
+            continue
+
+        if body_match and attempt == 1:
+            raise BannedTermLeakage(
+                term=body_match,
+                location=f"H2 order {h2_item.get('order')} body (after retry)",
+                snippet="",
+            )
+
+        return _build_result(h2_item, h3_items, sections_raw, section_budgets)
+
+    return _placeholder_result(h2_item, h3_items, section_budgets)
+
+
+def _placeholder_result(
+    h2_item: dict,
+    h3_items: list[dict],
+    budgets: dict[int, int],
+) -> SectionWriteResult:
+    placeholder = "[SECTION GENERATION FAILED — MANUAL REVIEW REQUIRED]"
+    sections = [ArticleSection(
+        order=h2_item.get("order", 0),
+        level="H2",
+        type="content",
+        heading=h2_item.get("text", ""),
+        body=placeholder,
+        word_count=0,
+        section_budget=budgets.get(h2_item.get("order"), 200),
+    )]
+    for h3 in h3_items:
+        sections.append(ArticleSection(
+            order=h3.get("order", 0),
+            level="H3",
+            type="content",
+            heading=h3.get("text", ""),
+            body=placeholder,
+            word_count=0,
+            section_budget=budgets.get(h3.get("order"), 150),
+        ))
+    return SectionWriteResult(sections=sections)
+
+
+def _build_result(
+    h2_item: dict,
+    h3_items: list[dict],
+    sections_raw: list[dict],
+    budgets: dict[int, int],
+) -> SectionWriteResult:
+    by_order = {}
+    for s in sections_raw:
+        if not isinstance(s, dict):
+            continue
+        order = s.get("order")
+        if isinstance(order, int):
+            by_order[order] = s
+
+    out_sections: list[ArticleSection] = []
+    citations_used: set[str] = set()
+
+    h2_order = h2_item.get("order", 0)
+    h2_data = by_order.get(h2_order, {})
+    h2_body = h2_data.get("body", "") if isinstance(h2_data, dict) else ""
+    citations_used.update(_extract_marker_ids(h2_body))
+    out_sections.append(ArticleSection(
+        order=h2_order,
+        level="H2",
+        type="content",
+        heading=h2_item.get("text", ""),
+        body=h2_body,
+        word_count=len(h2_body.split()),
+        section_budget=budgets.get(h2_order, 200),
+        citations_referenced=_extract_marker_ids(h2_body),
+    ))
+
+    for h3 in h3_items:
+        h3_order = h3.get("order", 0)
+        h3_data = by_order.get(h3_order, {})
+        body = h3_data.get("body", "") if isinstance(h3_data, dict) else ""
+        citations_used.update(_extract_marker_ids(body))
+        out_sections.append(ArticleSection(
+            order=h3_order,
+            level="H3",
+            type="content",
+            heading=h3.get("text", ""),
+            body=body,
+            word_count=len(body.split()),
+            section_budget=budgets.get(h3_order, 150),
+            citations_referenced=_extract_marker_ids(body),
+        ))
+
+    return SectionWriteResult(sections=out_sections, citations_used_in_group=citations_used)
