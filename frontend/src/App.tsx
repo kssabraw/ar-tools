@@ -7,6 +7,7 @@ import { Login } from './pages/Login'
 import { Runs } from './pages/Runs'
 import { RunDetail } from './pages/RunDetail'
 import { Clients } from './pages/Clients'
+import { ClientForm } from './pages/ClientForm'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -30,6 +31,7 @@ export default function App() {
                       <Route path="/" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
+                      <Route path="/clients/new" element={<ClientForm />} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Layout>
