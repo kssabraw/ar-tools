@@ -149,20 +149,49 @@ async def _get_snapshot(run_id: str) -> dict:
 
 
 async def _create_module_output(run_id: str, module: str, input_payload: dict) -> str:
-    result = (
-        _sb()
-        .table("module_outputs")
-        .insert(
+    try:
+        result = (
+            _sb()
+            .table("module_outputs")
+            .insert(
+                {
+                    "run_id": run_id,
+                    "module": module,
+                    "status": "running",
+                    "input_payload": input_payload,
+                }
+            )
+            .execute()
+        )
+        return (result.data or [{}])[0].get("id", "")
+    except Exception as exc:
+        # Stale row from a prior crashed run — reset it and reuse its ID
+        if "23505" not in str(exc):
+            raise
+        existing = (
+            _sb()
+            .table("module_outputs")
+            .select("id")
+            .eq("run_id", run_id)
+            .eq("module", module)
+            .order("attempt_number", desc=True)
+            .limit(1)
+            .execute()
+        )
+        row_id = (existing.data or [{}])[0].get("id", "")
+        _sb().table("module_outputs").update(
             {
-                "run_id": run_id,
-                "module": module,
                 "status": "running",
                 "input_payload": input_payload,
+                "output_payload": None,
+                "completed_at": None,
             }
+        ).eq("id", row_id).execute()
+        logger.warning(
+            "module_output_row_reset",
+            extra={"run_id": run_id, "pipeline_module": module, "row_id": row_id},
         )
-        .execute()
-    )
-    return (result.data or [{}])[0].get("id", "")
+        return row_id
 
 
 async def _save_module_output(
