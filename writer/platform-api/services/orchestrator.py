@@ -253,7 +253,7 @@ async def _call_module(
                 "schema_version_mismatch",
                 extra={
                     "run_id": run_id,
-                    "module": module,
+                    "pipeline_module": module,
                     "expected": EXPECTED_MODULE_VERSIONS[module],
                     "actual": actual_version,
                 },
@@ -273,7 +273,7 @@ async def _call_module(
                 "schema_version_mismatch",
                 extra={
                     "run_id": run_id,
-                    "module": module,
+                    "pipeline_module": module,
                     "expected": expected,
                     "actual": actual_version,
                 },
@@ -289,7 +289,7 @@ async def _call_module(
         "stage_complete",
         extra={
             "run_id": run_id,
-            "module": module,
+            "pipeline_module": module,
             "duration_ms": duration_ms,
             "cost_usd": cost,
         },
