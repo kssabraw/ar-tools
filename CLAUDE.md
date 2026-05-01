@@ -8,16 +8,17 @@ An internal agency tool that generates SEO + AEO-optimized blog content for mult
 
 This is **not** a customer-facing SaaS. There's no billing, no customer signup, no marketing site. Internal team use only.
 
-## The four reference documents
+## The five reference documents
 
 Before writing code, read these in this order:
 
 1. **`/docs/engineering-spec-v1_1.md`** — Your primary implementation reference. Covers service topology, schema, API routes, orchestration patterns, file parsing, frontend architecture, deployment sequence.
-2. **`/docs/platform-prd-v1_3.md`** — Product spec. Read for overall context, business rules, role permissions, brand-vs-SIE precedence rules.
-3. **`/docs/writer-module-v1_5-change-spec.md`** — Required Writer Module update. Adds `client_context` input, brand voice distillation, brand-SIE reconciliation.
-4. **`/docs/modules/`** — Individual module PRDs. Read each before implementing that module.
+2. **`/docs/platform-prd-v1_3.md`** — Product spec (canonical version is v1.4 per the doc header). Read for overall context, business rules, role permissions, brand-vs-SIE precedence rules.
+3. **`/docs/content-quality-prd-v1_0.md`** — Cross-cutting content quality requirements (R1–R7) authored 2026-05-01. Encodes semantic heading dedup, SERP sanitization, topic adherence, required structural elements (Key Takeaways / APP intro / CTA), brand context injection, paragraph length cap, and external citation coverage. **Brief PRD v1.8 and Writer PRD v1.6 implement this; read here first for the *what*.**
+4. **`/docs/writer-module-v1_5-change-spec.md`** — Writer Module v1.5 update. Adds `client_context` input, brand voice distillation, brand-SIE reconciliation. Still authoritative for those features.
+5. **`/docs/modules/`** — Individual module PRDs. Read each before implementing that module. Note: the brief PRD's filename ends `-v1.7.md` but its canonical version is **v1.8**; the writer PRD's filename ends `-v1.3.md` but its canonical version is **v1.6**.
 
-When you encounter conflicting information across docs, the engineering spec wins for "how to build it" and the product PRD wins for "what should it do."
+When you encounter conflicting information across docs, the engineering spec wins for "how to build it" and the product PRD wins for "what should it do." Within product PRDs, the **content quality PRD overrides the module PRDs on R1–R7 acceptance criteria**.
 
 ## Stack decisions already made — do not change without asking
 

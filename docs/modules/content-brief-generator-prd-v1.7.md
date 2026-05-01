@@ -1,10 +1,12 @@
 # PRD: Content Brief Generator Module
 
-**Version:** 1.7
+**Version:** 1.8
 **Status:** Ready for Engineering Spec
-**Last Updated:** April 29, 2026
+**Last Updated:** 2026-05-01
 **Part of:** [Parent Content Creation Platform — TBD name]
 **Downstream Dependency:** Content Writer Module
+
+> **v1.8 changes (2026-05-01):** Encoded Content Quality PRD v1.0 R1, R2, R3, R5. Filename retains `-v1.7` suffix; canonical version is in this header.
 
 ---
 
@@ -138,6 +140,8 @@ Ranking and LLM citation performance tracking is out of scope for v1 and will be
 | Input length >150 characters | Reject with structured error |
 | All other inputs | Pass through as-typed |
 
+**Optional input (v1.8+):** `client_context` — same shape as the Writer Module's Input D (`brand_guide_text`, `icp_text`, `website_analysis`, `website_analysis_unavailable`). When provided, it is consumed only by the Step 8 audience-alignment downgrade (per Content Quality PRD v1.0 R5). When omitted, all R5-related logic is skipped and `metadata.client_context_provided` is `false`. The brief never injects brand voice into prompts itself — that remains the Writer Module's responsibility; the brief uses ICP only as a similarity reference for downgrading off-audience headings.
+
 ### Step 1 — SERP Scraping
 
 **Provider:** DataForSEO SERP API (Standard Queue)
@@ -152,6 +156,7 @@ Ranking and LLM citation performance tracking is out of scope for v1 and will be
 - Exclude headings from paginated results (page 2+)
 - Tag each heading with source URL and SERP position
 - Strip boilerplate patterns ("Contact Us", "About the Author", "Related Posts")
+- Apply the **SERP heading sanitization rules** from Step 4 (see below) at intake time so subreddit suffixes, ellipsis, site-name prefixes/suffixes, and similar artifacts are stripped before the heading enters any candidate pool. Per Content Quality PRD v1.0 R2.
 
 ### Step 2 — PAA, Reddit, Autocomplete, and LLM Fan-Out (Parallel with Step 1)
 
@@ -244,6 +249,24 @@ LLM returns one of: `ecom`, `comparison`, or `informational-commercial`.
 
 ### Step 4 — Subtopic Aggregation
 
+**Step 4.0 — SERP heading sanitization (deterministic, runs before all other Step 4 logic).** Per Content Quality PRD v1.0 R2, the following sanitization rules apply to every heading candidate at intake, regardless of source:
+
+| # | Pattern | Action |
+|---|---|---|
+| S1 | Trailing `: r/<subreddit>` | Strip suffix |
+| S2 | Trailing `…` or three or more consecutive periods | Strip suffix |
+| S3 | Trailing `\| <site name>`, `– <site name>`, `— <site name>` where the trailing segment matches a domain root in the SERP item's URL or is < 30 chars and contains at most one CapitalizedWord run | Strip suffix |
+| S4 | Leading `<site name>: ` (same matching rule as S3) | Strip prefix |
+| S5 | Trailing `\| Read More`, `\| Continue Reading`, `Read More …`, `Continue Reading …` | Strip suffix |
+| S6 | Wrapping HTML tags or entities (`<strong>`, `&amp;`, `&#8217;`) | Decode entities; strip tags |
+| S7 | Multiple internal whitespace runs | Collapse to single spaces |
+| S8 | Trailing punctuation runs other than a single terminal `?` or `.` | Reduce to single terminal mark |
+| S9 | Headings shorter than 3 words after sanitization | Discard with `discard_reason: "too_short_after_sanitization"` |
+| S10 | Headings whose sanitized form is a single proper-noun brand name with no verb or noun phrase | Discard with `discard_reason: "non_descriptive_after_sanitization"` |
+
+The pre-sanitization raw text is preserved on the candidate as `raw_text` so `discarded_headings[].original_source` can show what was scraped. The polish-pass LLM (Step 5) receives sanitized text only.
+
+**Step 4.1 — Aggregation.**
 - Combine all scraped H1–H3 headings from Step 1 plus autocomplete queries, keyword suggestions, fan-out queries from all 4 LLMs, and response extractions from all 4 LLMs from Step 2
 - Normalize: lowercase + strip punctuation for comparison; preserve original casing for output
 - Deduplicate using fuzzy matching (Levenshtein distance threshold ≤0.15) across all sources
@@ -273,6 +296,15 @@ Where:
 ```
 
 **Rationale:** A topic that 3 of 4 LLMs surface independently is a strong signal that LLMs view it as core to the topic — exactly what's needed for citation optimization.
+
+**Step 5.5 — Semantic deduplication (added per Content Quality PRD v1.0 R1).** After scoring and polishing, but before priority-based selection in Step 8, run a pairwise cosine-similarity pass across all surviving H2 candidates using the embeddings already computed in Step 5.
+
+- For every pair `(a, b)` where `cosine(a.embedding, b.embedding) ≥ 0.85`, retain the candidate with the higher `heading_priority` and discard the other with:
+  - `discard_reason: "semantic_duplicate_of_higher_priority_h2"`
+  - `semantic_duplicate_of: <order of the kept H2>` (back-reference field added to discarded headings)
+- Definitional-restatement guard: when ≥ 6 candidates have a pairwise cosine to the seed keyword ≥ 0.90 (signal of a definitional keyword like "what is X"), retain at most **one** candidate that matches the regex `^(what (is|are|does)|define|explain|introducing|demystif|explained?|overview of)\b` (case-insensitive). Additional matches are discarded with `discard_reason: "definitional_restatement"`.
+- Increment `metadata.semantic_dedup_collapses_count` for every pair collapsed by the 0.85 rule and `metadata.definitional_restatements_discarded_count` for each candidate dropped by the definitional guard.
+- This pass runs **before** Step 6 (Authority Gap) so authority-gap H3s never get attached to an H2 that is about to be dropped as a semantic duplicate.
 
 ### Step 6 — Authority Gap Analysis
 
@@ -352,8 +384,32 @@ Where:
 | Global content subheading cap (capped intents) | 15 |
 | Global content subheading cap (listicle, how-to) | 20 |
 | FAQ H2 + FAQ H3s | Outside both caps |
+| Topical-diversity-aware selection (MMR) | **Required** — see below |
 
 Headings that do not make the final selection due to priority ranking are moved to `discarded_headings` with `discard_reason: "below_priority_threshold"`. Headings that would have been included but are cut by the global cap are moved with `discard_reason: "global_cap_exceeded"`.
+
+**MMR-ranked H2 selection (added per Content Quality PRD v1.0 R1).**
+
+Selection is no longer pure priority sort. To prevent topical redundancy in the final outline, H2s are picked greedily by **Maximum Marginal Relevance**:
+
+1. Sort the H2 candidate pool by `heading_priority` desc.
+2. Pick the highest-priority candidate as the first selected H2.
+3. For each subsequent slot up to the cap, score every remaining candidate as:
+   ```
+   mmr_score(c) = λ * heading_priority(c) − (1 − λ) * max_cosine(c.embedding, selected_h2_embeddings)
+   λ = 0.6
+   ```
+   Pick the candidate with the highest `mmr_score`.
+4. Stop when the H2 cap (6 for capped intents) is reached or no candidate has `mmr_score > 0`.
+
+`λ` is configurable via `format_directives.mmr_lambda` if a downstream module needs to tune the diversity/priority balance per intent.
+
+**Topic-adherence ICP downgrade (added per Content Quality PRD v1.0 R5).**
+
+When the brief's optional `client_context.icp_text` is provided (see Section 4 — Inputs):
+- Embed the audience summary (single sentence extracted from the ICP guide; if not extractable, embed the full ICP text truncated to 500 tokens).
+- For each H2 candidate, compute `audience_alignment = cosine(c.embedding, audience_embedding)`.
+- Candidates whose `audience_alignment ≤ 0.45` **and** whose `heading_priority` rank is in the bottom 25% of the H2 pool are downgraded by 0.10 in `heading_priority` before MMR selection runs. The downgrade is logged on the candidate as `audience_alignment_downgrade_applied: true`.
 
 **Intent-specific structure:**
 
@@ -387,15 +443,20 @@ Headings that do not make the final selection due to priority ranking are moved 
 | Typical (10) | 5 H2 + 5 H3 | ~250 words |
 | Light (7) | 4 H2 + 3 H3 | ~357 words |
 
-### Step 9 — Silo Cluster Identification
+### Step 9 — Spin-Off Article Routing (formerly Silo Cluster Identification)
 
-**Purpose:** Convert discarded headings into a structured map of supporting cluster articles for the content silo. This step adds zero additional API cost since all embeddings were computed in Step 5.
+**Purpose:** Convert discarded headings — including those dropped by R1 semantic dedup, R3 topic-adherence checks, and the historical priority/cap discards — into a structured `spin_off_articles[]` map of supporting cluster articles. Off-topic headings are never padded into the parent piece (per Content Quality PRD v1.0 R3); they always route here for use as future article seeds.
+
+This step adds zero additional API cost since all embeddings were computed in Step 5.
 
 **Input:** All headings in `discarded_headings` with `discard_reason` of:
 - `below_priority_threshold`
 - `global_cap_exceeded`
+- `semantic_duplicate_of_higher_priority_h2` (added per R1)
+- `definitional_restatement` (added per R1)
+- `low_topic_adherence_in_writer` (added per R3 — backfilled when the Writer drops a section for low topic adherence)
 
-Headings with `discard_reason` of `below_semantic_threshold` or `duplicate` are excluded from silo candidates.
+Headings with `discard_reason` of `below_semantic_threshold`, `duplicate`, `too_short_after_sanitization`, or `non_descriptive_after_sanitization` are excluded from spin-off candidates.
 
 **Process:**
 1. Take all eligible discarded headings — their embeddings already exist from Step 5, no re-embedding needed
@@ -475,7 +536,9 @@ Headings with `discard_reason` of `below_semantic_threshold` or `duplicate` are 
       "avg_serp_position": 0.0,
       "llm_fanout_consensus": 0,
       "heading_priority": 0.0,
-      "discard_reason": "below_semantic_threshold | below_priority_threshold | global_cap_exceeded | duplicate | low_cluster_coherence"
+      "discard_reason": "below_semantic_threshold | below_priority_threshold | global_cap_exceeded | duplicate | low_cluster_coherence | semantic_duplicate_of_higher_priority_h2 | definitional_restatement | too_short_after_sanitization | non_descriptive_after_sanitization | low_topic_adherence_in_writer",
+      "semantic_duplicate_of": null,
+      "raw_text": "string — pre-sanitization text as scraped (R2)"
     }
   ],
   "silo_candidates": [
@@ -492,6 +555,18 @@ Headings with `discard_reason` of `below_semantic_threshold` or `duplicate` are 
           "discard_reason": "global_cap_exceeded | below_priority_threshold"
         }
       ]
+    }
+  ],
+  "spin_off_articles": [
+    {
+      "suggested_keyword": "string",
+      "source_heading_text": "string",
+      "source_reason": "low_topic_adherence | semantic_duplicate | global_cap_exceeded | below_priority_threshold | definitional_restatement",
+      "topic_adherence_score": 0.0,
+      "cluster_coherence_score": 0.0,
+      "review_recommended": false,
+      "recommended_intent": "informational | listicle | how-to | comparison | ecom | local-seo | news | informational-commercial",
+      "supporting_headings": ["string"]
     }
   ],
   "metadata": {
@@ -525,6 +600,12 @@ Headings with `discard_reason` of `below_semantic_threshold` or `duplicate` are 
     },
     "embedding_model": "text-embedding-3-small",
     "semantic_filter_threshold": 0.55,
+    "semantic_dedup_threshold": 0.85,
+    "semantic_dedup_collapses_count": 0,
+    "definitional_restatements_discarded_count": 0,
+    "mmr_lambda": 0.6,
+    "client_context_provided": false,
+    "audience_alignment_downgrades_applied": 0,
     "low_serp_coverage": false,
     "reddit_unavailable": false,
     "llm_fanout_unavailable": {
@@ -533,7 +614,7 @@ Headings with `discard_reason` of `below_semantic_threshold` or `duplicate` are 
       "gemini": false,
       "perplexity": false
     },
-    "schema_version": "1.7"
+    "schema_version": "1.8"
   }
 }
 ```
@@ -637,6 +718,14 @@ The 4 LLM fan-out calls run concurrently with each other and with SERP/Reddit/Au
 | Max article word count | 2,500 (FAQ excluded) |
 | Silo candidate discard reasons included | `below_priority_threshold`, `global_cap_exceeded` |
 | Silo candidate discard reasons excluded | `below_semantic_threshold`, `duplicate`, `low_cluster_coherence` |
+| Spin-off article discard reasons included (R3) | `below_priority_threshold`, `global_cap_exceeded`, `semantic_duplicate_of_higher_priority_h2`, `definitional_restatement`, `low_topic_adherence_in_writer` |
+| Spin-off article discard reasons excluded | `below_semantic_threshold`, `duplicate`, `too_short_after_sanitization`, `non_descriptive_after_sanitization`, `low_cluster_coherence` |
+| H2 semantic-dedup cosine threshold (R1) | 0.85 |
+| Definitional-restatement guard trigger (R1) | ≥ 6 candidates with cosine ≥ 0.90 to seed keyword |
+| Definitional-restatement keep limit (R1) | 1 |
+| MMR lambda (R1) | 0.6 default; configurable via `format_directives.mmr_lambda` |
+| Audience-alignment downgrade trigger (R5) | `audience_alignment ≤ 0.45` AND `heading_priority` rank in bottom 25% |
+| Audience-alignment downgrade amount (R5) | −0.10 to `heading_priority` |
 | Min headings per silo cluster | 2 |
 | Min cluster coherence score | 0.60 |
 | Max silo candidates per brief | 10 |
@@ -672,3 +761,4 @@ To be addressed in the engineering implementation spec:
 | 1.5 | 2026-04-29 | Reduced max H3s per H2 from 3 to 2 |
 | 1.6 | 2026-04-29 | Expanded LLM fan-out capture from ChatGPT-only to all 4 major LLMs (ChatGPT, Claude, Gemini, Perplexity); added cross-LLM consensus tracking (`llm_fanout_consensus`); rebalanced heading priority formula to weight LLM consensus at 0.2 |
 | 1.7 | 2026-04-29 | Added Step 9 Silo Cluster Identification; added `discarded_headings` and `silo_candidates` to output schema; added cluster quality rules, review flag, and failure mode for empty silo results |
+| 1.8 | 2026-05-01 | Encoded Content Quality PRD v1.0 R1, R2, R3, and R5: SERP heading sanitization at intake (Step 4.0), semantic-similarity dedup with 0.85 cosine threshold and definitional-restatement guard (Step 5.5), MMR-ranked H2 selection in Step 8 with `λ=0.6`, optional `client_context` input feeding Step 8 audience-alignment downgrade, renamed Step 9 to Spin-Off Article Routing with new `spin_off_articles[]` output (legacy `silo_candidates[]` retained for one release), expanded `discarded_headings` enum, schema metadata adds `semantic_dedup_threshold`, `semantic_dedup_collapses_count`, `definitional_restatements_discarded_count`, `mmr_lambda`, `client_context_provided`, `audience_alignment_downgrades_applied`. Bumped `schema_version` to `1.8`. |

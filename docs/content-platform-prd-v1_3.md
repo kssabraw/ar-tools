@@ -1,8 +1,10 @@
 # PRD: [Product Name TBD] — Internal Content Generation Platform
 
-**Version:** 1.3 (Draft)
+**Version:** 1.4 (Draft)
 **Status:** Draft — Ready for Implementation
-**Last Updated:** April 30, 2026
+**Last Updated:** 2026-05-01
+
+> **v1.4 changes (2026-05-01):** Updated Goals and Out of Scope to reflect Content Quality PRD v1.0 R5 — the Brief Generator now optionally consumes per-client `client_context.icp_text` for topic-adherence downgrade. The Brief still does not inject brand voice into prompts. SIE and Research remain keyword-driven. See `/docs/content-quality-prd-v1_0.md`.
 **Audience:** Internal team (no commercial release in v1)
 **Modules in Scope:**
 - Content Brief Generator (v1.7)
@@ -33,7 +35,7 @@ This PRD specifies that platform.
 
 - Provide a single internal web app where authenticated team members submit a keyword for a configured client and receive a complete, publication-ready Markdown blog post
 - Capture per-client context (name, website, brand guide, ICP) once and reuse it across all runs for that client
-- Inject brand guide and ICP into the **Content Writer Module** so generated content reflects each client's tone and audience, while keeping SERP-intelligence modules (SIE, Brief, Research) keyword-driven and brand-agnostic
+- Inject brand guide and ICP into the **Content Writer Module** so generated content reflects each client's tone and audience. **Pass ICP into the Brief Generator** for topic-adherence downgrade only (Content Quality PRD v1.0 R5; Brief PRD v1.8). Keep SIE and Research keyword-driven and brand-agnostic.
 - Scrape and analyze each client's website at setup time to extract structured signals (services, locations, existing tone) used to enrich generation
 - Orchestrate the existing module pipeline (Brief → Research & Citations → SIE → Writer → Sources Cited) end-to-end with no manual handoff between stages
 - Surface intermediate artifacts (brief JSON, citation pool, SIE term list, draft article) for human review at any stage of a run
@@ -51,7 +53,7 @@ This PRD specifies that platform.
 - Image generation, image selection, or alt-text
 - Internal linking suggestions across the team's article archive
 - **Structured parsing of brand guide / ICP into typed fields** (tone, banned words, demographics) — v1 passes raw text to the Writer; structured extraction is deferred to v2
-- **Brand context injection into SIE, Brief Generator, or Research & Citations** — those modules remain keyword-driven; brand reconciliation happens in the Writer only
+- **Brand context injection into SIE or Research & Citations** — those modules remain keyword-driven; brand reconciliation happens in the Writer only. **As of Content Quality PRD v1.0 R5, the Brief Generator now optionally consumes `client_context` for ICP-based topic-adherence downgrade only** (it does not inject brand voice into prompts) — see Brief Generator PRD v1.8 §5 Step 8.
 - Live (non-snapshot) brand context — every run snapshots client context at submission time; edits to a client do not retroactively affect past runs
 - Rank tracking or post-publish citation monitoring
 - Human editorial workflow / approval routing

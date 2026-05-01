@@ -1,10 +1,12 @@
 # PRD: Content Writer Module
-**Version:** 1.4
+**Version:** 1.6
 **Status:** Draft
-**Last Updated:** April 30, 2026
+**Last Updated:** 2026-05-01
 **Part of:** ShowUP Local — Content Generation Platform
-**Upstream Dependencies:** SIE Term & Entity Module · Research & Citations Module (v1.1) · Content Brief Generator Module (v1.7)
+**Upstream Dependencies:** SIE Term & Entity Module · Research & Citations Module (v1.1) · Content Brief Generator Module (v1.8)
 **Downstream Dependency:** Sources Cited Module (v1.1)
+
+> **v1.6 changes (2026-05-01):** Encoded Content Quality PRD v1.0 R3, R4, R5, R6, R7. v1.5 changes (`client_context` Input D, brand voice distillation, brand–SIE reconciliation, banned-term scan) remain in `/docs/writer-module-v1_5-change-spec_2.md` and are still authoritative for those features. Filename retains `-v1.3` suffix; canonical version is in this header.
 
 ---
 
@@ -234,6 +236,14 @@ The title is not included in the Content Brief Generator output (explicitly defe
 - LLM generates 3 title candidates; selection is deterministic (pick candidate with highest combined keyword + entity coverage)
 - Title is stored in `output.title`; it is not injected into `heading_structure`
 
+**Topic-adherence anchor (added per Content Quality PRD v1.0 R3).**
+After the title is selected, embed it with `text-embedding-3-small`. The title embedding is the "topic anchor" for the article. Every H2 from the brief is checked against this anchor immediately after Step 3 (Word Budget Allocation) and **before** Step 4 (Section Writing) begins:
+
+- For each H2 in `brief.heading_structure`, compute `topic_adherence_score = cosine(h2.embedding, title_embedding)`. The H2 embeddings exist in the brief output from the brief's Step 5; if not present, embed the H2 text on the fly.
+- H2s with `topic_adherence_score < 0.62` are dropped from the section-writing queue. Each dropped H2 is logged in writer metadata under `dropped_for_low_topic_adherence: [{order, heading, score}]` and added to a writer-side payload that the platform forwards back to the brief's `discarded_headings` with `discard_reason: "low_topic_adherence_in_writer"` so spin-off routing (Brief PRD v1.8 Step 9) can pick them up.
+- Authority gap H3s (`source: "authority_gap_sme"`) are exempt from this check, but a parent H2 dropped for low adherence carries its authority gap H3s with it.
+- If the dropped set leaves the article with fewer than 3 content H2s, the writer logs `low_h2_count_after_adherence_drop: true` and proceeds; this is not an abort condition.
+
 ---
 
 ### Step 2 — H1 Enrichment
@@ -247,6 +257,45 @@ The H1 in the brief's `heading_structure` is the exact-match seed keyword (e.g.,
 - The enrichment lede is 1 sentence, maximum 25 words
 - Must include at least 1 entity with `entity_category` in: `services`, `equipment`, `problems`, `methods`
 - Must not be a complete restatement of the title
+
+---
+
+### Step 2.5 — Intro Construction (Agree / Promise / Preview) — added per Content Quality PRD v1.0 R4
+
+The intro is generated **after** the title and H1 enrichment but **before** Step 4 section writing, so the intro's preview block can be built from the post-adherence-filter H2 list.
+
+**Inputs:**
+- `output.title` (from Step 1)
+- `brief.heading_structure` (post-adherence-filter list of H2s — see Step 1 topic-adherence anchor)
+- `client_context.icp_text` (when available)
+
+**Output:** A structured object with three discrete prose blocks:
+
+```json
+{
+  "intro": {
+    "agree": "string (≤ 50 words)",
+    "promise": "string (≤ 50 words)",
+    "preview": "string (≤ 50 words)"
+  }
+}
+```
+
+**Block semantics:**
+
+| Block | Purpose | Constraints |
+|---|---|---|
+| **Agree** | A sentence acknowledging the reader's situation, question, or pain point. Anchored in `client_context.icp_text` when available; otherwise inferred from the title's question/topic. | One paragraph. ≤ 50 words. Must not name the brand. Must not begin with the seed keyword. |
+| **Promise** | A sentence stating what the article will deliver to the reader. | One paragraph. ≤ 50 words. May reference the seed keyword once. Must not contain a CTA. |
+| **Preview** | A sentence that enumerates 2–4 of the topics covered, drawn from the post-adherence-filter H2 list (not the original brief outline). | One paragraph. ≤ 50 words. Names topics in plain language; does not list bullets or H2 headings verbatim. |
+
+**Banned-term enforcement:** All three blocks pass through the same regex banned-term scan as section bodies (Writer v1.5 §4.4).
+
+**Failure handling:**
+- LLM returns malformed JSON → retry once with a stricter prompt; on second failure, abort with structured error `intro_generation_failed`.
+- Any single block exceeds 50 words → retry once with the over-length block named explicitly; on second failure, truncate the offending block at the last sentence boundary ≤ 50 words.
+
+The intro is added to `article[]` as a single section after the H1 enrichment with `type: "intro"`, `level: "none"`, `heading: null`, and `body` formatted as the three blocks separated by blank lines (Markdown paragraph breaks).
 
 ---
 
@@ -338,6 +387,16 @@ H3 sections inherit the topic context of their parent H2. H3 prose is more speci
 
 Authority gap H3s may not use hedge language as a substitute for substance (e.g., "it depends" with no follow-up).
 
+#### 4E.1 — Paragraph Length Constraint (added per Content Quality PRD v1.0 R6)
+
+Every section-writing prompt includes the directive:
+
+> **Critical:** Every paragraph must contain at most 4 sentences. Three sentences or fewer is preferred. If a paragraph runs longer, split on a logical break.
+
+This is the upstream half of R6; the downstream validation pass runs in Step 6.6.
+
+`brief.format_directives.max_sentences_per_paragraph` (default `4`) carries the threshold so the value is brief-controlled. If the brief omits the field, the writer defaults to 4 and logs `max_sentences_per_paragraph_default_applied: true`.
+
 #### 4F — Citation Usage
 
 For each H2 group being written, the module resolves the citation pool for that group and injects verified claims into the LLM writing prompt.
@@ -362,6 +421,29 @@ For each H2 group being written, the module resolves the citation pool for that 
 
 **Citation marking:**
 After the section is written, record which `citation_id` values were woven into prose for that section. Each citation appearing in prose is marked `used: true`; all others remain `used: false` until Step 7.
+
+#### 4F.1 — External-Citation Coverage on Citable Claims (added per Content Quality PRD v1.0 R7)
+
+After each section is written, the writer runs a deterministic **citable-claim detection** pass on the section body:
+
+A sentence is a citable claim if it matches any of:
+
+| # | Pattern |
+|---|---|
+| C1 | A numeral followed by `%`, `percent`, `pct`, or `percentage points` |
+| C2 | A numeral with currency symbol or USD/EUR/GBP suffix (e.g., `$100M`, `1.2 billion USD`) |
+| C3 | A four-digit year between 1990 and 2099 used as a date (`in 2023`, `since 2024`) |
+| C4 | `according to <ProperNoun>`, `<ProperNoun> reports`, `<ProperNoun> found`, `<ProperNoun> survey` |
+| C5 | `studies show`, `research shows`, `data shows`, `analysts predict` |
+| C6 | A sentence containing the name of an entity from `sie.terms.required[*]` where `is_entity == true` **and** a quantitative or temporal qualifier from C1–C3 |
+
+**Coverage threshold:** At least **50%** of detected citable claims in a section must be followed by a `{{cit_id}}` marker. The threshold is per-section.
+
+**First-party preference:** When the Research module produced multiple citation candidates for a claim, the writer prefers citations whose `domain` matches the entity named in the claim sentence. Existing v1.4+ citations carry `url`; the writer extracts the domain from `url` for matching.
+
+**Below-threshold remediation:** A section that fails the 50% threshold triggers a one-shot retry with a stricter prompt that names the uncited claim sentences and asks the LLM to either add a citation marker from the available pool or rewrite the sentence to remove the specific statistic / year / brand attribution. If the retry still fails, the section is accepted but flagged: `under_cited_sections: [{section_order, citable_claims, cited_claims}]` in writer metadata.
+
+**FAQ rule:** FAQ answers are exempt from the 50% threshold. However, the same claim-detection pass runs on FAQ answers; any FAQ answer with a numeric statistic without a citation is **rewritten** to remove the statistic in favor of a qualitative phrasing (one-shot retry with explicit instruction).
 
 
 ---
@@ -392,15 +474,89 @@ The conclusion is the final content section. It is a structural block (`type: "c
 **Rules:**
 - 100–150 words
 - Synthesizes the article's core takeaways in 2–3 sentences
-- Ends with a soft, generic call-to-action appropriate to the intent type:
-  - `how-to`: "Following these steps will…"
-  - `informational`: "For more on [topic]…"
-  - `local-seo`, `ecom`, `informational-commercial`: "When choosing a [service/product], consider…"
+- Conclusion prose must NOT contain the CTA — see Step 6.4 for required CTA placement
 - Must not introduce new information not covered in the article
 - The seed keyword must appear at least once in the conclusion
 
 ---
 
+### Step 6.4 — Call-to-Action (CTA) — added per Content Quality PRD v1.0 R4
+
+**Required.** Every article must end with a CTA. The CTA is a separate structural element rendered after the conclusion paragraph(s).
+
+**Inputs:**
+- `client_context.icp_text` (when available — used to source audience-specific next-step language)
+- `brief.intent_type`
+- `output.title` (so the CTA refers naturally to the article's promise)
+
+**Rules:**
+- Single sentence, ≤ 30 words.
+- Must name a specific next action (read, download, contact, evaluate, compare, sign up, request, schedule, audit, review).
+- Never a hard sales pitch ("Buy now", "Limited time only").
+- When `client_context.icp_text` is provided, draw the next-step verb from the ICP's stated audience goals (e.g., "growth-focused marketing leaders evaluating new acquisition channels" → "evaluate how this fits your acquisition mix"). When unavailable, use a generic intent-appropriate template:
+  - `how-to`: "Try these steps in your next [task] and measure the result."
+  - `informational`: "Explore [related sub-topic] next."
+  - `comparison`: "Run this comparison against your current [solution category] to see where the trade-offs land for your team."
+  - `local-seo` / `ecom` / `informational-commercial`: "When you're ready to evaluate options, look for [criterion drawn from article]."
+  - `news`: "Watch for follow-on coverage as the situation develops."
+
+**Output placement:** Added to `article[]` as `{order, level: "none", type: "cta", heading: null, body: "<CTA sentence>"}` immediately after the conclusion section.
+
+**Failure handling:**
+- LLM produces > 30 words → retry once with the word limit named explicitly.
+- Retry still over → truncate at the last word boundary ≤ 30 words and log `cta_truncated: true`.
+- Retry produces a hard sales phrase (regex match against `\b(buy|purchase|order)\s+now\b|\blimited\s+time\b|\bact\s+today\b`) → retry with explicit "no hard sales language" guidance.
+
+---
+
+### Step 6.5 — Key Takeaways — added per Content Quality PRD v1.0 R4
+
+**Required.** Generated **after** all content sections, FAQs, and the conclusion are written so it summarizes actual content rather than the outline.
+
+**Inputs:**
+- The full assembled article body (all H2 sections + FAQ answers + conclusion).
+- `output.title` (anchor for relevance).
+
+**Rules:**
+- Single LLM call.
+- Output: 3–5 standalone sentences, each ≤ 25 words.
+- Each sentence must be self-contained (LLM citation surfaces extract individual sentences without surrounding context).
+- Sentences are facts or actionable claims pulled from the article body — no opinion, no marketing language, no rhetorical questions.
+- Sentences must not repeat each other (cosine similarity ≥ 0.85 between any pair triggers a regeneration of the offending pair).
+- Brand mentions in Key Takeaways count toward the R5 brand-mention budget.
+
+**Output placement:** Added to `article[]` immediately after the H1 enrichment (before the intro from Step 2.5) so the renderer surfaces it at the top of the page:
+
+```
+{order, level: "none", type: "key-takeaways", heading: "Key Takeaways", body: "- bullet\n- bullet\n- bullet"}
+```
+
+The renderer (frontend `sectionsToMarkdown`) recognizes `type: "key-takeaways"` and emits the heading as `## Key Takeaways`.
+
+**Re-ordering after generation:** Because Key Takeaways is generated last but rendered second (after H1, before intro), the writer's article assembly performs a final re-ordering pass to insert the takeaways block in its display position before serializing the output.
+
+**Failure handling:**
+- LLM returns < 3 or > 5 sentences → retry once with the count constraint named explicitly; on second failure, accept what was returned within the 3–5 bounds (truncate to 5 if over, accept down to 3 if under, abort if < 3 with `key_takeaways_count_invalid`).
+- Any single sentence > 25 words → retry once with the word limit named.
+- Pair with cosine ≥ 0.85 → regenerate the offending pair only; on second similar failure, drop one and continue with 3–4 takeaways.
+
+---
+
+### Step 6.6 — Post-Generation Validation Pass — added per Content Quality PRD v1.0 R6
+
+After all sections, FAQs, conclusion, CTA, and Key Takeaways are written but **before** the citation reconciliation in Step 7 and the existing v1.5 banned-term scan, run a **paragraph length validation** pass over every body field in `article[]`:
+
+1. Split each `body` on blank lines (Markdown paragraph boundaries).
+2. For each paragraph, count sentence-terminal punctuation (`.`, `?`, `!`) outside Markdown link/code spans. Use an abbreviation dictionary to skip false positives: `e.g.`, `i.e.`, `etc.`, `Mr.`, `Dr.`, `vs.`, `Inc.`, `U.S.`, `U.K.`.
+3. If any paragraph has > `max_sentences_per_paragraph` (default 4), mark the section for retry.
+
+**Per-section retry rules:**
+- One retry per section, with a prompt addendum that names the over-length paragraph and the limit.
+- If the retry is also over budget, accept the section but flag in writer metadata: `paragraph_length_violations: [{section_order, paragraph_index, sentence_count}]`.
+
+The validation pass also scans the Key Takeaways bullets — any single bullet > 25 words triggers a one-time retry of Key Takeaways generation with a strict word limit reminder.
+
+---
 
 ### Step 7 — Citation Usage Reconciliation
 
@@ -433,7 +589,7 @@ Record `citations_used` and `citations_unused` counts in the output `metadata` b
     {
       "order": 0,
       "level": "H1 | H2 | H3 | none",
-      "type": "content | faq-header | faq-question | conclusion | h1-enrichment",
+      "type": "content | faq-header | faq-question | conclusion | h1-enrichment | key-takeaways | intro | cta",
       "heading": "string | null",
       "body": "string — Markdown (GitHub Flavored Markdown / CommonMark). May contain {{citation_id}} inline markers placed immediately after the closing punctuation of sentences containing cited claims. Markers conform to regex \\{\\{cit_[0-9]+\\}\\}. Markers are resolved into superscript references by the downstream Sources Cited Module.",
       "word_count": 0,
@@ -441,6 +597,13 @@ Record `citations_used` and `citations_unused` counts in the output `metadata` b
       "citations_referenced": ["cit_001"]
     }
   ],
+  "key_takeaways": ["string (≤ 25 words each, 3–5 items)"],
+  "intro": {
+    "agree": "string (≤ 50 words)",
+    "promise": "string (≤ 50 words)",
+    "preview": "string (≤ 50 words)"
+  },
+  "cta": "string (≤ 30 words)",
   "citation_usage": {
     "total_citations_available": 0,
     "citations_used": 0,
@@ -475,8 +638,25 @@ Record `citations_used` and `citations_unused` counts in the output `metadata` b
     "citations_unused": 0,
     "no_citations": false,
     "retry_count": 0,
-    "schema_version": "1.4",
-    "brief_schema_version": "1.7",
+    "dropped_for_low_topic_adherence": [
+      {"order": 0, "heading": "string", "score": 0.0}
+    ],
+    "low_h2_count_after_adherence_drop": false,
+    "paragraph_length_violations": [
+      {"section_order": 0, "paragraph_index": 0, "sentence_count": 0}
+    ],
+    "under_cited_sections": [
+      {"section_order": 0, "citable_claims": 0, "cited_claims": 0}
+    ],
+    "topic_brand_alignment": "brand_aligned | brand_agnostic",
+    "brand_mention_count": 0,
+    "brand_mention_flags": [
+      "zero_brand_mentions_on_brand_aligned_topic | brand_mentions_exceed_target | brand_mentions_exceed_hard_cap"
+    ],
+    "max_sentences_per_paragraph_default_applied": false,
+    "cta_truncated": false,
+    "schema_version": "1.6",
+    "brief_schema_version": "1.8",
     "generation_time_ms": 0
   }
 }
@@ -497,6 +677,14 @@ Record `citations_used` and `citations_unused` counts in the output `metadata` b
 | `sie.terms.required` is empty | Continue without term injection; log `no_required_terms: true` |
 | `research.citations` missing or empty | Continue in degraded mode; sections written without citation grounding; log `no_citations: true` |
 | All claims for an H2 have `extraction_method: "fallback_stub"` | Write section without specific factual assertions from citations; reference source as context only; flag `all_stubs: true` on affected section |
+| Final article missing any of `key-takeaways`, `intro`, `cta` sections (R4) | Abort with structured error `missing_required_structure` and `missing_elements: [...]`. No partial output returned. |
+| `intro` block exceeds 50 words after retry | Truncate at the last sentence boundary ≤ 50 words and accept |
+| `cta` exceeds 30 words after retry | Truncate at the last word boundary ≤ 30 words; flag `cta_truncated: true` |
+| `key_takeaways` count outside 3–5 after retry | Abort with `key_takeaways_count_invalid` if count < 3; truncate to 5 if count > 5 |
+| Section fails R7 50% citation coverage after one retry | Accept section and flag in `under_cited_sections` |
+| Section fails R6 paragraph-length cap after one retry | Accept section and flag in `paragraph_length_violations` |
+| Brand mentions ≥ 6 (R5 hard cap) after one retry on the highest-mention section | Accept output; flag `brand_mentions_exceed_hard_cap`. Do not block publishing. |
+| < 3 H2s remain after Step 1 topic-adherence drop (R3) | Continue and log `low_h2_count_after_adherence_drop: true`. Not an abort. |
 
 ---
 
@@ -576,6 +764,12 @@ Combined with upstream costs — Brief Generator ($0.19–$0.53), Research & Cit
 | Markers permitted in heading fields | No — markers must only appear in `body` fields |
 | Citation usage tracked per citation_id | Yes — `used`, `sections_used_in`, `marker_placed` in output |
 | Unused citations trigger retry | No — recorded as unused; not an error condition |
+| Required structural elements (R4) | `key-takeaways` (3–5 items, ≤ 25 words each), `intro` (Agree/Promise/Preview, each ≤ 50 words), `cta` (≤ 30 words). All three required; missing any → abort with `missing_required_structure` |
+| H2 topic-adherence threshold (R3) | `cosine(h2.embedding, title.embedding) ≥ 0.62` required; below threshold → drop and route to spin-offs |
+| Paragraph length cap (R6) | 4 sentences per paragraph (default `format_directives.max_sentences_per_paragraph`); over-budget paragraphs trigger one retry, then accept and flag |
+| External citation coverage on citable claims (R7) | ≥ 50% of detected citable claims per section must carry a `{{cit_id}}` marker; below threshold → one retry, then accept and flag |
+| Brand mention budget (R5) | 2–3 mentions target; 0 + brand-aligned topic → flag (no reject); 4–5 → log warning; ≥ 6 → one retry then accept |
+| Brand-aligned vs. brand-agnostic determination (R5) | `cosine(title.embedding, brand_voice_card.client_services_joined.embedding) ≥ 0.55` → `brand_aligned`; otherwise `brand_agnostic` |
 
 ---
 
@@ -608,5 +802,7 @@ To be addressed in the engineering implementation spec:
 | 1.2 | 2026-04-29 | Removed title length and no-question rules; title now optimizes for SIE term/entity coverage. Min lists reduced to 1. Max paragraph words removed. Steps 7 (Term Usage Audit) and 8 (Hallucination Scan) moved to downstream quality module |
 | 1.3 | 2026-04-29 | Integrated Research & Citations Module as upstream dependency. Inputs restructured to three independent payloads: Input A (Brief), Input B (Research), Input C (SIE). Added Step 4F (citation usage in section writing), Step 7 (citation usage reconciliation), `citation_usage` output block, `citations_referenced` per article section, fallback stub rules, inline hyperlink requirements, citation-related failure modes and business rules. Combined pipeline cost updated |
 | 1.4 | 2026-04-30 | Added downstream Sources Cited Module as a new dependency; restructured citation output to support it. Replaced inline Markdown hyperlink placement with `{{citation_id}}` inline marker placement at the point of citation use (markers conform to regex `\{\{cit_[0-9]+\}\}` and are placed immediately after closing punctuation of the cited sentence). Removed all inline hyperlink logic from Step 4F; citation formatting and external linking are now sole responsibility of the downstream Sources Cited Module. Renamed `inline_link_placed` to `marker_placed` in `citation_usage` output. Declared `article[].body` field format as Markdown (GFM/CommonMark) with embedded marker tokens. Removed `citations[].url`, `title`, `author`, `publication`, and `published_date` from Writer's consumed fields list (they pass through downstream to the Sources Cited Module). Added explicit guardrail: markers are forbidden in heading fields. Added stacked-marker rule for multiple citations in a single sentence. Bumped output `schema_version` to `1.4`. |
+| 1.5 | 2026-04-30 | See `/docs/writer-module-v1_5-change-spec_2.md`. Added `client_context` Input D, brand voice distillation (Step 3.5a), brand–SIE term reconciliation (Step 3.5b), brand voice injection into Steps 4–6, post-hoc regex-based banned-term scan (§4.4), `brand_voice_card_used`, `brand_conflict_log[]`, and `client_context_summary` outputs. |
+| 1.6 | 2026-05-01 | Encoded Content Quality PRD v1.0 R3, R4, R5, R6, R7. Added: topic-adherence anchor after Step 1 (drops H2s with `cosine ≤ 0.62` to title and routes them to brief spin-offs); intro construction in Step 2.5 with discrete Agree/Promise/Preview blocks; paragraph-length directive in Step 4E.1; citable-claim detection and 50% coverage threshold with one-shot remediation in Step 4F.1; explicit CTA in Step 6.4 (now a separate structural element, removed from conclusion prose); Key Takeaways generation in Step 6.5 (3–5 items, ≤ 25 words each); paragraph-length validation pass in Step 6.6 (default 4 sentences); brand-mention budget enforcement (2–3 target, 0 on brand-aligned topic flagged, ≥ 6 retry-then-accept); new `article[]` types `key-takeaways`, `intro`, `cta`; new metadata fields `dropped_for_low_topic_adherence`, `paragraph_length_violations`, `under_cited_sections`, `topic_brand_alignment`, `brand_mention_count`, `brand_mention_flags`, `cta_truncated`. Bumped `schema_version` to `1.6`; consumed `brief_schema_version` to `1.8`. |
 
 ---
