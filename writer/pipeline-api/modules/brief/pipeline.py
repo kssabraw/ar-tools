@@ -77,7 +77,7 @@ from .parsers import (
 )
 from .persona import generate_persona
 from .priority import compute_priority
-from .scope_verification import verify_scope
+from .scope_verification import verify_h3_scope, verify_scope
 from .silos import identify_silos, verify_silo_viability
 from .title_scope import generate_title_and_scope
 
@@ -502,7 +502,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             if h3.discard_reason == "below_priority_threshold":
                 h3.discard_reason = None
 
-    # ---- Step 9 — authority gap H3s ----
+    # ---- Step 9 — authority gap H3s (PRD v2.0.3: scope-aware) ----
     existing_texts = [c.text for c in selected_h2s]
     for arr in h3_selection_result.attachments.values():
         existing_texts.extend(c.text for c in arr)
@@ -510,6 +510,9 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         keyword=keyword,
         existing_headings=existing_texts,
         reddit_context=reddit_titles + reddit_comments,
+        title=title_scope.title,
+        scope_statement=title_scope.scope_statement,
+        intent_type=intent,
     )
     if auth_h3s:
         try:
@@ -527,11 +530,23 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
                 extra={"error": str(exc)},
             )
 
+    # ---- Step 8.5b — Authority Gap H3 scope verification (PRD v2.0.3) ----
+    # Catches H3s the agent produced that drift outside the brief's scope.
+    # Out-of-scope H3s are removed from the attachment pool and routed to
+    # silos with routed_from='scope_verification_h3'. Failures fall back
+    # to accept-all-as-in_scope (never aborts the run).
+    h3_scope_result = await verify_h3_scope(
+        title=title_scope.title,
+        scope_statement=title_scope.scope_statement,
+        h3s=auth_h3s,
+    )
+    auth_h3s_kept = h3_scope_result.kept
+
     # Merge authority gap H3s into the per-H2 attachments with the
     # priority-comparison + recursive routing rules from PRD §5 Step 8.6.
     auth_attach = attach_authority_h3s_with_displacement(
         h2s=selected_h2s,
-        authority_h3s=auth_h3s,
+        authority_h3s=auth_h3s_kept,
         existing_attachments=h3_selection_result.attachments,
     )
     h3_attachments = auth_attach.attachments
@@ -582,6 +597,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         candidate_pool=eligible_pool,
         contributing_region_ids=contributing_region_ids,
         scope_rejects=scope_result.rejected,
+        h3_scope_rejects=h3_scope_result.rejected,
     )
     viability_result = await verify_silo_viability(
         silo_id_result.candidates,
@@ -616,6 +632,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         c for c in selection.not_selected if id(c) not in attached_h3_ids
     )
     discarded.extend(scope_result.rejected)
+    discarded.extend(h3_scope_result.rejected)
     discarded.extend(h3_selection_result.globally_rejected)
     discarded.extend(auth_attach.displaced)
     discarded.extend(low_coherence)

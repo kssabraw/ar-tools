@@ -82,7 +82,12 @@ DiscardReason = Literal[
     "displaced_by_authority_gap_h3",
 ]
 
-SiloRoutedFrom = Literal["non_selected_region", "scope_verification"]
+SiloRoutedFrom = Literal[
+    "non_selected_region",
+    "scope_verification",
+    # Step 8.5b — Authority Gap H3 rejected by H3 scope verification (PRD v2.0.3)
+    "scope_verification_h3",
+]
 
 
 # ---- Request envelope ----
@@ -146,6 +151,9 @@ class HeadingItem(BaseModel):
     # the parent-relevance MMR; null for H1, H2, and authority-gap H3s.
     parent_h2_text: Optional[str] = None
     parent_relevance: float = 0.0
+    # Step 9 (v2.0.3): populated only for source='authority_gap_sme' entries —
+    # the agent's own justification that the H3 stays within the brief's scope.
+    scope_alignment_note: Optional[str] = None
     order: int = 0
 
 

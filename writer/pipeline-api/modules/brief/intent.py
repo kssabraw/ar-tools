@@ -1,11 +1,21 @@
 """Step 3 — Intent classification.
 
-Rules-based first; LLM check on borderline ecom cases.
+Two-pass classifier (PRD v2.0.3):
+
+  Step 3.1 — Keyword pattern pre-check (NEW)
+  Step 3.2 — Rules-based on SERP feature signals + LLM borderline-ecom check
+
+Step 3.1 short-circuits Step 3.2 when the seed keyword matches a known
+pattern (how-to, what-is, listicle, comparison). This fixes the failure
+mode where SERP titles don't literally start with the expected phrase
+(e.g. "how to open a tiktok shop" returning informational at confidence
+0.55 because top SERP titles are noun-phrase listicles).
 """
 
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 from models.brief import IntentSignals, IntentType
@@ -27,13 +37,60 @@ INTENT_PRIORITY: list[IntentType] = [
 ]
 
 
+# Step 3.1 — keyword pattern pre-check (PRD v2.0.3)
+# Each entry: (predicate, intent, confidence). First match wins.
+# Predicates take a normalized (lowercased + stripped) keyword.
+
+_HOW_TO_PREFIXES = ("how to", "how do i", "how can i", "ways to", "steps to", "guide to")
+_INFO_PREFIXES = ("what is", "what are", "what does", "definition of")
+_LISTICLE_PREFIXES = ("best", "top")
+# "<n> <plural-noun>" — e.g. "10 ways", "5 reasons", "20 tips". The plural is
+# detected by a trailing 's' on the second word, which catches the long tail
+# of "best of N" and "N <thing>s" patterns without overfitting to specific
+# noun lists.
+_LISTICLE_NUM_PATTERN = re.compile(r"^\d+\s+\w+s\b")
+_COMPARISON_TOKENS = (" vs ", " versus ", " or ", "compared to")
+
+
+def _keyword_pattern_precheck(keyword: str) -> Optional[tuple[IntentType, float]]:
+    """PRD v2.0.3 Step 3.1: deterministic keyword-pattern intent classifier.
+
+    Returns (intent, confidence) on match, None otherwise. First matching
+    rule wins; rule order mirrors the PRD §11 business-rules table.
+    """
+    kw = (keyword or "").strip().lower()
+    if not kw:
+        return None
+
+    # how-to (highest specificity — tested first since some how-to phrasings
+    # like "best ways to" otherwise hit the listicle prefix).
+    if any(kw.startswith(p) for p in _HOW_TO_PREFIXES):
+        return ("how-to", 0.95)
+
+    # informational (definitional)
+    if any(kw.startswith(p) for p in _INFO_PREFIXES):
+        return ("informational", 0.90)
+
+    # listicle — "best X" / "top X" / "<n> <plural-noun>"
+    if any(kw.startswith(p + " ") for p in _LISTICLE_PREFIXES):
+        return ("listicle", 0.90)
+    if _LISTICLE_NUM_PATTERN.match(kw):
+        return ("listicle", 0.90)
+
+    # comparison — substring (not just prefix) since these tokens often
+    # sit between two terms ("dogs vs cats").
+    if any(tok in kw for tok in _COMPARISON_TOKENS):
+        return ("comparison", 0.90)
+
+    return None
+
+
 def _has_pattern(titles: list[str], pattern: str, min_count: int = 3) -> bool:
     count = sum(1 for t in titles[:5] if pattern in t.lower())
     return count >= min_count
 
 
 def _is_numbered_listicle(titles: list[str]) -> bool:
-    import re
     pattern = re.compile(r"^\s*(\d+)\s+")
     count = sum(1 for t in titles[:5] if pattern.match(t))
     return count >= 3
@@ -122,10 +179,30 @@ async def classify_intent(
     top_3_domains: list[str],
     override: Optional[IntentType] = None,
 ) -> tuple[IntentType, float, bool]:
-    """Returns (intent_type, confidence, review_required)."""
+    """Returns (intent_type, confidence, review_required).
+
+    PRD v2.0.3 two-pass logic:
+      1. Step 3.1 keyword pattern pre-check — deterministic, short-circuits
+         the SERP-based classifier on match.
+      2. Step 3.2 SERP-feature-signal classifier — original v1.7 logic,
+         only runs when the keyword pattern check did NOT match.
+    """
     if override:
         return (override, 1.0, False)
 
+    # Step 3.1 — keyword pattern pre-check (PRD v2.0.3)
+    pre = _keyword_pattern_precheck(keyword)
+    if pre is not None:
+        intent, confidence = pre
+        logger.info(
+            "intent.pre_check_matched",
+            extra={"keyword": keyword, "intent": intent, "confidence": confidence},
+        )
+        # PRD: "When the pre-check matches, intent_review_required is set
+        # to false (the pattern is unambiguous enough not to warrant review)."
+        return (intent, confidence, False)
+
+    # Step 3.2 — SERP-feature-signal classifier (UNCHANGED from v1.7)
     intent, confidence = classify_rules(signals, titles)
 
     if intent == "ecom":

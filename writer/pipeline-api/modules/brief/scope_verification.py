@@ -320,3 +320,243 @@ async def verify_scope(
         rejected_count=out_of_scope,
         fallback_applied=fallback_applied,
     )
+
+
+# ----------------------------------------------------------------------
+# Step 8.5b — Authority Gap H3 scope verification (PRD v2.0.3)
+# ----------------------------------------------------------------------
+
+H3_SYSTEM_PROMPT = """\
+You verify that each candidate H3 sub-heading falls within the scope of
+the article it would appear in.
+
+These H3s come from the Universal Authority Agent (Step 9), which
+generates content across three pillars: Human/Behavioral, Risk/Regulatory,
+and Long-Term Systems. The agent sometimes drifts outside the article's
+committed scope — for example, producing post-launch operational content
+on a "how to set up X" article whose scope only covers signup-through-
+first-listing. Your role catches that drift.
+
+Process:
+1. Read the title and scope_statement carefully. The scope_statement
+   contains a "does not cover" clause naming what is explicitly out.
+2. For each H3, decide whether an article delivering on the title would
+   reasonably include this sub-heading.
+3. Use three classifications:
+   - "in_scope": Reading the title, you'd expect this H3 under one of
+     the article's main sections.
+   - "borderline": A reasonable reader could go either way; flag for
+     human review but don't reject.
+   - "out_of_scope": This belongs in a different article. Likely a
+     spin-off topic worth its own piece.
+
+Be conservative. Default to "in_scope" or "borderline". Only mark
+"out_of_scope" when the H3 clearly answers a different question than
+the title commits to, or when it touches an area named in the
+"does not cover" clause.
+
+Output strict JSON only — no preamble, no markdown fences:
+{
+  "verified_h3s": [
+    {
+      "h3_text": "exact text of the H3 from the input",
+      "scope_classification": "in_scope" | "borderline" | "out_of_scope",
+      "reasoning": "≤200 chars: why this classification"
+    }
+  ]
+}
+
+You MUST classify every H3 in the input. The h3_text in your output
+must match the input exactly so the routing logic can pair them.
+"""
+
+
+@dataclass
+class H3ScopeVerificationResult:
+    """Output of Step 8.5b — Authority Gap H3 scope verification.
+
+    Mutates each surviving Candidate in place: writes
+    `scope_classification` ('in_scope' or 'borderline') on kept H3s and
+    `discard_reason='scope_verification_out_of_scope'` on rejects.
+    """
+
+    kept: list[Candidate] = field(default_factory=list)
+    rejected: list[Candidate] = field(default_factory=list)
+    borderline_count: int = 0
+    rejected_count: int = 0
+    fallback_applied: bool = False
+
+
+def _format_h3_user_prompt(
+    title: str,
+    scope_statement: str,
+    h3s: list[Candidate],
+) -> str:
+    h3_lines = [f"  {i+1}. {c.text}" for i, c in enumerate(h3s)]
+    return (
+        f"Article title: {title}\n\n"
+        f"Scope statement:\n{scope_statement}\n\n"
+        f"Candidate Authority Gap H3s ({len(h3s)}):\n"
+        + ("\n".join(h3_lines) if h3_lines else "(none)")
+    )
+
+
+def _validate_h3_payload(
+    payload: Any,
+    h3s: list[Candidate],
+) -> tuple[bool, str, Optional[dict[str, tuple[str, str]]]]:
+    """Validate Step 8.5b LLM output. Mirrors `_validate_payload` shape
+    but reads `verified_h3s` / `h3_text` keys instead of `verified_h2s` /
+    `h2_text`."""
+    if not isinstance(payload, dict):
+        return False, "payload_not_object", None
+    verified = payload.get("verified_h3s")
+    if not isinstance(verified, list):
+        return False, "verified_h3s_not_list", None
+
+    valid_texts = {c.text for c in h3s}
+    classifications: dict[str, tuple[str, str]] = {}
+
+    for entry in verified:
+        if not isinstance(entry, dict):
+            continue
+        h3_text = entry.get("h3_text")
+        cls = entry.get("scope_classification")
+        reason = entry.get("reasoning", "") or ""
+        if not isinstance(h3_text, str) or not h3_text.strip():
+            continue
+        if cls not in VALID_CLASSIFICATIONS:
+            continue
+        if h3_text not in valid_texts:
+            logger.warning(
+                "brief.scope_h3.rogue_classification",
+                extra={"h3_text": h3_text, "classification": cls},
+            )
+            continue
+        if not isinstance(reason, str):
+            reason = ""
+        classifications[h3_text] = (
+            cls,
+            reason.strip()[:MAX_REASONING_LEN],
+        )
+
+    if not classifications:
+        return False, "no_valid_classifications", None
+
+    return True, "ok", classifications
+
+
+async def verify_h3_scope(
+    *,
+    title: str,
+    scope_statement: str,
+    h3s: list[Candidate],
+    llm_json_fn: Optional[LLMJsonFn] = None,
+) -> H3ScopeVerificationResult:
+    """Step 8.5b — Authority Gap H3 scope verification (PRD v2.0.3).
+
+    Runs after Step 9 emits Authority Gap H3s. Failure handling matches
+    Step 8.5: on double LLM failure, accept all as `in_scope` (never
+    aborts). Empty input short-circuits without an LLM call.
+
+    Mutates the input candidates:
+      - in_scope / borderline → scope_classification stamped, kept
+      - out_of_scope → discard_reason='scope_verification_out_of_scope'
+        AND scope_classification stays None (downstream silo routing
+        recognizes scope-rejected H3s by the discard_reason).
+    """
+    if not h3s:
+        return H3ScopeVerificationResult()
+
+    call = llm_json_fn or claude_json
+    user = _format_h3_user_prompt(title, scope_statement, h3s)
+
+    classifications: Optional[dict[str, tuple[str, str]]] = None
+    last_error = "unknown"
+
+    for attempt in (1, 2):
+        system = (
+            H3_SYSTEM_PROMPT if attempt == 1
+            else H3_SYSTEM_PROMPT + STRICTER_RETRY_SUFFIX
+        )
+        try:
+            payload = await call(
+                system, user,
+                max_tokens=2000,
+                temperature=0.2 if attempt == 1 else 0.1,
+            )
+        except Exception as exc:
+            last_error = f"llm_call_exception: {exc}"
+            logger.warning(
+                "brief.scope_h3.llm_failed",
+                extra={"attempt": attempt, "error": str(exc)},
+            )
+            continue
+
+        ok, reason, parsed = _validate_h3_payload(payload, h3s)
+        if ok and parsed is not None:
+            classifications = parsed
+            logger.info(
+                "brief.scope_h3.verified",
+                extra={
+                    "attempt": attempt,
+                    "classified_count": len(parsed),
+                    "input_count": len(h3s),
+                },
+            )
+            break
+
+        last_error = reason
+        logger.warning(
+            "brief.scope_h3.invalid",
+            extra={"attempt": attempt, "reason": reason},
+        )
+
+    fallback_applied = classifications is None
+    if fallback_applied:
+        logger.warning(
+            "brief.scope_h3.fallback",
+            extra={
+                "reason": last_error,
+                "fallback": "accept_all_as_in_scope",
+                "h3_count": len(h3s),
+            },
+        )
+        classifications = {c.text: ("in_scope", "fallback_after_llm_failure")
+                           for c in h3s}
+
+    kept: list[Candidate] = []
+    rejected: list[Candidate] = []
+    borderline = 0
+    out_of_scope = 0
+
+    for cand in h3s:
+        cls, _reason = classifications.get(cand.text, ("in_scope", "default_pass"))
+        if cls == "out_of_scope":
+            cand.discard_reason = "scope_verification_out_of_scope"
+            cand.scope_classification = None
+            rejected.append(cand)
+            out_of_scope += 1
+        else:
+            cand.scope_classification = cls  # type: ignore[assignment]
+            kept.append(cand)
+            if cls == "borderline":
+                borderline += 1
+
+    logger.info(
+        "brief.scope_h3.complete",
+        extra={
+            "kept": len(kept),
+            "rejected": out_of_scope,
+            "borderline": borderline,
+            "fallback_applied": fallback_applied,
+        },
+    )
+
+    return H3ScopeVerificationResult(
+        kept=kept,
+        rejected=rejected,
+        borderline_count=borderline,
+        rejected_count=out_of_scope,
+        fallback_applied=fallback_applied,
+    )

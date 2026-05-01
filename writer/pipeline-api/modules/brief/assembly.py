@@ -25,6 +25,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
+from titlecase import titlecase
+
 from models.brief import (
     FAQItem,
     HeadingItem,
@@ -260,6 +262,9 @@ def _to_heading_item(
         heading_priority=round(c.heading_priority, 4),
         region_id=c.region_id,
         scope_classification=c.scope_classification,
+        # Step 9 Authority Agent's scope-alignment justification —
+        # populated for source='authority_gap_sme' candidates only.
+        scope_alignment_note=c.scope_alignment_note,
         parent_h2_text=c.parent_h2_text,
         parent_relevance=round(c.parent_relevance, 4) if c.parent_relevance else 0.0,
         order=order,
@@ -351,4 +356,42 @@ def assemble_structure(
                 order=order,
             ))
 
+    # Step 11.x — Title case normalization (PRD v2.0.3).
+    # Last heading-text mutation in the pipeline. Applies AP/Chicago title
+    # case via the `titlecase` PyPI library to every content + faq-header
+    # heading. FAQ questions stay in sentence case (they end with `?` and
+    # read as sentences, not headings).
+    items = _apply_title_case(items)
+
     return items, cut
+
+
+_TITLE_CASE_TYPES = {"content", "faq-header", "conclusion"}
+
+
+def _apply_title_case(items: list[HeadingItem]) -> list[HeadingItem]:
+    """Pass every content / faq-header / conclusion heading through
+    `titlecase`. FAQ questions are left in sentence case because they
+    are full sentences ending with `?`.
+
+    Pure CPU; deterministic; idempotent (titlecase round-trips).
+    """
+    for h in items:
+        if h.type not in _TITLE_CASE_TYPES:
+            continue
+        original = h.text
+        if not original:
+            continue
+        normalized = titlecase(original)
+        if normalized != original:
+            h.text = normalized
+            logger.debug(
+                "brief.title_case.normalized",
+                extra={
+                    "level": h.level,
+                    "type": h.type,
+                    "before": original,
+                    "after": normalized,
+                },
+            )
+    return items

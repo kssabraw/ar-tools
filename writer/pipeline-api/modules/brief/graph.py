@@ -83,6 +83,11 @@ class Candidate:
     parent_h2_text: Optional[str] = None
     parent_relevance: float = 0.0
 
+    # Set by Step 9 Authority Agent (only on source='authority_gap_sme'
+    # candidates; PRD v2.0.3): the agent's own justification for why the
+    # H3 stays within the brief's scope_statement.
+    scope_alignment_note: Optional[str] = None
+
     # Set when discarded
     discard_reason: Optional[DiscardReason] = None
 
