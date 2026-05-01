@@ -11,4 +11,6 @@ ENV NLTK_DATA=/usr/local/share/nltk_data
 COPY . .
 
 EXPOSE 8000
-CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+# Bind to :: so Railway private networking (IPv6-only) can reach this service.
+# Linux dual-stack will still accept IPv4 connections via IPv4-mapped addresses.
+CMD uvicorn main:app --host :: --port ${PORT:-8000}
