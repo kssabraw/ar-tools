@@ -531,6 +531,71 @@ After scope verification, if removals dropped the H2 count below target, the sel
 | LLM returns malformed JSON | One retry; on second failure, accept all H2s as `in_scope` and log warning. Do not abort the run — selection has already produced a valid outline by mathematical constraints. |
 | LLM classifies an H2 not in the input list | Discard the rogue classification; log warning |
 
+### Step 8.6 — H3 Selection (NEW)
+
+**Purpose:** For each selected H2, choose 0–2 H3s from the candidate pool that elaborate the H2's scope without restating it. Authority Gap H3s (Step 9) are inserted afterward and may displace lower-priority H3s if the per-H2 cap is exceeded.
+
+This step formalizes H3 selection as a parent-scoped mirror of Step 8: same MMR + region + anti-restatement principles, but applied at H2-scope rather than title-scope. Without explicit rules at this layer, an implementation might default to picking H3s by global priority regardless of parent H2, which would reproduce the v1.7 paraphrase failure mode at the H3 level.
+
+**Inputs:**
+- All eligible H3-level candidates from the coverage graph (Step 5) — the post-region-elimination pool minus the H2s selected by Step 8
+- Selected H2s from Step 8 with their embeddings and `region_id`s
+- Scope statement from Step 3.5
+
+**Algorithm — for each selected H2:**
+
+1. Compute `parent_relevance` for every H3 candidate as the cosine similarity between the H3 candidate embedding and the H2 embedding.
+
+2. Filter the candidate pool to that H2's scope. Keep only H3 candidates that:
+   - Have `parent_relevance >= 0.60` (must be related to the H2)
+   - Have `parent_relevance <= 0.85` (must not restate the H2; threshold is slightly looser than the title-level 0.78 because H3s legitimately drill into narrower scopes)
+   - Belong to the same coverage graph region as the H2, OR an adjacent region with edge weight `>= 0.65` to the H2's region centroid
+   - Were not already selected as H2s elsewhere
+
+3. Apply MMR within the filtered pool, using:
+   - Target count: 2 H3s per H2 maximum
+   - Inter-H3 anti-redundancy threshold: 0.78 pairwise (looser than the 0.75 used for H2s)
+   - Priority score for H3s: same formula as H2s in Step 7, with `title_relevance` replaced by `parent_relevance` for the H2 the H3 is being assigned to
+
+4. Accept shortfalls. If filtering produces fewer than 2 eligible H3s for a given H2, output what is available. Per Section 11, H3s are not required per H2.
+
+**Discarded headings:**
+
+H3 candidates dropped during this step are routed to `discarded_headings` with one of the following reasons:
+
+| Filter | discard_reason |
+|---|---|
+| Below `parent_relevance >= 0.60` | `h3_below_parent_relevance_floor` |
+| Above `parent_relevance <= 0.85` | `h3_above_parent_restatement_ceiling` |
+| Lost the per-H2 MMR competition | `below_priority_threshold` |
+
+A candidate that fails the parent-relevance check for one H2 is still considered for every other selected H2. Only candidates that fail against all selected H2s carry an `h3_*` discard reason in the final output.
+
+**Authority Gap H3 Interaction:**
+
+After Step 8.6 produces selected H3s per H2, Step 9 runs and adds 3–5 Authority Gap H3s. Each Authority Gap H3 is assigned to the most relevant H2. If adding an Authority Gap H3 would push that H2 over the 2-H3 cap:
+
+1. Compare priority scores. If the Authority Gap H3 has a higher priority score than the lowest-scoring existing H3, the existing H3 is displaced (moved to `discarded_headings` with `discard_reason: "displaced_by_authority_gap_h3"`).
+2. If the Authority Gap H3 has a lower priority score than all existing H3s on that H2, route it to the next-most-relevant H2 (recursive).
+3. If no H2 can accommodate the Authority Gap H3 without violating the cap and the Authority Gap H3 has the lowest priority across the board, it is still kept (Authority Gap H3s are never discarded per Step 9 rules); the per-H2 cap may be exceeded by 1 in this edge case. Step 11 (Structure Assembly) must allow a maximum of 3 H3s per H2 specifically when Authority Gap H3s caused the overflow.
+
+**Output:**
+
+Each selected H2 carries an h3s array (possibly empty), and each H3 carries:
+- `parent_h2_text` (so the structure is reconstructable from the flat `heading_structure` array)
+- `parent_relevance` (the cosine similarity to its parent H2)
+- All standard heading fields already specified in the output schema (`region_id`, `source`, scores, etc.)
+
+**Failure handling:**
+
+| Scenario | Behavior |
+|---|---|
+| H2 has 0 eligible H3s after filtering | Accept zero H3s for that H2; increment `metadata.h2s_with_zero_h3s` |
+| Eligible pool is empty across all H2s | Continue without non-authority H3s; Step 9 still runs |
+| Embedding required for H2 or H3 candidate is missing (defensive) | Skip that pairing; do not abort |
+
+This step adds no new LLM calls — it is pure embedding math and MMR over the same vectors produced in Step 5.
+
 ### Step 9 — Authority Gap Analysis (Unchanged from v1.7)
 
 Universal Authority Agent with three pillars (Human/Behavioral, Risk/Regulatory, Long-Term Systems). Inputs: aggregated heading list from Step 4 plus Reddit thread summaries from Step 2 as context (not as headings). See v1.7 Section 5 Step 6 for full specification.
@@ -539,7 +604,7 @@ Universal Authority Agent with three pillars (Human/Behavioral, Risk/Regulatory,
 - Exactly 3–5 new H3 subheadings
 - Inserted immediately after the most relevant H2
 - Tagged `source: "authority_gap_sme"`
-- Authority gap H3s count toward the per-H2 limit of 2 H3s
+- Authority gap H3s count toward the per-H2 limit of 2 H3s (with the cap-displacement rules specified in Step 8.6)
 - Score is computed but `exempt: true` flag set — bypasses 0.55 relevance threshold
 - Authority gap H3s are never discarded
 
@@ -666,6 +731,8 @@ The `routed_from: "scope_verification"` flag is particularly valuable — these 
       "heading_priority": 0.0,
       "region_id": "string | null",
       "scope_classification": "in_scope | borderline | null",
+      "parent_h2_text": "string | null",
+      "parent_relevance": 0.0,
       "order": 0
     }
   ],
@@ -702,7 +769,7 @@ The `routed_from: "scope_verification"` flag is particularly valuable — these 
       "llm_fanout_consensus": 0,
       "heading_priority": 0.0,
       "region_id": "string | null",
-      "discard_reason": "below_relevance_floor | above_restatement_ceiling | region_off_topic | region_restates_title | below_priority_threshold | global_cap_exceeded | duplicate | low_cluster_coherence | scope_verification_out_of_scope"
+      "discard_reason": "below_relevance_floor | above_restatement_ceiling | region_off_topic | region_restates_title | below_priority_threshold | global_cap_exceeded | duplicate | low_cluster_coherence | scope_verification_out_of_scope | h3_below_parent_relevance_floor | h3_above_parent_restatement_ceiling | displaced_by_authority_gap_h3"
     }
   ],
   "silo_candidates": [
@@ -735,6 +802,8 @@ The `routed_from: "scope_verification"` flag is particularly valuable — these 
     "reddit_threads_analyzed": 0,
     "h2_shortfall": false,
     "h2_shortfall_reason": "string | null",
+    "h3_count_average": 0.0,
+    "h2s_with_zero_h3s": 0,
     "regions_detected": 0,
     "regions_eliminated_off_topic": 0,
     "regions_eliminated_restate_title": 0,
@@ -815,12 +884,13 @@ The `routed_from: "scope_verification"` flag is particularly valuable — these 
 | Embedding + graph construction + scoring | 5s | 10s |
 | Persona generation | 5s | 10s |
 | MMR selection + scope verification | 8s | 15s |
+| H3 selection (Step 8.6, embedding math + MMR only) | 1–2s | 4s |
 | Authority agent | 15s | 30s |
 | Structure assembly + silo identification | 4s | 8s |
 
-The 4 LLM fan-out calls run concurrently with each other and with SERP/Reddit/Autocomplete. Title generation is sequential after intent classification (it uses intent type as input). Persona generation runs after graph construction completes (it benefits from seeing the candidate pool). Selection, scope verification, and authority agent run sequentially.
+The 4 LLM fan-out calls run concurrently with each other and with SERP/Reddit/Autocomplete. Title generation is sequential after intent classification (it uses intent type as input). Persona generation runs after graph construction completes (it benefits from seeing the candidate pool). Selection, scope verification, H3 selection (Step 8.6), and authority agent run sequentially.
 
-End-to-end target rises from v1.7's 60s to 75s due to additional LLM calls (title generation, persona generation, scope verification). 120s ceiling preserved.
+H3 selection (Step 8.6) is pure embedding math and MMR — no new LLM calls — and adds approximately 1–2 seconds to the structure assembly stage. End-to-end target stays at 75s; 120s ceiling preserved.
 
 ---
 
@@ -883,13 +953,18 @@ Cost increase from v1.7's $0.19–$0.53 range to v2.0's $0.30–$0.69 range refl
 | **Region uniqueness in selection** | Max 1 H2 per coverage graph region |
 | **MMR lambda** | 0.7 |
 | **Scope verification runs after MMR selection** | Yes (Step 8.5) |
+| **H3 parent_relevance floor (heading-to-parent-H2 cosine minimum)** | 0.60 |
+| **H3 parent_relevance ceiling (heading-to-parent-H2 cosine maximum)** | 0.85 |
+| **Inter-H3 anti-redundancy threshold (max pairwise cosine between H3s under one H2)** | 0.78 |
+| **H3 selection runs per parent H2 (Step 8.6)** | Yes |
 | Authority gap headings bypass relevance filter | Yes (still scored) |
 | Authority gap headings per brief | 3–5 |
 | Authority gap H3s count toward per-H2 limit | Yes |
 | Authority gap H3s ever discarded | Never |
 | Max content H2s (capped intents) | 6 |
 | Max content H2s (listicle, how-to) | Uncapped |
-| Max H3s per H2 | 2 |
+| Max H3s per H2 (standard) | 2 |
+| Max H3s per H2 (Authority Gap overflow only) | 3 (per Step 8.6 cap-displacement edge case) |
 | H3s required per H2 | No |
 | **H2 shortfall handling** | Accept shortfall; flag in metadata; do not relax thresholds or pad with synthetic content |
 | FAQ counts toward H2 budget | No |
@@ -1110,12 +1185,15 @@ To validate v2.0 against the failure modes that motivated the rewrite:
    - At most one H2 has cosine > 0.85 to title (should be zero by construction)
    - All paraphrase H2s ("What exactly is TikTok Shop", "What is a TikTok Shop seller", etc.) appear in `discarded_headings` with `discard_reason: "above_restatement_ceiling"`
    - "TikTok Shop algorithm signals"-type headings appear in `silo_candidates` with `routed_from: "scope_verification"` or as non-selected regions
+   - For each selected H2, every assigned H3 has `parent_relevance` in [0.60, 0.85] — no H3 paraphrases its parent
+   - Within any single H2, no two H3s have pairwise cosine > 0.78 — H3 siblings do not paraphrase each other
 2. **Fixture B — Sparse SERP.** Run a niche keyword with <10 SERP results. Verify graceful degradation: `low_serp_coverage: true` and reasonable persona-gap-driven outline.
 3. **Fixture C — Listicle intent.** Run a "best X" keyword. Verify uncapped H2 selection respects intent-specific rules and that each list-item-H2 is a distinct region.
 4. **Fixture D — Constraint exhaustion.** Construct a scenario where eligible candidates cluster heavily in 2–3 regions only. Verify `h2_shortfall: true` and `h2_shortfall_reason: "constraints_exhausted_eligible_pool"`.
 5. **Fixture E — Title generation failure path.** Mock title generation LLM to return malformed JSON twice. Verify run aborts with `title_generation_failed`.
 6. **Fixture F — Scope verification override.** Run a brief where the LLM marks an H2 `out_of_scope` that a human reviewer would consider in-scope. Verify the H2 routes to silo and the metadata captures the rejection. (This fixture is for catching false-positive scope rejections during tuning.)
 7. **Fixture G — Threshold sensitivity.** Run the same keyword 3 times with restatement_ceiling values of 0.74, 0.78, 0.82. Compare outputs. The middle run should be the production default; the others should produce visibly worse (over-constrained or under-constrained) results.
+8. **Fixture H — H3 sparsity.** Construct a scenario where a selected H2 has very few eligible H3 candidates after parent-relevance filtering (e.g., a niche H2 whose region is small and well-isolated from other regions). Verify `metadata.h2s_with_zero_h3s > 0`, that the brief is still valid, and that Authority Gap H3s still attach to the most-relevant available H2.
 
 ---
 
@@ -1131,4 +1209,4 @@ To validate v2.0 against the failure modes that motivated the rewrite:
 | 1.5 | 2026-04-29 | Reduced max H3s per H2 from 3 to 2 |
 | 1.6 | 2026-04-29 | Expanded LLM fan-out capture from ChatGPT-only to all 4 major LLMs; added cross-LLM consensus tracking; rebalanced heading priority formula to weight LLM consensus at 0.2 |
 | 1.7 | 2026-04-29 | Added Step 9 Silo Cluster Identification; added `discarded_headings` and `silo_candidates` to output schema; added cluster quality rules, review flag, and failure mode for empty silo results |
-| **2.0** | **2026-05-01** | **Major architectural rewrite. Added Step 3.5 (title + scope statement generation), Step 6 (hypothetical searcher persona generation), and Step 8.5 (scope verification). Replaced lexical-only deduplication with embedding-based pre-filtering (relevance floor 0.55, restatement ceiling 0.78). Replaced ad-hoc heading selection with MMR optimization respecting region uniqueness and inter-heading anti-redundancy (max 0.75 pairwise cosine). Added coverage graph construction via Louvain community detection. Upgraded embedding model from text-embedding-3-small to text-embedding-3-large. Rebalanced heading priority formula to include explicit information_gain_score term. Silo cluster identification now reuses Step 5 regions instead of clustering discarded headings separately. Output schema fundamentally restructured: `semantic_score` renamed to `title_relevance`; new fields `title`, `scope_statement`, `persona`, `region_id`, `scope_classification`, `information_gain_score`; new discard reasons; new metadata for graph structure and shortfall flags. Cost ceiling raised from $0.75 to $1.00. End-to-end target raised from 60s to 75s. Brief generator does not accept ICP context; hypothetical searcher is derived from topic + SERP signal only. Fixes the v1.7 failure modes documented in Section 1: paraphrase-H2 outlines and topical-clone outlines.** |
+| **2.0** | **2026-05-01** | **Major architectural rewrite. Added Step 3.5 (title + scope statement generation), Step 6 (hypothetical searcher persona generation), Step 8.5 (scope verification), and Step 8.6 (H3 selection — applies the same MMR + region + anti-restatement principles at H2-scope rather than title-scope, with `parent_relevance` floor 0.60 and ceiling 0.85, inter-H3 threshold 0.78, and Authority Gap cap-displacement rules). Replaced lexical-only deduplication with embedding-based pre-filtering (relevance floor 0.55, restatement ceiling 0.78). Replaced ad-hoc heading selection with MMR optimization respecting region uniqueness and inter-heading anti-redundancy (max 0.75 pairwise cosine). Added coverage graph construction via Louvain community detection. Upgraded embedding model from text-embedding-3-small to text-embedding-3-large. Rebalanced heading priority formula to include explicit information_gain_score term. Silo cluster identification now reuses Step 5 regions instead of clustering discarded headings separately. Output schema fundamentally restructured: `semantic_score` renamed to `title_relevance`; new fields `title`, `scope_statement`, `persona`, `region_id`, `scope_classification`, `information_gain_score`, `parent_h2_text`, `parent_relevance`; new discard reasons (including `h3_below_parent_relevance_floor`, `h3_above_parent_restatement_ceiling`, `displaced_by_authority_gap_h3`); new metadata for graph structure, shortfall flags, and H3 distribution (`h3_count_average`, `h2s_with_zero_h3s`). Cost ceiling raised from $0.75 to $1.00. End-to-end target raised from 60s to 75s. Brief generator does not accept ICP context; hypothetical searcher is derived from topic + SERP signal only. Fixes the v1.7 failure modes documented in Section 1: paraphrase-H2 outlines and topical-clone outlines.** |
