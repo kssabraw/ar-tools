@@ -46,6 +46,7 @@ Writer v1.5 introduces a fourth input — `client_context` — and the logic to 
 | **v1.6:** H1 sourced verbatim from `brief.title` (no LLM regeneration) | Behavioral change | Section 4.5 |
 | **v1.6:** Intro Agree/Promise/Preview construction (60–150 words, single paragraph) | Behavioral change | Section 4.3.1–4.3.2 |
 | **v1.6:** Defense-in-depth `titlecase` pass on all H1/H2/H3 text | Behavioral change | Section 4.6 |
+| **v1.6:** Multi-format output serialization — `article_markdown` and `article_html` | Schema addition + behavioral change | Section 4.7 / Output contract |
 | Bump output `schema_version` to `1.6` | Schema metadata | Output contract |
 
 The Brief, Research & Citations, and SIE input schemas (Inputs A, B, C) are **unchanged** in v1.5/v1.6 — but v1.6 now consumes `brief.title` (added by Brief PRD v2.0.0 Step 3.5) as a required input.
@@ -531,6 +532,86 @@ A failed assertion indicates either a bug in the `titlecase` library version or 
 
 ---
 
+### 4.7 Multi-Format Output Serialization (NEW in v1.6)
+
+In addition to the structured `article[]` array, the Writer emits two flat string serializations of the final article so consumers (frontend, exports, CMS integrations) do not each reimplement the conversion. Both serializations are produced **deterministically** from the existing `article[]` + `citations[]` data — there are no LLM calls in this step.
+
+#### 4.7.1 New Output Fields
+
+| Field | Type | Purpose |
+|---|---|---|
+| `article_markdown` | string | GitHub-flavored Markdown, suitable for Markdown editors, the platform's article preview, GitHub renders, and any consumer that natively understands Markdown footnotes. |
+| `article_html` | string | Semantic HTML5 (no inline styles, no wrapping `<html>`/`<body>` boilerplate) suitable for direct paste into the WordPress code/HTML block, embedding in a CMS, or pasting into Google Docs / WordPress visual editor (both readers render pasted HTML as rich text). |
+
+Both fields are always present when `article[]` is non-empty. Both are populated even on the legacy-H1 / no-context / degraded code paths.
+
+#### 4.7.2 Markdown Serialization Rules
+
+| `article[]` Item | Markdown |
+|---|---|
+| `level == "H1"` | `# {text}\n\n` |
+| `level == "H2"`, `type == "content"` | `## {text}\n\n` |
+| `level == "H3"`, `type == "content"` | `### {text}\n\n` |
+| `level == "H2"`, `type == "faq-header"` | `## {text}\n\n` |
+| `level == "H2"`, `type == "conclusion"` | `## {text}\n\n` |
+| Intro paragraph | `{text}\n\n` |
+| Section body paragraph | `{text}\n\n` |
+| FAQ question | `### {text}\n\n` |
+| FAQ answer | `{text}\n\n` |
+| Citation marker `{{cit_N}}` inside body text | `[^N]` (GitHub footnote reference) |
+| Sources Cited section | `## Sources\n\n[^1]: {title} — {url}\n[^2]: ...` (one footnote definition per cited source, ordered by citation id) |
+
+Trailing whitespace is stripped from the final string. The output ends with a single `\n`.
+
+#### 4.7.3 HTML Serialization Rules
+
+| `article[]` Item | HTML |
+|---|---|
+| `level == "H1"` | `<h1>{text}</h1>` |
+| `level == "H2"` (any `type`) | `<h2>{text}</h2>` |
+| `level == "H3"` (any `type`) | `<h3>{text}</h3>` |
+| Intro paragraph | `<p>{text}</p>` |
+| Section body paragraph | `<p>{text}</p>` |
+| FAQ question | `<h3>{text}</h3>` |
+| FAQ answer | `<p>{text}</p>` |
+| Citation marker `{{cit_N}}` inside body text | `<sup><a href="#cite-N">N</a></sup>` |
+| Sources Cited section | `<h2>Sources</h2><ol><li id="cite-1"><a href="{url}">{title}</a></li>...</ol>` |
+
+**Constraints:**
+
+- All text content is HTML-escaped (`&`, `<`, `>`, `"`, `'`) before insertion. Citation markers are escaped *after* substitution so the `<sup>` tags survive.
+- No `<html>`, `<head>`, `<body>`, `<!DOCTYPE>`, or `<meta>` tags — output is a fragment, not a document.
+- No inline `style="..."` attributes and no class names. Consumers that want styling apply their own CSS.
+- Items are joined with `\n` (one HTML element per line) for readability; whitespace between block elements is irrelevant for rendering.
+- Anchor targets (`id="cite-N"`) live exclusively on the `<li>` elements inside the Sources `<ol>`. When the HTML is pasted into Google Docs or the WordPress visual editor, in-document anchors generally do not survive the paste — that is acceptable; the superscript numbers remain readable as plain numerals and the Sources list remains a clickable list of external URLs.
+
+#### 4.7.4 Citation Rendering Across Formats
+
+| Format | Inline marker | Source list |
+|---|---|---|
+| `article[]` (structured) | `{{cit_N}}` token (unchanged from v1.5) | `citations[]` array (unchanged from v1.5) |
+| `article_markdown` | `[^N]` GitHub footnote | `## Sources` heading followed by `[^N]: {title} — {url}` definitions |
+| `article_html` | `<sup><a href="#cite-N">N</a></sup>` | `<h2>Sources</h2><ol><li id="cite-N"><a href="{url}">{title}</a></li>…</ol>` |
+
+The numeric citation index `N` is the citation's `id` from the `citations[]` array — it must match across all three representations.
+
+#### 4.7.5 Determinism & Idempotency
+
+- The serializers are pure functions of `(article[], citations[])` — same inputs always produce the same outputs.
+- The serializers do NOT mutate `article[]` or `citations[]`.
+- Running the Markdown serializer's output back through a Markdown parser and re-serializing it MAY produce minor whitespace differences (acceptable). Running the HTML serializer's output through `BeautifulSoup` or a tag-stripping parser MUST recover the same plain-text content as the original `article[]` body fields.
+
+#### 4.7.6 Failure Handling
+
+| Scenario | Behavior |
+|---|---|
+| `article[]` is empty | `article_markdown = ""`, `article_html = ""`. No abort. (The Writer should never produce an empty article in normal operation; this is a defensive default.) |
+| Citation marker references an unknown citation id | Emit the marker text verbatim (`{{cit_N}}` in Markdown, `<span>{{cit_N}}</span>` in HTML) and log warning `serializer_unknown_citation`. Do not abort. |
+| Section body paragraph contains existing Markdown / HTML syntax (e.g., a literal `**` or `<em>`) | Markdown: pass through unchanged (already-Markdown content rendered as-is). HTML: HTML-escape the entire paragraph — the body LLM is not authorized to emit HTML in v1.6, so any `<` / `>` is treated as literal text, not markup. |
+| `Sources Cited` module did not run (older pipeline, missing data) | Omit the Sources section in both formats. The inline citation markers still render to `[^N]` / `<sup>`-anchor form — a reader sees superscript numerals with no resolvable target, which is recoverable rather than abort-worthy. |
+
+---
+
 ## 5. Output Schema Additions
 
 ### 5.1 New Top-Level Output Fields
@@ -539,6 +620,8 @@ A failed assertion indicates either a bug in the `titlecase` library version or 
 {
   "schema_version": "1.6",
   "article": [...],
+  "article_markdown": "string (full Markdown serialization — see Section 4.7.2)",
+  "article_html": "string (full semantic HTML5 fragment — see Section 4.7.3)",
   "citations": [...],
   "citation_usage": {...},
   "brand_voice_card_used": {
@@ -576,6 +659,8 @@ A failed assertion indicates either a bug in the `titlecase` library version or 
 
 | Field | Notes |
 |---|---|
+| `article_markdown` | GitHub-flavored Markdown serialization of `article[]` + `citations[]`, produced deterministically per Section 4.7.2. Always populated when `article[]` is non-empty. |
+| `article_html` | Semantic HTML5 fragment serialization of `article[]` + `citations[]`, produced deterministically per Section 4.7.3. Suitable for direct paste into the WordPress code/HTML block, embedding in a CMS, or pasting into Google Docs / WordPress visual editor. |
 | `brand_voice_card_used` | The exact distilled brand voice card that drove section writing. Verbatim copy from Step 3.5a output. Surfaced for downstream review and debugging. |
 | `brand_conflict_log` | One entry per non-`keep` reconciliation decision from Step 3.5b. Empty array (`[]`) when no conflicts existed. **Never null.** |
 | `brand_conflict_log[].applicable_section_ids` | Section IDs (from Brief input) where the term would have been used per SIE; empty list if the term applied article-wide |
@@ -716,7 +801,7 @@ Append this row to the existing version history table in Section 14 of the maste
 | Version | Date | Notes |
 |---|---|---|
 | 1.5 | 2026-04-30 | Added Input D (`client_context`) carrying `brand_guide_text`, `icp_text`, and `website_analysis` from the platform layer. Added Step 3.5a (Brand Voice Distillation) and Step 3.5b (Brand–SIE Term Reconciliation), running in parallel before Step 4. Brand voice card is regenerated per run from the platform's `client_context_snapshots` (no caching on the client record); the resulting card is persisted to Supabase via the `brand_voice_card_used` output field. Section writing, FAQ writing, and intro/conclusion writing prompts now inject distilled brand voice card, audience summary, filtered SIE terms, and (when available) website-derived client context blocks. Added output blocks `brand_voice_card_used`, `brand_conflict_log[]`, and `client_context_summary`. Added precedence rules: brand-banned > SIE-Required (term excluded), SIE-Avoid > brand-preferred (continue avoiding). Distillation and reconciliation LLMs are categorization-only — both must ground decisions in source text and may not invent brand opinions. Added post-hoc banned-term validation: regex-based, case-insensitive, word-boundary matching against `brand_voice_card.banned_terms`. Headings on regex match abort immediately with no retry; body/FAQ/intro/conclusion matches retry once with stricter prompt before aborting. Added backward-compat fallback `schema_version: "1.5-no-context"` when `client_context` is omitted, and `schema_version: "1.5-degraded"` when all client context is empty. Added three new failure modes (`brand_distillation_failed`, `brand_reconciliation_failed`, `banned_term_leakage`). Estimated cost delta from v1.4: +$0.04 to +$0.08 per article. Bumped output `schema_version` to `1.5`. |
-| 1.6 | 2026-05-01 | Three structural additions on top of v1.5, all driven by production failures observed on the "how to open a tiktok shop" run and aligned with Brief Generator PRD v2.0.3. **(1) H1 verbatim from `brief.title`** (Section 4.5): the Writer no longer generates the H1 via an LLM call; it copies `brief.title` directly into the first `H1` `article[]` item. Adds failure mode `brief_missing_title` and legacy fallback `schema_version: "1.6-legacy-h1"` for pre-v2.0.0 briefs without a `title` field. **(2) Agree / Promise / Preview intro** (Section 4.3.1–4.3.2): every article ships with a single-paragraph intro, 60–150 words, with three deterministic beats (Agree the reader's situation; Promise what the article delivers, anchored to `title` + `scope_statement`; Preview the first 3–5 H2 sections in order). Intro prompt now receives `title`, `scope_statement`, `intent_type`, and the H2 list as inputs. Post-validation enforces word count, single-paragraph, and no-heading-marker rules with a single retry per failed check. **(3) Defense-in-depth title casing** (Section 4.6): immediately before serialization, the Writer runs the same `titlecase==2.4.1` library used by the brief generator (PRD v2.0.3 Step 11.x) over every `H1/H2/H3` heading where `type ∈ {content, faq-header, conclusion, title}`. FAQ questions, intro/conclusion body text, and section bodies are excluded. The pass is idempotent and serves as a safety net when the brief generator's normalization is bypassed by Writer-side heading rewrites. Bumped output `schema_version` to `1.6`. New `schema_version_effective` values: `"1.6"`, `"1.6-no-context"`, `"1.6-degraded"`, `"1.6-legacy-h1"`. No changes to v1.5 brand reconciliation, banned-term enforcement, or client-context handling. |
+| 1.6 | 2026-05-01 | Four additions on top of v1.5, all driven by production failures observed on the "how to open a tiktok shop" run, alignment with Brief Generator PRD v2.0.3, and the publication-workflow need to paste articles directly into WordPress and Google Docs. **(1) H1 verbatim from `brief.title`** (Section 4.5): the Writer no longer generates the H1 via an LLM call; it copies `brief.title` directly into the first `H1` `article[]` item. Adds failure mode `brief_missing_title` and legacy fallback `schema_version: "1.6-legacy-h1"` for pre-v2.0.0 briefs without a `title` field. **(2) Agree / Promise / Preview intro** (Section 4.3.1–4.3.2): every article ships with a single-paragraph intro, 60–150 words, with three deterministic beats (Agree the reader's situation; Promise what the article delivers, anchored to `title` + `scope_statement`; Preview the first 3–5 H2 sections in order). Intro prompt now receives `title`, `scope_statement`, `intent_type`, and the H2 list as inputs. Post-validation enforces word count, single-paragraph, and no-heading-marker rules with a single retry per failed check. **(3) Defense-in-depth title casing** (Section 4.6): immediately before serialization, the Writer runs the same `titlecase==2.4.1` library used by the brief generator (PRD v2.0.3 Step 11.x) over every `H1/H2/H3` heading where `type ∈ {content, faq-header, conclusion, title}`. FAQ questions, intro/conclusion body text, and section bodies are excluded. The pass is idempotent and serves as a safety net when the brief generator's normalization is bypassed by Writer-side heading rewrites. **(4) Multi-format output serialization** (Section 4.7): the Writer now emits two new top-level output fields, `article_markdown` (GitHub-flavored Markdown with `[^N]` footnote citations) and `article_html` (semantic HTML5 fragment with `<sup><a href="#cite-N">` citations and an ordered Sources list), produced deterministically from `article[]` + `citations[]` with no LLM calls. The HTML fragment is suitable for both the WordPress code/HTML block and direct clipboard paste into Google Docs or the WordPress visual editor (which rich-text-render pasted HTML). Citation rendering rules are unified across the three representations (`{{cit_N}}` → `[^N]` → `<sup><a>`). Bumped output `schema_version` to `1.6`. New `schema_version_effective` values: `"1.6"`, `"1.6-no-context"`, `"1.6-degraded"`, `"1.6-legacy-h1"`. No changes to v1.5 brand reconciliation, banned-term enforcement, or client-context handling. |
 
 ---
 
