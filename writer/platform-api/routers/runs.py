@@ -267,6 +267,81 @@ async def cancel_run(
     return {"id": str(run_id), "status": "cancelled"}
 
 
+@router.post("/runs/{run_id}/resume", response_model=RunCreateResponse, status_code=202)
+async def resume_run(
+    run_id: UUID,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(require_auth),
+) -> RunCreateResponse:
+    """Resume a failed/cancelled run from the last completed stage.
+
+    Reuses any module_outputs already in 'complete' status — the orchestrator
+    skips those stages and picks up at the first incomplete one.
+    """
+    supabase = get_supabase()
+    run_result = (
+        supabase.table("runs").select("*").eq("id", str(run_id)).single().execute()
+    )
+    if not run_result.data:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    run = run_result.data
+
+    if run["status"] not in {"failed", "cancelled"}:
+        raise HTTPException(status_code=409, detail="run_not_resumable")
+
+    if auth["role"] != "admin" and str(run.get("created_by")) != auth["user_id"]:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    in_flight = (
+        supabase.table("runs")
+        .select("id", count="exact")
+        .in_("status", list(NON_TERMINAL_STATUSES))
+        .execute()
+    )
+    if (in_flight.count or 0) >= 5:
+        raise HTTPException(status_code=429, detail="concurrency_limit")
+
+    # Determine completed stages so we can pick the right re-entry status
+    mo_result = (
+        supabase.table("module_outputs")
+        .select("module, status")
+        .eq("run_id", str(run_id))
+        .execute()
+    )
+    completed = {m["module"] for m in (mo_result.data or []) if m.get("status") == "complete"}
+
+    if "writer" in completed:
+        next_status = "sources_cited_running"
+    elif "research" in completed:
+        next_status = "writer_running"
+    elif {"brief", "sie"}.issubset(completed):
+        next_status = "research_running"
+    else:
+        next_status = "brief_running"
+
+    supabase.table("runs").update(
+        {
+            "status": next_status,
+            "error_stage": None,
+            "error_message": None,
+            "completed_at": None,
+            "updated_at": "now()",
+        }
+    ).eq("id", str(run_id)).execute()
+
+    logger.info(
+        "run_resumed",
+        extra={
+            "run_id": str(run_id),
+            "next_status": next_status,
+            "resumed_completed_stages": list(completed),
+            "user_id": auth["user_id"],
+        },
+    )
+    background_tasks.add_task(orchestrate_run, str(run_id))
+    return RunCreateResponse(run_id=run_id, status=next_status)
+
+
 @router.post("/runs/{run_id}/rerun", response_model=RunCreateResponse, status_code=202)
 async def rerun(
     run_id: UUID,

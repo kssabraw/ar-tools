@@ -148,6 +148,25 @@ async def _get_snapshot(run_id: str) -> dict:
     return result.data or {}
 
 
+async def _load_completed_outputs(run_id: str) -> dict[str, dict]:
+    """Return {module: output_payload} for all module_outputs rows already
+    marked complete. Used by the orchestrator to skip stages on resume."""
+    result = (
+        _sb()
+        .table("module_outputs")
+        .select("module, status, output_payload")
+        .eq("run_id", run_id)
+        .eq("status", "complete")
+        .execute()
+    )
+    out: dict[str, dict] = {}
+    for row in result.data or []:
+        payload = row.get("output_payload")
+        if payload:
+            out[row["module"]] = payload
+    return out
+
+
 async def _create_module_output(run_id: str, module: str, input_payload: dict) -> str:
     try:
         result = (
@@ -433,28 +452,38 @@ async def orchestrate_run(run_id: str) -> None:
     try:
         run = await _get_run(run_id)
         snapshot = await _get_snapshot(run_id)
+        completed = await _load_completed_outputs(run_id)
+        if completed:
+            logger.info(
+                "resuming_run",
+                extra={"run_id": run_id, "completed_stages": list(completed.keys())},
+            )
 
-        # Stage 1: Brief + SIE in parallel
+        # Stage 1: Brief + SIE in parallel (skip whichever are already complete)
         if await _is_cancelled(run_id):
             raise CancellationError()
 
-        await _set_run_status(run_id, "brief_running")
+        brief_result: Any = completed.get("brief")
+        sie_result: Any = completed.get("sie")
 
-        brief_payload = _build_brief_payload(run)
-        sie_payload = _build_sie_payload(run)
+        pending: list[tuple[str, Any]] = []
+        if brief_result is None:
+            pending.append(("brief", _call_module("brief", run_id, _build_brief_payload(run))))
+        if sie_result is None:
+            pending.append(("sie", _call_module("sie", run_id, _build_sie_payload(run))))
 
-        brief_result, sie_result = await asyncio.gather(
-            _call_module("brief", run_id, brief_payload),
-            _call_module("sie", run_id, sie_payload),
-            return_exceptions=True,
-        )
+        if pending:
+            await _set_run_status(run_id, "brief_running")
+            results = await asyncio.gather(*[c for _, c in pending], return_exceptions=True)
+            for (name, _), res in zip(pending, results):
+                if isinstance(res, Exception):
+                    raise res if isinstance(res, StageError) else StageError(name, res)
+                if name == "brief":
+                    brief_result = res
+                else:
+                    sie_result = res
 
-        if isinstance(brief_result, Exception):
-            raise brief_result if isinstance(brief_result, StageError) else StageError("brief", brief_result)
-        if isinstance(sie_result, Exception):
-            raise sie_result if isinstance(sie_result, StageError) else StageError("sie", sie_result)
-
-        # Check SIE cache hit and persist to run
+        # Persist SIE cache hit (only meaningful when SIE actually ran)
         sie_cache_hit = sie_result.get("sie_cache_hit", False)
         _sb().table("runs").update({"sie_cache_hit": sie_cache_hit}).eq("id", run_id).execute()
 
@@ -462,27 +491,32 @@ async def orchestrate_run(run_id: str) -> None:
         if await _is_cancelled(run_id):
             raise CancellationError()
 
-        await _set_run_status(run_id, "research_running")
-        research_payload = _build_research_payload(run, brief_result)
-        research_result = await _call_module("research", run_id, research_payload)
+        research_result = completed.get("research")
+        if research_result is None:
+            await _set_run_status(run_id, "research_running")
+            research_payload = _build_research_payload(run, brief_result)
+            research_result = await _call_module("research", run_id, research_payload)
 
         # Stage 3: Writer
         if await _is_cancelled(run_id):
             raise CancellationError()
 
-        await _set_run_status(run_id, "writer_running")
-        writer_payload = _build_writer_payload(
-            run, brief_result, sie_result, research_result, snapshot
-        )
-        writer_result = await _call_module("writer", run_id, writer_payload)
+        writer_result = completed.get("writer")
+        if writer_result is None:
+            await _set_run_status(run_id, "writer_running")
+            writer_payload = _build_writer_payload(
+                run, brief_result, sie_result, research_result, snapshot
+            )
+            writer_result = await _call_module("writer", run_id, writer_payload)
 
         # Stage 4: Sources Cited
         if await _is_cancelled(run_id):
             raise CancellationError()
 
-        await _set_run_status(run_id, "sources_cited_running")
-        sources_payload = _build_sources_cited_payload(run, writer_result, research_result)
-        await _call_module("sources_cited", run_id, sources_payload)
+        if completed.get("sources_cited") is None:
+            await _set_run_status(run_id, "sources_cited_running")
+            sources_payload = _build_sources_cited_payload(run, writer_result, research_result)
+            await _call_module("sources_cited", run_id, sources_payload)
 
         # Complete
         await _set_run_status(run_id, "complete")

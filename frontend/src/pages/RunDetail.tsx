@@ -2,7 +2,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
-import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, RotateCcw, Repeat } from 'lucide-react'
+import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, RotateCcw, Repeat, Play } from 'lucide-react'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -97,6 +97,14 @@ export function RunDetail() {
     },
   })
 
+  const resumeMutation = useMutation({
+    mutationFn: () => api.post<{ run_id: string; status: RunStatus }>(`/runs/${id}/resume`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['run', id] })
+      queryClient.invalidateQueries({ queryKey: ['runs'] })
+    },
+  })
+
   function handleCancel() {
     if (!window.confirm('Cancel this run? In-progress modules will finish, but no further stages will run.')) return
     cancelMutation.mutate()
@@ -107,11 +115,17 @@ export function RunDetail() {
     rerunMutation.mutate()
   }
 
+  function handleResume() {
+    if (!window.confirm('Resume this run from the last completed stage? Already-finished modules will be reused.')) return
+    resumeMutation.mutate()
+  }
+
   if (isLoading) return <div style={{ padding: 40, color: '#64748b' }}>Loading…</div>
   if (!run) return <div style={{ padding: 40, color: '#dc2626' }}>Run not found</div>
 
   const canCancel = !TERMINAL.includes(run.status)
   const canRestart = run.status === 'failed' || run.status === 'cancelled'
+  const canResume = run.status === 'failed' || run.status === 'cancelled'
   const canRerun = run.status === 'complete'
 
   const scPayload = run.module_outputs?.sources_cited?.output_payload
@@ -149,6 +163,15 @@ export function RunDetail() {
               <Ban size={13} /> {cancelMutation.isPending ? 'Cancelling…' : 'Cancel run'}
             </button>
           )}
+          {canResume && (
+            <button
+              onClick={handleResume}
+              disabled={resumeMutation.isPending}
+              style={resumeBtn}
+            >
+              <Play size={13} /> {resumeMutation.isPending ? 'Resuming…' : 'Resume'}
+            </button>
+          )}
           {canRestart && (
             <button
               onClick={() => handleRerun('Restart this run')}
@@ -179,6 +202,12 @@ export function RunDetail() {
       {rerunMutation.isError && (
         <div style={{ marginBottom: 16, padding: '10px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
           Failed to start new run: {rerunMutation.error instanceof Error ? rerunMutation.error.message : 'unknown error'}
+        </div>
+      )}
+
+      {resumeMutation.isError && (
+        <div style={{ marginBottom: 16, padding: '10px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
+          Failed to resume run: {resumeMutation.error instanceof Error ? resumeMutation.error.message : 'unknown error'}
         </div>
       )}
 
@@ -269,4 +298,5 @@ const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color
 const ghostBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#374151', border: '1px solid #e2e8f0', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
 const cancelBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
 const restartBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#b45309', border: '1px solid #fde68a', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
+const resumeBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#0f766e', border: '1px solid #99f6e4', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
 const rerunBtnStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#6366f1', color: '#fff', border: '1px solid #6366f1', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
