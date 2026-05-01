@@ -22,7 +22,7 @@ create table briefs_cache (
   -- attributing cost and tracking which client first paid for which brief.
   -- The cache key intentionally does NOT include client_id — content is
   -- shared across clients per PRD §2.
-  triggered_by_client_id uuid,
+  triggered_by_client_id text,
 
   -- Operational metrics for cost / performance tracking
   cost_usd        numeric(10, 4),

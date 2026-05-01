@@ -34,7 +34,7 @@ from networkx.algorithms.community import louvain_communities
 
 from models.brief import DiscardReason, HeadingSource, ScopeClassification
 
-from .llm import cosine, embed_batch_large
+from .llm import embed_batch_large
 
 logger = logging.getLogger(__name__)
 
