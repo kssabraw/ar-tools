@@ -27,27 +27,114 @@ from models.brief import BriefRequest
 # Reusable synthetic data builders
 # ----------------------------------------------------------------------
 
-def _normalize_vec(text: str, dim: int = 16) -> list[float]:
-    """Deterministic synthetic embedding biased toward axis 0 for the topic."""
+def _normalize(v: list[float]) -> list[float]:
+    n = math.sqrt(sum(x * x for x in v)) or 1.0
+    return [x / n for x in v]
+
+
+# Topic → axis routing for the synthetic embedder. Strings on the LEFT
+# are matched as substrings (lowercased). Vectors are then constructed
+# so each topic cluster has a distinct primary axis but all share the
+# title axis (0) at a magnitude that puts cosine-to-title inside the
+# eligible band [0.55, 0.78] for in-scope topics.
+_TOPIC_AXES: list[tuple[str, int, float]] = [
+    # (substring, axis, title-axis weight)
+    # — title-restatement (cosine > 0.85): drop directly on axis 0
+    ("what is tiktok shop", 0, 0.97),
+    ("what is the tiktok shop", 0, 0.97),
+    ("what exactly is tiktok shop", 0, 0.97),
+    ("what does tiktok shop", 0, 0.95),
+    ("what tiktok shop", 0, 0.94),
+    # — in-band useful subtopics: cosine ~0.70 to title; spread axes 1–4
+    ("how does tiktok shop work", 1, 0.70),
+    ("how it works", 1, 0.70),
+    ("how tiktok shop works", 1, 0.70),
+    ("setup", 2, 0.70),
+    ("set up", 2, 0.70),
+    ("how to set up", 2, 0.70),
+    ("seller requirements", 2, 0.68),
+    ("fees", 3, 0.70),
+    ("charge", 3, 0.70),
+    ("cost", 3, 0.70),
+    ("payment", 3, 0.70),
+    # — persona gap questions land on axis 4 so they cluster together
+    ("gap question", 4, 0.70),
+    # — algorithm-tactical: in eligible band but typically out-of-scope
+    ("algorithm", 5, 0.65),
+    ("optimize", 5, 0.65),
+    # — off-topic: orthogonal to title (below relevance floor)
+    ("cooking", 7, 0.0),
+    ("recipes", 7, 0.0),
+]
+
+
+def _normalize_vec(text: str, dim: int = 12) -> list[float]:
+    """Smart synthetic embedder: routes each text to a primary topic axis
+    and builds a vector that puts cosine-to-title inside the right band.
+
+    Adds a tiny per-text perturbation so candidates within the same
+    topic cluster differ slightly (Louvain still groups them; coherence
+    stays high; pairwise cosines under one H2 stay below 0.78 if we
+    perturb across non-primary axes).
+    """
+    text_l = text.lower()
+
+    # Pick the first matching topic; fall back to a generic in-band slot
+    # so unmatched candidates don't all collapse onto axis 0.
+    primary_axis = 1
+    title_weight = 0.65
+    for needle, axis, weight in _TOPIC_AXES:
+        if needle in text_l:
+            primary_axis = axis
+            title_weight = weight
+            break
+
     vec = [0.0] * dim
+    vec[0] = title_weight
+    if primary_axis != 0 and primary_axis < dim:
+        # Choose a secondary weight so the result roughly unit-normalizes
+        secondary = math.sqrt(max(1.0 - title_weight ** 2, 0.0))
+        vec[primary_axis] = secondary
+
+    # Per-text perturbation on axes other than 0 and primary_axis so
+    # cluster members aren't byte-identical (avoids exact-cosine 1.0
+    # which would fail the inter_h3 / restatement bands artificially).
     seed = sum(ord(c) for c in text)
     for i in range(dim):
-        vec[i] = ((seed + i * 17) % 13) / 13.0
-    if "tiktok shop" in text.lower() or text.lower() == "what is tiktok shop":
-        vec[0] += 1.5
-    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
-    return [x / norm for x in vec]
+        if i in (0, primary_axis):
+            continue
+        vec[i] += ((seed + i * 7) % 7) / 200.0  # ≤ 0.03 noise per axis
+
+    return _normalize(vec)
 
 
 def _build_serp_items(
     n: int = 20,
-    description_template: str = (
-        "Overview of TikTok Shop selling for new creators (variant {i}). "
-        "How it works:\nSetup process for sellers:\nFees structure:"
-    ),
+    description_template: Optional[str] = None,
     extras: Optional[list[dict]] = None,
 ) -> list[dict]:
+    """Build a topically-diverse SERP organic feed.
+
+    The default template seeds three in-band topics (works / setup /
+    fees) plus a paraphrase trap (the title itself) so the run produces:
+
+      * multiple coverage-graph regions (axes 1, 2, 3 from the smart embedder)
+      * above_restatement_ceiling rejects (Fixture I source)
+      * algorithm-tactical headings via PAA (Fixture J / scope-reject source)
+    """
     items: list[dict] = []
+    if description_template is None:
+        # Including the algorithm-tactical line in every description gives
+        # it serp_frequency ~= n, putting search_demand_score above the
+        # 0.30 floor so it can materialize as a scope-verification silo
+        # in fixture I / J.
+        description_template = (
+            "Article variant {i} covering the basics. "
+            "How TikTok Shop works for sellers:\n"
+            "Setup process for new sellers:\n"
+            "Fees and charges sellers should know:\n"
+            "How to optimize for the TikTok Shop algorithm:"
+        )
     for i in range(n):
         items.append({
             "type": "organic",
@@ -64,8 +151,10 @@ def _build_serp_items(
             "type": "people_also_ask",
             "items": [
                 {"title": "How does TikTok Shop work for sellers?"},
-                {"title": "Is TikTok Shop worth it for small businesses?"},
+                {"title": "How to set up a TikTok Shop account?"},
                 {"title": "How much does TikTok Shop charge in fees?"},
+                # algorithm-tactical → scope_verification routes to silo
+                {"title": "How to optimize for the TikTok Shop algorithm?"},
             ],
         })
         items.append({"type": "featured_snippet", "title": "TikTok Shop"})
@@ -103,6 +192,12 @@ async def _default_keyword_suggestions(*args, **kwargs):
 
 
 async def _default_llm_response(*args, **kwargs):
+    # Each of the 4 LLM fanouts returns the same payload, including the
+    # algorithm-tactical query. After Levenshtein dedup against PAA's
+    # "How to optimize for the TikTok Shop algorithm?", consensus on
+    # the merged candidate reaches 4 → search_demand_score
+    # = 0.25 (consensus 4/4) + 0.20 (paa presence) = 0.45 (above 0.30
+    # floor), so it materializes as a scope-verification silo.
     return {
         "text": (
             "TikTok Shop is a social commerce platform inside TikTok. "
@@ -111,6 +206,7 @@ async def _default_llm_response(*args, **kwargs):
         "fan_out_queries": [
             "how to set up tiktok shop",
             "tiktok shop seller requirements",
+            "how to optimize for the tiktok shop algorithm",
         ],
     }
 
@@ -168,12 +264,20 @@ def _make_default_claude_router(
             items = []
             for ln in lines:
                 text = ln.split(". ", 1)[-1] if ". " in ln else ln
-                if text:
-                    items.append({
-                        "h2_text": text,
-                        "scope_classification": "in_scope",
-                        "reasoning": "ok",
-                    })
+                if not text:
+                    continue
+                # Algorithm-tactical phrasing → out_of_scope so it
+                # routes to silos via routed_from="scope_verification".
+                lower = text.lower()
+                if "algorithm" in lower or "optimize" in lower:
+                    classification = "out_of_scope"
+                else:
+                    classification = "in_scope"
+                items.append({
+                    "h2_text": text,
+                    "scope_classification": classification,
+                    "reasoning": "scope check",
+                })
             return {"verified_h2s": items}
 
         if "universal authority agent" in sys_l:
@@ -285,24 +389,45 @@ def _fixture_mocks(
 @pytest.mark.asyncio
 async def test_fixture_a_tiktok_shop_v2_0_2_silo_fields_present():
     """Fixture A extension: verify silos carry search_demand_score,
-    viable_as_standalone_article, viability_reasoning, and estimated_intent."""
+    viable_as_standalone_article, viability_reasoning, and estimated_intent.
+
+    The synthetic SERP includes an algorithm-tactical PAA entry that the
+    scope-verification mock classifies as out_of_scope; combined with
+    LLM fanout consensus across all 4 mocked LLMs, demand clears the
+    0.30 floor so the candidate materializes as a silo with
+    routed_from="scope_verification".
+    """
     from modules.brief.pipeline import run_brief
 
     req = BriefRequest(run_id="fix-a", keyword="what is tiktok shop")
     with _fixture_mocks():
         result = await run_brief(req)
 
-    # Every silo carries the v2.0.2 fields populated
+    # Non-vacuous: at least one silo must materialize via the
+    # scope_verification path so the v2.0.2 field assertions actually run.
+    assert len(result.silo_candidates) >= 1, (
+        "expected at least one silo from scope_verification path"
+    )
+    scope_silos = [
+        s for s in result.silo_candidates
+        if s.routed_from == "scope_verification"
+    ]
+    assert scope_silos, "expected a scope_verification-routed silo"
+
     for silo in result.silo_candidates:
-        assert silo.search_demand_score >= 0.0
-        # Default-router viability returns viable=true
+        # 12.3 — every silo must clear the demand floor
+        assert silo.search_demand_score >= 0.30
+        # 12.4 — default router returns viable=true for all
         assert silo.viable_as_standalone_article is True
         assert silo.viability_reasoning  # non-empty
         assert silo.estimated_intent in {
             "informational", "listicle", "how-to", "comparison",
             "ecom", "local-seo", "news", "informational-commercial",
         }
+        # 12.5 — v2.0.2 default
         assert silo.cross_brief_occurrence_count == 1
+        # 12.6 — discard breakdown is populated
+        assert silo.discard_reason_breakdown
 
 
 @pytest.mark.asyncio
@@ -380,22 +505,31 @@ async def test_fixture_d_constraint_exhaustion_flags_h2_shortfall():
 
 @pytest.mark.asyncio
 async def test_fixture_h_h3_sparsity_metadata_populated():
-    """Construct a scenario where H2s are well-spread across regions
-    but few candidates pass parent-relevance filtering. Verify
-    h2s_with_zero_h3s > 0 and the brief is still valid."""
+    """The smart embedder produces tight intra-region cosines (≥0.95) so
+    Step 8.6's parent_restatement_ceiling (0.85) rejects most candidates
+    — every selected H2 ends up with zero non-authority H3s. The
+    metadata must surface that condition cleanly.
+    """
     from modules.brief.pipeline import run_brief
 
     req = BriefRequest(run_id="fix-h", keyword="what is tiktok shop")
     with _fixture_mocks():
         result = await run_brief(req)
 
-    # h3_count_average and h2s_with_zero_h3s are populated regardless;
-    # we just need them to be non-negative and consistent.
-    assert result.metadata.h3_count_average >= 0.0
-    assert result.metadata.h2s_with_zero_h3s >= 0
+    # Sanity: at least one H2 selected so the metadata is meaningful
+    assert result.metadata.h2_count >= 1
+    # h2s_with_zero_h3s ≤ h2_count — they're counts of the same set
     assert (
         result.metadata.h2s_with_zero_h3s <= result.metadata.h2_count
     )
+    # Non-vacuous: under the synthetic embedder, in-region cosines are
+    # too tight for Step 8.6 to attach H3s, so EVERY H2 should report
+    # zero non-authority H3s. (Authority gap H3s flow through a
+    # different path and don't count toward this metric.)
+    assert result.metadata.h2s_with_zero_h3s == result.metadata.h2_count
+    # h3_count_average is the structure-level count; with authority H3s
+    # attaching it can be > 0 even when h2s_with_zero_h3s == h2_count.
+    assert result.metadata.h3_count_average >= 0.0
 
 
 # ----------------------------------------------------------------------
@@ -417,6 +551,16 @@ async def test_fixture_i_above_restatement_ceiling_excluded_from_silos():
         d.text for d in result.discarded_headings
         if d.discard_reason == "above_restatement_ceiling"
     }
+    # Non-vacuous: synthetic SERP titles include "What TikTok Shop Is"
+    # paraphrases that the smart embedder maps to axis 0 with cosine
+    # ≥ 0.94 to title — these must end up in restatement discards.
+    assert restatement_texts, (
+        "expected at least one above_restatement_ceiling discard"
+    )
+    # And at least one silo must exist so the loop body runs.
+    assert result.silo_candidates, (
+        "expected at least one silo for the exclusion check to be meaningful"
+    )
 
     # No silo candidate should be drawn from those texts
     for silo in result.silo_candidates:
@@ -442,7 +586,8 @@ async def test_fixture_j_viability_false_excludes_candidate_and_increments_count
     silo_candidates_rejected_by_viability_check."""
     from modules.brief.pipeline import run_brief
 
-    # Force the viability LLM to mark every candidate as non-viable.
+    # Baseline run produces silos. Force viability=false on the same run
+    # to confirm they get filtered out and counted.
     router = _make_default_claude_router(viability_default_viable=False)
 
     req = BriefRequest(run_id="fix-j", keyword="what is tiktok shop")
@@ -451,9 +596,9 @@ async def test_fixture_j_viability_false_excludes_candidate_and_increments_count
 
     # All silos should have been filtered → empty list
     assert result.silo_candidates == []
-    # Rejection counter incremented at least once if any candidates
-    # made it past Steps 12.1–12.3.
-    assert result.metadata.silo_candidates_rejected_by_viability_check >= 0
+    # Non-vacuous: at least one candidate must have been rejected by
+    # the viability check (otherwise we're testing a no-op).
+    assert result.metadata.silo_candidates_rejected_by_viability_check >= 1
     # No fallback applied (LLM responded with valid JSON)
     assert result.metadata.silo_viability_fallback_applied is False
 
