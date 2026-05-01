@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Any, Optional
+from typing import Optional
 from urllib.parse import urlparse
 
 from config import settings
@@ -36,7 +36,6 @@ from models.brief import (
     BriefRequest,
     BriefResponse,
     DiscardedHeading,
-    HeadingSource,
     LLMFanoutCounts,
     LLMUnavailable,
     PersonaInfo,
@@ -45,7 +44,11 @@ from models.brief import (
 from . import dataforseo
 from .aggregation import aggregate_candidates
 from .errors import BriefError
-from .assembly import assemble_structure, attach_h3s, reorder_how_to
+from .assembly import (
+    assemble_structure,
+    attach_authority_h3s_with_displacement,
+    reorder_how_to,
+)
 from .authority import authority_gap_headings
 from .cache import get_cached, write_cache
 from .faqs import (
@@ -62,6 +65,7 @@ from .graph import (
     embed_with_gates,
     score_regions,
 )
+from .h3_selection import select_h3s_for_h2s
 from .intent import classify_intent
 from .llm import claude_json, embed_batch_large
 from .mmr import select_h2s_mmr
@@ -70,12 +74,11 @@ from .parsers import (
     normalize_text,
     parse_reddit,
     parse_serp,
-    sanitization_discards,
 )
 from .persona import generate_persona
 from .priority import compute_priority
 from .scope_verification import verify_scope
-from .silos import identify_silos
+from .silos import identify_silos, verify_silo_viability
 from .title_scope import generate_title_and_scope
 
 logger = logging.getLogger(__name__)
@@ -163,14 +166,6 @@ def _domain(url: str) -> str:
         return urlparse(url).netloc.lower()
     except Exception:
         return ""
-
-
-def _region_id_for(idx: int, regions) -> Optional[str]:
-    """Reverse-lookup: return the region_id whose member_indices contains idx."""
-    for r in regions:
-        if idx in r.member_indices:
-            return r.region_id
-    return None
 
 
 # ----------------------------------------------------------------------
@@ -399,9 +394,12 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             c.discard_reason = existing.discard_reason
         candidate_pool.append(c)
 
-    # Embed the genuinely new (mostly persona_gap) candidates and apply gates.
+    # Embed the genuinely new (mostly persona_gap) candidates and apply
+    # gates. embed_with_gates mutates the candidates in place — the
+    # GateResult itself is unused here (the new candidates flow into
+    # candidate_pool via shared object references).
     if new_candidates:
-        new_gate = await embed_with_gates(
+        await embed_with_gates(
             seed=keyword,
             title=title_scope.title,
             scope_statement=title_scope.scope_statement,
@@ -476,8 +474,30 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         )
         selected_h2s = selection.selected
 
+    # ---- Step 8.6 — H3 selection (NEW in v2.0.x) ----
+    # Per-H2 MMR over the eligible pool with parent_relevance bounds.
+    # Non-authority H3s come from the MMR-loser pool; the H3 pool is
+    # `selection.not_selected` PLUS region_kept members that were never
+    # picked but stayed eligible.
+    h3_pool = list(selection.not_selected)
+    h3_selection_result = select_h3s_for_h2s(
+        selected_h2s=selected_h2s,
+        h3_pool=h3_pool,
+        regions=scored_regions,
+    )
+    # Candidates attached as H3s should NOT carry below_priority_threshold.
+    attached_h3_ids: set[int] = set()
+    for arr in h3_selection_result.attachments.values():
+        for h3 in arr:
+            attached_h3_ids.add(id(h3))
+            # Clear the MMR-loser stamp; this candidate is now an H3.
+            if h3.discard_reason == "below_priority_threshold":
+                h3.discard_reason = None
+
     # ---- Step 9 — authority gap H3s ----
     existing_texts = [c.text for c in selected_h2s]
+    for arr in h3_selection_result.attachments.values():
+        existing_texts.extend(c.text for c in arr)
     auth_h3s = await authority_gap_headings(
         keyword=keyword,
         existing_headings=existing_texts,
@@ -498,6 +518,15 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
                 "brief.authority.embed_failed",
                 extra={"error": str(exc)},
             )
+
+    # Merge authority gap H3s into the per-H2 attachments with the
+    # priority-comparison + recursive routing rules from PRD §5 Step 8.6.
+    auth_attach = attach_authority_h3s_with_displacement(
+        h2s=selected_h2s,
+        authority_h3s=auth_h3s,
+        existing_attachments=h3_selection_result.attachments,
+    )
+    h3_attachments = auth_attach.attachments
 
     # ---- Step 10 — FAQ generation ----
     # Persona gap questions that did NOT make it into the H2 outline feed
@@ -528,16 +557,6 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     if intent == "how-to":
         selected_h2s = await reorder_how_to(selected_h2s, keyword)
 
-    # Build the H3 attachment pool from candidates that lost the H2
-    # competition but stayed in the eligible pool. Authority gap H3s go
-    # in separately (assembly handles the cap-displacement logic).
-    h3_pool = [
-        c for c in region_kept
-        if c not in selected_h2s
-        and c.discard_reason is None  # MMR sets this on losers
-    ]
-    h3_attachments = attach_h3s(selected_h2s, auth_h3s, h3_pool)
-
     heading_structure, cap_cuts = assemble_structure(
         keyword=keyword,
         intent=intent,
@@ -546,26 +565,35 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faqs=faqs,
     )
 
-    # ---- Step 12 — silos ----
+    # ---- Step 12 — silos (12.1 + 12.2 + 12.3 sync, then 12.4 async) ----
     contributing_region_ids = {
         c.region_id for c in selected_h2s if c.region_id is not None
     }
-    silos, low_coherence = identify_silos(
+    silo_id_result = identify_silos(
         regions=scored_regions,
         candidate_pool=eligible_pool,
         contributing_region_ids=contributing_region_ids,
         scope_rejects=scope_result.rejected,
     )
+    viability_result = await verify_silo_viability(
+        silo_id_result.candidates,
+        title=title_scope.title,
+        scope_statement=title_scope.scope_statement,
+    )
+    silos = viability_result.candidates
+    low_coherence = silo_id_result.low_coherence_candidates
 
     # ---- Build discarded_headings ----
     # The discarded list has multiple sources:
     #  - relevance gate (below_relevance_floor / above_restatement_ceiling)
     #  - region elimination (region_off_topic / region_restates_title)
-    #  - MMR losers (below_priority_threshold)
+    #  - MMR losers that didn't get promoted to H3 (below_priority_threshold)
     #  - scope verification rejects (scope_verification_out_of_scope)
+    #  - Step 8.6 globally-rejected H3s (h3_below_parent_relevance_floor /
+    #    h3_above_parent_restatement_ceiling)
+    #  - authority-gap displacements (displaced_by_authority_gap_h3)
     #  - silos low_coherence (low_cluster_coherence)
     #  - global cap cuts (global_cap_exceeded)
-    #  - sanitization rejects from parse_serp (S9/S10)
     discarded: list[Candidate] = []
 
     for c in candidate_pool:
@@ -575,14 +603,14 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             discarded.append(c)
 
     discarded.extend(region_eliminated)
-    discarded.extend(selection.not_selected)
+    # selection.not_selected: include only those NOT promoted to H3
+    discarded.extend(
+        c for c in selection.not_selected if id(c) not in attached_h3_ids
+    )
     discarded.extend(scope_result.rejected)
+    discarded.extend(h3_selection_result.globally_rejected)
+    discarded.extend(auth_attach.displaced)
     discarded.extend(low_coherence)
-
-    used_in_structure = {id(h) for h in selected_h2s}
-    for arr in h3_attachments.values():
-        for h3 in arr:
-            used_in_structure.add(id(h3))
 
     for c in cap_cuts:
         c.discard_reason = "global_cap_exceeded"
@@ -615,18 +643,6 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             discard_reason=c.discard_reason,
         ))
 
-    # Sanitization rejects from parse_serp (kept text is the raw — there's
-    # no v2.0 discard_reason that maps cleanly, so use 'duplicate' as the
-    # closest neutral category. Future PRD revision can add a dedicated
-    # discard_reason for this case.)
-    for raw in sanitization_discards(serp_headings):
-        discarded_models.append(DiscardedHeading(
-            text=raw["raw_text"],
-            source="serp",
-            title_relevance=0.0,
-            discard_reason="duplicate",
-        ))
-
     # ---- Build BriefMetadata ----
     h2_content_count = sum(
         1 for h in heading_structure if h.level == "H2" and h.type == "content"
@@ -643,6 +659,11 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         if r.eliminated and r.elimination_reason == "restates_title"
     )
 
+    # Step 8.6 H3 distribution stats (PRD §5 §6 metadata fields)
+    h3_count_average = (
+        h3_content_count / max(1, h2_content_count) if h2_content_count else 0.0
+    )
+
     metadata = BriefMetadata(
         word_budget=2500,
         faq_count=len(faqs),
@@ -655,12 +676,22 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         reddit_threads_analyzed=len(reddit_items),
         h2_shortfall=selection.shortfall,
         h2_shortfall_reason=selection.shortfall_reason,
+        h3_count_average=round(h3_count_average, 4),
+        h2s_with_zero_h3s=h3_selection_result.h2s_with_zero_h3s,
         regions_detected=len(scored_regions),
         regions_eliminated_off_topic=region_off_topic,
         regions_eliminated_restate_title=region_restate,
         regions_contributing_h2s=len(contributing_region_ids),
         scope_verification_borderline_count=scope_result.borderline_count,
         scope_verification_rejected_count=scope_result.rejected_count,
+        silo_candidates_rejected_by_discard_reason=(
+            silo_id_result.rejected_by_discard_reason_count
+        ),
+        silo_candidates_rejected_by_search_demand=(
+            silo_id_result.rejected_by_search_demand_count
+        ),
+        silo_candidates_rejected_by_viability_check=viability_result.rejected_count,
+        silo_viability_fallback_applied=viability_result.fallback_applied,
         llm_fanout_queries_captured=fanout_counts,
         llm_response_subtopics_extracted=response_counts,
         intent_signals=signals,
@@ -670,6 +701,11 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         inter_heading_threshold=settings.brief_inter_heading_threshold,
         edge_threshold=settings.brief_edge_threshold,
         mmr_lambda=settings.brief_mmr_lambda,
+        # Step 8.6 + Step 12.3 thresholds (echoed for tuning)
+        parent_relevance_floor_threshold=0.60,
+        parent_restatement_ceiling_threshold=0.85,
+        inter_h3_threshold=0.78,
+        silo_search_demand_threshold=0.30,
         low_serp_coverage=low_serp_coverage,
         reddit_unavailable=reddit_unavailable,
         llm_fanout_unavailable=unavailable,

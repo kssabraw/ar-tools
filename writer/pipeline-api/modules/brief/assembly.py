@@ -1,22 +1,28 @@
-"""Step 11 — Structure Assembly (Brief Generator v2.0).
+"""Step 11 — Structure Assembly (Brief Generator v2.0.2).
 
-Implements PRD §5 Step 11 — same shape as v1.7 but operates on the v2
-Candidate type and writes the v2 HeadingItem schema (no cluster_id /
-cluster_evidence — those are gone in v2.0).
+Implements PRD §5 Step 11. In v2.0.2 the non-authority H3 attachment
+moved to Step 8.6 (`h3_selection.py`); this module now handles only
+the authority-gap reconciliation and final structure assembly.
 
 Output:
   - H1: exact-match seed keyword
   - H2 sequence per intent (capped at 6 unless intent ∈ {listicle, how-to})
-  - Up to 2 H3s per H2; authority gap H3s land under their best-match H2
+  - Up to 2 H3s per H2 (3 only when Authority Gap overflow occurred —
+    PRD §5 Step 8.6 / Section 11)
   - FAQ block as a synthesized H2 + question H3s (outside the global cap)
   - Global cap: 15 (default) or 20 (uncapped intents)
 
-The function returns (heading_structure, candidates_cut_by_global_cap).
+`attach_authority_h3s_with_displacement` consumes the H3 attachments
+produced by Step 8.6 and merges authority-gap H3s with the
+priority-comparison + recursive routing rules from PRD §5 Step 8.6.
+`assemble_structure` returns the final HeadingItem list plus the
+candidates that fell off due to the global cap.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
 from models.brief import (
@@ -36,10 +42,9 @@ H2_CAP_DEFAULT = 6
 GLOBAL_CAP_CAPPED = 15
 GLOBAL_CAP_UNCAPPED = 20
 MAX_H3_PER_H2 = 2
-
-# Per PRD §5 Step 11 the parent-H2 attachment for non-authority H3s
-# requires a minimum cosine of 0.55 (matches v1.7 behavior).
-MIN_H3_TO_H2_SIMILARITY = 0.55
+# When authority gap H3 cap-displacement causes overflow, the per-H2
+# limit may grow by 1 (PRD §5 Step 8.6).
+MAX_H3_PER_H2_WITH_AUTHORITY_OVERFLOW = 3
 
 
 def _cosine_unit(a: list[float], b: list[float]) -> float:
@@ -49,64 +54,138 @@ def _cosine_unit(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b))
 
 
-def attach_h3s(
+@dataclass
+class AuthorityAttachResult:
+    """Output of `attach_authority_h3s_with_displacement`.
+
+    `attachments` mirrors the input shape (H2-index → H3 list). Authority
+    H3s sit at the start of each H2's list so the published order keeps
+    them visually distinct from Step 8.6 H3s. `displaced` carries any
+    Step 8.6 H3s evicted by higher-priority authority H3s — each has
+    `discard_reason="displaced_by_authority_gap_h3"` stamped.
+    """
+    attachments: dict[int, list[Candidate]] = field(default_factory=dict)
+    displaced: list[Candidate] = field(default_factory=list)
+
+
+def _rank_h2s_by_similarity(
+    auth_h3: Candidate,
+    h2s: list[Candidate],
+) -> list[int]:
+    """Return H2 indices ordered by cosine to the authority H3, descending.
+
+    H2s without embeddings sort to the end so we still produce a list
+    where any choice is reachable by recursive routing.
+    """
+    scored: list[tuple[float, int]] = []
+    for i, h2 in enumerate(h2s):
+        sim = _cosine_unit(auth_h3.embedding, h2.embedding) if h2.embedding else -1.0
+        scored.append((sim, i))
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    return [i for _, i in scored]
+
+
+def attach_authority_h3s_with_displacement(
+    *,
     h2s: list[Candidate],
     authority_h3s: list[Candidate],
-    h3_pool: list[Candidate],
-) -> dict[int, list[Candidate]]:
-    """Attach up to MAX_H3_PER_H2 H3s to each H2.
+    existing_attachments: dict[int, list[Candidate]],
+    max_h3_per_h2: int = MAX_H3_PER_H2,
+) -> AuthorityAttachResult:
+    """Merge authority gap H3s into existing per-H2 H3 attachments.
 
-    Authority gap H3s land under the most-similar H2 (cosine on
-    embeddings). They displace the lowest-priority H3 already placed if
-    the slot is full — exempt H3s have priority over priority-only H3s.
+    Algorithm (PRD §5 Step 8.6 — Authority Gap H3 Interaction):
+      For each authority H3 in priority-desc order:
+        1. Rank H2s by cosine(auth_h3, h2) descending.
+        2. Walk the ranked list; first H2 with capacity (< max_h3_per_h2)
+           wins → attach there.
+        3. If no H2 has capacity, find the H2 where the auth H3 has the
+           highest priority over the lowest-scoring existing H3:
+             a. If the auth H3 outranks any existing H3, displace it
+                (discard_reason="displaced_by_authority_gap_h3").
+             b. Otherwise the auth H3 has the lowest priority across the
+                board; place it under the most-relevant H2 anyway —
+                authority H3s are never discarded (per PRD §5 Step 9).
+                The H2's H3 count is allowed to exceed `max_h3_per_h2`
+                by 1 in this edge case.
 
-    Then regular H3s fill remaining slots: each H3 is attached to its
-    best-similarity H2 with capacity, provided cosine ≥ MIN_H3_TO_H2_SIMILARITY.
+    Mutates the per-H2 lists in place; new attachment is inserted at
+    index 0 so authority H3s read first under their parent H2.
     """
-    attached: dict[int, list[Candidate]] = {i: [] for i in range(len(h2s))}
+    attachments: dict[int, list[Candidate]] = {
+        i: list(existing_attachments.get(i, [])) for i in range(len(h2s))
+    }
+    displaced: list[Candidate] = []
 
-    # Authority gap H3s first — cap-displacing
-    for ah in authority_h3s:
+    # Process auth H3s in priority-desc order so the strongest ones get
+    # first claim on capacity-available H2s.
+    auth_sorted = sorted(
+        authority_h3s,
+        key=lambda c: c.heading_priority,
+        reverse=True,
+    )
+
+    for ah in auth_sorted:
         if not h2s:
             continue
-        if not ah.embedding:
-            attached[0].append(ah)
-            continue
-        best_idx = 0
-        best_sim = -1.0
-        for i, h2 in enumerate(h2s):
-            if not h2.embedding:
-                continue
-            sim = _cosine_unit(ah.embedding, h2.embedding)
-            if sim > best_sim:
-                best_sim = sim
-                best_idx = i
-        if len(attached[best_idx]) >= MAX_H3_PER_H2:
-            # Drop the weakest non-authority H3 to make room
-            attached[best_idx].sort(key=lambda c: c.heading_priority)
-            attached[best_idx].pop(0)
-        attached[best_idx].append(ah)
+        ranked = _rank_h2s_by_similarity(ah, h2s)
 
-    # Non-authority H3 pool — fill remaining slots by best-similarity H2
-    h3_ranked = sorted(h3_pool, key=lambda c: c.heading_priority, reverse=True)
-    for h3 in h3_ranked:
-        if not h3.embedding:
+        # 1. First H2 with capacity wins
+        placed = False
+        for h2_idx in ranked:
+            if len(attachments[h2_idx]) < max_h3_per_h2:
+                attachments[h2_idx].insert(0, ah)
+                placed = True
+                break
+        if placed:
             continue
-        best_idx = -1
-        best_sim = -1.0
-        for i, h2 in enumerate(h2s):
-            if len(attached[i]) >= MAX_H3_PER_H2:
-                continue
-            if not h2.embedding:
-                continue
-            sim = _cosine_unit(h3.embedding, h2.embedding)
-            if sim > best_sim:
-                best_sim = sim
-                best_idx = i
-        if best_idx >= 0 and best_sim >= MIN_H3_TO_H2_SIMILARITY:
-            attached[best_idx].append(h3)
 
-    return attached
+        # 2. Find best displacement target: the H2 where THIS auth H3
+        # outranks the lowest-priority existing H3 by the largest margin.
+        best_target_idx: Optional[int] = None
+        best_margin = -float("inf")
+        best_displacee: Optional[Candidate] = None
+        for h2_idx in ranked:
+            slot = attachments[h2_idx]
+            if not slot:
+                continue
+            weakest = min(slot, key=lambda c: c.heading_priority)
+            margin = ah.heading_priority - weakest.heading_priority
+            if margin > best_margin:
+                best_margin = margin
+                best_target_idx = h2_idx
+                best_displacee = weakest
+
+        if best_target_idx is not None and best_displacee is not None and best_margin > 0:
+            # 2a. Displace the weakest H3
+            attachments[best_target_idx].remove(best_displacee)
+            best_displacee.discard_reason = "displaced_by_authority_gap_h3"
+            displaced.append(best_displacee)
+            attachments[best_target_idx].insert(0, ah)
+            continue
+
+        # 2b. Auth H3 has lowest priority everywhere → keep it anyway
+        # under the most-relevant H2 even if that exceeds the cap by 1.
+        target = ranked[0]
+        attachments[target].insert(0, ah)
+        logger.info(
+            "brief.authority.cap_overflow",
+            extra={
+                "auth_h3_text": ah.text,
+                "h2_index": target,
+                "new_h3_count": len(attachments[target]),
+                "max_h3_per_h2": max_h3_per_h2,
+            },
+        )
+
+    logger.info(
+        "brief.authority.attach_complete",
+        extra={
+            "auth_h3_count": len(authority_h3s),
+            "displaced_count": len(displaced),
+        },
+    )
+    return AuthorityAttachResult(attachments=attachments, displaced=displaced)
 
 
 LLMJsonFn = Callable[..., Awaitable]
