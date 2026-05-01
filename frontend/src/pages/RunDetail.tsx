@@ -1,8 +1,8 @@
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
-import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy } from 'lucide-react'
+import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, RotateCcw, Repeat } from 'lucide-react'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -70,6 +70,7 @@ function StatusChip({ status }: { status: RunStatus }) {
 export function RunDetail() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const { data: run, isLoading } = useQuery<RunDetailType>({
     queryKey: ['run', id],
@@ -88,15 +89,30 @@ export function RunDetail() {
     },
   })
 
+  const rerunMutation = useMutation({
+    mutationFn: () => api.post<{ run_id: string; status: RunStatus }>(`/runs/${id}/rerun`, {}),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['runs'] })
+      navigate(`/runs/${data.run_id}`)
+    },
+  })
+
   function handleCancel() {
     if (!window.confirm('Cancel this run? In-progress modules will finish, but no further stages will run.')) return
     cancelMutation.mutate()
+  }
+
+  function handleRerun(verb: string) {
+    if (!window.confirm(`${verb} with the same client and keyword? This creates a new run.`)) return
+    rerunMutation.mutate()
   }
 
   if (isLoading) return <div style={{ padding: 40, color: '#64748b' }}>Loading…</div>
   if (!run) return <div style={{ padding: 40, color: '#dc2626' }}>Run not found</div>
 
   const canCancel = !TERMINAL.includes(run.status)
+  const canRestart = run.status === 'failed' || run.status === 'cancelled'
+  const canRerun = run.status === 'complete'
 
   const scPayload = run.module_outputs?.sources_cited?.output_payload
   const enrichedArticle = scPayload?.enriched_article as Record<string, unknown> | undefined
@@ -133,12 +149,36 @@ export function RunDetail() {
               <Ban size={13} /> {cancelMutation.isPending ? 'Cancelling…' : 'Cancel run'}
             </button>
           )}
+          {canRestart && (
+            <button
+              onClick={() => handleRerun('Restart this run')}
+              disabled={rerunMutation.isPending}
+              style={restartBtn}
+            >
+              <RotateCcw size={13} /> {rerunMutation.isPending ? 'Starting…' : 'Restart'}
+            </button>
+          )}
+          {canRerun && (
+            <button
+              onClick={() => handleRerun('Rerun')}
+              disabled={rerunMutation.isPending}
+              style={rerunBtnStyle}
+            >
+              <Repeat size={13} /> {rerunMutation.isPending ? 'Starting…' : 'Rerun'}
+            </button>
+          )}
         </div>
       </div>
 
       {cancelMutation.isError && (
         <div style={{ marginBottom: 16, padding: '10px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
           Failed to cancel: {cancelMutation.error instanceof Error ? cancelMutation.error.message : 'unknown error'}
+        </div>
+      )}
+
+      {rerunMutation.isError && (
+        <div style={{ marginBottom: 16, padding: '10px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
+          Failed to start new run: {rerunMutation.error instanceof Error ? rerunMutation.error.message : 'unknown error'}
         </div>
       )}
 
@@ -228,3 +268,5 @@ const cardStyle: React.CSSProperties = { background: '#fff', borderRadius: 12, b
 const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#0f172a', margin: '0 0 16px' }
 const ghostBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#374151', border: '1px solid #e2e8f0', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
 const cancelBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
+const restartBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#b45309', border: '1px solid #fde68a', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
+const rerunBtnStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#6366f1', color: '#fff', border: '1px solid #6366f1', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
