@@ -70,7 +70,22 @@ def _validate_inputs(req: WriterRequest) -> tuple[str, str, list[dict], list[str
         raise WriterError("keyword_mismatch", f"brief.keyword='{brief_kw}' vs sie.keyword='{sie_kw}'")
 
     intent_type = brief.get("intent_type") or "informational"
-    heading_structure = brief.get("heading_structure") or []
+
+    # Prefer Research's enriched heading_structure (carries citation_ids
+    # per heading per Research §8). Fall back to the original brief's
+    # heading_structure when Research output is unavailable. Without this,
+    # the Writer's section prompt has no citations to ground prose,
+    # which causes the Section LLM to fall into placeholder mode on
+    # speculative topics (e.g. authority-gap H3s).
+    heading_structure: list[dict] = []
+    if req.research_output and isinstance(req.research_output, dict):
+        enriched = req.research_output.get("enriched_brief")
+        if isinstance(enriched, dict):
+            enriched_hs = enriched.get("heading_structure")
+            if isinstance(enriched_hs, list) and enriched_hs:
+                heading_structure = enriched_hs
+    if not heading_structure:
+        heading_structure = brief.get("heading_structure") or []
     if not heading_structure:
         raise WriterError("empty_heading_structure", "brief.heading_structure is empty")
 
