@@ -660,16 +660,42 @@ Universal structural constants, intent-aware H2/H3 caps, how-to sequential reord
 
 ### Step 12 — Silo Cluster Identification (REWRITTEN — Now Reuses Step 5 Regions)
 
-**Purpose:** Convert non-selected coverage graph regions into a structured map of supporting cluster articles for the content silo. Reuses regions computed in Step 5 — no additional clustering or embedding cost.
+**Purpose:** Convert non-selected coverage graph regions and scope-verification rejects into a prioritized roadmap of supporting cluster articles. Reuses regions computed in Step 5 — no additional clustering or embedding cost. Adds explicit filtering, search-demand validation, and a per-candidate viability check so the output is a defensible roadmap rather than a noisy list.
 
-**Input:** All regions from Step 5 that did NOT contribute a selected H2 to the final outline, plus all candidates moved to `discarded_headings` with `discard_reason: "scope_verification_out_of_scope"`.
+**Input:** All regions from Step 5 that did NOT contribute a selected H2 to the final outline, plus all candidates moved to `discarded_headings` with `discard_reason: "scope_verification_out_of_scope"`. The discard reason filtering in Step 12.1 governs which headings actually proceed.
 
-**Process:**
-1. For each non-contributing region from Step 5, compute:
-   - `cluster_coherence_score` = average pairwise cosine similarity between region members
-   - `suggested_keyword` = the centroid heading (highest average similarity to all other region members)
-   - `recommended_intent` = applied via the same rules-based signal mapping from Step 3, using the region's heading patterns
-2. For scope-verification rejects (which may not belong to a distinct region — they were eligible but failed scope check), treat each as a singleton silo candidate with `suggested_keyword = original heading text` and `cluster_coherence_score = 1.0` (singleton).
+**Process:** Run Steps 12.1 → 12.4 in order, then format per Step 12.6. Step 12.5 is reserved for v2.1.
+
+#### Step 12.1 — Discard Reason Filtering
+
+A heading's `discard_reason` determines whether it can become silo material. Re-routing the wrong reasons would generate articles that compete with the parent brief or surface noise.
+
+| Discard Reason | Silo Eligible | Reasoning |
+|---|---|---|
+| `above_restatement_ceiling` | No | Paraphrases the title; routing to silo would generate articles competing with the parent. |
+| `region_restates_title` | No | Same reasoning at the region level. |
+| `below_relevance_floor` | No | Off-topic noise; not a future article on this subject. |
+| `region_off_topic` | No | Same reasoning at the region level. |
+| `scope_verification_out_of_scope` | Yes — high priority | Topically relevant, in the eligible band, but answers a different reader question. Highest-confidence silo material. |
+| `below_priority_threshold` | Conditional | Eligible only if the heading's region did not contribute a selected H2. If the region did contribute, this heading is redundant with that H2 and excluded. |
+| `global_cap_exceeded` | Yes — medium priority | Cut for length, not quality. |
+| `low_cluster_coherence` | No | Already evaluated and rejected; do not re-evaluate. |
+| `duplicate` | No | Lexical duplicate. |
+| `displaced_by_authority_gap_h3` | No | H3-level signal, not H2-worthy. |
+| `h3_below_parent_relevance_floor` | No | H3-level signal. |
+| `h3_above_parent_restatement_ceiling` | No | H3-level signal. |
+
+Only headings with "Yes" or "Conditional" eligibility proceed to Step 12.2. Headings filtered out at this step are counted in `metadata.silo_candidates_rejected_by_discard_reason`.
+
+#### Step 12.2 — Cluster Formation
+
+For each non-selected, non-eliminated region from Step 5 whose members survived Step 12.1, compute:
+
+- `cluster_coherence_score` = average pairwise cosine similarity between region members
+- `suggested_keyword` = the centroid heading (highest average similarity to all other region members)
+- `recommended_intent` = applied via the same rules-based signal mapping from Step 3, using the region's heading patterns
+
+For scope-verification rejects, treat each as a singleton silo candidate with `suggested_keyword = original heading text` and `cluster_coherence_score = 1.0`. Singletons from `scope_verification_out_of_scope` are exempt from the minimum-2-heading rule because they have already been evaluated and confirmed as on-topic-but-out-of-scope.
 
 **Cluster quality rules:**
 
@@ -684,17 +710,84 @@ Universal structural constants, intent-aware H2/H3 caps, how-to sequential reord
 - If more than 10 clusters qualify, take the 10 with the highest coherence scores
 - If `cluster_coherence_score` is between 0.60 and 0.70, flag `review_recommended: true`
 
-**Silo candidate metadata:**
+#### Step 12.3 — Search Demand Validation
+
+A silo candidate that no one searches for is not a content opportunity. Compute a `search_demand_score` from signals already present on member headings:
+
+```
+search_demand_score =
+    0.30 × normalized_max_serp_frequency
+  + 0.25 × normalized_max_llm_consensus
+  + 0.20 × paa_presence_indicator
+  + 0.15 × autocomplete_presence_indicator
+  + 0.10 × reddit_discussion_indicator
+```
+
+Where:
+- `normalized_max_serp_frequency` = max `serp_frequency` among member headings, divided by 20
+- `normalized_max_llm_consensus` = max `llm_fanout_consensus` among member headings, divided by 4
+- `paa_presence_indicator` = 1.0 if any member heading has `source: "paa"`, else 0.0
+- `autocomplete_presence_indicator` = 1.0 if any member heading has `source` in {`autocomplete`, `keyword_suggestion`}, else 0.0
+- `reddit_discussion_indicator` = 1.0 if any member heading has `source: "reddit"`, else 0.0
+
+Silo candidates with `search_demand_score < 0.30` are filtered out — they have weak external evidence of search demand. This is a hard threshold, configurable per Section 12.6 of the PRD's Python Implementation Notes. Candidates filtered out at this step are counted in `metadata.silo_candidates_rejected_by_search_demand`.
+
+#### Step 12.4 — Independent Article Viability Check
+
+For each silo candidate that passes Steps 12.1–12.3, run a single LLM call to verify the candidate would make a defensible standalone article — distinct from the parent brief's intent, not a thin spin-off, and substantive enough to support its own outline.
+
+**Inputs:**
+- The silo candidate's `suggested_keyword`
+- The current brief's `title` and `scope_statement` (so the LLM can verify distinct intent)
+- The member headings of the silo candidate
+
+**Output schema (strict, additionalProperties: false):**
+
+```json
+{
+  "candidate_keyword": "string",
+  "viable_as_standalone_article": true,
+  "reasoning": "string (≤150 chars)",
+  "estimated_intent": "informational | listicle | how-to | comparison | ecom | local-seo | news | informational-commercial"
+}
+```
+
+**Failure handling:**
+
+| Scenario | Behavior |
+|---|---|
+| LLM returns malformed JSON | One retry; on second failure default `viable_as_standalone_article: true` and flag `metadata.silo_viability_fallback_applied: true` |
+| LLM call timeout | Same as malformed JSON |
+
+Candidates classified as `viable_as_standalone_article: false` are excluded from the final `silo_candidates` output array but logged in `metadata.silo_candidates_rejected_by_viability_check`.
+
+Viability checks for distinct candidates are independent and SHOULD run in parallel — see Section 8 for performance impact.
+
+#### Step 12.5 — Cross-Brief Deduplication (Deferred to v2.1)
+
+Cross-brief deduplication of silo candidates requires a Supabase table for tracking silo candidates across briefs over time. Out of scope for v2.0; flagged as a v2.1 requirement.
+
+**Future v2.1 logic:** maintain a `silo_candidates` table keyed by `client_id` + `suggested_keyword` embedding. On each new brief, check cosine similarity (≥ 0.85) against existing entries. Increment `cross_brief_occurrence_count` on duplicates. Surface candidates with high occurrence counts as priority article seeds in the platform UI.
+
+**For v2.0:** every silo candidate's `cross_brief_occurrence_count` defaults to 1.
+
+#### Step 12.6 — Output Format
 
 Each silo candidate carries:
 - `suggested_keyword`
 - `cluster_coherence_score`
 - `review_recommended`
 - `recommended_intent`
-- `source_headings[]` (member headings with text, source, semantic_score, heading_priority)
 - `routed_from`: `"non_selected_region"` (region didn't win H2 competition) or `"scope_verification"` (heading rejected by scope check)
+- `source_headings[]` (member headings with text, source, title_relevance, heading_priority, discard_reason)
+- `discard_reason_breakdown`: object mapping `discard_reason` values to counts among member headings
+- `search_demand_score` (float, 0.0–1.0)
+- `viable_as_standalone_article` (boolean)
+- `viability_reasoning` (string, ≤150 chars)
+- `estimated_intent` (one of the 8 intent types)
+- `cross_brief_occurrence_count` (integer, always 1 for v2.0; populated by v2.1)
 
-The `routed_from: "scope_verification"` flag is particularly valuable — these are headings that almost made it into a brief but represent genuinely different articles, so they're high-confidence silo seeds.
+The `routed_from: "scope_verification"` flag remains particularly valuable — these are headings that almost made it into a brief but represent genuinely different articles, so they're high-confidence silo seeds. Combined with the `search_demand_score` and the viability check, the silo output becomes a prioritized roadmap rather than a noisy list.
 
 ---
 
@@ -787,7 +880,17 @@ The `routed_from: "scope_verification"` flag is particularly valuable — these 
           "heading_priority": 0.0,
           "discard_reason": "string | null"
         }
-      ]
+      ],
+      "discard_reason_breakdown": {
+        "below_priority_threshold": 0,
+        "global_cap_exceeded": 0,
+        "scope_verification_out_of_scope": 0
+      },
+      "search_demand_score": 0.0,
+      "viable_as_standalone_article": true,
+      "viability_reasoning": "string",
+      "estimated_intent": "informational | listicle | how-to | comparison | ecom | local-seo | news | informational-commercial",
+      "cross_brief_occurrence_count": 1
     }
   ],
   "metadata": {
@@ -798,6 +901,10 @@ The `routed_from: "scope_verification"` flag is particularly valuable — these 
     "total_content_subheadings": 0,
     "discarded_headings_count": 0,
     "silo_candidates_count": 0,
+    "silo_candidates_rejected_by_discard_reason": 0,
+    "silo_candidates_rejected_by_search_demand": 0,
+    "silo_candidates_rejected_by_viability_check": 0,
+    "silo_viability_fallback_applied": false,
     "competitors_analyzed": 20,
     "reddit_threads_analyzed": 0,
     "h2_shortfall": false,
@@ -868,6 +975,7 @@ The `routed_from: "scope_verification"` flag is particularly valuable — these 
 | Authority Agent returns wrong heading count | Truncate to 5 if >5; retry if <3; on retry failure, accept what was returned |
 | Intent confidence <0.50 even after LLM check | Default to `informational`; flag `intent_review_required: true` |
 | No silo clusters meet minimum coherence threshold | Return empty `silo_candidates` array; do not abort |
+| Silo viability check LLM fails twice (per candidate) | Default `viable_as_standalone_article: true`, set `metadata.silo_viability_fallback_applied: true`, log warning; do not abort |
 | End-to-end exceeds 120s | Abort and notify user |
 
 ---
@@ -887,10 +995,13 @@ The `routed_from: "scope_verification"` flag is particularly valuable — these 
 | H3 selection (Step 8.6, embedding math + MMR only) | 1–2s | 4s |
 | Authority agent | 15s | 30s |
 | Structure assembly + silo identification | 4s | 8s |
+| Silo viability checks (Step 12.4, up to 10 candidates in parallel) | 5–10s | 15s |
 
 The 4 LLM fan-out calls run concurrently with each other and with SERP/Reddit/Autocomplete. Title generation is sequential after intent classification (it uses intent type as input). Persona generation runs after graph construction completes (it benefits from seeing the candidate pool). Selection, scope verification, H3 selection (Step 8.6), and authority agent run sequentially.
 
 H3 selection (Step 8.6) is pure embedding math and MMR — no new LLM calls — and adds approximately 1–2 seconds to the structure assembly stage. End-to-end target stays at 75s; 120s ceiling preserved.
+
+Silo viability checks (Step 12.4) add 5–10s when run in parallel (recommended) or 80–85s end-to-end if run sequentially (not recommended). Each viability check is a single Claude call (~$0.01–$0.02) over a small payload (suggested_keyword + title + scope + member headings); they are independent across candidates and SHOULD be issued concurrently with `asyncio.gather`. With parallel execution, end-to-end target stays at 75s.
 
 ---
 
@@ -912,12 +1023,13 @@ H3 selection (Step 8.6) is pure embedding math and MMR — no new LLM calls — 
 | LLM calls (intent borderline, heading polish, authority agent, FAQ extraction, how-to reordering) | $0.10–$0.30 |
 | Coverage graph + Louvain clustering | $0.00 (CPU only, milliseconds) |
 | Silo cluster identification | $0.00 (reuses Step 5 regions) |
-| **Estimated total per brief** | **$0.30–$0.69** |
+| **Silo viability checks (Step 12.4, up to 10 candidates × $0.01–$0.02 each)** | $0.05–$0.20 |
+| **Estimated total per brief** | **$0.35–$0.89** |
 | **Budget ceiling** | **$1.00** |
 
-**Monthly operational cost at 10–20 briefs/day:** ~$90–$420/month
+**Monthly operational cost at 10–20 briefs/day:** ~$105–$534/month
 
-Cost increase from v1.7's $0.19–$0.53 range to v2.0's $0.30–$0.69 range reflects the three new LLM calls (title, persona, scope verification). Embedding model upgrade has negligible cost impact (~$0.0005 increase per brief).
+Cost increase from v1.7's $0.19–$0.53 range to v2.0's $0.35–$0.89 range reflects four new LLM call sites (title, persona, scope verification, silo viability checks). Silo viability checks scale linearly with eligible silo candidates (capped at 10) and parallelize cleanly. Still under the $1.00 ceiling.
 
 ---
 
@@ -977,8 +1089,12 @@ Cost increase from v1.7's $0.19–$0.53 range to v2.0's $0.30–$0.69 range refl
 | Max article word count | 2,500 (FAQ excluded) |
 | **Silo candidates reuse Step 5 regions** | Yes (no additional clustering cost) |
 | Silo candidate sources | Non-selected regions + scope-verification rejects |
+| **Silo discard reason filtering (Step 12.1)** | Yes — only specified `discard_reason` values eligible |
 | Min headings per silo cluster | 2 (singletons from scope verification exempt) |
 | Min cluster coherence score | 0.60 |
+| **Silo search demand minimum threshold (Step 12.3)** | 0.30 |
+| **Silo viability check per candidate (Step 12.4)** | Yes |
+| **Cross-brief silo deduplication (Step 12.5)** | Deferred to v2.1 |
 | Max silo candidates per brief | 10 |
 | Review recommended threshold | Coherence between 0.60 and 0.70 |
 | **ICP context input** | Not accepted; brief generator derives hypothetical searcher from topic itself |
@@ -1187,6 +1303,8 @@ To validate v2.0 against the failure modes that motivated the rewrite:
    - "TikTok Shop algorithm signals"-type headings appear in `silo_candidates` with `routed_from: "scope_verification"` or as non-selected regions
    - For each selected H2, every assigned H3 has `parent_relevance` in [0.60, 0.85] — no H3 paraphrases its parent
    - Within any single H2, no two H3s have pairwise cosine > 0.78 — H3 siblings do not paraphrase each other
+   - Every entry in `silo_candidates` has `search_demand_score > 0.0`
+   - "TikTok Shop algorithm signals"-type rejects are classified with `viable_as_standalone_article: true` and `estimated_intent` of `how-to` or `informational`
 2. **Fixture B — Sparse SERP.** Run a niche keyword with <10 SERP results. Verify graceful degradation: `low_serp_coverage: true` and reasonable persona-gap-driven outline.
 3. **Fixture C — Listicle intent.** Run a "best X" keyword. Verify uncapped H2 selection respects intent-specific rules and that each list-item-H2 is a distinct region.
 4. **Fixture D — Constraint exhaustion.** Construct a scenario where eligible candidates cluster heavily in 2–3 regions only. Verify `h2_shortfall: true` and `h2_shortfall_reason: "constraints_exhausted_eligible_pool"`.
@@ -1194,6 +1312,8 @@ To validate v2.0 against the failure modes that motivated the rewrite:
 6. **Fixture F — Scope verification override.** Run a brief where the LLM marks an H2 `out_of_scope` that a human reviewer would consider in-scope. Verify the H2 routes to silo and the metadata captures the rejection. (This fixture is for catching false-positive scope rejections during tuning.)
 7. **Fixture G — Threshold sensitivity.** Run the same keyword 3 times with restatement_ceiling values of 0.74, 0.78, 0.82. Compare outputs. The middle run should be the production default; the others should produce visibly worse (over-constrained or under-constrained) results.
 8. **Fixture H — H3 sparsity.** Construct a scenario where a selected H2 has very few eligible H3 candidates after parent-relevance filtering (e.g., a niche H2 whose region is small and well-isolated from other regions). Verify `metadata.h2s_with_zero_h3s > 0`, that the brief is still valid, and that Authority Gap H3s still attach to the most-relevant available H2.
+9. **Fixture I — Silo discard reason filtering.** Construct a brief where many headings are discarded with `discard_reason: "above_restatement_ceiling"` (i.e., the LLM fan-out / SERP returned several near-paraphrases of the title). Verify that none of these headings appear in `silo_candidates` and that `metadata.silo_candidates_rejected_by_discard_reason` is incremented to match.
+10. **Fixture J — Silo viability rejection.** Mock the Step 12.4 viability LLM to return `viable_as_standalone_article: false` for a known silo candidate. Verify the candidate is excluded from the final `silo_candidates` array and that `metadata.silo_candidates_rejected_by_viability_check` is incremented by 1.
 
 ---
 
@@ -1210,3 +1330,4 @@ To validate v2.0 against the failure modes that motivated the rewrite:
 | 1.6 | 2026-04-29 | Expanded LLM fan-out capture from ChatGPT-only to all 4 major LLMs; added cross-LLM consensus tracking; rebalanced heading priority formula to weight LLM consensus at 0.2 |
 | 1.7 | 2026-04-29 | Added Step 9 Silo Cluster Identification; added `discarded_headings` and `silo_candidates` to output schema; added cluster quality rules, review flag, and failure mode for empty silo results |
 | **2.0** | **2026-05-01** | **Major architectural rewrite. Added Step 3.5 (title + scope statement generation), Step 6 (hypothetical searcher persona generation), Step 8.5 (scope verification), and Step 8.6 (H3 selection — applies the same MMR + region + anti-restatement principles at H2-scope rather than title-scope, with `parent_relevance` floor 0.60 and ceiling 0.85, inter-H3 threshold 0.78, and Authority Gap cap-displacement rules). Replaced lexical-only deduplication with embedding-based pre-filtering (relevance floor 0.55, restatement ceiling 0.78). Replaced ad-hoc heading selection with MMR optimization respecting region uniqueness and inter-heading anti-redundancy (max 0.75 pairwise cosine). Added coverage graph construction via Louvain community detection. Upgraded embedding model from text-embedding-3-small to text-embedding-3-large. Rebalanced heading priority formula to include explicit information_gain_score term. Silo cluster identification now reuses Step 5 regions instead of clustering discarded headings separately. Output schema fundamentally restructured: `semantic_score` renamed to `title_relevance`; new fields `title`, `scope_statement`, `persona`, `region_id`, `scope_classification`, `information_gain_score`, `parent_h2_text`, `parent_relevance`; new discard reasons (including `h3_below_parent_relevance_floor`, `h3_above_parent_restatement_ceiling`, `displaced_by_authority_gap_h3`); new metadata for graph structure, shortfall flags, and H3 distribution (`h3_count_average`, `h2s_with_zero_h3s`). Cost ceiling raised from $0.75 to $1.00. End-to-end target raised from 60s to 75s. Brief generator does not accept ICP context; hypothetical searcher is derived from topic + SERP signal only. Fixes the v1.7 failure modes documented in Section 1: paraphrase-H2 outlines and topical-clone outlines.** |
+| **2.0.2** | **2026-05-01** | **Refined Step 12 (Silo Cluster Identification) into six numbered subsections: 12.1 explicit `discard_reason` filtering (only `scope_verification_out_of_scope`, conditional `below_priority_threshold`, and `global_cap_exceeded` route to silos; restatement ceiling and off-topic rejects are excluded so silos never compete with the parent brief); 12.2 cluster formation (preserves region reuse + coherence + centroid); 12.3 search demand validation with hard threshold 0.30 against a five-signal `search_demand_score` (max SERP frequency, max LLM consensus, PAA / autocomplete / Reddit presence indicators); 12.4 per-candidate viability LLM check with strict JSON output (`viable_as_standalone_article`, `reasoning`, `estimated_intent`) and parallel execution; 12.5 cross-brief deduplication scoped out as a v2.1 requirement; 12.6 expanded silo candidate output with `discard_reason_breakdown`, `search_demand_score`, `viable_as_standalone_article`, `viability_reasoning`, `estimated_intent`, and `cross_brief_occurrence_count`. New metadata counters: `silo_candidates_rejected_by_discard_reason`, `silo_candidates_rejected_by_search_demand`, `silo_candidates_rejected_by_viability_check`, `silo_viability_fallback_applied`. Cost range updated to $0.35–$0.89 reflecting up to 10 parallel viability checks at $0.01–$0.02 each; $1.00 ceiling preserved; end-to-end target stays at 75s under parallel execution. New test fixtures I (discard-reason filtering) and J (viability rejection); Fixture A extended to verify silo `search_demand_score > 0` and `viable_as_standalone_article: true` for in-band scope rejects. No breaking schema changes — new fields are additive.** |
