@@ -61,6 +61,9 @@ cython_debug/
 .ruff_cache/
 .pypirc
 
+# frontend/src/lib is a TypeScript source directory, not a Python lib
+!frontend/src/lib/
+
 # ── Node / JavaScript ─────────────────────────────────────────────────────────
 node_modules/
 npm-debug.log*
