@@ -76,6 +76,10 @@ DiscardReason = Literal[
     "duplicate",
     "low_cluster_coherence",
     "scope_verification_out_of_scope",
+    # Step 8.6 (H3 Selection) additions — PRD v2.0.x
+    "h3_below_parent_relevance_floor",
+    "h3_above_parent_restatement_ceiling",
+    "displaced_by_authority_gap_h3",
 ]
 
 SiloRoutedFrom = Literal["non_selected_region", "scope_verification"]
@@ -138,6 +142,10 @@ class HeadingItem(BaseModel):
     heading_priority: float = 0.0
     region_id: Optional[str] = None
     scope_classification: Optional[ScopeClassification] = None
+    # Step 8.6 (H3 Selection): only set on H3 entries that flow through
+    # the parent-relevance MMR; null for H1, H2, and authority-gap H3s.
+    parent_h2_text: Optional[str] = None
+    parent_relevance: float = 0.0
     order: int = 0
 
 
@@ -222,6 +230,20 @@ class SiloCandidate(BaseModel):
     routed_from: SiloRoutedFrom
     source_headings: list[SiloSourceHeading] = []
 
+    # Step 12 refinements (PRD §5 Step 12.6)
+    # Counts of each discard_reason among the silo's member headings —
+    # gives consumers a quick view of why these headings were rejected.
+    discard_reason_breakdown: dict[str, int] = {}
+    # Step 12.3 — five-signal demand score, hard floor 0.30 to qualify.
+    search_demand_score: float = 0.0
+    # Step 12.4 — viability LLM verdict; defaults true under double-failure
+    # fallback (see metadata.silo_viability_fallback_applied).
+    viable_as_standalone_article: bool = True
+    viability_reasoning: str = ""
+    estimated_intent: IntentType = "informational"
+    # Step 12.5 — populated by v2.1 cross-brief dedup; defaults to 1 in v2.0.
+    cross_brief_occurrence_count: int = 1
+
 
 # ---- Metadata ----
 
@@ -273,6 +295,10 @@ class BriefMetadata(BaseModel):
     h2_shortfall: bool = False
     h2_shortfall_reason: Optional[str] = None
 
+    # H3 distribution (PRD §5 Step 8.6)
+    h3_count_average: float = 0.0
+    h2s_with_zero_h3s: int = 0
+
     # Coverage graph stats (PRD §5 Step 5)
     regions_detected: int = 0
     regions_eliminated_off_topic: int = 0
@@ -282,6 +308,12 @@ class BriefMetadata(BaseModel):
     # Scope verification stats (PRD §5 Step 8.5)
     scope_verification_borderline_count: int = 0
     scope_verification_rejected_count: int = 0
+
+    # Silo pipeline rejection counters (PRD §5 Step 12.1 / 12.3 / 12.4)
+    silo_candidates_rejected_by_discard_reason: int = 0
+    silo_candidates_rejected_by_search_demand: int = 0
+    silo_candidates_rejected_by_viability_check: int = 0
+    silo_viability_fallback_applied: bool = False
 
     llm_fanout_queries_captured: LLMFanoutCounts = LLMFanoutCounts()
     llm_response_subtopics_extracted: LLMFanoutCounts = LLMFanoutCounts()
@@ -294,6 +326,14 @@ class BriefMetadata(BaseModel):
     inter_heading_threshold: float = 0.75
     edge_threshold: float = 0.65
     mmr_lambda: float = 0.7
+
+    # Step 8.6 H3 thresholds (echoed for tuning)
+    parent_relevance_floor_threshold: float = 0.60
+    parent_restatement_ceiling_threshold: float = 0.85
+    inter_h3_threshold: float = 0.78
+
+    # Step 12.3 silo search-demand floor
+    silo_search_demand_threshold: float = 0.30
 
     low_serp_coverage: bool = False
     reddit_unavailable: bool = False

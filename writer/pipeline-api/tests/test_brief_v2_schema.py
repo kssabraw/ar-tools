@@ -219,7 +219,81 @@ def test_metadata_defaults_match_prd_thresholds():
     assert m.inter_heading_threshold == 0.75
     assert m.edge_threshold == 0.65
     assert m.mmr_lambda == 0.7
+    # Step 8.6 + Step 12 refinement defaults (PRD v2.0.2)
+    assert m.parent_relevance_floor_threshold == 0.60
+    assert m.parent_restatement_ceiling_threshold == 0.85
+    assert m.inter_h3_threshold == 0.78
+    assert m.silo_search_demand_threshold == 0.30
+    assert m.h3_count_average == 0.0
+    assert m.h2s_with_zero_h3s == 0
+    assert m.silo_candidates_rejected_by_discard_reason == 0
+    assert m.silo_candidates_rejected_by_search_demand == 0
+    assert m.silo_candidates_rejected_by_viability_check == 0
+    assert m.silo_viability_fallback_applied is False
     assert m.schema_version == "2.0"
+
+
+def test_heading_item_carries_step_8_6_fields():
+    h = HeadingItem(
+        level="H3",
+        text="Setup process",
+        type="content",
+        source="serp",
+        parent_h2_text="How TikTok Shop Works",
+        parent_relevance=0.72,
+    )
+    assert h.parent_h2_text == "How TikTok Shop Works"
+    assert h.parent_relevance == 0.72
+
+
+@pytest.mark.parametrize("reason", [
+    "h3_below_parent_relevance_floor",
+    "h3_above_parent_restatement_ceiling",
+    "displaced_by_authority_gap_h3",
+])
+def test_step_8_6_discard_reasons_accepted(reason):
+    d = DiscardedHeading(
+        text="x",
+        source="serp",
+        discard_reason=reason,  # type: ignore[arg-type]
+    )
+    assert d.discard_reason == reason
+
+
+def test_silo_candidate_carries_step_12_fields():
+    s = SiloCandidate(
+        suggested_keyword="tiktok shop algorithm tactics",
+        cluster_coherence_score=0.72,
+        review_recommended=False,
+        recommended_intent="how-to",
+        routed_from="scope_verification",
+        discard_reason_breakdown={"scope_verification_out_of_scope": 1},
+        search_demand_score=0.55,
+        viable_as_standalone_article=True,
+        viability_reasoning="Distinct intent vs the parent definitional brief",
+        estimated_intent="how-to",
+        cross_brief_occurrence_count=1,
+    )
+    assert s.discard_reason_breakdown == {"scope_verification_out_of_scope": 1}
+    assert s.search_demand_score == 0.55
+    assert s.viable_as_standalone_article is True
+    assert s.viability_reasoning.startswith("Distinct intent")
+    assert s.estimated_intent == "how-to"
+    assert s.cross_brief_occurrence_count == 1
+
+
+def test_silo_candidate_defaults_for_step_12_fields():
+    s = SiloCandidate(
+        suggested_keyword="x",
+        recommended_intent="informational",
+        routed_from="non_selected_region",
+    )
+    assert s.discard_reason_breakdown == {}
+    assert s.search_demand_score == 0.0
+    assert s.viable_as_standalone_article is True
+    assert s.viability_reasoning == ""
+    assert s.estimated_intent == "informational"
+    assert s.cross_brief_occurrence_count == 1
 
 
 def test_metadata_rejects_legacy_fields():
