@@ -108,8 +108,8 @@ export function ClientForm() {
       </h1>
       <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 32px' }}>
         {isEdit
-          ? 'Update the client's details. Changes apply to future runs — existing runs keep the snapshot that was taken when they started.'
-          : 'Fill in the client's details. The brand guide and ICP are used by the AI to match the client's voice and audience on every content run.'}
+          ? "Update the client's details. Changes apply to future runs — existing runs keep the snapshot that was taken when they started."
+          : "Fill in the client's details. The brand guide and ICP are used by the AI to match the client's voice and audience on every content run."}
       </p>
 
       <form onSubmit={handleSubmit}>
