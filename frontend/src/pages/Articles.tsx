@@ -16,12 +16,12 @@ function downloadFile(content: string, filename: string, mime: string) {
 }
 
 const HEADING_PREFIX: Record<string, string> = {
-  H1: '#',
-  H2: '##',
-  H3: '###',
-  H4: '####',
-  H5: '#####',
-  H6: '######',
+  H1: '# ',
+  H2: '## ',
+  H3: '### ',
+  H4: '#### ',
+  H5: '##### ',
+  H6: '###### ',
 }
 
 function sectionsToMarkdown(article: unknown[], title?: string): string {
@@ -31,19 +31,21 @@ function sectionsToMarkdown(article: unknown[], title?: string): string {
     .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
 
   const hasH1 = sorted.some((s: any) => s.level === 'H1')
-  const lines: string[] = []
+  const parts: string[] = []
 
   if (title && !hasH1) {
-    lines.push(`# ${title}\n\n`)
+    parts.push(`# ${title}`)
   }
 
   for (const s of sorted as any[]) {
+    // 'none' level (e.g. h1-enrichment paragraph) renders body only.
     const prefix = HEADING_PREFIX[s.level] ?? ''
-    const heading = s.heading && prefix ? `${prefix} ${s.heading}\n\n` : ''
+    const heading = s.heading && prefix ? `${prefix}${s.heading}\n\n` : ''
     const body = s.body ?? ''
-    lines.push(`${heading}${body}`)
+    const piece = `${heading}${body}`
+    if (piece.trim().length > 0) parts.push(piece)
   }
-  return lines.join('\n\n')
+  return parts.join('\n\n')
 }
 
 function ArticleCard({ run }: { run: any }) {

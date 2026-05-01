@@ -1,10 +1,24 @@
-"""Tests for two-tier semantic clustering (CQ PRD v1.0 R1)."""
+"""LEGACY v1.8 tests — skipped during the v2.0 staged rollout.
+
+The v2.0 pipeline replaces two-tier semantic clustering with coverage-
+graph regions detected via Louvain community detection (graph.py, built
+in Stage 2). This file stays in tree as reference for the new region-
+detection tests that will replace it.
+
+Tests for two-tier semantic clustering (CQ PRD v1.0 R1).
+"""
 
 from __future__ import annotations
 
 import math
 
 import pytest
+
+pytest.skip(
+    "Legacy v1.8 clustering tests; v2.0 replaces clustering.py with "
+    "coverage-graph regions in Stage 2.",
+    allow_module_level=True,
+)
 
 from modules.brief.clustering import (
     HARD_MERGE_THRESHOLD,

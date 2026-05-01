@@ -248,17 +248,49 @@ async def write_h2_group(
             retry_term=retry_term,
         )
         try:
-            result = await claude_json(SECTION_SYSTEM, user, max_tokens=3500, temperature=0.4)
+            # 8000 tokens accommodates an H2 + up to ~6 H3 children, each with
+            # answer-first body + lists/tables, without truncation. The previous
+            # 3500-token cap silently truncated mid-string when a brief produced
+            # 1 H2 with many H3 children, raising JSONDecodeError downstream.
+            result = await claude_json(SECTION_SYSTEM, user, max_tokens=8000, temperature=0.4)
         except Exception as exc:
-            logger.warning("Section writing failed for H2 order %s: %s", h2_item.get("order"), exc)
-            return _placeholder_result(h2_item, h3_items, section_budgets)
+            logger.exception(
+                "writer.section.llm_failed",
+                extra={
+                    "h2_order": h2_item.get("order"),
+                    "h2_text": (h2_item.get("text") or "")[:120],
+                    "h3_count": len(h3_items),
+                    "citations_attached": len(resolved_citations),
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:400],
+                },
+            )
+            return _placeholder_result(
+                h2_item, h3_items, section_budgets,
+                reason=f"llm_call:{type(exc).__name__}",
+            )
 
         if not isinstance(result, dict):
-            return _placeholder_result(h2_item, h3_items, section_budgets)
+            logger.warning(
+                "writer.section.payload_not_dict",
+                extra={"h2_order": h2_item.get("order"), "got_type": type(result).__name__},
+            )
+            return _placeholder_result(
+                h2_item, h3_items, section_budgets, reason="payload_not_dict",
+            )
 
         sections_raw = result.get("sections") or []
         if not isinstance(sections_raw, list) or not sections_raw:
-            return _placeholder_result(h2_item, h3_items, section_budgets)
+            logger.warning(
+                "writer.section.empty_sections",
+                extra={
+                    "h2_order": h2_item.get("order"),
+                    "got_keys": list(result.keys()) if isinstance(result, dict) else [],
+                },
+            )
+            return _placeholder_result(
+                h2_item, h3_items, section_budgets, reason="empty_sections",
+            )
 
         # Banned-term check on body content of every produced section
         body_match: Optional[str] = None
@@ -285,15 +317,20 @@ async def write_h2_group(
 
         return _build_result(h2_item, h3_items, sections_raw, section_budgets)
 
-    return _placeholder_result(h2_item, h3_items, section_budgets)
+    return _placeholder_result(
+        h2_item, h3_items, section_budgets, reason="loop_exhausted",
+    )
 
 
 def _placeholder_result(
     h2_item: dict,
     h3_items: list[dict],
     budgets: dict[int, int],
+    reason: str = "unknown",
 ) -> SectionWriteResult:
-    placeholder = "[SECTION GENERATION FAILED — MANUAL REVIEW REQUIRED]"
+    placeholder = (
+        f"[SECTION GENERATION FAILED — MANUAL REVIEW REQUIRED — reason: {reason}]"
+    )
     sections = [ArticleSection(
         order=h2_item.get("order", 0),
         level="H2",

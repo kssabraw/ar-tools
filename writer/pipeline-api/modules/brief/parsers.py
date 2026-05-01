@@ -115,18 +115,26 @@ def _add_sanitized(
     })
 
 
-def parse_serp(items: list[dict[str, Any]]) -> tuple[list[dict], IntentSignals, list[str], list[str]]:
+def parse_serp(
+    items: list[dict[str, Any]],
+) -> tuple[list[dict], IntentSignals, list[str], list[str], list[str]]:
     """Step 1 — extract headings (H1/H2/H3) from organic results, and SERP signals.
+
+    PRD §5 Step 1 outputs (v2.0): headings, page titles, AND meta descriptions
+    are first-class — meta descriptions feed Step 3.5 title generation alongside
+    titles and H1s.
 
     Returns:
         headings: list of {text, raw_text, level, position, url, source, sanitization_discarded}
         intent_signals: IntentSignals
         paa_questions: list of PAA question strings (sanitized; ones rejected by S9/S10 dropped)
-        organic_titles: list of organic result titles (used by intent classifier)
+        organic_titles: list of organic result titles (used by intent classifier + Step 3.5)
+        meta_descriptions: list of organic result meta descriptions (Step 3.5 input)
     """
     headings: list[dict] = []
     paa_questions: list[str] = []
     titles: list[str] = []
+    meta_descriptions: list[str] = []
 
     signals = IntentSignals()
 
@@ -182,6 +190,8 @@ def parse_serp(items: list[dict[str, Any]]) -> tuple[list[dict], IntentSignals, 
         # standard SERP API; the Brief Generator gets them via title/snippet
         # parsing here, plus PAA, autocomplete, suggestions, and LLM fan-out.
         snippet = item.get("description") or ""
+        if snippet.strip():
+            meta_descriptions.append(snippet.strip())
         for line in snippet.splitlines():
             line = line.strip(" •-—:")
             if line.endswith(":") and 3 <= len(line.split()) <= 12 and not is_boilerplate(line):
@@ -190,7 +200,7 @@ def parse_serp(items: list[dict[str, Any]]) -> tuple[list[dict], IntentSignals, 
                     level="H2", position=position, url=url, source="serp",
                 )
 
-    return headings, signals, paa_questions, titles
+    return headings, signals, paa_questions, titles, meta_descriptions
 
 
 def parse_reddit(items: list[dict[str, Any]]) -> tuple[list[str], list[str]]:

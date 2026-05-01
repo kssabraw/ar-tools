@@ -7,6 +7,7 @@ import logging
 
 from config import settings
 from db.supabase_client import get_supabase
+from services.silo_dedup import process_silo_dedup_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
 
 logger = logging.getLogger(__name__)
@@ -112,10 +113,13 @@ async def _run_website_scrape(job: dict) -> None:
 
 
 async def _process_job(job: dict) -> None:
-    if job.get("job_type") == "website_scrape":
+    job_type = job.get("job_type")
+    if job_type == "website_scrape":
         await _run_website_scrape(job)
+    elif job_type == "silo_dedup":
+        await process_silo_dedup_job(job)
     else:
-        logger.warning("job_worker.unknown_job_type", extra={"job_type": job.get("job_type")})
+        logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 
 
 async def job_worker() -> None:

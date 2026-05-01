@@ -39,6 +39,7 @@ from .citations import reconcile_citation_usage
 from .conclusion import write_conclusion
 from .distillation import distill_brand_voice, is_card_empty
 from .faqs import write_faqs
+from .intro import write_intro
 from .reconciliation import FilteredSIETerms, reconcile_terms, ReconciledTerm
 from .sections import SectionWriteResult, write_h2_group
 from .title import generate_h1_enrichment, generate_title
@@ -70,7 +71,22 @@ def _validate_inputs(req: WriterRequest) -> tuple[str, str, list[dict], list[str
         raise WriterError("keyword_mismatch", f"brief.keyword='{brief_kw}' vs sie.keyword='{sie_kw}'")
 
     intent_type = brief.get("intent_type") or "informational"
-    heading_structure = brief.get("heading_structure") or []
+
+    # Prefer Research's enriched heading_structure (carries citation_ids
+    # per heading per Research §8). Fall back to the original brief's
+    # heading_structure when Research output is unavailable. Without this,
+    # the Writer's section prompt has no citations to ground prose,
+    # which causes the Section LLM to fall into placeholder mode on
+    # speculative topics (e.g. authority-gap H3s).
+    heading_structure: list[dict] = []
+    if req.research_output and isinstance(req.research_output, dict):
+        enriched = req.research_output.get("enriched_brief")
+        if isinstance(enriched, dict):
+            enriched_hs = enriched.get("heading_structure")
+            if isinstance(enriched_hs, list) and enriched_hs:
+                heading_structure = enriched_hs
+    if not heading_structure:
+        heading_structure = brief.get("heading_structure") or []
     if not heading_structure:
         raise WriterError("empty_heading_structure", "brief.heading_structure is empty")
 
@@ -316,8 +332,26 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             heading=None, body=h1_enrichment, word_count=len(h1_enrichment.split()),
         ))
 
-    # ---- Section writing (sequential per H2 group) ----
+    # ---- Intro paragraph (Writer v1.6 §4.3.1 — Agree/Promise/Preview) ----
     h2_groups = _split_h2_groups(heading_structure)
+    h2_titles = [(h2_item.get("text") or "").strip() for h2_item, _ in h2_groups]
+    h2_titles = [t for t in h2_titles if t]
+    scope_statement = (brief.get("scope_statement") or "").strip()
+    intro_title = (brief.get("title") or h1_text).strip()
+    next_order += 1
+    intro_section = await write_intro(
+        keyword=keyword,
+        title=intro_title,
+        scope_statement=scope_statement,
+        intent_type=intent_type,
+        h2_list=h2_titles,
+        brand_voice_card=brand_voice_card,
+        banned_regex=banned_regex,
+        intro_order=next_order,
+    )
+    article.append(intro_section)
+
+    # ---- Section writing (sequential per H2 group) ----
     for h2_item, h3_items in h2_groups:
         result = await write_h2_group(
             keyword=keyword, intent=intent_type,

@@ -1,16 +1,22 @@
-"""Pydantic models for the Brief Generator module (schema v1.8).
+"""Pydantic models for the Brief Generator module — schema v2.0.
 
-v1.8 changes (Content Quality PRD v1.0 R1, R2, R3):
-- HeadingItem gains cluster_id, cluster_size, cluster_evidence
-- DiscardedHeading gains cluster_id, semantic_duplicate_of, raw_text
-- DiscardReason enum extended with semantic_duplicate_of_higher_priority_h2,
-  definitional_restatement, too_short_after_sanitization,
-  non_descriptive_after_sanitization, low_topic_adherence_in_writer
-- BriefMetadata gains semantic_dedup_threshold, semantic_dedup_collapses_count,
-  definitional_restatements_discarded_count, mmr_lambda
-- spin_off_articles[] introduced; silo_candidates[] retained for one release
-- All models lock to extra='forbid' (Pydantic equivalent of JSON Schema
-  additionalProperties: false)
+Implements the output schema specified in
+docs/modules/content-brief-generator-prd-v2_0.md §6.
+
+Key v2.0 architectural changes versus v1.7/v1.8:
+- Title + scope statement are now first-class outputs (Step 3.5)
+- Hypothetical searcher persona is captured (Step 6)
+- `semantic_score` renamed to `title_relevance` (cosine to title, not seed)
+- `region_id` and `scope_classification` carried on every heading
+- New discard reasons gate on title relevance + region elimination + scope
+- Coverage-graph regions replace v1.7's two-tier semantic clusters; the
+  cluster_id / cluster_evidence fields are gone
+- Silos now reuse Step 5 regions (`routed_from`) and absorb scope-rejects
+- spin_off_articles[] removed; silo_candidates is the unified concept
+- Embedding model upgraded to text-embedding-3-large
+
+All models lock to extra='forbid' (Pydantic equivalent of JSON Schema
+additionalProperties: false), per PRD §12 strict-validation requirement.
 """
 
 from typing import Literal, Optional
@@ -20,6 +26,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 _FORBID_EXTRA = ConfigDict(extra="forbid")
 
+
+# ---- Enumerations ----
 
 IntentType = Literal[
     "informational",
@@ -51,23 +59,38 @@ HeadingSource = Literal[
     "llm_response_claude",
     "llm_response_gemini",
     "llm_response_perplexity",
+    "persona_gap",
 ]
 
-FAQSource = Literal["paa", "reddit", "llm_extracted"]
+FAQSource = Literal["paa", "reddit", "llm_extracted", "persona_gap"]
+
+ScopeClassification = Literal["in_scope", "borderline"]
 
 DiscardReason = Literal[
-    "below_semantic_threshold",
+    "below_relevance_floor",
+    "above_restatement_ceiling",
+    "region_off_topic",
+    "region_restates_title",
     "below_priority_threshold",
     "global_cap_exceeded",
     "duplicate",
     "low_cluster_coherence",
-    "semantic_duplicate_of_higher_priority_h2",
-    "definitional_restatement",
-    "too_short_after_sanitization",
-    "non_descriptive_after_sanitization",
-    "low_topic_adherence_in_writer",
+    "scope_verification_out_of_scope",
+    # Step 8.6 (H3 Selection) additions — PRD v2.0.x
+    "h3_below_parent_relevance_floor",
+    "h3_above_parent_restatement_ceiling",
+    "displaced_by_authority_gap_h3",
 ]
 
+SiloRoutedFrom = Literal[
+    "non_selected_region",
+    "scope_verification",
+    # Step 8.5b — Authority Gap H3 rejected by H3 scope verification (PRD v2.0.3)
+    "scope_verification_h3",
+]
+
+
+# ---- Request envelope ----
 
 class BriefRequest(BaseModel):
     """Input envelope to POST /brief."""
@@ -77,19 +100,35 @@ class BriefRequest(BaseModel):
     attempt: int = 1
     keyword: str = Field(..., min_length=1, max_length=150)
     location_code: int = 2840  # United States
+
+    # Captured for audit trail. The brief content is client-agnostic per
+    # PRD §2; client_id never feeds into LLM inputs and never scopes the
+    # cache. Two clients running the same keyword share the cached output.
+    client_id: Optional[str] = None
+
+    # When true, skip the cache lookup and force regeneration. Successful
+    # regeneration overwrites the cached row.
+    force_refresh: bool = False
+
     intent_override: Optional[IntentType] = None
 
 
-class HeadingClusterEvidence(BaseModel):
-    """One paraphrase variant that was merged into a cluster's canonical."""
+# ---- Persona (Step 6 output) ----
+
+class PersonaInfo(BaseModel):
+    """Hypothetical searcher persona derived from topic + SERP signal.
+
+    Per PRD §2: brand and ICP context never feed into persona generation;
+    the persona is always inferred from the keyword and SERP alone.
+    """
     model_config = _FORBID_EXTRA
 
-    text: str
-    source: HeadingSource
-    source_url: Optional[str] = None
-    cosine_to_canonical: float = 0.0
-    heading_priority: float = 0.0
+    description: str = ""
+    background_assumptions: list[str] = []
+    primary_goal: str = ""
 
+
+# ---- Heading items ----
 
 class HeadingItem(BaseModel):
     model_config = _FORBID_EXTRA
@@ -99,18 +138,26 @@ class HeadingItem(BaseModel):
     type: HeadingType
     source: HeadingSource
     original_source: Optional[str] = None
-    semantic_score: float = 0.0
+    title_relevance: float = 0.0
     exempt: bool = False
     serp_frequency: int = 0
     avg_serp_position: Optional[float] = None
     llm_fanout_consensus: int = 0
+    information_gain_score: float = 0.0
     heading_priority: float = 0.0
+    region_id: Optional[str] = None
+    scope_classification: Optional[ScopeClassification] = None
+    # Step 8.6 (H3 Selection): only set on H3 entries that flow through
+    # the parent-relevance MMR; null for H1, H2, and authority-gap H3s.
+    parent_h2_text: Optional[str] = None
+    parent_relevance: float = 0.0
+    # Step 9 (v2.0.3): populated only for source='authority_gap_sme' entries —
+    # the agent's own justification that the H3 stays within the brief's scope.
+    scope_alignment_note: Optional[str] = None
     order: int = 0
-    # CQ PRD v1.0 R1 — cluster info
-    cluster_id: Optional[int] = None
-    cluster_size: int = 1
-    cluster_evidence: list[HeadingClusterEvidence] = []
 
+
+# ---- FAQs ----
 
 class FAQItem(BaseModel):
     model_config = _FORBID_EXTRA
@@ -119,6 +166,8 @@ class FAQItem(BaseModel):
     source: FAQSource
     faq_score: float = 0.0
 
+
+# ---- Structural + format directives ----
 
 class StructuralConstants(BaseModel):
     model_config = _FORBID_EXTRA
@@ -144,66 +193,67 @@ class FormatDirectives(BaseModel):
     answer_first_paragraphs: bool = True
 
 
+# ---- Discarded headings ----
+
 class DiscardedHeading(BaseModel):
     model_config = _FORBID_EXTRA
 
     text: str
     source: HeadingSource
     original_source: Optional[str] = None
-    semantic_score: float = 0.0
+    title_relevance: float = 0.0
     serp_frequency: int = 0
     avg_serp_position: Optional[float] = None
     llm_fanout_consensus: int = 0
     heading_priority: float = 0.0
+    region_id: Optional[str] = None
     discard_reason: DiscardReason
-    # CQ PRD v1.0 R1 / R2
-    cluster_id: Optional[int] = None
-    semantic_duplicate_of: Optional[int] = None  # `order` of the canonical kept
-    raw_text: Optional[str] = None  # pre-sanitization text (R2)
 
+
+# ---- Silo candidates ----
 
 class SiloSourceHeading(BaseModel):
+    """A heading that contributed to a silo candidate.
+
+    `discard_reason` is nullable because non-selected-region members may
+    have been eligible for selection but lost the MMR competition (no
+    discard reason yet); scope-verification rejects always carry one.
+    """
     model_config = _FORBID_EXTRA
 
     text: str
-    semantic_score: float
-    heading_priority: float
-    discard_reason: Literal["global_cap_exceeded", "below_priority_threshold"]
+    source: HeadingSource
+    title_relevance: float = 0.0
+    heading_priority: float = 0.0
+    discard_reason: Optional[DiscardReason] = None
 
 
 class SiloCandidate(BaseModel):
-    """Legacy v1.7 silos. Retained for one release alongside spin_off_articles."""
     model_config = _FORBID_EXTRA
 
     suggested_keyword: str
-    cluster_coherence_score: float
-    review_recommended: bool = False
-    recommended_intent: IntentType
-    source_headings: list[SiloSourceHeading]
-
-
-SpinOffSourceReason = Literal[
-    "low_topic_adherence",
-    "semantic_duplicate",
-    "global_cap_exceeded",
-    "below_priority_threshold",
-    "definitional_restatement",
-]
-
-
-class SpinOffArticle(BaseModel):
-    """CQ PRD v1.0 R3 — off-topic / displaced headings routed to future pieces."""
-    model_config = _FORBID_EXTRA
-
-    suggested_keyword: str
-    source_heading_text: str
-    source_reason: SpinOffSourceReason
-    topic_adherence_score: float = 0.0
     cluster_coherence_score: float = 0.0
     review_recommended: bool = False
     recommended_intent: IntentType
-    supporting_headings: list[str] = []
+    routed_from: SiloRoutedFrom
+    source_headings: list[SiloSourceHeading] = []
 
+    # Step 12 refinements (PRD §5 Step 12.6)
+    # Counts of each discard_reason among the silo's member headings —
+    # gives consumers a quick view of why these headings were rejected.
+    discard_reason_breakdown: dict[str, int] = {}
+    # Step 12.3 — five-signal demand score, hard floor 0.30 to qualify.
+    search_demand_score: float = 0.0
+    # Step 12.4 — viability LLM verdict; defaults true under double-failure
+    # fallback (see metadata.silo_viability_fallback_applied).
+    viable_as_standalone_article: bool = True
+    viability_reasoning: str = ""
+    estimated_intent: IntentType = "informational"
+    # Step 12.5 — populated by v2.1 cross-brief dedup; defaults to 1 in v2.0.
+    cross_brief_occurrence_count: int = 1
+
+
+# ---- Metadata ----
 
 class LLMFanoutCounts(BaseModel):
     model_config = _FORBID_EXTRA
@@ -234,6 +284,9 @@ class IntentSignals(BaseModel):
 
 
 class BriefMetadata(BaseModel):
+    """Operational + tuning metadata. Threshold values used during the
+    run are echoed back so consumers (and offline tuners) know exactly
+    which configuration produced the output."""
     model_config = _FORBID_EXTRA
 
     word_budget: int = 2500
@@ -243,52 +296,82 @@ class BriefMetadata(BaseModel):
     total_content_subheadings: int = 0
     discarded_headings_count: int = 0
     silo_candidates_count: int = 0
-    spin_off_articles_count: int = 0
     competitors_analyzed: int = 20
     reddit_threads_analyzed: int = 0
+
+    # Shortfall tracking (PRD §5 Step 8 — accept shortfall, don't pad)
+    h2_shortfall: bool = False
+    h2_shortfall_reason: Optional[str] = None
+
+    # H3 distribution (PRD §5 Step 8.6)
+    h3_count_average: float = 0.0
+    h2s_with_zero_h3s: int = 0
+
+    # Coverage graph stats (PRD §5 Step 5)
+    regions_detected: int = 0
+    regions_eliminated_off_topic: int = 0
+    regions_eliminated_restate_title: int = 0
+    regions_contributing_h2s: int = 0
+
+    # Scope verification stats (PRD §5 Step 8.5)
+    scope_verification_borderline_count: int = 0
+    scope_verification_rejected_count: int = 0
+
+    # Silo pipeline rejection counters (PRD §5 Step 12.1 / 12.3 / 12.4)
+    silo_candidates_rejected_by_discard_reason: int = 0
+    silo_candidates_rejected_by_search_demand: int = 0
+    silo_candidates_rejected_by_viability_check: int = 0
+    silo_viability_fallback_applied: bool = False
+
     llm_fanout_queries_captured: LLMFanoutCounts = LLMFanoutCounts()
     llm_response_subtopics_extracted: LLMFanoutCounts = LLMFanoutCounts()
     intent_signals: IntentSignals = IntentSignals()
-    embedding_model: str = "text-embedding-3-small"
-    semantic_filter_threshold: float = 0.55
-    # CQ PRD v1.0 R1 — semantic dedup & MMR
-    semantic_dedup_threshold: float = 0.85
-    semantic_dedup_collapses_count: int = 0
-    soft_cluster_pairs_examined: int = 0
-    soft_cluster_pairs_merged: int = 0
-    definitional_restatements_discarded_count: int = 0
-    mmr_lambda: float = 0.6
-    # CQ PRD v1.0 R2 — sanitization
-    sanitization_discards_count: int = 0
+
+    # Threshold values used during this run (echoed for tuning)
+    embedding_model: Literal["text-embedding-3-large"] = "text-embedding-3-large"
+    relevance_floor_threshold: float = 0.55
+    restatement_ceiling_threshold: float = 0.78
+    inter_heading_threshold: float = 0.75
+    edge_threshold: float = 0.65
+    mmr_lambda: float = 0.7
+
+    # Step 8.6 H3 thresholds (echoed for tuning)
+    parent_relevance_floor_threshold: float = 0.60
+    parent_restatement_ceiling_threshold: float = 0.85
+    inter_h3_threshold: float = 0.78
+
+    # Step 12.3 silo search-demand floor
+    silo_search_demand_threshold: float = 0.30
+
     low_serp_coverage: bool = False
     reddit_unavailable: bool = False
     llm_fanout_unavailable: LLMUnavailable = LLMUnavailable()
+
     # Root domains of all SERP results — consumed by Research & Citations
     # to exclude competitor URLs from citation candidates.
     competitor_domains: list[str] = []
-    schema_version: Literal["1.8"] = "1.8"
 
+    schema_version: Literal["2.0"] = "2.0"
+
+
+# ---- Top-level response ----
 
 class BriefResponse(BaseModel):
-    """Brief Generator output (schema v1.8)."""
+    """Brief Generator output (schema v2.0, see PRD §6)."""
     model_config = _FORBID_EXTRA
 
     keyword: str
-    title: str = Field(
-        default="",
-        description=(
-            "Title-cased article title (PRD v2.0.0 Step 3.5). "
-            "Equals the H1 text. Writer copies this verbatim into the article H1."
-        ),
-    )
+    title: str
+    scope_statement: str
+    title_rationale: str = ""
     intent_type: IntentType
-    intent_confidence: float
+    intent_confidence: float = 0.0
     intent_review_required: bool = False
-    heading_structure: list[HeadingItem]
-    faqs: list[FAQItem]
+    persona: PersonaInfo = PersonaInfo()
+    heading_structure: list[HeadingItem] = []
+    faqs: list[FAQItem] = []
     structural_constants: StructuralConstants = StructuralConstants()
     format_directives: FormatDirectives = FormatDirectives()
     discarded_headings: list[DiscardedHeading] = []
     silo_candidates: list[SiloCandidate] = []
-    spin_off_articles: list[SpinOffArticle] = []
     metadata: BriefMetadata

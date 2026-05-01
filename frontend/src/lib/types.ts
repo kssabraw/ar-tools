@@ -91,3 +91,85 @@ export interface Profile {
   role: 'admin' | 'team_member'
   full_name: string | null
 }
+
+
+// ---- Silo Candidates (Platform PRD v1.4 §7.7) ----
+
+export type SiloStatus =
+  | 'proposed'
+  | 'approved'
+  | 'rejected'
+  | 'in_progress'
+  | 'published'
+  | 'superseded'
+
+export type SiloRoutedFrom = 'non_selected_region' | 'scope_verification'
+
+export type IntentType =
+  | 'informational'
+  | 'listicle'
+  | 'how-to'
+  | 'comparison'
+  | 'ecom'
+  | 'local-seo'
+  | 'news'
+  | 'informational-commercial'
+
+export interface SiloListItem {
+  id: string
+  client_id: string
+  suggested_keyword: string
+  status: SiloStatus
+  occurrence_count: number
+  cluster_coherence_score: number | null
+  search_demand_score: number | null
+  viable_as_standalone_article: boolean
+  estimated_intent: IntentType | null
+  routed_from: SiloRoutedFrom | null
+  first_seen_run_id: string
+  last_seen_run_id: string
+  promoted_to_run_id: string | null
+  last_promotion_failed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface SiloDetail extends SiloListItem {
+  source_run_ids: string[]
+  viability_reasoning: string | null
+  discard_reason_breakdown: Record<string, number>
+  source_headings: Array<{
+    text: string
+    source: string
+    title_relevance?: number
+    heading_priority?: number
+    discard_reason?: string | null
+  }>
+}
+
+export interface SiloListResponse {
+  items: SiloListItem[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface SiloMetrics {
+  client_id: string
+  counts_by_status: Partial<Record<SiloStatus, number>>
+  average_occurrence_count: number
+  high_frequency_threshold: number
+  high_frequency_count: number
+}
+
+export interface SiloBulkResponse {
+  succeeded: string[]
+  failed: Array<{ id: string; reason: string }>
+  runs_dispatched: string[]
+}
+
+export interface SiloPromoteResponse {
+  silo_id: string
+  run_id: string
+  status: SiloStatus
+}

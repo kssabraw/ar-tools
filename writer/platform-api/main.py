@@ -18,6 +18,7 @@ from routers.clients import router as clients_router
 from routers.files import router as files_router
 from routers.publish import router as publish_router
 from routers.runs import router as runs_router
+from routers.silos import router as silos_router
 from routers.users import router as users_router
 from services.job_worker import job_worker
 from services.orchestrator import recover_stuck_runs
@@ -91,6 +92,7 @@ app.add_middleware(
 app.include_router(clients_router)
 app.include_router(files_router)
 app.include_router(runs_router)
+app.include_router(silos_router)
 app.include_router(users_router)
 app.include_router(publish_router)
 

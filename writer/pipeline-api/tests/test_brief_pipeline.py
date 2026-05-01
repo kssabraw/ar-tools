@@ -1,4 +1,12 @@
-"""Happy-path test for the Brief Generator pipeline.
+"""LEGACY v1.8 pipeline test — skipped during the v2.0 staged rollout.
+
+The v2.0 orchestrator is built in Stage 9; the rewritten happy-path test
+will live in test_brief_v2_pipeline.py with v2.0 fixtures (Fixtures A–G
+from PRD §14.3).
+
+Original docstring preserved below.
+================================================================
+Happy-path test for the Brief Generator pipeline.
 
 Mocks all external APIs (DataForSEO, OpenAI embeddings, Anthropic) so the
 test runs offline and deterministically. Verifies the pipeline produces a
@@ -6,6 +14,13 @@ schema-valid BriefResponse with the expected structural invariants.
 """
 
 from __future__ import annotations
+
+import pytest
+
+pytest.skip(
+    "Legacy v1.8 pipeline test; v2.0 orchestrator is rebuilt in Stage 9.",
+    allow_module_level=True,
+)
 
 import math
 from typing import Any

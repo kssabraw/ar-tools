@@ -2,15 +2,19 @@
 
 - Anthropic Claude Sonnet 4.6 for: heading polish, intent borderline check,
   authority gap agent, FAQ concern extraction, response content extraction,
-  how-to reordering.
-- OpenAI text-embedding-3-small for: semantic scoring (Step 5) and
-  cluster grouping (Step 9, reuses same vectors).
+  how-to reordering, plus v2.0's title/scope generation, persona generation,
+  and scope verification.
+- OpenAI text-embedding-3-small (`embed_batch`) for: legacy v1.8 brief
+  pipeline, SIE filters, and Research & Citations snippet ranking.
+- OpenAI text-embedding-3-large (`embed_batch_large`) for: Brief Generator
+  v2.0 — finer-grained paraphrase discrimination and the coverage graph.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from typing import Any, Optional
 
@@ -23,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
 EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_MODEL_LARGE = "text-embedding-3-large"
 
 _anthropic: Optional[AsyncAnthropic] = None
 _openai: Optional[AsyncOpenAI] = None
@@ -133,14 +138,33 @@ async def claude_json(
             block.text for block in message.content if getattr(block, "type", "") == "text"
         )
         last_text = text
+
+        # Detect response truncation. When stop_reason == "max_tokens" the
+        # JSON value is almost certainly incomplete (cut off mid-string),
+        # which raw_decode cannot recover. Log loudly so operators can
+        # bump the budget at the call site.
+        stop_reason = getattr(message, "stop_reason", None)
+        if stop_reason == "max_tokens":
+            logger.warning(
+                "claude_json.truncated",
+                extra={
+                    "attempt": attempt + 1,
+                    "max_tokens": max_tokens,
+                    "model": CLAUDE_MODEL,
+                    "response_chars": len(text),
+                    "tail": text[-200:],
+                },
+            )
+
         try:
             return _extract_json_payload(text)
         except json.JSONDecodeError as exc:
             last_error = exc
             logger.warning(
-                "claude_json parse failed (attempt %s/2): %s — response head=%r",
+                "claude_json parse failed (attempt %s/2): %s — stop_reason=%s response head=%r",
                 attempt + 1,
                 exc,
+                stop_reason,
                 text[:500],
             )
             continue
@@ -171,7 +195,11 @@ async def claude_text(
 # ---- OpenAI embeddings ----
 
 async def embed_batch(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts. Returns one vector per input."""
+    """Embed a batch of texts using text-embedding-3-small.
+
+    Used by the legacy brief pipeline, SIE, and Research. Brief v2.0 calls
+    `embed_batch_large` instead. Returns one vector per input.
+    """
     if not texts:
         return []
     client = get_openai()
@@ -181,6 +209,38 @@ async def embed_batch(texts: list[str]) -> list[list[float]]:
         input=texts,
     )
     return [item.embedding for item in response.data]
+
+
+async def embed_batch_large(
+    texts: list[str],
+    normalize: bool = True,
+) -> list[list[float]]:
+    """Embed a batch of texts using text-embedding-3-large (Brief v2.0).
+
+    PRD §12.2 normalizes embeddings to unit length so cosine == dot product.
+    The `normalize` flag is on by default for that reason; tests may flip
+    it off when they want to inspect raw cosines independently.
+
+    Returns one vector per input. Empty input → empty output (no API call).
+    """
+    if not texts:
+        return []
+    client = get_openai()
+    response = await client.embeddings.create(
+        model=EMBEDDING_MODEL_LARGE,
+        input=texts,
+    )
+    vectors = [list(item.embedding) for item in response.data]
+    if normalize:
+        return [_unit_normalize(v) for v in vectors]
+    return vectors
+
+
+def _unit_normalize(v: list[float]) -> list[float]:
+    norm = math.sqrt(sum(x * x for x in v))
+    if norm == 0.0:
+        return v
+    return [x / norm for x in v]
 
 
 def cosine(a: list[float], b: list[float]) -> float:
