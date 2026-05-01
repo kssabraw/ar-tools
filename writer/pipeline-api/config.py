@@ -9,10 +9,7 @@ class Settings(BaseSettings):
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    # Google NLP: pass either the JSON content of a service account key
-    # (preferred for Railway since it's a single env var) or rely on
-    # GOOGLE_APPLICATION_CREDENTIALS path-based auth.
-    google_nlp_credentials_json: str = ""
+    google_nlp_api_key: str = ""
     sie_cache_ttl_days: int = 7
     sie_min_pages: int = 5
     log_level: str = "INFO"

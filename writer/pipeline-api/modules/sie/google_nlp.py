@@ -1,5 +1,8 @@
 """Google Cloud Natural Language API client for SIE entity extraction.
 
+Uses the REST API with an API key (GOOGLE_NLP_API_KEY) via httpx — no
+service account JSON required.
+
 Per SIE PRD Module 11 Pass 1: extract entities with salience >= 0.40, types
 PERSON / LOCATION / ORGANIZATION / EVENT / WORK_OF_ART / CONSUMER_GOOD / OTHER.
 
@@ -10,17 +13,18 @@ truncate at the byte boundary to avoid mid-character splits.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
-from functools import lru_cache
 from typing import Optional
+
+import httpx
 
 from config import settings
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_NLP_MAX_BYTES = 99_000  # leave a safety margin under the 100,000 cap
+_NLP_URL = "https://language.googleapis.com/v1/documents:analyzeEntities"
+GOOGLE_NLP_MAX_BYTES = 99_000
 SALIENCE_THRESHOLD = 0.40
 ALLOWED_TYPES = {
     "PERSON", "LOCATION", "ORGANIZATION", "EVENT",
@@ -49,87 +53,72 @@ class PageNERResult:
     failure_reason: Optional[str] = None
 
 
-@lru_cache(maxsize=1)
-def _client() -> Optional[object]:
-    """Lazy-init the Google NLP client. Returns None if creds are missing."""
-    creds_json = settings.google_nlp_credentials_json.strip()
-    if not creds_json:
-        logger.info("Google NLP credentials not configured — entity extraction disabled")
-        return None
-    try:
-        from google.cloud import language_v1
-        from google.oauth2 import service_account
-
-        creds_dict = json.loads(creds_json)
-        credentials = service_account.Credentials.from_service_account_info(creds_dict)
-        return language_v1.LanguageServiceClient(credentials=credentials)
-    except Exception as exc:
-        logger.error("Failed to init Google NLP client: %s", exc)
-        return None
-
-
 def _truncate_to_bytes(text: str, max_bytes: int) -> str:
-    """Cut text to fit within a UTF-8 byte limit without splitting a codepoint."""
     encoded = text.encode("utf-8")
     if len(encoded) <= max_bytes:
         return text
-    truncated = encoded[:max_bytes]
-    return truncated.decode("utf-8", errors="ignore")
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
 def _is_navigational(name: str) -> bool:
     lowered = name.lower().strip()
-    if not lowered or "." in lowered and len(lowered) < 30 and " " not in lowered:
-        # Domain-name-like single tokens
+    if not lowered:
+        return True
+    if "." in lowered and len(lowered) < 30 and " " not in lowered:
         return True
     return any(p in lowered for p in NAVIGATIONAL_NAME_PATTERNS)
 
 
 async def analyze_entities(url: str, text: str) -> PageNERResult:
     """Run analyzeEntities on a single page's cleaned body text."""
+    api_key = settings.google_nlp_api_key.strip()
+    if not api_key:
+        logger.info("Google NLP API key not configured — entity extraction disabled")
+        return PageNERResult(url=url, failed=True, failure_reason="not_configured")
+
     if not text or not text.strip():
         return PageNERResult(url=url, failed=True, failure_reason="empty_text")
 
-    client = _client()
-    if client is None:
-        return PageNERResult(url=url, failed=True, failure_reason="not_configured")
-
-    # google-cloud-language is sync; run in a worker thread.
     payload_text = _truncate_to_bytes(text, GOOGLE_NLP_MAX_BYTES)
+    body = {
+        "document": {"content": payload_text, "type": "PLAIN_TEXT", "language": "en"},
+        "encodingType": "UTF8",
+    }
+
     try:
-        response = await asyncio.to_thread(_invoke, client, payload_text)
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.post(
+                _NLP_URL,
+                params={"key": api_key},
+                json=body,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as exc:
+        logger.warning("Google NLP HTTP error for %s: %s", url, exc.response.text[:200])
+        return PageNERResult(url=url, failed=True, failure_reason=f"http_{exc.response.status_code}")
     except Exception as exc:
         logger.warning("Google NLP call failed for %s: %s", url, exc)
         return PageNERResult(url=url, failed=True, failure_reason=f"api_error: {exc.__class__.__name__}")
 
     entities: list[NEREntity] = []
-    for entity in response.entities:
-        if entity.salience < SALIENCE_THRESHOLD:
+    for entity in data.get("entities", []):
+        if entity.get("salience", 0) < SALIENCE_THRESHOLD:
             continue
-        type_name = entity.type_.name if hasattr(entity, "type_") else str(entity.type)
+        type_name = entity.get("type", "OTHER")
         if type_name not in ALLOWED_TYPES:
             continue
-        if _is_navigational(entity.name):
+        name = (entity.get("name") or "").strip()
+        if _is_navigational(name):
             continue
         entities.append(NEREntity(
-            name=entity.name.strip(),
+            name=name,
             type=type_name,
-            salience=entity.salience,
-            mentions=len(entity.mentions),
+            salience=entity["salience"],
+            mentions=len(entity.get("mentions", [])) or 1,
         ))
+
     return PageNERResult(url=url, entities=entities)
-
-
-def _invoke(client, text: str):
-    from google.cloud import language_v1
-    document = language_v1.Document(
-        content=text,
-        type_=language_v1.Document.Type.PLAIN_TEXT,
-        language="en",
-    )
-    return client.analyze_entities(
-        request={"document": document, "encoding_type": language_v1.EncodingType.UTF8}
-    )
 
 
 async def analyze_many(pages: list[tuple[str, str]], concurrency: int = 5) -> list[PageNERResult]:
