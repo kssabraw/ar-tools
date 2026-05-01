@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { Run, RunListResponse, ClientListItem, RunStatus } from '../lib/types'
+import type { RunListResponse, ClientListItem, RunStatus } from '../lib/types'
 import { Plus, RefreshCw } from 'lucide-react'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
