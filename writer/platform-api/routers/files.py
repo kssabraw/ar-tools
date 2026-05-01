@@ -48,7 +48,7 @@ async def upload_file(
     except FileParseError as exc:
         logger.error(
             "file_parse_failed",
-            extra={"filename": filename, "code": exc.code, "error": exc.message},
+            extra={"upload_filename": filename, "code": exc.code, "error": exc.message},
         )
         if exc.code == "file_too_large":
             raise HTTPException(status_code=413, detail=exc.code)

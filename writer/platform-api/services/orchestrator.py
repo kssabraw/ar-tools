@@ -206,7 +206,7 @@ async def _call_module(
 
     logger.info(
         "stage_started",
-        extra={"run_id": run_id, "module": module, "attempt": attempt},
+        extra={"run_id": run_id, "pipeline_module": module, "attempt": attempt},
     )
     start = time.perf_counter()
     try:
@@ -231,7 +231,7 @@ async def _call_module(
         if (is_timeout or is_5xx) and attempt == 1:
             logger.warning(
                 "module_retry_attempt",
-                extra={"run_id": run_id, "module": module, "error": str(exc)},
+                extra={"run_id": run_id, "pipeline_module": module, "error": str(exc)},
             )
             await _fail_module_output(output_id, str(exc))
             return await _call_module(module, run_id, payload, attempt=2)
