@@ -27,12 +27,17 @@ def _normalize(v: list[float]) -> list[float]:
 
 def _cand(text: str, embedding: list[float], source: str = "serp",
           title_relevance: float = 0.6, heading_priority: float = 0.5,
-          discard_reason=None) -> Candidate:
+          discard_reason=None, serp_frequency: int = 15,
+          llm_fanout_consensus: int = 3) -> Candidate:
     c = Candidate(text=text, source=source)  # type: ignore[arg-type]
     c.embedding = _normalize(embedding)
     c.title_relevance = title_relevance
     c.heading_priority = heading_priority
     c.discard_reason = discard_reason
+    # Defaults give a non-trivial search_demand_score (~0.40) so the 12.3
+    # filter passes for tests that don't explicitly exercise it.
+    c.serp_frequency = serp_frequency
+    c.llm_fanout_consensus = llm_fanout_consensus
     return c
 
 
@@ -319,7 +324,7 @@ def test_logs_complete_summary(caplog):
             regions=regions, candidate_pool=pool,
             contributing_region_ids=set(), scope_rejects=[],
         )
-    assert any(r.message == "brief.silo.complete" for r in caplog.records)
+    assert any(r.message == "brief.silo.identification_complete" for r in caplog.records)
 
 
 def test_logs_low_coherence_drop(caplog):
