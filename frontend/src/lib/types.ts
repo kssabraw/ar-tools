@@ -27,6 +27,7 @@ export interface Client extends ClientListItem {
   icp_source_type: 'text' | 'file'
   icp_text: string
   icp_original_filename: string | null
+  google_drive_folder_id: string | null
   updated_at: string
 }
 

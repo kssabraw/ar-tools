@@ -126,6 +126,7 @@ async def create_client(
         "icp_text": icp_text,
         "icp_file_path": icp_file_path,
         "website_analysis_status": "pending",
+        "google_drive_folder_id": body.google_drive_folder_id,
         "created_by": auth["user_id"],
     }
     result = supabase.table("clients").insert(row).execute()
@@ -183,6 +184,8 @@ async def update_client(
         updates["icp_source_type"] = body.icp_source_type
     if body.icp_text is not None:
         updates["icp_text"] = body.icp_text
+    if body.google_drive_folder_id is not None:
+        updates["google_drive_folder_id"] = body.google_drive_folder_id
 
     result = supabase.table("clients").update(updates).eq("id", str(client_id)).execute()
     if not result.data:

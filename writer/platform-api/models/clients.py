@@ -39,6 +39,7 @@ class ClientDetail(BaseModel):
     archived: bool
     created_at: str
     updated_at: str
+    google_drive_folder_id: Optional[str] = None
 
 
 class ClientCreateRequest(BaseModel):
@@ -50,6 +51,7 @@ class ClientCreateRequest(BaseModel):
     icp_source_type: Literal["text", "file"]
     icp_text: str = ""
     icp_file_id: Optional[UUID] = None
+    google_drive_folder_id: Optional[str] = None
 
 
 class ClientUpdateRequest(BaseModel):
@@ -61,3 +63,4 @@ class ClientUpdateRequest(BaseModel):
     icp_source_type: Optional[Literal["text", "file"]] = None
     icp_text: Optional[str] = None
     icp_file_id: Optional[UUID] = None
+    google_drive_folder_id: Optional[str] = None

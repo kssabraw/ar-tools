@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     job_worker_poll_interval_seconds: int = 10
     allowed_origins: List[str] = ["*"]
     log_level: str = "INFO"
+    google_apps_script_url: str = ""
 
     class Config:
         env_file = ".env"

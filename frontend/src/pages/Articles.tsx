@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunListResponse } from '../lib/types'
-import { Download, Copy, FileText, ChevronDown, ChevronUp } from 'lucide-react'
+import { Download, Copy, FileText, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -30,6 +30,15 @@ function sectionsToMarkdown(article: unknown[]): string {
 function ArticleCard({ run }: { run: any }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+
+  const publishMutation = useMutation({
+    mutationFn: () => api.post<{ doc_url: string }>(`/runs/${run.id}/publish`, {}),
+    onSuccess: (data) => {
+      setPublishedUrl(data.doc_url)
+      window.open(data.doc_url, '_blank')
+    },
+  })
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ['run', run.id],
@@ -76,6 +85,21 @@ function ArticleCard({ run }: { run: any }) {
               <button onClick={() => downloadFile(markdown, `${slug}.txt`, 'text/plain')} style={ghostBtn}>
                 <Download size={13} /> .txt
               </button>
+              {publishedUrl ? (
+                <a href={publishedUrl} target="_blank" rel="noreferrer"
+                  style={{ ...ghostBtn, textDecoration: 'none', color: '#16a34a', borderColor: '#bbf7d0' }}>
+                  <ExternalLink size={13} /> Open Doc
+                </a>
+              ) : (
+                <button
+                  onClick={() => publishMutation.mutate()}
+                  disabled={publishMutation.isPending}
+                  style={{ ...ghostBtn, color: '#6366f1', borderColor: '#c7d2fe' }}
+                  title="Publish to the client's Google Drive folder"
+                >
+                  <ExternalLink size={13} /> {publishMutation.isPending ? 'Publishing…' : 'Publish to Google Docs'}
+                </button>
+              )}
             </>
           )}
           <Link to={`/runs/${run.id}`} style={{ ...ghostBtn, textDecoration: 'none' }}>
@@ -86,6 +110,12 @@ function ArticleCard({ run }: { run: any }) {
           </button>
         </div>
       </div>
+
+      {publishMutation.error && (
+        <div style={{ marginTop: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
+          {(publishMutation.error as Error).message}
+        </div>
+      )}
 
       {expanded && (
         <div style={{ marginTop: 16 }}>

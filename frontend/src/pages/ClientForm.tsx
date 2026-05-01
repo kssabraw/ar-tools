@@ -10,9 +10,10 @@ interface FormData {
   website_url: string
   brand_guide_text: string
   icp_text: string
+  google_drive_folder_id: string
 }
 
-const empty: FormData = { name: '', website_url: '', brand_guide_text: '', icp_text: '' }
+const empty: FormData = { name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '' }
 
 export function ClientForm() {
   const navigate = useNavigate()
@@ -35,6 +36,7 @@ export function ClientForm() {
         website_url: existing.website_url,
         brand_guide_text: existing.brand_guide_text ?? '',
         icp_text: existing.icp_text ?? '',
+        google_drive_folder_id: existing.google_drive_folder_id ?? '',
       })
     }
   }, [existing])
@@ -72,6 +74,7 @@ export function ClientForm() {
           brand_guide_text: form.brand_guide_text,
           icp_source_type: 'text',
           icp_text: form.icp_text,
+          google_drive_folder_id: form.google_drive_folder_id || null,
         })
       } else {
         await createMutation.mutateAsync({
@@ -81,6 +84,7 @@ export function ClientForm() {
           brand_guide_text: form.brand_guide_text,
           icp_source_type: 'text',
           icp_text: form.icp_text,
+          google_drive_folder_id: form.google_drive_folder_id || null,
         })
       }
     } finally {
@@ -168,6 +172,23 @@ export function ClientForm() {
             placeholder={`Examples of what to include:\n• Homeowners aged 35–65, own their home for 5+ years\n• Concerned about unexpected repair costs and energy bills\n• Search when something breaks or before summer/winter\n• Trust local companies with reviews over national chains\n• Objections: "Can I trust them?" and "Is it worth the cost?"`}
             style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', resize: 'vertical', lineHeight: 1.6 }}
           />
+        </div>
+
+        <div style={sectionStyle}>
+          <h2 style={sectionTitle}>Google Drive Publishing</h2>
+          <p style={descStyle}>
+            Optional. Paste this client's Google Drive folder ID to enable one-click publishing of finished articles into their folder.
+          </p>
+          <label style={labelStyle}>Drive Folder ID</label>
+          <input
+            value={form.google_drive_folder_id}
+            onChange={set('google_drive_folder_id')}
+            placeholder="1aBcDeFgHiJkLmNoPqRsTuVwXyZ123456"
+            style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' }}
+          />
+          <p style={hintStyle}>
+            Find the ID in the folder's URL — the part after <code>/folders/</code>. Make sure your Apps Script account has Editor access.
+          </p>
         </div>
 
         {error && (
