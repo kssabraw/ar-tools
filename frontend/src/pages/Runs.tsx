@@ -2,17 +2,28 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { Run, Client } from '../lib/types'
+import type { Run, RunListResponse, ClientListItem, RunStatus } from '../lib/types'
 import { Plus, RefreshCw } from 'lucide-react'
 
-function statusBadge(status: Run['status']) {
-  const map: Record<Run['status'], { bg: string; color: string; label: string }> = {
-    pending: { bg: '#fef3c7', color: '#92400e', label: 'Pending' },
-    running: { bg: '#dbeafe', color: '#1e40af', label: 'Running' },
-    completed: { bg: '#dcfce7', color: '#166534', label: 'Completed' },
-    failed: { bg: '#fee2e2', color: '#991b1b', label: 'Failed' },
+const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
+
+function isRunning(status: RunStatus) {
+  return !TERMINAL.includes(status)
+}
+
+function statusBadge(status: RunStatus) {
+  const map: Record<RunStatus, { bg: string; color: string; label: string }> = {
+    queued:                  { bg: '#f1f5f9', color: '#475569', label: 'Queued' },
+    brief_running:           { bg: '#dbeafe', color: '#1e40af', label: 'Brief' },
+    sie_running:             { bg: '#dbeafe', color: '#1e40af', label: 'SIE' },
+    research_running:        { bg: '#dbeafe', color: '#1e40af', label: 'Research' },
+    writer_running:          { bg: '#dbeafe', color: '#1e40af', label: 'Writing' },
+    sources_cited_running:   { bg: '#dbeafe', color: '#1e40af', label: 'Citations' },
+    complete:                { bg: '#dcfce7', color: '#166534', label: 'Complete' },
+    failed:                  { bg: '#fee2e2', color: '#991b1b', label: 'Failed' },
+    cancelled:               { bg: '#f1f5f9', color: '#475569', label: 'Cancelled' },
   }
-  const s = map[status]
+  const s = map[status] ?? { bg: '#f1f5f9', color: '#475569', label: status }
   return (
     <span style={{ background: s.bg, color: s.color, borderRadius: 999, padding: '2px 10px', fontSize: 12, fontWeight: 600 }}>
       {s.label}
@@ -27,19 +38,24 @@ export function Runs() {
   const [keyword, setKeyword] = useState('')
   const [creating, setCreating] = useState(false)
 
-  const { data: runs = [], isLoading: runsLoading, refetch } = useQuery<Run[]>({
+  const { data: runsResp, isLoading: runsLoading, refetch } = useQuery<RunListResponse>({
     queryKey: ['runs'],
-    queryFn: () => api.get<Run[]>('/runs'),
-    refetchInterval: 10000,
+    queryFn: () => api.get<RunListResponse>('/runs'),
+    refetchInterval: (query) => {
+      const runs = query.state.data?.data ?? []
+      return runs.some(r => isRunning(r.status)) ? 8000 : false
+    },
   })
 
-  const { data: clients = [] } = useQuery<Client[]>({
+  const runs = runsResp?.data ?? []
+
+  const { data: clients = [] } = useQuery<ClientListItem[]>({
     queryKey: ['clients'],
-    queryFn: () => api.get<Client[]>('/clients'),
+    queryFn: () => api.get<ClientListItem[]>('/clients'),
   })
 
   const createRun = useMutation({
-    mutationFn: (body: { client_id: string; keyword: string }) =>
+    mutationFn: (body: { client_id: string; keyword: string; sie_outlier_mode: string; sie_force_refresh: boolean }) =>
       api.post('/runs', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['runs'] })
@@ -53,7 +69,12 @@ export function Runs() {
     e.preventDefault()
     setCreating(true)
     try {
-      await createRun.mutateAsync({ client_id: clientId, keyword })
+      await createRun.mutateAsync({
+        client_id: clientId,
+        keyword,
+        sie_outlier_mode: 'safe',
+        sie_force_refresh: false,
+      })
     } finally {
       setCreating(false)
     }
@@ -81,7 +102,9 @@ export function Runs() {
               <label style={labelStyle}>Client</label>
               <select value={clientId} onChange={e => setClientId(e.target.value)} required style={inputStyle}>
                 <option value="">Select client…</option>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                {clients.filter(c => !c.archived).map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
               </select>
             </div>
             <div style={{ flex: 1, minWidth: 240 }}>
@@ -90,6 +113,7 @@ export function Runs() {
                 value={keyword}
                 onChange={e => setKeyword(e.target.value)}
                 required
+                maxLength={150}
                 placeholder="e.g. best hvac systems 2026"
                 style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
               />
@@ -130,7 +154,7 @@ export function Runs() {
             <tbody>
               {runs.map(run => (
                 <tr key={run.id} style={{ borderBottom: '1px solid #f8fafc' }}>
-                  <td style={tdStyle}>{run.clients?.name ?? run.client_id}</td>
+                  <td style={tdStyle}>{run.client_name}</td>
                   <td style={{ ...tdStyle, fontWeight: 500, color: '#0f172a' }}>{run.keyword}</td>
                   <td style={tdStyle}>{statusBadge(run.status)}</td>
                   <td style={{ ...tdStyle, color: '#64748b', fontSize: 13 }}>
