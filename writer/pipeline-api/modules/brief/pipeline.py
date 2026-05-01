@@ -1,7 +1,13 @@
-"""Brief Generator pipeline orchestrator (schema v1.7).
+"""Brief Generator pipeline orchestrator (schema v1.8).
 
 Runs all 9 steps from the PRD with parallel external calls where the spec
 allows it. Returns a fully populated BriefResponse.
+
+v1.8 (CQ PRD v1.0 R1, R2):
+- Sanitization runs at intake (in parsers.parse_serp + scoring.aggregate_candidates).
+- After Step 5 scoring, cluster_candidates collapses paraphrases at cosine ≥ 0.85,
+  optionally LLM-arbitrates soft pairs (0.72–0.85), and feeds canonicals
+  through polish + priority + select.
 """
 
 from __future__ import annotations
@@ -37,15 +43,24 @@ from .faqs import (
 )
 from .intent import classify_intent
 from .llm import claude_json
+from .clustering import (
+    HARD_MERGE_THRESHOLD,
+    SOFT_CLUSTER_THRESHOLD,
+    assign_cluster_ids,
+    cluster_candidates,
+    pick_canonicals,
+)
 from .parsers import (
     aggregate_serp_stats,
     normalize_text,
     parse_reddit,
     parse_serp,
+    sanitization_discards,
 )
 from .scoring import (
     HeadingCandidate,
     aggregate_candidates,
+    arbitrate_soft_pairs,
     compute_priority,
     polish_headings,
     score_candidates,
@@ -226,7 +241,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     if not candidates:
         raise BriefError("no_candidates", "No heading candidates after aggregation.")
 
-    # ---- Step 5 — semantic scoring + heading polish ----
+    # ---- Step 5 — semantic scoring ----
     kept, low_score_discards, keyword_embedding = await score_candidates(
         keyword=keyword,
         candidates=candidates,
@@ -235,11 +250,64 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     if not kept:
         raise BriefError("all_below_threshold", "No candidates above semantic threshold.")
 
-    await polish_headings(kept)
+    # Initial priority needed so cluster ordering and canonical-pick are
+    # stable. Clustering rolls up cluster signals and we recompute below.
     compute_priority(kept)
 
+    # ---- Step 5.5 — semantic clustering (CQ PRD R1) ----
+    clustering_result = cluster_candidates(
+        kept,
+        hard_threshold=HARD_MERGE_THRESHOLD,
+        soft_threshold=SOFT_CLUSTER_THRESHOLD,
+    )
+    soft_pairs_examined = len(clustering_result.soft_pairs)
+    soft_pairs_merged = 0
+
+    # Optional second pass: ask the polish LLM to confirm soft-band paraphrases.
+    # Cheap (one extra LLM call) and only fires when soft pairs exist.
+    if clustering_result.soft_pairs:
+        confirmed = await arbitrate_soft_pairs(kept, clustering_result.soft_pairs)
+        if confirmed:
+            soft_pairs_merged = len(confirmed)
+            # Union the confirmed pairs into the existing cluster structure
+            from .clustering import _find, _union, _union_find_init  # type: ignore
+            # Rebuild union-find from current clusters, then add confirmed pairs.
+            n = len(kept)
+            parent = _union_find_init(n)
+            for cluster in clustering_result.clusters:
+                if len(cluster) > 1:
+                    base = cluster[0]
+                    for other in cluster[1:]:
+                        _union(parent, base, other)
+            for a, b in confirmed:
+                _union(parent, a, b)
+            cluster_map: dict[int, list[int]] = {}
+            for i in range(n):
+                root = _find(parent, i)
+                cluster_map.setdefault(root, []).append(i)
+            clustering_result.clusters = list(cluster_map.values())
+
+    # Stamp cluster_id on every candidate (ordered by max-priority-in-cluster)
+    assign_cluster_ids(kept, clustering_result.clusters)
+
+    # Pick one canonical per cluster; rolls up cluster signals onto canonicals.
+    canonicals, cluster_losers = pick_canonicals(kept, clustering_result.clusters)
+    semantic_dedup_collapses_count = sum(
+        1 for c in clustering_result.clusters if len(c) > 1
+    )
+    logger.info(
+        "step_5_5: %d candidates → %d canonicals (%d collapses, %d soft pairs examined, %d merged)",
+        len(kept), len(canonicals), semantic_dedup_collapses_count,
+        soft_pairs_examined, soft_pairs_merged,
+    )
+
+    # Polish + recompute priority on canonicals only (cluster signals now
+    # include the rolled-up SERP frequency / LLM consensus from variants).
+    await polish_headings(canonicals)
+    compute_priority(canonicals)
+
     # ---- Step 6 — authority gap ----
-    existing_texts = [c.text for c in kept]
+    existing_texts = [c.text for c in canonicals]
     reddit_context_blobs = reddit_titles + reddit_comments
     auth_h3s = await authority_gap_headings(
         keyword=keyword,
@@ -265,12 +333,12 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         reddit_blob = "\n\n".join(reddit_titles + reddit_comments)
         faq_pool.extend(await llm_concern_extraction(reddit_blob))
 
-    heading_norm_set = {normalize_text(c.text) for c in kept}
+    heading_norm_set = {normalize_text(c.text) for c in canonicals}
     scored_faqs = await score_faqs(faq_pool, keyword_embedding, heading_norm_set)
     faqs = select_faqs(scored_faqs)
 
-    # ---- Step 8 — structure ----
-    h2_selected, leftovers = select_h2s(kept, intent)
+    # ---- Step 8 — structure (operates on canonicals only) ----
+    h2_selected, leftovers = select_h2s(canonicals, intent)
     if intent == "how-to":
         h2_selected = await reorder_how_to(h2_selected, keyword)
 
@@ -291,6 +359,18 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     for c in low_score_discards:
         discarded_candidates.append(c)
 
+    # CQ PRD R1: cluster losers (paraphrases collapsed into a canonical).
+    # We need cluster_id → canonical's heading order so the discarded record
+    # can carry semantic_duplicate_of (the order of the kept canonical).
+    cluster_to_canonical_order: dict[int, int] = {}
+    for item in heading_structure:
+        if item.cluster_id is not None:
+            cluster_to_canonical_order.setdefault(item.cluster_id, item.order)
+    discarded_candidates.extend(cluster_losers)
+
+    # CQ PRD R2: SERP rows rejected by sanitization (S9/S10).
+    sanitization_rejected = sanitization_discards(serp_headings)
+
     selected_norms = {normalize_text(item.text) for item in heading_structure}
     attached_norms: set[str] = set()
     for arr in h3_attachments.values():
@@ -308,7 +388,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         c.discard_reason = "global_cap_exceeded"
         discarded_candidates.append(c)
 
-    # ---- Step 9 — silos ----
+    # ---- Step 9 — silos (legacy) + spin_off_articles (CQ PRD R3) ----
     eligible = [
         c for c in discarded_candidates
         if c.discard_reason in ("below_priority_threshold", "global_cap_exceeded")
@@ -316,8 +396,13 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     silos, low_coherence = identify_silos(eligible)
     discarded_candidates.extend(low_coherence)
 
-    discarded_models = [
-        DiscardedHeading(
+    spin_off_articles = _build_spin_off_articles(discarded_candidates, silos)
+
+    discarded_models: list[DiscardedHeading] = []
+    for c in discarded_candidates:
+        if not c.discard_reason:
+            continue
+        discarded_models.append(DiscardedHeading(
             text=c.text,
             source=c.source,
             original_source=c.original_source,
@@ -329,10 +414,29 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             llm_fanout_consensus=c.llm_fanout_consensus,
             heading_priority=round(c.heading_priority, 4),
             discard_reason=c.discard_reason,  # type: ignore[arg-type]
-        )
-        for c in discarded_candidates
-        if c.discard_reason
-    ]
+            cluster_id=(c.cluster_id if c.cluster_id != -1 else None),
+            semantic_duplicate_of=cluster_to_canonical_order.get(
+                c.semantic_duplicate_of_cluster
+            ) if c.semantic_duplicate_of_cluster is not None else None,
+            raw_text=c.raw_text,
+        ))
+
+    # Add the SERP rows that sanitization rejected outright
+    for raw in sanitization_rejected:
+        discarded_models.append(DiscardedHeading(
+            text=raw["raw_text"],
+            source="serp",
+            semantic_score=0.0,
+            serp_frequency=0,
+            avg_serp_position=None,
+            llm_fanout_consensus=0,
+            heading_priority=0.0,
+            # Best-effort: most rejections are "too short" (S9). The sanitizer
+            # itself doesn't disambiguate S9 vs S10 today; we tag the broader
+            # too-short category which covers ~95% of cases in practice.
+            discard_reason="too_short_after_sanitization",
+            raw_text=raw["raw_text"],
+        ))
 
     # ---- Metadata ----
     h2_count = sum(1 for h in heading_structure if h.level == "H2" and h.type == "content")
@@ -345,6 +449,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         total_content_subheadings=h2_count + h3_count,
         discarded_headings_count=len(discarded_models),
         silo_candidates_count=len(silos),
+        spin_off_articles_count=len(spin_off_articles),
         competitors_analyzed=20,
         reddit_threads_analyzed=len(reddit_items),
         llm_fanout_queries_captured=fanout_counts,
@@ -352,6 +457,11 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         intent_signals=signals,
         embedding_model="text-embedding-3-small",
         semantic_filter_threshold=0.55,
+        semantic_dedup_threshold=HARD_MERGE_THRESHOLD,
+        semantic_dedup_collapses_count=semantic_dedup_collapses_count,
+        soft_cluster_pairs_examined=soft_pairs_examined,
+        soft_cluster_pairs_merged=soft_pairs_merged,
+        sanitization_discards_count=len(sanitization_rejected),
         low_serp_coverage=low_serp_coverage,
         reddit_unavailable=reddit_unavailable,
         llm_fanout_unavailable=unavailable,
@@ -367,8 +477,62 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faqs=faqs,
         discarded_headings=discarded_models,
         silo_candidates=silos,
+        spin_off_articles=spin_off_articles,
         metadata=metadata,
     )
+
+
+def _build_spin_off_articles(
+    discarded: list[HeadingCandidate],
+    silos: list,
+) -> list:
+    """CQ PRD R3 — surface displaced headings as spin_off_articles.
+
+    Initial implementation: route the silo seed keywords as spin-offs
+    plus any semantic-duplicate or definitional-restatement losers that
+    represented genuinely distinct sub-topics (priority > median).
+    Refinement (LLM-curated topical seeds) deferred per CQ PRD §5 v1.0.
+    """
+    from models.brief import SpinOffArticle
+
+    out: list[SpinOffArticle] = []
+
+    # Convert legacy silo seeds into spin-offs (one-release transition window).
+    for s in silos:
+        out.append(SpinOffArticle(
+            suggested_keyword=s.suggested_keyword,
+            source_heading_text=s.suggested_keyword,
+            source_reason="below_priority_threshold",
+            cluster_coherence_score=s.cluster_coherence_score,
+            review_recommended=s.review_recommended,
+            recommended_intent=s.recommended_intent,
+            supporting_headings=[h.text for h in s.source_headings],
+        ))
+
+    # Promote semantic-duplicate / definitional / cap-cut losers that are
+    # high-priority on their own (might genuinely deserve their own article).
+    for c in discarded:
+        if c.discard_reason not in (
+            "semantic_duplicate_of_higher_priority_h2",
+            "definitional_restatement",
+            "global_cap_exceeded",
+        ):
+            continue
+        if c.heading_priority < 0.50:
+            continue
+        out.append(SpinOffArticle(
+            suggested_keyword=c.text,
+            source_heading_text=c.text,
+            source_reason=(
+                "semantic_duplicate" if c.discard_reason == "semantic_duplicate_of_higher_priority_h2"
+                else c.discard_reason  # type: ignore[arg-type]
+            ),
+            cluster_coherence_score=0.0,
+            recommended_intent="informational",
+            supporting_headings=[],
+        ))
+
+    return out
 
 
 async def _swallow(coro):

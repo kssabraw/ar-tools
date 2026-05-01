@@ -195,8 +195,14 @@ async def test_run_brief_happy_path():
         result = await run_brief(req)
 
     # Schema invariants
-    assert result.metadata.schema_version == "1.7"
+    assert result.metadata.schema_version == "1.8"
     assert result.keyword == "best hvac systems 2026"
+
+    # CQ PRD R1/R2 metadata fields are present
+    assert hasattr(result.metadata, "semantic_dedup_threshold")
+    assert hasattr(result.metadata, "semantic_dedup_collapses_count")
+    assert hasattr(result.metadata, "sanitization_discards_count")
+    assert hasattr(result, "spin_off_articles")
 
     # Has H1
     h1s = [h for h in result.heading_structure if h.level == "H1"]

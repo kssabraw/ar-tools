@@ -13,6 +13,8 @@ from typing import Any
 
 from models.brief import IntentSignals
 
+from .sanitization import sanitize_heading
+
 BOILERPLATE_PATTERNS = [
     r"^contact us$",
     r"^about( the)? author$",
@@ -72,13 +74,54 @@ def levenshtein_ratio(a: str, b: str) -> float:
     return distance / max(len(a), len(b))
 
 
-def parse_serp(items: list[dict[str, Any]]) -> tuple[list[dict], IntentSignals, list[str]]:
+def _add_sanitized(
+    bucket: list[dict],
+    raw_text: str,
+    *,
+    level: str,
+    position: int,
+    url: str,
+    source: str,
+) -> None:
+    """Apply CQ PRD R2 sanitization at intake. Stash both clean + raw text.
+
+    `raw_text` is preserved on the candidate so the brief output's
+    discarded_headings can show what was actually scraped.
+    """
+    raw = (raw_text or "").strip()
+    if not raw or is_boilerplate(raw):
+        return
+    cleaned = sanitize_heading(raw, source_url=url)
+    if cleaned is None:
+        # Sanitization rejected (S9 too short, S10 non-descriptive, or stripped to empty)
+        bucket.append({
+            "text": raw,
+            "raw_text": raw,
+            "level": level,
+            "position": position,
+            "url": url,
+            "source": source,
+            "sanitization_discarded": True,
+        })
+        return
+    bucket.append({
+        "text": cleaned,
+        "raw_text": raw,
+        "level": level,
+        "position": position,
+        "url": url,
+        "source": source,
+        "sanitization_discarded": False,
+    })
+
+
+def parse_serp(items: list[dict[str, Any]]) -> tuple[list[dict], IntentSignals, list[str], list[str]]:
     """Step 1 — extract headings (H1/H2/H3) from organic results, and SERP signals.
 
     Returns:
-        headings: list of {text, level, position, url, source}
+        headings: list of {text, raw_text, level, position, url, source, sanitization_discarded}
         intent_signals: IntentSignals
-        paa_questions: list of PAA question strings
+        paa_questions: list of PAA question strings (sanitized; ones rejected by S9/S10 dropped)
         organic_titles: list of organic result titles (used by intent classifier)
     """
     headings: list[dict] = []
@@ -93,8 +136,11 @@ def parse_serp(items: list[dict[str, Any]]) -> tuple[list[dict], IntentSignals, 
         if item_type == "people_also_ask":
             for paa_item in item.get("items") or []:
                 q = paa_item.get("title")
-                if q:
-                    paa_questions.append(q.strip())
+                if not q:
+                    continue
+                cleaned = sanitize_heading(q.strip(), source_url=None)
+                if cleaned:
+                    paa_questions.append(cleaned)
             continue
 
         if item_type == "shopping" or item_type == "shopping_serp":
@@ -129,13 +175,7 @@ def parse_serp(items: list[dict[str, Any]]) -> tuple[list[dict], IntentSignals, 
             titles.append(title.strip())
             # Title doubles as an H1 candidate
             if len(title.split()) >= 3:
-                headings.append({
-                    "text": title.strip(),
-                    "level": "H1",
-                    "position": position,
-                    "url": url,
-                    "source": "serp",
-                })
+                _add_sanitized(headings, title, level="H1", position=position, url=url, source="serp")
 
         # Some DataForSEO responses include `extended_snippet` or item-level
         # `highlighted_text`. We don't have direct H2/H3 access from the
@@ -145,13 +185,10 @@ def parse_serp(items: list[dict[str, Any]]) -> tuple[list[dict], IntentSignals, 
         for line in snippet.splitlines():
             line = line.strip(" •-—:")
             if line.endswith(":") and 3 <= len(line.split()) <= 12 and not is_boilerplate(line):
-                headings.append({
-                    "text": line.rstrip(":"),
-                    "level": "H2",
-                    "position": position,
-                    "url": url,
-                    "source": "serp",
-                })
+                _add_sanitized(
+                    headings, line.rstrip(":"),
+                    level="H2", position=position, url=url, source="serp",
+                )
 
     return headings, signals, paa_questions, titles
 
@@ -177,18 +214,37 @@ def parse_reddit(items: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
 
 
 def aggregate_serp_stats(headings: list[dict]) -> dict[str, dict]:
-    """Compute serp_frequency and avg_serp_position keyed by normalized text."""
+    """Compute serp_frequency, avg_serp_position, and source URLs keyed by normalized text.
+
+    Headings flagged with `sanitization_discarded` are excluded — they were
+    sanitized to nothing meaningful and don't enter the SERP stats pool.
+    The pre-sanitization raw text is preserved on the representative entry
+    so downstream `discarded_headings` records can show the original artifact.
+    """
     by_norm: dict[str, list[dict]] = defaultdict(list)
     for h in headings:
+        if h.get("sanitization_discarded"):
+            continue
         by_norm[normalize_text(h["text"])].append(h)
 
     stats: dict[str, dict] = {}
     for norm, group in by_norm.items():
         positions = [h["position"] for h in group if h.get("position")]
+        urls = [h["url"] for h in group if h.get("url")]
         stats[norm] = {
             "serp_frequency": len(group),
             "avg_serp_position": (sum(positions) / len(positions)) if positions else None,
             "representative_text": group[0]["text"],
             "representative_level": group[0].get("level", "H2"),
+            "raw_text": group[0].get("raw_text"),
+            "source_urls": urls,
         }
     return stats
+
+
+def sanitization_discards(headings: list[dict]) -> list[dict]:
+    """Return SERP headings whose sanitization rejected them (S9 / S10).
+
+    Used by the pipeline to populate `discarded_headings` with R2 reasons.
+    """
+    return [h for h in headings if h.get("sanitization_discarded")]

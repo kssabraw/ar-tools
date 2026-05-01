@@ -12,6 +12,7 @@ from typing import Optional
 from models.brief import (
     DiscardedHeading,
     FAQItem,
+    HeadingClusterEvidence,
     HeadingItem,
     IntentType,
 )
@@ -166,22 +167,7 @@ def assemble_structure(
             continue
         order += 1
         used += 1
-        items.append(HeadingItem(
-            level="H2",
-            text=h2.text,
-            type="content",
-            source=h2.source,
-            original_source=h2.original_source,
-            semantic_score=round(h2.semantic_score, 4),
-            exempt=h2.exempt,
-            serp_frequency=h2.serp_frequency,
-            avg_serp_position=(
-                round(h2.avg_serp_position, 2) if h2.avg_serp_position is not None else None
-            ),
-            llm_fanout_consensus=h2.llm_fanout_consensus,
-            heading_priority=round(h2.heading_priority, 4),
-            order=order,
-        ))
+        items.append(_to_heading_item(h2, level="H2", order=order, cap_evidence=5))
 
         for h3 in h3_attachments.get(i, []):
             if used >= cap:
@@ -189,22 +175,7 @@ def assemble_structure(
                 continue
             order += 1
             used += 1
-            items.append(HeadingItem(
-                level="H3",
-                text=h3.text,
-                type="content",
-                source=h3.source,
-                original_source=h3.original_source,
-                semantic_score=round(h3.semantic_score, 4),
-                exempt=h3.exempt,
-                serp_frequency=h3.serp_frequency,
-                avg_serp_position=(
-                    round(h3.avg_serp_position, 2) if h3.avg_serp_position is not None else None
-                ),
-                llm_fanout_consensus=h3.llm_fanout_consensus,
-                heading_priority=round(h3.heading_priority, 4),
-                order=order,
-            ))
+            items.append(_to_heading_item(h3, level="H3", order=order, cap_evidence=5))
 
     # FAQ section (outside the cap)
     if faqs:
@@ -227,3 +198,55 @@ def assemble_structure(
             ))
 
     return (items, cut)
+
+
+def _to_heading_item(
+    c: HeadingCandidate,
+    *,
+    level: str,
+    order: int,
+    cap_evidence: int = 5,
+) -> HeadingItem:
+    """Build a HeadingItem from a candidate, including cluster evidence (R1).
+
+    Cluster evidence is capped at `cap_evidence` variants (sorted by
+    cosine_to_canonical desc) to keep the brief output payload bounded.
+    A canonical with 9 paraphrases shows the top 5 here; the remaining 4
+    still appear as `discarded_headings` rows with `semantic_duplicate_of`.
+    """
+    sorted_variants = sorted(
+        c.cluster_variants,
+        key=lambda v: v.cosine_to_canonical,
+        reverse=True,
+    )[:cap_evidence]
+
+    evidence = [
+        HeadingClusterEvidence(
+            text=v.text,
+            source=v.source,
+            source_url=v.source_url,
+            cosine_to_canonical=round(v.cosine_to_canonical, 4),
+            heading_priority=round(v.heading_priority, 4),
+        )
+        for v in sorted_variants
+    ]
+
+    return HeadingItem(
+        level=level,  # type: ignore[arg-type]
+        text=c.text,
+        type="content",
+        source=c.source,
+        original_source=c.original_source,
+        semantic_score=round(c.semantic_score, 4),
+        exempt=c.exempt,
+        serp_frequency=c.serp_frequency,
+        avg_serp_position=(
+            round(c.avg_serp_position, 2) if c.avg_serp_position is not None else None
+        ),
+        llm_fanout_consensus=c.llm_fanout_consensus,
+        heading_priority=round(c.heading_priority, 4),
+        order=order,
+        cluster_id=(c.cluster_id if c.cluster_id != -1 else None),
+        cluster_size=1 + len(c.cluster_variants),
+        cluster_evidence=evidence,
+    )

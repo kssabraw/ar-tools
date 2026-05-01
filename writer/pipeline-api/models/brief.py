@@ -1,8 +1,24 @@
-"""Pydantic models for the Brief Generator module (schema v1.7)."""
+"""Pydantic models for the Brief Generator module (schema v1.8).
+
+v1.8 changes (Content Quality PRD v1.0 R1, R2, R3):
+- HeadingItem gains cluster_id, cluster_size, cluster_evidence
+- DiscardedHeading gains cluster_id, semantic_duplicate_of, raw_text
+- DiscardReason enum extended with semantic_duplicate_of_higher_priority_h2,
+  definitional_restatement, too_short_after_sanitization,
+  non_descriptive_after_sanitization, low_topic_adherence_in_writer
+- BriefMetadata gains semantic_dedup_threshold, semantic_dedup_collapses_count,
+  definitional_restatements_discarded_count, mmr_lambda
+- spin_off_articles[] introduced; silo_candidates[] retained for one release
+- All models lock to extra='forbid' (Pydantic equivalent of JSON Schema
+  additionalProperties: false)
+"""
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+_FORBID_EXTRA = ConfigDict(extra="forbid")
 
 
 IntentType = Literal[
@@ -45,11 +61,17 @@ DiscardReason = Literal[
     "global_cap_exceeded",
     "duplicate",
     "low_cluster_coherence",
+    "semantic_duplicate_of_higher_priority_h2",
+    "definitional_restatement",
+    "too_short_after_sanitization",
+    "non_descriptive_after_sanitization",
+    "low_topic_adherence_in_writer",
 ]
 
 
 class BriefRequest(BaseModel):
     """Input envelope to POST /brief."""
+    model_config = _FORBID_EXTRA
 
     run_id: str = Field(..., description="Idempotency key from platform-api")
     attempt: int = 1
@@ -58,7 +80,20 @@ class BriefRequest(BaseModel):
     intent_override: Optional[IntentType] = None
 
 
+class HeadingClusterEvidence(BaseModel):
+    """One paraphrase variant that was merged into a cluster's canonical."""
+    model_config = _FORBID_EXTRA
+
+    text: str
+    source: HeadingSource
+    source_url: Optional[str] = None
+    cosine_to_canonical: float = 0.0
+    heading_priority: float = 0.0
+
+
 class HeadingItem(BaseModel):
+    model_config = _FORBID_EXTRA
+
     level: HeadingLevel
     text: str
     type: HeadingType
@@ -71,16 +106,26 @@ class HeadingItem(BaseModel):
     llm_fanout_consensus: int = 0
     heading_priority: float = 0.0
     order: int = 0
+    # CQ PRD v1.0 R1 — cluster info
+    cluster_id: Optional[int] = None
+    cluster_size: int = 1
+    cluster_evidence: list[HeadingClusterEvidence] = []
 
 
 class FAQItem(BaseModel):
+    model_config = _FORBID_EXTRA
+
     question: str
     source: FAQSource
     faq_score: float = 0.0
 
 
 class StructuralConstants(BaseModel):
+    model_config = _FORBID_EXTRA
+
     class _Conclusion(BaseModel):
+        model_config = _FORBID_EXTRA
+
         type: Literal["conclusion"] = "conclusion"
         level: Optional[str] = None
         text: str = "[Conclusion placeholder]"
@@ -89,6 +134,8 @@ class StructuralConstants(BaseModel):
 
 
 class FormatDirectives(BaseModel):
+    model_config = _FORBID_EXTRA
+
     require_bulleted_lists: bool = True
     require_tables: bool = True
     min_lists_per_article: int = 2
@@ -98,6 +145,8 @@ class FormatDirectives(BaseModel):
 
 
 class DiscardedHeading(BaseModel):
+    model_config = _FORBID_EXTRA
+
     text: str
     source: HeadingSource
     original_source: Optional[str] = None
@@ -107,9 +156,15 @@ class DiscardedHeading(BaseModel):
     llm_fanout_consensus: int = 0
     heading_priority: float = 0.0
     discard_reason: DiscardReason
+    # CQ PRD v1.0 R1 / R2
+    cluster_id: Optional[int] = None
+    semantic_duplicate_of: Optional[int] = None  # `order` of the canonical kept
+    raw_text: Optional[str] = None  # pre-sanitization text (R2)
 
 
 class SiloSourceHeading(BaseModel):
+    model_config = _FORBID_EXTRA
+
     text: str
     semantic_score: float
     heading_priority: float
@@ -117,6 +172,9 @@ class SiloSourceHeading(BaseModel):
 
 
 class SiloCandidate(BaseModel):
+    """Legacy v1.7 silos. Retained for one release alongside spin_off_articles."""
+    model_config = _FORBID_EXTRA
+
     suggested_keyword: str
     cluster_coherence_score: float
     review_recommended: bool = False
@@ -124,7 +182,32 @@ class SiloCandidate(BaseModel):
     source_headings: list[SiloSourceHeading]
 
 
+SpinOffSourceReason = Literal[
+    "low_topic_adherence",
+    "semantic_duplicate",
+    "global_cap_exceeded",
+    "below_priority_threshold",
+    "definitional_restatement",
+]
+
+
+class SpinOffArticle(BaseModel):
+    """CQ PRD v1.0 R3 — off-topic / displaced headings routed to future pieces."""
+    model_config = _FORBID_EXTRA
+
+    suggested_keyword: str
+    source_heading_text: str
+    source_reason: SpinOffSourceReason
+    topic_adherence_score: float = 0.0
+    cluster_coherence_score: float = 0.0
+    review_recommended: bool = False
+    recommended_intent: IntentType
+    supporting_headings: list[str] = []
+
+
 class LLMFanoutCounts(BaseModel):
+    model_config = _FORBID_EXTRA
+
     chatgpt: int = 0
     claude: int = 0
     gemini: int = 0
@@ -132,6 +215,8 @@ class LLMFanoutCounts(BaseModel):
 
 
 class LLMUnavailable(BaseModel):
+    model_config = _FORBID_EXTRA
+
     chatgpt: bool = False
     claude: bool = False
     gemini: bool = False
@@ -139,6 +224,8 @@ class LLMUnavailable(BaseModel):
 
 
 class IntentSignals(BaseModel):
+    model_config = _FORBID_EXTRA
+
     shopping_box: bool = False
     news_box: bool = False
     local_pack: bool = False
@@ -147,6 +234,8 @@ class IntentSignals(BaseModel):
 
 
 class BriefMetadata(BaseModel):
+    model_config = _FORBID_EXTRA
+
     word_budget: int = 2500
     faq_count: int = 0
     h2_count: int = 0
@@ -154,6 +243,7 @@ class BriefMetadata(BaseModel):
     total_content_subheadings: int = 0
     discarded_headings_count: int = 0
     silo_candidates_count: int = 0
+    spin_off_articles_count: int = 0
     competitors_analyzed: int = 20
     reddit_threads_analyzed: int = 0
     llm_fanout_queries_captured: LLMFanoutCounts = LLMFanoutCounts()
@@ -161,17 +251,27 @@ class BriefMetadata(BaseModel):
     intent_signals: IntentSignals = IntentSignals()
     embedding_model: str = "text-embedding-3-small"
     semantic_filter_threshold: float = 0.55
+    # CQ PRD v1.0 R1 — semantic dedup & MMR
+    semantic_dedup_threshold: float = 0.85
+    semantic_dedup_collapses_count: int = 0
+    soft_cluster_pairs_examined: int = 0
+    soft_cluster_pairs_merged: int = 0
+    definitional_restatements_discarded_count: int = 0
+    mmr_lambda: float = 0.6
+    # CQ PRD v1.0 R2 — sanitization
+    sanitization_discards_count: int = 0
     low_serp_coverage: bool = False
     reddit_unavailable: bool = False
     llm_fanout_unavailable: LLMUnavailable = LLMUnavailable()
     # Root domains of all SERP results — consumed by Research & Citations
     # to exclude competitor URLs from citation candidates.
     competitor_domains: list[str] = []
-    schema_version: Literal["1.7"] = "1.7"
+    schema_version: Literal["1.8"] = "1.8"
 
 
 class BriefResponse(BaseModel):
-    """Brief Generator output (schema v1.7)."""
+    """Brief Generator output (schema v1.8)."""
+    model_config = _FORBID_EXTRA
 
     keyword: str
     intent_type: IntentType
@@ -183,4 +283,5 @@ class BriefResponse(BaseModel):
     format_directives: FormatDirectives = FormatDirectives()
     discarded_headings: list[DiscardedHeading] = []
     silo_candidates: list[SiloCandidate] = []
+    spin_off_articles: list[SpinOffArticle] = []
     metadata: BriefMetadata

@@ -1,4 +1,15 @@
-"""Step 4 + 5 — Aggregation, semantic scoring, and heading polish."""
+"""Step 4 + 5 — Aggregation, semantic scoring, and heading polish.
+
+v1.8 (CQ PRD v1.0 R1, R2):
+- aggregate_candidates() applies sanitization at intake (R2) and threads
+  source URLs through the candidate so cluster_evidence can show provenance.
+- HeadingCandidate gains cluster fields (cluster_id, is_canonical,
+  cluster_variants) populated by clustering.cluster_candidates +
+  clustering.pick_canonicals.
+- polish_headings() operates on canonicals only — see polish_canonicals().
+- compute_priority() unchanged in formula; clustering rolls up SERP /
+  consensus signals onto canonicals before this is recomputed.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +21,7 @@ from models.brief import HeadingSource
 
 from .llm import claude_json, cosine, embed_batch
 from .parsers import levenshtein_ratio, normalize_text
+from .sanitization import sanitize_heading
 
 logger = logging.getLogger(__name__)
 
@@ -28,18 +40,42 @@ LLM_RESPONSE_SOURCES = {
 
 
 @dataclass
+class ClusterVariant:
+    """A non-canonical member of a heading cluster.
+
+    Stored on the canonical's `cluster_variants` list so downstream
+    consumers can see what got merged. Mirrors models.brief.HeadingClusterEvidence
+    for serialization.
+    """
+    text: str
+    source: HeadingSource
+    source_url: Optional[str]
+    source_urls: list[str]
+    avg_serp_position: Optional[float]
+    cosine_to_canonical: float
+    heading_priority: float
+
+
+@dataclass
 class HeadingCandidate:
     text: str
     source: HeadingSource
+    raw_text: Optional[str] = None  # pre-sanitization (R2)
     original_source: Optional[str] = None
     serp_frequency: int = 0
     avg_serp_position: Optional[float] = None
+    source_urls: list[str] = field(default_factory=list)
     llm_fanout_consensus: int = 0
     semantic_score: float = 0.0
     heading_priority: float = 0.0
     embedding: list[float] = field(default_factory=list)
     discard_reason: Optional[str] = None
     exempt: bool = False
+    # CQ PRD v1.0 R1 — cluster fields
+    cluster_id: int = -1
+    is_canonical: bool = False
+    cluster_variants: list[ClusterVariant] = field(default_factory=list)
+    semantic_duplicate_of_cluster: Optional[int] = None
 
 
 def aggregate_candidates(
@@ -50,38 +86,47 @@ def aggregate_candidates(
     llm_fanout_by_source: dict[str, list[str]],
     llm_response_by_source: dict[str, list[str]],
 ) -> list[HeadingCandidate]:
-    """Step 4 — combine all sources, dedup with Levenshtein 0.15.
+    """Step 4 — combine all sources, sanitize, dedup with Levenshtein 0.15.
 
-    Tracks `llm_fanout_consensus` (count of distinct LLMs that surfaced a
-    near-duplicate text). Pure SERP/autocomplete/keyword_suggestion entries
-    get `llm_fanout_consensus: 0`.
+    Sanitization (CQ PRD R2) runs at intake on all non-SERP sources here
+    (SERP gets sanitized earlier in parse_serp). Tracks `llm_fanout_consensus`
+    (count of distinct LLMs that surfaced a near-duplicate text). Pure
+    SERP/autocomplete/keyword_suggestion entries get `llm_fanout_consensus: 0`.
     """
     raw: list[HeadingCandidate] = []
 
-    for norm, stats in serp_stats.items():
+    for stats in serp_stats.values():
         raw.append(HeadingCandidate(
             text=stats["representative_text"],
+            raw_text=stats.get("raw_text"),
             source="serp",
             serp_frequency=stats["serp_frequency"],
             avg_serp_position=stats.get("avg_serp_position"),
+            source_urls=list(stats.get("source_urls") or []),
         ))
 
+    def _push(text: str, source: HeadingSource) -> None:
+        cleaned = sanitize_heading(text, source_url=None)
+        if cleaned is None:
+            return
+        raw.append(HeadingCandidate(text=cleaned, raw_text=text, source=source))
+
     for q in paa_questions:
-        raw.append(HeadingCandidate(text=q, source="paa"))
+        _push(q, "paa")
 
     for q in autocomplete:
-        raw.append(HeadingCandidate(text=q, source="autocomplete"))
+        _push(q, "autocomplete")
 
     for q in keyword_suggestions:
-        raw.append(HeadingCandidate(text=q, source="keyword_suggestion"))
+        _push(q, "keyword_suggestion")
 
     for src, queries in llm_fanout_by_source.items():
         for q in queries:
-            raw.append(HeadingCandidate(text=q, source=src))
+            _push(q, src)  # type: ignore[arg-type]
 
     for src, items in llm_response_by_source.items():
         for s in items:
-            raw.append(HeadingCandidate(text=s, source=src))
+            _push(s, src)  # type: ignore[arg-type]
 
     # Fuzzy dedup with consensus tracking
     deduped: list[HeadingCandidate] = []
@@ -101,6 +146,10 @@ def aggregate_candidates(
                     existing.source = c.source
                     existing.serp_frequency = c.serp_frequency
                     existing.avg_serp_position = c.avg_serp_position
+                # Union the URL set so cluster_evidence can show all sources
+                for u in c.source_urls:
+                    if u not in existing.source_urls:
+                        existing.source_urls.append(u)
                 # Track LLM consensus
                 _add_consensus(existing, c.source)
                 merged = True
@@ -184,6 +233,10 @@ async def score_candidates(
 def compute_priority(candidates: list[HeadingCandidate]) -> None:
     """Step 5 — heading_priority = 0.4*semantic + 0.25*serp_freq_norm
     + 0.15*position_weight + 0.2*llm_consensus_norm.
+
+    After clustering rolls up cluster-level SERP/consensus signals onto
+    canonicals (clustering._rollup_cluster_signals), the caller should
+    re-run this so canonicals get a priority that reflects the full cluster.
     """
     for c in candidates:
         norm_freq = min((c.serp_frequency or 0) / 20, 1.0)
@@ -204,6 +257,11 @@ async def polish_headings(candidates: list[HeadingCandidate]) -> None:
     """Step 5 — LLM polish for awkward, keyword-stuffed, or raw query-format
     candidates (autocomplete, fan-out, etc.). Updates text in place and
     sets source='synthesized' with original_source preserved.
+
+    v1.8: when called after clustering, the caller passes ONLY canonicals
+    so we don't waste polish budget rewriting paraphrases that have already
+    been merged. This function itself is unchanged — it just receives a
+    smaller pool.
 
     Single batched LLM call; on failure leaves headings unchanged.
     """
@@ -238,3 +296,54 @@ async def polish_headings(candidates: list[HeadingCandidate]) -> None:
                     c.source = "synthesized"
     except Exception as exc:
         logger.warning("heading polish failed, leaving raw: %s", exc)
+
+
+async def arbitrate_soft_pairs(
+    candidates: list[HeadingCandidate],
+    soft_pairs: list,  # list[clustering.SoftPair] — typed loosely to avoid circular import
+) -> set[tuple[int, int]]:
+    """Optional second pass: ask the LLM to confirm which soft-cluster pairs
+    are actually paraphrases of the same idea.
+
+    Returns the set of (a_index, b_index) pairs the LLM confirmed should
+    be merged. Caller is responsible for unioning them into clusters.
+    Cheap (one LLM call); fails open (returns empty set, leaving pairs split).
+    """
+    if not soft_pairs:
+        return set()
+
+    items = []
+    for k, p in enumerate(soft_pairs):
+        items.append({
+            "k": k,
+            "a": candidates[p.a_index].text,
+            "b": candidates[p.b_index].text,
+        })
+
+    system = (
+        "You decide whether two H2 heading candidates are paraphrases of the "
+        "same underlying question. Two candidates are paraphrases when an "
+        "article that answered one would necessarily answer the other. "
+        "Respond with a JSON array: [{k: int, paraphrase: bool}]. "
+        "Be conservative — if the headings ask about different aspects "
+        "(e.g., 'What is X' vs 'How does X work'), they are NOT paraphrases."
+    )
+    user = (
+        "For each pair, answer paraphrase: true|false.\n"
+        f"Pairs:\n{items}"
+    )
+
+    confirmed: set[tuple[int, int]] = set()
+    try:
+        result = await claude_json(system, user, max_tokens=1500, temperature=0.1)
+        if isinstance(result, list):
+            for entry in result:
+                k = entry.get("k")
+                is_para = entry.get("paraphrase")
+                if isinstance(k, int) and 0 <= k < len(soft_pairs) and is_para is True:
+                    p = soft_pairs[k]
+                    confirmed.add((p.a_index, p.b_index))
+    except Exception as exc:
+        logger.warning("soft-pair arbitration failed, treating as distinct: %s", exc)
+
+    return confirmed
