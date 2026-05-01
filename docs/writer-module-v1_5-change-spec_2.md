@@ -1,12 +1,16 @@
-# Content Writer Module — v1.5 Change Specification
+# Content Writer Module — v1.5 → v1.6 Change Specification
 
 **Document Type:** Delta / Change Specification
 **Base Version:** Writer Module PRD v1.4
-**Target Version:** Writer Module PRD v1.5
+**Target Version:** Writer Module PRD v1.6
 **Date:** April 30, 2026
-**Last Revised:** April 30, 2026 (decisions resolved on caching strategy and banned-term detection)
+**Last Revised:** 2026-05-01 — v1.6 additions: H1 sourced from `brief.title`, Agree/Promise/Preview intro construction, defense-in-depth title-case enforcement on all headings.
 **Status:** Draft — Ready for Implementation
-**Driven By:** Platform PRD v1.2 (introduces per-client brand context)
+**Driven By:**
+- Platform PRD v1.2 — introduces per-client brand context (drives v1.5 work)
+- Content Brief Generator PRD v2.0.3 — introduces `brief.title` field (Step 3.5) and AP/Chicago title-case normalization (Step 11.x); drives v1.6 article-structural alignment
+
+> **v1.6 additions (2026-05-01):** Three structural requirements layered on top of v1.5. (1) The article's H1 text MUST equal `brief.title` verbatim — no regeneration, no rewriting (Section 4.5). (2) Every article MUST include an Agree/Promise/Preview intro paragraph (60–150 words, single paragraph) between H1 and the first content H2 (Section 4.3.1 — modifies existing Step 6 spec). (3) All H1/H2/H3 text MUST round-trip through `titlecase` (the same library the brief generator uses) as defense-in-depth, since v2.0.3 already title-cases brief output (Section 4.6). All three additions ship as v1.6; existing v1.5 brand-reconciliation, banned-term enforcement, and client-context handling are unchanged.
 
 ---
 
@@ -39,9 +43,12 @@ Writer v1.5 introduces a fourth input — `client_context` — and the logic to 
 | Add output block: `brand_voice_card_used` | Schema addition | Output contract |
 | Update business rules for brand precedence | Rule change | Section 11 |
 | Update failure modes for client context handling | Rule addition | Section 12 |
-| Bump output `schema_version` to `1.5` | Schema metadata | Output contract |
+| **v1.6:** H1 sourced verbatim from `brief.title` (no LLM regeneration) | Behavioral change | Section 4.5 |
+| **v1.6:** Intro Agree/Promise/Preview construction (60–150 words, single paragraph) | Behavioral change | Section 4.3.1–4.3.2 |
+| **v1.6:** Defense-in-depth `titlecase` pass on all H1/H2/H3 text | Behavioral change | Section 4.6 |
+| Bump output `schema_version` to `1.6` | Schema metadata | Output contract |
 
-The Brief, Research & Citations, and SIE input schemas (Inputs A, B, C) are **unchanged** in v1.5.
+The Brief, Research & Citations, and SIE input schemas (Inputs A, B, C) are **unchanged** in v1.5/v1.6 — but v1.6 now consumes `brief.title` (added by Brief PRD v2.0.0 Step 3.5) as a required input.
 
 ---
 
@@ -305,6 +312,58 @@ Intros and conclusions get the heaviest brand shaping because they set the artic
 - Both must respect banned-terms rules identically to section writing
 - **No positioning statement is injected** — website analysis does not produce one; brand tone and voice from `brand_guide_text` drive the conclusion's character
 
+#### 4.3.1 Intro Construction (NEW in v1.6) — Agree / Promise / Preview
+
+The article's introduction MUST follow a three-beat **Agree / Promise / Preview** construction. This replaces the open-ended "intro paragraph(s)" behavior of v1.5 with a deterministic structure that aligns every article on the same opening shape.
+
+**Required structure** (single paragraph, in order):
+
+| Beat | Purpose | Length guidance |
+|---|---|---|
+| **Agree** | One or two sentences that name the reader's situation, problem, or curiosity in their own language. Establishes resonance with the ICP. | ~25–45 words |
+| **Promise** | One sentence that states what the article will deliver — explicitly tied to `brief.title` and `brief.scope_statement`. | ~15–35 words |
+| **Preview** | One or two sentences that name the major H2 sections the reader will encounter, in the order they appear in `brief.heading_structure`. Does not need to enumerate every H2 — covering the first 3–5 is sufficient. | ~20–70 words |
+
+**Hard constraints:**
+
+- The intro is **exactly one paragraph** — no `\n\n` paragraph breaks.
+- Word count: **60 ≤ words ≤ 150** (inclusive). Word count is computed by `len(text.split())` after stripping leading/trailing whitespace.
+- The intro lives between H1 and the first content H2 in the rendered article. It is NOT preceded by its own H2 heading.
+- The intro MUST NOT contain any heading markers (`#`, `##`, `###`) and MUST NOT contain bulleted or numbered list markers.
+- The intro MUST respect all banned-term and filtered-SIE-excluded rules from Section 4.4.
+
+**Prompt inputs for the intro call:**
+
+The intro-writing prompt receives, in addition to the v1.5 brand/audience/client-context blocks:
+
+| Field | Source | Notes |
+|---|---|---|
+| `title` | `brief.title` (verbatim) | The Promise beat must echo the topic of this title. |
+| `scope_statement` | `brief.scope_statement` | Constrains the Promise — the article does not promise out-of-scope content. |
+| `intent_type` | `brief.intent` | Shapes diction (e.g., how-to vs. comparison vs. listicle). |
+| `h2_list` | `[item.text for item in brief.heading_structure if item.level == "H2" and item.type == "content"]` | The Preview beat references these in order. Pass the full list; the LLM picks the first 3–5 to mention by name. |
+
+**Prompt directive (verbatim text to include in system or user prompt):**
+
+> Write the article's introduction as a single paragraph (60–150 words) in three beats:
+> 1. **Agree** — name the reader's situation in their own words (1–2 sentences).
+> 2. **Promise** — state what this article will deliver, anchored in the title and the article's stated scope (1 sentence).
+> 3. **Preview** — name the first 3–5 H2 sections the reader will encounter, in order (1–2 sentences).
+> Do not break the paragraph. Do not include headings, bullets, or numbered lists. Do not introduce out-of-scope topics.
+
+#### 4.3.2 Intro Validation (NEW in v1.6)
+
+After the intro LLM call returns, the Writer applies a deterministic post-validation pass:
+
+| Check | Rule | On Failure |
+|---|---|---|
+| **Word count in range** | `60 ≤ len(text.split()) ≤ 150` | Retry the intro once with the prompt amended to specify the actual word count and direction (too short / too long). After one retry, if still out of range, log warning and accept output (do not abort the run — intros are recoverable). |
+| **Single paragraph** | `"\n\n" not in text.strip()` | Retry once with explicit "single paragraph, no line breaks" directive. After one retry, accept output and collapse line breaks deterministically by replacing `\n+` with a single space. |
+| **No heading markers** | Regex `r"(?m)^\s*#{1,6}\s"` finds no match | Retry once. After one retry, strip any matched heading lines deterministically. |
+| **Banned-term / SIE-excluded compliance** | Per Section 4.4 | Standard Section 4.4.3 retry-once-then-abort policy applies to the intro identically to body sections. |
+
+The validation results (pass / retried / accepted-with-warning) are recorded in the run's structured logs but are NOT surfaced as a user-facing field — the final intro text appears in `article[]` under whichever item-type the platform uses for intro paragraphs (unchanged from v1.5).
+
 ### 4.4 Post-Hoc Banned-Term Validation (Regex-Based)
 
 Per **Decision D2**, banned-term detection in generated output is regex-based.
@@ -365,13 +424,120 @@ When a regex match triggers a successful retry (i.e., the retry produced clean c
 
 ---
 
+### 4.5 H1 Heading Sourcing (NEW in v1.6)
+
+The article's H1 text MUST equal `brief.title` **verbatim**. The Writer does not regenerate, paraphrase, abbreviate, expand, or otherwise rewrite the H1.
+
+#### 4.5.1 Rule
+
+```
+article_h1.text = brief.title  # exact string equality
+```
+
+The brief generator (PRD v2.0.3 Step 11.x) already title-cases `brief.title` via the `titlecase` library before emitting the brief. The Writer trusts that normalization and does not re-case the H1 unless Section 4.6's defense-in-depth pass mutates the heading (which is idempotent on already-cased input — see Section 4.6.3).
+
+#### 4.5.2 Implementation
+
+When the Writer constructs its `article[]` output, the first emitted item where `level == "H1"` must have its `text` field assigned directly from `brief.title`:
+
+```python
+article.append(ArticleItem(
+    level="H1",
+    type="title",
+    text=brief.title,            # verbatim — no LLM call
+))
+```
+
+There is **no LLM call** that produces the H1. Any v1.4/v1.5 prompt path that previously generated a title-style heading is removed in v1.6. The Writer also does NOT call the title-generator helper that historically produced H1 candidates from the keyword.
+
+#### 4.5.3 Failure Modes
+
+| Scenario | Behavior |
+|---|---|
+| `brief.title` is missing or empty string | Abort with `brief_missing_title`. The brief PRD v2.0.3 guarantees this field; absence indicates an upstream regression and should not be silently masked. |
+| `brief.title` exceeds 120 characters | Continue — accept whatever the brief produced. The Writer does not enforce its own H1 length cap (that is a brief-generator concern). Log warning. |
+| `brief.title` contains a banned term | Per Section 4.4.3 heading rule: abort immediately with `banned_term_leakage`. This signals an upstream brief generator that needs banned-term awareness; the Writer does not silently rewrite the H1 to evade brand rules. |
+
+#### 4.5.4 Backward Compatibility
+
+If a request payload's `brief` does NOT include a `title` field (legacy v1.x briefs predating PRD v2.0.0 Step 3.5), the Writer:
+
+1. Logs a warning (`brief_legacy_no_title`).
+2. Generates an H1 via the v1.5 fallback path (LLM call from keyword + intent).
+3. Reports `schema_version: "1.6-legacy-h1"` so downstream observability can flag legacy paths.
+
+This fallback exists solely to avoid breaking historical replay tests; production callers are guaranteed to send a `title` per the orchestrator's input contract.
+
+---
+
+### 4.6 Post-Generation Title Case Normalization (NEW in v1.6)
+
+A defense-in-depth pass guarantees that **every** heading in the final `article[]` output is in AP/Chicago title case, regardless of upstream behavior.
+
+#### 4.6.1 Why Defense-in-Depth
+
+The brief generator (PRD v2.0.3 Step 11.x) already applies `titlecase` to all heading-level output it emits. The Writer's role for v1.6 is therefore primarily a **safety net**, not the canonical title-caser. There are still two scenarios where Writer-side title casing matters:
+
+1. The Writer occasionally rewrites or merges H2/H3 text during section writing (e.g., when the brief's H3 was a placeholder that the section LLM elaborated on). Any rewritten heading needs re-normalization.
+2. The legacy-H1 fallback (Section 4.5.4) generates an H1 from scratch; that output must be normalized before emission.
+
+#### 4.6.2 Implementation
+
+After all section, FAQ, intro, and conclusion writing has completed and after Section 4.4's banned-term pass — i.e., as the final step before serializing the response — the Writer runs:
+
+```python
+from titlecase import titlecase
+
+_TITLE_CASE_LEVELS = {"H1", "H2", "H3"}
+_TITLE_CASE_TYPES = {"content", "faq-header", "conclusion", "title"}
+
+def _apply_title_case(article_items: list[ArticleItem]) -> list[ArticleItem]:
+    for item in article_items:
+        if item.level in _TITLE_CASE_LEVELS and item.type in _TITLE_CASE_TYPES:
+            item.text = titlecase(item.text)
+    return article_items
+```
+
+Pinned dependency: **`titlecase==2.4.1`** (matches the brief generator's pin per PRD v2.0.3 Section 11.x). Both modules MUST stay on the same major.minor to guarantee identical behavior on shared inputs.
+
+#### 4.6.3 Idempotency Guarantee
+
+`titlecase()` is idempotent: `titlecase(titlecase(x)) == titlecase(x)` for all inputs. Running this pass on input that the brief generator already title-cased is therefore a no-op. The pass is safe to apply unconditionally and is required even when the brief input was already normalized.
+
+#### 4.6.4 Exclusions
+
+The pass deliberately does NOT title-case:
+
+| Field | Rationale |
+|---|---|
+| FAQ questions (`type == "faq-question"`) | Questions are full sentences ending in `?`; sentence case is correct. |
+| Intro paragraph text | Body text, not a heading. |
+| Conclusion paragraph body | Body text, not a heading. (The conclusion's own H2 heading IS title-cased per the table above.) |
+| Section body text | Body text, not a heading. |
+| Citation marker tokens | Markers like `{{cit_N}}` contain no human-readable text; pass-through. |
+
+#### 4.6.5 Validation
+
+After the pass, the Writer asserts (in non-production builds; logged-as-warning in production):
+
+```python
+for item in article_items:
+    if item.level in _TITLE_CASE_LEVELS and item.type in _TITLE_CASE_TYPES:
+        assert titlecase(item.text) == item.text, \
+            f"Title case round-trip failed for {item.level}: {item.text!r}"
+```
+
+A failed assertion indicates either a bug in the `titlecase` library version or that something downstream (e.g., a serializer) mutated heading text after the pass. Production behavior on assertion failure is to log a structured warning (`title_case_round_trip_failed`) and emit the heading anyway — this is a safety net, not a hard gate.
+
+---
+
 ## 5. Output Schema Additions
 
 ### 5.1 New Top-Level Output Fields
 
 ```json
 {
-  "schema_version": "1.5",
+  "schema_version": "1.6",
   "article": [...],
   "citations": [...],
   "citation_usage": {...},
@@ -401,7 +567,7 @@ When a regex match triggers a successful retry (i.e., the retry produced clean c
     "brand_guide_provided": true,
     "icp_provided": true,
     "website_analysis_used": true,
-    "schema_version_effective": "1.5" | "1.5-no-context" | "1.5-degraded"
+    "schema_version_effective": "1.6" | "1.6-no-context" | "1.6-degraded" | "1.6-legacy-h1"
   }
 }
 ```
@@ -417,9 +583,16 @@ When a regex match triggers a successful retry (i.e., the retry produced clean c
 
 ### 5.3 Modified Existing Output Fields
 
-`schema_version` bumps from `1.4` to `1.5`. No other existing fields are modified.
+`schema_version` bumps from `1.5` to `1.6`. The set of valid `schema_version` values produced by the module is now:
 
-`citation_usage`, `article[]`, `citations[]` retain their v1.4 schemas and behavior.
+| Value | Trigger |
+|---|---|
+| `"1.6"` | Normal v1.6 path: `client_context` present and well-formed; `brief.title` present; intro/H1/title-case rules all satisfied. |
+| `"1.6-no-context"` | `client_context` omitted; brand handling skipped (per Section 1.3). H1, intro, and title-case rules still apply. |
+| `"1.6-degraded"` | `client_context` present but all fields empty AND website unavailable (per Section 2.7 last row). H1, intro, and title-case rules still apply. |
+| `"1.6-legacy-h1"` | `brief.title` missing; H1 generated via legacy fallback (per Section 4.5.4). |
+
+`citation_usage`, `article[]`, `citations[]` retain their v1.5 schemas. `article[]` items continue to use the v1.5 schema; v1.6 changes only the **content** of those items (H1 source, intro structure, heading casing), not their shape.
 
 ---
 
@@ -543,6 +716,7 @@ Append this row to the existing version history table in Section 14 of the maste
 | Version | Date | Notes |
 |---|---|---|
 | 1.5 | 2026-04-30 | Added Input D (`client_context`) carrying `brand_guide_text`, `icp_text`, and `website_analysis` from the platform layer. Added Step 3.5a (Brand Voice Distillation) and Step 3.5b (Brand–SIE Term Reconciliation), running in parallel before Step 4. Brand voice card is regenerated per run from the platform's `client_context_snapshots` (no caching on the client record); the resulting card is persisted to Supabase via the `brand_voice_card_used` output field. Section writing, FAQ writing, and intro/conclusion writing prompts now inject distilled brand voice card, audience summary, filtered SIE terms, and (when available) website-derived client context blocks. Added output blocks `brand_voice_card_used`, `brand_conflict_log[]`, and `client_context_summary`. Added precedence rules: brand-banned > SIE-Required (term excluded), SIE-Avoid > brand-preferred (continue avoiding). Distillation and reconciliation LLMs are categorization-only — both must ground decisions in source text and may not invent brand opinions. Added post-hoc banned-term validation: regex-based, case-insensitive, word-boundary matching against `brand_voice_card.banned_terms`. Headings on regex match abort immediately with no retry; body/FAQ/intro/conclusion matches retry once with stricter prompt before aborting. Added backward-compat fallback `schema_version: "1.5-no-context"` when `client_context` is omitted, and `schema_version: "1.5-degraded"` when all client context is empty. Added three new failure modes (`brand_distillation_failed`, `brand_reconciliation_failed`, `banned_term_leakage`). Estimated cost delta from v1.4: +$0.04 to +$0.08 per article. Bumped output `schema_version` to `1.5`. |
+| 1.6 | 2026-05-01 | Three structural additions on top of v1.5, all driven by production failures observed on the "how to open a tiktok shop" run and aligned with Brief Generator PRD v2.0.3. **(1) H1 verbatim from `brief.title`** (Section 4.5): the Writer no longer generates the H1 via an LLM call; it copies `brief.title` directly into the first `H1` `article[]` item. Adds failure mode `brief_missing_title` and legacy fallback `schema_version: "1.6-legacy-h1"` for pre-v2.0.0 briefs without a `title` field. **(2) Agree / Promise / Preview intro** (Section 4.3.1–4.3.2): every article ships with a single-paragraph intro, 60–150 words, with three deterministic beats (Agree the reader's situation; Promise what the article delivers, anchored to `title` + `scope_statement`; Preview the first 3–5 H2 sections in order). Intro prompt now receives `title`, `scope_statement`, `intent_type`, and the H2 list as inputs. Post-validation enforces word count, single-paragraph, and no-heading-marker rules with a single retry per failed check. **(3) Defense-in-depth title casing** (Section 4.6): immediately before serialization, the Writer runs the same `titlecase==2.4.1` library used by the brief generator (PRD v2.0.3 Step 11.x) over every `H1/H2/H3` heading where `type ∈ {content, faq-header, conclusion, title}`. FAQ questions, intro/conclusion body text, and section bodies are excluded. The pass is idempotent and serves as a safety net when the brief generator's normalization is bypassed by Writer-side heading rewrites. Bumped output `schema_version` to `1.6`. New `schema_version_effective` values: `"1.6"`, `"1.6-no-context"`, `"1.6-degraded"`, `"1.6-legacy-h1"`. No changes to v1.5 brand reconciliation, banned-term enforcement, or client-context handling. |
 
 ---
 
