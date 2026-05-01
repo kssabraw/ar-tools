@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin
@@ -103,11 +103,11 @@ async def update_user_role(
     )
 
 
-@router.delete("/users/{user_id}", status_code=204)
+@router.delete("/users/{user_id}", status_code=204, response_class=Response)
 async def delete_user(
     user_id: UUID,
     auth: dict = Depends(require_admin),
-) -> None:
+) -> Response:
     if str(user_id) == auth["user_id"]:
         raise HTTPException(status_code=409, detail="cannot_delete_self")
 
@@ -116,3 +116,5 @@ async def delete_user(
         supabase.auth.admin.delete_user(str(user_id))
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"delete_failed: {exc}") from exc
+
+    return Response(status_code=204)
