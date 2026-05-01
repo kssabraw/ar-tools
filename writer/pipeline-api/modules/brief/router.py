@@ -24,6 +24,12 @@ async def generate_brief(request: BriefRequest) -> BriefResponse:
     try:
         result = await run_brief(request)
     except BriefError as exc:
+        # During the v2.0 staged rollout, the placeholder pipeline raises
+        # `v2_pipeline_not_implemented`. Surface that as 503 so callers can
+        # distinguish "endpoint disabled" from a real validation error.
+        if exc.code == "v2_pipeline_not_implemented":
+            logger.info("brief.unavailable: %s", exc.message)
+            raise HTTPException(status_code=503, detail=exc.message)
         logger.warning("brief.failed: %s — %s", exc.code, exc.message)
         raise HTTPException(status_code=422, detail=exc.message)
     except Exception as exc:

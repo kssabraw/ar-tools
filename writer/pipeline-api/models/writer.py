@@ -134,7 +134,7 @@ class WriterMetadata(BaseModel):
     no_citations: bool = False
     retry_count: int = 0
     schema_version: SchemaVersion = "1.5"
-    brief_schema_version: str = "1.7"
+    brief_schema_version: str = "2.0"
     generation_time_ms: int = 0
 
 
