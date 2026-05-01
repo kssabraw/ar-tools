@@ -78,7 +78,7 @@ const MODULES: ModuleMeta[] = [
     label: 'Content Writer',
     description: 'Drafting the full article with brand voice and SEO structure',
     runningStatus: 'writer_running',
-    typicalRange: '60–90s',
+    typicalRange: '2–5 min',
   },
   {
     key: 'sources_cited',

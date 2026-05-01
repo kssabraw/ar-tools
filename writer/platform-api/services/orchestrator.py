@@ -38,7 +38,7 @@ MODULE_TIMEOUTS: dict[str, int] = {
     "brief": 130,
     "sie": 130,
     "research": 130,
-    "writer": 100,
+    "writer": 600,  # writer makes many sequential LLM calls; allow up to 10m
     "sources_cited": 20,
 }
 
