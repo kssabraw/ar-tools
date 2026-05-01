@@ -1,21 +1,28 @@
-"""Step 6 — Universal Authority Agent (3 pillars).
+"""Step 9 — Universal Authority Agent (Brief Generator v2.0).
 
-Generates 3-5 H3 subheadings that fill information gaps across:
-1. Human/Behavioral
-2. Risk/Regulatory
-3. Long-Term Systems
+Implements PRD §5 Step 9 — unchanged from v1.7 except the output type
+is now the v2 Candidate (from graph.py) instead of HeadingCandidate.
 
-Output gets `exempt: true` (bypasses semantic threshold), counts toward per-H2 limit.
+Generates 3-5 H3 subheadings filling gaps across three pillars:
+  1. Human/Behavioral
+  2. Risk/Regulatory
+  3. Long-Term Systems
+
+Output:
+  - source = "authority_gap_sme"
+  - exempt = True (bypasses relevance gate)
+  - Counts toward the per-H2 H3 limit but never gets discarded for low
+    relevance / priority — exempt from those checks per PRD §5 Step 9
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
+from .graph import Candidate
 from .llm import claude_json
 from .parsers import levenshtein_ratio, normalize_text
-from .scoring import HeadingCandidate
 
 logger = logging.getLogger(__name__)
 
@@ -39,18 +46,27 @@ AUTHORITY_SYSTEM_PROMPT = (
 )
 
 
+LLMJsonFn = Callable[..., Awaitable]
+
+
 async def authority_gap_headings(
+    *,
     keyword: str,
     existing_headings: list[str],
     reddit_context: list[str],
     max_retries: int = 1,
-) -> list[HeadingCandidate]:
-    """Run the Universal Authority Agent. Returns 3-5 HeadingCandidates,
-    each tagged source='authority_gap_sme', exempt=True.
+    llm_json_fn: Optional[LLMJsonFn] = None,
+) -> list[Candidate]:
+    """Run the Universal Authority Agent. Returns 3-5 v2 Candidates.
 
-    On malformed output: retry once with stricter prompt; on second failure
-    return empty list (caller will continue without authority gap headings).
+    Each candidate is tagged source='authority_gap_sme', exempt=True.
+
+    Failure handling (PRD §5 Step 9 — never aborts):
+      - Malformed output / fewer than 3 results → retry once
+      - Second failure → return empty list, caller continues
     """
+    call = llm_json_fn or claude_json
+
     user = (
         f"Topic / keyword: {keyword}\n\n"
         "Existing heading coverage in top SERP and synthesized candidates:\n"
@@ -71,7 +87,7 @@ async def authority_gap_headings(
                     "\n\nIMPORTANT: Your previous response did not parse as valid JSON. "
                     "Return ONLY the JSON object, no preamble, no explanation."
                 )
-            result = await claude_json(system, user, max_tokens=600, temperature=0.4)
+            result = await call(system, user, max_tokens=600, temperature=0.4)
             headings = result.get("headings") if isinstance(result, dict) else None
             if not headings or not isinstance(headings, list):
                 raise ValueError("missing headings array")
@@ -87,15 +103,19 @@ async def authority_gap_headings(
                 cleaned.append(h.strip())
                 seen_norms.add(norm)
 
-            # Truncate to 5 if over; require >=3
             if len(cleaned) > 5:
                 cleaned = cleaned[:5]
             if len(cleaned) < 3:
                 if attempt < max_retries:
                     continue
-                # Accept what we got per failure mode rules
+                # Accept what we got per PRD §5 Step 9 — never abort.
+
+            logger.info(
+                "brief.authority.generated",
+                extra={"count": len(cleaned), "attempt": attempt + 1},
+            )
             return [
-                HeadingCandidate(
+                Candidate(
                     text=text,
                     source="authority_gap_sme",
                     exempt=True,
@@ -104,7 +124,13 @@ async def authority_gap_headings(
             ]
         except Exception as exc:
             last_exc = exc
-            logger.warning("authority agent attempt %s failed: %s", attempt + 1, exc)
+            logger.warning(
+                "brief.authority.attempt_failed",
+                extra={"attempt": attempt + 1, "error": str(exc)},
+            )
 
-    logger.warning("authority agent gave up: %s", last_exc)
+    logger.warning(
+        "brief.authority.gave_up",
+        extra={"error": str(last_exc) if last_exc else "unknown"},
+    )
     return []

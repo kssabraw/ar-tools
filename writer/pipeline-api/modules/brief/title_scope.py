@@ -34,8 +34,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
+from .errors import BriefError
 from .llm import claude_json
-from .pipeline import BriefError
 
 logger = logging.getLogger(__name__)
 
