@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { ClientListItem } from '../lib/types'
-import { Plus, X, Check, Globe, AlertCircle, Clock } from 'lucide-react'
+import { Plus, X, Check, Globe, AlertCircle, Clock, Pencil } from 'lucide-react'
 
 function AnalysisStatus({ status }: { status: ClientListItem['website_analysis_status'] }) {
   if (status === 'complete') return <span style={{ fontSize: 12, color: '#16a34a' }}>✓ Website analyzed</span>
@@ -62,7 +62,10 @@ export function Clients() {
                   <AnalysisStatus status={c.website_analysis_status} />
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <Link to={`/clients/${c.id}/edit`} style={iconBtn} title="Edit">
+                  <Pencil size={14} />
+                </Link>
                 {deleteId === c.id ? (
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                     <span style={{ fontSize: 12, color: '#dc2626' }}>Archive?</span>
@@ -88,4 +91,4 @@ export function Clients() {
 
 const cardStyle: React.CSSProperties = { background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 24, marginBottom: 20 }
 const primaryBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: 'pointer', textDecoration: 'none' }
-const iconBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', padding: '6px', background: '#fff', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }
+const iconBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', padding: '6px', background: '#fff', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', textDecoration: 'none' }

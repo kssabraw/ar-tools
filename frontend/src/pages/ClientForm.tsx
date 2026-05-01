@@ -1,7 +1,8 @@
-import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useEffect } from 'react'
+import { useNavigate, useParams, Link } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import type { Client } from '../lib/types'
 import { ArrowLeft, Check } from 'lucide-react'
 
 interface FormData {
@@ -15,17 +16,44 @@ const empty: FormData = { name: '', website_url: '', brand_guide_text: '', icp_t
 
 export function ClientForm() {
   const navigate = useNavigate()
+  const { id } = useParams<{ id?: string }>()
+  const isEdit = Boolean(id)
   const qc = useQueryClient()
   const [form, setForm] = useState<FormData>(empty)
   const [saving, setSaving] = useState(false)
 
+  const { data: existing, isLoading } = useQuery<Client>({
+    queryKey: ['client', id],
+    queryFn: () => api.get<Client>(`/clients/${id}`),
+    enabled: isEdit,
+  })
+
+  useEffect(() => {
+    if (existing) {
+      setForm({
+        name: existing.name,
+        website_url: existing.website_url,
+        brand_guide_text: existing.brand_guide_text ?? '',
+        icp_text: existing.icp_text ?? '',
+      })
+    }
+  }, [existing])
+
   const createMutation = useMutation({
     mutationFn: (body: object) => api.post('/clients', body),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['clients'] }); navigate('/clients') },
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: (body: object) => api.patch(`/clients/${id}`, body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['clients'] })
+      qc.invalidateQueries({ queryKey: ['client', id] })
       navigate('/clients')
     },
   })
+
+  const error = createMutation.error ?? updateMutation.error
 
   function set(field: keyof FormData) {
     return (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -36,18 +64,31 @@ export function ClientForm() {
     e.preventDefault()
     setSaving(true)
     try {
-      await createMutation.mutateAsync({
-        name: form.name,
-        website_url: form.website_url,
-        brand_guide_source_type: 'text',
-        brand_guide_text: form.brand_guide_text,
-        icp_source_type: 'text',
-        icp_text: form.icp_text,
-      })
+      if (isEdit) {
+        await updateMutation.mutateAsync({
+          name: form.name,
+          website_url: form.website_url,
+          brand_guide_source_type: 'text',
+          brand_guide_text: form.brand_guide_text,
+          icp_source_type: 'text',
+          icp_text: form.icp_text,
+        })
+      } else {
+        await createMutation.mutateAsync({
+          name: form.name,
+          website_url: form.website_url,
+          brand_guide_source_type: 'text',
+          brand_guide_text: form.brand_guide_text,
+          icp_source_type: 'text',
+          icp_text: form.icp_text,
+        })
+      }
     } finally {
       setSaving(false)
     }
   }
+
+  if (isEdit && isLoading) return <div style={{ padding: 40, color: '#64748b' }}>Loading…</div>
 
   return (
     <div style={{ padding: 32, maxWidth: 760 }}>
@@ -58,14 +99,17 @@ export function ClientForm() {
         <ArrowLeft size={14} /> Back to Clients
       </Link>
 
-      <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 8px' }}>New Client</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 8px' }}>
+        {isEdit ? `Edit ${existing?.name ?? 'Client'}` : 'New Client'}
+      </h1>
       <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 32px' }}>
-        Fill in the client's details. The brand guide and ICP are used by the AI to match the client's voice and audience on every content run.
+        {isEdit
+          ? 'Update the client's details. Changes apply to future runs — existing runs keep the snapshot that was taken when they started.'
+          : 'Fill in the client's details. The brand guide and ICP are used by the AI to match the client's voice and audience on every content run.'}
       </p>
 
       <form onSubmit={handleSubmit}>
 
-        {/* Basic info */}
         <div style={sectionStyle}>
           <h2 style={sectionTitle}>Basic Info</h2>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px 24px' }}>
@@ -89,12 +133,13 @@ export function ClientForm() {
                 placeholder="https://acmehvac.com"
                 style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
               />
-              <p style={hintStyle}>We'll automatically analyze this homepage to extract services and locations.</p>
+              <p style={hintStyle}>
+                {isEdit ? 'Changing the URL will trigger a new website analysis.' : 'We\'ll automatically analyze this homepage to extract services and locations.'}
+              </p>
             </div>
           </div>
         </div>
 
-        {/* Brand Guide */}
         <div style={sectionStyle}>
           <h2 style={sectionTitle}>Brand Guide</h2>
           <p style={descStyle}>
@@ -110,11 +155,10 @@ export function ClientForm() {
           />
         </div>
 
-        {/* ICP */}
         <div style={sectionStyle}>
           <h2 style={sectionTitle}>Ideal Customer Profile (ICP)</h2>
           <p style={descStyle}>
-            Describe who this client's content is written for. Include demographics, pain points, what they care about, what triggers them to search, and what objections they have. This shapes how the AI frames arguments and chooses examples.
+            Describe who this client's content is written for. Include demographics, pain points, what they care about, what triggers them to search, and what objections they have.
           </p>
           <label style={labelStyle}>ICP Text</label>
           <textarea
@@ -126,19 +170,17 @@ export function ClientForm() {
           />
         </div>
 
-        {createMutation.error && (
+        {error && (
           <div style={{ marginBottom: 20, padding: '12px 16px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
-            {(createMutation.error as Error).message}
+            {(error as Error).message}
           </div>
         )}
 
         <div style={{ display: 'flex', gap: 10 }}>
           <button type="submit" disabled={saving} style={primaryBtn}>
-            <Check size={15} /> {saving ? 'Saving…' : 'Save Client'}
+            <Check size={15} /> {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Save Client'}
           </button>
-          <Link to="/clients" style={ghostBtn}>
-            Cancel
-          </Link>
+          <Link to="/clients" style={ghostBtn}>Cancel</Link>
         </div>
 
       </form>
@@ -146,13 +188,7 @@ export function ClientForm() {
   )
 }
 
-const sectionStyle: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e2e8f0',
-  borderRadius: 12,
-  padding: 24,
-  marginBottom: 20,
-}
+const sectionStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 24, marginBottom: 20 }
 const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#0f172a', margin: '0 0 4px' }
 const descStyle: React.CSSProperties = { fontSize: 13, color: '#64748b', margin: '0 0 16px', lineHeight: 1.6 }
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 6 }
