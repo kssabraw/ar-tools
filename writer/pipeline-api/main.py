@@ -7,6 +7,7 @@ from config import settings
 from modules.brief import router as brief_router
 from modules.research import router as research_router
 from modules.sie import router as sie_router
+from modules.sources_cited import router as sources_cited_router
 from modules.writer import router as writer_router
 
 logging.basicConfig(level=settings.log_level.upper())
@@ -26,6 +27,7 @@ app.include_router(brief_router)
 app.include_router(sie_router)
 app.include_router(research_router)
 app.include_router(writer_router)
+app.include_router(sources_cited_router)
 
 
 @app.get("/health")

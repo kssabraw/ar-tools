@@ -1,0 +1,231 @@
+"""Sources Cited orchestrator (schema v1.1).
+
+5 steps from the PRD:
+0. Validate writer + research inputs (schema, keyword, marker resolvability,
+   citation_id format, integrity check between prose markers and
+   citation_usage record)
+1. Marker discovery + first-appearance numbering
+2. Superscript injection (with ascending sort for stacked markers)
+3. MLA-derived entry generation (no LLM)
+4. Sources Cited section assembly (header + body appended after conclusion)
+5. Output assembly with sources_cited_metadata block
+"""
+
+from __future__ import annotations
+
+import copy
+import logging
+import re
+import time
+from typing import Any
+
+from models.sources_cited import (
+    SourcesCitedMetadata,
+    SourcesCitedRequest,
+    SourcesCitedResponse,
+)
+
+from .entries import build_sources_cited_sections
+from .markers import (
+    all_marker_ids_in_body,
+    find_markers_in_headings,
+    is_valid_citation_id,
+    scan_markers,
+)
+from .superscripts import inject_into_article
+
+logger = logging.getLogger(__name__)
+
+
+class SourcesCitedError(Exception):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+_WRITER_MIN_VERSION_RE = re.compile(r"^1\.(?:[4-9]|\d{2,})")
+
+
+def _validate(req: SourcesCitedRequest) -> tuple[dict, dict]:
+    writer = req.writer_output
+    research = req.research_output
+
+    if not isinstance(writer, dict):
+        raise SourcesCitedError("invalid_writer", "writer_output must be a dict")
+    if not isinstance(research, dict):
+        raise SourcesCitedError("invalid_research", "research_output must be a dict")
+
+    writer_kw = (writer.get("keyword") or "").strip()
+    research_kw = (
+        research.get("keyword")
+        or (research.get("enriched_brief") or {}).get("keyword")
+        or ""
+    ).strip()
+    if not writer_kw or writer_kw.lower() != research_kw.lower():
+        raise SourcesCitedError(
+            "keyword_mismatch",
+            f"writer.keyword='{writer_kw}' vs research.keyword='{research_kw}'",
+        )
+
+    schema_version = (writer.get("metadata") or {}).get("schema_version", "")
+    if not _WRITER_MIN_VERSION_RE.match(schema_version):
+        raise SourcesCitedError(
+            "writer_schema_too_old",
+            f"writer schema_version='{schema_version}' must be 1.4 or newer",
+        )
+
+    article = writer.get("article") or []
+    if not isinstance(article, list) or not article:
+        raise SourcesCitedError("empty_article", "writer.article is empty or missing")
+
+    return (writer, research)
+
+
+def _get_citations_by_id(research: dict) -> dict[str, dict]:
+    citations_list = (
+        research.get("citations")
+        or (research.get("enriched_brief") or {}).get("citations")
+        or []
+    )
+    return {
+        c.get("citation_id"): c
+        for c in citations_list
+        if isinstance(c, dict) and c.get("citation_id")
+    }
+
+
+def _used_citation_ids_from_writer(writer: dict) -> set[str]:
+    """Set of citation_ids the Writer reports as used:true."""
+    usage = (writer.get("citation_usage") or {}).get("usage") or []
+    out: set[str] = set()
+    for entry in usage:
+        if isinstance(entry, dict) and entry.get("used") and entry.get("citation_id"):
+            out.add(entry["citation_id"])
+    return out
+
+
+def _all_citation_ids_in_usage(writer: dict) -> set[str]:
+    """All citation_ids appearing in the Writer's citation_usage.usage[]."""
+    usage = (writer.get("citation_usage") or {}).get("usage") or []
+    return {
+        entry.get("citation_id")
+        for entry in usage
+        if isinstance(entry, dict) and entry.get("citation_id")
+    }
+
+
+def _conclusion_order(article: list[dict]) -> int:
+    for s in article:
+        if isinstance(s, dict) and s.get("type") == "conclusion":
+            return s.get("order", 0)
+    # Fall back to the highest order if no conclusion found
+    return max((s.get("order", 0) for s in article if isinstance(s, dict)), default=0)
+
+
+def _section_marker_reconciliation_warnings(article: list[dict]) -> list[str]:
+    """Per-section: if `citations_referenced` lists an ID not actually
+    present as a marker in that section's body, flag a warning string."""
+    from .markers import MARKER_RE
+    warnings: list[str] = []
+    for s in article:
+        if not isinstance(s, dict):
+            continue
+        listed = set(s.get("citations_referenced") or [])
+        body = s.get("body") or ""
+        actual = set(MARKER_RE.findall(body))
+        missing = listed - actual
+        if missing:
+            warnings.append(
+                f"section order={s.get('order', 0)} lists {sorted(missing)} but body has no markers for them"
+            )
+    return warnings
+
+
+def run_sources_cited(req: SourcesCitedRequest) -> SourcesCitedResponse:
+    started = time.perf_counter()
+    writer, research = _validate(req)
+
+    article: list[dict] = copy.deepcopy(writer.get("article") or [])
+    citations_by_id = _get_citations_by_id(research)
+
+    # Step 0 (continued): heading marker check, ID format, marker resolvability
+    heading_hits = find_markers_in_headings(article)
+    if heading_hits:
+        raise SourcesCitedError(
+            "marker_in_heading",
+            f"Markers found in heading at order(s): {[h[0] for h in heading_hits]}",
+        )
+
+    body_marker_ids = all_marker_ids_in_body(article)
+    for cid in body_marker_ids:
+        if not is_valid_citation_id(cid):
+            raise SourcesCitedError(
+                "invalid_citation_id",
+                f"citation_id '{cid}' does not match ^cit_[0-9]+$",
+            )
+
+    # Marker resolvability: every body marker must exist in research.citations
+    unresolvable = sorted(body_marker_ids - set(citations_by_id.keys()))
+    if unresolvable:
+        raise SourcesCitedError(
+            "unresolvable_markers",
+            f"Markers reference unknown citation_ids: {unresolvable}",
+        )
+
+    # Integrity check: every body marker must appear in writer's citation_usage
+    usage_ids = _all_citation_ids_in_usage(writer)
+    integrity_violations = sorted(body_marker_ids - usage_ids)
+    if integrity_violations:
+        raise SourcesCitedError(
+            "writer_integrity_violation",
+            f"Markers in prose missing from citation_usage: {integrity_violations}",
+        )
+
+    # Step 1: discover + number citations by first appearance
+    number_map, ordered_used = scan_markers(article)
+
+    # Orphaned usage records (used:true but no marker in prose)
+    used_in_writer = _used_citation_ids_from_writer(writer)
+    orphans = sorted(used_in_writer - set(number_map.keys()))
+
+    # Step 2: superscript injection
+    inject_into_article(article, number_map)
+
+    # Per-section reconciliation warnings
+    warnings = _section_marker_reconciliation_warnings(article)
+
+    # Step 3 + 4: build entries + section pair
+    conclusion_order = _conclusion_order(article)
+    new_sections, flags = build_sources_cited_sections(
+        ordered_used_citations=ordered_used,
+        citations_by_id=citations_by_id,
+        conclusion_order=conclusion_order,
+    )
+    article.extend(new_sections)
+
+    # Step 5: assemble enriched output
+    enriched = copy.deepcopy(writer)
+    enriched["article"] = article
+
+    # Pass through metadata; note the sources_cited module version
+    enriched_metadata = dict(enriched.get("metadata") or {})
+    enriched_metadata["sources_cited_module_version"] = "1.1"
+    enriched["metadata"] = enriched_metadata
+
+    sc_metadata = SourcesCitedMetadata(
+        total_citations_in_sources_cited=len(ordered_used),
+        citation_number_map=number_map,
+        orphaned_usage_records=orphans,
+        marker_reconciliation_warnings=warnings,
+        entries_with_missing_publication=flags.get("entries_with_missing_publication", []),
+        entries_with_placeholder=flags.get("entries_with_placeholder", []),
+        writer_schema_version=(writer.get("metadata") or {}).get("schema_version", "1.5"),
+        generation_time_ms=int((time.perf_counter() - started) * 1000),
+    )
+    enriched["sources_cited_metadata"] = sc_metadata.model_dump(mode="json")
+
+    return SourcesCitedResponse(
+        enriched_article=enriched,
+        sources_cited_metadata=sc_metadata,
+    )
