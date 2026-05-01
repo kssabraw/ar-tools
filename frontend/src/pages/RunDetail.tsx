@@ -91,16 +91,38 @@ const MODULES: ModuleMeta[] = [
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
 
-function sectionsToMarkdown(article: unknown[]): string {
+function sectionsToMarkdown(article: unknown[], title?: string): string {
   if (!Array.isArray(article)) return ''
-  return article
+
+  const HEADING_PREFIX: Record<string, string> = {
+    H1: '# ',
+    H2: '## ',
+    H3: '### ',
+    H4: '#### ',
+  }
+
+  const sorted = article
     .slice()
     .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
-    .map((s: any) => {
-      const heading = s.heading ? `## ${s.heading}\n\n` : ''
-      return `${heading}${s.body ?? ''}`
-    })
-    .join('\n\n')
+
+  const parts: string[] = []
+  if (title) parts.push(`# ${title}`)
+
+  for (const s of sorted as any[]) {
+    // Skip the article's H1 section if we've already rendered the title
+    // (writer emits H1 with empty body — it would just duplicate the title)
+    if (title && s.level === 'H1' && !(s.body ?? '').trim()) continue
+
+    const prefix = HEADING_PREFIX[s.level] ?? ''
+    const heading = s.heading ? `${prefix}${s.heading}` : ''
+    const body = s.body ?? ''
+
+    if (heading && body) parts.push(`${heading}\n\n${body}`)
+    else if (heading) parts.push(heading)
+    else if (body) parts.push(body)
+  }
+
+  return parts.join('\n\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +334,8 @@ export function RunDetail() {
   const scPayload = run.module_outputs?.sources_cited?.output_payload
   const enrichedArticle = scPayload?.enriched_article as Record<string, unknown> | undefined
   const articleSections = enrichedArticle?.article as unknown[] | undefined
-  const articleMarkdown = articleSections ? sectionsToMarkdown(articleSections) : null
+  const articleTitle = typeof enrichedArticle?.title === 'string' ? enrichedArticle.title : undefined
+  const articleMarkdown = articleSections ? sectionsToMarkdown(articleSections, articleTitle) : null
 
   return (
     <div style={{ padding: 32, maxWidth: 900 }}>
