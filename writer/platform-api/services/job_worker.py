@@ -23,7 +23,6 @@ async def _claim_next_job() -> dict | None:
             supabase.table("async_jobs")
             .select("*")
             .eq("status", "pending")
-            .lt("attempts", supabase.table("async_jobs").select("max_attempts"))  # type: ignore
             .order("scheduled_at")
             .limit(1)
             .execute()

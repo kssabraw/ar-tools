@@ -52,14 +52,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Platform API", version="1.0.0", lifespan=lifespan)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.allowed_origins,
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 @app.middleware("http")
 async def request_id_middleware(request: Request, call_next):
@@ -80,6 +72,20 @@ async def request_id_middleware(request: Request, call_next):
         },
     )
     return response
+
+
+# CORSMiddleware must be added last so it is outermost in the middleware stack.
+# Starlette inserts each add_middleware() call at position 0; reversed() during
+# stack build means the last insertion becomes the outermost layer. CORS must be
+# outermost so it can short-circuit OPTIONS preflights before BaseHTTPMiddleware
+# wraps them.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.allowed_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 app.include_router(clients_router)
