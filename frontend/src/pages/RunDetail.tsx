@@ -1,8 +1,8 @@
 import { useParams, Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
-import { ArrowLeft, CheckCircle, XCircle, Clock, Loader, Download, Copy } from 'lucide-react'
+import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy } from 'lucide-react'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -69,6 +69,7 @@ function StatusChip({ status }: { status: RunStatus }) {
 
 export function RunDetail() {
   const { id } = useParams<{ id: string }>()
+  const queryClient = useQueryClient()
 
   const { data: run, isLoading } = useQuery<RunDetailType>({
     queryKey: ['run', id],
@@ -79,8 +80,23 @@ export function RunDetail() {
     },
   })
 
+  const cancelMutation = useMutation({
+    mutationFn: () => api.post<{ id: string; status: RunStatus }>(`/runs/${id}/cancel`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['run', id] })
+      queryClient.invalidateQueries({ queryKey: ['runs'] })
+    },
+  })
+
+  function handleCancel() {
+    if (!window.confirm('Cancel this run? In-progress modules will finish, but no further stages will run.')) return
+    cancelMutation.mutate()
+  }
+
   if (isLoading) return <div style={{ padding: 40, color: '#64748b' }}>Loading…</div>
   if (!run) return <div style={{ padding: 40, color: '#dc2626' }}>Run not found</div>
+
+  const canCancel = !TERMINAL.includes(run.status)
 
   const scPayload = run.module_outputs?.sources_cited?.output_payload
   const enrichedArticle = scPayload?.enriched_article as Record<string, unknown> | undefined
@@ -106,8 +122,25 @@ export function RunDetail() {
             {run.total_cost_usd != null && ` · $${run.total_cost_usd.toFixed(4)}`}
           </div>
         </div>
-        <StatusChip status={run.status} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <StatusChip status={run.status} />
+          {canCancel && (
+            <button
+              onClick={handleCancel}
+              disabled={cancelMutation.isPending}
+              style={cancelBtn}
+            >
+              <Ban size={13} /> {cancelMutation.isPending ? 'Cancelling…' : 'Cancel run'}
+            </button>
+          )}
+        </div>
       </div>
+
+      {cancelMutation.isError && (
+        <div style={{ marginBottom: 16, padding: '10px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
+          Failed to cancel: {cancelMutation.error instanceof Error ? cancelMutation.error.message : 'unknown error'}
+        </div>
+      )}
 
       <div style={cardStyle}>
         <h2 style={sectionTitle}>Pipeline Progress</h2>
@@ -194,3 +227,4 @@ export function RunDetail() {
 const cardStyle: React.CSSProperties = { background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 24, marginBottom: 20 }
 const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#0f172a', margin: '0 0 16px' }
 const ghostBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#374151', border: '1px solid #e2e8f0', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
+const cancelBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
