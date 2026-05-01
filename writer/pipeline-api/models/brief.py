@@ -164,6 +164,9 @@ class BriefMetadata(BaseModel):
     low_serp_coverage: bool = False
     reddit_unavailable: bool = False
     llm_fanout_unavailable: LLMUnavailable = LLMUnavailable()
+    # Root domains of all SERP results — consumed by Research & Citations
+    # to exclude competitor URLs from citation candidates.
+    competitor_domains: list[str] = []
     schema_version: Literal["1.7"] = "1.7"
 
 

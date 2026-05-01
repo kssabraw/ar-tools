@@ -165,6 +165,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         item["url"] for item in serp_items if item.get("type") == "organic" and item.get("url")
     ]
     top_3_domains = [_domain(u) for u in organic_urls[:3]]
+    competitor_domains = sorted({_domain(u) for u in organic_urls if _domain(u)})
 
     low_serp_coverage = len([h for h in serp_headings]) < 10
 
@@ -354,6 +355,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         low_serp_coverage=low_serp_coverage,
         reddit_unavailable=reddit_unavailable,
         llm_fanout_unavailable=unavailable,
+        competitor_domains=competitor_domains,
     )
 
     return BriefResponse(

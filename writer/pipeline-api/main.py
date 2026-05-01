@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from config import settings
 from modules.brief import router as brief_router
+from modules.research import router as research_router
 from modules.sie import router as sie_router
 
 logging.basicConfig(level=settings.log_level.upper())
@@ -22,6 +23,7 @@ app = FastAPI(title="Pipeline API", lifespan=lifespan)
 
 app.include_router(brief_router)
 app.include_router(sie_router)
+app.include_router(research_router)
 
 
 @app.get("/health")
