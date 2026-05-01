@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Users, UserPlus, LogOut, FileText, BookOpen } from 'lucide-react'
+import { LayoutDashboard, Users, UserPlus, LogOut, FileText, BookOpen, Layers } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -11,6 +11,7 @@ interface NavItem {
 const nav: NavItem[] = [
   { label: 'Runs', to: '/', icon: <LayoutDashboard size={18} /> },
   { label: 'Articles', to: '/articles', icon: <BookOpen size={18} /> },
+  { label: 'Silos', to: '/silos', icon: <Layers size={18} /> },
   { label: 'Clients', to: '/clients', icon: <Users size={18} /> },
   { label: 'New Client', to: '/clients/new', icon: <UserPlus size={18} /> },
 ]
