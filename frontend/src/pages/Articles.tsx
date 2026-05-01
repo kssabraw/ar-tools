@@ -15,15 +15,25 @@ function downloadFile(content: string, filename: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
+const HEADING_PREFIX: Record<string, string> = {
+  H1: '# ',
+  H2: '## ',
+  H3: '### ',
+  H4: '#### ',
+}
+
 function sectionsToMarkdown(article: unknown[]): string {
   if (!Array.isArray(article)) return ''
   return article
     .slice()
     .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
     .map((s: any) => {
-      const heading = s.heading ? `## ${s.heading}\n\n` : ''
+      // 'none' level (e.g. h1-enrichment paragraph) renders body only.
+      const prefix = HEADING_PREFIX[s.level] ?? ''
+      const heading = s.heading && prefix ? `${prefix}${s.heading}\n\n` : ''
       return `${heading}${s.body ?? ''}`
     })
+    .filter(part => part.trim().length > 0)
     .join('\n\n')
 }
 

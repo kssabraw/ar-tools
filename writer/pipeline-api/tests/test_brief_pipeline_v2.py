@@ -282,7 +282,11 @@ async def test_pipeline_produces_h1_h2_outline():
 
     levels = [h.level for h in result.heading_structure]
     assert levels[0] == "H1"
-    assert result.heading_structure[0].text == "what is tiktok shop"
+    # H1 text is the Step 3.5 generated title, NOT the raw keyword. The
+    # mock title router returns "What TikTok Shop Is and How It Works in
+    # 2026" — that string must surface as the article's H1.
+    assert result.heading_structure[0].text == result.title
+    assert result.heading_structure[0].text.startswith("What TikTok Shop")
     # At least one H2
     assert "H2" in levels
     # Order numbers are sequential

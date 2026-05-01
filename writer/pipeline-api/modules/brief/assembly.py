@@ -273,15 +273,21 @@ def assemble_structure(
     h2s: list[Candidate],
     h3_attachments: dict[int, list[Candidate]],
     faqs: list[FAQItem],
+    title: Optional[str] = None,
 ) -> tuple[list[HeadingItem], list[Candidate]]:
     """Build the final HeadingItem list with order numbers and the global cap.
 
     Args:
-        keyword: seed used as the H1 text.
+        keyword: seed; used as a fallback H1 text only when no `title` is
+            provided. Downstream callers that have a Step 3.5 title should
+            pass it explicitly.
         intent: drives global cap (15 vs 20).
         h2s: ordered list of selected H2 candidates (Step 8 + how-to reorder).
         h3_attachments: per-H2-index list of attached H3 candidates.
         faqs: the final FAQ items (already ordered by select_faqs).
+        title: Step 3.5 generated title (PRD §5 Step 3.5). When supplied,
+            becomes the H1 text so the article reads with the
+            reader-facing title rather than the raw seed keyword.
 
     Returns:
         (heading_structure, cap_cuts) where cap_cuts are H2/H3 candidates
@@ -294,11 +300,14 @@ def assemble_structure(
     cut: list[Candidate] = []
     order = 0
 
-    # H1: exact-match seed keyword
+    # H1: prefer the Step 3.5 title (reader-facing); fall back to the
+    # raw seed keyword only when no title was generated (e.g. legacy
+    # callers or test fixtures that haven't supplied one).
+    h1_text = (title or "").strip() or keyword
     order += 1
     items.append(HeadingItem(
         level="H1",
-        text=keyword,
+        text=h1_text,
         type="content",
         source="serp",
         order=order,

@@ -570,6 +570,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         h2s=selected_h2s,
         h3_attachments=h3_attachments,
         faqs=faqs,
+        title=title_scope.title,
     )
 
     # ---- Step 12 — silos (12.1 + 12.2 + 12.3 sync, then 12.4 async) ----
