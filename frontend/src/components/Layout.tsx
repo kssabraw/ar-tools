@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Users, LogOut, FileText } from 'lucide-react'
+import { LayoutDashboard, Users, UserPlus, LogOut, FileText } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -11,6 +11,7 @@ interface NavItem {
 const nav: NavItem[] = [
   { label: 'Runs', to: '/', icon: <LayoutDashboard size={18} /> },
   { label: 'Clients', to: '/clients', icon: <Users size={18} /> },
+  { label: 'New Client', to: '/clients/new', icon: <UserPlus size={18} /> },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -55,6 +56,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 textDecoration: 'none',
                 fontSize: 14,
                 fontWeight: location.pathname === item.to ? 600 : 400,
+                transition: 'background 0.15s',
               }}
             >
               {item.icon}
