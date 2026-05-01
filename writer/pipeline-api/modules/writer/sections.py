@@ -248,7 +248,11 @@ async def write_h2_group(
             retry_term=retry_term,
         )
         try:
-            result = await claude_json(SECTION_SYSTEM, user, max_tokens=3500, temperature=0.4)
+            # 8000 tokens accommodates an H2 + up to ~6 H3 children, each with
+            # answer-first body + lists/tables, without truncation. The previous
+            # 3500-token cap silently truncated mid-string when a brief produced
+            # 1 H2 with many H3 children, raising JSONDecodeError downstream.
+            result = await claude_json(SECTION_SYSTEM, user, max_tokens=8000, temperature=0.4)
         except Exception as exc:
             logger.exception(
                 "writer.section.llm_failed",

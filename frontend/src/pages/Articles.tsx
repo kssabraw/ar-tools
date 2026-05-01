@@ -20,21 +20,32 @@ const HEADING_PREFIX: Record<string, string> = {
   H2: '## ',
   H3: '### ',
   H4: '#### ',
+  H5: '##### ',
+  H6: '###### ',
 }
 
-function sectionsToMarkdown(article: unknown[]): string {
+function sectionsToMarkdown(article: unknown[], title?: string): string {
   if (!Array.isArray(article)) return ''
-  return article
+  const sorted = article
     .slice()
     .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
-    .map((s: any) => {
-      // 'none' level (e.g. h1-enrichment paragraph) renders body only.
-      const prefix = HEADING_PREFIX[s.level] ?? ''
-      const heading = s.heading && prefix ? `${prefix}${s.heading}\n\n` : ''
-      return `${heading}${s.body ?? ''}`
-    })
-    .filter(part => part.trim().length > 0)
-    .join('\n\n')
+
+  const hasH1 = sorted.some((s: any) => s.level === 'H1')
+  const parts: string[] = []
+
+  if (title && !hasH1) {
+    parts.push(`# ${title}`)
+  }
+
+  for (const s of sorted as any[]) {
+    // 'none' level (e.g. h1-enrichment paragraph) renders body only.
+    const prefix = HEADING_PREFIX[s.level] ?? ''
+    const heading = s.heading && prefix ? `${prefix}${s.heading}\n\n` : ''
+    const body = s.body ?? ''
+    const piece = `${heading}${body}`
+    if (piece.trim().length > 0) parts.push(piece)
+  }
+  return parts.join('\n\n')
 }
 
 function ArticleCard({ run }: { run: any }) {
@@ -58,8 +69,12 @@ function ArticleCard({ run }: { run: any }) {
   })
 
   const scPayload = detail?.module_outputs?.sources_cited?.output_payload
+  const writerPayload = detail?.module_outputs?.writer?.output_payload
+  const briefPayload = detail?.module_outputs?.brief_generator?.output_payload
   const articleSections = (scPayload?.enriched_article as any)?.article as unknown[] | undefined
-  const markdown = articleSections ? sectionsToMarkdown(articleSections) : null
+  const articleTitle: string | undefined =
+    writerPayload?.title || briefPayload?.title || undefined
+  const markdown = articleSections ? sectionsToMarkdown(articleSections, articleTitle) : null
   const slug = run.keyword.replace(/\s+/g, '-').toLowerCase()
 
   function handleCopy() {

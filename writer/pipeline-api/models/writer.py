@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 SchemaVersion = Literal["1.5", "1.5-no-context", "1.5-degraded"]
 ArticleLevel = Literal["H1", "H2", "H3", "none"]
 ArticleType = Literal[
-    "content", "faq-header", "faq-question", "conclusion", "h1-enrichment", "title",
+    "content", "faq-header", "faq-question", "conclusion", "h1-enrichment", "title", "intro",
 ]
 ReconciliationAction = Literal[
     "keep",

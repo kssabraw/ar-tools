@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
-import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, RotateCcw, Repeat, Play } from 'lucide-react'
+import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, RotateCcw, Repeat, Play, ExternalLink } from 'lucide-react'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -206,9 +206,15 @@ function ModuleRow({
   costUsd?: number | null
   liveElapsedMs?: number
 }) {
-  const isRunning = runStatus === meta.runningStatus
   const isDone = moduleStatus === 'complete'
   const isFailed = moduleStatus === 'failed'
+  // Brief + SIE run in parallel, but the orchestrator only emits `brief_running`
+  // for that whole phase — `sie_running` is never actually set. Treat both as
+  // running while status is `brief_running` (until each module's own status
+  // flips to complete/failed).
+  const inParallelBriefSiePhase =
+    runStatus === 'brief_running' && (meta.key === 'brief' || meta.key === 'sie')
+  const isRunning = !isDone && !isFailed && (runStatus === meta.runningStatus || inParallelBriefSiePhase)
   const isPending = !isDone && !isFailed && !isRunning
 
   let statusIcon
@@ -320,6 +326,15 @@ export function RunDetail() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['run', id] })
       queryClient.invalidateQueries({ queryKey: ['runs'] })
+    },
+  })
+
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const publishMutation = useMutation({
+    mutationFn: () => api.post<{ doc_url: string }>(`/runs/${id}/publish`, {}),
+    onSuccess: (data) => {
+      setPublishedUrl(data.doc_url)
+      window.open(data.doc_url, '_blank')
     },
   })
 
@@ -508,8 +523,28 @@ export function RunDetail() {
               <button onClick={() => downloadFile(articleMarkdown, `${run.keyword.replace(/\s+/g, '-')}.txt`, 'text/plain')} style={ghostBtn}>
                 <Download size={13} /> .txt
               </button>
+              {publishedUrl ? (
+                <a href={publishedUrl} target="_blank" rel="noreferrer"
+                  style={{ ...ghostBtn, textDecoration: 'none', color: '#16a34a', borderColor: '#bbf7d0' }}>
+                  <ExternalLink size={13} /> Open Doc
+                </a>
+              ) : (
+                <button
+                  onClick={() => publishMutation.mutate()}
+                  disabled={publishMutation.isPending}
+                  style={{ ...ghostBtn, color: '#6366f1', borderColor: '#c7d2fe' }}
+                  title="Publish to the client's Google Drive folder"
+                >
+                  <ExternalLink size={13} /> {publishMutation.isPending ? 'Publishing…' : 'Publish to Google Docs'}
+                </button>
+              )}
             </div>
           </div>
+          {publishMutation.isError && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
+              Failed to publish: {publishMutation.error instanceof Error ? publishMutation.error.message : 'unknown error'}
+            </div>
+          )}
           <pre style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, overflowX: 'auto', fontSize: 13, lineHeight: 1.7, color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 600, overflowY: 'auto' }}>
             {articleMarkdown}
           </pre>

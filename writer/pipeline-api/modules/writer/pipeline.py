@@ -39,6 +39,7 @@ from .citations import reconcile_citation_usage
 from .conclusion import write_conclusion
 from .distillation import distill_brand_voice, is_card_empty
 from .faqs import write_faqs
+from .intro import write_intro
 from .reconciliation import FilteredSIETerms, reconcile_terms, ReconciledTerm
 from .sections import SectionWriteResult, write_h2_group
 from .title import generate_h1_enrichment, generate_title
@@ -284,11 +285,18 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         for t in ((sie.get("terms") or {}).get("required") or [])
         if isinstance(t, dict) and t.get("is_entity")
     ]
+    # Per Writer v1.6 Section 4.5: H1 is brief.title verbatim. Fall back
+    # to the brief's H1 heading_structure entry, then to the raw keyword,
+    # for compatibility with pre-v2.0.0 briefs that didn't emit `title`.
     h1_item = next(
         (h for h in heading_structure if isinstance(h, dict) and h.get("level") == "H1"),
         None,
     )
-    h1_text = h1_item.get("text", keyword) if h1_item else keyword
+    h1_text = (
+        (brief.get("title") or "").strip()
+        or (h1_item.get("text") if h1_item else "")
+        or keyword
+    )
 
     title_task = asyncio.create_task(generate_title(
         keyword=keyword, intent_type=intent_type,
@@ -324,8 +332,26 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             heading=None, body=h1_enrichment, word_count=len(h1_enrichment.split()),
         ))
 
-    # ---- Section writing (sequential per H2 group) ----
+    # ---- Intro paragraph (Writer v1.6 §4.3.1 — Agree/Promise/Preview) ----
     h2_groups = _split_h2_groups(heading_structure)
+    h2_titles = [(h2_item.get("text") or "").strip() for h2_item, _ in h2_groups]
+    h2_titles = [t for t in h2_titles if t]
+    scope_statement = (brief.get("scope_statement") or "").strip()
+    intro_title = (brief.get("title") or h1_text).strip()
+    next_order += 1
+    intro_section = await write_intro(
+        keyword=keyword,
+        title=intro_title,
+        scope_statement=scope_statement,
+        intent_type=intent_type,
+        h2_list=h2_titles,
+        brand_voice_card=brand_voice_card,
+        banned_regex=banned_regex,
+        intro_order=next_order,
+    )
+    article.append(intro_section)
+
+    # ---- Section writing (sequential per H2 group) ----
     for h2_item, h3_items in h2_groups:
         result = await write_h2_group(
             keyword=keyword, intent=intent_type,

@@ -219,10 +219,13 @@ async def test_run_brief_happy_path():
     assert hasattr(result.metadata, "sanitization_discards_count")
     assert hasattr(result, "spin_off_articles")
 
-    # Has H1
+    # Has H1 (title-cased per Brief PRD v2.0.3 Step 11.x)
     h1s = [h for h in result.heading_structure if h.level == "H1"]
     assert len(h1s) == 1
-    assert h1s[0].text == "best hvac systems 2026"
+    from titlecase import titlecase
+    assert h1s[0].text == titlecase("best hvac systems 2026")
+    # And the response's `title` field equals the H1 text (Writer v1.6 §4.5)
+    assert result.title == h1s[0].text
 
     # Has at least one H2 of content type
     content_h2s = [h for h in result.heading_structure if h.level == "H2" and h.type == "content"]
