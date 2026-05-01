@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from titlecase import titlecase
+
 from models.brief import (
     DiscardedHeading,
     FAQItem,
@@ -149,11 +151,11 @@ def assemble_structure(
     cut: list[HeadingCandidate] = []
     order = 0
 
-    # H1: exact-match seed keyword
+    # H1: title-cased seed keyword (per Brief PRD v2.0.3 Step 11.x)
     order += 1
     items.append(HeadingItem(
         level="H1",
-        text=keyword,
+        text=titlecase(keyword),
         type="content",
         source="serp",
         order=order,

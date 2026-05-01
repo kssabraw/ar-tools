@@ -44,6 +44,66 @@ def get_openai() -> AsyncOpenAI:
 
 # ---- Anthropic helpers ----
 
+_STRICT_JSON_SUFFIX = (
+    "\n\nIMPORTANT: Respond with ONLY a single JSON object. "
+    "No prose preamble, no commentary, no markdown code fences."
+)
+
+
+def _extract_json_payload(text: str) -> Any:
+    """Parse a JSON value out of a model response that may contain prose,
+    markdown fences, or trailing commentary.
+
+    Strategy:
+    1. Try parsing the full string verbatim (fast path for clean responses).
+    2. Strip a markdown code fence if one wraps the payload.
+    3. Walk forward through the text; at every `[` or `{` try
+       `json.JSONDecoder().raw_decode()` — that returns the first complete
+       JSON value and ignores trailing prose.
+
+    Raises json.JSONDecodeError if no parseable JSON value is found.
+    """
+    stripped = text.strip()
+    if not stripped:
+        raise json.JSONDecodeError("empty response", text, 0)
+
+    # Fast path: clean JSON
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    # Strip a fenced block if one wraps the payload (relaxed — does not
+    # require the fence to be at start/end of the entire string)
+    fence = re.search(r"```(?:json)?\s*(.*?)\s*```", stripped, re.DOTALL)
+    if fence:
+        try:
+            return json.loads(fence.group(1).strip())
+        except json.JSONDecodeError:
+            pass
+        candidate = fence.group(1).strip()
+    else:
+        candidate = stripped
+
+    # Walk forward, looking for the first position from which a complete
+    # JSON value can be decoded. raw_decode stops at the natural end of
+    # the value and does not care about trailing prose.
+    decoder = json.JSONDecoder()
+    for i, ch in enumerate(candidate):
+        if ch in "[{":
+            try:
+                obj, _ = decoder.raw_decode(candidate[i:])
+                return obj
+            except json.JSONDecodeError:
+                continue
+
+    raise json.JSONDecodeError(
+        "no JSON object or array could be decoded from response",
+        text,
+        0,
+    )
+
+
 async def claude_json(
     system: str,
     user: str,
@@ -52,31 +112,41 @@ async def claude_json(
 ) -> Any:
     """Call Claude and parse the response as JSON.
 
-    Strips ```json fences if present. Raises ValueError if no JSON found.
+    Tolerates fenced/prose-wrapped responses. On parse failure, retries
+    once with a stricter "JSON only" addendum to the system prompt and
+    logs a snippet of the offending response for diagnosis.
     """
     client = get_anthropic()
-    message = await client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    text = "".join(
-        block.text for block in message.content if getattr(block, "type", "") == "text"
-    ).strip()
 
-    # Strip markdown fences
-    fence = re.match(r"^```(?:json)?\s*\n(.*?)\n```$", text, re.DOTALL)
-    if fence:
-        text = fence.group(1).strip()
-    # Or grab the first JSON object/array
-    if not text.startswith(("[", "{")):
-        match = re.search(r"(\[.*\]|\{.*\})", text, re.DOTALL)
-        if match:
-            text = match.group(1)
+    last_error: Optional[Exception] = None
+    last_text: str = ""
+    for attempt in range(2):
+        sys_prompt = system if attempt == 0 else system + _STRICT_JSON_SUFFIX
+        message = await client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=sys_prompt,
+            messages=[{"role": "user", "content": user}],
+        )
+        text = "".join(
+            block.text for block in message.content if getattr(block, "type", "") == "text"
+        )
+        last_text = text
+        try:
+            return _extract_json_payload(text)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+            logger.warning(
+                "claude_json parse failed (attempt %s/2): %s — response head=%r",
+                attempt + 1,
+                exc,
+                text[:500],
+            )
+            continue
 
-    return json.loads(text)
+    assert last_error is not None
+    raise last_error
 
 
 async def claude_text(

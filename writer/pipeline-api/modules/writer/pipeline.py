@@ -269,11 +269,18 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         for t in ((sie.get("terms") or {}).get("required") or [])
         if isinstance(t, dict) and t.get("is_entity")
     ]
+    # Per Writer v1.6 Section 4.5: H1 is brief.title verbatim. Fall back
+    # to the brief's H1 heading_structure entry, then to the raw keyword,
+    # for compatibility with pre-v2.0.0 briefs that didn't emit `title`.
     h1_item = next(
         (h for h in heading_structure if isinstance(h, dict) and h.get("level") == "H1"),
         None,
     )
-    h1_text = h1_item.get("text", keyword) if h1_item else keyword
+    h1_text = (
+        (brief.get("title") or "").strip()
+        or (h1_item.get("text") if h1_item else "")
+        or keyword
+    )
 
     title_task = asyncio.create_task(generate_title(
         keyword=keyword, intent_type=intent_type,

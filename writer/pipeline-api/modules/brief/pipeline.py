@@ -468,8 +468,15 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         competitor_domains=competitor_domains,
     )
 
+    h1_item = next(
+        (h for h in heading_structure if h.level == "H1"),
+        None,
+    )
+    title = h1_item.text if h1_item else ""
+
     return BriefResponse(
         keyword=keyword,
+        title=title,
         intent_type=intent,
         intent_confidence=round(confidence, 4),
         intent_review_required=review_required,

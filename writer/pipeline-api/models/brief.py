@@ -274,6 +274,13 @@ class BriefResponse(BaseModel):
     model_config = _FORBID_EXTRA
 
     keyword: str
+    title: str = Field(
+        default="",
+        description=(
+            "Title-cased article title (PRD v2.0.0 Step 3.5). "
+            "Equals the H1 text. Writer copies this verbatim into the article H1."
+        ),
+    )
     intent_type: IntentType
     intent_confidence: float
     intent_review_required: bool = False

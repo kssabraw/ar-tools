@@ -15,16 +15,35 @@ function downloadFile(content: string, filename: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
-function sectionsToMarkdown(article: unknown[]): string {
+const HEADING_PREFIX: Record<string, string> = {
+  H1: '#',
+  H2: '##',
+  H3: '###',
+  H4: '####',
+  H5: '#####',
+  H6: '######',
+}
+
+function sectionsToMarkdown(article: unknown[], title?: string): string {
   if (!Array.isArray(article)) return ''
-  return article
+  const sorted = article
     .slice()
     .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
-    .map((s: any) => {
-      const heading = s.heading ? `## ${s.heading}\n\n` : ''
-      return `${heading}${s.body ?? ''}`
-    })
-    .join('\n\n')
+
+  const hasH1 = sorted.some((s: any) => s.level === 'H1')
+  const lines: string[] = []
+
+  if (title && !hasH1) {
+    lines.push(`# ${title}\n\n`)
+  }
+
+  for (const s of sorted as any[]) {
+    const prefix = HEADING_PREFIX[s.level] ?? ''
+    const heading = s.heading && prefix ? `${prefix} ${s.heading}\n\n` : ''
+    const body = s.body ?? ''
+    lines.push(`${heading}${body}`)
+  }
+  return lines.join('\n\n')
 }
 
 function ArticleCard({ run }: { run: any }) {
@@ -48,8 +67,12 @@ function ArticleCard({ run }: { run: any }) {
   })
 
   const scPayload = detail?.module_outputs?.sources_cited?.output_payload
+  const writerPayload = detail?.module_outputs?.writer?.output_payload
+  const briefPayload = detail?.module_outputs?.brief_generator?.output_payload
   const articleSections = (scPayload?.enriched_article as any)?.article as unknown[] | undefined
-  const markdown = articleSections ? sectionsToMarkdown(articleSections) : null
+  const articleTitle: string | undefined =
+    writerPayload?.title || briefPayload?.title || undefined
+  const markdown = articleSections ? sectionsToMarkdown(articleSections, articleTitle) : null
   const slug = run.keyword.replace(/\s+/g, '-').toLowerCase()
 
   function handleCopy() {
