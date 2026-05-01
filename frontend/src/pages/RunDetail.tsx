@@ -2,7 +2,17 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
-import { ArrowLeft, CheckCircle, XCircle, Clock, Loader } from 'lucide-react'
+import { ArrowLeft, CheckCircle, XCircle, Clock, Loader, Download, Copy } from 'lucide-react'
+
+function downloadFile(content: string, filename: string, mime: string) {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
 
@@ -134,9 +144,23 @@ export function RunDetail() {
         <div style={cardStyle}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
             <h2 style={sectionTitle}>Generated Article</h2>
-            <button onClick={() => navigator.clipboard.writeText(articleMarkdown)} style={ghostBtn}>
-              Copy Markdown
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button onClick={() => navigator.clipboard.writeText(articleMarkdown)} style={ghostBtn}>
+                <Copy size={13} /> Copy
+              </button>
+              <button
+                onClick={() => downloadFile(articleMarkdown, `${run.keyword.replace(/\s+/g, '-')}.md`, 'text/markdown')}
+                style={ghostBtn}
+              >
+                <Download size={13} /> Download .md
+              </button>
+              <button
+                onClick={() => downloadFile(articleMarkdown, `${run.keyword.replace(/\s+/g, '-')}.txt`, 'text/plain')}
+                style={ghostBtn}
+              >
+                <Download size={13} /> .txt
+              </button>
+            </div>
           </div>
           <pre style={{
             background: '#f8fafc',
@@ -169,4 +193,4 @@ export function RunDetail() {
 
 const cardStyle: React.CSSProperties = { background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 24, marginBottom: 20 }
 const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#0f172a', margin: '0 0 16px' }
-const ghostBtn: React.CSSProperties = { padding: '7px 14px', background: '#fff', color: '#374151', border: '1px solid #e2e8f0', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
+const ghostBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '7px 12px', background: '#fff', color: '#374151', border: '1px solid #e2e8f0', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
