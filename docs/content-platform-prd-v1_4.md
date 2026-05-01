@@ -416,8 +416,10 @@ In v1.3 these candidates lived only inside `module_outputs.output_payload` as st
 | Route | `/silos` (top-nav entry "Silos" between "Clients" and "Runs") |
 | Client selector | Required dropdown — silos are client-scoped; no cross-client view in v1.4 |
 | List columns | `suggested_keyword`, `status`, `occurrence_count`, `search_demand_score`, `viable_as_standalone_article`, `estimated_intent`, `routed_from`, first seen at, last seen at, per-row actions |
-| Default sort | `status='proposed'` first, then `occurrence_count desc`, then `search_demand_score desc` |
-| Filters | status (multi-select), `estimated_intent` (multi-select), `routed_from` (multi-select), `viable_as_standalone_article` (boolean) |
+| Default visibility | All statuses except `rejected`. `rejected` rows are hidden by default; users can toggle them on via the status filter. |
+| Default sort | Within the default view: `proposed` first, then `approved`, then `in_progress`, then `published`, then `superseded`. Within each status group: `occurrence_count desc`, then `search_demand_score desc`. |
+| Filters | status (multi-select; default = all except `rejected`), `estimated_intent` (multi-select), `routed_from` (multi-select), `viable_as_standalone_article` (boolean) |
+| Filter persistence | Session-local; not persisted across logins (matches v1.3 run dashboard convention) |
 | Search | Free-text on `suggested_keyword` (Postgres `ilike`) |
 | Per-row actions | `Approve and Generate Run`, `Approve` (no auto-run), `Reject`, `View Source Briefs` (links to `/runs/{run_id}` for each entry in `source_run_ids`) |
 | Row detail drawer | Expandable to show `viability_reasoning`, `discard_reason_breakdown`, `source_headings` from the latest brief |
@@ -458,13 +460,16 @@ When a user clicks `Approve and Generate Run` on a candidate:
 3. Updates the candidate row: `status = 'in_progress'`, `promoted_to_run_id = new_run.id`, `last_promotion_failed_at = null`
 4. Run executes through the normal pipeline (Section 8)
 5. On run state `complete`: candidate `status` → `'published'`
-6. On run state `failed`: candidate `status` → `'approved'` (back to actionable), `last_promotion_failed_at = now()`. UI surfaces a "last promotion failed" banner on that candidate so the user can retry or reject.
+6. On run state `failed`:
+   - If the candidate had **never been published before** (this was its first promotion): `status` → `'approved'` (back to actionable), `last_promotion_failed_at = now()`.
+   - If the candidate **had previously been published** and this was a re-promotion: `status` → `'published'` (unchanged), `last_promotion_failed_at = now()`. The "previously published" signal is preserved; the failure surfaces only via the timestamp.
+   In both cases the UI surfaces a "last promotion failed" banner on that candidate so the user can retry or reject. The platform detects "previously published" by looking at the `runs` table for prior `complete` runs whose `id` matches a value `promoted_to_run_id` ever held for this candidate (in practice: any prior dispatched run for the candidate that reached `complete`).
 
 #### 7.7.4 Bulk actions
 
 | Action | Behavior |
 |---|---|
-| Bulk approve & generate | Select N candidates → approve all → dispatch up to `5 - currently_running_runs` immediately; remaining queued at `runs.state='queued'` and dispatched as slots free up. Respects the existing 5-run concurrency cap from Section 7.3. |
+| Bulk approve & generate | Select N candidates → approve all → create N new `runs` rows. Each starts in its initial `queued` state per the Section 7.3 state machine; the existing dispatcher honors the 5-run concurrency cap, so at most 5 are running at any time and the rest sit in `queued` until slots free up. No new dispatch mechanism. |
 | Bulk approve only | Mark all selected as `approved` without dispatching runs (two-pass triage workflow). |
 | Bulk reject | Mark all selected as `rejected`. |
 | Confirmation | All bulk actions show a modal with the count and a typed confirmation for destructive paths (bulk reject of >10 candidates). |
@@ -524,7 +529,7 @@ This change must ship before the platform can run end-to-end. SIE, Brief, Resear
 
 ### 8.5 Cross-Brief Silo Persistence and Deduplication
 
-Brief Generator v2.0 emits per-brief `silo_candidates` (per Brief PRD §6 / §12.6). The platform persists these candidates across briefs into the `silo_candidates` table (Section 13.X data model) so the team can spot recurring article opportunities and promote them via Section 7.7. Brief PRD §12.5 explicitly defers cross-brief deduplication to the platform; this section specifies that logic.
+Brief Generator v2.0 emits per-brief `silo_candidates` (per Brief PRD §6 / §12.6). The platform persists these candidates across briefs into the `silo_candidates` table (Section 14.1) so the team can spot recurring article opportunities and promote them via Section 7.7. Brief PRD §12.5 explicitly defers cross-brief deduplication to the platform; this section specifies that logic.
 
 **Trigger:** when a `module_outputs` row for the `brief` module transitions to `status='complete'`, the orchestrator enqueues an `async_jobs(type='silo_dedup', payload={module_output_id, run_id, client_id})` row. Dedup runs **after** the brief completes — it does NOT block the rest of the pipeline (Research, Writer, Sources Cited continue normally) and it does NOT add a new run state. The run's state machine (Section 7.3) is unchanged.
 
@@ -562,7 +567,7 @@ For each silo candidate in the brief output:
 | pgvector query times out | Same as above |
 | Client deleted between brief completion and dedup | Skip silently; log warning |
 | Brief output's `silo_candidates` is empty | Mark `async_jobs` row complete; nothing to do |
-| Concurrent dedup jobs touch the same row | Postgres row-level locking handles via `select ... for update` on the matched row |
+| Concurrent dedup jobs touch the same row | Postgres row-level locking via `select ... for update` on the matched row. Each worker MUST re-query pgvector after acquiring the lock so a stale match is recomputed against the latest row state — otherwise two concurrent workers using the same pre-lock query result could both insert new rows for the same near-duplicate keyword. |
 | Brief generator's `cross_brief_occurrence_count` field on the silo | Ignored. The platform owns `occurrence_count` via this dedup path; the brief generator emits a constant `1` per its PRD §12.5. |
 
 **Performance and cost:**
@@ -803,16 +808,36 @@ New Supabase table introduced by v1.4 to support Sections 7.7 and 8.5. The schem
 - **No per-candidate `viability_was_fallback` flag**: detect via the `viability_reasoning` string contents.
 - **No FAQ-source field**: silos contain only H2-shape candidates; FAQ candidates do not flow to silos.
 
-### 14.2 `async_jobs.type` enum addition
+### 14.2 `async_jobs` additions
 
-The existing `async_jobs` table (used for website scrapes) gains a new value in its `type` enum:
+The existing `async_jobs` table (referenced in Section 5 and used for website scrapes per Section 7.2.4) gains:
+
+**A new value in its `type` enum:**
 
 | Value | Purpose |
 |---|---|
 | `website_scrape` | Existing — async website scrape + LLM extraction (Section 7.2.4) |
 | **`silo_dedup`** | **New — async silo candidate dedup + persist (Section 8.5)** |
 
-Worker dispatch logic in the platform-api gains a handler for the new type. No new worker process or queueing system.
+**Required keys in the `payload` JSON for `type='silo_dedup'`:**
+
+| Key | Type | Notes |
+|---|---|---|
+| `module_output_id` | uuid | The `module_outputs` row whose silo_candidates this job processes |
+| `run_id` | uuid | The originating run (used as `first_seen_run_id` / `last_seen_run_id`) |
+| `client_id` | uuid | Used to scope the dedup query and to short-circuit if the client is archived |
+
+**Required keys in the `metrics` JSON when the job completes:**
+
+| Key | Type | Notes |
+|---|---|---|
+| `candidates_processed` | integer | Count of silo candidates inspected (after viability skip) |
+| `dedup_hits` | integer | Count of candidates that matched an existing row |
+| `new_inserts` | integer | Count of candidates that resulted in a new row |
+| `skipped_non_viable` | integer | Count skipped because `viable_as_standalone_article=false` |
+| `embedding_cost_usd` | numeric(10,6) | Sum of OpenAI embedding cost for this job |
+
+The full `async_jobs` schema (column list, state machine, retry policy) is owned by the engineering implementation spec — v1.4 only adds the new `type` value and the per-type `payload` / `metrics` contracts above. Worker dispatch logic in the platform-api gains a handler for the new type. No new worker process or queueing system.
 
 ---
 
