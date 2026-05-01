@@ -1,0 +1,24 @@
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    supabase_url: str = ""
+    supabase_service_role_key: str = ""
+    dataforseo_login: str = ""
+    dataforseo_password: str = ""
+    scrapeowl_api_key: str = ""
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    # Google NLP: pass either the JSON content of a service account key
+    # (preferred for Railway since it's a single env var) or rely on
+    # GOOGLE_APPLICATION_CREDENTIALS path-based auth.
+    google_nlp_credentials_json: str = ""
+    sie_cache_ttl_days: int = 7
+    sie_min_pages: int = 5
+    log_level: str = "INFO"
+
+    class Config:
+        env_file = ".env"
+
+
+settings = Settings()
