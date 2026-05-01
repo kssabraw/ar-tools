@@ -125,6 +125,71 @@ async def _set_run_status(
         updates["error_message"] = error_message[:2000]
     _sb().table("runs").update(updates).eq("id", run_id).execute()
 
+    # PRD v1.4 §7.7.3 — when a run transitions to complete/failed, sync
+    # the silo candidate that promoted it (if any). On complete: status
+    # → 'published'. On failed: stay 'published' if the candidate was
+    # previously published (re-promotion failure preserves history),
+    # otherwise → 'approved' with last_promotion_failed_at set.
+    if status in ("complete", "failed"):
+        await _sync_silo_promotion_status(run_id, run_status=status)
+
+
+async def _sync_silo_promotion_status(run_id: str, run_status: str) -> None:
+    """Update the silo candidate (if any) that promoted this run."""
+    try:
+        match = (
+            _sb()
+            .table("silo_candidates")
+            .select("id, status, source_run_ids")
+            .eq("promoted_to_run_id", run_id)
+            .limit(1)
+            .execute()
+        )
+        rows = match.data or []
+        if not rows:
+            return
+        silo = rows[0]
+
+        if run_status == "complete":
+            _sb().table("silo_candidates").update(
+                {
+                    "status": "published",
+                    "last_promotion_failed_at": None,
+                }
+            ).eq("id", silo["id"]).execute()
+            return
+
+        # run_status == "failed"
+        # Detect "previously published": any prior run for this silo
+        # (in source_run_ids) that reached state=complete.
+        prior_run_ids = [
+            r for r in (silo.get("source_run_ids") or []) if r != run_id
+        ]
+        was_previously_published = False
+        if prior_run_ids:
+            prior_runs = (
+                _sb()
+                .table("runs")
+                .select("id, status")
+                .in_("id", prior_run_ids)
+                .eq("status", "complete")
+                .execute()
+            )
+            was_previously_published = bool(prior_runs.data)
+
+        next_status = "published" if was_previously_published else "approved"
+        _sb().table("silo_candidates").update(
+            {
+                "status": next_status,
+                "last_promotion_failed_at": "now()",
+            }
+        ).eq("id", silo["id"]).execute()
+    except Exception as exc:
+        logger.warning(
+            "silo_status_sync_failed",
+            extra={"run_id": run_id, "error": str(exc)},
+        )
+
 
 async def _is_cancelled(run_id: str) -> bool:
     result = _sb().table("runs").select("status").eq("id", run_id).single().execute()
@@ -349,6 +414,33 @@ async def _call_module(
 
     cost = result.get("cost_usd") or result.get("metadata", {}).get("cost_usd")
     await _save_module_output(output_id, result, duration_ms, cost, actual_version)
+
+    # PRD v1.4 §8.5 — when a brief module_output transitions to complete,
+    # enqueue the silo_dedup async job. Best-effort: failures here log
+    # but do not affect the run.
+    if module == "brief":
+        try:
+            run_row = (
+                _sb()
+                .table("runs")
+                .select("client_id")
+                .eq("id", run_id)
+                .single()
+                .execute()
+            ).data or {}
+            client_id = run_row.get("client_id")
+            if client_id:
+                from services.silo_dedup import enqueue_silo_dedup
+                enqueue_silo_dedup(
+                    module_output_id=output_id,
+                    run_id=run_id,
+                    client_id=client_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "silo_dedup_enqueue_skipped",
+                extra={"run_id": run_id, "error": str(exc)},
+            )
 
     logger.info(
         "stage_complete",
