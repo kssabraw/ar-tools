@@ -78,6 +78,11 @@ class Candidate:
     # Set by Step 8.5 scope verification (only on selected H2s)
     scope_classification: Optional[ScopeClassification] = None
 
+    # Set by Step 8.6 H3 selection (only on candidates that get attached
+    # as non-authority H3s; remain at defaults for H2s and authority H3s).
+    parent_h2_text: Optional[str] = None
+    parent_relevance: float = 0.0
+
     # Set when discarded
     discard_reason: Optional[DiscardReason] = None
 

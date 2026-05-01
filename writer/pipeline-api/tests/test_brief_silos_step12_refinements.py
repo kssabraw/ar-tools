@@ -138,6 +138,46 @@ def test_search_demand_score_partial():
     assert _search_demand_score(cands) == pytest.approx(0.275)
 
 
+def test_global_cap_exceeded_in_contributing_region_becomes_singleton():
+    """PRD §5 Step 12.1 marks global_cap_exceeded as eligible regardless
+    of region. A contributing region's H2 won, but a sibling H2 cut for
+    length should still surface as a singleton silo."""
+    pool = [
+        _cand("How TikTok Shop Works", [0.9, 0.0, 0.0]),  # the winning H2
+        _cand("Cut for length H2", [0.85, 0.5, 0.0],
+              source="paa",  # paa source pushes search demand >= 0.30
+              discard_reason="global_cap_exceeded"),
+    ]
+    regions = [_region("region_0", [0, 1])]
+    res = identify_silos(
+        regions=regions, candidate_pool=pool,
+        contributing_region_ids={"region_0"}, scope_rejects=[],
+    )
+    assert len(res.candidates) == 1
+    silo = res.candidates[0]
+    assert silo.suggested_keyword == "Cut for length H2"
+    assert silo.routed_from == "non_selected_region"
+    assert silo.cluster_coherence_score == 1.0  # singleton convention
+
+
+def test_global_cap_exceeded_in_non_contributing_region_clusters_normally():
+    """Sanity: a global_cap_exceeded member in a non-contributing region
+    enters via the cluster path, not the singleton path. Verifies we
+    don't double-process candidates."""
+    pool = [
+        _cand("a", [0.9, 0.0, 0.0], discard_reason="global_cap_exceeded"),
+        _cand("b", [0.95, 0.05, 0.0], discard_reason="global_cap_exceeded"),
+    ]
+    regions = [_region("region_3", [0, 1])]
+    res = identify_silos(
+        regions=regions, candidate_pool=pool,
+        contributing_region_ids=set(), scope_rejects=[],
+    )
+    # Single cluster (not 2 singletons); both members under one silo
+    assert len(res.candidates) == 1
+    assert len(res.candidates[0].source_headings) == 2
+
+
 def test_silo_dropped_when_search_demand_below_threshold():
     """A coherent cluster with weak demand signals is dropped."""
     pool = [

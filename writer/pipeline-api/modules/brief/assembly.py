@@ -236,7 +236,13 @@ def _to_heading_item(
     order: int,
     heading_type: str = "content",
 ) -> HeadingItem:
-    """Convert a v2 Candidate into the API-shape HeadingItem."""
+    """Convert a v2 Candidate into the API-shape HeadingItem.
+
+    `parent_h2_text` and `parent_relevance` are populated for H3 entries
+    by Step 8.6 (`select_h3s_for_h2s`); they remain at defaults
+    (None / 0.0) for H1, H2, FAQ entries, and authority gap H3s that
+    landed via attach_authority_h3s_with_displacement.
+    """
     return HeadingItem(
         level=level,  # type: ignore[arg-type]
         text=c.text,
@@ -254,6 +260,8 @@ def _to_heading_item(
         heading_priority=round(c.heading_priority, 4),
         region_id=c.region_id,
         scope_classification=c.scope_classification,
+        parent_h2_text=c.parent_h2_text,
+        parent_relevance=round(c.parent_relevance, 4) if c.parent_relevance else 0.0,
         order=order,
     )
 

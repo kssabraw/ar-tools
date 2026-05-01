@@ -328,6 +328,43 @@ def identify_silos(
         )
         silos_with_score.append((coh, silo))
 
+    # ---- contributing-region members with global_cap_exceeded ----
+    # PRD §5 Step 12.1 marks `global_cap_exceeded` as "Yes — medium
+    # priority" (eligible regardless of region). When their region also
+    # contributed an H2, the cluster path can't form a silo around them
+    # — the H2 already won that topic. Surface them as singleton silos
+    # so cut-for-length material doesn't get silently dropped.
+    cluster_member_ids: set[int] = set()
+    for region in regions:
+        if region.region_id in contributing_region_ids:
+            continue
+        for idx in region.member_indices:
+            cluster_member_ids.add(id(candidate_pool[idx]))
+
+    for cand in candidate_pool:
+        if cand.discard_reason != "global_cap_exceeded":
+            continue
+        if id(cand) in cluster_member_ids:
+            # Already considered via the non-contributing-region cluster path.
+            continue
+        recommended_intent = _infer_intent([cand.text])
+        demand = _search_demand_score([cand])
+        if demand < min_search_demand:
+            rejected_demand += 1
+            continue
+        silo = SiloCandidate(
+            suggested_keyword=cand.text,
+            cluster_coherence_score=SINGLETON_COHERENCE,
+            review_recommended=False,
+            recommended_intent=recommended_intent,
+            routed_from="non_selected_region",
+            source_headings=[_make_source_heading(cand)],
+            discard_reason_breakdown=_discard_reason_breakdown([cand]),
+            search_demand_score=round(demand, 4),
+            estimated_intent=recommended_intent,
+        )
+        silos_with_score.append((SINGLETON_COHERENCE, silo))
+
     # ---- scope-verification singleton rejects ----
     for cand in scope_rejects:
         if cand.discard_reason != "scope_verification_out_of_scope":

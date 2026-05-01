@@ -66,9 +66,14 @@ def _build_adjacent_regions_map(
 ) -> dict[str, set[str]]:
     """Pre-compute adjacency: region_id → set of adjacent region_ids.
 
-    Two regions are adjacent if the cosine between their centroids exceeds
-    `edge_threshold`. This is a region-level approximation of the
-    coverage-graph edge concept used in Step 5.
+    Two regions are adjacent if the cosine between their centroids
+    exceeds `edge_threshold` (default 0.65, matching Step 5's coverage
+    graph edge_threshold). This is the region-level interpretation of
+    PRD §5 Step 8.6's "adjacent region with edge weight ≥ 0.65 to the
+    H2's region centroid": the centroid-to-centroid cosine becomes the
+    adjacency criterion. Eliminated regions (off_topic /
+    restates_title) are excluded from the adjacency map so H3 candidates
+    in those regions can never enter the H3 selection pool.
     """
     adjacency: dict[str, set[str]] = {r.region_id: set() for r in regions}
     for i, r_i in enumerate(regions):

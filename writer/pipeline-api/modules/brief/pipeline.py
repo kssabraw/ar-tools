@@ -474,6 +474,14 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         )
         selected_h2s = selection.selected
 
+    # ---- how-to reorder must run BEFORE Step 8.6 ----
+    # Step 8.6's H3 attachments are keyed by H2 index. Reordering H2s
+    # after attachment would put H3s under the wrong parents. Running
+    # reorder first also lets the authority-gap agent see H2s in
+    # narrative (setup → execution → validation) order.
+    if intent == "how-to":
+        selected_h2s = await reorder_how_to(selected_h2s, keyword)
+
     # ---- Step 8.6 — H3 selection (NEW in v2.0.x) ----
     # Per-H2 MMR over the eligible pool with parent_relevance bounds.
     # Non-authority H3s come from the MMR-loser pool; the H3 pool is
@@ -554,9 +562,8 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     faqs = select_faqs(scored_faqs)
 
     # ---- Step 11 — structure assembly ----
-    if intent == "how-to":
-        selected_h2s = await reorder_how_to(selected_h2s, keyword)
-
+    # how-to reorder ran before Step 8.6 so attachment indices already
+    # match the final H2 order; assemble_structure consumes them as-is.
     heading_structure, cap_cuts = assemble_structure(
         keyword=keyword,
         intent=intent,

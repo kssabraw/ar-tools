@@ -337,6 +337,68 @@ async def test_pipeline_h2_headings_carry_v2_fields():
         assert h.region_id is not None
         # Step 8.5 wrote scope_classification
         assert h.scope_classification in ("in_scope", "borderline")
+        # H2s are not Step 8.6 outputs; parent fields stay at defaults
+        assert h.parent_h2_text is None
+        assert h.parent_relevance == 0.0
+
+
+@pytest.mark.asyncio
+async def test_step_8_6_h3s_carry_parent_metadata_in_output():
+    """Regression: parent_h2_text + parent_relevance must surface in
+    heading_structure for non-authority H3s (PRD §5 Step 8.6 / §6)."""
+    from modules.brief.pipeline import run_brief
+
+    req = BriefRequest(run_id="t6", keyword="what is tiktok shop")
+    with _AllMocks():
+        result = await run_brief(req)
+
+    # Authority gap H3s come from the mocked authority agent and don't
+    # carry parent_h2_text. Filter to only Step 8.6 H3s.
+    step_8_6_h3s = [
+        h for h in result.heading_structure
+        if h.level == "H3" and h.type == "content" and h.source != "authority_gap_sme"
+    ]
+    if step_8_6_h3s:
+        for h in step_8_6_h3s:
+            assert h.parent_h2_text, (
+                f"Step 8.6 H3 {h.text!r} missing parent_h2_text"
+            )
+            assert 0.0 < h.parent_relevance <= 1.0, (
+                f"Step 8.6 H3 {h.text!r} parent_relevance out of range"
+            )
+
+
+@pytest.mark.asyncio
+async def test_how_to_reorder_keeps_h3_attachments_aligned():
+    """Regression: when intent=how-to, H2 reorder runs BEFORE Step 8.6 so
+    H3 attachments stay aligned with their parents in the final
+    heading_structure."""
+    from modules.brief.pipeline import run_brief
+
+    # Force how-to intent via override; the mock how-to LLM returns
+    # range(20), which is a no-op reorder, but the test still verifies
+    # that the orchestrator wired the reorder path safely.
+    req = BriefRequest(
+        run_id="t7",
+        keyword="how to set up tiktok shop",
+        intent_override="how-to",
+    )
+    with _AllMocks():
+        result = await run_brief(req)
+
+    # For each H3 with a parent_h2_text, the parent text must literally
+    # appear among the H2s in the heading_structure — i.e., we never
+    # emit an H3 whose parent is "stale" from a pre-reorder index.
+    h2_texts = {
+        h.text for h in result.heading_structure
+        if h.level == "H2" and h.type == "content"
+    }
+    for h in result.heading_structure:
+        if h.level == "H3" and h.parent_h2_text:
+            assert h.parent_h2_text in h2_texts, (
+                f"H3 {h.text!r} references nonexistent parent "
+                f"{h.parent_h2_text!r}"
+            )
 
 
 # ----------------------------------------------------------------------
