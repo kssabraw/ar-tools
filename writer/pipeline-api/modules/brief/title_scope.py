@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 MAX_TITLE_LEN = 100
+MAX_H1_LEN = 130
 MAX_SCOPE_LEN = 500
 MAX_RATIONALE_LEN = 300
 
@@ -61,6 +62,7 @@ class TitleScopeOutput:
     """Validated Step 3.5 output."""
 
     title: str
+    h1: str
     scope_statement: str
     title_rationale: str
 
@@ -93,13 +95,25 @@ Process:
    Writer Module. The scope MUST include a "does not cover:" clause
    listing 1-3 adjacent topics this article will explicitly NOT address.
 
-Hard requirements for the title:
+Hard requirements for the title (SEO / meta title — appears in browser
+tab, SERP snippet, and og:title):
 - 50-80 characters preferred; 100 character maximum
 - AVOID generic AI-tells: "Ultimate Guide to", "Complete Guide",
   "Everything You Need to Know", "Definitive Guide", "Master [topic]"
 - Mention the current year ONLY when the topic genuinely warrants it
   (rapidly changing space, version-specific content). Do not reflexively
   stamp a year on every title.
+
+Hard requirements for the h1 (on-page main heading — appears at the
+top of the article body):
+- 130 character maximum (longer leeway than the title)
+- Often similar to the title, but MAY be slightly more descriptive,
+  more conversational, or expand on the title's framing. The H1's job
+  is to confirm to the on-page reader that they landed on the right
+  article — it does NOT have to be SERP-optimized.
+- It is acceptable for h1 == title when the title already reads as a
+  natural on-page heading. Do not force a difference.
+- Same banned-phrase rules as the title.
 
 Hard requirements for the scope statement:
 - 500 character maximum
@@ -109,7 +123,8 @@ Hard requirements for the scope statement:
 
 Output strict JSON only — no preamble, no markdown fences, no commentary:
 {
-  "title": "...",
+  "title": "SEO/meta title (50-80 chars preferred, ≤100 max)",
+  "h1": "On-page H1 heading (≤130 chars; may equal the title or expand it slightly)",
   "scope_statement": "Defines/explains... [in-scope]. Does not cover [adjacent topics].",
   "title_rationale": "Brief explanation (≤300 chars) of why this title and angle"
 }
@@ -177,6 +192,7 @@ def _validate_payload(payload: Any) -> tuple[bool, str, Optional[TitleScopeOutpu
     title = payload.get("title")
     scope = payload.get("scope_statement")
     rationale = payload.get("title_rationale", "")
+    h1_raw = payload.get("h1")
 
     if not isinstance(title, str) or not title.strip():
         return False, "title_missing_or_empty", None
@@ -188,6 +204,21 @@ def _validate_payload(payload: Any) -> tuple[bool, str, Optional[TitleScopeOutpu
     for banned in BANNED_TITLE_PHRASES:
         if banned in title_lower:
             return False, f"title_contains_banned_phrase: {banned!r}", None
+
+    # H1 falls back to title when missing (older payloads / LLM omits the
+    # field). When present, it gets the same banned-phrase check as the
+    # title but a longer length cap (on-page headings can be more
+    # descriptive than SERP titles).
+    if isinstance(h1_raw, str) and h1_raw.strip():
+        h1 = h1_raw.strip()
+        if len(h1) > MAX_H1_LEN:
+            return False, f"h1_too_long ({len(h1)} > {MAX_H1_LEN})", None
+        h1_lower = h1.lower()
+        for banned in BANNED_TITLE_PHRASES:
+            if banned in h1_lower:
+                return False, f"h1_contains_banned_phrase: {banned!r}", None
+    else:
+        h1 = title
 
     if not isinstance(scope, str) or not scope.strip():
         return False, "scope_statement_missing_or_empty", None
@@ -206,6 +237,7 @@ def _validate_payload(payload: Any) -> tuple[bool, str, Optional[TitleScopeOutpu
 
     return True, "ok", TitleScopeOutput(
         title=title,
+        h1=h1,
         scope_statement=scope,
         title_rationale=rationale,
     )

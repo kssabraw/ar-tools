@@ -175,20 +175,27 @@ async def get_run(
             module_version=mo.get("module_version"),
         )
 
-    # Surface the article's generated title from the brief module_output
-    # (populated by Brief Generator v2.0 Step 3.5). Falls back to None when
-    # the brief hasn't completed yet — the keyword is shown in that case.
+    # Surface the article's generated title and H1 from the brief
+    # module_output (populated by Brief Generator v2.0 Step 3.5). Title and
+    # H1 are SEPARATE concepts: title is SEO/meta (browser tab, SERP),
+    # H1 is the on-page main heading (first H1 in article body). Both
+    # fall back to None when the brief hasn't completed yet.
     article_title: Optional[str] = None
+    article_h1: Optional[str] = None
     brief_mo = module_outputs.get("brief")
     if brief_mo and brief_mo.output_payload:
-        candidate = brief_mo.output_payload.get("title")
-        if isinstance(candidate, str) and candidate.strip():
-            article_title = candidate.strip()
+        title_candidate = brief_mo.output_payload.get("title")
+        if isinstance(title_candidate, str) and title_candidate.strip():
+            article_title = title_candidate.strip()
+        h1_candidate = brief_mo.output_payload.get("h1")
+        if isinstance(h1_candidate, str) and h1_candidate.strip():
+            article_h1 = h1_candidate.strip()
 
     return RunDetail(
         id=run["id"],
         keyword=run["keyword"],
         title=article_title,
+        h1=article_h1,
         client_id=run["client_id"],
         status=run["status"],
         sie_cache_hit=run.get("sie_cache_hit"),

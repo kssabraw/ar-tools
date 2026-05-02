@@ -51,6 +51,7 @@ class RunDetail(BaseModel):
     id: UUID
     keyword: str
     title: Optional[str] = None
+    h1: Optional[str] = None
     client_id: UUID
     status: str
     sie_cache_hit: Optional[bool] = None

@@ -285,27 +285,28 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         for t in ((sie.get("terms") or {}).get("required") or [])
         if isinstance(t, dict) and t.get("is_entity")
     ]
-    # Per Writer v1.6 Section 4.5: H1 is brief.title verbatim. Fall back
-    # to the brief's H1 heading_structure entry, then to the raw keyword,
-    # for compatibility with pre-v2.0.0 briefs that didn't emit `title`.
+    # The article's on-page H1 and the SEO/meta title are SEPARATE concepts:
+    # - title = SEO/meta title (browser tab, SERP, og:title). Brief emits this
+    #   in `brief.title`. Surfaced as WriterResponse.title.
+    # - h1 = on-page main heading (first H1 in article body). Brief emits this
+    #   in `brief.h1`. May equal title or be slightly more descriptive.
+    # Legacy fallback chain for the H1: brief.h1 → brief.title → brief
+    # heading_structure[H1] → raw keyword.
     h1_item = next(
         (h for h in heading_structure if isinstance(h, dict) and h.get("level") == "H1"),
         None,
     )
     h1_text = (
-        (brief.get("title") or "").strip()
+        (brief.get("h1") or "").strip()
+        or (brief.get("title") or "").strip()
         or (h1_item.get("text") if h1_item else "")
         or keyword
     )
 
-    # WriterResponse.title is the same string as the H1 — no separate LLM
-    # call. Brief Generator v2.0 emits a properly-cased title field; the
-    # writer's role is to use it verbatim, not to regenerate a competing
-    # title that diverges from the article's H1. Legacy fallback to
-    # `generate_title` only when brief.title is missing AND
-    # heading_structure has no H1.
-    if (brief.get("title") or "").strip() or h1_item:
-        title = h1_text
+    # WriterResponse.title prefers brief.title (the SEO title), falling back
+    # to the H1 chain when brief.title is absent (very old briefs).
+    if (brief.get("title") or "").strip() or (brief.get("h1") or "").strip() or h1_item:
+        title = (brief.get("title") or "").strip() or h1_text
         h1_enrichment = await generate_h1_enrichment(
             keyword=keyword, h1_text=h1_text,
             high_salience_entities=entity_terms,

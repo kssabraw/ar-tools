@@ -62,6 +62,8 @@ export interface RunListResponse {
 export interface RunDetail {
   id: string
   keyword: string
+  title: string | null
+  h1: string | null
   client_id: string
   status: RunStatus
   sie_cache_hit: boolean | null

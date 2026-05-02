@@ -368,6 +368,7 @@ class BriefResponse(BaseModel):
 
     keyword: str
     title: str
+    h1: str = ""
     scope_statement: str
     title_rationale: str = ""
     intent_type: IntentType

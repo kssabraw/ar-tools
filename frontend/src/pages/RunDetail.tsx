@@ -513,6 +513,29 @@ export function RunDetail() {
         )}
       </div>
 
+      {/* Title + H1 (each individually copyable). The title is the SEO/meta
+          title (browser tab, SERP); the H1 is the on-page main heading.
+          Often the same string but they're independently editable concepts. */}
+      {(run.title || run.h1) && (
+        <div style={cardStyle}>
+          <h2 style={sectionTitle}>Title & H1</h2>
+          {run.title && (
+            <CopyableLine
+              label="Title (SEO / meta)"
+              text={run.title}
+              hint="Browser tab, SERP snippet, og:title"
+            />
+          )}
+          {run.h1 && (
+            <CopyableLine
+              label="H1 (on-page heading)"
+              text={run.h1}
+              hint="First H1 in the article body"
+            />
+          )}
+        </div>
+      )}
+
       {/* Article output */}
       {articleMarkdown && (
         <div style={cardStyle}>
@@ -561,6 +584,44 @@ export function RunDetail() {
           <XCircle size={32} color="#dc2626" style={{ marginBottom: 12 }} />
           <div>This run failed. Check the error above, then use Resume to continue from where it stopped.</div>
         </div>
+      )}
+    </div>
+  )
+}
+
+function CopyableLine({ label, text, hint }: { label: string; text: string; hint?: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 4 }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+          {label}
+        </span>
+        <button
+          onClick={() => {
+            navigator.clipboard.writeText(text)
+            setCopied(true)
+            setTimeout(() => setCopied(false), 1500)
+          }}
+          style={ghostBtn}
+        >
+          <Copy size={12} /> {copied ? 'Copied!' : 'Copy'}
+        </button>
+      </div>
+      <div style={{
+        background: '#f8fafc',
+        border: '1px solid #e2e8f0',
+        borderRadius: 6,
+        padding: '8px 12px',
+        fontSize: 14,
+        color: '#0f172a',
+        lineHeight: 1.5,
+        wordBreak: 'break-word',
+      }}>
+        {text}
+      </div>
+      {hint && (
+        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>{hint}</div>
       )}
     </div>
   )

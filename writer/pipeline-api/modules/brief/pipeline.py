@@ -751,6 +751,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     response = BriefResponse(
         keyword=keyword,
         title=title_scope.title,
+        h1=title_scope.h1,
         scope_statement=title_scope.scope_statement,
         title_rationale=title_scope.title_rationale,
         intent_type=intent,
