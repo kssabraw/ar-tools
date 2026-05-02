@@ -393,6 +393,9 @@ export function RunDetail() {
   const articleSections = enrichedArticle?.article as unknown[] | undefined
   const articleTitle = typeof enrichedArticle?.title === 'string' ? enrichedArticle.title : undefined
   const articleMarkdown = articleSections ? sectionsToMarkdown(articleSections, articleTitle) : null
+  const termUsageByZone = run.module_outputs?.writer?.output_payload?.term_usage_by_zone as
+    | Record<string, { related_keywords: any[]; entities: any[]; quadgrams: any[] }>
+    | undefined
 
   return (
     <div style={{ padding: 32, maxWidth: 900 }}>
@@ -579,11 +582,179 @@ export function RunDetail() {
         </div>
       )}
 
+      {/* Per-zone term usage breakdown — what related keywords, entities,
+          and quadgrams actually appear in each zone of the article. */}
+      {termUsageByZone && articleMarkdown && (
+        <TermUsageCard usage={termUsageByZone} />
+      )}
+
       {run.status === 'failed' && !articleMarkdown && (
         <div style={{ ...cardStyle, textAlign: 'center', padding: 48, color: '#64748b' }}>
           <XCircle size={32} color="#dc2626" style={{ marginBottom: 12 }} />
           <div>This run failed. Check the error above, then use Resume to continue from where it stopped.</div>
         </div>
+      )}
+    </div>
+  )
+}
+
+type TermEntry = { term: string; count: number; entity_category?: string }
+type QuadgramEntry = { phrase: string; count: number }
+type ZoneUsage = {
+  related_keywords: TermEntry[]
+  entities: TermEntry[]
+  quadgrams: QuadgramEntry[]
+}
+
+const ZONE_LABEL: Record<string, string> = {
+  title: 'Title',
+  h1: 'H1',
+  subheadings: 'Subheadings',
+  body: 'Body',
+}
+const ZONE_HINT: Record<string, string> = {
+  title: 'SEO/meta title',
+  h1: 'On-page main heading',
+  subheadings: 'All H2 + H3 heading text',
+  body: 'All paragraph prose (citations stripped)',
+}
+const ZONE_ORDER: string[] = ['title', 'h1', 'subheadings', 'body']
+
+function TermUsageCard({ usage }: { usage: Record<string, ZoneUsage> }) {
+  return (
+    <div style={cardStyle}>
+      <div style={{ marginBottom: 16 }}>
+        <h2 style={sectionTitle}>Term Usage by Zone</h2>
+        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>
+          Which SIE-recommended related keywords, named entities, and most-frequent
+          4-word phrases (quadgrams) actually appear in each zone of the article.
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        {ZONE_ORDER.map((zone) => {
+          const z = usage[zone]
+          if (!z) return null
+          const isEmpty =
+            z.related_keywords.length === 0 &&
+            z.entities.length === 0 &&
+            z.quadgrams.length === 0
+          return (
+            <div
+              key={zone}
+              style={{
+                border: '1px solid #e2e8f0',
+                borderRadius: 8,
+                padding: 14,
+                background: '#fafbfc',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+                  {ZONE_LABEL[zone] ?? zone}
+                </span>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>{ZONE_HINT[zone]}</span>
+              </div>
+              {isEmpty ? (
+                <div style={{ fontSize: 12, color: '#94a3b8', fontStyle: 'italic' }}>
+                  No SIE-tracked terms or quadgram signal in this zone.
+                </div>
+              ) : (
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gap: 14,
+                  }}
+                >
+                  <TermColumn
+                    title="Related keywords"
+                    items={z.related_keywords.map((t) => ({
+                      label: t.term,
+                      count: t.count,
+                    }))}
+                  />
+                  <TermColumn
+                    title="Entities"
+                    items={z.entities.map((t) => ({
+                      label: t.term,
+                      count: t.count,
+                      sub: t.entity_category,
+                    }))}
+                  />
+                  <TermColumn
+                    title="Quadgrams"
+                    items={z.quadgrams.map((q) => ({
+                      label: q.phrase,
+                      count: q.count,
+                    }))}
+                  />
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function TermColumn({
+  title,
+  items,
+}: {
+  title: string
+  items: { label: string; count: number; sub?: string }[]
+}) {
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: '#64748b',
+          textTransform: 'uppercase',
+          letterSpacing: 0.4,
+          marginBottom: 6,
+        }}
+      >
+        {title}
+      </div>
+      {items.length === 0 ? (
+        <div style={{ fontSize: 12, color: '#cbd5e1', fontStyle: 'italic' }}>—</div>
+      ) : (
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {items.map((item, idx) => (
+            <li
+              key={`${item.label}-${idx}`}
+              style={{
+                fontSize: 12,
+                color: '#0f172a',
+                display: 'flex',
+                justifyContent: 'space-between',
+                gap: 8,
+                lineHeight: 1.4,
+              }}
+            >
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {item.label}
+                {item.sub && (
+                  <span style={{ marginLeft: 6, fontSize: 10, color: '#94a3b8' }}>{item.sub}</span>
+                )}
+              </span>
+              <span
+                style={{
+                  flexShrink: 0,
+                  fontVariantNumeric: 'tabular-nums',
+                  fontWeight: 600,
+                  color: '#6366f1',
+                }}
+              >
+                {item.count}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )

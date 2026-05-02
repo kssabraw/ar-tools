@@ -158,4 +158,8 @@ class WriterResponse(BaseModel):
     brand_voice_card_used: Optional[BrandVoiceCard] = None
     brand_conflict_log: list[BrandConflictEntry] = []
     client_context_summary: ClientContextSummary = ClientContextSummary()
+    # Per-zone term usage breakdown (related keywords, entities, quadgrams).
+    # Keyed by zone name: "title", "h1", "subheadings", "body". Computed
+    # post-hoc by modules.writer.term_usage; always present.
+    term_usage_by_zone: dict[str, dict] = {}
     metadata: WriterMetadata

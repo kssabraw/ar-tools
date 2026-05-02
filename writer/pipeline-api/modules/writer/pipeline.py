@@ -42,6 +42,7 @@ from .faqs import write_faqs
 from .intro import write_intro
 from .reconciliation import FilteredSIETerms, reconcile_terms, ReconciledTerm
 from .sections import SectionWriteResult, write_h2_group
+from .term_usage import compute_term_usage_by_zone
 from .title import generate_h1_enrichment, generate_title
 
 logger = logging.getLogger(__name__)
@@ -449,6 +450,18 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         generation_time_ms=int((time.perf_counter() - started) * 1000),
     )
 
+    # ---- Per-zone term usage analysis ----
+    sie_required_raw = (sie.get("terms") or {}).get("required") or []
+    sie_exploratory_raw = (sie.get("terms") or {}).get("exploratory") or []
+    article_dicts = [s.model_dump() for s in article]
+    term_usage_by_zone = compute_term_usage_by_zone(
+        title=title,
+        h1=h1_text,
+        article=article_dicts,
+        sie_terms_required=sie_required_raw,
+        sie_terms_exploratory=sie_exploratory_raw,
+    )
+
     return WriterResponse(
         keyword=keyword,
         intent_type=intent_type,
@@ -459,5 +472,6 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         brand_voice_card_used=brand_voice_card,
         brand_conflict_log=brand_conflict_log,
         client_context_summary=client_summary if client_summary.brand_guide_provided or client_summary.icp_provided or client_summary.website_analysis_used else ClientContextSummary(schema_version_effective=schema_effective),
+        term_usage_by_zone=term_usage_by_zone,
         metadata=metadata,
     )
