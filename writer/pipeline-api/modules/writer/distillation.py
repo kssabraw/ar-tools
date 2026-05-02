@@ -44,8 +44,8 @@ You must output a single JSON object matching this exact schema:
 CRITICAL RULES:
 - brand_name is the proper noun the brand uses for itself in the brand guide. Extract it verbatim — do NOT paraphrase or expand acronyms. If the brand guide does not state a name, return "".
 - tone_adjectives and voice_directives come ONLY from the brand guide text. NEVER from website analysis.
-- A term is "banned" only when explicitly prohibited in the brand guide.
-- A term is "discouraged" when the brand guide expresses preference against it without prohibition.
+- A term is "banned" ONLY when the brand guide uses literal prohibitive language about it: "never use", "do not use", "DO NOT", "banned", "prohibited", "must not appear", "absolute no", or equivalent. The bar is HIGH — banned means the writer must error if the term appears.
+- A term is "discouraged" when the brand guide expresses any softer preference against it — "avoid", "we prefer X over Y", "try not to use", "lean away from", "use sparingly", "minimize", or any preference-without-prohibition language. When in doubt between banned and discouraged, classify as discouraged.
 - A term is "preferred" when the brand guide names it as preferred phrasing.
 - audience_summary, audience_personas, audience_verticals, audience_company_size, audience_pain_points, audience_goals all come from the ICP text.
 - audience_personas: extract the named job titles/roles verbatim (e.g. "VP of Growth", "Director of Marketing"). Do not infer titles that aren't in the ICP.

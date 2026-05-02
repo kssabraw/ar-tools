@@ -368,6 +368,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     article.append(intro_section)
 
     # ---- Section writing (sequential per H2 group) ----
+    banned_terms_leaked_in_body: list[str] = []
     for h2_item, h3_items in h2_groups:
         result = await write_h2_group(
             keyword=keyword, intent=intent_type,
@@ -379,6 +380,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             banned_regex=banned_regex,
         )
         article.extend(result.sections)
+        banned_terms_leaked_in_body.extend(result.banned_terms_leaked)
 
     # ---- FAQ writing ----
     faq_header_item = next(
@@ -440,6 +442,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         citations_unused=citation_usage.citations_unused,
         no_citations=no_citations,
         retry_count=0,
+        banned_terms_leaked_in_body=sorted(set(banned_terms_leaked_in_body)),
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),

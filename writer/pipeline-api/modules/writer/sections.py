@@ -71,6 +71,7 @@ INTENT_GUIDANCE = {
 class SectionWriteResult:
     sections: list[ArticleSection]
     citations_used_in_group: set[str] = field(default_factory=set)
+    banned_terms_leaked: list[str] = field(default_factory=list)
 
 
 def _intent_guidance(intent: str) -> str:
@@ -434,11 +435,30 @@ async def write_h2_group(
             last_response = result
             continue
 
+        # Body-content leakage after retry: degrade gracefully instead of
+        # aborting the entire run. The brand voice card's banned_terms list
+        # is sometimes too aggressive (the distillation LLM categorizes
+        # soft preferences like "leverage" as banned, then the section LLM
+        # can't avoid them in marketing/ROI prose). Surface the leakage in
+        # logs + writer metadata so the reviewer can find and fix the term;
+        # headings remain hard-abort (see _scan_headings_for_banned).
+        leaked_terms: list[str] = []
         if body_match and attempt == 1:
-            raise BannedTermLeakage(
-                term=body_match,
-                location=f"H2 order {h2_item.get('order')} body (after retry)",
-                snippet="",
+            all_body_matches: list[str] = []
+            for s in sections_raw:
+                if not isinstance(s, dict):
+                    continue
+                body = s.get("body") or ""
+                all_body_matches.extend(find_banned(body, banned_regex))
+            leaked_terms = sorted(set(all_body_matches))
+            logger.warning(
+                "writer.section.banned_term_leakage_after_retry",
+                extra={
+                    "h2_order": h2_item.get("order"),
+                    "h2_text": (h2_item.get("text") or "")[:120],
+                    "leaked_terms": leaked_terms[:20],
+                    "leaked_count": len(all_body_matches),
+                },
             )
 
         # Strip invented citation markers — any {{cit_NNN}} that doesn't
@@ -458,7 +478,9 @@ async def write_h2_group(
                     h2_order=h2_item.get("order"),
                 )
 
-        return _build_result(h2_item, h3_items, sections_raw, section_budgets)
+        result_obj = _build_result(h2_item, h3_items, sections_raw, section_budgets)
+        result_obj.banned_terms_leaked = leaked_terms
+        return result_obj
 
     return _placeholder_result(
         h2_item, h3_items, section_budgets, reason="loop_exhausted",

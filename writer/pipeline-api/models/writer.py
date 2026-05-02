@@ -137,6 +137,12 @@ class WriterMetadata(BaseModel):
     citations_unused: int = 0
     no_citations: bool = False
     retry_count: int = 0
+    # Banned terms that leaked into body content after the section LLM's
+    # one-retry attempt. The run does NOT abort on body leakage (the
+    # distillation LLM occasionally over-classifies common words like
+    # "leverage" as banned). Headings remain hard-abort. Reviewers can
+    # find and fix these terms during article QA.
+    banned_terms_leaked_in_body: list[str] = []
     schema_version: SchemaVersion = "1.5"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0
