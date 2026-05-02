@@ -592,12 +592,23 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     contributing_region_ids = {
         c.region_id for c in selected_h2s if c.region_id is not None
     }
+    # Relevance-gate rejects are eligible for silo singletons (PRD §5 Step
+    # 12). These are headings whose cosine to the title fell below the
+    # relevance floor, so they were excluded from `eligible_pool` and
+    # never reached region detection — but they often represent adjacent
+    # topics that are valid silos.
+    relevance_rejects = [
+        c for c in candidate_pool
+        if c.discard_reason == "below_relevance_floor"
+    ]
+
     silo_id_result = identify_silos(
         regions=scored_regions,
         candidate_pool=eligible_pool,
         contributing_region_ids=contributing_region_ids,
         scope_rejects=scope_result.rejected,
         h3_scope_rejects=h3_scope_result.rejected,
+        relevance_rejects=relevance_rejects,
     )
     viability_result = await verify_silo_viability(
         silo_id_result.candidates,

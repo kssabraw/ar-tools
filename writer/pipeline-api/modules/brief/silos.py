@@ -237,6 +237,7 @@ def identify_silos(
     contributing_region_ids: set[str],
     scope_rejects: list[Candidate],
     h3_scope_rejects: Optional[list[Candidate]] = None,
+    relevance_rejects: Optional[list[Candidate]] = None,
     min_coherence: float = MIN_CLUSTER_COHERENCE,
     review_threshold: float = REVIEW_RECOMMENDED_MAX,
     max_candidates: int = MAX_SILO_CANDIDATES,
@@ -420,6 +421,43 @@ def identify_silos(
             review_recommended=False,
             recommended_intent=recommended_intent,
             routed_from="scope_verification_h3",
+            source_headings=[_make_source_heading(cand)],
+            discard_reason_breakdown=_discard_reason_breakdown([cand]),
+            search_demand_score=round(demand, 4),
+            estimated_intent=recommended_intent,
+        )
+        silos_with_score.append((SINGLETON_COHERENCE, silo))
+
+    # ---- Step 5.1 relevance-floor singletons ----
+    # Headings discarded as below_relevance_floor are below the title's
+    # relevance floor (so excluded from the parent article) but often
+    # represent adjacent topics. Without this path, runs whose SERP is
+    # dominated by restatement clusters produce zero silos every time —
+    # observed empirically on "what is a tiktok shop" and similar
+    # broad-overview keywords. Search-demand floor + Step 12.4 viability
+    # LLM keep noise out of the surfaced set.
+    for cand in (relevance_rejects or []):
+        if cand.discard_reason != "below_relevance_floor":
+            continue
+        recommended_intent = _infer_intent([cand.text])
+        demand = _search_demand_score([cand])
+        if demand < min_search_demand:
+            rejected_demand += 1
+            logger.info(
+                "brief.silo.relevance_singleton_low_search_demand",
+                extra={
+                    "heading": cand.text,
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                },
+            )
+            continue
+        silo = SiloCandidate(
+            suggested_keyword=cand.text,
+            cluster_coherence_score=SINGLETON_COHERENCE,
+            review_recommended=False,
+            recommended_intent=recommended_intent,
+            routed_from="relevance_floor_reject",
             source_headings=[_make_source_heading(cand)],
             discard_reason_breakdown=_discard_reason_breakdown([cand]),
             search_demand_score=round(demand, 4),

@@ -87,6 +87,12 @@ SiloRoutedFrom = Literal[
     "scope_verification",
     # Step 8.5b — Authority Gap H3 rejected by H3 scope verification (PRD v2.0.3)
     "scope_verification_h3",
+    # Step 5.1 relevance gate — heading discarded as below_relevance_floor.
+    # These candidates are below the title's relevance floor (so excluded
+    # from the parent article) but may still represent adjacent topics
+    # worth surfacing as standalone silos (filtered by search demand + the
+    # Step 12.4 viability LLM check before reaching the user).
+    "relevance_floor_reject",
 ]
 
 
