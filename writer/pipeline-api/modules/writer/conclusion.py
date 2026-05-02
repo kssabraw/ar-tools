@@ -70,6 +70,13 @@ async def write_conclusion(
         f"\nSOFT_CTA_DIRECTION: {soft_cta}",
     ]
     if brand_voice_card:
+        if brand_voice_card.brand_name:
+            user_parts.append(f"\nBRAND_NAME: {brand_voice_card.brand_name}")
+            user_parts.append(
+                "  The conclusion is the right place for ONE brand mention if it fits "
+                "the closing argument — anchored to evidence or a specific service, "
+                "never as a hard sales CTA. Skip if no natural anchor exists."
+            )
         if brand_voice_card.tone_adjectives:
             user_parts.append(f"\nTONE: {', '.join(brand_voice_card.tone_adjectives)}")
         if brand_voice_card.voice_directives:
@@ -77,7 +84,10 @@ async def write_conclusion(
         if brand_voice_card.audience_summary:
             user_parts.append(f"\nAUDIENCE: {brand_voice_card.audience_summary}")
         if brand_voice_card.client_services or brand_voice_card.client_locations:
-            user_parts.append("\nCLIENT_CONTEXT (reference naturally if it fits; never force):")
+            user_parts.append(
+                "\nCLIENT_CONTEXT (reference one service or location if it naturally extends "
+                "the closing point):"
+            )
             if brand_voice_card.client_services:
                 user_parts.append(f"  services: {', '.join(brand_voice_card.client_services[:5])}")
             if brand_voice_card.client_locations:

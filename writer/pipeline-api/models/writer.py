@@ -54,6 +54,7 @@ class ClientContactInfo(BaseModel):
 
 
 class BrandVoiceCard(BaseModel):
+    brand_name: str = ""
     tone_adjectives: list[str] = []
     voice_directives: list[str] = []
     audience_summary: str = ""

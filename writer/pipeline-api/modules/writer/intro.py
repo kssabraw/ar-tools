@@ -82,6 +82,14 @@ def _build_intro_user_prompt(
         for idx, h2 in enumerate(h2_list[: PREVIEW_H2_LIMIT * 2], start=1):
             parts.append(f"  {idx}. {h2}")
     if brand_voice_card:
+        if brand_voice_card.brand_name:
+            parts.append(f"\nBRAND_NAME: {brand_voice_card.brand_name}")
+            parts.append(
+                "  You may mention the brand at most ONCE in the intro, and only when "
+                "anchored to evidence (e.g., 'Ubiquitous campaign data shows ...'). Never "
+                "as standalone promotion. Skipping the mention is acceptable when the "
+                "topic is broad or when no concrete anchor fits naturally."
+            )
         if brand_voice_card.tone_adjectives:
             parts.append(f"\nTONE: {', '.join(brand_voice_card.tone_adjectives)}")
         if brand_voice_card.voice_directives:

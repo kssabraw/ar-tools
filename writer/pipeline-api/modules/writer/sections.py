@@ -147,6 +147,8 @@ def _build_section_user_prompt(
 
     if brand_voice_card:
         parts.append("\nBRAND_VOICE:")
+        if brand_voice_card.brand_name:
+            parts.append(f"  brand_name: {brand_voice_card.brand_name}")
         if brand_voice_card.tone_adjectives:
             parts.append(f"  tone: {', '.join(brand_voice_card.tone_adjectives)}")
         if brand_voice_card.voice_directives:
@@ -155,10 +157,27 @@ def _build_section_user_prompt(
             parts.append(f"\nAUDIENCE: {brand_voice_card.audience_summary}")
         if brand_voice_card.audience_pain_points:
             parts.append(f"  pain points: {', '.join(brand_voice_card.audience_pain_points[:3])}")
-        if brand_voice_card.client_services or brand_voice_card.client_locations:
-            parts.append("\nCLIENT_CONTEXT (reference naturally where relevant; do not force):")
+        if (
+            brand_voice_card.brand_name
+            or brand_voice_card.client_services
+            or brand_voice_card.client_locations
+        ):
+            parts.append(
+                "\nCLIENT_CONTEXT (anchor the section to this brand where it adds credibility):"
+            )
+            if brand_voice_card.brand_name:
+                parts.append(
+                    f"  Across the article, mention {brand_voice_card.brand_name} 1–2 times "
+                    f"total — anchored to evidence (data, methodology, or a specific service), "
+                    f"never as standalone promotion. In any single section you may include AT "
+                    f"MOST 1 mention; if the topic is far from the brand's offering, omit the "
+                    f"mention in this section and let another carry it."
+                )
             if brand_voice_card.client_services:
-                parts.append(f"  services: {', '.join(brand_voice_card.client_services[:8])}")
+                parts.append(
+                    f"  services (reference one where it naturally extends a section's argument): "
+                    f"{', '.join(brand_voice_card.client_services[:8])}"
+                )
             if brand_voice_card.client_locations:
                 parts.append(f"  locations: {', '.join(brand_voice_card.client_locations[:8])}")
 
