@@ -44,6 +44,7 @@ export interface Run {
   client_id: string
   client_name: string
   keyword: string
+  title: string | null
   status: RunStatus
   sie_cache_hit: boolean | null
   total_cost_usd: number | null

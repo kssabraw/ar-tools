@@ -76,13 +76,36 @@ async def list_runs(
     offset = (page - 1) * page_size
     result = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
 
+    run_rows = result.data or []
+
+    # Bulk-fetch the brief module_output's title for every run on this page
+    # so the list view can show the actual generated article title alongside
+    # the user-typed keyword. Single round-trip, scoped to the current page.
+    titles_by_run_id: dict[str, Optional[str]] = {}
+    if run_rows:
+        run_ids = [r["id"] for r in run_rows]
+        brief_rows = (
+            supabase.table("module_outputs")
+            .select("run_id, output_payload")
+            .in_("run_id", run_ids)
+            .eq("module", "brief")
+            .eq("status", "complete")
+            .execute()
+        )
+        for br in brief_rows.data or []:
+            payload = br.get("output_payload") or {}
+            title = payload.get("title")
+            if isinstance(title, str) and title.strip():
+                titles_by_run_id[br["run_id"]] = title.strip()
+
     rows = []
-    for r in result.data or []:
+    for r in run_rows:
         client_name = (r.get("clients") or {}).get("name", "")
         rows.append(
             RunListItem(
                 id=r["id"],
                 keyword=r["keyword"],
+                title=titles_by_run_id.get(r["id"]),
                 client_id=r["client_id"],
                 client_name=client_name,
                 status=r["status"],
@@ -152,9 +175,20 @@ async def get_run(
             module_version=mo.get("module_version"),
         )
 
+    # Surface the article's generated title from the brief module_output
+    # (populated by Brief Generator v2.0 Step 3.5). Falls back to None when
+    # the brief hasn't completed yet — the keyword is shown in that case.
+    article_title: Optional[str] = None
+    brief_mo = module_outputs.get("brief")
+    if brief_mo and brief_mo.output_payload:
+        candidate = brief_mo.output_payload.get("title")
+        if isinstance(candidate, str) and candidate.strip():
+            article_title = candidate.strip()
+
     return RunDetail(
         id=run["id"],
         keyword=run["keyword"],
+        title=article_title,
         client_id=run["client_id"],
         status=run["status"],
         sie_cache_hit=run.get("sie_cache_hit"),

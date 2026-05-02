@@ -87,12 +87,15 @@ function ArticleCard({ run }: { run: any }) {
   return (
     <div style={cardStyle}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-            <FileText size={15} color="#6366f1" />
-            <span style={{ fontWeight: 600, fontSize: 15, color: '#0f172a' }}>{run.keyword}</span>
+            <FileText size={15} color="#6366f1" style={{ flexShrink: 0 }} />
+            <span style={{ fontWeight: 600, fontSize: 15, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {run.title ?? run.keyword}
+            </span>
           </div>
           <div style={{ fontSize: 12, color: '#94a3b8' }}>
+            {run.title && <>“{run.keyword}” · </>}
             {run.client_name} · {new Date(run.completed_at ?? run.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
             {run.total_cost_usd != null && ` · $${Number(run.total_cost_usd).toFixed(4)}`}
           </div>

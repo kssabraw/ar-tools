@@ -19,6 +19,7 @@ class RunCreateRequest(BaseModel):
 class RunListItem(BaseModel):
     id: UUID
     keyword: str
+    title: Optional[str] = None
     client_id: UUID
     client_name: str
     status: str
@@ -49,6 +50,7 @@ class ClientContextSnapshot(BaseModel):
 class RunDetail(BaseModel):
     id: UUID
     keyword: str
+    title: Optional[str] = None
     client_id: UUID
     status: str
     sie_cache_hit: Optional[bool] = None

@@ -404,8 +404,13 @@ export function RunDetail() {
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 24 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 4px' }}>{run.keyword}</h1>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 4px' }}>
+            {run.title ?? run.keyword}
+          </h1>
+          {run.title && (
+            <div style={{ fontSize: 13, color: '#94a3b8', marginBottom: 4 }}>“{run.keyword}”</div>
+          )}
           <div style={{ fontSize: 13, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
             {run.started_at
               ? `Started ${new Date(run.started_at).toLocaleString()}`

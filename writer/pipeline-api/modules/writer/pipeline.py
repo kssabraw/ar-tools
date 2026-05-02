@@ -298,17 +298,33 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         or keyword
     )
 
-    title_task = asyncio.create_task(generate_title(
-        keyword=keyword, intent_type=intent_type,
-        required_terms=required_terms_list,
-        entities=[e["term"] for e in entity_terms],
-    ))
-    h1_task = asyncio.create_task(generate_h1_enrichment(
-        keyword=keyword, h1_text=h1_text,
-        high_salience_entities=entity_terms,
-    ))
-    title = await title_task
-    h1_enrichment = await h1_task
+    # WriterResponse.title is the same string as the H1 — no separate LLM
+    # call. Brief Generator v2.0 emits a properly-cased title field; the
+    # writer's role is to use it verbatim, not to regenerate a competing
+    # title that diverges from the article's H1. Legacy fallback to
+    # `generate_title` only when brief.title is missing AND
+    # heading_structure has no H1.
+    if (brief.get("title") or "").strip() or h1_item:
+        title = h1_text
+        h1_enrichment = await generate_h1_enrichment(
+            keyword=keyword, h1_text=h1_text,
+            high_salience_entities=entity_terms,
+        )
+    else:
+        title_task = asyncio.create_task(generate_title(
+            keyword=keyword, intent_type=intent_type,
+            required_terms=required_terms_list,
+            entities=[e["term"] for e in entity_terms],
+        ))
+        h1_task = asyncio.create_task(generate_h1_enrichment(
+            keyword=keyword, h1_text=h1_text,
+            high_salience_entities=entity_terms,
+        ))
+        title = await title_task
+        h1_enrichment = await h1_task
+        # Promote the LLM-generated title to the H1 too so the article's
+        # H1 stays consistent with WriterResponse.title.
+        h1_text = title
 
     # Heading-level banned check on title and H1
     if banned_regex:
