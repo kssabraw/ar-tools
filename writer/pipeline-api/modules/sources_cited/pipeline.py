@@ -27,6 +27,7 @@ from models.sources_cited import (
 
 from .entries import build_sources_cited_sections
 from .markers import (
+    MARKER_RE,
     all_marker_ids_in_body,
     find_markers_in_headings,
     is_valid_citation_id,
@@ -123,6 +124,36 @@ def _conclusion_order(article: list[dict]) -> int:
     return max((s.get("order", 0) for s in article if isinstance(s, dict)), default=0)
 
 
+def _strip_marker_ids_from_article(article: list[dict], invalid_ids: set[str]) -> None:
+    """Remove every {{cit_NNN}} marker whose id is in `invalid_ids` from
+    every section body in `article`. Mutates in place. Cleans up
+    surrounding whitespace and orphaned punctuation so the prose remains
+    readable after removal."""
+    if not invalid_ids:
+        return
+
+    def _sub(match: re.Match) -> str:
+        return "" if match.group(1) in invalid_ids else match.group(0)
+
+    for s in article:
+        if not isinstance(s, dict):
+            continue
+        body = s.get("body")
+        if not isinstance(body, str) or not body:
+            continue
+        cleaned = MARKER_RE.sub(_sub, body)
+        if cleaned != body:
+            cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+            cleaned = re.sub(r" +([.,;:!?])", r"\1", cleaned)
+            s["body"] = cleaned
+
+        # Also clean any per-section citations_referenced list so the
+        # section's own bookkeeping doesn't keep dangling IDs.
+        listed = s.get("citations_referenced")
+        if isinstance(listed, list):
+            s["citations_referenced"] = [c for c in listed if c not in invalid_ids]
+
+
 def _section_marker_reconciliation_warnings(article: list[dict]) -> list[str]:
     """Per-section: if `citations_referenced` lists an ID not actually
     present as a marker in that section's body, flag a warning string."""
@@ -165,21 +196,38 @@ def run_sources_cited(req: SourcesCitedRequest) -> SourcesCitedResponse:
                 f"citation_id '{cid}' does not match ^cit_[0-9]+$",
             )
 
-    # Marker resolvability: every body marker must exist in research.citations
-    unresolvable = sorted(body_marker_ids - set(citations_by_id.keys()))
-    if unresolvable:
-        raise SourcesCitedError(
-            "unresolvable_markers",
-            f"Markers reference unknown citation_ids: {unresolvable}",
+    # Marker resolvability: every body marker SHOULD exist in research.citations.
+    # Historically we aborted with HTTP 422 when an unresolvable marker showed
+    # up; that was too strict — a Writer that hallucinates IDs (e.g. cit_001..
+    # cit_009 mimicking the prompt example) now blocks every Resume of the
+    # affected run. Strip unknown markers in place, log loudly, and proceed.
+    unresolvable_markers_stripped: list[str] = sorted(
+        body_marker_ids - set(citations_by_id.keys())
+    )
+    if unresolvable_markers_stripped:
+        logger.warning(
+            "sources_cited.unresolvable_markers_stripped",
+            extra={
+                "stripped_ids": unresolvable_markers_stripped,
+                "stripped_count": len(unresolvable_markers_stripped),
+                "valid_id_count": len(citations_by_id),
+            },
         )
+        _strip_marker_ids_from_article(article, set(unresolvable_markers_stripped))
+        body_marker_ids = all_marker_ids_in_body(article)
 
-    # Integrity check: every body marker must appear in writer's citation_usage
+    # Integrity check: every body marker SHOULD appear in writer's citation_usage.
+    # Same reasoning — log + proceed rather than abort. The marker references a
+    # real citation; the writer just didn't record it in citation_usage.
     usage_ids = _all_citation_ids_in_usage(writer)
     integrity_violations = sorted(body_marker_ids - usage_ids)
     if integrity_violations:
-        raise SourcesCitedError(
-            "writer_integrity_violation",
-            f"Markers in prose missing from citation_usage: {integrity_violations}",
+        logger.warning(
+            "sources_cited.writer_integrity_violation",
+            extra={
+                "missing_from_usage": integrity_violations,
+                "violation_count": len(integrity_violations),
+            },
         )
 
     # Step 1: discover + number citations by first appearance
@@ -220,6 +268,8 @@ def run_sources_cited(req: SourcesCitedRequest) -> SourcesCitedResponse:
         marker_reconciliation_warnings=warnings,
         entries_with_missing_publication=flags.get("entries_with_missing_publication", []),
         entries_with_placeholder=flags.get("entries_with_placeholder", []),
+        unresolvable_markers_stripped=unresolvable_markers_stripped,
+        integrity_violations=integrity_violations,
         writer_schema_version=(writer.get("metadata") or {}).get("schema_version", "1.5"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),
     )

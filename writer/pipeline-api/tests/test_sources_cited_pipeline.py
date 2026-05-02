@@ -122,27 +122,35 @@ def test_aborts_on_marker_in_heading():
     assert exc_info.value.code == "marker_in_heading"
 
 
-def test_aborts_on_unresolvable_marker():
-    from modules.sources_cited.pipeline import SourcesCitedError, run_sources_cited
+def test_strips_unresolvable_markers_and_continues():
+    """Hallucinated citation_ids that don't exist in research.citations
+    are stripped from the body (not aborted on). The strip is recorded
+    in sources_cited_metadata.unresolvable_markers_stripped."""
+    from modules.sources_cited.pipeline import run_sources_cited
 
     bad_writer = dict(WRITER_OUTPUT)
-    bad_writer["article"] = list(WRITER_OUTPUT["article"])
-    bad_writer["article"][1] = dict(bad_writer["article"][1])
-    bad_writer["article"][1]["body"] = "Some claim.{{cit_42}}"
-    bad_writer["citation_usage"] = dict(WRITER_OUTPUT["citation_usage"])
-    bad_writer["citation_usage"]["usage"] = list(WRITER_OUTPUT["citation_usage"]["usage"]) + [
-        {"citation_id": "cit_42", "used": True, "sections_used_in": [2], "marker_placed": True}
-    ]
+    bad_writer["article"] = [dict(s) for s in WRITER_OUTPUT["article"]]
+    # cit_042 is NOT in RESEARCH_OUTPUT.citations — simulates the writer
+    # hallucinating a sequential ID like cit_001..cit_009.
+    bad_writer["article"][1]["body"] = (
+        bad_writer["article"][1]["body"] + " Hallucinated.{{cit_042}}"
+    )
 
     req = SourcesCitedRequest(run_id="t", writer_output=bad_writer, research_output=RESEARCH_OUTPUT)
-    with pytest.raises(SourcesCitedError) as exc_info:
-        run_sources_cited(req)
-    assert exc_info.value.code == "unresolvable_markers"
+    result = run_sources_cited(req)
+
+    # The run completed (no abort)
+    assert result.sources_cited_metadata.unresolvable_markers_stripped == ["cit_042"]
+    # The marker is gone from the rendered body
+    rendered_body = result.enriched_article["article"][1]["body"]
+    assert "{{cit_042}}" not in rendered_body
+    assert "cit_042" not in result.sources_cited_metadata.citation_number_map
 
 
-def test_aborts_on_writer_integrity_violation():
-    """Marker in prose with citation_id not present in citation_usage."""
-    from modules.sources_cited.pipeline import SourcesCitedError, run_sources_cited
+def test_logs_writer_integrity_violation_and_continues():
+    """Marker in prose with citation_id not present in citation_usage —
+    logged as a structured warning + reported in metadata, run completes."""
+    from modules.sources_cited.pipeline import run_sources_cited
 
     bad_writer = dict(WRITER_OUTPUT)
     bad_writer["citation_usage"] = dict(WRITER_OUTPUT["citation_usage"])
@@ -152,9 +160,11 @@ def test_aborts_on_writer_integrity_violation():
         if u["citation_id"] != "cit_003"
     ]
     req = SourcesCitedRequest(run_id="t", writer_output=bad_writer, research_output=RESEARCH_OUTPUT)
-    with pytest.raises(SourcesCitedError) as exc_info:
-        run_sources_cited(req)
-    assert exc_info.value.code == "writer_integrity_violation"
+    result = run_sources_cited(req)
+
+    assert "cit_003" in result.sources_cited_metadata.integrity_violations
+    # cit_003 still gets numbered and rendered (it's a real citation)
+    assert "cit_003" in result.sources_cited_metadata.citation_number_map
 
 
 def test_aborts_on_keyword_mismatch():
