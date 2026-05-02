@@ -107,12 +107,13 @@ tab, SERP snippet, and og:title):
 Hard requirements for the h1 (on-page main heading — appears at the
 top of the article body):
 - 130 character maximum (longer leeway than the title)
-- Often similar to the title, but MAY be slightly more descriptive,
-  more conversational, or expand on the title's framing. The H1's job
-  is to confirm to the on-page reader that they landed on the right
-  article — it does NOT have to be SERP-optimized.
-- It is acceptable for h1 == title when the title already reads as a
-  natural on-page heading. Do not force a difference.
+- MUST be worded differently from the title — h1 == title is never
+  acceptable. The title and H1 zone will target different related
+  keywords and entities, so the phrasing must differ.
+- The H1's job is to confirm to the on-page reader that they landed on
+  the right article. Make it more descriptive, more conversational, or
+  expand on the title's framing — but it MUST NOT be a copy of the title.
+- It does NOT have to be SERP-optimized.
 - Same banned-phrase rules as the title.
 
 Hard requirements for the scope statement:
@@ -124,7 +125,7 @@ Hard requirements for the scope statement:
 Output strict JSON only — no preamble, no markdown fences, no commentary:
 {
   "title": "SEO/meta title (50-80 chars preferred, ≤100 max)",
-  "h1": "On-page H1 heading (≤130 chars; may equal the title or expand it slightly)",
+  "h1": "On-page H1 heading (≤130 chars; MUST differ from title — more descriptive or conversational)",
   "scope_statement": "Defines/explains... [in-scope]. Does not cover [adjacent topics].",
   "title_rationale": "Brief explanation (≤300 chars) of why this title and angle"
 }
@@ -134,10 +135,11 @@ Output strict JSON only — no preamble, no markdown fences, no commentary:
 STRICTER_RETRY_PROMPT_SUFFIX = """\
 
 CRITICAL: Your previous response was rejected for a validation failure.
-Re-read the hard requirements. Output ONLY the JSON object with the three
+Re-read the hard requirements. Output ONLY the JSON object with the four
 required fields, no surrounding text. The scope_statement MUST contain
 the literal phrase "does not cover". The title MUST be ≤100 characters
-and MUST NOT contain banned phrases.
+and MUST NOT contain banned phrases. The h1 MUST be worded differently
+from the title — identical title and h1 is never acceptable.
 """
 
 
@@ -205,20 +207,17 @@ def _validate_payload(payload: Any) -> tuple[bool, str, Optional[TitleScopeOutpu
         if banned in title_lower:
             return False, f"title_contains_banned_phrase: {banned!r}", None
 
-    # H1 falls back to title when missing (older payloads / LLM omits the
-    # field). When present, it gets the same banned-phrase check as the
-    # title but a longer length cap (on-page headings can be more
-    # descriptive than SERP titles).
-    if isinstance(h1_raw, str) and h1_raw.strip():
-        h1 = h1_raw.strip()
-        if len(h1) > MAX_H1_LEN:
-            return False, f"h1_too_long ({len(h1)} > {MAX_H1_LEN})", None
-        h1_lower = h1.lower()
-        for banned in BANNED_TITLE_PHRASES:
-            if banned in h1_lower:
-                return False, f"h1_contains_banned_phrase: {banned!r}", None
-    else:
-        h1 = title
+    if not isinstance(h1_raw, str) or not h1_raw.strip():
+        return False, "h1_missing_or_empty", None
+    h1 = h1_raw.strip()
+    if len(h1) > MAX_H1_LEN:
+        return False, f"h1_too_long ({len(h1)} > {MAX_H1_LEN})", None
+    h1_lower = h1.lower()
+    for banned in BANNED_TITLE_PHRASES:
+        if banned in h1_lower:
+            return False, f"h1_contains_banned_phrase: {banned!r}", None
+    if h1.lower() == title.lower():
+        return False, "h1_identical_to_title", None
 
     if not isinstance(scope, str) or not scope.strip():
         return False, "scope_statement_missing_or_empty", None
