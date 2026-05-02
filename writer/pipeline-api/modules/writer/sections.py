@@ -127,6 +127,7 @@ def _build_section_user_prompt(
     brand_voice_card: Optional[BrandVoiceCard],
     is_authority_gap_section: bool,
     retry_term: Optional[str] = None,
+    citations_were_fallback: bool = False,
 ) -> str:
     parts: list[str] = []
     parts.append(f"KEYWORD: {keyword}")
@@ -176,7 +177,16 @@ def _build_section_user_prompt(
 
     if citations:
         valid_ids = sorted({c.get("citation_id", "") for c in citations if c.get("citation_id")})
-        parts.append("\nCITATIONS (use {{cit_id}} markers after sentences containing these specific facts):")
+        if citations_were_fallback:
+            parts.append(
+                "\nCITATIONS (general references for this article — cite where any "
+                "actually fits a factual claim in your section; otherwise omit the marker):"
+            )
+        else:
+            parts.append(
+                "\nCITATIONS (use {{cit_id}} markers after sentences containing these "
+                "specific facts):"
+            )
         for c in citations:
             cid = c.get("citation_id", "")
             url = c.get("url", "")
@@ -277,7 +287,37 @@ async def write_h2_group(
     all_ids = list(dict.fromkeys(h2_citation_ids + h3_citation_ids))
     resolved_citations = _resolve_citations(all_ids, citations)
 
+    # Fallback: if Research didn't attach any citation_ids to this H2 group,
+    # pass the full research.citations pool so the writer can still cite
+    # general sources where they fit. Without this, an entire H2 group
+    # writes citation-free prose and the article ships with an empty
+    # Sources Cited section.
+    citations_were_fallback = False
+    if not resolved_citations and citations:
+        resolved_citations = list(citations)[:8]  # cap at 8 to keep prompt size bounded
+        citations_were_fallback = True
+        logger.info(
+            "writer.section.citations_fallback_to_global_pool",
+            extra={
+                "h2_order": h2_item.get("order"),
+                "h2_text": (h2_item.get("text") or "")[:120],
+                "fallback_count": len(resolved_citations),
+            },
+        )
+
     is_auth_gap = any(h3.get("source") == "authority_gap_sme" for h3 in h3_items)
+
+    logger.info(
+        "writer.section.citations_attached",
+        extra={
+            "h2_order": h2_item.get("order"),
+            "h2_text": (h2_item.get("text") or "")[:120],
+            "h3_count": len(h3_items),
+            "citation_ids_from_brief": len(all_ids),
+            "citations_resolved": len(resolved_citations),
+            "fallback_used": citations_were_fallback,
+        },
+    )
 
     retry_term: Optional[str] = None
     last_response: Optional[dict] = None
@@ -297,6 +337,7 @@ async def write_h2_group(
             brand_voice_card=brand_voice_card,
             is_authority_gap_section=is_auth_gap,
             retry_term=retry_term,
+            citations_were_fallback=citations_were_fallback,
         )
         try:
             # 8000 tokens accommodates an H2 + up to ~6 H3 children, each with

@@ -103,7 +103,19 @@ def build_sources_cited_sections(
     """Build the two sections to append to the article (header + body).
 
     Returns (sections, flags_by_kind).
+
+    When `ordered_used_citations` is empty, returns ([], empty_flags) —
+    rendering an empty `<ol class="sources-cited"></ol>` with no entries
+    is worse than omitting the section entirely. The article body still
+    publishes; it just lacks a Sources Cited section because no inline
+    markers were placed.
     """
+    if not ordered_used_citations:
+        return (
+            [],
+            {"entries_with_missing_publication": [], "entries_with_placeholder": []},
+        )
+
     body_html, flags = build_sources_cited_html(ordered_used_citations, citations_by_id)
 
     header = {
