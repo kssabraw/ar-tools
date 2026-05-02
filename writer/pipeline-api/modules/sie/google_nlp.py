@@ -3,7 +3,7 @@
 Uses the REST API with an API key (GOOGLE_NLP_API_KEY) via httpx — no
 service account JSON required.
 
-Per SIE PRD Module 11 Pass 1: extract entities with salience >= 0.40, types
+Per SIE PRD Module 11 Pass 1: extract entities with salience >= 0.15, types
 PERSON / LOCATION / ORGANIZATION / EVENT / WORK_OF_ART / CONSUMER_GOOD / OTHER.
 
 Google's analyzeEntities endpoint accepts up to 100,000 bytes per call. We
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 _NLP_URL = "https://language.googleapis.com/v1/documents:analyzeEntities"
 GOOGLE_NLP_MAX_BYTES = 99_000
-SALIENCE_THRESHOLD = 0.40
+SALIENCE_THRESHOLD = 0.15
 ALLOWED_TYPES = {
     "PERSON", "LOCATION", "ORGANIZATION", "EVENT",
     "WORK_OF_ART", "CONSUMER_GOOD", "OTHER",
