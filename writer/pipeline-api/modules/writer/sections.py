@@ -175,6 +175,7 @@ def _build_section_user_prompt(
         parts.append(f"\nRETRY: A previous attempt included the forbidden term '{retry_term}'. Rewrite without it.")
 
     if citations:
+        valid_ids = sorted({c.get("citation_id", "") for c in citations if c.get("citation_id")})
         parts.append("\nCITATIONS (use {{cit_id}} markers after sentences containing these specific facts):")
         for c in citations:
             cid = c.get("citation_id", "")
@@ -189,16 +190,66 @@ def _build_section_user_prompt(
                     )
                 else:
                     parts.append(f"    fact: {claim.get('claim_text', '')}")
+        parts.append(
+            f"\nVALID_CITATION_IDS: {', '.join(valid_ids)}. "
+            f"You may ONLY use these exact IDs in {{{{cit_id}}}} markers. "
+            f"NEVER invent IDs (do not write {{{{cit_001}}}}, {{{{cit_002}}}}, etc. unless they appear above)."
+        )
+    else:
+        parts.append(
+            "\nCITATIONS: none available for this section. "
+            "DO NOT place any {{cit_id}} markers in the body. "
+            "Write the section as factual prose without inline citations."
+        )
 
     parts.append(
-        "\nWrite the section now. Output the JSON object with the sections array. "
-        "Use {{cit_id}} markers after sentences carrying cited facts."
+        "\nWrite the section now. Output the JSON object with the sections array."
     )
     return "\n".join(parts)
 
 
 def _extract_marker_ids(body: str) -> list[str]:
     return re.findall(r"\{\{(cit_\d+)\}\}", body)
+
+
+_MARKER_RE = re.compile(r"\{\{(cit_\d+)\}\}")
+
+
+def _strip_invalid_markers(
+    body: str,
+    *,
+    valid_ids: set[str],
+    h2_order: Optional[int] = None,
+) -> str:
+    """Remove any {{cit_NNN}} marker whose id is not in `valid_ids`.
+
+    Also collapses any extra whitespace introduced by the removal so the
+    surrounding sentence remains clean (e.g., "fact.{{cit_999}} Next" →
+    "fact. Next" rather than "fact.  Next").
+    """
+    invented: list[str] = []
+
+    def _sub(match: re.Match) -> str:
+        cid = match.group(1)
+        if cid in valid_ids:
+            return match.group(0)
+        invented.append(cid)
+        return ""
+
+    cleaned = _MARKER_RE.sub(_sub, body)
+    if invented:
+        cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+        cleaned = re.sub(r" +([.,;:!?])", r"\1", cleaned)
+        logger.warning(
+            "writer.section.invented_markers_stripped",
+            extra={
+                "h2_order": h2_order,
+                "stripped_ids": invented[:20],
+                "stripped_count": len(invented),
+                "valid_id_count": len(valid_ids),
+            },
+        )
+    return cleaned
 
 
 async def write_h2_group(
@@ -314,6 +365,23 @@ async def write_h2_group(
                 location=f"H2 order {h2_item.get('order')} body (after retry)",
                 snippet="",
             )
+
+        # Strip invented citation markers — any {{cit_NNN}} that doesn't
+        # match an actual citation_id in `resolved_citations` is removed
+        # from every body. The Section LLM occasionally hallucinates IDs
+        # (matching the example in the system prompt's format) when no or
+        # few citations are attached; sources_cited rejects unknowns with
+        # HTTP 422, so we sanitize here as a safety net.
+        valid_marker_ids = {
+            c.get("citation_id", "") for c in resolved_citations if c.get("citation_id")
+        }
+        for s in sections_raw:
+            if isinstance(s, dict) and isinstance(s.get("body"), str):
+                s["body"] = _strip_invalid_markers(
+                    s["body"],
+                    valid_ids=valid_marker_ids,
+                    h2_order=h2_item.get("order"),
+                )
 
         return _build_result(h2_item, h3_items, sections_raw, section_budgets)
 
