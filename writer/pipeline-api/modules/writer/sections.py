@@ -155,8 +155,23 @@ def _build_section_user_prompt(
             parts.append(f"  directives: {' | '.join(brand_voice_card.voice_directives[:5])}")
         if brand_voice_card.audience_summary:
             parts.append(f"\nAUDIENCE: {brand_voice_card.audience_summary}")
+        if brand_voice_card.audience_personas:
+            parts.append(f"  personas: {', '.join(brand_voice_card.audience_personas[:5])}")
+        if brand_voice_card.audience_company_size:
+            parts.append(f"  company size: {brand_voice_card.audience_company_size}")
+        if brand_voice_card.audience_verticals:
+            parts.append(
+                f"  verticals: {', '.join(brand_voice_card.audience_verticals[:8])} "
+                f"(when an example would help, ground it in one of these verticals "
+                f"rather than a generic industry)"
+            )
         if brand_voice_card.audience_pain_points:
             parts.append(f"  pain points: {', '.join(brand_voice_card.audience_pain_points[:3])}")
+        if brand_voice_card.audience_goals:
+            parts.append(
+                f"  goals (frame the section to advance one of these where natural): "
+                f"{', '.join(brand_voice_card.audience_goals[:3])}"
+            )
         if (
             brand_voice_card.brand_name
             or brand_voice_card.client_services

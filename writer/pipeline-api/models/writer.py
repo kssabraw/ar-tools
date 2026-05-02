@@ -58,6 +58,9 @@ class BrandVoiceCard(BaseModel):
     tone_adjectives: list[str] = []
     voice_directives: list[str] = []
     audience_summary: str = ""
+    audience_personas: list[str] = []
+    audience_verticals: list[str] = []
+    audience_company_size: str = ""
     audience_pain_points: list[str] = []
     audience_goals: list[str] = []
     preferred_terms: list[str] = []

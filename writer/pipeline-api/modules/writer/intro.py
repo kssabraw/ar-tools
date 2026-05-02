@@ -98,9 +98,22 @@ def _build_intro_user_prompt(
             )
         if brand_voice_card.audience_summary:
             parts.append(f"\nAUDIENCE: {brand_voice_card.audience_summary}")
+        if brand_voice_card.audience_personas:
+            parts.append(f"  personas: {', '.join(brand_voice_card.audience_personas[:5])}")
+        if brand_voice_card.audience_company_size:
+            parts.append(f"  company size: {brand_voice_card.audience_company_size}")
+        if brand_voice_card.audience_verticals:
+            parts.append(
+                f"  verticals: {', '.join(brand_voice_card.audience_verticals[:8])}"
+            )
         if brand_voice_card.audience_pain_points:
             parts.append(
                 f"  pain points: {', '.join(brand_voice_card.audience_pain_points[:3])}"
+            )
+        if brand_voice_card.audience_goals:
+            parts.append(
+                f"  goals (the Promise beat should advance one of these): "
+                f"{', '.join(brand_voice_card.audience_goals[:3])}"
             )
     if forbidden_terms:
         parts.append(

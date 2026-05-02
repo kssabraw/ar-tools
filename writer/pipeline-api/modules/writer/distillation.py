@@ -28,6 +28,9 @@ You must output a single JSON object matching this exact schema:
   "tone_adjectives": [string],
   "voice_directives": [string, max 200 chars each, max 8 items],
   "audience_summary": string (max 300 chars),
+  "audience_personas": [string, max 8 items — job titles or roles the ICP names, e.g. "VP of Growth", "CMO", "Director of Marketing"],
+  "audience_verticals": [string, max 12 items — industry verticals or categories the ICP targets, e.g. "Beauty", "Health & Wellness", "Pet Care"],
+  "audience_company_size": string (max 120 chars — the company-size descriptor the ICP uses, e.g. "$20M+ ARR (sweet spot $30M–$100M)"),
   "audience_pain_points": [string, max 5 items],
   "audience_goals": [string, max 5 items],
   "preferred_terms": [string, max 20 items],
@@ -44,7 +47,10 @@ CRITICAL RULES:
 - A term is "banned" only when explicitly prohibited in the brand guide.
 - A term is "discouraged" when the brand guide expresses preference against it without prohibition.
 - A term is "preferred" when the brand guide names it as preferred phrasing.
-- audience_summary, pain_points, goals come from the ICP text.
+- audience_summary, audience_personas, audience_verticals, audience_company_size, audience_pain_points, audience_goals all come from the ICP text.
+- audience_personas: extract the named job titles/roles verbatim (e.g. "VP of Growth", "Director of Marketing"). Do not infer titles that aren't in the ICP.
+- audience_verticals: extract the named industry verticals verbatim (e.g. "Beauty", "Food & Beverage"). Do not infer verticals that aren't in the ICP.
+- audience_company_size: extract the literal company-size descriptor (revenue band, employee count, growth stage, etc.). Empty string if the ICP doesn't specify.
 - client_services, client_locations, client_contact_info come ONLY from website analysis (verbatim).
 - If a field has no information in the source, return an empty array, empty string, or null.
 - Never invent. If brand guide does not mention term-level guidance, return empty arrays for the term lists."""
@@ -125,6 +131,9 @@ def _parse_card(raw: dict) -> BrandVoiceCard:
         tone_adjectives=_list("tone_adjectives", 12),
         voice_directives=_list("voice_directives", 8),
         audience_summary=str(raw.get("audience_summary") or "")[:300],
+        audience_personas=_list("audience_personas", 8),
+        audience_verticals=_list("audience_verticals", 12),
+        audience_company_size=str(raw.get("audience_company_size") or "").strip()[:120],
         audience_pain_points=_list("audience_pain_points", 5),
         audience_goals=_list("audience_goals", 5),
         preferred_terms=_list("preferred_terms", 20),
@@ -145,9 +154,11 @@ def is_card_empty(card: Optional[BrandVoiceCard]) -> bool:
     if card is None:
         return True
     return not any([
+        card.brand_name,
         card.tone_adjectives, card.voice_directives,
-        card.audience_summary, card.audience_pain_points,
-        card.audience_goals, card.preferred_terms,
-        card.banned_terms, card.discouraged_terms,
+        card.audience_summary, card.audience_personas,
+        card.audience_verticals, card.audience_company_size,
+        card.audience_pain_points, card.audience_goals,
+        card.preferred_terms, card.banned_terms, card.discouraged_terms,
         card.client_services, card.client_locations,
     ])
