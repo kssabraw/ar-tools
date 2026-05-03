@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
@@ -121,11 +121,18 @@ export function Silos() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
-  // Auto-select the first non-archived client if none chosen yet.
+  // Auto-select the first non-archived client when the clients list
+  // first arrives. The previous `setClientId` call sat directly in the
+  // function body, which is a setState-during-render anti-pattern —
+  // React would warn and drop the update, leaving clientId='' so the
+  // silos query never fired (`enabled: !!clientId`). Effect form
+  // applies the update after render so the next render has the value.
   const activeClients = useMemo(() => clients.filter(c => !c.archived), [clients])
-  if (!clientId && activeClients.length > 0) {
-    setClientId(activeClients[0].id)
-  }
+  useEffect(() => {
+    if (!clientId && activeClients.length > 0) {
+      setClientId(activeClients[0].id)
+    }
+  }, [clientId, activeClients])
 
   const queryKey = [
     'silos', clientId, statusFilter, intentFilter, routedFilter, viableOnly, search, page,
