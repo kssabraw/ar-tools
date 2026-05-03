@@ -142,7 +142,17 @@ def _build_section_user_prompt(
     if h3_items:
         parts.append("\nH3_SUBSECTIONS:")
         for h3 in h3_items:
-            tag = " [authority gap — must add unique substantive insight]" if h3.get("source") == "authority_gap_sme" else ""
+            # Internal SME-flagged H3s carry source='authority_gap_sme'.
+            # The directive below tells the writer this section must add
+            # substantive insight competitors miss — but we deliberately
+            # avoid the literal phrase "authority gap" because the
+            # writer LLM has parroted it back into article bodies in the
+            # past (e.g. "The authority gap has four failure points...").
+            tag = (
+                " [must add a specific expert insight competitors don't cover — non-obvious angle, hidden trade-off, or insider perspective]"
+                if h3.get("source") == "authority_gap_sme"
+                else ""
+            )
             parts.append(
                 f"  - order {h3.get('order')}: {h3.get('text')}"
                 f" — budget: {section_budgets.get(h3.get('order'), 150)} words{tag}"
