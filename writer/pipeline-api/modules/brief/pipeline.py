@@ -35,8 +35,12 @@ from models.brief import (
     BriefMetadata,
     BriefRequest,
     BriefResponse,
+    ContestedTopicModel,
+    CustomerReviewInsightsModel,
     DiscardedHeading,
+    EditorialCritiqueModel,
     FormatDirectives,
+    LLMDisagreementModel,
     LLMFanoutCounts,
     LLMUnavailable,
     PersonaInfo,
@@ -83,6 +87,9 @@ from .parsers import (
     parse_reddit,
     parse_serp,
 )
+from .customer_review_research import research_customer_reviews
+from .editorial_critique import generate_editorial_critique
+from .llm_disagreement import analyze_fanout_disagreement
 from .persona import generate_persona
 from .priority import compute_priority
 from .reddit_research import research_reddit
@@ -94,7 +101,7 @@ from .title_scope import generate_title_and_scope
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = "2.5"
+SCHEMA_VERSION = "2.6"
 
 
 # PRD v2.3 / Phase 3 — per-intent-pattern minimum-words floor for H2
@@ -283,6 +290,13 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     # `RedditInsights(available=False, ...)` and the pipeline falls back
     # to the legacy raw context — never aborts the run.
     reddit_research_task = asyncio.create_task(research_reddit(keyword))
+    # PRD v2.6 — Customer-review research runs in parallel for industry-
+    # blind-spot mitigation. Same Perplexity client, different prompt
+    # targeting Trustpilot / G2 / Capterra / Yelp / etc. Surfaces
+    # frustrations and unmet needs that don't make it into SEO content.
+    customer_review_task = asyncio.create_task(
+        research_customer_reviews(keyword)
+    )
 
     serp_result = await serp_task
     serp_items = serp_result["items"]
@@ -297,6 +311,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     suggestion_items = await suggestions_task or []
     fanout_results = await asyncio.gather(*fanout_tasks)
     reddit_insights = await reddit_research_task
+    customer_review_insights = await customer_review_task
 
     # ---- Step 1 parsing (now returns 5-tuple incl. meta_descriptions) ----
     serp_headings, signals, paa_questions, organic_titles, meta_descriptions = parse_serp(
@@ -1085,6 +1100,22 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         min_h2_body_words=_min_h2_body_words_for_template(intent_template),
     )
 
+    # ---- PRD v2.6 — Industry-blind-spot mitigation outputs ----
+    # All three are side-channel observability layers; none gate or
+    # modify the brief structure. Failures degrade gracefully into
+    # `available=False` so a single LLM hiccup doesn't lose the whole
+    # brief.
+    disagreement_result = analyze_fanout_disagreement(fanout_by_source)
+    selected_h2_texts = [c.text for c in selected_h2s]
+    critique_result = await generate_editorial_critique(
+        keyword=keyword,
+        intent=intent,
+        title=title_scope.title,
+        scope_statement=title_scope.scope_statement,
+        selected_h2_texts=selected_h2_texts,
+        competitor_titles=organic_titles,
+    )
+
     response = BriefResponse(
         keyword=keyword,
         title=title_scope.title,
@@ -1106,6 +1137,18 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         silo_candidates=silos,
         intent_format_template=intent_template,
         reddit_insights=RedditInsightsModel(**reddit_insights.to_dict()),
+        customer_review_insights=CustomerReviewInsightsModel(
+            **customer_review_insights.to_dict()
+        ),
+        llm_disagreement=LLMDisagreementModel(
+            available=disagreement_result.available,
+            consensus_strength=disagreement_result.consensus_strength,
+            contested_topics=[
+                ContestedTopicModel(**t.to_dict())
+                for t in disagreement_result.contested_topics
+            ],
+        ),
+        editorial_critique=EditorialCritiqueModel(**critique_result.to_dict()),
         metadata=metadata,
     )
 

@@ -526,7 +526,7 @@ class BriefMetadata(BaseModel):
     # Echoed for tuning, like the other threshold values above.
     faq_intent_floor_threshold: float = 0.55
 
-    schema_version: Literal["2.5"] = "2.5"
+    schema_version: Literal["2.6"] = "2.6"
 
 
 # ---- Reddit research (PRD v2.4) ----
@@ -548,6 +548,69 @@ class RedditInsightsModel(BaseModel):
     sections: dict[str, str] = Field(default_factory=dict)
     citations: list[str] = Field(default_factory=list)
     reddit_citations: list[str] = Field(default_factory=list)
+    fallback_reason: Optional[str] = None
+
+
+# ---- Customer review research (PRD v2.6) ----
+
+
+class CustomerReviewInsightsModel(BaseModel):
+    """Structured output of `modules/brief/customer_review_research.py`.
+
+    Mirrors RedditInsights — single Perplexity sonar-pro synthesis,
+    7-section Markdown report, with citations filtered to customer
+    review platforms (Trustpilot / G2 / Capterra / etc.).
+    """
+
+    model_config = _FORBID_EXTRA
+
+    available: bool = False
+    markdown_report: str = ""
+    sections: dict[str, str] = Field(default_factory=dict)
+    citations: list[str] = Field(default_factory=list)
+    review_citations: list[str] = Field(default_factory=list)
+    fallback_reason: Optional[str] = None
+
+
+# ---- LLM disagreement analysis (PRD v2.6) ----
+
+
+class ContestedTopicModel(BaseModel):
+    model_config = _FORBID_EXTRA
+    text: str
+    surfaced_by: list[str] = Field(default_factory=list)
+    missed_by: list[str] = Field(default_factory=list)
+    score: float = 0.0
+
+
+class LLMDisagreementModel(BaseModel):
+    """Topics surfaced by some but not all of the four fan-out LLMs —
+    high-signal candidates that sit on the edge of well-documented
+    territory and merit strategist review."""
+
+    model_config = _FORBID_EXTRA
+
+    available: bool = False
+    consensus_strength: float = 0.0
+    contested_topics: list[ContestedTopicModel] = Field(default_factory=list)
+
+
+# ---- Editorial critique (PRD v2.6) ----
+
+
+class EditorialCritiqueModel(BaseModel):
+    """Adversarial editorial review of the assembled brief — surfaces
+    stale framings, missing angles, and contrarian takes a strategist
+    should consider. Side output; does NOT modify the H2/H3 outline."""
+
+    model_config = _FORBID_EXTRA
+
+    available: bool = False
+    stale_framings: list[str] = Field(default_factory=list)
+    missing_angles: list[str] = Field(default_factory=list)
+    contrarian_takes: list[str] = Field(default_factory=list)
+    overall_assessment: str = ""
+    confidence: float = 0.0
     fallback_reason: Optional[str] = None
 
 
@@ -581,4 +644,11 @@ class BriefResponse(BaseModel):
     # raw reddit_titles + reddit_comments path into the Authority Agent).
     # Optional so cached v2.3 rows can still be deserialized for diagnostics.
     reddit_insights: Optional[RedditInsightsModel] = None
+    # PRD v2.6 — Industry-blind-spot mitigation. All four are optional so
+    # cached v2.4/v2.5 rows can still deserialize for diagnostics; in the
+    # live pipeline they are populated when their respective stages
+    # succeed and `available=False` when they didn't.
+    customer_review_insights: Optional[CustomerReviewInsightsModel] = None
+    llm_disagreement: Optional[LLMDisagreementModel] = None
+    editorial_critique: Optional[EditorialCritiqueModel] = None
     metadata: BriefMetadata
