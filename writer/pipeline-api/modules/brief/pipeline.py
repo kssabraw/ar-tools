@@ -75,6 +75,7 @@ from .intent import classify_intent
 from .intent_rewrite import rewrite_h2s_for_intent
 from .intent_template import get_template
 from .llm import claude_json, embed_batch_large
+from .llm_scoring import score_top_candidates_llm
 from .mmr import select_h2s_mmr
 from .parsers import (
     aggregate_serp_stats,
@@ -494,6 +495,22 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
 
     # ---- Step 7 — priority scoring on remaining eligible pool ----
     compute_priority(region_kept)
+
+    # ---- Step 7.6 — LLM heading quality scoring (PRD v2.4) ----
+    # Bell-curve LLM scoring on the top-K candidates by vector priority.
+    # Blends a 0-1 quality score into `heading_priority` at the configured
+    # `brief_llm_scoring_weight` (default 0.30). Vector signals stay
+    # primary at 70% so SEO/AEO ranking dominates; the LLM adds
+    # discrimination on engagement / information depth that vectors can't
+    # see. Cost-bounded (one batched LLM call against top-K candidates,
+    # default K=25). Never aborts — vector priority is preserved on LLM
+    # failure. Set `brief_llm_scoring_weight = 0.0` to disable.
+    await score_top_candidates_llm(
+        region_kept,
+        keyword=keyword,
+        title=title_scope.title,
+        intent=intent,
+    )
 
     # ---- PRD v2.1: per-intent heading skeleton template ----
     # The template drives Step 7.5 (anchor-slot reservation) and Step 11

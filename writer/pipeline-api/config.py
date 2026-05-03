@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     # metadata (even for discards) so operators can tune thresholds offline.
     brief_tuning_mode: bool = False
 
+    # PRD v2.4 — Step 7.6 LLM scoring blend.
+    # `brief_llm_scoring_weight` is the LLM share of the combined priority
+    # (0.30 by default). Set to 0.0 to disable LLM scoring entirely and
+    # fall back to pure vector priority. `brief_llm_scoring_top_k` caps
+    # the number of candidates LLM-scored — only the top-K by vector
+    # priority are sent to the LLM, keeping cost bounded.
+    brief_llm_scoring_weight: float = 0.30
+    brief_llm_scoring_top_k: int = 25
+
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 

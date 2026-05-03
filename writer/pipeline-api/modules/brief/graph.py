@@ -75,6 +75,17 @@ class Candidate:
     information_gain_score: float = 0.0
     heading_priority: float = 0.0
 
+    # Set by Step 7.6 LLM scoring (PRD v2.4) — 0-3 integer scores from a
+    # batched LLM call against top-K candidates by vector priority. The
+    # combined `llm_quality_score` (0-1) is folded into `heading_priority`
+    # via a 70/30 vector/LLM blend before MMR runs. Defaults stay at 0
+    # for candidates outside the top-K window or when LLM scoring is
+    # disabled (brief_llm_scoring_weight = 0.0).
+    llm_topical_relevance: int = 0
+    llm_engagement_value: int = 0
+    llm_information_depth: int = 0
+    llm_quality_score: float = 0.0
+
     # Set by Step 8.5 scope verification (only on selected H2s)
     scope_classification: Optional[ScopeClassification] = None
 
