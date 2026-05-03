@@ -191,6 +191,38 @@ async def fake_claude_json(system: str, user: str, **kwargs):
     if "extract all distinct subtopics" in sys_l:
         return ["Setup process", "Seller fees", "Payment methods"]
 
+    # Framing rewrite: "you normalize blog h2 headings"
+    if "normalize blog h2 headings" in sys_l:
+        # Echo input headings unchanged so the validator's regex re-check
+        # decides whether to accept; tests can override on a case-by-case
+        # basis when they want to verify rewrite behavior specifically.
+        # The framing prompt embeds the items as a JSON array on a line
+        # tagged "Headings to rewrite (JSON):"
+        import json as _json
+        import re as _re
+        rewrites = []
+        marker = "Headings to rewrite (JSON):\n"
+        if marker in user:
+            try:
+                payload = user.split(marker, 1)[1].strip()
+                # Tolerate trailing prose by trimming to the closing ']'
+                end = payload.rfind("]")
+                if end != -1:
+                    payload = payload[: end + 1]
+                items = _json.loads(payload)
+                for item in items:
+                    if (
+                        isinstance(item, dict)
+                        and isinstance(item.get("index"), int)
+                        and isinstance(item.get("text"), str)
+                    ):
+                        rewrites.append(
+                            {"index": item["index"], "text": item["text"]}
+                        )
+            except Exception:
+                rewrites = []
+        return {"rewrites": rewrites}
+
     return {}
 
 
@@ -230,6 +262,9 @@ class _AllMocks:
             patch("modules.brief.faqs.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.graph.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.intent.claude_json", fake_claude_json),
+            # PRD v2.1 — anchor-slot embedding + framing rewrite LLM call
+            patch("modules.brief.skeleton_slots.embed_batch_large", fake_embed_batch_large),
+            patch("modules.brief.framing.claude_json", fake_claude_json),
             patch("modules.brief.pipeline.get_cached", fake_get_cached),
             patch("modules.brief.pipeline.write_cache", fake_write_cache),
         ]
@@ -258,7 +293,7 @@ async def test_pipeline_produces_schema_v2_response():
         result = await run_brief(req)
 
     # ---- Schema contract ----
-    assert result.metadata.schema_version == "2.0"
+    assert result.metadata.schema_version == "2.1"
     assert result.metadata.embedding_model == "text-embedding-3-large"
 
     # ---- Step 3.5 outputs surface on the response ----
@@ -442,7 +477,7 @@ async def test_cache_hit_short_circuits_pipeline():
         "discarded_headings": [],
         "silo_candidates": [],
         "metadata": {
-            "schema_version": "2.0",
+            "schema_version": "2.1",
             "word_budget": 2500,
             "faq_count": 0,
             "h2_count": 0,
@@ -539,7 +574,7 @@ async def test_pipeline_writes_to_cache_after_generation():
     args = write_called["args"]
     assert args["keyword"] == "what is tiktok shop"
     assert args["location_code"] == 2840
-    assert args["schema_version"] == "2.0"
+    assert args["schema_version"] == "2.1"
     assert args["triggered_by_client_id"] == "client-uuid-123"
     assert args["duration_ms"] >= 0
 
@@ -571,3 +606,139 @@ async def test_pipeline_validation_error_on_empty_keyword():
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         BriefRequest(run_id="x", keyword="")
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 / PRD v2.1 — intent format template + framing + re-embedding
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_emits_intent_format_template():
+    """Brief output must carry `intent_format_template` populated from
+    Step 3.3 + the registry — informational keyword → topic_questions
+    pattern, no anchor slots configured, non-empty description."""
+    from modules.brief.pipeline import run_brief
+
+    req = BriefRequest(run_id="ift1", keyword="what is tiktok shop")
+    with _AllMocks():
+        result = await run_brief(req)
+
+    template = result.intent_format_template
+    assert template is not None
+    assert template.intent == "informational"
+    assert template.h2_pattern == "topic_questions"
+    assert template.h2_framing_rule == "question_or_topic_phrase"
+    assert template.min_h2_count >= 3
+    assert template.max_h2_count >= template.min_h2_count
+    assert template.description != ""
+
+
+@pytest.mark.asyncio
+async def test_pipeline_metadata_carries_phase1_counters():
+    """Brief metadata must carry the four Phase 1 diagnostic counters,
+    even on a happy-path informational run where no rewrites fire."""
+    from modules.brief.pipeline import run_brief
+
+    req = BriefRequest(run_id="ift2", keyword="what is tiktok shop")
+    with _AllMocks():
+        result = await run_brief(req)
+
+    m = result.metadata
+    assert m.anchor_slots_total >= 0  # informational has 4 anchors
+    assert m.anchor_slots_reserved_count >= 0
+    assert m.anchor_slots_reserved_count <= m.anchor_slots_total
+    assert m.framing_rewrites_applied == 0  # informational accepts everything
+    assert m.framing_rewrites_accepted_with_violation == 0
+
+
+@pytest.mark.asyncio
+async def test_pipeline_target_h2_clamps_to_template_max(monkeypatch):
+    """Fix #6 — when the template's max_h2_count is below the 6-slot
+    baseline (e.g. a 3-axis comparison), MMR must not be asked for
+    more slots than the template allows. We patch get_template to
+    return a template with max_h2_count=3 and verify the resulting
+    selection respects that ceiling.
+    """
+    from modules.brief import pipeline as brief_pipeline
+    from modules.brief.intent_template import get_template
+
+    # Force the comparison template's max down to 3.
+    def patched_get_template(intent):
+        t = get_template("comparison")
+        t.max_h2_count = 3
+        t.min_h2_count = 2
+        return t
+
+    with _AllMocks():
+        with monkeypatch.context() as m:
+            m.setattr(
+                brief_pipeline, "get_template", patched_get_template,
+            )
+            req = BriefRequest(
+                run_id="clamp1",
+                keyword="what is tiktok shop",
+                intent_override="comparison",
+            )
+            result = await brief_pipeline.run_brief(req)
+
+    h2_count = sum(
+        1 for h in result.heading_structure
+        if h.level == "H2" and h.type == "content"
+    )
+    assert h2_count <= 3, (
+        f"target_h2 must clamp to template.max_h2_count=3; got {h2_count}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pipeline_reembeds_rewritten_h2s(monkeypatch):
+    """Fix #3 — when the framing validator rewrites an H2's text, the
+    pipeline must re-embed it so downstream parent_relevance maths
+    operates on a vector aligned with the new text. We force the
+    framing validator to mutate one H2 and assert that the re-embed
+    path is exercised (the embedding API receives a call with the
+    rewritten heading text).
+    """
+    from modules.brief import pipeline as brief_pipeline
+
+    captured_embed_inputs: list[list[str]] = []
+
+    async def tracking_embed(texts, normalize=True):
+        captured_embed_inputs.append(list(texts))
+        return [_normalized_vec(t) for t in texts]
+
+    # A framing validator that rewrites the FIRST selected H2.
+    rewrite_text = "Plan Your TikTok Shop Test Rewrite"
+
+    async def fake_framing(h2s, template, **kwargs):
+        from modules.brief.framing import FramingResult
+        if h2s:
+            h2s[0].text = rewrite_text
+        return FramingResult(
+            rewritten_indices=[0] if h2s else [],
+            llm_called=True,
+        )
+
+    with _AllMocks():
+        with monkeypatch.context() as m:
+            m.setattr(
+                brief_pipeline, "embed_batch_large", tracking_embed,
+            )
+            m.setattr(
+                brief_pipeline,
+                "validate_and_rewrite_framing",
+                fake_framing,
+            )
+            req = BriefRequest(run_id="reemb1", keyword="what is tiktok shop")
+            await brief_pipeline.run_brief(req)
+
+    # The re-embed call must have included the rewritten text exactly
+    # once after the framing pass mutated the heading.
+    matched = [
+        batch for batch in captured_embed_inputs if rewrite_text in batch
+    ]
+    assert matched, (
+        "expected re-embed pass to re-vectorize the rewritten H2 text; "
+        f"saw embed batches: {captured_embed_inputs}"
+    )

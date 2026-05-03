@@ -279,3 +279,93 @@ def test_mmr_blocks_paraphrase_outline_simulation():
     assert len(discarded_paraphrases) == 4
     assert all(c.discard_reason == "below_priority_threshold"
                for c in discarded_paraphrases)
+
+
+# ----------------------------------------------------------------------
+# Pre-reservation (PRD v2.1 / Phase 1 Step 7.5)
+# ----------------------------------------------------------------------
+
+
+def test_mmr_pre_reserved_seeds_selected_set():
+    """Pre-reserved candidates appear at the head of `selected` in
+    input order, and MMR fills only the remaining slots."""
+    pre = [_make("plan", "region_0", 0.5, [1.0, 0.0, 0.0])]
+    pool = [
+        _make("alt_plan", "region_0", 0.99, [0.99, 0.0, 0.0]),  # blocked: same region
+        _make("launch", "region_1", 0.9, [0.0, 1.0, 0.0]),
+        _make("iterate", "region_2", 0.8, [0.0, 0.0, 1.0]),
+    ]
+    res = select_h2s_mmr(pool, target_count=3, pre_reserved=pre)
+    assert [c.text for c in res.selected] == ["plan", "launch", "iterate"]
+    # alt_plan must NOT have been selected — region_0 was reserved.
+    assert all(c.text != "alt_plan" for c in res.selected)
+
+
+def test_mmr_pre_reserved_blocks_inter_heading_violators():
+    """A pool candidate too similar to a pre-reserved candidate is
+    blocked by the inter-heading hard constraint, even when not in the
+    same region."""
+    pre = [_make("plan", "region_0", 0.5, [1.0, 0.0])]
+    pool = [
+        _make("near_clone", "region_1", 0.99, [1.0, 0.0]),  # cos = 1.0 to 'plan'
+        _make("diverse", "region_2", 0.8, [0.0, 1.0]),
+    ]
+    res = select_h2s_mmr(
+        pool, target_count=3, pre_reserved=pre,
+        inter_heading_threshold=0.75,
+    )
+    selected_texts = [c.text for c in res.selected]
+    assert "plan" in selected_texts
+    assert "near_clone" not in selected_texts
+    assert "diverse" in selected_texts
+
+
+def test_mmr_pre_reserved_count_exceeding_target_raises():
+    pre = [
+        _make("a", "r0", 0.5, [1.0, 0.0]),
+        _make("b", "r1", 0.5, [0.0, 1.0]),
+    ]
+    with pytest.raises(ValueError, match="exceeds target_count"):
+        select_h2s_mmr([], target_count=1, pre_reserved=pre)
+
+
+def test_mmr_pre_reserved_missing_region_raises():
+    bad = Candidate(text="x", source="serp")
+    bad.embedding = [1.0, 0.0]
+    bad.heading_priority = 0.5
+    # region_id is None — pre_reserved validation must catch it
+    with pytest.raises(ValueError, match="pre_reserved"):
+        select_h2s_mmr([], target_count=2, pre_reserved=[bad])
+
+
+def test_mmr_pre_reserved_with_target_zero_returns_pre_reserved_only():
+    """Edge case: target_count=0 with non-empty pre_reserved still
+    surfaces the pre-reserved candidates (they were already chosen)."""
+    pre = [_make("plan", "region_0", 0.5, [1.0, 0.0])]
+    res = select_h2s_mmr(
+        [_make("other", "region_1", 0.9, [0.0, 1.0])],
+        target_count=0,
+        pre_reserved=pre,
+    )
+    assert [c.text for c in res.selected] == ["plan"]
+    assert res.shortfall is False
+
+
+def test_mmr_pre_reserved_preserves_input_order_for_strict_sequential():
+    """With ordering='strict_sequential' upstream, pre_reserved arrives
+    in narrative order; selected must preserve that prefix exactly."""
+    pre = [
+        _make("step_1_plan", "r0", 0.4, [1.0, 0.0, 0.0]),
+        _make("step_2_build", "r1", 0.4, [0.0, 1.0, 0.0]),
+        _make("step_3_ship", "r2", 0.4, [0.0, 0.0, 1.0]),
+    ]
+    pool = [
+        _make("extra", "r3", 0.99, [0.5, 0.5, 0.0]),
+    ]
+    res = select_h2s_mmr(
+        pool, target_count=4, pre_reserved=pre,
+        inter_heading_threshold=0.95,
+    )
+    assert [c.text for c in res.selected[:3]] == [
+        "step_1_plan", "step_2_build", "step_3_ship",
+    ]

@@ -44,7 +44,7 @@ def test_normalize_keyword_strips_and_lowercases():
 
 @pytest.mark.asyncio
 async def test_get_cached_returns_payload_on_hit():
-    payload = {"schema_version": "2.0", "keyword": "what is tiktok shop"}
+    payload = {"schema_version": "2.1", "keyword": "what is tiktok shop"}
     rows = [{"output_payload": payload, "created_at": "2026-04-30T10:00:00Z"}]
     client, table = _make_supabase_mock(rows)
 
@@ -133,7 +133,7 @@ async def test_write_cache_inserts_row_with_normalized_keyword():
         await write_cache(
             keyword="What is TikTok Shop",
             location_code=2840,
-            schema_version="2.0",
+            schema_version="2.1",
             output_payload={"k": "v"},
             triggered_by_client_id="client-uuid",
             duration_ms=12345,
@@ -143,7 +143,7 @@ async def test_write_cache_inserts_row_with_normalized_keyword():
     inserted = table.insert.call_args[0][0]
     assert inserted["keyword"] == "what is tiktok shop"
     assert inserted["location_code"] == 2840
-    assert inserted["schema_version"] == "2.0"
+    assert inserted["schema_version"] == "2.1"
     assert inserted["output_payload"] == {"k": "v"}
     assert inserted["triggered_by_client_id"] == "client-uuid"
     assert inserted["duration_ms"] == 12345
@@ -156,7 +156,7 @@ async def test_write_cache_omits_optional_fields_when_none():
         await write_cache(
             keyword="x",
             location_code=2840,
-            schema_version="2.0",
+            schema_version="2.1",
             output_payload={},
         )
 
@@ -177,7 +177,7 @@ async def test_write_cache_swallows_errors():
         await write_cache(
             keyword="x",
             location_code=2840,
-            schema_version="2.0",
+            schema_version="2.1",
             output_payload={},
         )
 
@@ -191,7 +191,7 @@ async def test_write_cache_logs_failure(caplog):
             await write_cache(
                 keyword="x",
                 location_code=2840,
-                schema_version="2.0",
+                schema_version="2.1",
                 output_payload={},
             )
     assert any(r.message == "brief.cache.write_failed" for r in caplog.records)

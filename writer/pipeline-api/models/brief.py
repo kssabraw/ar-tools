@@ -199,6 +199,68 @@ class FormatDirectives(BaseModel):
     answer_first_paragraphs: bool = True
 
 
+# ---- Intent format template (Phase 1 / Brief PRD v2.1 Step 7.5 + Step 11) ----
+#
+# `intent_format_template` commits the brief to a per-intent heading-skeleton
+# shape so the H2 outline matches the keyword's intent (sequential steps for
+# how-to, ranked items for listicle, etc.). The template feeds:
+#   - Step 7.5: anchor-slot reservation in MMR — preferred slots are filled
+#     by the highest-priority candidate whose embedding aligns with the
+#     slot's semantic anchor before generic MMR fills the rest.
+#   - Step 11: framing validator — every selected H2 must satisfy the
+#     template's framing regex; failures route through one LLM rewrite pass.
+
+H2Pattern = Literal[
+    "sequential_steps",       # how-to: Plan → Set Up → Launch → Iterate
+    "ranked_items",           # listicle: 1. X, 2. Y, 3. Z
+    "parallel_axes",          # comparison: Pricing, Features, Support
+    "topic_questions",        # informational: What is X, How X works
+    "buyer_education_axes",   # informational-commercial: What to look for, …
+    "feature_benefit",        # ecom: Pricing, What's Included, Compatibility
+    "place_bound_topics",     # local-seo: deferred (not enforced in v1)
+    "news_lede",              # news: out of scope for v1; framing validator NOOPs
+]
+
+
+H2FramingRule = Literal[
+    "verb_leading_action",        # how-to step framing
+    "ordinal_then_noun_phrase",   # listicle
+    "axis_noun_phrase",           # comparison axes / ecom feature-benefit
+    "question_or_topic_phrase",   # informational
+    "buyer_education_phrase",     # informational-commercial
+    "no_constraint",              # news / local-seo / fallback
+]
+
+
+H2Ordering = Literal["strict_sequential", "logical", "none"]
+
+
+class IntentFormatTemplate(BaseModel):
+    """Per-intent heading-skeleton template emitted by Step 3 (PRD v2.1).
+
+    `anchor_slots` carries short semantic-anchor strings (e.g. ``"plan"``,
+    ``"set up"``, ``"launch"``, ``"iterate"`` for how-to). Step 7.5 embeds
+    these and reserves H2 slots by matching candidate embeddings against
+    the anchors. When the candidate pool genuinely contains procedural
+    coverage, anchor slots fill before generic MMR runs; when it does
+    not, MMR proceeds normally and the framing validator (Step 11)
+    rewrites the H2 framing instead.
+    """
+    model_config = _FORBID_EXTRA
+
+    intent: IntentType
+    h2_pattern: H2Pattern
+    h2_framing_rule: H2FramingRule
+    ordering: H2Ordering
+    min_h2_count: int = Field(default=4, ge=1)
+    max_h2_count: int = Field(default=10, ge=1)
+    # Semantic anchors for Step 7.5. Empty list = no anchor reservation
+    # (template falls through to plain MMR).
+    anchor_slots: list[str] = []
+    # Operator-facing description; not consumed by code, only logged + surfaced.
+    description: str = ""
+
+
 # ---- Discarded headings ----
 
 class DiscardedHeading(BaseModel):
@@ -357,7 +419,20 @@ class BriefMetadata(BaseModel):
     # to exclude competitor URLs from citation candidates.
     competitor_domains: list[str] = []
 
-    schema_version: Literal["2.0"] = "2.0"
+    # Phase 1 / PRD v2.1 — Step 7.5 anchor-slot reservation + Step 11 framing.
+    # `anchor_slots_reserved_count` is the number of H2 slots filled by the
+    # anchor-reservation pass before generic MMR ran. `anchor_slots_total`
+    # is the size of the anchor list emitted by the template (so consumers
+    # can compute reservation rate). `framing_rewrites_applied` counts H2s
+    # whose text was rewritten by the framing validator's LLM pass; the
+    # accept_after_retry counter exists because the validator is best-
+    # effort (one retry, then warn-and-accept).
+    anchor_slots_total: int = 0
+    anchor_slots_reserved_count: int = 0
+    framing_rewrites_applied: int = 0
+    framing_rewrites_accepted_with_violation: int = 0
+
+    schema_version: Literal["2.1"] = "2.1"
 
 
 # ---- Top-level response ----
@@ -381,4 +456,9 @@ class BriefResponse(BaseModel):
     format_directives: FormatDirectives = FormatDirectives()
     discarded_headings: list[DiscardedHeading] = []
     silo_candidates: list[SiloCandidate] = []
+    # PRD v2.1 — per-intent heading skeleton template (Step 3 output, used
+    # by Step 7.5 + Step 11). Optional so legacy fixtures + cached v2.0
+    # rows that don't carry it can still be deserialized for diagnostic
+    # use; in the live pipeline this is always populated.
+    intent_format_template: Optional[IntentFormatTemplate] = None
     metadata: BriefMetadata

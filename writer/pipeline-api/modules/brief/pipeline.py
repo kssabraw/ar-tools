@@ -65,8 +65,10 @@ from .graph import (
     embed_with_gates,
     score_regions,
 )
+from .framing import validate_and_rewrite_framing
 from .h3_selection import select_h3s_for_h2s
 from .intent import classify_intent
+from .intent_template import get_template
 from .llm import claude_json, embed_batch_large
 from .mmr import select_h2s_mmr
 from .parsers import (
@@ -79,12 +81,13 @@ from .persona import generate_persona
 from .priority import compute_priority
 from .scope_verification import verify_h3_scope, verify_scope
 from .silos import identify_silos, verify_silo_viability
+from .skeleton_slots import embed_anchor_slots, reserve_anchor_slots
 from .title_scope import generate_title_and_scope
 
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = "2.0"
+SCHEMA_VERSION = "2.1"
 
 
 # Re-export for callers that historically imported BriefError from pipeline.
@@ -443,13 +446,52 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     # ---- Step 7 — priority scoring on remaining eligible pool ----
     compute_priority(region_kept)
 
-    # ---- Step 8 — MMR H2 selection ----
-    target_h2 = 6  # PRD §5 Step 8 baseline target; assembly will cap further
+    # ---- PRD v2.1: per-intent heading skeleton template ----
+    # The template drives Step 7.5 (anchor-slot reservation) and Step 11
+    # (framing validator). It is deterministic from `intent` so the call
+    # is local + free.
+    intent_template = get_template(intent)
+
+    # Cap MMR target_h2 at the template's max so a 6-axis comparison
+    # template doesn't ask MMR for 10 slots. Floor stays at the PRD's 6
+    # baseline so capped intents still try to fill 6 slots when the
+    # template allows.
+    target_h2 = min(6, intent_template.max_h2_count) if intent_template.max_h2_count else 6
+    if intent_template.h2_pattern == "ranked_items":
+        # Listicle / how-to are uncapped per PRD §11; raise target to the
+        # template max so MMR doesn't truncate prematurely.
+        target_h2 = intent_template.max_h2_count
+    if intent_template.h2_pattern == "sequential_steps":
+        # how-to baseline target — favor the template max within reason.
+        target_h2 = max(target_h2, min(8, intent_template.max_h2_count))
+    # Final clamp: never ask MMR for more than the template allows. A
+    # template with max_h2_count below the 6-baseline (e.g. a 3-axis
+    # comparison) must NOT trigger a 6-slot ask.
+    if intent_template.max_h2_count:
+        target_h2 = min(target_h2, intent_template.max_h2_count)
+
+    # ---- Step 7.5 — anchor-slot reservation (PRD v2.1 / Phase 1) ----
+    # Embed the template's anchor strings (single API call) and reserve
+    # the best-fitting candidate per slot before MMR runs. Listicle /
+    # news / local-seo templates carry empty anchor lists, so this is a
+    # no-op for those intents.
+    anchor_embeddings = await embed_anchor_slots(intent_template)
+    reservation = reserve_anchor_slots(
+        eligible=region_kept,
+        template=intent_template,
+        anchor_embeddings=anchor_embeddings,
+        inter_heading_threshold=settings.brief_inter_heading_threshold,
+    )
+    reserved_ids = {id(c) for c in reservation.reserved}
+    mmr_pool = [c for c in region_kept if id(c) not in reserved_ids]
+
+    # ---- Step 8 — MMR H2 selection (now slot-aware) ----
     selection = select_h2s_mmr(
-        region_kept,
+        mmr_pool,
         target_count=target_h2,
         inter_heading_threshold=settings.brief_inter_heading_threshold,
         mmr_lambda=settings.brief_mmr_lambda,
+        pre_reserved=reservation.reserved,
     )
     if not selection.selected:
         raise BriefError(
@@ -473,6 +515,47 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             extra={"original_count": len(selection.selected)},
         )
         selected_h2s = selection.selected
+
+    # ---- Step 11 framing validator (PRD v2.1 / Phase 1) ----
+    # Best-effort H2 framing normalization driven by intent_template.
+    # Runs after scope verification (so we don't rewrite H2s that are
+    # about to be rejected) and BEFORE the how-to reorder LLM call (so
+    # reorder operates on already-normalized procedural framings).
+    framing_result = await validate_and_rewrite_framing(
+        h2s=selected_h2s,
+        template=intent_template,
+    )
+
+    # Re-embed rewritten H2s so downstream parent_relevance computations
+    # (Step 8.6 H3 selection, authority gap attachment) operate on
+    # vectors aligned with the displayed text. The framing prompt
+    # constrains rewrites to preserve topic, so the embedding shift is
+    # small — but small drifts can push H3 candidates across the
+    # parent_relevance band [0.60, 0.85] in either direction. One
+    # embedding API call per run, only fires when at least one rewrite
+    # landed (typical case is zero).
+    if framing_result.rewritten_indices:
+        rewritten = [selected_h2s[i] for i in framing_result.rewritten_indices]
+        try:
+            new_vecs = await embed_batch_large([c.text for c in rewritten])
+            for c, v in zip(rewritten, new_vecs):
+                if v:
+                    c.embedding = v
+                    # Refresh title_relevance against the new vector so
+                    # any downstream consumer that re-reads it (e.g. the
+                    # discarded_headings audit) sees a coherent number.
+                    c.title_relevance = (
+                        sum(a * b for a, b in zip(v, title_embedding))
+                        if title_embedding else c.title_relevance
+                    )
+        except Exception as exc:
+            logger.warning(
+                "brief.framing.reembed_failed",
+                extra={
+                    "rewritten_count": len(rewritten),
+                    "error": str(exc),
+                },
+            )
 
     # ---- how-to reorder must run BEFORE Step 8.6 ----
     # Step 8.6's H3 attachments are keyed by H2 index. Reordering H2s
@@ -746,6 +829,13 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         reddit_unavailable=reddit_unavailable,
         llm_fanout_unavailable=unavailable,
         competitor_domains=competitor_domains,
+        # PRD v2.1 — anchor reservation + framing validator counters
+        anchor_slots_total=len(intent_template.anchor_slots),
+        anchor_slots_reserved_count=len(reservation.reserved),
+        framing_rewrites_applied=len(framing_result.rewritten_indices),
+        framing_rewrites_accepted_with_violation=(
+            len(framing_result.accepted_with_violation_indices)
+        ),
     )
 
     response = BriefResponse(
@@ -766,6 +856,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faqs=faqs,
         discarded_headings=discarded_models,
         silo_candidates=silos,
+        intent_format_template=intent_template,
         metadata=metadata,
     )
 
