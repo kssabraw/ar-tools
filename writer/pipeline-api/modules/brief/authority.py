@@ -131,6 +131,7 @@ def _format_user_prompt(
     existing_headings: list[str],
     reddit_context: list[str],
     reddit_insights_markdown: Optional[str] = None,
+    customer_review_insights_markdown: Optional[str] = None,
 ) -> str:
     parts: list[str] = [f"Topic / keyword: {keyword}"]
 
@@ -168,6 +169,23 @@ def _format_user_prompt(
             + "\n".join(f"- {snippet[:200]}" for snippet in reddit_context[:5])
         )
 
+    # PRD v2.6 — Customer review synthesis. Reddit captures community
+    # voice; customer reviews capture POST-PURCHASE reality — frustrations
+    # with marketing claims, churn signals, unmet needs that don't make
+    # it into SEO content. The agent should mine these specifically for
+    # the Risk/Regulatory pillar (billing/trust/compliance complaints)
+    # and the marketing-vs-reality gap angle that competitors miss.
+    if customer_review_insights_markdown:
+        parts.append(
+            "\nCustomer review synthesis (themed insights from review "
+            "platforms like Trustpilot / G2 / Capterra; treat as ground "
+            "truth for post-purchase reality — what frustrates customers, "
+            "why they switch, where marketing claims diverge from "
+            "experience, and which trust/risk angles surface in negative "
+            "reviews. Use especially for the Risk/Regulatory pillar.):\n"
+            f"{customer_review_insights_markdown.strip()}"
+        )
+
     return "\n".join(parts)
 
 
@@ -177,6 +195,7 @@ async def authority_gap_headings(
     existing_headings: list[str],
     reddit_context: list[str],
     reddit_insights_markdown: Optional[str] = None,
+    customer_review_insights_markdown: Optional[str] = None,
     title: Optional[str] = None,
     scope_statement: Optional[str] = None,
     intent_type: Optional[str] = None,
@@ -203,6 +222,7 @@ async def authority_gap_headings(
         existing_headings=existing_headings,
         reddit_context=reddit_context,
         reddit_insights_markdown=reddit_insights_markdown,
+        customer_review_insights_markdown=customer_review_insights_markdown,
     )
 
     last_exc: Optional[Exception] = None

@@ -232,3 +232,67 @@ async def test_prompt_human_behavioral_pillar_has_fears_values_recommendations()
     assert "FEARS" in sys
     assert "VALUES" in sys
     assert "RECOMMENDATIONS" in sys
+
+
+# ---------------------------------------------------------------------------
+# PRD v2.6 — Customer review insights wiring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_prompt_carries_customer_review_synthesis():
+    """When `customer_review_insights_markdown` is supplied, the user
+    prompt MUST surface it under a labeled section so the LLM knows
+    to ground its Risk/Regulatory pillar and marketing-vs-reality
+    angles against it."""
+    captured: dict = {}
+
+    async def capturing(system, user, **kw):
+        captured["user"] = user
+        return {"headings": [
+            {"text": "h1", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h2", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h3", "level": "H3", "scope_alignment_note": "in"},
+        ]}
+
+    review_md = (
+        "## 1. Top Customer Frustrations\n"
+        "- Slow checkout flow on mobile\n"
+        "## 5. Marketing-vs-Reality Gaps\n"
+        "- Marketing claims free returns; customers report restocking fees\n"
+    )
+    await authority_gap_headings(
+        keyword="kw",
+        existing_headings=[],
+        reddit_context=[],
+        customer_review_insights_markdown=review_md,
+        llm_json_fn=capturing,
+    )
+    user = captured["user"]
+    assert "Customer review synthesis" in user
+    assert "Top Customer Frustrations" in user
+    assert "Marketing-vs-Reality Gaps" in user
+
+
+@pytest.mark.asyncio
+async def test_user_prompt_omits_customer_review_section_when_unavailable():
+    """If no customer review insights are passed, the section should
+    NOT appear in the prompt (don't waste tokens on empty headers)."""
+    captured: dict = {}
+
+    async def capturing(system, user, **kw):
+        captured["user"] = user
+        return {"headings": [
+            {"text": "h1", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h2", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h3", "level": "H3", "scope_alignment_note": "in"},
+        ]}
+
+    await authority_gap_headings(
+        keyword="kw",
+        existing_headings=[],
+        reddit_context=[],
+        # customer_review_insights_markdown intentionally omitted
+        llm_json_fn=capturing,
+    )
+    assert "Customer review synthesis" not in captured["user"]

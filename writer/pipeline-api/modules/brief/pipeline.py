@@ -680,6 +680,15 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         reddit_insights_markdown=(
             reddit_insights.markdown_report if reddit_insights.available else None
         ),
+        # PRD v2.6 — customer review synthesis feeds the agent the same
+        # way Reddit insights do, but captures POST-PURCHASE reality
+        # (frustrations, churn signals, marketing-vs-experience gaps)
+        # that the SERP+Reddit+fanout corpus shares as a blind spot.
+        customer_review_insights_markdown=(
+            customer_review_insights.markdown_report
+            if customer_review_insights.available
+            else None
+        ),
         title=title_scope.title,
         scope_statement=title_scope.scope_statement,
         intent_type=intent,
