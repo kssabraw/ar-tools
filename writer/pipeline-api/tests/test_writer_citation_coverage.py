@@ -252,8 +252,13 @@ def test_soften_duration_window():
     body = "Schedule a 4-to-6 week refresh cadence for new listings."
     softened, replacements = apply_soften(body)
     assert softened != body
-    assert "every few weeks" in softened
-    assert "4-to-6 week refresh cadence" not in softened
+    # Phase 4 review fix #1: match the entire `a 4-to-6 week refresh
+    # cadence` phrase including the leading article + trailing noun
+    # chain. No fragments left orphaned.
+    assert "a typical refresh cadence" in softened
+    assert "4-to-6" not in softened
+    assert "4 week" not in softened
+    assert "refresh cadence" not in softened.replace("a typical refresh cadence", "")
     assert len(replacements) == 1
     assert replacements[0].rule == "duration-as-recommendation"
 
@@ -372,15 +377,158 @@ def test_audit_unsourced_operational_claims_detected():
 
 def test_audit_unsourced_operational_claims_softened():
     """When the LLM retry can't add citations to those claims, the
-    auto-soften pass rewrites them to hedge phrasing."""
+    auto-soften pass rewrites them to hedge phrasing — the entire
+    `a <duration> <noun phrase>` is replaced cleanly with `a typical
+    <noun phrase>` (Phase 4 review fix #1)."""
     body = (
         "Sellers should adopt a 4-to-6 week refresh cadence. "
         "Maintain a 60-day affiliate audit window."
     )
     softened, replacements = apply_soften(body)
-    assert "4-to-6 week refresh cadence" not in softened
-    assert "60-day affiliate audit window" not in softened
-    assert "every few weeks" in softened
-    # 60-day window scales as "couple of months" per the soften table
-    assert "couple of months" in softened or "brief window" in softened
+    # No fragments of the original durations remain.
+    assert "4-to-6" not in softened
+    assert "60-day" not in softened
+    assert "60 day" not in softened
+    # Hedge phrasing in place.
+    assert "a typical refresh cadence" in softened
+    assert "a typical audit window" in softened
     assert len(replacements) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 review fix #1 — N-to-N range + leading article + trailing noun chain
+# ---------------------------------------------------------------------------
+
+
+def test_soften_n_to_n_range_no_orphan_fragments():
+    """Phase 4 review fix #1 — `4-to-6 week refresh cadence` must
+    soften as a whole phrase. The original C7 regex's range arm
+    `(?:to|-|–|—)` couldn't match `<hyphen><to><hyphen>`, leaving
+    `4-to-` orphaned in the soften output. After the fix, the entire
+    phrase including the leading article is replaced cleanly."""
+    body = "Schedule a 4-to-6 week refresh cadence for new listings."
+    softened, replacements = apply_soften(body)
+    # Original phrase fully gone — no orphan `4-to-` or stray `cadence`
+    # after the replacement.
+    assert "4-to-" not in softened
+    assert "4 week" not in softened
+    # Replacement reads grammatically: `Schedule a typical refresh cadence ...`
+    assert "Schedule a typical refresh cadence for new listings." == softened
+
+
+def test_soften_no_doubled_article():
+    """Phase 4 review fix #1 — when the matched phrase started with a
+    leading article (`a 4-week sprint`), soften must consume the
+    article so the output doesn't read `a a typical sprint`."""
+    body = "Run a 4-week sprint cooldown between releases."
+    softened, replacements = apply_soften(body)
+    assert "a a typical" not in softened
+    assert "a typical sprint cooldown" in softened
+
+
+def test_soften_trailing_noun_chain_consumed():
+    """Phase 4 review fix #1 — when the recommendation noun is followed
+    by another recommendation noun (e.g. `refresh cadence`), the C7
+    regex matches the whole chain so soften's output replaces both
+    rather than leaving the trailing noun orphaned."""
+    body = "Use a 30-day affiliate audit window before renewals."
+    softened, replacements = apply_soften(body)
+    # `audit window` is a chained noun phrase — both consumed.
+    assert "audit window" not in softened.replace("a typical audit window", "")
+    assert "a typical audit window" in softened
+
+
+def test_soften_handles_dash_separator_no_to():
+    """`4-6 week` (no `to` between hyphens) must also match."""
+    body = "Plan a 4-6 month review cycle."
+    softened, _ = apply_soften(body)
+    assert "4-6" not in softened
+    assert "a typical review cycle" in softened
+
+
+def test_soften_handles_word_separator_to():
+    """`4 to 6 week` (spaces, no hyphen) must also match."""
+    body = "Plan a 4 to 6 week review cycle."
+    softened, _ = apply_soften(body)
+    assert "4 to 6" not in softened
+    assert "a typical review cycle" in softened
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 review fix #2 — already-cited sentences NOT softened
+# ---------------------------------------------------------------------------
+
+
+def test_soften_skips_cited_sentence():
+    """Phase 4 review fix #2 — when an operational claim sentence
+    already has a `{{cit_N}}` marker attached, soften must NOT touch
+    it. The citation grounds the precise text; softening would leave
+    the marker pointing at hedged phrasing that no longer matches the
+    citation."""
+    body = (
+        "Schedule a 4-week refresh cadence.{{cit_001}} "
+        "Maintain a 30-day audit window."
+    )
+    softened, replacements = apply_soften(body)
+    # Cited sentence preserved verbatim.
+    assert "Schedule a 4-week refresh cadence.{{cit_001}}" in softened
+    # Uncited sentence softened.
+    assert "30-day" not in softened
+    assert "a typical audit window" in softened
+    # Only one replacement (uncited sentence)
+    assert len(replacements) == 1
+
+
+def test_soften_skips_multiple_cited_sentences():
+    """Multiple cited sentences in one body all bypass soften."""
+    body = (
+        "Use a 4-week refresh cadence.{{cit_001}} "
+        "Apply a 5% rule for refunds.{{cit_002}} "
+        "Run a weekly audit of inventory."
+    )
+    softened, replacements = apply_soften(body)
+    # First two sentences preserved.
+    assert "a 4-week refresh cadence.{{cit_001}}" in softened
+    assert "a 5% rule for refunds.{{cit_002}}" in softened
+    # Third (uncited) softened.
+    assert "weekly audit" not in softened
+    assert "a regular audit" in softened
+    assert len(replacements) == 1
+
+
+def test_soften_does_not_strip_marker_when_skipping():
+    """The `{{cit_N}}` marker must remain in the output exactly where
+    it was — masking + restoration roundtrips it cleanly."""
+    body = "Run a quarterly review.{{cit_042}} And plan a 60-day audit window."
+    softened, _ = apply_soften(body)
+    assert "{{cit_042}}" in softened
+    assert softened.count("{{cit_042}}") == 1
+
+
+def test_soften_restoration_handles_multiple_markers_in_order():
+    """When multiple cited sentences are masked, each one is restored
+    to its original text — placeholders don't get cross-wired."""
+    body = (
+        "First a 1-week cycle.{{cit_001}} "
+        "Then a 2-week cycle.{{cit_002}} "
+        "Then a 3-week cycle.{{cit_003}}"
+    )
+    softened, replacements = apply_soften(body)
+    assert replacements == []  # all sentences cited
+    assert "1-week cycle.{{cit_001}}" in softened
+    assert "2-week cycle.{{cit_002}}" in softened
+    assert "3-week cycle.{{cit_003}}" in softened
+
+
+def test_soften_marker_not_attached_to_terminator_does_not_protect():
+    """A misplaced marker (not immediately after `.?!`) does NOT count
+    as a cited sentence — the surrounding region remains open to soften.
+    Defensive against malformed LLM output."""
+    body = "Schedule a 4-week refresh cadence{{cit_001}} for new listings."
+    softened, replacements = apply_soften(body)
+    # No `.` before the marker → not a cited sentence → soften runs.
+    assert "4-week" not in softened
+    assert "a typical refresh cadence" in softened
+    # Marker still in output (we don't touch it deliberately, just
+    # don't protect the sentence around it).
+    assert "{{cit_001}}" in softened

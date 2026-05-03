@@ -191,10 +191,11 @@ async def test_validator_softens_operational_claims_when_retry_fails():
     )
     assert result.retries_attempted == 1
     assert result.retries_succeeded == 0
-    # Section was softened — operational phrase replaced
+    # Section was softened — operational phrase replaced cleanly with
+    # `a typical refresh cadence` (Phase 4 review fix #1).
     body = result.validated_article[0].body
-    assert "4-to-6 week refresh cadence" not in body
-    assert "every few weeks" in body
+    assert "4-to-6" not in body
+    assert "a typical refresh cadence" in body
     # Records appended
     assert len(result.operational_claims_softened) == 1
     assert result.operational_claims_softened[0]["rule"] == "duration-as-recommendation"
@@ -303,7 +304,7 @@ async def test_validator_handles_retry_exception_with_soften():
     assert result.retries_attempted == 1
     assert result.retries_succeeded == 0
     body = result.validated_article[0].body
-    assert "30-day audit window" not in body
-    # Soften table maps "30-day audit window" via the C7 rule —
-    # day-scale becomes "a brief window" or close.
-    assert any(phrase in body for phrase in ("brief window", "couple of months"))
+    assert "30-day" not in body
+    # Soften replaces the entire `a 30-day audit window` phrase with
+    # `a typical audit window` (Phase 4 review fix #1).
+    assert "a typical audit window" in body

@@ -159,22 +159,46 @@ _C5_RE = re.compile(
 )
 
 # C7 — Duration-as-recommendation (NEW in Phase 4).
-# `4-to-6 week refresh cadence`, `60-day affiliate audit window`,
-# `90-minute review cycle`.
-_C7_RE = re.compile(
-    r"\b\d+(?:\s*(?:to|-|–|—)\s*\d+)?[\s-]*"
-    r"(?:second|minute|hour|day|week|month|year)s?\b"
-    r"(?:[\s-]+\w+){0,3}?[\s-]+"
-    r"(?:cadence|window|cycle|interval|period|review|audit|"
+# Catches forms like:
+#   `a 4-to-6 week refresh cadence`
+#   `a 60-day affiliate audit window`
+#   `a 90-minute review cycle`
+#   `a 2-week sprint cooldown`
+#
+# Phase 4 review fix #1: the range arm `4-to-6` failed under the original
+# `(?:to|-|–|—)` alternation because the structure `<hyphen><to><hyphen>`
+# can't be matched as a single token. Rewriting as `[\s-]*(?:to|–|—)?[\s-]*`
+# accepts `4-to-6` / `4-6` / `4 to 6` uniformly. The regex also now:
+#   - Consumes optional leading article (`a`/`an`/`the`) so soften can
+#     replace the phrase including the article — no more `"a a typical"`
+#     duplication.
+#   - Consumes trailing recommendation noun phrases — `refresh cadence`
+#     matches as a unit instead of leaving `cadence` orphaned after
+#     soften.
+_C7_NOUNS = (
+    r"cadence|window|cycle|interval|period|review|audit|"
     r"refresh|sprint|cooldown|cool-down|cool\s+down|lookback|"
-    r"horizon|warranty|grace\s+period|onboarding)\b",
+    r"horizon|warranty|grace\s+period|onboarding"
+)
+_C7_RE = re.compile(
+    r"(?:\b(?:a|an|the)\s+)?"                  # optional leading article
+    r"\b\d+(?:[\s-]*(?:to|–|—)?[\s-]*\d+)?"    # numeric duration / range
+    r"[\s-]+"                                  # space or hyphen before unit
+    r"(?:second|minute|hour|day|week|month|year)s?\b"
+    r"(?:[\s-]+\w+){0,3}?[\s-]+"               # up to 3 modifier words
+    r"(?:" + _C7_NOUNS + r")"                  # primary recommendation noun
+    r"(?:[\s-]+(?:" + _C7_NOUNS + r"))*"       # optional chained nouns
+    r"\b",
     re.IGNORECASE,
 )
 
 # C8 — Frequency-as-recommendation (NEW).
+# Phase 4 review fix #1: optional leading article so soften can replace
+# the article-bearing phrase ("a weekly review") without doubling it.
 _C8_RE = re.compile(
     r"\b(?:every|each)\s+\d+\s+(?:hours?|days?|weeks?|months?|quarters?|years?)\b"
-    r"|\b(?:hourly|daily|weekly|biweekly|bi-weekly|monthly|"
+    r"|(?:\b(?:a|an|the)\s+)?"
+    r"\b(?:hourly|daily|weekly|biweekly|bi-weekly|monthly|"
     r"quarterly|semiannually|semi-annually|annually|yearly)\s+"
     r"(?:audit|review|refresh|check|update|inspection|sync|"
     r"reconciliation|cleanup|standup|stand-up)\b",
@@ -229,64 +253,66 @@ class _SoftenRule:
     description: str
 
 
+_C7_NOUN_PHRASE_RE = re.compile(
+    r"((?:" + _C7_NOUNS + r")"
+    r"(?:[\s-]+(?:" + _C7_NOUNS + r"))*)"
+    r"\s*$",
+    re.IGNORECASE,
+)
+
+
 def _soften_duration_window(match: re.Match) -> str:
-    """`4-to-6 week refresh cadence` → `a typical refresh cadence
-    (every few weeks)`. `60-day affiliate audit window` → `a brief audit
-    window (a couple of months)`."""
+    """Phase 4 review fix #1: replace the entire matched phrase
+    (including any leading article) with `a typical <noun phrase>` so
+    no fragments of the original duration remain orphaned in the body.
+
+    Examples:
+      "a 4-to-6 week refresh cadence" → "a typical refresh cadence"
+      "a 60-day affiliate audit window" → "a typical audit window"
+      "a 2-week sprint cooldown" → "a typical sprint cooldown"
+
+    The original strategy of appending a parenthetical scale phrase
+    (e.g. "(every few weeks)") was dropped because (a) day-scale
+    durations like "60-day window" combined awkwardly with scale
+    phrases ("(a brief window)" produced "audit window (a brief
+    window)"), and (b) the scale phrase often misrepresented the
+    original duration after soften. Pure noun-only phrasing reads
+    cleanly and stays factually neutral.
+    """
     text = match.group(0)
-    lower = text.lower()
-    if "week" in lower:
-        scale = "every few weeks"
-    elif "month" in lower:
-        scale = "a couple of months"
-    elif "day" in lower:
-        scale = "a brief window"
-    elif "hour" in lower:
-        scale = "every few hours"
-    elif "year" in lower:
-        scale = "every year or two"
-    else:
-        scale = "regularly"
-    # Try to extract the noun for "refresh cadence" / "audit window"
-    noun_match = re.search(
-        r"(cadence|window|cycle|interval|period|review|audit|"
-        r"refresh|sprint|cooldown|cool-down|lookback|horizon)",
-        text,
-        re.IGNORECASE,
-    )
+    noun_match = _C7_NOUN_PHRASE_RE.search(text)
     if noun_match:
-        noun = noun_match.group(1).lower()
-        return f"a typical {noun} ({scale})"
-    return f"a typical pattern ({scale})"
+        noun_phrase = noun_match.group(1).strip()
+        # Lower-case the noun phrase but preserve any internal hyphenation.
+        noun_phrase = re.sub(r"\s+", " ", noun_phrase.lower())
+        return f"a typical {noun_phrase}"
+    return "a typical pattern"
+
+
+_C8_ACTION_NOUNS_RE = re.compile(
+    r"(audit|review|refresh|check|update|inspection|sync|"
+    r"reconciliation|cleanup|standup|stand-up)\s*$",
+    re.IGNORECASE,
+)
 
 
 def _soften_frequency(match: re.Match) -> str:
-    """`every 4 weeks` → `every few weeks`. `weekly audit` → `regular audit`."""
+    """Phase 4 review fix #1: pure article+noun output for `weekly
+    review` / `monthly audit` style; pure phrase output for `every N
+    units` style. No mid-replacement fragments left orphaned in the
+    body.
+
+    Examples:
+      "a weekly review" → "a regular review"
+      "weekly audit" → "a regular audit"
+      "every 4 weeks" → "on a regular schedule"
+    """
     text = match.group(0)
-    lower = text.lower()
-    if " every " in f" {lower}" or lower.startswith("every"):
-        if "week" in lower:
-            return "every few weeks"
-        if "month" in lower:
-            return "every couple of months"
-        if "day" in lower:
-            return "every few days"
-        if "hour" in lower:
-            return "every few hours"
-        if "year" in lower:
-            return "every year or two"
-        if "quarter" in lower:
-            return "every quarter or so"
-    # `weekly audit` / `monthly review` etc.
-    noun_match = re.search(
-        r"(audit|review|refresh|check|update|inspection|sync|"
-        r"reconciliation|cleanup|standup|stand-up)",
-        text,
-        re.IGNORECASE,
-    )
+    noun_match = _C8_ACTION_NOUNS_RE.search(text)
     if noun_match:
         return f"a regular {noun_match.group(1).lower()}"
-    return "a regular cycle"
+    # `every <N> <unit>` form has no trailing action noun.
+    return "on a regular schedule"
 
 
 def _soften_operational_percentage(match: re.Match) -> str:
@@ -486,19 +512,82 @@ class SoftenReplacement:
     rule: str  # description of the soften rule that fired
 
 
+_PLACEHOLDER_FMT = "\x00CITED_{idx}\x00"
+_PLACEHOLDER_RE = re.compile(r"\x00CITED_(\d+)\x00")
+
+
+def _find_cited_sentence_spans(body: str) -> list[tuple[int, int]]:
+    """Phase 4 review fix #2 — locate every cited sentence's character
+    span [start, end] in `body`. A "cited sentence" ends in `.?!`
+    immediately followed by a `{{cit_N}}` marker; the span runs from
+    the previous sentence boundary (or start of body) through the end
+    of the marker.
+
+    The walk-back for the previous sentence boundary is bounded by the
+    end of the PREVIOUS cited span (`last_end`) — without this bound,
+    a body containing `"Foo.{{cit_1}} Bar.{{cit_2}}"` would compute
+    Bar's span starting at position-after-Foo's-period (i.e. inside
+    Foo's marker), causing restoration to scramble both spans.
+
+    Used by `apply_soften` to mask cited regions before running the
+    soften rules so already-cited operational claims keep their
+    precise wording — the citation marker grounds the precise text,
+    not a hedged version of it.
+    """
+    spans: list[tuple[int, int]] = []
+    last_end = 0
+    for marker in _MARKER_RE.finditer(body):
+        marker_start = marker.start()
+        marker_end = marker.end()
+        if marker_start == 0 or body[marker_start - 1] not in ".?!":
+            # Marker not attached to a sentence terminator — malformed,
+            # leave the surrounding region open to soften.
+            continue
+        # Walk backward from the terminator to find the previous
+        # sentence boundary, bounded by the end of the previous cited
+        # span so we don't reach back into already-assigned regions.
+        terminator_pos = marker_start - 1
+        boundary = last_end
+        for i in range(terminator_pos - 1, last_end - 1, -1):
+            if body[i] in ".?!":
+                boundary = i + 1
+                break
+        # Skip leading whitespace inside the cited region so the span
+        # tracks the actual sentence text, not surrounding indentation.
+        while boundary < terminator_pos and body[boundary].isspace():
+            boundary += 1
+        spans.append((boundary, marker_end))
+        last_end = marker_end
+    return spans
+
+
 def apply_soften(body: str) -> tuple[str, list[SoftenReplacement]]:
     """Run all soften rules over `body`. Returns the (possibly mutated)
     body plus a list of replacements that fired.
 
     Rules apply iteratively in registry order. Each rule's regex
     finds non-overlapping matches; we replace ALL matches per rule
-    before moving to the next rule. Sentences with citation markers
-    are still softened — the LLM may have placed a marker without
-    the marker actually grounding the duration / frequency claim.
+    before moving to the next rule.
+
+    Phase 4 review fix #2: sentences with `{{cit_N}}` markers are
+    EXCLUDED from soften — the citation grounds the precise claim, so
+    softening would leave the marker pointing at hedged text. We mask
+    cited regions with stable placeholders before running soften, then
+    restore them. The placeholders contain control characters that no
+    soften regex matches.
     """
     if not body:
         return body, []
-    out = body
+    cited_spans = _find_cited_sentence_spans(body)
+    cited_texts: list[str] = [body[s:e] for s, e in cited_spans]
+    masked = body
+    # Replace cited spans in REVERSE order so character positions
+    # earlier in the body remain valid through each substitution.
+    for idx in reversed(range(len(cited_spans))):
+        s, e = cited_spans[idx]
+        masked = masked[:s] + _PLACEHOLDER_FMT.format(idx=idx) + masked[e:]
+
+    out = masked
     replacements: list[SoftenReplacement] = []
     for rule in _SOFTEN_RULES:
         def _sub(m: re.Match, _rule: _SoftenRule = rule) -> str:
@@ -518,4 +607,13 @@ def apply_soften(body: str) -> tuple[str, list[SoftenReplacement]]:
                 ))
             return soft
         out = rule.pattern.sub(_sub, out)
+
+    # Restore cited regions.
+    if cited_texts:
+        def _restore(m: re.Match) -> str:
+            idx = int(m.group(1))
+            if 0 <= idx < len(cited_texts):
+                return cited_texts[idx]
+            return m.group(0)
+        out = _PLACEHOLDER_RE.sub(_restore, out)
     return out, replacements
