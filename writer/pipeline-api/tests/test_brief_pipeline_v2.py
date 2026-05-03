@@ -191,6 +191,20 @@ async def fake_claude_json(system: str, user: str, **kwargs):
     if "extract all distinct subtopics" in sys_l:
         return ["Setup process", "Seller fees", "Payment methods"]
 
+    # Framing rewrite: "you normalize blog h2 headings"
+    if "normalize blog h2 headings" in sys_l:
+        # Echo input headings unchanged so the validator's regex re-check
+        # decides whether to accept; tests can override on a case-by-case
+        # basis when they want to verify rewrite behavior specifically.
+        rewrites = []
+        # Items in user payload look like: [{'index': 0, 'text': '...'}]
+        import re as _re
+        for m in _re.finditer(
+            r"'index':\s*(\d+),\s*'text':\s*'([^']*)'", user
+        ):
+            rewrites.append({"index": int(m.group(1)), "text": m.group(2)})
+        return {"rewrites": rewrites}
+
     return {}
 
 
@@ -230,6 +244,9 @@ class _AllMocks:
             patch("modules.brief.faqs.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.graph.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.intent.claude_json", fake_claude_json),
+            # PRD v2.1 — anchor-slot embedding + framing rewrite LLM call
+            patch("modules.brief.skeleton_slots.embed_batch_large", fake_embed_batch_large),
+            patch("modules.brief.framing.claude_json", fake_claude_json),
             patch("modules.brief.pipeline.get_cached", fake_get_cached),
             patch("modules.brief.pipeline.write_cache", fake_write_cache),
         ]
@@ -258,7 +275,7 @@ async def test_pipeline_produces_schema_v2_response():
         result = await run_brief(req)
 
     # ---- Schema contract ----
-    assert result.metadata.schema_version == "2.0"
+    assert result.metadata.schema_version == "2.1"
     assert result.metadata.embedding_model == "text-embedding-3-large"
 
     # ---- Step 3.5 outputs surface on the response ----
@@ -442,7 +459,7 @@ async def test_cache_hit_short_circuits_pipeline():
         "discarded_headings": [],
         "silo_candidates": [],
         "metadata": {
-            "schema_version": "2.0",
+            "schema_version": "2.1",
             "word_budget": 2500,
             "faq_count": 0,
             "h2_count": 0,
@@ -539,7 +556,7 @@ async def test_pipeline_writes_to_cache_after_generation():
     args = write_called["args"]
     assert args["keyword"] == "what is tiktok shop"
     assert args["location_code"] == 2840
-    assert args["schema_version"] == "2.0"
+    assert args["schema_version"] == "2.1"
     assert args["triggered_by_client_id"] == "client-uuid-123"
     assert args["duration_ms"] >= 0
 

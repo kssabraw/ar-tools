@@ -1,11 +1,19 @@
 # PRD: Content Brief Generator Module
 
-**Version:** 2.0.3
+**Version:** 2.1
 **Status:** Ready for Engineering Spec
-**Last Updated:** May 1, 2026
+**Last Updated:** May 3, 2026
 **Part of:** [Parent Content Creation Platform — TBD name]
 **Downstream Dependency:** Content Writer Module (v1.5+)
-**Supersedes:** v1.7
+**Supersedes:** v2.0.3 (filename retains the `-v2_0` suffix; canonical version is in this header)
+
+> **v2.1 changes (2026-05-03):** Phase 1 of the article-quality defect fixes — addresses Defect 1 from the 2026-05-03 audit (keyword-intent → article-format mismatch on the run for "How to Increase ROI for Your TikTok Shop", which classified correctly as `how-to` but produced topic-cluster Q&A H2s instead of procedural steps). Three additions:
+>
+> 1. **`intent_format_template`** — new top-level Step 3 output committing the brief to a per-intent heading-skeleton shape (`h2_pattern`, `h2_framing_rule`, `ordering`, `min_h2_count`, `max_h2_count`, `anchor_slots`). Drives Step 7.5 + Step 11.
+> 2. **Step 7.5 — Anchor-Slot Reservation** (NEW) — runs immediately before Step 8. Embeds the template's `anchor_slots` and reserves the best-fitting candidate per slot before generic MMR runs. Listicle / news / local-seo templates carry empty anchor lists, so this is a no-op for them.
+> 3. **Step 11 — H2 Framing Validator** (NEW) — runs after Step 8.5 scope verification, before the how-to reorder LLM call. Each selected H2 is regex-checked against the template's framing rule; failures route through a single batched LLM rewrite call; rewrites that still fail the regex are accepted with a `framing_violation_accepted` flag in metadata (warn-and-accept fallback — no run aborts).
+>
+> Schema bump: `2.0` → `2.1`. Additive, no breaking output changes; consumers that ignore the new fields continue to work. v2.0 brand reconciliation, banned-term enforcement, scope verification (Steps 8.5 / 8.5b), H3 selection (Step 8.6), authority gap (Step 9), title casing (Step 11.x), and silo identification (Step 12) are unchanged.
 
 ---
 
@@ -234,6 +242,47 @@ If the keyword pattern pre-check did NOT match, fall through to the existing rul
 
 **Output:** `intent_type`, `intent_confidence`, `intent_review_required` (true if confidence < 0.75 and Step 3.1 did not fire)
 
+**Step 3.3 — Intent format template (NEW in v2.1):**
+
+The classifier's output is mapped (deterministic lookup, no LLM call) to a per-intent **heading skeleton template** that drives Step 7.5 anchor-slot reservation and Step 11 framing validation. The template is committed to the brief output as a top-level `intent_format_template` object.
+
+```json
+{
+  "intent_format_template": {
+    "intent": "how-to",
+    "h2_pattern": "sequential_steps",
+    "h2_framing_rule": "verb_leading_action",
+    "ordering": "strict_sequential",
+    "min_h2_count": 4,
+    "max_h2_count": 12,
+    "anchor_slots": [
+      "plan and prepare",
+      "set up and configure",
+      "launch and execute",
+      "measure results and iterate"
+    ],
+    "description": "Sequential procedural steps (verb-leading H2s) for how-to intent."
+  }
+}
+```
+
+**Per-intent template registry (v1):**
+
+| Intent | `h2_pattern` | `h2_framing_rule` | `ordering` | Anchor slots | `min` / `max` H2 |
+|---|---|---|---|---|---|
+| `how-to` | `sequential_steps` | `verb_leading_action` | `strict_sequential` | plan / set up / launch / iterate (4) | 4 / 12 |
+| `listicle` | `ranked_items` | `ordinal_then_noun_phrase` | `none` | none (no anchor reservation) | 5 / 10 |
+| `comparison` | `parallel_axes` | `axis_noun_phrase` | `logical` | pricing / features / performance / support (4) | 3 / 6 |
+| `informational` (incl. `definition`/`guide` aliases) | `topic_questions` | `question_or_topic_phrase` | `logical` | definition / how it works / who / pitfalls (4) | 4 / 6 |
+| `informational-commercial` (incl. `review` alias) | `buyer_education_axes` | `buyer_education_phrase` | `logical` | what to look for / comparing / mistakes / evaluate (4) | 4 / 6 |
+| `ecom` | `feature_benefit` | `axis_noun_phrase` | `logical` | what is included / pricing / compatibility / warranty (4) | 4 / 6 |
+| `local-seo` | `place_bound_topics` | `no_constraint` | `logical` | none | 3 / 6 |
+| `news` | `news_lede` | `no_constraint` | `strict_sequential` | none | 3 / 5 |
+
+`local-seo` and `news` carry `framing_rule="no_constraint"` so the Step 11 validator is a NOOP for them — both are deferred to v1.x. Aliases `guide`, `definition`, and `review` are not new enum values; the classifier already collapses them to one of the canonical intents above.
+
+**Anchor-slot semantics:** anchors are short *phase-level* phrases (e.g. `"plan and prepare"`), not topic-level (e.g. `"plan your TikTok shop"`). Phase phrasing generalizes across keywords — the same how-to skeleton applies whether the article is about opening a TikTok shop, building a deck, or launching a podcast. Topic-level anchors would over-constrain the candidate pool.
+
 ### Step 3.5 — Title + Scope Statement Generation (NEW)
 
 **Purpose:** Commit to an explicit article title and scope statement that anchor all downstream selection and verification logic. Without this commitment, scope discipline can only be approximated from indirect signals.
@@ -431,6 +480,42 @@ Where:
 - **LLM consensus** (0.20) preserved at v1.7 level. Cross-model agreement is a strong citation-optimization signal.
 - **Information gain** (0.20) is new. A heading that appears in Reddit/PAA/LLM fan-out but not in competitor SERP is exactly the differentiation we want to surface.
 
+### Step 7.5 — Anchor-Slot Reservation (NEW in v2.1)
+
+**Purpose:** Force the heading skeleton to match the keyword's intent. Without this step, MMR (Step 8) maximizes priority + diversity but is blind to *shape* — a how-to keyword whose pool is dominated by definitional candidates would produce a Q&A outline even though Step 3 correctly classified the intent as `how-to`. Step 7.5 closes the gap by reserving each anchor slot's best-fitting candidate before generic MMR runs.
+
+**Method:** Single OpenAI embedding call (anchors only — typically 0–5 strings).
+
+**Inputs:**
+- `intent_format_template.anchor_slots` from Step 3.3
+- The eligible candidate pool from Step 5 (after region elimination)
+- `inter_heading_threshold` (matches Step 8's threshold)
+
+**Algorithm:**
+
+1. Embed every anchor in `anchor_slots` (single batched API call). Templates with empty `anchor_slots` (`listicle`, `news`, `local-seo`) skip Step 7.5 entirely.
+2. For each anchor in template order:
+   - Score each unreserved candidate as `cosine(candidate.embedding, anchor.embedding)`.
+   - Skip candidates whose `region_id` was reserved by an earlier slot (region uniqueness).
+   - Skip candidates whose pairwise cosine to any prior reservation exceeds `inter_heading_threshold` (anti-redundancy).
+   - Reserve the highest-scoring survivor whose score exceeds `MIN_ANCHOR_COSINE = 0.55`. Below the floor, leave the slot empty rather than force-fitting an off-anchor candidate — log `unmatched_slot_indices` so threshold-tuning sessions can spot pools that genuinely lack procedural coverage.
+
+**Output:** A list of reserved candidates (in template order) plus the indices of unmatched slots. The reserved list is passed into Step 8 as `pre_reserved`.
+
+**Failure handling:**
+
+| Scenario | Behavior |
+|---|---|
+| Anchor embedding API call fails | Log + continue with empty reservation; Step 8 falls through to plain MMR. Never aborts the run. |
+| Embedding count mismatches anchor count (defensive) | Log + return empty reservation. |
+| Pool is empty | Return empty reservation; Step 8 will raise `no_h2s_selected` itself if applicable. |
+
+**Cost:** One embedding call (≤ 5 anchors) per brief — ~$0.0001. Negligible.
+
+**Logging:**
+- `brief.anchor.reservation_complete` (INFO) — counts reserved vs. unmatched slots.
+- `brief.anchor.unmatched` (DEBUG) — per-slot best score + threshold for tuning.
+
 ### Step 8 — Constrained H2 Selection via MMR (REWRITTEN)
 
 **Algorithm:** Greedy Maximum Marginal Relevance (MMR) with hard constraints.
@@ -440,8 +525,9 @@ Where:
 | Parameter | Default | Notes |
 |---|---|---|
 | `mmr_lambda` | 0.7 | Balance between topical value (priority score) and diversity |
-| `target_h2_count` | 6 (capped intents), 10 (listicle/how-to baseline, uncapped) | From v1.7 intent rules |
+| `target_h2_count` | 6 (capped intents), 10 (listicle/how-to baseline, uncapped) | From v1.7 intent rules. v2.1: clamp to `intent_format_template.max_h2_count`; for `sequential_steps` raise to `min(8, max_h2_count)`. |
 | `inter_heading_threshold` | 0.75 | Maximum allowed pairwise cosine between any two selected H2s |
+| `pre_reserved` | `[]` | NEW in v2.1. Candidates already chosen by Step 7.5 anchor-slot reservation. They occupy the head of `selected` in input order; their regions and embeddings seed MMR's hard-constraint state so subsequent picks don't violate region-uniqueness or inter-heading thresholds against them. MMR fills the remaining `target_count - len(pre_reserved)` slots from the (non-reserved) eligible pool. |
 
 **Algorithm logic:**
 
@@ -720,6 +806,58 @@ Universal structural constants, intent-aware H2/H3 caps, how-to sequential reord
 
 **Word budget:** Maximum 2,500 words across content sections; FAQ section excluded; enforcement is the Writer Module's responsibility.
 
+#### Step 11.0 — H2 Framing Validator (NEW in v2.1)
+
+**Purpose:** Enforce per-intent H2 framing on the surviving outline. After Step 7.5's anchor reservation + Step 8's MMR + Step 8.5's scope verification, the H2 set is finalized — but individual H2s may still be framed as questions when the template wants action verbs (or vice-versa). The framing validator catches this before how-to reordering and Step 11.x title casing run.
+
+**Position in the pipeline:** runs **after Step 8.5 scope verification** and **before** the how-to reorder LLM call (Step 8.6 prep) and **before** Step 11.x title casing. Reorder operates on already-correctly-framed H2s; title casing then normalizes capitalization on the rewritten text.
+
+**Method:**
+
+1. **Regex pre-check.** For each selected H2, evaluate the template's `h2_framing_rule` against the H2 text:
+
+   | `h2_framing_rule` | Pass condition |
+   |---|---|
+   | `verb_leading_action` | First lexical token is an action verb (whitelist + conservative `e/t/n/d/p/y/h/w/ze/fy/ate/ize/ise` stem heuristic) OR an explicit `Step <N>:` prefix. Rejects question-leading and article-leading openers ("What…", "How…", "The…", "Your…", "Best…"). |
+   | `ordinal_then_noun_phrase` | Leading numeral followed by `.`/`)`/space, OR `#<N>`, OR `Top <N>`, OR `Number <N>`. |
+   | `axis_noun_phrase` | Short noun-phrase (≤8 words), no leading question word, not a multi-word verb phrase. Single-word or two-word headings always pass (covers single-word axes like "Pricing", "Support"). |
+   | `question_or_topic_phrase` | Any non-empty heading. |
+   | `buyer_education_phrase` | Either question form OR axis-style noun-phrase. |
+   | `no_constraint` | Always passes (used by `news` / `local-seo`). |
+
+2. **Single batched LLM rewrite.** All failing H2s are sent in one Claude call with a strict JSON contract:
+
+   ```json
+   {"rewrites": [{"index": 0, "text": "Set Up Your TikTok Shop"}, ...]}
+   ```
+
+   The prompt instructs the model to preserve each H2's *topic* exactly (the rewrite must not change what the section covers) while satisfying the framing rule. Per-rule prompt hints are appended (e.g. how-to: "start with an action verb"; comparison: "strip leading verbs and articles; produce a short axis noun-phrase").
+
+3. **Re-check.** Each rewrite is re-validated against the same regex. A rewrite that passes replaces the H2 text in place. A rewrite that still fails the regex → the H2 keeps its original text and the index lands in `framing_rewrites_accepted_with_violation` (logged as a warning, never aborts).
+
+**Failure handling:**
+
+| Scenario | Behavior |
+|---|---|
+| Template's `h2_framing_rule` is `no_constraint` | NOOP. No regex check, no LLM call. |
+| All H2s already pass the regex | NOOP. No LLM call (cost optimization + flake reduction). |
+| LLM call fails or returns malformed JSON | Log + accept all originals; flag every original index in `framing_rewrites_accepted_with_violation`. |
+| LLM returns rewrite for some indices but not others | The unspecified indices fall through to `framing_rewrites_accepted_with_violation`; specified indices follow the re-check rule above. |
+| Rewrite re-check fails | Original text preserved; index added to `framing_rewrites_accepted_with_violation`. |
+
+**Cost:** Zero or one LLM call per brief, ~$0.01–$0.02 when invoked. Skipped entirely when no H2 fails the regex.
+
+**Metadata:**
+- `framing_rewrites_applied: int` — H2s whose text was rewritten (and the rewrite passed).
+- `framing_rewrites_accepted_with_violation: int` — H2s where the rewrite still failed the regex AND the LLM-failure case.
+- `anchor_slots_total: int` and `anchor_slots_reserved_count: int` (from Step 7.5) round out the diagnostic trio surfaced for each run.
+
+**Logging:**
+- `brief.framing.complete` (INFO) — totals per run.
+- `brief.framing.rewritten` (INFO) — per-H2 before/after.
+- `brief.framing.violation_accepted` (WARN) — chronic offenders for tuning.
+- `brief.framing.llm_failed` (WARN) — LLM call exception path.
+
 #### Step 11.x — Title Case Normalization (NEW in v2.0.3)
 
 After every prior heading-processing step has run (polish, authority gap injection, scope verification, H3 selection, structure assembly), apply **AP-style / Chicago Manual of Style title case** to every `text` field on every entry in `heading_structure` — H1, H2, H3, FAQ headers, FAQ questions — uniformly.
@@ -879,7 +1017,7 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
 
 ```json
 {
-  "schema_version": "2.0",
+  "schema_version": "2.1",
   "keyword": "string",
   "title": "string",
   "scope_statement": "string",
@@ -887,6 +1025,16 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
   "intent_type": "informational | listicle | how-to | comparison | ecom | local-seo | news | informational-commercial",
   "intent_confidence": 0.0,
   "intent_review_required": false,
+  "intent_format_template": {
+    "intent": "informational | listicle | how-to | comparison | ecom | local-seo | news | informational-commercial",
+    "h2_pattern": "sequential_steps | ranked_items | parallel_axes | topic_questions | buyer_education_axes | feature_benefit | place_bound_topics | news_lede",
+    "h2_framing_rule": "verb_leading_action | ordinal_then_noun_phrase | axis_noun_phrase | question_or_topic_phrase | buyer_education_phrase | no_constraint",
+    "ordering": "strict_sequential | logical | none",
+    "min_h2_count": 4,
+    "max_h2_count": 12,
+    "anchor_slots": ["string"],
+    "description": "string"
+  },
   "persona": {
     "description": "string",
     "background_assumptions": ["string"],
@@ -1034,7 +1182,11 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
       "claude": false,
       "gemini": false,
       "perplexity": false
-    }
+    },
+    "anchor_slots_total": 0,
+    "anchor_slots_reserved_count": 0,
+    "framing_rewrites_applied": 0,
+    "framing_rewrites_accepted_with_violation": 0
   }
 }
 ```
@@ -1434,3 +1586,4 @@ To validate v2.0 against the failure modes that motivated the rewrite:
 | **2.0** | **2026-05-01** | **Major architectural rewrite. Added Step 3.5 (title + scope statement generation), Step 6 (hypothetical searcher persona generation), Step 8.5 (scope verification), and Step 8.6 (H3 selection — applies the same MMR + region + anti-restatement principles at H2-scope rather than title-scope, with `parent_relevance` floor 0.60 and ceiling 0.85, inter-H3 threshold 0.78, and Authority Gap cap-displacement rules). Replaced lexical-only deduplication with embedding-based pre-filtering (relevance floor 0.55, restatement ceiling 0.78). Replaced ad-hoc heading selection with MMR optimization respecting region uniqueness and inter-heading anti-redundancy (max 0.75 pairwise cosine). Added coverage graph construction via Louvain community detection. Upgraded embedding model from text-embedding-3-small to text-embedding-3-large. Rebalanced heading priority formula to include explicit information_gain_score term. Silo cluster identification now reuses Step 5 regions instead of clustering discarded headings separately. Output schema fundamentally restructured: `semantic_score` renamed to `title_relevance`; new fields `title`, `scope_statement`, `persona`, `region_id`, `scope_classification`, `information_gain_score`, `parent_h2_text`, `parent_relevance`; new discard reasons (including `h3_below_parent_relevance_floor`, `h3_above_parent_restatement_ceiling`, `displaced_by_authority_gap_h3`); new metadata for graph structure, shortfall flags, and H3 distribution (`h3_count_average`, `h2s_with_zero_h3s`). Cost ceiling raised from $0.75 to $1.00. End-to-end target raised from 60s to 75s. Brief generator does not accept ICP context; hypothetical searcher is derived from topic + SERP signal only. Fixes the v1.7 failure modes documented in Section 1: paraphrase-H2 outlines and topical-clone outlines.** |
 | **2.0.2** | **2026-05-01** | **Refined Step 12 (Silo Cluster Identification) into six numbered subsections: 12.1 explicit `discard_reason` filtering (only `scope_verification_out_of_scope`, conditional `below_priority_threshold`, and `global_cap_exceeded` route to silos; restatement ceiling and off-topic rejects are excluded so silos never compete with the parent brief); 12.2 cluster formation (preserves region reuse + coherence + centroid); 12.3 search demand validation with hard threshold 0.30 against a five-signal `search_demand_score` (max SERP frequency, max LLM consensus, PAA / autocomplete / Reddit presence indicators); 12.4 per-candidate viability LLM check with strict JSON output (`viable_as_standalone_article`, `reasoning`, `estimated_intent`) and parallel execution; 12.5 cross-brief deduplication scoped out as a v2.1 requirement; 12.6 expanded silo candidate output with `discard_reason_breakdown`, `search_demand_score`, `viable_as_standalone_article`, `viability_reasoning`, `estimated_intent`, and `cross_brief_occurrence_count`. New metadata counters: `silo_candidates_rejected_by_discard_reason`, `silo_candidates_rejected_by_search_demand`, `silo_candidates_rejected_by_viability_check`, `silo_viability_fallback_applied`. Cost range updated to $0.35–$0.89 reflecting up to 10 parallel viability checks at $0.01–$0.02 each; $1.00 ceiling preserved; end-to-end target stays at 75s under parallel execution. New test fixtures I (discard-reason filtering) and J (viability rejection); Fixture A extended to verify silo `search_demand_score > 0` and `viable_as_standalone_article: true` for in-band scope rejects. No breaking schema changes — new fields are additive.** |
 | **2.0.3** | **2026-05-01** | **Three surgical bug fixes diagnosed from a production run on `"how to open a tiktok shop"`. (1) **Intent classifier keyword pattern pre-check**: Step 3 now runs a deterministic keyword pattern check (Step 3.1) BEFORE the SERP-feature-signal classifier; matching keywords short-circuit at 0.90–0.95 confidence with `intent_review_required=false`. Patterns cover `how to`/`how do i`/`how can i`/`ways to`/`steps to`/`guide to` (→ how-to), `what is`/`what are`/`what does`/`definition of` (→ informational), `best`/`top`/`<n> <plurals>` (→ listicle), and ` vs `/` versus `/` or `/`compared to` (→ comparison). Fixes a production miss where a how-to keyword was classified informational at 0.55 confidence because top SERP titles didn't literally start with "how to". (2) **Authority Gap scope discipline**: Step 9 now receives `title`, `scope_statement`, and `intent_type` as inputs and emits a `scope_alignment_note` per H3. A new Step 8.5b runs scope verification on Authority Gap H3s with the same in_scope / borderline / out_of_scope routing as Step 8.5; out-of-scope H3s route to `silo_candidates` with new `routed_from: "scope_verification_h3"`. Adds ~$0.02 per brief for the extra LLM call. Fixes the production failure mode where compliance / tax / abandonment H3s bypassed scope verification entirely. (3) **Title case normalization**: a new Step 11.x applies AP/Chicago-style title case via the `titlecase` PyPI library to every `heading_structure[].text` after all upstream processing. Pure CPU, free, deterministic. Fixes inconsistent capitalization in published articles. New fixtures: K (Authority Gap H3 scope rejection), L (title case round-trip). Cost range updated to $0.37–$0.91; end-to-end target unchanged at 75s; ceiling unchanged at $1.00.** |
+| **2.1** | **2026-05-03** | **Phase 1 of the article-quality defect fixes (proposal accepted 2026-05-03). Addresses Defect 1 from the audit: keyword-intent → article-format mismatch (the run on "How to Increase ROI for Your TikTok Shop" classified correctly as `how-to` but produced topic-cluster Q&A H2s instead of procedural steps). Three additions, all additive on the v2.0 schema. **(1) `intent_format_template`** — Step 3.3 maps the classified intent to a per-intent heading-skeleton template emitting `h2_pattern`, `h2_framing_rule`, `ordering`, `min_h2_count`, `max_h2_count`, and `anchor_slots`. Templates registered for all 8 intent enum values; `local-seo` and `news` use `framing_rule="no_constraint"` and remain deferred to v1.x. **(2) Step 7.5 — Anchor-Slot Reservation** — runs immediately before Step 8 MMR. Embeds template `anchor_slots` (single API call), then for each slot reserves the highest-cosine candidate above `MIN_ANCHOR_COSINE = 0.55` while honoring region uniqueness and the inter-heading threshold. Reserved candidates seed `select_h2s_mmr`'s `pre_reserved` parameter so MMR's hard constraints account for them. Failures (embedding outage, no candidate above floor) are logged and skipped — Step 8 falls through to plain MMR. **(3) Step 11.0 — H2 Framing Validator** — runs after Step 8.5 scope verification, before how-to reorder and Step 11.x title casing. Each H2 is regex-checked against the template's framing rule; failures route through one batched LLM rewrite call (preserving topic, swapping framing). Rewrites that still fail the regex are accepted with `framing_rewrites_accepted_with_violation` flagged in metadata — never aborts the run. New top-level output field `intent_format_template`; new metadata counters `anchor_slots_total`, `anchor_slots_reserved_count`, `framing_rewrites_applied`, `framing_rewrites_accepted_with_violation`. Schema bump `2.0` → `2.1`. Orchestrator's `EXPECTED_MODULE_VERSIONS["brief"]` bumped to `2.1` in lockstep. Cost increase: ~$0.0001 (anchor embedding) + 0–$0.02 (framing rewrite, only when triggered). End-to-end timing unchanged (Step 7.5 is one embedding call running before Step 8; framing pass adds ≤2s when LLM call fires).** |

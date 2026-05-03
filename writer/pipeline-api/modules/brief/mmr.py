@@ -67,6 +67,8 @@ def select_h2s_mmr(
     target_count: int,
     inter_heading_threshold: float = 0.75,
     mmr_lambda: float = 0.7,
+    *,
+    pre_reserved: Optional[list[Candidate]] = None,
 ) -> SelectionResult:
     """Select up to `target_count` H2s under hard constraints (PRD §5 Step 8).
 
@@ -77,10 +79,18 @@ def select_h2s_mmr(
       - `eligible` is the post-region-elimination pool — gates and
         region-off-topic / region-restates-title cuts already applied
         upstream.
+      - `pre_reserved` (PRD v2.1 Step 7.5): candidates already chosen by
+        the anchor-slot reservation pass. They appear at the head of
+        `selected` in their input order, and their regions/embeddings
+        seed the MMR loop's hard-constraint state. The caller is
+        responsible for excluding them from `eligible`.
 
     Behavior:
-      - Greedy: each round picks the surviving candidate with the
-        highest mmr_score.
+      - Pre-reserved candidates fill the first slots in input order; MMR
+        fills the remaining `target_count - len(pre_reserved)` slots.
+      - Greedy: each MMR round picks the surviving candidate with the
+        highest mmr_score against the union of (pre-reserved + already-
+        selected-by-MMR).
       - Region uniqueness and inter-heading constraints are HARD —
         violators are skipped, never penalized.
       - When no surviving candidate exists, the loop exits and shortfall
@@ -89,12 +99,19 @@ def select_h2s_mmr(
     Argument validation:
       - target_count <= 0 returns empty selection without iterating.
       - mmr_lambda must be in [0, 1]; values outside raise ValueError.
+      - len(pre_reserved) > target_count raises ValueError — the caller
+        passed more anchors than slots to fill.
     """
     if not 0.0 <= mmr_lambda <= 1.0:
         raise ValueError(f"mmr_lambda must be in [0, 1]; got {mmr_lambda}")
+    pre_reserved = list(pre_reserved or [])
+    if len(pre_reserved) > target_count > 0:
+        raise ValueError(
+            f"pre_reserved count ({len(pre_reserved)}) exceeds target_count ({target_count})"
+        )
     if target_count <= 0:
         return SelectionResult(
-            selected=[],
+            selected=list(pre_reserved),
             not_selected=list(eligible),
             shortfall=False,
             shortfall_reason=None,
@@ -110,10 +127,23 @@ def select_h2s_mmr(
             "select_h2s_mmr requires region_id on every eligible candidate; "
             f"missing on: {missing_region!r}"
         )
+    pre_missing_region = [c.text for c in pre_reserved if c.region_id is None]
+    if pre_missing_region:
+        raise ValueError(
+            "select_h2s_mmr requires region_id on every pre_reserved candidate; "
+            f"missing on: {pre_missing_region!r}"
+        )
 
-    selected: list[Candidate] = []
-    selected_regions: set[str] = set()
-    selected_embeddings: list[list[float]] = []
+    # Seed MMR state with the pre-reserved candidates so subsequent
+    # selections respect region uniqueness and inter-heading thresholds
+    # against them.
+    selected: list[Candidate] = list(pre_reserved)
+    selected_regions: set[str] = {
+        c.region_id for c in pre_reserved if c.region_id is not None
+    }
+    selected_embeddings: list[list[float]] = [
+        c.embedding for c in pre_reserved if c.embedding
+    ]
     pool: list[Candidate] = list(eligible)
     rounds = 0
 
