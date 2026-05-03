@@ -72,6 +72,7 @@ from .framing import validate_and_rewrite_framing
 from .h3_parent_fit import verify_h3_parent_fit
 from .h3_selection import select_h3s_for_h2s
 from .intent import classify_intent
+from .intent_rewrite import rewrite_h2s_for_intent
 from .intent_template import get_template
 from .llm import claude_json, embed_batch_large
 from .mmr import select_h2s_mmr
@@ -737,6 +738,21 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
                     "max_h2_count": intent_template.max_h2_count,
                 },
             )
+
+    # ---- Step 11.5 — Intent Rewriter (PRD v2.4) ----
+    # Archetype-driven STRUCTURAL rewriting for how-to / listicle /
+    # informational intents. Distinct from Step 11 framing (shape only,
+    # warn-and-accept): this stage actively rewrites Q&A-style or topic-
+    # paraphrased H2s into the archetype's expected form (sequential
+    # procedural steps, value-leading list items, Cost-of-Inaction
+    # opener). Other intents pass through. Never aborts on failure —
+    # framing validator already ran upstream as the shape safety net.
+    await rewrite_h2s_for_intent(
+        h2s=selected_h2s,
+        keyword=keyword,
+        title=title_scope.title,
+        intent=intent,
+    )
 
     # ---- Step 8.5b — Authority Gap H3 scope verification (PRD v2.0.3) ----
     # Catches H3s the agent produced that drift outside the brief's scope.
