@@ -155,7 +155,7 @@ class TargetKeywordRecord(BaseModel):
 
 
 class SIEResponse(BaseModel):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1"] = "1.1"
     keyword: str
     location_code: int
     language_code: str

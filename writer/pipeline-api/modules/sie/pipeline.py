@@ -359,7 +359,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
         keyword=keyword,
         location_code=req.location_code,
         outlier_mode=req.outlier_mode,
-        schema_version="1.0",
+        schema_version="1.1",
         output_payload=response.model_dump(mode="json"),
         duration_ms=duration_ms,
     )

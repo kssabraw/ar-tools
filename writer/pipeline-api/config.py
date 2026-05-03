@@ -67,6 +67,21 @@ class Settings(BaseSettings):
     # account tiers; 5 is safe for the default Anthropic plan.
     anthropic_max_concurrency: int = 5
 
+    # SIE v1.1 — Hybrid entity scoring (replaces the prior hard
+    # salience >= 0.40 gate at NLP-extract time). Google NLP returns
+    # everything above the floor; entities are then scored on a
+    # composite of cross-SERP recurrence + salience + mentions - noise
+    # and promoted into terms by either composite-score threshold OR
+    # high-recurrence override. See `modules/sie/entities.py` and
+    # `modules/sie/google_nlp.py`.
+    google_nlp_min_salience_floor: float = 0.10
+    entity_score_promotion_threshold: float = 0.30
+    entity_recurrence_override_pages: int = 3
+    entity_score_weights_recurrence: float = 0.45
+    entity_score_weights_salience: float = 0.30
+    entity_score_weights_mention: float = 0.20
+    entity_score_weights_noise_penalty: float = 0.15
+
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 

@@ -3,11 +3,20 @@
 Uses the REST API with an API key (GOOGLE_NLP_API_KEY) via httpx — no
 service account JSON required.
 
-Per SIE PRD Module 11 Pass 1: extract entities with salience >= 0.40, types
-PERSON / LOCATION / ORGANIZATION / EVENT / WORK_OF_ART / CONSUMER_GOOD / OTHER.
+SIE v1.1 (replaces v1.0's hard salience >= 0.40 gate):
+  - Salience floor lowered to `google_nlp_min_salience_floor` (default
+    0.10) so low-salience entities with cross-SERP recurrence aren't
+    discarded at extraction time. Hybrid scoring in `entities.py`
+    promotes them based on the composite signal.
+  - Type whitelist removed — every Google NLP entity type passes
+    through the extractor. NUMBER / DATE / PRICE / PHONE_NUMBER
+    entities are filtered downstream by the noise penalty in the
+    composite score (typically low salience + low recurrence anyway).
+  - Navigational-name heuristic is preserved (catches obvious junk
+    before it ever reaches scoring).
 
-Google's analyzeEntities endpoint accepts up to 100,000 bytes per call. We
-truncate at the byte boundary to avoid mid-character splits.
+Google's analyzeEntities endpoint accepts up to 100,000 bytes per call.
+We truncate at the byte boundary to avoid mid-character splits.
 """
 
 from __future__ import annotations
@@ -25,11 +34,7 @@ logger = logging.getLogger(__name__)
 
 _NLP_URL = "https://language.googleapis.com/v1/documents:analyzeEntities"
 GOOGLE_NLP_MAX_BYTES = 99_000
-SALIENCE_THRESHOLD = 0.40
-ALLOWED_TYPES = {
-    "PERSON", "LOCATION", "ORGANIZATION", "EVENT",
-    "WORK_OF_ART", "CONSUMER_GOOD", "OTHER",
-}
+
 NAVIGATIONAL_NAME_PATTERNS = (
     "menu", "navigation", "homepage", "facebook", "twitter",
     "instagram", "linkedin", "youtube", "tiktok", "search",
@@ -61,12 +66,23 @@ def _truncate_to_bytes(text: str, max_bytes: int) -> str:
 
 
 def _is_navigational(name: str) -> bool:
+    """True when `name` looks like menu/footer junk rather than content.
+
+    SIE v1.1 — tightened from substring match to exact-token match so
+    legitimate entities containing a navigational word as part of their
+    proper noun ("TikTok Shop", "Facebook Marketing Strategy") are NOT
+    filtered. Only entities whose entire name IS one of the patterns
+    (or a bare domain) are dropped here. Anything subtler is handled
+    downstream by the composite-score noise penalty in `entities.py`.
+    """
     lowered = name.lower().strip()
     if not lowered:
         return True
+    # Bare domain: dot-separated, short, no spaces (e.g. "tiktok.com")
     if "." in lowered and len(lowered) < 30 and " " not in lowered:
         return True
-    return any(p in lowered for p in NAVIGATIONAL_NAME_PATTERNS)
+    # Exact match against the navigational pattern list.
+    return lowered in NAVIGATIONAL_NAME_PATTERNS
 
 
 async def analyze_entities(url: str, text: str) -> PageNERResult:
@@ -101,13 +117,15 @@ async def analyze_entities(url: str, text: str) -> PageNERResult:
         logger.warning("Google NLP call failed for %s: %s", url, exc)
         return PageNERResult(url=url, failed=True, failure_reason=f"api_error: {exc.__class__.__name__}")
 
+    floor = settings.google_nlp_min_salience_floor
     entities: list[NEREntity] = []
     for entity in data.get("entities", []):
-        if entity.get("salience", 0) < SALIENCE_THRESHOLD:
+        # SIE v1.1 — soft salience floor (default 0.10) replaces the
+        # prior hard 0.40 gate. Entities surviving here are scored
+        # downstream against recurrence + mentions before promotion.
+        if entity.get("salience", 0) < floor:
             continue
         type_name = entity.get("type", "OTHER")
-        if type_name not in ALLOWED_TYPES:
-            continue
         name = (entity.get("name") or "").strip()
         if _is_navigational(name):
             continue
