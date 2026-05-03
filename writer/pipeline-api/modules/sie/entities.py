@@ -536,12 +536,24 @@ def merge_textrazor_entities_into_terms(
             existing_meta.setdefault("is_entity", True)
             existing_meta.setdefault("entity_category", "concepts")
             existing_meta.setdefault("ner_variants", [])
-            # The term came from at least the n-gram pipeline; if
-            # Google NLP also flagged it the source is already
-            # "ngram_and_entity". Either way, having TextRazor agree
-            # bumps source to "ngram_and_entity" (covers the case
-            # where the n-gram had no Google NLP signal).
-            existing_meta["source"] = "ngram_and_entity"
+            # Source-flag rules — TextRazor agreement is a
+            # cross-vendor confirmation, not a new signal type. It
+            # MUST NOT promote an entity_only term to
+            # ngram_and_entity (no n-gram exists to back the claim,
+            # and scoring.py applies a 1.20× boost to
+            # ngram_and_entity vs 1.10× to entity_only — falsely
+            # upgrading inflates the score by ~9%).
+            #   - existing "entity_only" (Google NLP only) → stays
+            #     "entity_only"; TextRazor adds a confidence flag
+            #     via is_textrazor below but NOT a source upgrade.
+            #   - existing "ngram_and_entity" → stays.
+            #   - no prior entity_meta entry (n-gram-only term) →
+            #     becomes "ngram_and_entity" since TextRazor now
+            #     supplies the entity signal the n-gram alone
+            #     lacked.
+            existing_source = existing_meta.get("source")
+            if existing_source != "entity_only":
+                existing_meta["source"] = "ngram_and_entity"
             existing_meta["is_textrazor"] = True
             existing_meta["textrazor_relevance"] = round(ent.avg_relevance, 4)
             existing_meta["textrazor_confidence"] = round(ent.max_confidence, 4)

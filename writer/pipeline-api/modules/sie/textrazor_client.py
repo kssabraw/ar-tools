@@ -36,6 +36,34 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 TEXTRAZOR_MAX_BYTES = 200_000  # TextRazor accepts up to ~200KB per request
 
 
+# Map SIE's ISO-639-1 `language_code` (e.g. "en", "es", "fr") to
+# TextRazor's 3-letter `languageOverride` codes. TextRazor supports
+# 12+ languages but expects "eng" / "spa" / "fra" rather than ISO-1.
+# Unmapped codes fall back to "eng" (TextRazor will still succeed —
+# accuracy degrades gracefully on unsupported languages).
+_TEXTRAZOR_LANGUAGE_MAP = {
+    "en": "eng",
+    "es": "spa",
+    "fr": "fra",
+    "de": "deu",
+    "it": "ita",
+    "pt": "por",
+    "nl": "nld",
+    "ja": "jpn",
+    "zh": "zho",
+    "ru": "rus",
+    "pl": "pol",
+    "tr": "tur",
+}
+
+
+def _textrazor_language(language_code: str) -> str:
+    """Translate ISO-639-1 to TextRazor's 3-letter code; default to eng."""
+    return _TEXTRAZOR_LANGUAGE_MAP.get(
+        (language_code or "en").strip().lower(), "eng",
+    )
+
+
 class TextRazorError(Exception):
     """Raised on non-2xx HTTP responses or malformed payloads."""
 
@@ -75,6 +103,7 @@ async def analyze_entities(
     text: str,
     *,
     http_client: Optional[httpx.AsyncClient] = None,
+    language_code: str = "en",
 ) -> PageTextRazorResult:
     """Run TextRazor entity extraction on a single page's body text.
 
@@ -82,8 +111,15 @@ async def analyze_entities(
     the API call doesn't succeed — callers should aggregate the
     successful results and ignore the failures (matching the Google NLP
     pattern).
+
+    `language_code` is the SIE request's ISO-639-1 code; it gets
+    translated to TextRazor's 3-letter `languageOverride`. Defaults to
+    "en" so legacy callers keep working.
     """
-    api_key = settings.textrazor_api_key.strip()
+    # Defensive — config defines `textrazor_api_key: str = ""`, but if
+    # the field were missing or set to None the `.strip()` would
+    # AttributeError.
+    api_key = (getattr(settings, "textrazor_api_key", "") or "").strip()
     if not api_key:
         return PageTextRazorResult(
             url=url, failed=True, failure_reason="not_configured",
@@ -99,7 +135,7 @@ async def analyze_entities(
     form = {
         "text": payload_text,
         "extractors": "entities",  # explicitly request entities only
-        "languageOverride": "eng",
+        "languageOverride": _textrazor_language(language_code),
     }
     headers = {
         "X-TextRazor-Key": api_key,
@@ -183,17 +219,27 @@ async def analyze_many(
     pages: list[tuple[str, str]],
     *,
     concurrency: int = 5,
+    language_code: str = "en",
 ) -> list[PageTextRazorResult]:
     """Run analyze_entities on many (url, text) pairs concurrently.
 
     Concurrency bounded with a semaphore (default 5) to stay under the
     free tier's rate and play nicely with retries. Returns one result
     per input in the same order, including failures.
+
+    A single shared `httpx.AsyncClient` is used across all calls so we
+    benefit from connection pooling — without this, each per-page call
+    spins up its own client (N TLS handshakes for N pages).
     """
     semaphore = asyncio.Semaphore(concurrency)
 
-    async def _bounded(url: str, text: str) -> PageTextRazorResult:
-        async with semaphore:
-            return await analyze_entities(url, text)
+    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT_SECONDS) as client:
+        async def _bounded(url: str, text: str) -> PageTextRazorResult:
+            async with semaphore:
+                return await analyze_entities(
+                    url, text,
+                    http_client=client,
+                    language_code=language_code,
+                )
 
-    return await asyncio.gather(*[_bounded(u, t) for u, t in pages])
+        return await asyncio.gather(*[_bounded(u, t) for u, t in pages])

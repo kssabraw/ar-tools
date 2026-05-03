@@ -191,7 +191,9 @@ async def run_sie(req: SIERequest) -> SIEResponse:
 
     # ---- Track A + Track B in parallel ----
     track_a = asyncio.create_task(_run_track_a(pages, keyword, page_to_classified))
-    track_b = asyncio.create_task(_run_track_b(pages, keyword=keyword))
+    track_b = asyncio.create_task(_run_track_b(
+        pages, keyword=keyword, language_code=req.language_code,
+    ))
 
     aggregates, sem_scores, tfidf_scores, signals = await track_a
     (
@@ -213,20 +215,18 @@ async def run_sie(req: SIERequest) -> SIEResponse:
             details={"failed_urls": nlp_failed_urls},
         ))
 
-    # PRD v1.2 — TextRazor partial-failure warning. Note "not_configured"
-    # is silently ignored (it's expected when the env var isn't set);
-    # only true errors get surfaced.
-    real_textrazor_failures = [
-        u for u in textrazor_failed_urls
-        if u  # `not_configured` would mark every page as failed; we
-              # detect that via no surviving entities below
-    ]
-    if textrazor_entities and real_textrazor_failures and len(real_textrazor_failures) < len(pages):
+    # PRD v1.2 — TextRazor partial-failure warning. The
+    # `textrazor_entities` truthy gate filters out the "not_configured"
+    # case (no API key → every page fails → zero aggregated entities,
+    # which is silent-by-design rather than a partial-failure warning).
+    # When some pages succeeded, the count of failed URLs is meaningful
+    # and worth surfacing to the dashboard.
+    if textrazor_entities and textrazor_failed_urls and len(textrazor_failed_urls) < len(pages):
         warnings.append(SIEWarning(
             level="info",
             code="textrazor_partial",
-            message=f"TextRazor failed for {len(real_textrazor_failures)} pages.",
-            details={"failed_urls": real_textrazor_failures},
+            message=f"TextRazor failed for {len(textrazor_failed_urls)} pages.",
+            details={"failed_urls": textrazor_failed_urls},
         ))
 
     # ---- Module 11 merge: entities into terms ----
@@ -464,6 +464,7 @@ async def _run_track_b(
     pages: list[PageZones],
     *,
     keyword: str = "",
+    language_code: str = "en",
 ) -> tuple[list, list[str], list, list[str], int, int, int, list[int]]:
     """Track B: entity extraction + word count analysis.
 
@@ -472,6 +473,9 @@ async def _run_track_b(
     `keyword_match` reason in PromotionReason).
 
     SIE v1.2 — also runs TextRazor entity extraction in parallel.
+    `language_code` is the SIE request's ISO-639-1 code; forwarded to
+    TextRazor as `languageOverride` so non-English content gets
+    analyzed against the correct entity model.
     Returns a tuple of (google_entities, google_failed_urls,
     textrazor_entities, textrazor_failed_urls, wc_min, wc_target,
     wc_max, source_counts).
@@ -485,7 +489,8 @@ async def _run_track_b(
     # pipeline proceeds with Google-NLP-only entities.
     textrazor_task = asyncio.create_task(
         textrazor_client.analyze_many(
-            [(p.url, p.body_text or "") for p in pages]
+            [(p.url, p.body_text or "") for p in pages],
+            language_code=language_code,
         )
     )
 

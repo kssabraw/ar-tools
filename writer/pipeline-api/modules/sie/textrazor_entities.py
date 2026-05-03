@@ -115,10 +115,8 @@ def aggregate_textrazor_results(
     aggregated: list[AggregatedTextRazorEntity] = []
     for norm, slot in by_norm.items():
         pages_found = len(slot["urls"])
-        if pages_found <= 3:
+        if pages_found < TEXTRAZOR_MIN_PAGES:
             # Aggregate filter — discard low-coverage entities.
-            continue
-        if not slot["relevances"]:
             continue
         # Most-common original casing wins as the canonical name.
         canonical = Counter(slot["names"]).most_common(1)[0][0]

@@ -404,3 +404,166 @@ def test_scoring_boost_differentiation_constants_correct():
     assert "score *= 1.10" in src or "* 1.10" in src
     # The old v1.1 constant should NOT remain in the scoring path
     assert "score *= 1.15" not in src
+
+
+# ---------------------------------------------------------------------------
+# Self-review fixes — source-flag preservation, constant drift, language,
+# httpx pooling, dead-code removal.
+# ---------------------------------------------------------------------------
+
+
+def test_textrazor_merge_preserves_entity_only_source():
+    """Bug fix: TextRazor agreement on a Google-NLP-only term must NOT
+    upgrade source from 'entity_only' to 'ngram_and_entity'. There is
+    no n-gram backing; falsely upgrading inflates the score by ~9%
+    (1.20× boost vs 1.10× per scoring.py).
+    """
+    aggregates = {"gmv max": _make_aggregate("gmv max")}
+    # Simulate Google NLP having previously marked this as entity_only.
+    entity_meta: dict[str, dict] = {
+        "gmv max": {
+            "is_entity": True,
+            "entity_category": "concepts",
+            "source": "entity_only",
+        }
+    }
+    textrazor_entity = AggregatedTextRazorEntity(
+        name="GMV Max",
+        avg_relevance=0.6,
+        max_confidence=5.0,
+        pages_found=4,
+        source_urls=["https://t.com/x"],
+        variants=["GMV Max", "gmv max"],
+    )
+    aggregates, entity_meta = merge_textrazor_entities_into_terms(
+        aggregates, entity_meta, [textrazor_entity],
+    )
+    # Must STAY entity_only — TextRazor agreeing doesn't mean an
+    # n-gram exists.
+    assert entity_meta["gmv max"]["source"] == "entity_only"
+    # But the TextRazor confidence flags should still be added.
+    assert entity_meta["gmv max"]["is_textrazor"] is True
+    assert entity_meta["gmv max"]["textrazor_relevance"] == 0.6
+
+
+def test_textrazor_merge_promotes_ngram_only_to_dual_signal():
+    """Companion to the above — when no entity_meta entry exists yet
+    (n-gram-only term), TextRazor agreement DOES promote it to
+    ngram_and_entity. This is the legitimate upgrade path.
+    """
+    aggregates = {"checkout flow": _make_aggregate("checkout flow")}
+    entity_meta: dict[str, dict] = {}  # No prior entity signal.
+    textrazor_entity = AggregatedTextRazorEntity(
+        name="Checkout Flow",
+        avg_relevance=0.5,
+        max_confidence=4.0,
+        pages_found=4,
+        source_urls=["https://t.com/x"],
+        variants=["Checkout Flow", "checkout flow"],
+    )
+    aggregates, entity_meta = merge_textrazor_entities_into_terms(
+        aggregates, entity_meta, [textrazor_entity],
+    )
+    assert entity_meta["checkout flow"]["source"] == "ngram_and_entity"
+
+
+def test_aggregator_uses_min_pages_constant():
+    """Bug fix: the aggregator's coverage filter must reference
+    TEXTRAZOR_MIN_PAGES rather than a hardcoded literal so changing
+    the constant propagates. We assert this by making a TextRazor
+    entity present on exactly TEXTRAZOR_MIN_PAGES - 1 pages and
+    verifying it's discarded, then on TEXTRAZOR_MIN_PAGES pages and
+    verifying it survives.
+    """
+    def _entity_on_n_pages(n: int):
+        per_page: list[PageTextRazorResult] = []
+        for i in range(n):
+            per_page.append(PageTextRazorResult(
+                url=f"https://t.com/{i}",
+                entities=[TextRazorEntity(
+                    name="GMV Max",
+                    matched_text="GMV Max",
+                    relevance=0.8,
+                    confidence=8.0,
+                )],
+            ))
+        return per_page
+
+    just_under = aggregate_textrazor_results(
+        _entity_on_n_pages(TEXTRAZOR_MIN_PAGES - 1)
+    )
+    assert just_under == []
+
+    just_at = aggregate_textrazor_results(
+        _entity_on_n_pages(TEXTRAZOR_MIN_PAGES)
+    )
+    assert len(just_at) == 1
+    assert just_at[0].pages_found == TEXTRAZOR_MIN_PAGES
+
+
+def test_textrazor_language_map_translates_iso_to_three_letter():
+    """Bug fix: SIE request's ISO-639-1 language_code must be
+    translated to TextRazor's expected 3-letter code, not hardcoded
+    to 'eng'. Unknown codes fall back to 'eng' so we never break
+    requests on unsupported languages."""
+    from modules.sie.textrazor_client import _textrazor_language
+
+    assert _textrazor_language("en") == "eng"
+    assert _textrazor_language("es") == "spa"
+    assert _textrazor_language("fr") == "fra"
+    assert _textrazor_language("DE") == "deu"  # Case-insensitive
+    assert _textrazor_language("xx") == "eng"  # Unknown → fallback
+    assert _textrazor_language("") == "eng"
+    assert _textrazor_language(None) == "eng"  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_analyze_many_shares_single_httpx_client(monkeypatch):
+    """Bug fix: each per-page call must reuse a single httpx.AsyncClient
+    (connection pooling), not spin up a fresh one. We instrument
+    AsyncClient.__init__ to count constructions across an analyze_many
+    over 5 pages and assert exactly one was created."""
+    from modules.sie import textrazor_client as tc
+
+    construction_count = {"n": 0}
+    real_init = tc.httpx.AsyncClient.__init__
+
+    def _counting_init(self, *args, **kw):
+        construction_count["n"] += 1
+        return real_init(self, *args, **kw)
+
+    monkeypatch.setattr(tc.httpx.AsyncClient, "__init__", _counting_init)
+    # Make analyze_entities a no-op so we don't actually hit the network
+    # — we just want to count client constructions.
+    async def _fake_analyze(url, text, *, http_client=None, language_code="en"):
+        return PageTextRazorResult(url=url)
+
+    monkeypatch.setattr(tc, "analyze_entities", _fake_analyze)
+
+    pages = [(f"https://t.com/{i}", "body") for i in range(5)]
+    results = await tc.analyze_many(pages)
+    assert len(results) == 5
+    assert construction_count["n"] == 1
+
+
+def test_aggregator_requires_per_occurrence_filters_pass_before_slot_creation():
+    """Regression: the dead-code branch `if not slot["relevances"]:
+    continue` was removed. Verify aggregation still rejects entities
+    whose every occurrence failed per-occurrence filters — by never
+    creating a slot for them rather than checking after-the-fact.
+    """
+    per_page = [
+        PageTextRazorResult(
+            url=f"https://t.com/{i}",
+            entities=[TextRazorEntity(
+                # Below relevance threshold — must not contribute.
+                name="Low Relevance",
+                matched_text="lr",
+                relevance=TEXTRAZOR_MIN_RELEVANCE - 0.05,
+                confidence=10.0,
+            )],
+        )
+        for i in range(10)  # Plenty of pages, but all filtered.
+    ]
+    out = aggregate_textrazor_results(per_page)
+    assert out == []
