@@ -122,6 +122,12 @@ SiloRoutedFrom = Literal[
     # H3 was classified `promote_to_h2` — represents a different topic
     # than its assigned parent and warrants its own article.
     "h3_promote_candidate",
+    # Unused LLM fanout query — candidate sourced from llm_fanout_*
+    # that wasn't selected as an H2 and didn't fit any other singleton
+    # routing path. Surfaced as a silo bypassing the search-demand floor
+    # (the LLMs already nominated the query, which is its own demand
+    # signal); still gated by the Step 12.4 viability LLM check.
+    "llm_fanout_unused",
 ]
 
 

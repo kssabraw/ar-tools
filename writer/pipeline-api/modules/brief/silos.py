@@ -83,6 +83,19 @@ _SILO_ELIGIBLE_REASONS_CONDITIONAL: frozenset[str] = frozenset({
 })
 
 
+def _is_fanout_source(source: str) -> bool:
+    """True if `source` is one of the LLM fan-out variants.
+
+    Fan-out queries are LLM-generated query expansions (chatgpt / claude /
+    gemini / perplexity). When a candidate is sourced from fan-out and
+    didn't make the H2 cut, the LLMs themselves are the demand signal —
+    so the search-demand floor is bypassed for these candidates in the
+    singleton routing paths and an explicit `llm_fanout_unused` pass picks
+    up any that weren't routed elsewhere.
+    """
+    return bool(source) and source.startswith("llm_fanout_")
+
+
 def _is_member_eligible(
     cand: Candidate,
     *,
@@ -264,6 +277,11 @@ def identify_silos(
     low_coherence: list[Candidate] = []
     rejected_discard = 0
     rejected_demand = 0
+    # Tracks `id(candidate)` for every Candidate that has been emitted as
+    # part of a silo (cluster member or singleton). The trailing
+    # `llm_fanout_unused` pass uses this to avoid double-routing fanout
+    # candidates that already landed in a cluster or singleton silo.
+    routed_candidate_ids: set[int] = set()
 
     # ---- non-selected, non-eliminated regions ----
     for region in regions:
@@ -335,6 +353,7 @@ def identify_silos(
             estimated_intent=recommended_intent,
         )
         silos_with_score.append((coh, silo))
+        routed_candidate_ids.update(id(c) for c in eligible_members)
 
     # ---- contributing-region members with global_cap_exceeded ----
     # PRD §5 Step 12.1 marks `global_cap_exceeded` as "Yes — medium
@@ -357,9 +376,20 @@ def identify_silos(
             continue
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
-        if demand < min_search_demand:
+        if demand < min_search_demand and not _is_fanout_source(cand.source):
             rejected_demand += 1
             continue
+        if demand < min_search_demand:
+            logger.info(
+                "brief.silo.fanout_demand_bypass",
+                extra={
+                    "heading": cand.text,
+                    "source": cand.source,
+                    "routed_from": "non_selected_region",
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                },
+            )
         silo = SiloCandidate(
             suggested_keyword=cand.text,
             cluster_coherence_score=SINGLETON_COHERENCE,
@@ -372,6 +402,7 @@ def identify_silos(
             estimated_intent=recommended_intent,
         )
         silos_with_score.append((SINGLETON_COHERENCE, silo))
+        routed_candidate_ids.add(id(cand))
 
     # ---- scope-verification singleton rejects ----
     for cand in scope_rejects:
@@ -380,16 +411,28 @@ def identify_silos(
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
         if demand < min_search_demand:
-            rejected_demand += 1
-            logger.info(
-                "brief.silo.singleton_low_search_demand",
-                extra={
-                    "heading": cand.text,
-                    "search_demand_score": round(demand, 4),
-                    "threshold": min_search_demand,
-                },
-            )
-            continue
+            if _is_fanout_source(cand.source):
+                logger.info(
+                    "brief.silo.fanout_demand_bypass",
+                    extra={
+                        "heading": cand.text,
+                        "source": cand.source,
+                        "routed_from": "scope_verification",
+                        "search_demand_score": round(demand, 4),
+                        "threshold": min_search_demand,
+                    },
+                )
+            else:
+                rejected_demand += 1
+                logger.info(
+                    "brief.silo.singleton_low_search_demand",
+                    extra={
+                        "heading": cand.text,
+                        "search_demand_score": round(demand, 4),
+                        "threshold": min_search_demand,
+                    },
+                )
+                continue
         silo = SiloCandidate(
             suggested_keyword=cand.text,
             cluster_coherence_score=SINGLETON_COHERENCE,
@@ -403,6 +446,7 @@ def identify_silos(
         )
         # Singletons sit at the top of the priority list (coherence 1.0)
         silos_with_score.append((SINGLETON_COHERENCE, silo))
+        routed_candidate_ids.add(id(cand))
 
     # ---- Authority Gap H3 scope-verification singleton rejects (PRD v2.0.3 Step 8.5b) ----
     for cand in (h3_scope_rejects or []):
@@ -411,16 +455,28 @@ def identify_silos(
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
         if demand < min_search_demand:
-            rejected_demand += 1
-            logger.info(
-                "brief.silo.h3_singleton_low_search_demand",
-                extra={
-                    "heading": cand.text,
-                    "search_demand_score": round(demand, 4),
-                    "threshold": min_search_demand,
-                },
-            )
-            continue
+            if _is_fanout_source(cand.source):
+                logger.info(
+                    "brief.silo.fanout_demand_bypass",
+                    extra={
+                        "heading": cand.text,
+                        "source": cand.source,
+                        "routed_from": "scope_verification_h3",
+                        "search_demand_score": round(demand, 4),
+                        "threshold": min_search_demand,
+                    },
+                )
+            else:
+                rejected_demand += 1
+                logger.info(
+                    "brief.silo.h3_singleton_low_search_demand",
+                    extra={
+                        "heading": cand.text,
+                        "search_demand_score": round(demand, 4),
+                        "threshold": min_search_demand,
+                    },
+                )
+                continue
         silo = SiloCandidate(
             suggested_keyword=cand.text,
             cluster_coherence_score=SINGLETON_COHERENCE,
@@ -433,6 +489,7 @@ def identify_silos(
             estimated_intent=recommended_intent,
         )
         silos_with_score.append((SINGLETON_COHERENCE, silo))
+        routed_candidate_ids.add(id(cand))
 
     # ---- Step 5.1 relevance-floor singletons ----
     # Headings discarded as below_relevance_floor are below the title's
@@ -448,16 +505,28 @@ def identify_silos(
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
         if demand < min_search_demand:
-            rejected_demand += 1
-            logger.info(
-                "brief.silo.relevance_singleton_low_search_demand",
-                extra={
-                    "heading": cand.text,
-                    "search_demand_score": round(demand, 4),
-                    "threshold": min_search_demand,
-                },
-            )
-            continue
+            if _is_fanout_source(cand.source):
+                logger.info(
+                    "brief.silo.fanout_demand_bypass",
+                    extra={
+                        "heading": cand.text,
+                        "source": cand.source,
+                        "routed_from": "relevance_floor_reject",
+                        "search_demand_score": round(demand, 4),
+                        "threshold": min_search_demand,
+                    },
+                )
+            else:
+                rejected_demand += 1
+                logger.info(
+                    "brief.silo.relevance_singleton_low_search_demand",
+                    extra={
+                        "heading": cand.text,
+                        "search_demand_score": round(demand, 4),
+                        "threshold": min_search_demand,
+                    },
+                )
+                continue
         silo = SiloCandidate(
             suggested_keyword=cand.text,
             cluster_coherence_score=SINGLETON_COHERENCE,
@@ -470,6 +539,7 @@ def identify_silos(
             estimated_intent=recommended_intent,
         )
         silos_with_score.append((SINGLETON_COHERENCE, silo))
+        routed_candidate_ids.add(id(cand))
 
     # ---- Phase 2 / PRD v2.2 — Step 8.7 H3 parent-fit rejects ----
     # H3s the LLM classified as `wrong_parent` (no fitting parent
@@ -487,17 +557,29 @@ def identify_silos(
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
         if demand < min_search_demand:
-            rejected_demand += 1
-            logger.info(
-                "brief.silo.h3_parent_fit_low_search_demand",
-                extra={
-                    "heading": cand.text,
-                    "routed_from": routed_from,
-                    "search_demand_score": round(demand, 4),
-                    "threshold": min_search_demand,
-                },
-            )
-            continue
+            if _is_fanout_source(cand.source):
+                logger.info(
+                    "brief.silo.fanout_demand_bypass",
+                    extra={
+                        "heading": cand.text,
+                        "source": cand.source,
+                        "routed_from": routed_from,
+                        "search_demand_score": round(demand, 4),
+                        "threshold": min_search_demand,
+                    },
+                )
+            else:
+                rejected_demand += 1
+                logger.info(
+                    "brief.silo.h3_parent_fit_low_search_demand",
+                    extra={
+                        "heading": cand.text,
+                        "routed_from": routed_from,
+                        "search_demand_score": round(demand, 4),
+                        "threshold": min_search_demand,
+                    },
+                )
+                continue
         silo = SiloCandidate(
             suggested_keyword=cand.text,
             cluster_coherence_score=SINGLETON_COHERENCE,
@@ -510,6 +592,48 @@ def identify_silos(
             estimated_intent=recommended_intent,
         )
         silos_with_score.append((SINGLETON_COHERENCE, silo))
+        routed_candidate_ids.add(id(cand))
+
+    # ---- Unused LLM fanout queries ----
+    # Final pass: any candidate sourced from an LLM fanout that didn't
+    # land in a cluster or any of the singleton routing paths above is
+    # surfaced as a silo. The fanout LLMs already nominated the query, so
+    # we treat it as having sufficient demand on its own — the search-
+    # demand floor is bypassed for this path. The Step 12.4 viability
+    # check still runs, so non-defensible standalone topics are filtered
+    # downstream. Without this path, fanout queries that fall below the
+    # title's relevance floor *and* score under the demand threshold
+    # (common — most singleton fanout queries don't clear 0.30) get
+    # silently dropped.
+    for cand in candidate_pool:
+        if not _is_fanout_source(cand.source):
+            continue
+        if id(cand) in routed_candidate_ids:
+            continue
+        recommended_intent = _infer_intent([cand.text])
+        demand = _search_demand_score([cand])
+        silo = SiloCandidate(
+            suggested_keyword=cand.text,
+            cluster_coherence_score=SINGLETON_COHERENCE,
+            review_recommended=False,
+            recommended_intent=recommended_intent,
+            routed_from="llm_fanout_unused",
+            source_headings=[_make_source_heading(cand)],
+            discard_reason_breakdown=_discard_reason_breakdown([cand]),
+            search_demand_score=round(demand, 4),
+            estimated_intent=recommended_intent,
+        )
+        silos_with_score.append((SINGLETON_COHERENCE, silo))
+        routed_candidate_ids.add(id(cand))
+        logger.info(
+            "brief.silo.fanout_unused_routed",
+            extra={
+                "heading": cand.text,
+                "source": cand.source,
+                "search_demand_score": round(demand, 4),
+                "discard_reason": cand.discard_reason,
+            },
+        )
 
     # ---- cap at max_candidates by descending coherence ----
     silos_with_score.sort(key=lambda x: x[0], reverse=True)
