@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
@@ -99,7 +99,6 @@ def aggregate_ner_results(per_page: list[PageNERResult]) -> list[AggregatedEntit
         if not slot["salience_count"]:
             continue
         # Pick the most common original casing as canonical
-        from collections import Counter
         most_common = Counter(slot["names"]).most_common(1)[0][0]
         aggregated.append(AggregatedEntity(
             name=most_common,
@@ -157,34 +156,59 @@ def _noise_penalty(ent: AggregatedEntity) -> float:
     return 0.0
 
 
-def _matches_keyword(entity_name: str, keyword: str) -> bool:
-    """True when the entity's tokens appear as a contiguous subsequence
-    of the keyword's tokens (after lemmatization + lowercasing).
+def _tokens_for_keyword_match(text: str) -> list[str]:
+    """Normalize + tokenize a string for token-level keyword matching.
 
-    Token-level (not substring) so "shop" matches "tiktok shop" but
-    "ip" does NOT match "trip". Multi-word entities must appear in
-    order: "tiktok shop" matches "how to start a tiktok shop" but
-    "shop tiktok" does not.
-
-    Empty inputs return False — keyword is optional in legacy callers
-    and we don't want to silently auto-promote everything when it's
-    missing.
+    Returns an empty list when the text normalizes to nothing (empty
+    input, whitespace, or all stopwords stripped). Centralizes the
+    normalization so keyword and entity names are compared on identical
+    footing.
     """
-    if not entity_name or not keyword:
-        return False
-    norm_entity = _normalize_entity_name(entity_name)
-    norm_keyword = _normalize_entity_name(keyword)
-    if not norm_entity or not norm_keyword:
-        return False
-    entity_tokens = norm_entity.split()
-    keyword_tokens = norm_keyword.split()
-    if not entity_tokens or not keyword_tokens or len(entity_tokens) > len(keyword_tokens):
+    if not text:
+        return []
+    norm = _normalize_entity_name(text)
+    if not norm:
+        return []
+    return norm.split()
+
+
+def _matches_keyword_tokens(
+    entity_tokens: list[str], keyword_tokens: list[str],
+) -> bool:
+    """Token-level contiguous-subsequence match.
+
+    "shop" matches "tiktok shop" but "ip" does NOT match "trip".
+    Multi-word entities must appear in order — "tiktok shop" matches
+    "how to start a tiktok shop" but "shop tiktok" does not.
+
+    Caller passes pre-tokenized lists so the keyword's tokens can be
+    computed once per `score_and_promote_entities` call rather than
+    re-normalized for every entity.
+    """
+    if not entity_tokens or not keyword_tokens:
         return False
     n = len(entity_tokens)
+    if n > len(keyword_tokens):
+        return False
     for i in range(len(keyword_tokens) - n + 1):
         if keyword_tokens[i : i + n] == entity_tokens:
             return True
     return False
+
+
+def _matches_keyword(entity_name: str, keyword: str) -> bool:
+    """Convenience wrapper for tests and callers without pre-tokenized
+    keyword. Internal hot path uses `_matches_keyword_tokens` directly.
+
+    Empty inputs return False — keyword is optional and we don't want
+    to silently auto-promote everything when it's missing.
+    """
+    if not entity_name or not keyword:
+        return False
+    return _matches_keyword_tokens(
+        _tokens_for_keyword_match(entity_name),
+        _tokens_for_keyword_match(keyword),
+    )
 
 
 def _classify_promotion(
@@ -192,7 +216,7 @@ def _classify_promotion(
     *,
     score_threshold: float,
     recurrence_override: int,
-    keyword: str = "",
+    keyword_tokens: Optional[list[str]] = None,
 ) -> Optional[PromotionReason]:
     """Decide whether to promote and tag the reason.
 
@@ -205,12 +229,22 @@ def _classify_promotion(
       3. high_recurrence_low_salience — recurrence override path.
       4. high_salience_low_recurrence — single-source strong entity.
       5. entity_only_promoted — composite-score path.
+
+    `keyword_tokens` is the pre-normalized + tokenized keyword (passed
+    once from `score_and_promote_entities`). Pass None or an empty
+    list to skip the keyword_match path.
     """
-    if keyword:
-        if _matches_keyword(ent.name, keyword):
-            return "keyword_match"
-        for variant in ent.ner_variants:
-            if _matches_keyword(variant, keyword):
+    if keyword_tokens:
+        # Check the canonical name AND every variant; dedupe so we
+        # don't tokenize+match `ent.name` twice when it's also in
+        # `ner_variants` (which it typically is).
+        seen: set[str] = set()
+        for candidate in [ent.name, *ent.ner_variants]:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            ent_tokens = _tokens_for_keyword_match(candidate)
+            if _matches_keyword_tokens(ent_tokens, keyword_tokens):
                 return "keyword_match"
 
     high_recurrence = ent.pages_found >= recurrence_override
@@ -258,6 +292,12 @@ def score_and_promote_entities(
     score_threshold = settings.entity_score_promotion_threshold
     recurrence_override = settings.entity_recurrence_override_pages
 
+    # Normalize the keyword ONCE (not per-entity). The previous
+    # implementation called `_normalize_entity_name(keyword)` inside
+    # `_matches_keyword` for every entity × variant pair — wasted NLTK
+    # lemmatizer calls when the keyword is the same the whole loop.
+    keyword_tokens = _tokens_for_keyword_match(keyword)
+
     max_mentions = max((e.total_mentions for e in aggregated), default=1) or 1
 
     promoted: list[AggregatedEntity] = []
@@ -291,7 +331,7 @@ def score_and_promote_entities(
             ent,
             score_threshold=score_threshold,
             recurrence_override=recurrence_override,
-            keyword=keyword,
+            keyword_tokens=keyword_tokens,
         )
         if reason is not None:
             ent.promotion_reason = reason
