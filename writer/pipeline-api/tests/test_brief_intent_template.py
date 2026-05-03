@@ -92,3 +92,36 @@ def test_template_min_h2_count_is_at_least_3():
         assert template.min_h2_count >= 3, (
             f"{intent} has min_h2_count={template.min_h2_count}"
         )
+
+
+# ---------------------------------------------------------------------------
+# PRD v2.3 / Phase 3 — min_h2_body_words derivation
+# ---------------------------------------------------------------------------
+
+
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("intent,expected_floor", [
+    ("how-to", 120),
+    ("listicle", 80),
+    ("comparison", 150),
+    ("informational", 180),
+    ("informational-commercial", 180),
+    ("ecom", 150),
+    ("local-seo", 150),
+    ("news", 100),
+])
+def test_min_h2_body_words_per_intent(intent, expected_floor):
+    """Phase 3 — the brief generator stamps a per-intent
+    min_h2_body_words floor on format_directives at assembly time.
+    Each intent's template has its own floor calibrated for typical
+    article shape."""
+    from modules.brief.pipeline import _min_h2_body_words_for_template
+    template = get_template(intent)
+    assert _min_h2_body_words_for_template(template) == expected_floor
+
+
+def test_min_h2_body_words_falls_back_when_template_is_none():
+    from modules.brief.pipeline import _min_h2_body_words_for_template
+    assert _min_h2_body_words_for_template(None) == 100

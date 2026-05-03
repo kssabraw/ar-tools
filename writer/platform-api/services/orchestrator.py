@@ -24,14 +24,14 @@ run_id_ctx: ContextVar[str] = ContextVar("run_id", default="")
 # ---------------------------------------------------------------------------
 
 EXPECTED_MODULE_VERSIONS: dict[str, str] = {
-    "brief": "2.2",
+    "brief": "2.3",
     "sie": "1.0",
     "research": "1.1",
-    "writer": "1.5",
+    "writer": "1.6",
     "sources_cited": "1.1",
 }
 
-WRITER_ACCEPTED_VERSIONS = {"1.5", "1.5-no-context", "1.5-degraded"}
+WRITER_ACCEPTED_VERSIONS = {"1.6", "1.6-no-context", "1.6-degraded"}
 
 # Per-module HTTP timeouts in seconds
 MODULE_TIMEOUTS: dict[str, int] = {

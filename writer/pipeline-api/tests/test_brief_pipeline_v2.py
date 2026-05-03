@@ -347,7 +347,7 @@ async def test_pipeline_produces_schema_v2_response():
         result = await run_brief(req)
 
     # ---- Schema contract ----
-    assert result.metadata.schema_version == "2.2"
+    assert result.metadata.schema_version == "2.3"
     assert result.metadata.embedding_model == "text-embedding-3-large"
 
     # ---- Step 3.5 outputs surface on the response ----
@@ -531,7 +531,7 @@ async def test_cache_hit_short_circuits_pipeline():
         "discarded_headings": [],
         "silo_candidates": [],
         "metadata": {
-            "schema_version": "2.2",
+            "schema_version": "2.3",
             "word_budget": 2500,
             "faq_count": 0,
             "h2_count": 0,
@@ -628,7 +628,7 @@ async def test_pipeline_writes_to_cache_after_generation():
     args = write_called["args"]
     assert args["keyword"] == "what is tiktok shop"
     assert args["location_code"] == 2840
-    assert args["schema_version"] == "2.2"
+    assert args["schema_version"] == "2.3"
     assert args["triggered_by_client_id"] == "client-uuid-123"
     assert args["duration_ms"] >= 0
 
@@ -850,3 +850,41 @@ async def test_pipeline_h2s_with_zero_h3s_reflects_step_8_7_mutations(monkeypatc
     assert result.metadata.h2s_with_zero_h3s <= h2_count
     # And at least the H2 we just emptied should be counted
     assert result.metadata.h2s_with_zero_h3s >= 1
+
+
+# ---------------------------------------------------------------------------
+# PRD v2.3 / Phase 3 — min_h2_body_words plumbed end-to-end
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_emits_min_h2_body_words_in_format_directives():
+    """The brief output's format_directives must carry the per-intent
+    min_h2_body_words floor that the writer's Step 6.7 validator will
+    consume. For an `informational` keyword the audit floor is 180."""
+    from modules.brief.pipeline import run_brief
+
+    req = BriefRequest(run_id="mh2_1", keyword="what is tiktok shop")
+    with _AllMocks():
+        result = await run_brief(req)
+
+    assert result.format_directives.min_h2_body_words == 180
+
+
+@pytest.mark.asyncio
+async def test_pipeline_min_h2_body_words_matches_intent_override(monkeypatch):
+    """When the run uses `intent_override`, the floor reflects that
+    intent's template, not whatever the SERP signals would have
+    produced."""
+    from modules.brief.pipeline import run_brief
+
+    req = BriefRequest(
+        run_id="mh2_2",
+        keyword="what is tiktok shop",
+        intent_override="how-to",
+    )
+    with _AllMocks():
+        result = await run_brief(req)
+
+    assert result.intent_type == "how-to"
+    assert result.format_directives.min_h2_body_words == 120

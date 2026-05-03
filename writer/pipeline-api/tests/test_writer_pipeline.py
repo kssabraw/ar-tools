@@ -185,7 +185,7 @@ async def test_writer_happy_path_with_client_context():
     ):
         result = await run_writer(req)
 
-    assert result.metadata.schema_version == "1.5"
+    assert result.metadata.schema_version == "1.6"
     assert result.title  # title generated
     assert result.brand_voice_card_used is not None
     assert "premium" in result.brand_voice_card_used.banned_terms
@@ -223,7 +223,7 @@ async def test_writer_no_client_context_falls_back_to_v14():
     ):
         result = await run_writer(req)
 
-    assert result.metadata.schema_version == "1.5-no-context"
+    assert result.metadata.schema_version == "1.6-no-context"
     assert result.brand_voice_card_used is None
     assert result.brand_conflict_log == []
 
@@ -322,3 +322,151 @@ def test_writer_request_validation():
     WriterRequest(run_id="r", brief_output={"k": 1}, sie_output={})  # OK
     with pytest.raises(ValidationError):
         WriterRequest(run_id="r", brief_output="not a dict", sie_output={})
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 review fix #3 — pipeline-level Step 6.7 retry integration test
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_writer_pipeline_invokes_h2_body_length_retry(monkeypatch):
+    """Phase 3 — when an H2 group ships under the brief's
+    `min_h2_body_words` floor, the writer pipeline must invoke Step 6.7
+    which retries the section group ONCE. We patch validate_h2_body_lengths
+    to verify it's called with the correct floor + state, then assert the
+    article still validates schema-wise."""
+    from modules.writer import pipeline as writer_pipeline
+    from modules.writer.h2_body_length import H2BodyLengthResult
+
+    # Brief carries an explicit min_h2_body_words floor (the production
+    # path stamps this from the intent template; the test harness brief
+    # didn't include it, so adding here exercises the writer-side path).
+    brief = dict(SAMPLE_BRIEF)
+    brief["format_directives"] = dict(brief.get("format_directives", {}))
+    brief["format_directives"]["min_h2_body_words"] = 180  # informational floor
+
+    captured: dict = {}
+
+    async def spy_validator(*, min_h2_body_words, keyword, intent, **kwargs):
+        captured["called"] = True
+        captured["floor"] = min_h2_body_words
+        captured["intent"] = intent
+        captured["keyword"] = keyword
+        captured["kwargs_keys"] = sorted(kwargs.keys())
+        # Simulate a successful retry: pretend one section was retried
+        # successfully — the article passed in is returned unchanged.
+        article = kwargs["article"] if "article" in kwargs else None
+        # The actual signature passes article as positional; reconstruct.
+        return H2BodyLengthResult(
+            validated_article=[],  # filled below from the wrapper
+            under_length_h2_sections=[],
+            retries_attempted=1,
+            retries_succeeded=1,
+        )
+
+    # The validator is invoked positionally with `article` as the
+    # first arg, then keyword args. Wrap to capture and pass through.
+    real_call_state = {}
+
+    async def wrapping_validator(article, **kwargs):
+        real_call_state["article_in"] = article
+        result = await spy_validator(**kwargs)
+        result.validated_article = list(article)  # passthrough
+        return result
+
+    req = WriterRequest(
+        run_id="t-h2len",
+        brief_output=brief,
+        sie_output=SAMPLE_SIE,
+        research_output=SAMPLE_RESEARCH,
+        client_context=ClientContextInput(
+            brand_guide_text="Brand voice is professional. Banned term: premium.",
+            icp_text="Homeowners researching HVAC upgrades.",
+            website_analysis=None,
+            website_analysis_unavailable=True,
+        ),
+    )
+
+    with (
+        patch("modules.writer.title.claude_json", fake_claude_json),
+        patch("modules.writer.distillation.claude_json", fake_claude_json),
+        patch("modules.writer.reconciliation.claude_json", fake_claude_json),
+        patch("modules.writer.sections.claude_json", fake_claude_json),
+        patch("modules.writer.faqs.claude_json", fake_claude_json),
+        patch("modules.writer.conclusion.claude_json", fake_claude_json),
+        patch(
+            "modules.writer.pipeline.validate_h2_body_lengths",
+            wrapping_validator,
+        ),
+    ):
+        result = await writer_pipeline.run_writer(req)
+
+    # Step 6.7 was invoked
+    assert captured.get("called") is True
+    # Floor passed through from format_directives
+    assert captured["floor"] == 180
+    # Other required params present
+    assert captured["keyword"] == "best hvac systems 2026"
+    assert captured["intent"] == "informational-commercial"
+    assert "heading_structure" in captured["kwargs_keys"]
+    assert "section_budgets" in captured["kwargs_keys"]
+    assert "filtered_terms" in captured["kwargs_keys"]
+    assert "citations" in captured["kwargs_keys"]
+    assert "brand_voice_card" in captured["kwargs_keys"]
+    assert "banned_regex" in captured["kwargs_keys"]
+    # Pipeline produced a valid response with retry counters
+    assert result.metadata.h2_body_length_retries_attempted == 1
+    assert result.metadata.h2_body_length_retries_succeeded == 1
+
+
+@pytest.mark.asyncio
+async def test_writer_pipeline_skips_h2_body_length_when_floor_zero():
+    """When the brief carries no `min_h2_body_words` floor (or 0), the
+    validator does NOT run — saving the LLM call when defaults haven't
+    been calibrated for the intent."""
+    from modules.writer import pipeline as writer_pipeline
+
+    brief = dict(SAMPLE_BRIEF)
+    brief["format_directives"] = dict(brief.get("format_directives", {}))
+    brief["format_directives"]["min_h2_body_words"] = 0  # disabled
+
+    state = {"called": False}
+
+    async def spy_validator(*args, **kwargs):
+        state["called"] = True
+        from modules.writer.h2_body_length import H2BodyLengthResult
+        return H2BodyLengthResult(validated_article=list(args[0]) if args else [])
+
+    req = WriterRequest(
+        run_id="t-h2len-skip",
+        brief_output=brief,
+        sie_output=SAMPLE_SIE,
+        research_output=SAMPLE_RESEARCH,
+        client_context=ClientContextInput(
+            brand_guide_text="Brand voice is professional.",
+            icp_text="Homeowners.",
+            website_analysis=None,
+            website_analysis_unavailable=True,
+        ),
+    )
+
+    with (
+        patch("modules.writer.title.claude_json", fake_claude_json),
+        patch("modules.writer.distillation.claude_json", fake_claude_json),
+        patch("modules.writer.reconciliation.claude_json", fake_claude_json),
+        patch("modules.writer.sections.claude_json", fake_claude_json),
+        patch("modules.writer.faqs.claude_json", fake_claude_json),
+        patch("modules.writer.conclusion.claude_json", fake_claude_json),
+        patch(
+            "modules.writer.pipeline.validate_h2_body_lengths",
+            spy_validator,
+        ),
+    ):
+        result = await writer_pipeline.run_writer(req)
+
+    assert state["called"] is False
+    # Metadata fields default to safe values when validator skipped.
+    assert result.metadata.under_length_h2_sections == []
+    assert result.metadata.h2_body_length_retries_attempted == 0
+    assert result.metadata.h2_body_length_retries_succeeded == 0
