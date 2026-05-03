@@ -7,6 +7,7 @@ frequency. Supports safe (default) and aggressive outlier modes.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
 
 import numpy as np
@@ -109,39 +110,60 @@ def _compute_zone_range(
     )
 
 
-def build_usage(
+def build_zone_count_map(
     aggregates: dict[str, TermAggregate],
     pages: list[PageZones],
-    target_word_count: int,
-    outlier_mode: str = "safe",
-) -> list[dict]:
-    """Build usage recommendations for terms in the aggregates dict.
+) -> dict[str, dict[str, dict[str, int]]]:
+    """Substring-scan every term across every page's zone text.
 
-    Returns list of dicts ready to feed into pydantic UsageRecommendation.
+    Returns `{term: {zone: {url: count}}}`. Counts > 0 mean the term
+    is present in that page's zone. Multi-word terms use plain
+    substring count; unigrams use word-boundary regex to avoid
+    matching inside longer words ("ai" inside "training" etc.).
+
+    Extracted so `build_usage` and `build_zone_category_targets` can
+    share the scan — without sharing they'd each do
+    `len(terms) × len(zones) × len(pages)` substring searches against
+    full lowercase joined zone text, doubling the per-SIE-run work.
     """
-    page_word_counts = {p.url: max(p.word_count, 1) for p in pages}
-
-    # Build per-zone-per-page count map for each term
-    zone_count_by_term_and_url: dict[str, dict[str, dict[str, int]]] = {}
+    out: dict[str, dict[str, dict[str, int]]] = {}
     for page in pages:
-        zones = page.all_zone_text()
+        zones_text = page.all_zone_text()
         for zone_name in ZONES:
-            blocks = zones.get(zone_name, [])
+            blocks = zones_text.get(zone_name, [])
             if not blocks:
                 continue
             joined = " ".join(blocks).lower()
             for term in aggregates.keys():
                 if not term:
                     continue
-                # Rough count: substring occurrences of the term token sequence
                 if " " in term:
                     count = joined.count(term)
                 else:
-                    # word boundary count
-                    import re
                     count = len(re.findall(rf"\b{re.escape(term)}\b", joined))
                 if count > 0:
-                    zone_count_by_term_and_url.setdefault(term, {}).setdefault(zone_name, {})[page.url] = count
+                    out.setdefault(term, {}).setdefault(zone_name, {})[page.url] = count
+    return out
+
+
+def build_usage(
+    aggregates: dict[str, TermAggregate],
+    pages: list[PageZones],
+    target_word_count: int,
+    outlier_mode: str = "safe",
+    zone_count_by_term_and_url: Optional[dict[str, dict[str, dict[str, int]]]] = None,
+) -> list[dict]:
+    """Build usage recommendations for terms in the aggregates dict.
+
+    `zone_count_by_term_and_url` lets callers pass a pre-built scan
+    (from `build_zone_count_map`) so both per-term and category-aggregate
+    consumers share the work. When None, builds it locally.
+
+    Returns list of dicts ready to feed into pydantic UsageRecommendation.
+    """
+    page_word_counts = {p.url: max(p.word_count, 1) for p in pages}
+    if zone_count_by_term_and_url is None:
+        zone_count_by_term_and_url = build_zone_count_map(aggregates, pages)
 
     out: list[dict] = []
     for term in aggregates.keys():
@@ -220,6 +242,7 @@ def build_zone_category_targets(
     entity_meta: dict[str, dict],
     seed_fragment_terms: set[str],
     outlier_mode: str = "safe",
+    zone_count_by_term_and_url: Optional[dict[str, dict[str, dict[str, int]]]] = None,
 ) -> dict[str, dict[str, dict[str, int]]]:
     """SIE v1.4 — per-zone per-category aggregate distinct-item targets.
 
@@ -229,6 +252,10 @@ def build_zone_category_targets(
     follows the same SAFE_OUTLIER_MULT logic as `_compute_zone_range`
     but operates on per-page distinct counts instead of per-1000-words
     frequencies.
+
+    `zone_count_by_term_and_url` lets callers pass the shared
+    `build_zone_count_map` output so both per-term and category
+    aggregates run on one scan.
 
     Returns a dict shaped:
         {zone: {category: {target: int, max: int}}}
@@ -251,34 +278,26 @@ def build_zone_category_targets(
         for term in aggregates.keys() if term
     }
 
-    # For each page, for each zone, count distinct terms per category.
-    # Substring/word-boundary search mirrors `build_usage` so the same
-    # term-presence semantics drive both per-term and aggregate
-    # benchmarks.
-    import re as _re
+    if zone_count_by_term_and_url is None:
+        zone_count_by_term_and_url = build_zone_count_map(aggregates, pages)
 
+    # Derive per-page-per-zone-per-category distinct counts from the
+    # shared scan. A term is "present" when its count for that (page,
+    # zone) is > 0.
     distinct_counts: dict[str, dict[str, dict[str, int]]] = {
         p.url: {z: {c: 0 for c in CATEGORIES} for z in ZONES} for p in pages
     }
-    for page in pages:
-        zones_text = page.all_zone_text()
-        for zone_name in ZONES:
-            blocks = zones_text.get(zone_name, [])
-            if not blocks:
+    for term, by_zone in zone_count_by_term_and_url.items():
+        category = term_to_category.get(term)
+        if category is None:
+            continue
+        for zone_name, by_url in by_zone.items():
+            if zone_name not in distinct_counts[next(iter(distinct_counts))]:
+                # Skip non-tracked zones (e.g. faq_blocks, lists, tables).
                 continue
-            joined = " ".join(blocks).lower()
-            seen_per_category: dict[str, set[str]] = {c: set() for c in CATEGORIES}
-            for term, category in term_to_category.items():
-                if term in seen_per_category[category]:
-                    continue
-                if " " in term:
-                    if term in joined:
-                        seen_per_category[category].add(term)
-                else:
-                    if _re.search(rf"\b{_re.escape(term)}\b", joined):
-                        seen_per_category[category].add(term)
-            for category, terms in seen_per_category.items():
-                distinct_counts[page.url][zone_name][category] = len(terms)
+            for url, count in by_url.items():
+                if count > 0 and url in distinct_counts:
+                    distinct_counts[url][zone_name][category] += 1
 
     # Across-page aggregation with outlier exclusion + 0.50 multiplier.
     for zone in ZONES:

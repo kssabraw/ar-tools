@@ -66,7 +66,7 @@ from .ngrams import (
 from .scoring import score_terms
 from .scraper import scrape_many
 from .textrazor_entities import aggregate_textrazor_results
-from .usage import build_usage, build_zone_category_targets
+from .usage import build_usage, build_zone_category_targets, build_zone_count_map
 from .word_count import compute_word_count_target
 from .zones import PageZones, cross_page_fingerprint_filter, extract_zones
 
@@ -85,8 +85,14 @@ async def run_sie(req: SIERequest) -> SIEResponse:
     keyword = req.keyword.strip()
 
     # ---- Cache check ----
+    # Filter by schema_version so stale-shape rows (e.g. pre-v1.4
+    # without zone_category_targets) get treated as misses rather than
+    # blowing up Pydantic validation against the new Literal.
     if not req.force_refresh:
-        cached = await cache.get_cached(keyword, req.location_code, req.outlier_mode)
+        cached = await cache.get_cached(
+            keyword, req.location_code, req.outlier_mode,
+            schema_version="1.4",
+        )
         if cached:
             cached["cached"] = True
             cached["sie_cache_hit"] = True
@@ -327,7 +333,14 @@ async def run_sie(req: SIERequest) -> SIEResponse:
     target_word_count = word_count_target_p50 or 1500
     # Build usage only for top required terms (cap to keep payload reasonable)
     top_for_usage = {r.term: aggregates[r.term] for r in required[:50] if r.term in aggregates}
-    usage_dicts = build_usage(top_for_usage, pages, target_word_count, req.outlier_mode)
+    # Single page-zone scan shared between per-term usage targets and
+    # category aggregates — without sharing each consumer would scan
+    # 50 terms × 5 zones × N pages independently, doubling the work.
+    zone_count_by_term_and_url = build_zone_count_map(top_for_usage, pages)
+    usage_dicts = build_usage(
+        top_for_usage, pages, target_word_count, req.outlier_mode,
+        zone_count_by_term_and_url=zone_count_by_term_and_url,
+    )
 
     # ---- SIE v1.4: zone × category aggregate targets ----
     # Per-zone per-category distinct-item targets benchmarked at 0.50 ×
@@ -340,6 +353,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
         entity_meta,
         seed_fragment_terms,
         req.outlier_mode,
+        zone_count_by_term_and_url=zone_count_by_term_and_url,
     )
     zone_category_targets_models: dict[str, ZoneCategoryAggregate] = {}
     for zone_name, cat_dict in zone_category_targets_raw.items():

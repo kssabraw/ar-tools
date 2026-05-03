@@ -207,6 +207,35 @@ def test_zone_category_target_zero_when_no_pages():
     assert out["paragraphs"]["entities"] == {"target": 0, "max": 0}
 
 
+def test_zone_category_target_consumes_shared_scan():
+    """When the caller passes a pre-built zone_count_by_term_and_url
+    map, build_zone_category_targets must use it instead of re-scanning.
+    We verify by passing a map that contradicts the page text (terms
+    flagged present in pages where they don't textually appear) — if
+    the function honors the map the result reflects the map; if it
+    re-scans we'd see the empty pages and produce zero counts."""
+    pages = [
+        _page_with_paragraphs(f"https://t.com/{i}", ["completely unrelated text"])
+        for i in range(3)
+    ]
+    aggregates = {"phantom": object()}
+    entity_meta = {"phantom": {"is_entity": True}}
+    fake_scan = {
+        "phantom": {
+            "paragraphs": {p.url: 5 for p in pages},  # Pretend present everywhere.
+        }
+    }
+    out = build_zone_category_targets(
+        aggregates=aggregates, pages=pages,
+        entity_meta=entity_meta, seed_fragment_terms=set(),
+        outlier_mode="safe",
+        zone_count_by_term_and_url=fake_scan,
+    )
+    # If the shared map were ignored the substring scan would find
+    # nothing and we'd get max=0; honoring it produces max=1.
+    assert out["paragraphs"]["entities"]["max"] == 1
+
+
 # ---------------------------------------------------------------------------
 # Title-zone wiring
 # ---------------------------------------------------------------------------
