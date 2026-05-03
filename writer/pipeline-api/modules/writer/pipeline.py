@@ -41,6 +41,10 @@ from .distillation import distill_brand_voice, is_card_empty
 from .faqs import write_faqs
 from .intro import write_intro
 from .reconciliation import FilteredSIETerms, reconcile_terms, ReconciledTerm
+from .citation_coverage_validator import (
+    CoverageValidationResult,
+    validate_citation_coverage,
+)
 from .h2_body_length import H2BodyLengthResult, validate_h2_body_lengths
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
@@ -218,7 +222,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     section_budgets = allocate_budget(heading_structure, word_budget)
 
     # ---- Brand voice distillation + reconciliation in parallel ----
-    schema_effective: SchemaVersion = "1.6"
+    schema_effective: SchemaVersion = "1.7"
     brand_voice_card: Optional[BrandVoiceCard] = None
     filtered_terms = FilteredSIETerms()
     brand_conflict_log: list[BrandConflictEntry] = []
@@ -226,7 +230,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
 
     if req.client_context is None:
         # v1.4 fallback path
-        schema_effective = "1.6-no-context"
+        schema_effective = "1.7-no-context"
         # Build a flat filtered terms list (all keep)
         from .reconciliation import _all_keep, _avoid_terms_from_sie, _required_terms_from_sie
         filtered_terms = _all_keep(
@@ -241,7 +245,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         no_website = ctx.website_analysis_unavailable
 
         if brand_empty and icp_empty and no_website:
-            schema_effective = "1.6-degraded"
+            schema_effective = "1.7-degraded"
             from .reconciliation import _all_keep, _avoid_terms_from_sie, _required_terms_from_sie
             filtered_terms = _all_keep(
                 _required_terms_from_sie(sie),
@@ -453,6 +457,30 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         article = h2_length_result.validated_article
         _scan_headings_for_banned(article, banned_regex)
 
+    # ---- Step 4F.1 — Citation Coverage Validator (PRD v1.7 / Phase 4) ----
+    # Detects citable claims (C1–C9) per H2 group. If coverage is below
+    # 50%, retries the section ONCE with a directive listing the uncited
+    # claims and asking the LLM to add markers or rewrite to remove the
+    # claim. After retry, applies an auto-soften pass to operational
+    # claims (C7-C9) that remain unsourced, replacing specific durations
+    # / frequencies / operational percentages with hedge phrasing
+    # ("4-to-6 week refresh cadence" → "a typical refresh cadence
+    # (every few weeks)"). Never aborts.
+    coverage_result: Optional[CoverageValidationResult] = None
+    coverage_result = await validate_citation_coverage(
+        article,
+        keyword=keyword,
+        intent=intent_type,
+        heading_structure=heading_structure,
+        section_budgets=section_budgets,
+        filtered_terms=filtered_terms,
+        citations=citations,
+        brand_voice_card=brand_voice_card,
+        banned_regex=banned_regex,
+    )
+    article = coverage_result.validated_article
+    _scan_headings_for_banned(article, banned_regex)
+
     # ---- Citation reconciliation ----
     citation_usage = reconcile_citation_usage(article, citations)
 
@@ -489,6 +517,23 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         h2_body_length_retries_succeeded=(
             h2_length_result.retries_succeeded
             if h2_length_result is not None else 0
+        ),
+        # PRD v1.7 / Phase 4 — Step 4F.1 outcomes
+        under_cited_sections=(
+            coverage_result.under_cited_sections
+            if coverage_result is not None else []
+        ),
+        operational_claims_softened=(
+            coverage_result.operational_claims_softened
+            if coverage_result is not None else []
+        ),
+        citation_coverage_retries_attempted=(
+            coverage_result.retries_attempted
+            if coverage_result is not None else 0
+        ),
+        citation_coverage_retries_succeeded=(
+            coverage_result.retries_succeeded
+            if coverage_result is not None else 0
         ),
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),

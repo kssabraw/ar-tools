@@ -1,8 +1,11 @@
-"""Pydantic models for the Content Writer module — schema v1.6.
+"""Pydantic models for the Content Writer module — schema v1.7.
 
 Per writer-module-v1_5-change-spec_2.md plus content-writer-module-prd-v1.3.md.
 PRD v2.3 / Phase 3: bumped to 1.6 with new Step 6.7 H2 body length
-validator + new `under_length_h2_sections` metadata field.
+validator + `under_length_h2_sections` metadata field.
+PRD v1.7 / Phase 4: bumped to 1.7 with new Step 4F.1 citation-coverage
+validator (C1-C9 patterns + auto-soften for operational claims) +
+new `under_cited_sections` and `operational_claims_softened` metadata.
 """
 
 from typing import Any, Literal, Optional
@@ -10,7 +13,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-SchemaVersion = Literal["1.6", "1.6-no-context", "1.6-degraded"]
+SchemaVersion = Literal["1.7", "1.7-no-context", "1.7-degraded"]
 ArticleLevel = Literal["H1", "H2", "H3", "none"]
 ArticleType = Literal[
     "content", "faq-header", "faq-question", "conclusion", "h1-enrichment", "title", "intro",
@@ -87,7 +90,7 @@ class ClientContextSummary(BaseModel):
     brand_guide_provided: bool = False
     icp_provided: bool = False
     website_analysis_used: bool = False
-    schema_version_effective: SchemaVersion = "1.6"
+    schema_version_effective: SchemaVersion = "1.7"
 
 
 # ---- Article output ----
@@ -155,7 +158,18 @@ class WriterMetadata(BaseModel):
     under_length_h2_sections: list[dict] = []
     h2_body_length_retries_attempted: int = 0
     h2_body_length_retries_succeeded: int = 0
-    schema_version: SchemaVersion = "1.6"
+    # PRD v1.7 / Phase 4 — Step 4F.1 citation-coverage validator outcomes.
+    # `under_cited_sections` carries the H2 sections whose detected
+    # citable claims (C1-C9) fell under the 50% citation-coverage
+    # threshold even after a single retry. `operational_claims_softened`
+    # records every C7-C9 phrase that was deterministically rewritten
+    # to hedge phrasing because no citation could be added during the
+    # retry. Both are warn-and-accept — runs never abort on coverage.
+    under_cited_sections: list[dict] = []
+    operational_claims_softened: list[dict] = []
+    citation_coverage_retries_attempted: int = 0
+    citation_coverage_retries_succeeded: int = 0
+    schema_version: SchemaVersion = "1.7"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0
 
