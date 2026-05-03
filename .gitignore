@@ -120,3 +120,6 @@ venv.bak/
 *.aof
 *.pid
 /site
+
+# Local working directory for ad-hoc files (n8n exports, sample payloads, etc.)
+scratch/
