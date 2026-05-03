@@ -501,6 +501,14 @@ class BriefMetadata(BaseModel):
     faq_intent_gate_floor_rejected_count: int = 0
     faq_intent_gate_llm_rejected_count: int = 0
     faq_intent_gate_relaxation_applied: bool = False
+    # Phase 2 review fix #4 — when the gate would otherwise produce
+    # zero kept on a non-empty pool, it falls back to admitting the
+    # original candidates as `adjacent_intent` so PRD §5 Step 10's
+    # 3–5 FAQ guarantee is honored. True = the brief's FAQs are the
+    # original (potentially stakeholder-mismatched) pool. Operators
+    # should treat a True value as a strong signal to review the
+    # intent_profile config or the candidate pool.
+    faq_intent_gate_full_relaxation_applied: bool = False
     # Echoed for tuning, like the other threshold values above.
     faq_intent_floor_threshold: float = 0.55
 

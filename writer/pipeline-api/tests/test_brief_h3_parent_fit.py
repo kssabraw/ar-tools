@@ -124,14 +124,18 @@ async def test_marginal_stamps_classification_and_keeps_h3():
 
 
 @pytest.mark.asyncio
-async def test_wrong_parent_reattaches_to_better_h2():
-    """If the LLM marks an H3 as wrong_parent and a different H2 has
-    capacity + clears the parent_relevance floor, re-attach there."""
+async def test_wrong_parent_reattaches_to_same_region_h2():
+    """PRD v2.2 / Phase 2 fix #2: re-attachment requires same region as
+    the H3. If the LLM marks an H3 wrong_parent and a different H2 in
+    the SAME region has capacity + clears the parent_relevance floor,
+    re-attach there. Cross-region re-attachment is forbidden — that
+    would silently re-introduce the v2.2 same-region drift fix."""
+    # All three live in region r1. h3 is currently misplaced under
+    # h2_a but cosine to h2_b is high. Both H2s in r1 → re-attach allowed.
     h2_a = _h2("Cart Abandonment", "r1", [1, 0, 0])
-    h2_b = _h2("Affiliate Strategy", "r2", [0, 1, 0])
-    # H3 originally under h2_a but cosine to h2_b is high.
+    h2_b = _h2("Affiliate Strategy", "r1", [0, 1, 0])
     h3 = _h3("Vetting affiliates", "r1",
-            [0, 0.95, 0.1], parent_h2_text="Cart Abandonment")
+             [0, 0.95, 0.1], parent_h2_text="Cart Abandonment")
     attachments = {0: [h3], 1: []}
     result = await verify_h3_parent_fit(
         selected_h2s=[h2_a, h2_b],
@@ -146,6 +150,31 @@ async def test_wrong_parent_reattaches_to_better_h2():
     assert len(result.reattached) == 1
     assert h3 not in result.routed_to_silos
     assert h3.discard_reason is None  # not a silo reject
+
+
+@pytest.mark.asyncio
+async def test_wrong_parent_does_not_reattach_cross_region():
+    """PRD v2.2 / Phase 2 fix #2: even when a different-region H2 has
+    capacity + high cosine to the H3, re-attachment is BLOCKED — the
+    H3 routes to silos instead. This is the explicit guard against
+    Step 8.7 silently undoing Step 8.6's same-region tightening."""
+    h2_a = _h2("Cart Abandonment", "r1", [1, 0, 0])
+    # h2_b lives in r2 — different region from the H3.
+    h2_b = _h2("Affiliate Strategy", "r2", [0, 1, 0])
+    h3 = _h3("Vetting affiliates", "r1",
+             [0, 0.95, 0.1], parent_h2_text="Cart Abandonment")
+    attachments = {0: [h3], 1: []}
+    result = await verify_h3_parent_fit(
+        selected_h2s=[h2_a, h2_b],
+        h2_attachments=attachments,
+        llm_json_fn=_classifier({"h2_0.h3_0": "wrong_parent"}),
+    )
+    # No same-region alternative → silo route.
+    assert attachments[0] == []
+    assert attachments[1] == []
+    assert h3 in result.routed_to_silos
+    assert h3.discard_reason == "h3_wrong_parent"
+    assert len(result.reattached) == 0
 
 
 @pytest.mark.asyncio
@@ -338,3 +367,83 @@ async def test_rogue_h3_id_silently_dropped():
     assert result.fallback_applied is False
     assert h3 in attachments[0]
     assert h3.parent_fit_classification is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 review fix #1 — list-mutation iteration regression
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_multiple_h3s_under_one_h2_with_mixed_routing():
+    """Phase 2 review fix #1 — if an H2 has multiple H3s and the LLM
+    routes them to different verdicts, every H3 must receive its OWN
+    verdict, not the verdict of a sibling.
+
+    Pre-fix: positional iteration with `attached.remove(h3)` shifted
+    indices, causing later H3s to be processed under earlier H3s'
+    verdicts (or skipped entirely)."""
+    h2 = _h2("Parent H2", "r1", [1, 0, 0])
+    a = _h3("A — promote me", "r1", [0.7, 0.3, 0],
+            parent_h2_text="Parent H2")
+    b = _h3("B — wrong parent", "r1", [0.7, 0.3, 0.1],
+            parent_h2_text="Parent H2")
+    c = _h3("C — leave alone", "r1", [0.75, 0.25, 0],
+            parent_h2_text="Parent H2")
+    attachments = {0: [a, b, c]}
+
+    # Add a same-region alternative parent so b can re-attach (fix #2
+    # requirement). Place it in r1 with high cosine to b.
+    other_parent = _h2("Other H2", "r1", [0.7, 0.3, 0.1])
+    attachments[1] = []
+
+    result = await verify_h3_parent_fit(
+        selected_h2s=[h2, other_parent],
+        h2_attachments=attachments,
+        llm_json_fn=_classifier({
+            "h2_0.h3_0": "promote_to_h2",
+            "h2_0.h3_1": "wrong_parent",
+            "h2_0.h3_2": "good",
+        }),
+    )
+
+    # A was promoted → silo
+    assert a in result.routed_to_silos
+    assert a.discard_reason == "h3_promoted_to_h2_candidate"
+    # B was re-attached to other_parent (same region, has capacity)
+    assert b in attachments[1]
+    assert b not in attachments[0]
+    assert b.parent_h2_text == "Other H2"
+    # C was left alone — must still be under the original H2
+    assert c in attachments[0]
+    assert c.parent_fit_classification is None
+    assert c.discard_reason is None
+    # Counts add up
+    assert result.promoted_count == 1
+    assert result.wrong_parent_count == 1
+
+
+@pytest.mark.asyncio
+async def test_two_promote_to_h2_under_same_h2_does_not_skip_second():
+    """Phase 2 review fix #1 — when two consecutive H3s under the same
+    H2 are both promoted, the SECOND must not be silently skipped due
+    to index shift after the first removal."""
+    h2 = _h2("Parent", "r1", [1, 0, 0])
+    a = _h3("A", "r1", [0.7, 0.3, 0], parent_h2_text="Parent")
+    b = _h3("B", "r1", [0.75, 0.25, 0], parent_h2_text="Parent")
+    attachments = {0: [a, b]}
+
+    result = await verify_h3_parent_fit(
+        selected_h2s=[h2],
+        h2_attachments=attachments,
+        llm_json_fn=_classifier({
+            "h2_0.h3_0": "promote_to_h2",
+            "h2_0.h3_1": "promote_to_h2",
+        }),
+    )
+
+    # BOTH H3s must be removed and silo'd, not just A.
+    assert attachments[0] == []
+    assert a in result.routed_to_silos
+    assert b in result.routed_to_silos
+    assert result.promoted_count == 2

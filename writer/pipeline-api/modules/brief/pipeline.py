@@ -687,10 +687,21 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         persona_primary_goal=persona.primary_goal,
     )
     gated_pool = faq_gate_result.kept
+    # Phase 2 review fix #6 — reuse the gate's per-candidate embeddings
+    # so score_faqs doesn't pay a second embedding API call. The gate
+    # only populates kept_embeddings on the happy path; on embed
+    # fallback `kept_embeddings` is empty and score_faqs re-embeds
+    # (acceptable — embed outage isn't a steady state).
+    gated_embeddings = (
+        faq_gate_result.kept_embeddings
+        if len(faq_gate_result.kept_embeddings) == len(gated_pool)
+        else None
+    )
 
     scored_faqs = await score_faqs(
         gated_pool, title_embedding, heading_norm_set,
         intent_profile_embedding=faq_gate_result.intent_profile_embedding or None,
+        candidate_embeddings=gated_embeddings,
     )
     faqs = select_faqs(scored_faqs)
 
@@ -819,9 +830,26 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         if r.eliminated and r.elimination_reason == "restates_title"
     )
 
-    # Step 8.6 H3 distribution stats (PRD §5 §6 metadata fields)
+    # Step 8.6 H3 distribution stats (PRD §5 §6 metadata fields).
+    # h3_count_average derives from heading_structure (the post-Step-8.7
+    # final outline), so it already reflects routing.
     h3_count_average = (
         h3_content_count / max(1, h2_content_count) if h2_content_count else 0.0
+    )
+
+    # Phase 2 review fix #5 — h3_selection_result.h2s_with_zero_h3s is
+    # captured pre-Step-8.7. Once Step 8.7 routes H3s to silos, more H2s
+    # may end up empty. Recompute from the FINAL attachment map so the
+    # metadata reflects what actually shipped.
+    #
+    # Semantic preserved from v2.0: only NON-authority H3s count toward
+    # this metric. An H2 with only an authority-gap H3 still reports as
+    # `zero h3s` because the authority pillar isn't a Step 8.6 sub-topic.
+    def _has_non_auth_h3(arr: list) -> bool:
+        return any(c.source != "authority_gap_sme" for c in arr)
+    final_h2s_with_zero_h3s = sum(
+        1 for i in range(len(selected_h2s))
+        if not _has_non_auth_h3(h3_attachments.get(i, []))
     )
 
     metadata = BriefMetadata(
@@ -837,7 +865,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         h2_shortfall=selection.shortfall,
         h2_shortfall_reason=selection.shortfall_reason,
         h3_count_average=round(h3_count_average, 4),
-        h2s_with_zero_h3s=h3_selection_result.h2s_with_zero_h3s,
+        h2s_with_zero_h3s=final_h2s_with_zero_h3s,
         regions_detected=len(scored_regions),
         regions_eliminated_off_topic=region_off_topic,
         regions_eliminated_restate_title=region_restate,
@@ -886,6 +914,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faq_intent_gate_floor_rejected_count=faq_gate_result.floor_rejected_count,
         faq_intent_gate_llm_rejected_count=faq_gate_result.llm_rejected_count,
         faq_intent_gate_relaxation_applied=faq_gate_result.relaxation_applied,
+        faq_intent_gate_full_relaxation_applied=faq_gate_result.full_relaxation_applied,
     )
 
     response = BriefResponse(
