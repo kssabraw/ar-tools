@@ -42,7 +42,12 @@ MODULE_TIMEOUTS: dict[str, int] = {
     # duration to ~150s; 200s gives headroom without making timeouts
     # invisible.
     "brief": 200,
-    "sie": 130,
+    # SIE on a cold (uncached) keyword: DataForSEO SERP + ScrapeOwl on
+    # ~20 pages + Google NLP analyzeEntities per page + TextRazor per
+    # page + Anthropic for entity dedup + OpenAI embeddings. Observed
+    # ~195s on a fresh run with TextRazor 401s adding latency. Cache
+    # hits are near-instant. 240s gives headroom for cold starts.
+    "sie": 240,
     "research": 130,
     "writer": 600,  # writer makes many sequential LLM calls; allow up to 10m
     "sources_cited": 20,
