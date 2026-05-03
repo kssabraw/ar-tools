@@ -651,6 +651,77 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
                 extra={"error": str(exc)},
             )
 
+    # ---- Step 9b — Promote H2-level authority gaps into selected_h2s ----
+    # The Universal Authority Agent emits a `level` per heading (PRD v2.2
+    # extension). H2-level gaps are substantive standalone topics that
+    # competitors miss entirely; H3-level gaps continue through Step 8.5b
+    # and the existing attachment flow. H2-level gaps go through scope
+    # verification + framing validation here, then displace the lowest-
+    # priority MMR-selected H2 if accepting them would exceed the
+    # template's `max_h2_count`. They land without H3 attachments — Step
+    # 8.6 H3 selection has already run by this point — which matches the
+    # "unique angle competitors miss" framing of authority gaps.
+    auth_h2_candidates = [
+        c for c in auth_h3s if c.authority_gap_level == "H2"
+    ]
+    auth_h3s = [
+        c for c in auth_h3s if c.authority_gap_level != "H2"
+    ]
+
+    if auth_h2_candidates:
+        # Scope verification: fail-open (accept all on LLM failure) so an
+        # SME-flagged angle isn't lost to a transient LLM error.
+        h2_scope_result = await verify_scope(
+            title=title_scope.title,
+            scope_statement=title_scope.scope_statement,
+            selected_h2s=auth_h2_candidates,
+        )
+        auth_h2_kept = h2_scope_result.kept
+
+        if auth_h2_kept:
+            # Framing validator: rewrite to match intent's H2 framing rule
+            # (e.g. verb-leading for how-to). Reuses the same warn-and-
+            # accept policy as Step 11; the authority gap text is rarely
+            # mis-framed since the agent prompt already pushes for
+            # specific, actionable phrasing.
+            await validate_and_rewrite_framing(
+                h2s=auth_h2_kept,
+                template=intent_template,
+            )
+
+            # Insert into selected_h2s. The intent template's max_h2_count
+            # is the cap; if accepting these would exceed it, drop the
+            # lowest-priority MMR-selected H2 (authority gap H2s are
+            # always retained — they're the differentiator the SME flagged).
+            cap = intent_template.max_h2_count or len(selected_h2s) + len(auth_h2_kept)
+            displaced: list[Candidate] = []
+            for h2 in auth_h2_kept:
+                selected_h2s.append(h2)
+                if len(selected_h2s) > cap:
+                    # Drop the lowest-priority non-authority-gap entry. We
+                    # never displace another authority gap (rare to have
+                    # multiple given MAX_AUTHORITY_GAP_H2_PER_ARTICLE = 1,
+                    # but defensive).
+                    non_auth = [
+                        (i, c) for i, c in enumerate(selected_h2s)
+                        if c.source != "authority_gap_sme"
+                    ]
+                    if non_auth:
+                        non_auth.sort(key=lambda pair: pair[1].heading_priority)
+                        drop_idx = non_auth[0][0]
+                        dropped = selected_h2s.pop(drop_idx)
+                        dropped.discard_reason = "displaced_by_authority_gap_h3"
+                        displaced.append(dropped)
+            logger.info(
+                "brief.authority.h2_promoted",
+                extra={
+                    "promoted_count": len(auth_h2_kept),
+                    "displaced_count": len(displaced),
+                    "selected_h2_count_after": len(selected_h2s),
+                    "max_h2_count": intent_template.max_h2_count,
+                },
+            )
+
     # ---- Step 8.5b — Authority Gap H3 scope verification (PRD v2.0.3) ----
     # Catches H3s the agent produced that drift outside the brief's scope.
     # Out-of-scope H3s are removed from the attachment pool and routed to

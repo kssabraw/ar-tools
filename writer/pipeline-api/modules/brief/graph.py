@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Optional
+from typing import Awaitable, Callable, Literal, Optional
 
 import networkx as nx
 from networkx.algorithms.community import louvain_communities
@@ -87,6 +87,15 @@ class Candidate:
     # candidates; PRD v2.0.3): the agent's own justification for why the
     # H3 stays within the brief's scope_statement.
     scope_alignment_note: Optional[str] = None
+
+    # Set by Step 9 Authority Agent — the level the agent intended for
+    # this gap. Most authority gaps are sub-topic H3s under an existing
+    # H2, but some are substantive enough to deserve their own H2. When
+    # set to "H2", pipeline.py routes the candidate through scope
+    # verification + framing validation and inserts it into selected_h2s
+    # (capped per intent template). Default None for non-authority-gap
+    # candidates.
+    authority_gap_level: Optional[Literal["H2", "H3"]] = None
 
     # Set by Step 8.7 H3 Parent-Fit Verification (PRD v2.2 / Phase 2).
     # Only populated when the LLM tagged the H3 as `marginal` — `good`
