@@ -192,18 +192,51 @@ def _contains_forbidden(text: str, forbidden_terms: list[str]) -> Optional[str]:
     """Return the first forbidden term found in `text`, or None.
 
     Word-boundary regex match (case-insensitive) so "free" doesn't match
-    inside "freedom".
+    inside "freedom". Convenience wrapper that compiles a fresh regex
+    each call — for the inner loop in `optimize_headings`, callers
+    should use `_compile_forbidden_pattern` once and re-use it via
+    `_match_forbidden_compiled` to avoid recompiling per heading.
     """
     if not text or not forbidden_terms:
         return None
-    lower = text.lower()
-    for term in forbidden_terms:
-        if not term:
-            continue
-        pattern = r"\b" + re.escape(term.lower()) + r"\b"
-        if re.search(pattern, lower):
-            return term
-    return None
+    pattern = _compile_forbidden_pattern(forbidden_terms)
+    if pattern is None:
+        return None
+    return _match_forbidden_compiled(text, pattern, forbidden_terms)
+
+
+def _compile_forbidden_pattern(forbidden_terms: list[str]) -> Optional[re.Pattern]:
+    """Compile a single combined word-boundary regex over all forbidden
+    terms. Returns None when the list is effectively empty so callers
+    can short-circuit. Compiled once per `optimize_headings` call,
+    reused across every rewrite candidate."""
+    cleaned = [t for t in (forbidden_terms or []) if t]
+    if not cleaned:
+        return None
+    # De-dupe to avoid wasted alternation branches when the same term
+    # surfaces from both brand_voice_card.banned_terms and
+    # filtered_terms.avoid (common — they overlap).
+    deduped = sorted(set(t.lower() for t in cleaned), key=len, reverse=True)
+    alternation = "|".join(re.escape(t) for t in deduped)
+    return re.compile(rf"\b({alternation})\b", re.IGNORECASE)
+
+
+def _match_forbidden_compiled(
+    text: str, pattern: re.Pattern, forbidden_terms: list[str],
+) -> Optional[str]:
+    """Look up the matched forbidden term using a pre-compiled pattern.
+    Returns the canonical term from `forbidden_terms` (preserving the
+    caller's casing for logs) when matched, else None."""
+    if not text:
+        return None
+    m = pattern.search(text)
+    if not m:
+        return None
+    matched_lower = m.group(1).lower()
+    for orig in forbidden_terms or []:
+        if orig and orig.lower() == matched_lower:
+            return orig
+    return matched_lower
 
 
 # ---------------------------------------------------------------------------
@@ -241,6 +274,12 @@ async def optimize_headings(
         on failure the structure is populated (with the original) so the
         caller can use it unconditionally.
     """
+    # Defensive None-guards. Type hints say `list` but Python doesn't
+    # enforce, and callers may pass None when SIE / reconciliation
+    # short-circuited.
+    reconciled_terms = reconciled_terms or []
+    forbidden_terms = forbidden_terms or []
+
     # Always populate with the original so callers can rely on the
     # field being present.
     original_structure = [dict(h) for h in heading_structure]
@@ -328,22 +367,54 @@ async def optimize_headings(
         )
         return result
 
-    # Index rewrites by (order, level) — the LLM might shuffle them.
-    rewrites_by_key: dict[tuple[Any, Any], str] = {}
+    # Index rewrites by (order, level). Normalize both sides to handle
+    # LLM-side type drift: returning `"order": "1"` (string) instead of
+    # `1` (int), or `"level": "h2"` (lower) instead of `"H2"` (upper).
+    # Without normalization the lookup silently misses and we drop a
+    # rewrite that the LLM actually produced.
+    def _normalize_key(order: Any, level: Any) -> Optional[tuple[int, str]]:
+        if isinstance(level, str):
+            level_norm = level.strip().upper()
+        else:
+            return None
+        if level_norm not in ("H1", "H2", "H3"):
+            return None
+        if isinstance(order, int):
+            order_norm = order
+        elif isinstance(order, str):
+            try:
+                order_norm = int(order.strip())
+            except (TypeError, ValueError):
+                return None
+        elif isinstance(order, float) and order.is_integer():
+            order_norm = int(order)
+        else:
+            return None
+        return (order_norm, level_norm)
+
+    rewrites_by_key: dict[tuple[int, str], str] = {}
     for entry in rewrites:
         if not isinstance(entry, dict):
             continue
-        order = entry.get("order")
-        level = entry.get("level")
         text = entry.get("text")
         if not isinstance(text, str) or not text.strip():
             continue
-        rewrites_by_key[(order, level)] = text.strip()
+        key = _normalize_key(entry.get("order"), entry.get("level"))
+        if key is None:
+            continue
+        rewrites_by_key[key] = text.strip()
+
+    # Compile the forbidden-term regex ONCE per call. Inner loop runs
+    # the compiled pattern against each rewrite — saves N×M regex
+    # compiles for N candidates × M forbidden terms.
+    forbidden_pattern = _compile_forbidden_pattern(forbidden_terms)
 
     # Apply rewrites with safety guards.
     new_structure = [dict(h) for h in heading_structure]
     for idx, original in candidates:
-        key = (original.get("order"), original.get("level"))
+        key = _normalize_key(original.get("order"), original.get("level"))
+        if key is None:
+            continue
         new_text = rewrites_by_key.get(key)
         if not new_text:
             continue
@@ -351,17 +422,20 @@ async def optimize_headings(
             continue
         # Forbidden-term guard — if the LLM ignored the constraint and
         # produced a heading with a forbidden term, keep the original.
-        forbidden_hit = _contains_forbidden(new_text, forbidden_terms)
-        if forbidden_hit:
-            logger.warning(
-                "writer.heading_seo_optimizer.forbidden_in_rewrite",
-                extra={
-                    "original": original.get("text"),
-                    "rewrite": new_text,
-                    "forbidden_term": forbidden_hit,
-                },
+        if forbidden_pattern is not None:
+            forbidden_hit = _match_forbidden_compiled(
+                new_text, forbidden_pattern, forbidden_terms,
             )
-            continue
+            if forbidden_hit:
+                logger.warning(
+                    "writer.heading_seo_optimizer.forbidden_in_rewrite",
+                    extra={
+                        "original": original.get("text"),
+                        "rewrite": new_text,
+                        "forbidden_term": forbidden_hit,
+                    },
+                )
+                continue
         # Apply.
         ratio = _change_ratio(original.get("text", ""), new_text)
         new_structure[idx] = {**original, "text": new_text}

@@ -412,3 +412,140 @@ def test_zones_for_term_partial_zones_default_to_zero():
     assert zones["h2"]["target"] == 3
     assert zones["title"]["target"] == 0
     assert zones["paragraphs"]["max"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Robustness fixes — LLM type drift and pre-compiled forbidden regex
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_llm_returns_order_as_string_still_matches():
+    """LLM-side type drift: order returned as string instead of int.
+    The normalization layer should coerce both sides to int so the
+    lookup matches."""
+    structure = [_heading("H2", "Original", 1)]
+    response = {"rewrites": [
+        # `order` as string — should still match input order=1
+        {"order": "1", "level": "H2", "text": "Optimize Original With Entity"},
+    ]}
+    result = await optimize_headings(
+        structure,
+        keyword="kw",
+        reconciled_terms=[_entity_term("Entity")],
+        forbidden_terms=[],
+        llm_json_fn=_mock_call(response),
+    )
+    assert 0 in result.rewritten_indices
+    assert "Entity" in result.heading_structure[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_llm_returns_level_lowercase_still_matches():
+    """LLM-side case drift: level as lowercase 'h2' instead of 'H2'.
+    Should still match."""
+    structure = [_heading("H2", "Original", 1)]
+    response = {"rewrites": [
+        {"order": 1, "level": "h2", "text": "Optimize Original With Entity"},
+    ]}
+    result = await optimize_headings(
+        structure,
+        keyword="kw",
+        reconciled_terms=[_entity_term("Entity")],
+        forbidden_terms=[],
+        llm_json_fn=_mock_call(response),
+    )
+    assert 0 in result.rewritten_indices
+
+
+@pytest.mark.asyncio
+async def test_llm_returns_unknown_level_skipped_safely():
+    """If LLM returns 'level': 'h4' (not a valid heading level), the
+    normalization rejects the key and the rewrite is dropped."""
+    structure = [_heading("H2", "Original", 1)]
+    response = {"rewrites": [
+        {"order": 1, "level": "h4", "text": "Should Be Rejected"},
+    ]}
+    result = await optimize_headings(
+        structure,
+        keyword="kw",
+        reconciled_terms=[_entity_term("Entity")],
+        forbidden_terms=[],
+        llm_json_fn=_mock_call(response),
+    )
+    assert result.heading_structure[0]["text"] == "Original"
+    assert result.rewritten_indices == []
+
+
+@pytest.mark.asyncio
+async def test_llm_returns_non_numeric_order_skipped_safely():
+    structure = [_heading("H2", "Original", 1)]
+    response = {"rewrites": [
+        {"order": "not a number", "level": "H2", "text": "Should Be Rejected"},
+    ]}
+    result = await optimize_headings(
+        structure,
+        keyword="kw",
+        reconciled_terms=[_entity_term("Entity")],
+        forbidden_terms=[],
+        llm_json_fn=_mock_call(response),
+    )
+    assert result.heading_structure[0]["text"] == "Original"
+
+
+@pytest.mark.asyncio
+async def test_none_reconciled_terms_treated_as_empty():
+    """Defensive guard: None instead of [] for reconciled_terms must
+    not raise — should skip with no_entities_available."""
+    structure = [_heading("H2", "Original", 1)]
+    result = await optimize_headings(
+        structure,
+        keyword="kw",
+        reconciled_terms=None,  # type: ignore[arg-type]
+        forbidden_terms=[],
+        llm_json_fn=_mock_call({"rewrites": []}),
+    )
+    assert result.skipped_reason == "no_entities_available"
+
+
+@pytest.mark.asyncio
+async def test_none_forbidden_terms_treated_as_empty():
+    """Defensive guard: None for forbidden_terms must not raise."""
+    structure = [_heading("H2", "Original", 1)]
+    response = {"rewrites": [
+        {"order": 1, "level": "H2", "text": "Optimize Original With Entity"},
+    ]}
+    result = await optimize_headings(
+        structure,
+        keyword="kw",
+        reconciled_terms=[_entity_term("Entity")],
+        forbidden_terms=None,  # type: ignore[arg-type]
+        llm_json_fn=_mock_call(response),
+    )
+    assert 0 in result.rewritten_indices
+
+
+def test_forbidden_pattern_dedupes_and_compiles_once():
+    """Compiled pattern is built once per call regardless of duplicate
+    terms in the input — same brand-voice term often shows up in both
+    `banned_terms` and `filtered_terms.avoid`."""
+    from modules.writer.heading_seo_optimizer import (
+        _compile_forbidden_pattern,
+        _match_forbidden_compiled,
+    )
+
+    pattern = _compile_forbidden_pattern(["free", "FREE", "free", "best"])
+    assert pattern is not None
+    # Both word forms still detected
+    assert _match_forbidden_compiled("Get free shipping", pattern, ["free", "FREE", "best"]) == "free"
+    assert _match_forbidden_compiled("The Best deal", pattern, ["free", "best"]) == "best"
+    # Word boundary respected
+    assert _match_forbidden_compiled("Path to freedom", pattern, ["free"]) is None
+
+
+def test_forbidden_pattern_returns_none_for_empty_input():
+    from modules.writer.heading_seo_optimizer import _compile_forbidden_pattern
+
+    assert _compile_forbidden_pattern([]) is None
+    assert _compile_forbidden_pattern(None) is None  # type: ignore[arg-type]
+    assert _compile_forbidden_pattern(["", "", ""]) is None
