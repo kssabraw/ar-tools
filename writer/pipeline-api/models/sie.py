@@ -77,6 +77,14 @@ class TermRecord(BaseModel):
     n_gram_length: int = 1
     is_entity: bool = False
     is_target_keyword: bool = False
+    # SIE v1.3 — n-gram terms whose tokens are a contiguous subsequence
+    # of the seed keyword (e.g. "tiktok shop" / "roi" / "how to" for
+    # the seed "how to increase roi for a tiktok shop"). Frontend should
+    # bucket these separately from "related concepts" — they're echoes
+    # of the input, not topical adjacent terms. Writer still uses them
+    # via the per-zone targets in usage_recommendations. Entities and
+    # the seed keyword itself are NEVER flagged as fragments.
+    is_seed_fragment: bool = False
     entity_category: Optional[EntityCategory] = None
     avg_salience: Optional[float] = None
     ner_variants: list[str] = []
@@ -155,7 +163,7 @@ class TargetKeywordRecord(BaseModel):
 
 
 class SIEResponse(BaseModel):
-    schema_version: Literal["1.2"] = "1.2"
+    schema_version: Literal["1.3"] = "1.3"
     keyword: str
     location_code: int
     language_code: str

@@ -115,56 +115,75 @@ def _make_aggregate(term: str, pages_found: int = 5) -> TermAggregate:
     )
 
 
-def test_seed_fragment_filter_drops_subsequences():
-    """For seed 'how to grow your tiktok shop', terms that are
-    contiguous subsequences of the keyword get stripped."""
+def test_seed_fragment_mark_flags_subsequences():
+    """SIE v1.3 — flag (don't strip) seed-keyword fragments. For seed
+    'how to grow your tiktok shop', n-gram terms that are contiguous
+    subsequences of the keyword get FLAGGED — they stay in aggregates
+    so the writer keeps using them, but the returned set tells the
+    pipeline which terms to mark `is_seed_fragment=True` on."""
     aggregates = {
         "tiktok": _make_aggregate("tiktok"),
         "tiktok shop": _make_aggregate("tiktok shop"),
         "grow your tiktok": _make_aggregate("grow your tiktok"),
         "social commerce": _make_aggregate("social commerce"),  # NOT a fragment
     }
-    removed = filter_seed_keyword_fragments(
+    flagged = filter_seed_keyword_fragments(
         aggregates, "how to grow your tiktok shop",
     )
-    assert removed == 3
-    assert "social commerce" in aggregates
-    assert "tiktok" not in aggregates
+    # Three fragments flagged; aggregates dict UNCHANGED (writer needs
+    # them all for per-zone usage targets)
+    assert flagged == {"tiktok", "tiktok shop", "grow your tiktok"}
+    assert "social commerce" not in flagged
+    assert "social commerce" in aggregates  # not a fragment, not flagged
+    assert "tiktok" in aggregates  # flagged but NOT removed
 
 
-def test_seed_fragment_filter_protects_target_keyword():
-    """The seed keyword itself (any token order match) survives."""
-    aggregates = {
-        "tiktok shop": _make_aggregate("tiktok shop"),
-    }
+def test_seed_fragment_mark_protects_target_keyword():
+    """The seed keyword itself (any token order match) is NEVER flagged."""
+    aggregates = {"tiktok shop": _make_aggregate("tiktok shop")}
     aggregates["tiktok shop"].coverage_exception = "target_keyword"
-    filter_seed_keyword_fragments(aggregates, "tiktok shop")
-    assert "tiktok shop" in aggregates
+    flagged = filter_seed_keyword_fragments(aggregates, "tiktok shop")
+    assert flagged == set()
 
 
-def test_seed_fragment_filter_protects_entities():
-    """Entities (per entity_meta['is_entity']) are protected even when
-    they happen to be seed-keyword fragments."""
+def test_seed_fragment_mark_protects_entities():
+    """Entities (per entity_meta['is_entity']) are protected — they
+    surface in the entity bucket, not the keyword-variants bucket."""
     aggregates = {
         "tiktok shop": _make_aggregate("tiktok shop"),
-        "tiktok": _make_aggregate("tiktok"),  # n-gram only — should be removed
+        "tiktok": _make_aggregate("tiktok"),
     }
     entity_meta = {
         "tiktok shop": {"is_entity": True, "source": "ngram_and_entity"},
     }
-    removed = filter_seed_keyword_fragments(
+    flagged = filter_seed_keyword_fragments(
         aggregates, "how to grow tiktok shop", entity_meta=entity_meta,
     )
-    # tiktok shop entity is preserved; "tiktok" n-gram-only fragment is removed
-    assert "tiktok shop" in aggregates
-    assert "tiktok" not in aggregates
-
-
-def test_seed_fragment_filter_no_op_on_empty_keyword():
-    aggregates = {"tiktok": _make_aggregate("tiktok")}
-    removed = filter_seed_keyword_fragments(aggregates, "")
-    assert removed == 0
+    # tiktok shop is an entity — NOT flagged; tiktok is plain n-gram — flagged
+    assert "tiktok" in flagged
+    assert "tiktok shop" not in flagged
+    # Both still in aggregates (no removal in v1.3)
     assert "tiktok" in aggregates
+    assert "tiktok shop" in aggregates
+
+
+def test_seed_fragment_mark_returns_empty_set_on_empty_keyword():
+    aggregates = {"tiktok": _make_aggregate("tiktok")}
+    flagged = filter_seed_keyword_fragments(aggregates, "")
+    assert flagged == set()
+    assert "tiktok" in aggregates  # still present
+
+
+def test_termrecord_carries_is_seed_fragment_flag():
+    """SIE v1.3 — TermRecord must support the new is_seed_fragment field
+    so the pipeline can stamp it from the flagged set."""
+    from models.sie import TermRecord
+
+    rec = TermRecord(term="tiktok shop", is_seed_fragment=True)
+    assert rec.is_seed_fragment is True
+    # Default false
+    rec_default = TermRecord(term="social commerce")
+    assert rec_default.is_seed_fragment is False
 
 
 # ---------------------------------------------------------------------------

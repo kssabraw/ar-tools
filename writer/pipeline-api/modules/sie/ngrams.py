@@ -245,49 +245,52 @@ def apply_subsumption(aggregates: dict[str, TermAggregate]) -> int:
 # ---- Seed-keyword-fragment filter (SIE v1.2) ----
 
 
-def filter_seed_keyword_fragments(
+def mark_seed_keyword_fragments(
     aggregates: dict[str, TermAggregate],
     target_keyword: str,
     *,
     entity_meta: Optional[dict[str, dict]] = None,
-) -> int:
-    """Drop n-gram terms whose normalized tokens are a contiguous
-    subsequence of the seed keyword's normalized tokens.
+) -> set[str]:
+    """Identify n-gram terms whose normalized tokens are a contiguous
+    subsequence of the seed keyword's normalized tokens. Returns the
+    SET of flagged term keys — the caller stamps a flag on each
+    TermRecord at scoring/build time.
 
-    Production was producing related-keyword lists dominated by
-    fragments of the input ("tiktok", "tiktok shop", "roi" for the
-    seed "how to increase roi for a tiktok shop"). These ARE useful
-    for SEO awareness but they aren't "related" — they're echoes of
-    the input. The writer already commits to using the keyword
-    verbatim via the brief's title/H1; the related_keywords list
-    should surface DIFFERENT concepts.
+    SIE v1.3 — flag-not-remove (replaces v1.2's filter_seed_keyword_fragments).
+    Background: production related-keyword output was dominated by
+    fragments of the seed input ("tiktok", "tiktok shop", "roi" for
+    "how to increase roi for a tiktok shop"). v1.2 stripped them
+    entirely from the aggregates dict — but that ALSO removed them
+    from the writer's `terms.required` list, losing the per-zone
+    target counts that previously guided the writer to use them
+    appropriately for SEO.
 
-    Entities (`entity_meta[term]["is_entity"]` truthy) are PROTECTED —
-    "TikTok Shop" might be both a keyword fragment AND a Google NLP /
-    TextRazor entity. Entities ride out their own pipeline (still
-    surface in the entity bucket); fragment-stripping only targets
-    pure-n-gram noise. The target keyword itself is also protected
-    via `coverage_exception="target_keyword"`.
+    v1.3: keep them in the writer's required list (so target counts
+    still drive usage) but flag them with `is_seed_fragment=True` so
+    the frontend / strategist UI can filter them out of a "related
+    concepts" view. Single list, multiple lenses.
 
-    Returns the number of terms removed.
+    Protected (NOT flagged):
+      - The seed keyword itself (it's the primary term, not a fragment)
+      - Entities (entity_meta[term]["is_entity"] truthy) — "TikTok
+        Shop" is an entity even when it overlaps the seed
     """
     if not target_keyword:
-        return 0
+        return set()
     keyword_tokens = [lemmatize(t) for t in target_keyword.lower().split() if t]
     if not keyword_tokens:
-        return 0
+        return set()
     target_norm = " ".join(sorted(keyword_tokens))
     meta = entity_meta or {}
 
-    removed = 0
-    for term in list(aggregates.keys()):
-        agg = aggregates[term]
-        # Don't strip the target keyword itself — it's a required term.
+    flagged: set[str] = set()
+    for term, agg in aggregates.items():
+        # Don't flag the target keyword itself — it's the primary term.
         if agg.coverage_exception == "target_keyword":
             continue
         if " ".join(sorted(term.split())) == target_norm:
             continue
-        # Don't strip entities — they belong in the entity bucket
+        # Don't flag entities — they belong in the entity bucket
         # regardless of whether their text overlaps the seed keyword.
         if meta.get(term, {}).get("is_entity"):
             continue
@@ -297,16 +300,22 @@ def filter_seed_keyword_fragments(
         n = len(term_tokens)
         for i in range(len(keyword_tokens) - n + 1):
             if keyword_tokens[i:i + n] == term_tokens:
-                del aggregates[term]
-                removed += 1
+                flagged.add(term)
                 break
 
-    if removed:
+    if flagged:
         logger.info(
-            "sie.ngrams.seed_fragments_removed",
-            extra={"removed_count": removed, "seed_keyword": target_keyword},
+            "sie.ngrams.seed_fragments_flagged",
+            extra={"flagged_count": len(flagged), "seed_keyword": target_keyword},
         )
-    return removed
+    return flagged
+
+
+# Back-compat alias — older callers (tests, imports) still using the
+# v1.2 name. The behavior is now flag-not-remove; the return type
+# changed from int to set[str] but `bool(set)` and `len(set)` give
+# equivalent truthiness/count semantics for most usage.
+filter_seed_keyword_fragments = mark_seed_keyword_fragments
 
 
 # ---- Coverage gate ----

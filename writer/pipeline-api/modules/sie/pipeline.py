@@ -56,7 +56,7 @@ from .ngrams import (
     analyze_pages,
     apply_coverage_gate,
     apply_subsumption,
-    filter_seed_keyword_fragments,
+    mark_seed_keyword_fragments,
     flag_template_boilerplate,
     lemmatize,
     tokenize,
@@ -239,13 +239,14 @@ async def run_sie(req: SIERequest) -> SIEResponse:
         aggregates, entity_meta, textrazor_entities,
     )
 
-    # PRD v1.2 — strip seed-keyword fragments AFTER all merges so we
-    # don't accidentally drop an entity that happens to share a token
-    # with the keyword (e.g. "TikTok Shop" entity for the keyword "how
-    # to grow your TikTok shop"). Entities are protected via
-    # entity_meta["is_entity"] inside the filter; pure n-gram fragments
-    # of the seed keyword get stripped.
-    filter_seed_keyword_fragments(aggregates, keyword, entity_meta=entity_meta)
+    # PRD v1.3 — flag (don't strip) seed-keyword fragments. Frontend
+    # filters them out of "related concepts" via is_seed_fragment;
+    # writer still uses them via per-zone targets in usage_recommendations.
+    # Entities are NEVER flagged as fragments (protected via the
+    # entity_meta["is_entity"] check in mark_seed_keyword_fragments).
+    seed_fragment_terms = mark_seed_keyword_fragments(
+        aggregates, keyword, entity_meta=entity_meta,
+    )
 
     # ---- Module 13: scoring ----
     rank_by_url = {p.url: page_to_classified[p.url].rank for p in pages}
@@ -277,6 +278,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
             n_gram_length=agg.n_gram_length,
             source=meta.get("source", "ngram"),
             is_entity=meta.get("is_entity", False),
+            is_seed_fragment=term in seed_fragment_terms,
             entity_category=meta.get("entity_category"),
             avg_salience=meta.get("avg_salience"),
             ner_variants=meta.get("ner_variants", []),
@@ -406,7 +408,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
         keyword=keyword,
         location_code=req.location_code,
         outlier_mode=req.outlier_mode,
-        schema_version="1.2",
+        schema_version="1.3",
         output_payload=response.model_dump(mode="json"),
         duration_ms=duration_ms,
     )
