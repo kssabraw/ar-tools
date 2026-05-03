@@ -22,6 +22,44 @@ from .reconciliation import FilteredSIETerms
 logger = logging.getLogger(__name__)
 
 
+# FAQs aren't a SIE-tracked zone (the SIE pipeline computes
+# title / h1 / h2 / h3 / paragraphs only). Derive a FAQ usage target
+# from the paragraphs target by the typical FAQ-to-paragraphs word
+# budget ratio (~150 FAQ words across 3-5 answers vs ~1500 main-body
+# paragraph words). That gives us a reasonable per-question pacing
+# floor without inventing a new SIE zone.
+_FAQ_TO_PARAGRAPHS_BUDGET_RATIO = 0.12
+
+
+def _derive_faq_zone_target(
+    filtered_terms: FilteredSIETerms,
+) -> tuple[int, int]:
+    """Sum the paragraphs-zone target/max across required terms and scale
+    by the FAQ-vs-paragraphs budget ratio. Returns (target, max) — the
+    aggregate count of distinct required-term mentions the FAQ section
+    should hit (target) and absolute ceiling (max). Both are 0 when SIE
+    hasn't surfaced per-zone targets (legacy responses).
+    """
+    para_target = 0
+    para_max = 0
+    for term in filtered_terms.required:
+        zones = getattr(term, "zones", {}) or {}
+        if not isinstance(zones, dict):
+            continue
+        para = zones.get("paragraphs") or {}
+        if not isinstance(para, dict):
+            continue
+        para_target += int(para.get("target", 0) or 0)
+        para_max += int(para.get("max", 0) or 0)
+    derived_target = int(round(para_target * _FAQ_TO_PARAGRAPHS_BUDGET_RATIO))
+    derived_max = int(round(para_max * _FAQ_TO_PARAGRAPHS_BUDGET_RATIO))
+    if para_target > 0 and derived_target == 0:
+        derived_target = 1
+    if derived_max < derived_target:
+        derived_max = derived_target
+    return (derived_target, derived_max)
+
+
 FAQ_SYSTEM = """You write FAQ answers for a blog post.
 
 OUTPUT FORMAT:
@@ -65,6 +103,9 @@ async def write_faqs(
         top = filtered_terms.required[:8]
         required_terms_str = ", ".join(t.term for t in top)
 
+    # PRD v2.6 wiring — FAQs aren't a SIE zone, derive from paragraphs.
+    faq_target, faq_max = _derive_faq_zone_target(filtered_terms)
+
     user_parts = [
         f"KEYWORD: {keyword}",
         "\nFAQ_QUESTIONS:",
@@ -85,6 +126,13 @@ async def write_faqs(
 
     if required_terms_str:
         user_parts.append(f"\nREQUIRED_TERMS: {required_terms_str}")
+        if faq_target > 0:
+            user_parts.append(
+                f"REQUIRED_TERM_USAGE_TARGET: aim for at least {faq_target} "
+                f"distinct REQUIRED_TERM mentions across the FAQ set "
+                f"(do not exceed {faq_max}). Distribute naturally; not "
+                f"every answer needs one."
+            )
 
     if forbidden_combined:
         user_parts.append(f"\nFORBIDDEN_TERMS: {', '.join(forbidden_combined[:50])}")

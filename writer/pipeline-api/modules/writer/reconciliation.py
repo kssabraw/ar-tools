@@ -67,6 +67,12 @@ class ReconciledTerm:
     zones: dict = field(default_factory=dict)
     is_entity: bool = False
     entity_category: Optional[str] = None
+    # SIE v1.3 — n-gram terms whose tokens are a contiguous subsequence of
+    # the seed keyword. Heading SEO Optimizer must NOT inject these into
+    # H2/H3 (they're keyword echoes, not topical adjacents). Entities and
+    # the seed itself are never flagged. Defaults False for legacy SIE
+    # responses (pre-1.3) that omit the field.
+    is_seed_fragment: bool = False
 
 
 @dataclass
@@ -195,18 +201,19 @@ async def reconcile_terms(
     return _all_keep(required_terms, avoid_terms, usage_recs), []
 
 
-def _entity_metadata_for_term(rec: dict) -> tuple[bool, Optional[str]]:
-    """Pluck (is_entity, entity_category) from a SIE term entry. Defaults
-    to (False, None) when the SIE row doesn't carry the metadata —
-    keeps backward compat with v1.0 SIE responses."""
+def _entity_metadata_for_term(rec: dict) -> tuple[bool, Optional[str], bool]:
+    """Pluck (is_entity, entity_category, is_seed_fragment) from a SIE term
+    entry. Defaults to (False, None, False) when the SIE row doesn't carry
+    the metadata — keeps backward compat with pre-v1.3 SIE responses."""
     data = rec.get("data") or {}
     if not isinstance(data, dict):
-        return (False, None)
+        return (False, None, False)
     is_entity = bool(data.get("is_entity", False))
     entity_category = data.get("entity_category")
     if not isinstance(entity_category, str):
         entity_category = None
-    return (is_entity, entity_category)
+    is_seed_fragment = bool(data.get("is_seed_fragment", False))
+    return (is_entity, entity_category, is_seed_fragment)
 
 
 def _all_keep(
@@ -222,7 +229,7 @@ def _all_keep(
             continue
         mn, tg, mx = _zone_usage_for_term(usage_recs, term)
         zones = _zones_for_term(usage_recs, term)
-        is_entity, entity_category = _entity_metadata_for_term(r)
+        is_entity, entity_category, is_seed_fragment = _entity_metadata_for_term(r)
         out.required.append(ReconciledTerm(
             term=term,
             zone_usage_target=tg, zone_usage_min=mn, zone_usage_max=mx,
@@ -231,6 +238,7 @@ def _all_keep(
             zones=zones,
             is_entity=is_entity,
             entity_category=entity_category,
+            is_seed_fragment=is_seed_fragment,
         ))
     out.avoid = [t for t in avoid if t]
     return out
@@ -266,7 +274,7 @@ def _build_filtered(
             continue
         mn, tg, mx = _zone_usage_for_term(usage_recs, term)
         zones = _zones_for_term(usage_recs, term)
-        is_entity, entity_category = _entity_metadata_for_term(r)
+        is_entity, entity_category, is_seed_fragment = _entity_metadata_for_term(r)
         cls = req_class_by_term.get(term, {})
         action = cls.get("classification", "keep")
         reasoning = (cls.get("brand_guide_reasoning") or "")[:300]
@@ -289,6 +297,7 @@ def _build_filtered(
                 zones=zones,
                 is_entity=is_entity,
                 entity_category=entity_category,
+                is_seed_fragment=is_seed_fragment,
             ))
             log.append(BrandConflictEntry(
                 term=term,
@@ -305,6 +314,7 @@ def _build_filtered(
                 zones=zones,
                 is_entity=is_entity,
                 entity_category=entity_category,
+                is_seed_fragment=is_seed_fragment,
             ))
 
     final_avoid: list[str] = []

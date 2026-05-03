@@ -302,6 +302,12 @@ async def optimize_headings(
     for term in reconciled_terms:
         if not getattr(term, "is_entity", False):
             continue
+        # SIE v1.3 defensive guard — entities should never be flagged as
+        # seed fragments (sie/pipeline.py guarantees this), but if the
+        # invariant breaks upstream we still don't want to inject a
+        # keyword echo into H2/H3. Skip silently.
+        if getattr(term, "is_seed_fragment", False):
+            continue
         zones = getattr(term, "zones", {}) or {}
         h2_zone = zones.get("h2", {}) if isinstance(zones, dict) else {}
         h3_zone = zones.get("h3", {}) if isinstance(zones, dict) else {}
