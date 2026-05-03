@@ -8,10 +8,20 @@
   pipeline, SIE filters, and Research & Citations snippet ranking.
 - OpenAI text-embedding-3-large (`embed_batch_large`) for: Brief Generator
   v2.0 — finer-grained paraphrase discrimination and the coverage graph.
+
+All Anthropic calls are wrapped in a single global semaphore (default 5
+concurrent, configurable via `anthropic_max_concurrency`) to dodge the
+per-account concurrent-connections rate limit. The brief pipeline fans
+out Claude calls in a few places (silo viability checks, fan-out
+subtopic extraction, parallel writer-side scoring) and unbounded
+concurrency reliably trips HTTP 429 rate_limit_error. The semaphore is
+acquired in `claude_json` and `claude_text` so every call site is
+protected without requiring per-caller throttling.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -31,6 +41,20 @@ EMBEDDING_MODEL_LARGE = "text-embedding-3-large"
 
 _anthropic: Optional[AsyncAnthropic] = None
 _openai: Optional[AsyncOpenAI] = None
+
+# Module-level semaphore guarding all `client.messages.create()` calls.
+# Lazily constructed on first use so it binds to the running event loop
+# rather than whatever loop existed at import time.
+_anthropic_semaphore: Optional[asyncio.Semaphore] = None
+
+
+def _get_anthropic_semaphore() -> asyncio.Semaphore:
+    global _anthropic_semaphore
+    if _anthropic_semaphore is None:
+        _anthropic_semaphore = asyncio.Semaphore(
+            settings.anthropic_max_concurrency
+        )
+    return _anthropic_semaphore
 
 
 def get_anthropic() -> AsyncAnthropic:
@@ -125,15 +149,17 @@ async def claude_json(
 
     last_error: Optional[Exception] = None
     last_text: str = ""
+    semaphore = _get_anthropic_semaphore()
     for attempt in range(2):
         sys_prompt = system if attempt == 0 else system + _STRICT_JSON_SUFFIX
-        message = await client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=sys_prompt,
-            messages=[{"role": "user", "content": user}],
-        )
+        async with semaphore:
+            message = await client.messages.create(
+                model=CLAUDE_MODEL,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=sys_prompt,
+                messages=[{"role": "user", "content": user}],
+            )
         text = "".join(
             block.text for block in message.content if getattr(block, "type", "") == "text"
         )
@@ -180,13 +206,14 @@ async def claude_text(
     temperature: float = 0.3,
 ) -> str:
     client = get_anthropic()
-    message = await client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
+    async with _get_anthropic_semaphore():
+        message = await client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        )
     return "".join(
         block.text for block in message.content if getattr(block, "type", "") == "text"
     ).strip()

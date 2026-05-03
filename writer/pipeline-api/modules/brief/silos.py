@@ -921,17 +921,14 @@ async def verify_silo_viability(
     title: str,
     scope_statement: str,
     llm_json_fn: Optional[LLMJsonFn] = None,
-    max_concurrency: int = 3,
 ) -> SiloViabilityResult:
     """Step 12.4 — verify each silo candidate's standalone viability.
 
-    Runs candidate checks concurrently with a bounded semaphore (default
-    3) so we don't trip Anthropic's per-account concurrent-connections
-    rate limit. With more than ~5 silos in a single brief, unbounded
-    `asyncio.gather` over Claude calls reliably triggers HTTP 429
-    rate_limit_error responses and forces every silo into the fallback
-    `viable_as_standalone_article=True` path — losing the verdict signal
-    even though the candidates were never actually evaluated.
+    Runs candidate checks concurrently. Concurrency is bounded globally
+    by the Anthropic-side semaphore in `modules/brief/llm.py` (default
+    5), so this gather can fire all silos at once without tripping
+    Anthropic's per-account concurrent-connections rate limit — at most
+    `anthropic_max_concurrency` will reach the API simultaneously.
 
     Mutates each input `SiloCandidate` in place:
       - `viable_as_standalone_article` set to LLM verdict
@@ -947,14 +944,8 @@ async def verify_silo_viability(
         return SiloViabilityResult()
 
     call = llm_json_fn or claude_json
-    semaphore = asyncio.Semaphore(max_concurrency)
-
-    async def _run_one(silo: SiloCandidate):
-        async with semaphore:
-            return await _viability_check_one(silo, title, scope_statement, call)
-
     results = await asyncio.gather(
-        *(_run_one(s) for s in candidates),
+        *(_viability_check_one(s, title, scope_statement, call) for s in candidates),
         return_exceptions=False,
     )
 

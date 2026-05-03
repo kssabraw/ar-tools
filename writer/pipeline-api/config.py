@@ -57,6 +57,16 @@ class Settings(BaseSettings):
     # surface as a silo even when its demand-side signals are sparse.
     brief_silo_strong_priority_bypass: float = 0.30
 
+    # Global cap on concurrent Anthropic API calls — protects against
+    # the per-account "concurrent connections" rate limit (HTTP 429
+    # rate_limit_error). Wraps every `claude_json` / `claude_text` entry
+    # point in `modules/brief/llm.py`. Production hit this on the silo
+    # viability burst (6+ parallel checks); the global cap also covers
+    # the LLM fan-out subtopic extraction (up to 4 parallel Claude
+    # calls) and any future concurrent Claude paths. Tune up for higher
+    # account tiers; 5 is safe for the default Anthropic plan.
+    anthropic_max_concurrency: int = 5
+
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 
