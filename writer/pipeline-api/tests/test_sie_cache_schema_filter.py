@@ -1,12 +1,12 @@
-"""SIE cache schema-version filter tests.
+"""SIE cache schema-version validation tests.
 
-When SIE bumps its schema (e.g. 1.3 → 1.4), cached payloads from the
-previous shape must be treated as misses — otherwise a Pydantic
-Literal mismatch on schema_version aborts every SIE call until the
-7-day TTL expires.
-
-These tests verify `get_cached` plumbs schema_version into the
-Supabase query as an `.eq("schema_version", ...)` filter.
+After v1.4 we validate the cached payload's schema_version IN PYTHON
+rather than via a SQL filter, so the cache works whether or not the DB
+has a `schema_version` column. These tests verify:
+  - A matching payload schema is returned.
+  - A mismatched payload schema is rejected (treated as miss).
+  - The query never adds an `.eq("schema_version", ...)` filter (which
+    would 400 on DBs missing that column).
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from modules.sie.cache import get_cached
+from modules.sie.cache import get_cached, write_cache
 
 
 def _make_supabase_mock(rows: list[dict]):
@@ -34,31 +34,42 @@ def _make_supabase_mock(rows: list[dict]):
 
 
 @pytest.mark.asyncio
-async def test_get_cached_filters_by_schema_version_when_provided():
-    """Passing schema_version="1.4" must add an .eq filter so old-shape
-    rows aren't returned."""
+async def test_get_cached_returns_payload_when_schema_matches():
     rows = [{
         "output_payload": {"schema_version": "1.4", "keyword": "kw"},
         "created_at": "2026-05-01T00:00:00Z",
-        "schema_version": "1.4",
     }]
     client, table = _make_supabase_mock(rows)
     with patch("modules.sie.cache.get_supabase", return_value=client):
-        result = await get_cached(
-            "kw", 2840, "safe", schema_version="1.4",
-        )
+        result = await get_cached("kw", 2840, "safe", schema_version="1.4")
     assert result is not None
-    table.eq.assert_any_call("schema_version", "1.4")
+    assert result["schema_version"] == "1.4"
 
 
 @pytest.mark.asyncio
-async def test_get_cached_omits_schema_version_filter_when_none():
-    """Backward compat: when schema_version is None (legacy callers),
-    no filter is added — same query as before this fix."""
+async def test_get_cached_treats_schema_mismatch_as_miss():
+    """A 1.3 payload returned from the DB must be rejected when the
+    caller expects 1.4 — otherwise SIEResponse.model_validate would
+    raise on the Literal mismatch."""
+    rows = [{
+        "output_payload": {"schema_version": "1.3", "keyword": "kw"},
+        "created_at": "2026-05-01T00:00:00Z",
+    }]
+    client, _ = _make_supabase_mock(rows)
+    with patch("modules.sie.cache.get_supabase", return_value=client):
+        result = await get_cached("kw", 2840, "safe", schema_version="1.4")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_cached_does_not_filter_by_schema_version_column():
+    """Defensive against DB drift: the query must NEVER add
+    .eq('schema_version', ...) — that would 400 on a sie_cache table
+    without that column."""
     rows: list[dict] = []
     client, table = _make_supabase_mock(rows)
     with patch("modules.sie.cache.get_supabase", return_value=client):
-        await get_cached("kw", 2840, "safe")
+        await get_cached("kw", 2840, "safe", schema_version="1.4")
     schema_version_calls = [
         c for c in table.eq.call_args_list
         if c.args and c.args[0] == "schema_version"
@@ -67,12 +78,41 @@ async def test_get_cached_omits_schema_version_filter_when_none():
 
 
 @pytest.mark.asyncio
-async def test_get_cached_returns_none_when_schema_filter_excludes_all():
-    """An old 1.3 row sitting in the cache must be invisible when we
-    filter for 1.4 — the mock returns no rows under that filter."""
-    client, _ = _make_supabase_mock(rows=[])
+async def test_get_cached_works_without_schema_version_arg():
+    """Backward compat: schema_version is optional; when omitted, the
+    payload is returned regardless of its schema (legacy callers)."""
+    rows = [{
+        "output_payload": {"schema_version": "anything"},
+        "created_at": "2026-05-01T00:00:00Z",
+    }]
+    client, _ = _make_supabase_mock(rows)
     with patch("modules.sie.cache.get_supabase", return_value=client):
-        result = await get_cached(
-            "kw", 2840, "safe", schema_version="1.4",
+        result = await get_cached("kw", 2840, "safe")
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_write_cache_omits_optional_columns():
+    """write_cache must NOT pass schema_version / cost_usd / duration_ms
+    columns in the INSERT — they may not exist on every deploy's
+    sie_cache table. The schema_version is preserved inside
+    output_payload."""
+    client, table = _make_supabase_mock(rows=[])
+    with patch("modules.sie.cache.get_supabase", return_value=client):
+        await write_cache(
+            "kw", 2840, "safe",
+            schema_version="1.4",
+            output_payload={"schema_version": "1.4"},
+            cost_usd=0.123,
+            duration_ms=4567,
         )
-    assert result is None
+    table.insert.assert_called_once()
+    inserted_row = table.insert.call_args.args[0]
+    assert "schema_version" not in inserted_row
+    assert "cost_usd" not in inserted_row
+    assert "duration_ms" not in inserted_row
+    # And the essentials ARE present.
+    assert inserted_row["keyword"] == "kw"
+    assert inserted_row["location_code"] == 2840
+    assert inserted_row["outlier_mode"] == "safe"
+    assert inserted_row["output_payload"] == {"schema_version": "1.4"}

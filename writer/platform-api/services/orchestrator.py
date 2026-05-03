@@ -35,7 +35,13 @@ WRITER_ACCEPTED_VERSIONS = {"1.7", "1.7-no-context", "1.7-degraded"}
 
 # Per-module HTTP timeouts in seconds
 MODULE_TIMEOUTS: dict[str, int] = {
-    "brief": 130,
+    # Brief generator runs a heavy LLM fan-out (silo viability,
+    # scope verification, framing, intent rewrite, persona, authority
+    # ×3 pillars, editorial critique, etc.). Anthropic 429 rate
+    # limiting during the silo viability phase routinely pushes total
+    # duration to ~150s; 200s gives headroom without making timeouts
+    # invisible.
+    "brief": 200,
     "sie": 130,
     "research": 130,
     "writer": 600,  # writer makes many sequential LLM calls; allow up to 10m
@@ -627,17 +633,22 @@ async def orchestrate_run(run_id: str) -> None:
             "stage_failed",
             extra={"run_id": run_id, "stage": exc.stage, "error": str(exc.cause)},
         )
+        # Append run_id to the error message so it surfaces in the UI.
+        # Without it, the user has nothing to grep production logs for
+        # when reporting a failure — "Error (brief): module_timeout"
+        # is identical for every failed run.
         await _set_run_status(
             run_id,
             "failed",
             error_stage=exc.stage,
-            error_message=str(exc.cause),
+            error_message=f"{exc.cause} (run_id: {run_id})",
         )
 
     except Exception as exc:
         logger.exception("orchestrator.unhandled", extra={"run_id": run_id, "error": str(exc)})
         await _set_run_status(
-            run_id, "failed", error_stage="unknown", error_message=str(exc)
+            run_id, "failed", error_stage="unknown",
+            error_message=f"{exc} (run_id: {run_id})",
         )
 
 
