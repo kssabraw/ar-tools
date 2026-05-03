@@ -526,7 +526,7 @@ class BriefMetadata(BaseModel):
     # Echoed for tuning, like the other threshold values above.
     faq_intent_floor_threshold: float = 0.55
 
-    schema_version: Literal["2.4"] = "2.4"
+    schema_version: Literal["2.5"] = "2.5"
 
 
 # ---- Reddit research (PRD v2.4) ----

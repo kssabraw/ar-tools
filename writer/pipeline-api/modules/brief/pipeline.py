@@ -94,7 +94,7 @@ from .title_scope import generate_title_and_scope
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = "2.4"
+SCHEMA_VERSION = "2.5"
 
 
 # PRD v2.3 / Phase 3 — per-intent-pattern minimum-words floor for H2
