@@ -296,3 +296,72 @@ async def test_user_prompt_omits_customer_review_section_when_unavailable():
         llm_json_fn=capturing,
     )
     assert "Customer review synthesis" not in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_user_prompt_carries_both_reddit_and_customer_review_synthesis():
+    """Reddit and customer review prompt sections are independent
+    conditionals — both must render when both are supplied. Regression
+    guard so a future refactor (e.g. consolidating the two into a
+    helper) doesn't accidentally make them mutually exclusive."""
+    captured: dict = {}
+
+    async def capturing(system, user, **kw):
+        captured["user"] = user
+        return {"headings": [
+            {"text": "h1", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h2", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h3", "level": "H3", "scope_alignment_note": "in"},
+        ]}
+
+    reddit_md = (
+        "## 1. Authentic Experience Signals\n"
+        "- Real Reddit signal\n"
+    )
+    review_md = (
+        "## 1. Top Customer Frustrations\n"
+        "- Real customer complaint\n"
+    )
+    await authority_gap_headings(
+        keyword="kw",
+        existing_headings=[],
+        reddit_context=[],
+        reddit_insights_markdown=reddit_md,
+        customer_review_insights_markdown=review_md,
+        llm_json_fn=capturing,
+    )
+    user = captured["user"]
+    # Both labeled sections appear
+    assert "Reddit research synthesis" in user
+    assert "Customer review synthesis" in user
+    # Both bodies are present
+    assert "Authentic Experience Signals" in user
+    assert "Top Customer Frustrations" in user
+
+
+@pytest.mark.asyncio
+async def test_whitespace_only_insights_markdown_does_not_render_section():
+    """A markdown string that's truthy in Python but strips to empty
+    (e.g. just newlines) must NOT render a labeled section. The prior
+    bug rendered 'Customer review synthesis ...:' with no body."""
+    captured: dict = {}
+
+    async def capturing(system, user, **kw):
+        captured["user"] = user
+        return {"headings": [
+            {"text": "h1", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h2", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h3", "level": "H3", "scope_alignment_note": "in"},
+        ]}
+
+    await authority_gap_headings(
+        keyword="kw",
+        existing_headings=[],
+        reddit_context=[],
+        reddit_insights_markdown="\n\n   \n",  # whitespace only
+        customer_review_insights_markdown="   \n",  # whitespace only
+        llm_json_fn=capturing,
+    )
+    user = captured["user"]
+    assert "Reddit research synthesis" not in user
+    assert "Customer review synthesis" not in user

@@ -155,13 +155,16 @@ def _format_user_prompt(
     # available — it carries themed sections (fears, values, recommendations,
     # information gain vs competitors, E-E-A-T opportunities) the agent can
     # ground its three pillars against. Fall back to raw Reddit snippets
-    # only when the synthesis was unavailable.
-    if reddit_insights_markdown:
+    # only when the synthesis was unavailable. Whitespace-only markdown is
+    # treated as missing so we don't render a labeled section with empty
+    # content (wastes tokens and confuses the LLM).
+    reddit_md_clean = (reddit_insights_markdown or "").strip()
+    if reddit_md_clean:
         parts.append(
             "\nReddit research synthesis (themed insights with citations from "
             "real Reddit discussions; treat as ground truth for the "
             "Human/Behavioral pillar's fears/values/recommendations buckets):\n"
-            f"{reddit_insights_markdown.strip()}"
+            f"{reddit_md_clean}"
         )
     elif reddit_context:
         parts.append(
@@ -175,7 +178,8 @@ def _format_user_prompt(
     # it into SEO content. The agent should mine these specifically for
     # the Risk/Regulatory pillar (billing/trust/compliance complaints)
     # and the marketing-vs-reality gap angle that competitors miss.
-    if customer_review_insights_markdown:
+    review_md_clean = (customer_review_insights_markdown or "").strip()
+    if review_md_clean:
         parts.append(
             "\nCustomer review synthesis (themed insights from review "
             "platforms like Trustpilot / G2 / Capterra; treat as ground "
@@ -183,7 +187,7 @@ def _format_user_prompt(
             "why they switch, where marketing claims diverge from "
             "experience, and which trust/risk angles surface in negative "
             "reviews. Use especially for the Risk/Regulatory pillar.):\n"
-            f"{customer_review_insights_markdown.strip()}"
+            f"{review_md_clean}"
         )
 
     return "\n".join(parts)
@@ -207,6 +211,27 @@ async def authority_gap_headings(
     Each candidate is tagged source='authority_gap_sme', exempt=True,
     and carries a `scope_alignment_note` explaining how it stays within
     the brief's scope_statement.
+
+    Inputs:
+      - keyword: the article's seed keyword.
+      - existing_headings: H2/H3 texts already in the outline + top
+        SERP candidate names; the agent must avoid restating these.
+      - reddit_context: raw Reddit thread snippets (legacy fallback).
+        Used only when `reddit_insights_markdown` is empty/missing.
+      - reddit_insights_markdown (PRD v2.4): the synthesized 7-section
+        Reddit research document. When supplied, the agent grounds its
+        Human/Behavioral pillar against this instead of raw snippets.
+        Whitespace-only strings are treated as missing.
+      - customer_review_insights_markdown (PRD v2.6): the synthesized
+        7-section customer-review document (Trustpilot / G2 / Capterra
+        / etc.). When supplied, the agent grounds its Risk/Regulatory
+        pillar and marketing-vs-reality angles against post-purchase
+        customer voice. Whitespace-only strings are treated as missing.
+      - title / scope_statement / intent_type: PRD v2.0.3 scope-aware
+        inputs.
+      - max_retries: how many additional attempts after the first when
+        the LLM returns malformed JSON (default 1 = at most 2 total).
+      - llm_json_fn: injectable for tests; defaults to `claude_json`.
 
     Failure handling (PRD §5 Step 9 — never aborts):
       - Malformed output / fewer than 3 results → retry once
