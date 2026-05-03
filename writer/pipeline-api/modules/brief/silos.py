@@ -72,6 +72,11 @@ VALID_INTENTS: frozenset[str] = frozenset({
 _SILO_ELIGIBLE_REASONS_YES: frozenset[str] = frozenset({
     "scope_verification_out_of_scope",
     "global_cap_exceeded",
+    # PRD v2.2 / Phase 2 — Step 8.7 outputs route via singleton paths
+    # (`h3_parent_fit_rejects`) but this table stays internally consistent
+    # so future cluster-aware aggregation doesn't need a second update.
+    "h3_wrong_parent",
+    "h3_promoted_to_h2_candidate",
 })
 _SILO_ELIGIBLE_REASONS_CONDITIONAL: frozenset[str] = frozenset({
     "below_priority_threshold",
@@ -238,6 +243,7 @@ def identify_silos(
     scope_rejects: list[Candidate],
     h3_scope_rejects: Optional[list[Candidate]] = None,
     relevance_rejects: Optional[list[Candidate]] = None,
+    h3_parent_fit_rejects: Optional[list[Candidate]] = None,
     min_coherence: float = MIN_CLUSTER_COHERENCE,
     review_threshold: float = REVIEW_RECOMMENDED_MAX,
     max_candidates: int = MAX_SILO_CANDIDATES,
@@ -458,6 +464,46 @@ def identify_silos(
             review_recommended=False,
             recommended_intent=recommended_intent,
             routed_from="relevance_floor_reject",
+            source_headings=[_make_source_heading(cand)],
+            discard_reason_breakdown=_discard_reason_breakdown([cand]),
+            search_demand_score=round(demand, 4),
+            estimated_intent=recommended_intent,
+        )
+        silos_with_score.append((SINGLETON_COHERENCE, silo))
+
+    # ---- Phase 2 / PRD v2.2 — Step 8.7 H3 parent-fit rejects ----
+    # H3s the LLM classified as `wrong_parent` (no fitting parent
+    # available) or `promote_to_h2` (substantial standalone topic) are
+    # routed to silos as singletons with their own routed_from value so
+    # the silo dashboard can highlight them as parent-fit failures.
+    for cand in (h3_parent_fit_rejects or []):
+        reason = cand.discard_reason
+        if reason == "h3_wrong_parent":
+            routed_from = "h3_parent_mismatch"
+        elif reason == "h3_promoted_to_h2_candidate":
+            routed_from = "h3_promote_candidate"
+        else:
+            continue
+        recommended_intent = _infer_intent([cand.text])
+        demand = _search_demand_score([cand])
+        if demand < min_search_demand:
+            rejected_demand += 1
+            logger.info(
+                "brief.silo.h3_parent_fit_low_search_demand",
+                extra={
+                    "heading": cand.text,
+                    "routed_from": routed_from,
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                },
+            )
+            continue
+        silo = SiloCandidate(
+            suggested_keyword=cand.text,
+            cluster_coherence_score=SINGLETON_COHERENCE,
+            review_recommended=False,
+            recommended_intent=recommended_intent,
+            routed_from=routed_from,  # type: ignore[arg-type]
             source_headings=[_make_source_heading(cand)],
             discard_reason_breakdown=_discard_reason_breakdown([cand]),
             search_demand_score=round(demand, 4),

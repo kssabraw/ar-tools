@@ -267,6 +267,10 @@ def _to_heading_item(
         scope_alignment_note=c.scope_alignment_note,
         parent_h2_text=c.parent_h2_text,
         parent_relevance=round(c.parent_relevance, 4) if c.parent_relevance else 0.0,
+        # PRD v2.2 / Phase 2 — Step 8.7 H3 Parent-Fit Verification flag.
+        # Populated only when the LLM tagged the H3 `marginal`; None
+        # otherwise (`good` H3s and H2/H1 entries).
+        parent_fit_classification=getattr(c, "parent_fit_classification", None),
         order=order,
     )
 

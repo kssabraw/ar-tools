@@ -340,3 +340,121 @@ def test_select_rounds_score_in_output():
     cands = [_scored("q?", "paa", 0.66666666)]
     out = select_faqs(cands, min_score=0.5)
     assert out[0].faq_score == 0.6667
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 / PRD v2.2 — Blended semantic_score (cosine-to-title +
+# cosine-to-intent-profile)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_score_faqs_blends_cosine_when_intent_profile_supplied():
+    """Phase 2: when intent_profile_embedding is supplied, semantic_score
+    is the 50/50 weighted average of cosine-to-title and cosine-to-
+    intent-profile."""
+    import math
+    from modules.brief.faqs import FAQCandidate, score_faqs
+
+    def _unit(v):
+        n = math.sqrt(sum(x * x for x in v)) or 1.0
+        return [x / n for x in v]
+
+    # Title axis = x; intent-profile axis = y. The FAQ has cosine 1.0
+    # to title and cosine 0.0 to intent-profile → blended = 0.5.
+    title_emb = _unit([1.0, 0.0])
+    intent_emb = _unit([0.0, 1.0])
+
+    async def fake_embed(texts):
+        # All FAQ text aligns with the title axis (cos=1 to title,
+        # cos=0 to intent_profile).
+        return [_unit([1.0, 0.0]) for _ in texts]
+
+    cands = [FAQCandidate(question="q1", source="paa")]
+    await score_faqs(
+        cands, title_emb, set(), embed_fn=fake_embed,
+        intent_profile_embedding=intent_emb,
+    )
+    assert cands[0].title_cosine == pytest.approx(1.0, abs=1e-6)
+    assert cands[0].intent_profile_cosine == pytest.approx(0.0, abs=1e-6)
+    assert cands[0].semantic_score == pytest.approx(0.5, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_score_faqs_falls_back_to_title_only_when_no_intent_profile():
+    """Without intent_profile_embedding, semantic_score is cosine-to-
+    title only (v2.0 / v2.1 backward compatibility)."""
+    import math
+    from modules.brief.faqs import FAQCandidate, score_faqs
+
+    def _unit(v):
+        n = math.sqrt(sum(x * x for x in v)) or 1.0
+        return [x / n for x in v]
+
+    title_emb = _unit([1.0, 0.0])
+
+    async def fake_embed(texts):
+        return [_unit([1.0, 0.0]) for _ in texts]
+
+    cands = [FAQCandidate(question="q1", source="paa")]
+    await score_faqs(cands, title_emb, set(), embed_fn=fake_embed)
+    # No intent_profile → semantic_score == title_cosine
+    assert cands[0].title_cosine == pytest.approx(1.0, abs=1e-6)
+    assert cands[0].intent_profile_cosine == 0.0
+    assert cands[0].semantic_score == pytest.approx(1.0, abs=1e-6)
+
+
+@pytest.mark.asyncio
+async def test_score_faqs_accepts_pre_computed_embeddings():
+    """Phase 2: callers can pass pre-computed candidate_embeddings to
+    avoid a second embedding API call after the FAQ intent gate
+    already embedded them."""
+    import math
+    from modules.brief.faqs import FAQCandidate, score_faqs
+
+    def _unit(v):
+        n = math.sqrt(sum(x * x for x in v)) or 1.0
+        return [x / n for x in v]
+
+    title_emb = _unit([1.0, 0.0])
+    pre = [_unit([1.0, 0.0]), _unit([0.5, 0.5])]
+    cands = [
+        FAQCandidate(question="q1", source="paa"),
+        FAQCandidate(question="q2", source="paa"),
+    ]
+
+    embed_calls = {"n": 0}
+
+    async def watching_embed(texts):
+        embed_calls["n"] += 1
+        return [_unit([0.0, 1.0]) for _ in texts]
+
+    await score_faqs(
+        cands, title_emb, set(),
+        embed_fn=watching_embed,
+        candidate_embeddings=pre,
+    )
+    # The fallback embedder must NOT have been called when
+    # candidate_embeddings is supplied.
+    assert embed_calls["n"] == 0
+    # Title cosines reflect the PRE-computed vectors, not the embedder.
+    assert cands[0].title_cosine == pytest.approx(1.0, abs=1e-6)
+
+
+def test_select_faqs_surfaces_intent_role_on_output():
+    """Phase 2: when a FAQCandidate carries `intent_role` (set by Step
+    10.5), the resulting FAQItem surfaces it verbatim."""
+    from modules.brief.faqs import FAQCandidate, select_faqs
+
+    cands = [
+        FAQCandidate(question=f"q{i}", source="paa", faq_score=0.9 - i * 0.01)
+        for i in range(3)
+    ]
+    cands[0].intent_role = "matches_primary_intent"
+    cands[1].intent_role = "adjacent_intent"
+    # cands[2].intent_role left as None
+    items = select_faqs(cands)
+    by_q = {it.question: it for it in items}
+    assert by_q["q0"].intent_role == "matches_primary_intent"
+    assert by_q["q1"].intent_role == "adjacent_intent"
+    assert by_q["q2"].intent_role is None

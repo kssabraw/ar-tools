@@ -88,6 +88,12 @@ class Candidate:
     # H3 stays within the brief's scope_statement.
     scope_alignment_note: Optional[str] = None
 
+    # Set by Step 8.7 H3 Parent-Fit Verification (PRD v2.2 / Phase 2).
+    # Only populated when the LLM tagged the H3 as `marginal` — `good`
+    # leaves it None for terseness, `wrong_parent` and `promote_to_h2`
+    # exit through routed_to_silos with their discard_reason set.
+    parent_fit_classification: Optional[str] = None
+
     # Set when discarded
     discard_reason: Optional[DiscardReason] = None
 
