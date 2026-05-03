@@ -34,11 +34,12 @@ def _fanout_cand(
     discard_reason=None,
     serp_frequency: int = 0,
     llm_fanout_consensus: int = 1,
+    heading_priority: float = 0.5,
 ) -> Candidate:
     c = Candidate(text=text, source=source)  # type: ignore[arg-type]
     c.embedding = _normalize([1.0, 0.0, 0.0])
     c.title_relevance = 0.6
-    c.heading_priority = 0.5
+    c.heading_priority = heading_priority
     c.discard_reason = discard_reason
     c.serp_frequency = serp_frequency
     c.llm_fanout_consensus = llm_fanout_consensus
@@ -148,14 +149,18 @@ def test_fanout_already_routed_not_double_emitted():
 
 
 def test_non_fanout_below_relevance_floor_still_filtered_by_demand():
-    """Non-fanout candidate below relevance floor with no demand should
-    still be filtered (the bypass is fanout-only)."""
+    """Non-fanout candidate below relevance floor with low demand AND
+    low priority is filtered. v2.4 added a strong-priority bypass — a
+    non-fanout candidate with heading_priority >= 0.30 would survive,
+    so this fixture sets heading_priority=0.10 to exercise the
+    rejection path."""
     serp_cand = _fanout_cand(
         "Weak serp heading",
         source="serp",
         discard_reason="below_relevance_floor",
         serp_frequency=0,
         llm_fanout_consensus=0,
+        heading_priority=0.10,  # below 0.30 strong-priority bypass
     )
     silos, _ = identify_silos(
         regions=[],
@@ -165,3 +170,94 @@ def test_non_fanout_below_relevance_floor_still_filtered_by_demand():
         relevance_rejects=[serp_cand],
     )
     assert silos == []
+
+
+# ---------------------------------------------------------------------------
+# v2.4 strong-priority bypass
+# ---------------------------------------------------------------------------
+
+
+def test_strong_priority_bypasses_demand_floor_for_non_fanout_singleton():
+    """A non-fanout SERP candidate with low demand but heading_priority
+    >= 0.30 should survive via the strong-priority bypass (v2.4)."""
+    cand = _fanout_cand(
+        "Substantive serp heading with strong evidence",
+        source="serp",
+        discard_reason="below_relevance_floor",
+        serp_frequency=0,
+        llm_fanout_consensus=0,
+        heading_priority=0.50,  # above the 0.30 strong-priority bypass
+    )
+    silos, _ = identify_silos(
+        regions=[],
+        candidate_pool=[],
+        contributing_region_ids=set(),
+        scope_rejects=[],
+        relevance_rejects=[cand],
+    )
+    assert len(silos) == 1
+    assert silos[0].routed_from == "relevance_floor_reject"
+
+
+def test_strong_priority_bypass_threshold_respected():
+    """A candidate with heading_priority just below the bypass threshold
+    is still filtered. Boundary check on the 0.30 default."""
+    cand = _fanout_cand(
+        "Borderline candidate",
+        source="serp",
+        discard_reason="below_relevance_floor",
+        serp_frequency=0,
+        llm_fanout_consensus=0,
+        heading_priority=0.29,  # below the default 0.30 bypass
+    )
+    silos, _ = identify_silos(
+        regions=[],
+        candidate_pool=[],
+        contributing_region_ids=set(),
+        scope_rejects=[],
+        relevance_rejects=[cand],
+    )
+    assert silos == []
+
+
+def test_strong_priority_bypass_in_scope_path():
+    """The bypass works across all singleton routing paths — verify
+    scope_verification path explicitly."""
+    cand = _fanout_cand(
+        "Substantive scope-rejected heading",
+        source="serp",
+        discard_reason="scope_verification_out_of_scope",
+        serp_frequency=0,
+        llm_fanout_consensus=0,
+        heading_priority=0.40,
+    )
+    silos, _ = identify_silos(
+        regions=[],
+        candidate_pool=[],
+        contributing_region_ids=set(),
+        scope_rejects=[cand],
+    )
+    assert len(silos) == 1
+    assert silos[0].routed_from == "scope_verification"
+
+
+def test_lowered_default_threshold_admits_paa_singletons():
+    """v2.4 lowered the demand-floor default 0.30 → 0.15 so PAA-only
+    singletons (demand score 0.20) survive without needing the bypass."""
+    paa_cand = _fanout_cand(
+        "PAA question heading",
+        source="paa",
+        discard_reason="below_relevance_floor",
+        serp_frequency=0,
+        llm_fanout_consensus=0,
+        heading_priority=0.10,  # below bypass — must pass via demand
+    )
+    silos, _ = identify_silos(
+        regions=[],
+        candidate_pool=[],
+        contributing_region_ids=set(),
+        scope_rejects=[],
+        relevance_rejects=[paa_cand],
+    )
+    # PAA contributes 0.20 to demand → above the lowered 0.15 floor.
+    assert len(silos) == 1

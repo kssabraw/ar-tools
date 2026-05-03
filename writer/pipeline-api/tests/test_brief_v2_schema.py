@@ -223,7 +223,10 @@ def test_metadata_defaults_match_prd_thresholds():
     assert m.parent_relevance_floor_threshold == 0.65
     assert m.parent_restatement_ceiling_threshold == 0.85
     assert m.inter_h3_threshold == 0.78
-    assert m.silo_search_demand_threshold == 0.30
+    # v2.4 lowered the singleton silo demand threshold 0.30 → 0.15
+    # because the original cluster-tuned threshold was rejecting nearly
+    # every singleton candidate, leaving production with zero silos.
+    assert m.silo_search_demand_threshold == 0.15
     assert m.h3_count_average == 0.0
     assert m.h2s_with_zero_h3s == 0
     assert m.silo_candidates_rejected_by_discard_reason == 0

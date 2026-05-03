@@ -32,11 +32,12 @@ def _normalize(v: list[float]) -> list[float]:
 
 
 def _cand(text: str, embedding: list[float], *, discard_reason=None,
-          serp_frequency: int = 15, llm_fanout_consensus: int = 3) -> Candidate:
+          serp_frequency: int = 15, llm_fanout_consensus: int = 3,
+          heading_priority: float = 0.5) -> Candidate:
     c = Candidate(text=text, source="serp")  # type: ignore[arg-type]
     c.embedding = _normalize(embedding)
     c.title_relevance = 0.4  # below the 0.55 floor
-    c.heading_priority = 0.5
+    c.heading_priority = heading_priority
     c.discard_reason = discard_reason
     c.serp_frequency = serp_frequency
     c.llm_fanout_consensus = llm_fanout_consensus
@@ -66,13 +67,17 @@ def test_relevance_floor_reject_becomes_singleton_silo():
 
 
 def test_relevance_floor_reject_with_low_search_demand_filtered():
-    """Search-demand floor (0.30) still applies — low-signal headings
-    don't surface as silos even when below the relevance floor."""
+    """Singleton candidates with both low demand AND low priority don't
+    surface as silos. Tightened in v2.4: now requires both demand <
+    threshold AND heading_priority < strong-priority bypass (0.30) AND
+    non-fanout source. The test fixture sets heading_priority below the
+    bypass to exercise the rejection path."""
     rejects = [
         _cand("Random low-signal text", [0.0, 1.0, 0.0],
               discard_reason="below_relevance_floor",
               serp_frequency=0,           # → 0 contribution from frequency
-              llm_fanout_consensus=0),    # → 0 contribution from consensus
+              llm_fanout_consensus=0,     # → 0 contribution from consensus
+              heading_priority=0.10),     # below 0.30 strong-priority bypass
     ]
     silos, _ = identify_silos(
         regions=[], candidate_pool=[], contributing_region_ids=set(),

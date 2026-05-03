@@ -44,8 +44,20 @@ REVIEW_RECOMMENDED_MAX = 0.70
 MAX_SILO_CANDIDATES = 10
 SINGLETON_COHERENCE = 1.0
 
-# PRD §5 Step 12.3 — search-demand floor
-MIN_SEARCH_DEMAND_SCORE = 0.30
+# PRD §5 Step 12.3 — search-demand floor.
+# Lowered from 0.30 to 0.15 in v2.4 — the original threshold was tuned
+# for multi-source clusters and rejected nearly every singleton (one
+# PAA, one SERP heading), leaving production with zero silos on most
+# keywords. Configurable via `brief_silo_search_demand_threshold`.
+MIN_SEARCH_DEMAND_SCORE = 0.15
+
+# Strong-evidence bypass: candidates whose `heading_priority` meets this
+# threshold skip the demand floor regardless of source. heading_priority
+# already aggregates title_relevance + serp signals + LLM consensus +
+# info gain (priority.py), so a substantive candidate shouldn't be
+# discarded for thin demand-side signals alone. Configurable via
+# `brief_silo_strong_priority_bypass`. Set to 1.0+ to disable.
+SILO_STRONG_PRIORITY_BYPASS = 0.30
 
 # PRD §5 Step 12.4 — viability LLM payload limits
 MAX_VIABILITY_REASONING_LEN = 150
@@ -94,6 +106,38 @@ def _is_fanout_source(source: str) -> bool:
     up any that weren't routed elsewhere.
     """
     return bool(source) and source.startswith("llm_fanout_")
+
+
+def _passes_singleton_demand(
+    cand: Candidate,
+    demand: float,
+    *,
+    min_search_demand: float,
+    priority_bypass: float,
+) -> tuple[bool, Optional[str]]:
+    """Centralized demand-floor decision for singleton silo paths.
+
+    Returns (passes, bypass_reason). When `passes=False` the caller
+    rejects the candidate. When `bypass_reason` is populated, the
+    candidate survived via a bypass path and the caller should log
+    accordingly:
+
+      - "fanout_source"    → llm_fanout_* candidate; LLMs are demand
+                             signal (PRD v2.4)
+      - "strong_priority"  → heading_priority >= priority_bypass; the
+                             aggregated priority signal substitutes for
+                             thin demand-side signals (PRD v2.4)
+
+    When `passes=True` and `bypass_reason=None`, the candidate cleared
+    the demand floor cleanly.
+    """
+    if demand >= min_search_demand:
+        return True, None
+    if _is_fanout_source(cand.source):
+        return True, "fanout_source"
+    if cand.heading_priority >= priority_bypass:
+        return True, "strong_priority"
+    return False, None
 
 
 def _is_member_eligible(
@@ -261,6 +305,7 @@ def identify_silos(
     review_threshold: float = REVIEW_RECOMMENDED_MAX,
     max_candidates: int = MAX_SILO_CANDIDATES,
     min_search_demand: float = MIN_SEARCH_DEMAND_SCORE,
+    priority_bypass: float = SILO_STRONG_PRIORITY_BYPASS,
 ) -> SiloIdentificationResult:
     """Build silo candidates from non-contributing regions + scope rejects.
 
@@ -376,15 +421,21 @@ def identify_silos(
             continue
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
-        if demand < min_search_demand and not _is_fanout_source(cand.source):
+        passes, bypass_reason = _passes_singleton_demand(
+            cand, demand,
+            min_search_demand=min_search_demand,
+            priority_bypass=priority_bypass,
+        )
+        if not passes:
             rejected_demand += 1
             continue
-        if demand < min_search_demand:
+        if bypass_reason:
             logger.info(
-                "brief.silo.fanout_demand_bypass",
+                f"brief.silo.{bypass_reason}_bypass",
                 extra={
                     "heading": cand.text,
                     "source": cand.source,
+                    "heading_priority": round(cand.heading_priority, 4),
                     "routed_from": "non_selected_region",
                     "search_demand_score": round(demand, 4),
                     "threshold": min_search_demand,
@@ -410,29 +461,36 @@ def identify_silos(
             continue
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
-        if demand < min_search_demand:
-            if _is_fanout_source(cand.source):
-                logger.info(
-                    "brief.silo.fanout_demand_bypass",
-                    extra={
-                        "heading": cand.text,
-                        "source": cand.source,
-                        "routed_from": "scope_verification",
-                        "search_demand_score": round(demand, 4),
-                        "threshold": min_search_demand,
-                    },
-                )
-            else:
-                rejected_demand += 1
-                logger.info(
-                    "brief.silo.singleton_low_search_demand",
-                    extra={
-                        "heading": cand.text,
-                        "search_demand_score": round(demand, 4),
-                        "threshold": min_search_demand,
-                    },
-                )
-                continue
+        passes, bypass_reason = _passes_singleton_demand(
+            cand, demand,
+            min_search_demand=min_search_demand,
+            priority_bypass=priority_bypass,
+        )
+        if not passes:
+            rejected_demand += 1
+            logger.info(
+                "brief.silo.singleton_low_search_demand",
+                extra={
+                    "heading": cand.text,
+                    "heading_priority": round(cand.heading_priority, 4),
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                    "priority_bypass": priority_bypass,
+                },
+            )
+            continue
+        if bypass_reason:
+            logger.info(
+                f"brief.silo.{bypass_reason}_bypass",
+                extra={
+                    "heading": cand.text,
+                    "source": cand.source,
+                    "heading_priority": round(cand.heading_priority, 4),
+                    "routed_from": "scope_verification",
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                },
+            )
         silo = SiloCandidate(
             suggested_keyword=cand.text,
             cluster_coherence_score=SINGLETON_COHERENCE,
@@ -454,29 +512,36 @@ def identify_silos(
             continue
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
-        if demand < min_search_demand:
-            if _is_fanout_source(cand.source):
-                logger.info(
-                    "brief.silo.fanout_demand_bypass",
-                    extra={
-                        "heading": cand.text,
-                        "source": cand.source,
-                        "routed_from": "scope_verification_h3",
-                        "search_demand_score": round(demand, 4),
-                        "threshold": min_search_demand,
-                    },
-                )
-            else:
-                rejected_demand += 1
-                logger.info(
-                    "brief.silo.h3_singleton_low_search_demand",
-                    extra={
-                        "heading": cand.text,
-                        "search_demand_score": round(demand, 4),
-                        "threshold": min_search_demand,
-                    },
-                )
-                continue
+        passes, bypass_reason = _passes_singleton_demand(
+            cand, demand,
+            min_search_demand=min_search_demand,
+            priority_bypass=priority_bypass,
+        )
+        if not passes:
+            rejected_demand += 1
+            logger.info(
+                "brief.silo.h3_singleton_low_search_demand",
+                extra={
+                    "heading": cand.text,
+                    "heading_priority": round(cand.heading_priority, 4),
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                    "priority_bypass": priority_bypass,
+                },
+            )
+            continue
+        if bypass_reason:
+            logger.info(
+                f"brief.silo.{bypass_reason}_bypass",
+                extra={
+                    "heading": cand.text,
+                    "source": cand.source,
+                    "heading_priority": round(cand.heading_priority, 4),
+                    "routed_from": "scope_verification_h3",
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                },
+            )
         silo = SiloCandidate(
             suggested_keyword=cand.text,
             cluster_coherence_score=SINGLETON_COHERENCE,
@@ -504,29 +569,36 @@ def identify_silos(
             continue
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
-        if demand < min_search_demand:
-            if _is_fanout_source(cand.source):
-                logger.info(
-                    "brief.silo.fanout_demand_bypass",
-                    extra={
-                        "heading": cand.text,
-                        "source": cand.source,
-                        "routed_from": "relevance_floor_reject",
-                        "search_demand_score": round(demand, 4),
-                        "threshold": min_search_demand,
-                    },
-                )
-            else:
-                rejected_demand += 1
-                logger.info(
-                    "brief.silo.relevance_singleton_low_search_demand",
-                    extra={
-                        "heading": cand.text,
-                        "search_demand_score": round(demand, 4),
-                        "threshold": min_search_demand,
-                    },
-                )
-                continue
+        passes, bypass_reason = _passes_singleton_demand(
+            cand, demand,
+            min_search_demand=min_search_demand,
+            priority_bypass=priority_bypass,
+        )
+        if not passes:
+            rejected_demand += 1
+            logger.info(
+                "brief.silo.relevance_singleton_low_search_demand",
+                extra={
+                    "heading": cand.text,
+                    "heading_priority": round(cand.heading_priority, 4),
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                    "priority_bypass": priority_bypass,
+                },
+            )
+            continue
+        if bypass_reason:
+            logger.info(
+                f"brief.silo.{bypass_reason}_bypass",
+                extra={
+                    "heading": cand.text,
+                    "source": cand.source,
+                    "heading_priority": round(cand.heading_priority, 4),
+                    "routed_from": "relevance_floor_reject",
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                },
+            )
         silo = SiloCandidate(
             suggested_keyword=cand.text,
             cluster_coherence_score=SINGLETON_COHERENCE,
@@ -556,30 +628,37 @@ def identify_silos(
             continue
         recommended_intent = _infer_intent([cand.text])
         demand = _search_demand_score([cand])
-        if demand < min_search_demand:
-            if _is_fanout_source(cand.source):
-                logger.info(
-                    "brief.silo.fanout_demand_bypass",
-                    extra={
-                        "heading": cand.text,
-                        "source": cand.source,
-                        "routed_from": routed_from,
-                        "search_demand_score": round(demand, 4),
-                        "threshold": min_search_demand,
-                    },
-                )
-            else:
-                rejected_demand += 1
-                logger.info(
-                    "brief.silo.h3_parent_fit_low_search_demand",
-                    extra={
-                        "heading": cand.text,
-                        "routed_from": routed_from,
-                        "search_demand_score": round(demand, 4),
-                        "threshold": min_search_demand,
-                    },
-                )
-                continue
+        passes, bypass_reason = _passes_singleton_demand(
+            cand, demand,
+            min_search_demand=min_search_demand,
+            priority_bypass=priority_bypass,
+        )
+        if not passes:
+            rejected_demand += 1
+            logger.info(
+                "brief.silo.h3_parent_fit_low_search_demand",
+                extra={
+                    "heading": cand.text,
+                    "heading_priority": round(cand.heading_priority, 4),
+                    "routed_from": routed_from,
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                    "priority_bypass": priority_bypass,
+                },
+            )
+            continue
+        if bypass_reason:
+            logger.info(
+                f"brief.silo.{bypass_reason}_bypass",
+                extra={
+                    "heading": cand.text,
+                    "source": cand.source,
+                    "heading_priority": round(cand.heading_priority, 4),
+                    "routed_from": routed_from,
+                    "search_demand_score": round(demand, 4),
+                    "threshold": min_search_demand,
+                },
+            )
         silo = SiloCandidate(
             suggested_keyword=cand.text,
             cluster_coherence_score=SINGLETON_COHERENCE,

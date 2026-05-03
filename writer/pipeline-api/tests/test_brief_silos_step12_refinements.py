@@ -225,13 +225,17 @@ def test_silo_carries_discard_reason_breakdown():
 
 
 def test_singleton_scope_reject_dropped_when_demand_below_threshold():
-    """A scope-verification reject with no demand signals is filtered."""
+    """A scope-verification reject with no demand AND low priority is
+    filtered. v2.4 added a strong-priority bypass — the fixture sets
+    heading_priority=0.10 (below the 0.30 bypass) so the demand-floor
+    rejection path actually fires."""
     rejected = _cand(
         "Niche tactics nobody searches for", [0.7, 0.7],
         source="serp",
         discard_reason="scope_verification_out_of_scope",
         serp_frequency=0,
         llm_fanout_consensus=0,
+        heading_priority=0.10,  # below the 0.30 strong-priority bypass
     )
     res = identify_silos(
         regions=[], candidate_pool=[],

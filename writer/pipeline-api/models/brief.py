@@ -472,7 +472,7 @@ class BriefMetadata(BaseModel):
     inter_h3_threshold: float = 0.78
 
     # Step 12.3 silo search-demand floor
-    silo_search_demand_threshold: float = 0.30
+    silo_search_demand_threshold: float = 0.15
 
     low_serp_coverage: bool = False
     reddit_unavailable: bool = False

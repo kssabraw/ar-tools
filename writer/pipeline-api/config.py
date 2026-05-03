@@ -42,6 +42,21 @@ class Settings(BaseSettings):
     brief_llm_scoring_weight: float = 0.30
     brief_llm_scoring_top_k: int = 25
 
+    # PRD §5 Step 12.3 — silo search-demand threshold.
+    # Originally 0.30, designed for multi-source clusters. Lowered to
+    # 0.15 because the same threshold applied to singletons (one PAA, one
+    # SERP heading) was rejecting every candidate — production was
+    # producing zero silos on most keywords. Singletons with strong
+    # priority signal additionally bypass this floor (see
+    # `brief_silo_strong_priority_bypass`).
+    brief_silo_search_demand_threshold: float = 0.15
+    # If a singleton candidate's `heading_priority` (computed in Step 7,
+    # range 0-1) meets this threshold, the demand floor is bypassed. The
+    # priority formula already aggregates title_relevance + serp signals
+    # + LLM consensus + info gain, so a substantive candidate should
+    # surface as a silo even when its demand-side signals are sparse.
+    brief_silo_strong_priority_bypass: float = 0.30
+
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 

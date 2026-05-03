@@ -897,6 +897,11 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         # PRD v2.2 / Phase 2 — Step 8.7 outcomes route to silos with
         # routed_from values "h3_parent_mismatch" / "h3_promote_candidate".
         h3_parent_fit_rejects=parent_fit_result.routed_to_silos,
+        # PRD v2.4 — singleton silo demand floor + strong-priority bypass.
+        # Threshold lowered from 0.30 to 0.15 default; substantive
+        # candidates (heading_priority >= 0.30) bypass the floor entirely.
+        min_search_demand=settings.brief_silo_search_demand_threshold,
+        priority_bypass=settings.brief_silo_strong_priority_bypass,
     )
     viability_result = await verify_silo_viability(
         silo_id_result.candidates,
@@ -1050,7 +1055,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         parent_relevance_floor_threshold=0.65,
         parent_restatement_ceiling_threshold=0.85,
         inter_h3_threshold=0.78,
-        silo_search_demand_threshold=0.30,
+        silo_search_demand_threshold=settings.brief_silo_search_demand_threshold,
         low_serp_coverage=low_serp_coverage,
         reddit_unavailable=reddit_unavailable,
         llm_fanout_unavailable=unavailable,
