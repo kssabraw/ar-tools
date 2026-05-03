@@ -185,7 +185,7 @@ async def test_writer_happy_path_with_client_context():
     ):
         result = await run_writer(req)
 
-    assert result.metadata.schema_version == "1.6"
+    assert result.metadata.schema_version == "1.7"
     assert result.title  # title generated
     assert result.brand_voice_card_used is not None
     assert "premium" in result.brand_voice_card_used.banned_terms
@@ -223,7 +223,7 @@ async def test_writer_no_client_context_falls_back_to_v14():
     ):
         result = await run_writer(req)
 
-    assert result.metadata.schema_version == "1.6-no-context"
+    assert result.metadata.schema_version == "1.7-no-context"
     assert result.brand_voice_card_used is None
     assert result.brand_conflict_log == []
 
@@ -470,3 +470,93 @@ async def test_writer_pipeline_skips_h2_body_length_when_floor_zero():
     assert result.metadata.under_length_h2_sections == []
     assert result.metadata.h2_body_length_retries_attempted == 0
     assert result.metadata.h2_body_length_retries_succeeded == 0
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — pipeline-level integration test for Step 4F.1 citation coverage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_writer_pipeline_invokes_citation_coverage_validator(monkeypatch):
+    """Phase 4 — the writer pipeline must invoke Step 4F.1 between Step
+    6.7 and Step 7. We patch the validator with a wrapping spy and
+    assert it's called with the right state and that the metadata
+    surfaces the new Phase 4 fields."""
+    from modules.writer import pipeline as writer_pipeline
+    from modules.writer.citation_coverage_validator import CoverageValidationResult
+
+    captured: dict = {}
+
+    async def spy(article, *, keyword, intent, **kwargs):
+        captured["called"] = True
+        captured["keyword"] = keyword
+        captured["intent"] = intent
+        captured["kwargs_keys"] = sorted(kwargs.keys())
+        return CoverageValidationResult(
+            validated_article=list(article),
+            under_cited_sections=[
+                {"section_order": 2, "citable_claims": 3, "cited_claims": 1,
+                 "ratio": 0.333, "threshold": 0.5,
+                 "operational_claims_softened": 1},
+            ],
+            operational_claims_softened=[
+                {"section_order": 2, "h2_order": 2,
+                 "rule": "duration-as-recommendation",
+                 "original": "4-to-6 week refresh cadence",
+                 "softened": "a typical refresh cadence (every few weeks)"},
+            ],
+            retries_attempted=1,
+            retries_succeeded=0,
+            sections_softened=1,
+        )
+
+    req = WriterRequest(
+        run_id="t-cov",
+        brief_output=SAMPLE_BRIEF,
+        sie_output=SAMPLE_SIE,
+        research_output=SAMPLE_RESEARCH,
+        client_context=ClientContextInput(
+            brand_guide_text="Brand voice is professional. Banned: premium.",
+            icp_text="Homeowners.",
+            website_analysis=None,
+            website_analysis_unavailable=True,
+        ),
+    )
+
+    with (
+        patch("modules.writer.title.claude_json", fake_claude_json),
+        patch("modules.writer.distillation.claude_json", fake_claude_json),
+        patch("modules.writer.reconciliation.claude_json", fake_claude_json),
+        patch("modules.writer.sections.claude_json", fake_claude_json),
+        patch("modules.writer.faqs.claude_json", fake_claude_json),
+        patch("modules.writer.conclusion.claude_json", fake_claude_json),
+        patch(
+            "modules.writer.pipeline.validate_citation_coverage",
+            spy,
+        ),
+    ):
+        result = await writer_pipeline.run_writer(req)
+
+    assert captured.get("called") is True
+    assert captured["keyword"] == "best hvac systems 2026"
+    assert captured["intent"] == "informational-commercial"
+    assert "heading_structure" in captured["kwargs_keys"]
+    assert "section_budgets" in captured["kwargs_keys"]
+    assert "filtered_terms" in captured["kwargs_keys"]
+    assert "citations" in captured["kwargs_keys"]
+    assert "brand_voice_card" in captured["kwargs_keys"]
+    assert "banned_regex" in captured["kwargs_keys"]
+
+    # Phase 4 metadata surfaces
+    assert len(result.metadata.under_cited_sections) == 1
+    assert result.metadata.under_cited_sections[0]["section_order"] == 2
+    assert len(result.metadata.operational_claims_softened) == 1
+    assert (
+        result.metadata.operational_claims_softened[0]["rule"]
+        == "duration-as-recommendation"
+    )
+    assert result.metadata.citation_coverage_retries_attempted == 1
+    assert result.metadata.citation_coverage_retries_succeeded == 0
+    # Schema bumped to 1.7
+    assert result.metadata.schema_version == "1.7"

@@ -28,7 +28,7 @@ class SourcesCitedMetadata(BaseModel):
     unresolvable_markers_stripped: list[str] = []
     integrity_violations: list[str] = []
     schema_version: Literal["1.1"] = "1.1"
-    writer_schema_version: str = "1.6"
+    writer_schema_version: str = "1.7"
     generation_time_ms: int = 0
 
 

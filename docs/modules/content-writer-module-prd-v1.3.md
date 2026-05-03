@@ -1,10 +1,20 @@
 # PRD: Content Writer Module
-**Version:** 1.6
+**Version:** 1.7
 **Status:** Draft
-**Last Updated:** 2026-05-01
+**Last Updated:** 2026-05-03
 **Part of:** ShowUP Local — Content Generation Platform
-**Upstream Dependencies:** SIE Term & Entity Module · Research & Citations Module (v1.1) · Content Brief Generator Module (v1.8)
+**Upstream Dependencies:** SIE Term & Entity Module · Research & Citations Module (v1.1) · Content Brief Generator Module (v2.3)
 **Downstream Dependency:** Sources Cited Module (v1.1)
+
+> **v1.7 changes (2026-05-03):** Phase 4 of the article-quality defect fixes — addresses Defect 5 (unsourced operational claims) from the 2026-05-03 audit ("4-to-6 week refresh cadence" and "60-day affiliate audit window" stated as fact without adjacent citations).
+>
+> 1. **Step 4F.1 — Citable-Claim Detection** is implemented. Base patterns C1–C6 from the writer PRD (R7) plus three new operational-claim patterns:
+>    - **C7 — Duration-as-recommendation**: `<numeric duration> <noun like 'cadence' / 'window' / 'cycle' / 'review' / 'audit' / 'refresh'>`. Catches the audited "4-to-6 week refresh cadence" / "60-day affiliate audit window" cases.
+>    - **C8 — Frequency-as-recommendation**: `every <N> <unit>` and `(weekly|monthly|quarterly|biweekly|annually) <action noun>`.
+>    - **C9 — Operational-percentage**: `<N>% rule/threshold/target/cap/floor/ceiling` and `aim for <N>%`.
+> 2. **Per-H2 citation-coverage validator** runs after Step 6.7 (H2 body length) and before Step 7 (citation reconciliation). Per H2 section group, computes coverage = cited_claims / citable_claims. If below 50%, retries the section ONCE with a `COVERAGE_RETRY:` directive listing the uncited claims and asking the LLM to either add a `{{cit_N}}` marker from the available pool or rewrite the sentence to remove the specific claim.
+> 3. **Auto-soften fallback for operational claims**. After the retry, any C7/C8/C9 claim that remains unsourced is deterministically softened via a small lookup table (e.g. "4-to-6 week refresh cadence" → "a typical refresh cadence (every few weeks)"). C1–C6 claims (statistics / years / source-attributed facts) are NEVER softened — softening would mangle the claim more than help it. Sections that still fail the threshold after retry + soften are accepted and recorded in `metadata.under_cited_sections`. Run never aborts.
+> 4. **Schema bump** `1.6` → `1.7` (with accepted variants `1.7-no-context`, `1.7-degraded`). New metadata fields: `under_cited_sections`, `operational_claims_softened`, `citation_coverage_retries_attempted`, `citation_coverage_retries_succeeded`. Orchestrator's `EXPECTED_MODULE_VERSIONS["writer"]` and `WRITER_ACCEPTED_VERSIONS` bumped in lockstep.
 
 > **v1.6 changes (2026-05-01):** Encoded Content Quality PRD v1.0 R3, R4, R5, R6, R7. v1.5 changes (`client_context` Input D, brand voice distillation, brand–SIE reconciliation, banned-term scan) remain in `/docs/writer-module-v1_5-change-spec_2.md` and are still authoritative for those features. Filename retains `-v1.3` suffix; canonical version is in this header.
 
@@ -436,14 +446,67 @@ A sentence is a citable claim if it matches any of:
 | C4 | `according to <ProperNoun>`, `<ProperNoun> reports`, `<ProperNoun> found`, `<ProperNoun> survey` |
 | C5 | `studies show`, `research shows`, `data shows`, `analysts predict` |
 | C6 | A sentence containing the name of an entity from `sie.terms.required[*]` where `is_entity == true` **and** a quantitative or temporal qualifier from C1–C3 |
+| **C7** *(NEW v1.7)* | **Duration-as-recommendation**: a numeric duration (`day`/`week`/`month`/`year`/`hour`/`minute`) followed by a recommendation noun (`cadence`, `window`, `cycle`, `interval`, `period`, `review`, `audit`, `refresh`, `sprint`, `cooldown`, `lookback`, `horizon`, `grace period`, `onboarding`). Catches the audited "4-to-6 week refresh cadence" and "60-day affiliate audit window" cases. |
+| **C8** *(NEW v1.7)* | **Frequency-as-recommendation**: `every <N> <unit>` (hours/days/weeks/months/quarters/years) OR `(hourly\|daily\|weekly\|biweekly\|monthly\|quarterly\|annually) <action>` (audit, review, refresh, check, update, inspection, sync, reconciliation, cleanup, standup). |
+| **C9** *(NEW v1.7)* | **Operational-percentage**: `<N>% rule/threshold/target/cap/floor/ceiling/minimum/maximum/baseline/benchmark/cutoff` OR `aim for <N>%` OR `keep [it/under/below/above] <N>%`. |
 
 **Coverage threshold:** At least **50%** of detected citable claims in a section must be followed by a `{{cit_id}}` marker. The threshold is per-section.
 
 **First-party preference:** When the Research module produced multiple citation candidates for a claim, the writer prefers citations whose `domain` matches the entity named in the claim sentence. Existing v1.4+ citations carry `url`; the writer extracts the domain from `url` for matching.
 
-**Below-threshold remediation:** A section that fails the 50% threshold triggers a one-shot retry with a stricter prompt that names the uncited claim sentences and asks the LLM to either add a citation marker from the available pool or rewrite the sentence to remove the specific statistic / year / brand attribution. If the retry still fails, the section is accepted but flagged: `under_cited_sections: [{section_order, citable_claims, cited_claims}]` in writer metadata.
+**Below-threshold remediation:** A section that fails the 50% threshold triggers a one-shot retry with a stricter `COVERAGE_RETRY:` directive that names the uncited claim sentences and asks the LLM to either add a citation marker from the available pool or rewrite the sentence to remove the specific statistic / year / brand attribution.
 
-**FAQ rule:** FAQ answers are exempt from the 50% threshold. However, the same claim-detection pass runs on FAQ answers; any FAQ answer with a numeric statistic without a citation is **rewritten** to remove the statistic in favor of a qualitative phrasing (one-shot retry with explicit instruction).
+**Auto-soften fallback for operational claims** *(NEW in v1.7 / Phase 4):* if the retry still falls below the threshold, a deterministic soften pass rewrites C7/C8/C9 phrases to hedge phrasing — but NOT C1-C6 (statistics / years / source-attributed facts where softening would mangle the claim).
+
+| Pattern | Example before → after |
+|---|---|
+| C7 (duration) | `4-to-6 week refresh cadence` → `a typical refresh cadence (every few weeks)` |
+| C7 (duration, day-scale) | `60-day affiliate audit window` → `a typical audit window (a brief window)` (or "couple of months" depending on duration scale) |
+| C8 (frequency) | `weekly audit` → `a regular audit` |
+| C8 (frequency, every-N) | `every 7 days` → `every few days` |
+| C9 (operational %) | `5% rule` → `a small percentage rule` |
+| C9 (aim for) | `aim for 30%` → `aim for a moderate share` |
+
+The soften table is intentionally small in v1; entries are added as production data shows which patterns recur. After retry + soften, sections that still fall below the threshold are **accepted** and recorded in `metadata.under_cited_sections` for review. The run never aborts on coverage.
+
+**Output additions to writer metadata** *(v1.7)*:
+
+```json
+{
+  "under_cited_sections": [
+    {
+      "section_order": 4,
+      "citable_claims": 5,
+      "cited_claims": 1,
+      "ratio": 0.2,
+      "threshold": 0.5,
+      "operational_claims_softened": 2
+    }
+  ],
+  "operational_claims_softened": [
+    {
+      "section_order": 4,
+      "h2_order": 4,
+      "rule": "duration-as-recommendation",
+      "original": "4-to-6 week refresh cadence",
+      "softened": "a typical refresh cadence (every few weeks)"
+    }
+  ],
+  "citation_coverage_retries_attempted": 1,
+  "citation_coverage_retries_succeeded": 0
+}
+```
+
+**Logging events** *(v1.7)*:
+
+- `writer.coverage.complete` (INFO) — totals (groups inspected / retries / sections softened / under-cited remaining).
+- `writer.coverage.retry` (INFO) — per-H2 trigger with citable / cited / ratio.
+- `writer.coverage.retry_succeeded` (INFO) — retry cleared the floor.
+- `writer.coverage.under_cited_after_retry` (WARN) — retry + soften didn't clear; section flagged.
+- `writer.coverage.retry_failed` (WARN) — LLM call exception path.
+- `writer.coverage.retry_section_count_mismatch` (WARN) — retry returned wrong number of sections (refused splice; Phase 3 fix #1 carry-over).
+
+**FAQ rule:** FAQ answers are exempt from the 50% threshold. However, the same claim-detection pass runs on FAQ answers; any FAQ answer with a numeric statistic without a citation is **rewritten** to remove the statistic in favor of a qualitative phrasing (one-shot retry with explicit instruction). *(FAQ-specific path is specced but not yet wired in v1.7 — current implementation runs the validator over content H2 groups only; FAQ extension is a v1.x candidate.)*
 
 
 ---
@@ -858,5 +921,6 @@ To be addressed in the engineering implementation spec:
 | 1.4 | 2026-04-30 | Added downstream Sources Cited Module as a new dependency; restructured citation output to support it. Replaced inline Markdown hyperlink placement with `{{citation_id}}` inline marker placement at the point of citation use (markers conform to regex `\{\{cit_[0-9]+\}\}` and are placed immediately after closing punctuation of the cited sentence). Removed all inline hyperlink logic from Step 4F; citation formatting and external linking are now sole responsibility of the downstream Sources Cited Module. Renamed `inline_link_placed` to `marker_placed` in `citation_usage` output. Declared `article[].body` field format as Markdown (GFM/CommonMark) with embedded marker tokens. Removed `citations[].url`, `title`, `author`, `publication`, and `published_date` from Writer's consumed fields list (they pass through downstream to the Sources Cited Module). Added explicit guardrail: markers are forbidden in heading fields. Added stacked-marker rule for multiple citations in a single sentence. Bumped output `schema_version` to `1.4`. |
 | 1.5 | 2026-04-30 | See `/docs/writer-module-v1_5-change-spec_2.md`. Added `client_context` Input D, brand voice distillation (Step 3.5a), brand–SIE term reconciliation (Step 3.5b), brand voice injection into Steps 4–6, post-hoc regex-based banned-term scan (§4.4), `brand_voice_card_used`, `brand_conflict_log[]`, and `client_context_summary` outputs. |
 | 1.6 | 2026-05-01 | Encoded Content Quality PRD v1.0 R3, R4, R5, R6, R7. Added: topic-adherence anchor after Step 1 (drops H2s with `cosine ≤ 0.62` to title and routes them to brief spin-offs); intro construction in Step 2.5 with discrete Agree/Promise/Preview blocks; paragraph-length directive in Step 4E.1; citable-claim detection and 50% coverage threshold with one-shot remediation in Step 4F.1; explicit CTA in Step 6.4 (now a separate structural element, removed from conclusion prose); Key Takeaways generation in Step 6.5 (3–5 items, ≤ 25 words each); paragraph-length validation pass in Step 6.6 (default 4 sentences); brand-mention budget enforcement (2–3 target, 0 on brand-aligned topic flagged, ≥ 6 retry-then-accept); new `article[]` types `key-takeaways`, `intro`, `cta`; new metadata fields `dropped_for_low_topic_adherence`, `paragraph_length_violations`, `under_cited_sections`, `topic_brand_alignment`, `brand_mention_count`, `brand_mention_flags`, `cta_truncated`. Bumped `schema_version` to `1.6`; consumed `brief_schema_version` to `1.8`. |
+| **1.7** | **2026-05-03** | **Phase 4 of the article-quality defect fixes (proposal accepted 2026-05-03). Addresses Defect 5 — unsourced operational claims. Step 4F.1 citable-claim detection is implemented with base patterns C1-C6 plus three NEW operational-claim patterns: **C7** (duration-as-recommendation: `<numeric duration> + <cadence/window/cycle/review/audit/refresh/sprint/cooldown/lookback/horizon/grace period/onboarding>`), **C8** (frequency-as-recommendation: `every <N> <unit>` and `(weekly\|monthly\|quarterly\|biweekly\|annually) + <action>`), **C9** (operational-percentage: `<N>% rule/threshold/target/cap/floor/ceiling` and `aim for <N>%` and `keep [...]<N>%`). Per-H2 citation-coverage validator runs after Step 6.7 and before Step 7. Coverage = cited_claims / citable_claims. Below 50% triggers ONE retry with a `COVERAGE_RETRY:` directive. After retry, any unresolved C7/C8/C9 claim is deterministically softened via a small lookup table ("4-to-6 week refresh cadence" → "a typical refresh cadence (every few weeks)", "60-day affiliate audit window" → "a typical audit window", "weekly audit" → "a regular audit", "5% rule" → "a small percentage rule", "aim for 30%" → "aim for a moderate share"). C1-C6 claims are NEVER softened. Sections still under threshold are accepted and surfaced in `metadata.under_cited_sections`. Run never aborts. New metadata fields: `under_cited_sections`, `operational_claims_softened`, `citation_coverage_retries_attempted`, `citation_coverage_retries_succeeded`. Schema bump `1.6` → `1.7` (with accepted variants `1.7-no-context`, `1.7-degraded`). Orchestrator `EXPECTED_MODULE_VERSIONS["writer"]` and `WRITER_ACCEPTED_VERSIONS` bumped in lockstep. Cost impact: 0–N additional LLM calls for coverage retries (~$0.01-0.03 each, only fires when coverage < 50%). Steady-state expected ≤ 1/run.** |
 
 ---
