@@ -120,6 +120,7 @@ def _format_user_prompt(
     intent_type: Optional[str],
     existing_headings: list[str],
     reddit_context: list[str],
+    reddit_insights_markdown: Optional[str] = None,
 ) -> str:
     parts: list[str] = [f"Topic / keyword: {keyword}"]
 
@@ -139,7 +140,19 @@ def _format_user_prompt(
         + "\n".join(f"- {h}" for h in existing_headings[:40])
     )
 
-    if reddit_context:
+    # Prefer the synthesized Reddit insights document (PRD v2.4) when
+    # available — it carries themed sections (fears, values, recommendations,
+    # information gain vs competitors, E-E-A-T opportunities) the agent can
+    # ground its three pillars against. Fall back to raw Reddit snippets
+    # only when the synthesis was unavailable.
+    if reddit_insights_markdown:
+        parts.append(
+            "\nReddit research synthesis (themed insights with citations from "
+            "real Reddit discussions; treat as ground truth for the "
+            "Human/Behavioral pillar's fears/values/recommendations buckets):\n"
+            f"{reddit_insights_markdown.strip()}"
+        )
+    elif reddit_context:
         parts.append(
             "\nReddit thread context (signals of real user concerns and confusions):\n"
             + "\n".join(f"- {snippet[:200]}" for snippet in reddit_context[:5])
@@ -153,6 +166,7 @@ async def authority_gap_headings(
     keyword: str,
     existing_headings: list[str],
     reddit_context: list[str],
+    reddit_insights_markdown: Optional[str] = None,
     title: Optional[str] = None,
     scope_statement: Optional[str] = None,
     intent_type: Optional[str] = None,
@@ -178,6 +192,7 @@ async def authority_gap_headings(
         intent_type=intent_type,
         existing_headings=existing_headings,
         reddit_context=reddit_context,
+        reddit_insights_markdown=reddit_insights_markdown,
     )
 
     last_exc: Optional[Exception] = None

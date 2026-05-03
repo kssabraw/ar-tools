@@ -40,6 +40,7 @@ from models.brief import (
     LLMFanoutCounts,
     LLMUnavailable,
     PersonaInfo,
+    RedditInsightsModel,
 )
 
 from . import dataforseo
@@ -82,6 +83,7 @@ from .parsers import (
 )
 from .persona import generate_persona
 from .priority import compute_priority
+from .reddit_research import research_reddit
 from .scope_verification import verify_h3_scope, verify_scope
 from .silos import identify_silos, verify_silo_viability
 from .skeleton_slots import embed_anchor_slots, reserve_anchor_slots
@@ -90,7 +92,7 @@ from .title_scope import generate_title_and_scope
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = "2.3"
+SCHEMA_VERSION = "2.4"
 
 
 # PRD v2.3 / Phase 3 — per-intent-pattern minimum-words floor for H2
@@ -272,6 +274,13 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         asyncio.create_task(_safe_fanout(keyword, llm_id, model, force))
         for llm_id, model, force in FANOUT_LLMS
     ]
+    # PRD v2.4 — Perplexity-synthesized Reddit research runs in parallel
+    # with the rest of Step 1+2. The result feeds the Authority Agent
+    # (replacing the prior raw reddit_titles+reddit_comments context). On
+    # failure or missing API key, the function returns
+    # `RedditInsights(available=False, ...)` and the pipeline falls back
+    # to the legacy raw context — never aborts the run.
+    reddit_research_task = asyncio.create_task(research_reddit(keyword))
 
     serp_result = await serp_task
     serp_items = serp_result["items"]
@@ -285,6 +294,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     autocomplete_items = await autocomplete_task or []
     suggestion_items = await suggestions_task or []
     fanout_results = await asyncio.gather(*fanout_tasks)
+    reddit_insights = await reddit_research_task
 
     # ---- Step 1 parsing (now returns 5-tuple incl. meta_descriptions) ----
     serp_headings, signals, paa_questions, organic_titles, meta_descriptions = parse_serp(
@@ -631,6 +641,12 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         keyword=keyword,
         existing_headings=existing_texts,
         reddit_context=reddit_titles + reddit_comments,
+        # PRD v2.4 — when Perplexity Reddit synthesis is available, the
+        # agent grounds its three pillars against the structured insights
+        # document instead of raw thread snippets.
+        reddit_insights_markdown=(
+            reddit_insights.markdown_report if reddit_insights.available else None
+        ),
         title=title_scope.title,
         scope_statement=title_scope.scope_statement,
         intent_type=intent,
@@ -1051,6 +1067,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         discarded_headings=discarded_models,
         silo_candidates=silos,
         intent_format_template=intent_template,
+        reddit_insights=RedditInsightsModel(**reddit_insights.to_dict()),
         metadata=metadata,
     )
 

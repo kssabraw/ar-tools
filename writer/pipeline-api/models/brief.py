@@ -526,7 +526,29 @@ class BriefMetadata(BaseModel):
     # Echoed for tuning, like the other threshold values above.
     faq_intent_floor_threshold: float = 0.55
 
-    schema_version: Literal["2.3"] = "2.3"
+    schema_version: Literal["2.4"] = "2.4"
+
+
+# ---- Reddit research (PRD v2.4) ----
+
+
+class RedditInsightsModel(BaseModel):
+    """Structured output of `modules/brief/reddit_research.py`.
+
+    Synthesized from a single Perplexity sonar-pro call against Reddit.
+    `available=False` means Reddit research was unavailable or failed
+    validation; downstream consumers should fall back to whatever
+    Reddit signal they had before this module existed.
+    """
+
+    model_config = _FORBID_EXTRA
+
+    available: bool = False
+    markdown_report: str = ""
+    sections: dict[str, str] = Field(default_factory=dict)
+    citations: list[str] = Field(default_factory=list)
+    reddit_citations: list[str] = Field(default_factory=list)
+    fallback_reason: Optional[str] = None
 
 
 # ---- Top-level response ----
@@ -555,4 +577,8 @@ class BriefResponse(BaseModel):
     # rows that don't carry it can still be deserialized for diagnostic
     # use; in the live pipeline this is always populated.
     intent_format_template: Optional[IntentFormatTemplate] = None
+    # PRD v2.4 — Perplexity-synthesized Reddit research (replaces the prior
+    # raw reddit_titles + reddit_comments path into the Authority Agent).
+    # Optional so cached v2.3 rows can still be deserialized for diagnostics.
+    reddit_insights: Optional[RedditInsightsModel] = None
     metadata: BriefMetadata

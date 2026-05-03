@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     anthropic_api_key: str = ""
     google_nlp_api_key: str = ""
+    perplexity_api_key: str = ""
     sie_cache_ttl_days: int = 7
     sie_min_pages: int = 5
     log_level: str = "INFO"

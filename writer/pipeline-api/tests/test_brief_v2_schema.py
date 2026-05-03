@@ -230,7 +230,7 @@ def test_metadata_defaults_match_prd_thresholds():
     assert m.silo_candidates_rejected_by_search_demand == 0
     assert m.silo_candidates_rejected_by_viability_check == 0
     assert m.silo_viability_fallback_applied is False
-    assert m.schema_version == "2.3"
+    assert m.schema_version == "2.4"
 
 
 def test_heading_item_carries_step_8_6_fields():
@@ -337,7 +337,7 @@ def _minimal_response() -> BriefResponse:
 def test_brief_response_minimum_valid():
     r = _minimal_response()
     assert r.title.startswith("What TikTok Shop Is")
-    assert r.metadata.schema_version == "2.3"
+    assert r.metadata.schema_version == "2.4"
     assert r.persona.description == ""
     assert r.heading_structure == []
 
@@ -378,4 +378,4 @@ def test_brief_response_serializes_round_trip():
     payload = r.model_dump()
     parsed = BriefResponse.model_validate(payload)
     assert parsed.heading_structure[0].region_id == "region_1"
-    assert parsed.metadata.schema_version == "2.3"
+    assert parsed.metadata.schema_version == "2.4"
