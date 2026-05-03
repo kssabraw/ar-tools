@@ -18,6 +18,7 @@ import pytest
 from modules.sie.entities import (
     AggregatedEntity,
     _classify_promotion,
+    _matches_keyword,
     _noise_penalty,
     aggregate_ner_results,
     llm_dedupe_and_categorize,
@@ -326,3 +327,95 @@ def test_score_and_promote_with_zero_total_pages():
     """Defensive: total_pages=0 returns empty (no division by zero)."""
     ents = [_agg("Topic", avg_salience=0.5, pages_found=2)]
     assert score_and_promote_entities(ents, total_pages=0) == []
+
+
+# ---------------------------------------------------------------------------
+# Keyword-match auto-promotion (highest-priority promotion path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("entity_name,keyword,expected", [
+    # Multi-word entity appears as contiguous tokens in keyword
+    ("TikTok Shop", "how to increase tiktok shop roi", True),
+    # Single-word entity appears in keyword
+    ("ROI", "how to increase tiktok shop roi", True),
+    ("TikTok", "how to increase tiktok shop roi", True),
+    # Token appears via lemmatization (basic case — depends on lemmatize impl)
+    ("Shop", "tiktok shops near me", True),
+    # Tokens out of order — no match (must be contiguous subsequence)
+    ("Shop TikTok", "how to increase tiktok shop roi", False),
+    # Entity not in keyword at all
+    ("Shopify", "how to increase tiktok shop roi", False),
+    ("Random Brand", "how to increase tiktok shop roi", False),
+    # Empty inputs return False (no auto-promote when keyword missing)
+    ("TikTok", "", False),
+    ("", "tiktok shop", False),
+    # Substring-but-not-token: "ip" in "trip" must NOT match
+    ("ip", "best trip planning apps", False),
+])
+def test_matches_keyword_token_boundary(entity_name, keyword, expected):
+    assert _matches_keyword(entity_name, keyword) is expected
+
+
+def test_keyword_match_auto_promotes_low_signal_entity():
+    """An entity that would otherwise fail every promotion path is
+    auto-promoted when its name appears in the keyword. The user
+    explicitly searched for this — by definition relevant."""
+    ents = [
+        # No recurrence (1 page), low salience (0.05), no mentions to speak
+        # of — would never pass composite score or recurrence override
+        _agg("TikTok Shop", avg_salience=0.05, pages_found=1, total_mentions=1),
+    ]
+    promoted = score_and_promote_entities(
+        ents, total_pages=10, keyword="how to grow your tiktok shop",
+    )
+    assert len(promoted) == 1
+    assert promoted[0].promotion_reason == "keyword_match"
+
+
+def test_keyword_match_outranks_other_reasons():
+    """When an entity ALSO qualifies for dual_signal_strong AND matches
+    the keyword, the reason flag is `keyword_match` (highest priority
+    in the classification order)."""
+    ents = [
+        _agg("TikTok Shop", avg_salience=0.55, pages_found=4, total_mentions=10),
+    ]
+    promoted = score_and_promote_entities(
+        ents, total_pages=5, keyword="tiktok shop seller fees",
+    )
+    assert promoted[0].promotion_reason == "keyword_match"
+
+
+def test_keyword_match_via_variant():
+    """Auto-promote when a variant (not the canonical name) appears in
+    the keyword. Common when Google NLP returns a slightly-different
+    casing that aggregation didn't pick as canonical."""
+    ent = _agg(
+        "TikTok-Shop",  # canonical with a hyphen
+        avg_salience=0.05,
+        pages_found=1,
+        total_mentions=1,
+        ner_variants=["TikTok-Shop", "TikTok Shop"],  # variant matches keyword
+    )
+    promoted = score_and_promote_entities(
+        [ent], total_pages=10, keyword="how to set up a tiktok shop",
+    )
+    assert len(promoted) == 1
+    assert promoted[0].promotion_reason == "keyword_match"
+
+
+def test_no_keyword_falls_back_to_existing_logic():
+    """When `keyword=''` (or omitted), the keyword_match path is
+    skipped entirely — entities promote via the existing four reasons."""
+    ents = [_agg("Strong Entity", avg_salience=0.55, pages_found=4, total_mentions=10)]
+    promoted = score_and_promote_entities(ents, total_pages=5, keyword="")
+    assert len(promoted) == 1
+    assert promoted[0].promotion_reason == "dual_signal_strong"
+
+
+def test_empty_keyword_does_not_auto_promote_junk():
+    """Defensive: empty keyword must not somehow auto-promote every
+    entity. A weak entity with no other signal still gets dropped."""
+    ents = [_agg("Weak", avg_salience=0.05, pages_found=1, total_mentions=1)]
+    promoted = score_and_promote_entities(ents, total_pages=10, keyword="")
+    assert promoted == []

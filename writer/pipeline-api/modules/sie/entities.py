@@ -41,6 +41,11 @@ logger = logging.getLogger(__name__)
 
 
 PromotionReason = Literal[
+    # Highest priority — entity name (or one of its variants) appears
+    # as a contiguous token-sequence inside the user's keyword. Forces
+    # promotion regardless of score; the reasoning is that anything
+    # the user explicitly typed is by definition relevant.
+    "keyword_match",
     "dual_signal_strong",
     "high_recurrence_low_salience",
     "high_salience_low_recurrence",
@@ -152,19 +157,62 @@ def _noise_penalty(ent: AggregatedEntity) -> float:
     return 0.0
 
 
+def _matches_keyword(entity_name: str, keyword: str) -> bool:
+    """True when the entity's tokens appear as a contiguous subsequence
+    of the keyword's tokens (after lemmatization + lowercasing).
+
+    Token-level (not substring) so "shop" matches "tiktok shop" but
+    "ip" does NOT match "trip". Multi-word entities must appear in
+    order: "tiktok shop" matches "how to start a tiktok shop" but
+    "shop tiktok" does not.
+
+    Empty inputs return False — keyword is optional in legacy callers
+    and we don't want to silently auto-promote everything when it's
+    missing.
+    """
+    if not entity_name or not keyword:
+        return False
+    norm_entity = _normalize_entity_name(entity_name)
+    norm_keyword = _normalize_entity_name(keyword)
+    if not norm_entity or not norm_keyword:
+        return False
+    entity_tokens = norm_entity.split()
+    keyword_tokens = norm_keyword.split()
+    if not entity_tokens or not keyword_tokens or len(entity_tokens) > len(keyword_tokens):
+        return False
+    n = len(entity_tokens)
+    for i in range(len(keyword_tokens) - n + 1):
+        if keyword_tokens[i : i + n] == entity_tokens:
+            return True
+    return False
+
+
 def _classify_promotion(
     ent: AggregatedEntity,
     *,
     score_threshold: float,
     recurrence_override: int,
+    keyword: str = "",
 ) -> Optional[PromotionReason]:
     """Decide whether to promote and tag the reason.
 
-    Returns None when the entity should NOT be promoted. The four
-    reasons are mutually-exclusive labels chosen by the (recurrence,
-    salience) shape so dashboards can spot which signal carried each
-    promotion.
+    Returns None when the entity should NOT be promoted. The five
+    reasons are checked in priority order:
+
+      1. keyword_match — entity tokens appear in the user's keyword.
+         Always promotes (the user said this matters).
+      2. dual_signal_strong — high recurrence AND mid+ salience.
+      3. high_recurrence_low_salience — recurrence override path.
+      4. high_salience_low_recurrence — single-source strong entity.
+      5. entity_only_promoted — composite-score path.
     """
+    if keyword:
+        if _matches_keyword(ent.name, keyword):
+            return "keyword_match"
+        for variant in ent.ner_variants:
+            if _matches_keyword(variant, keyword):
+                return "keyword_match"
+
     high_recurrence = ent.pages_found >= recurrence_override
     high_salience = ent.avg_salience >= 0.50
     score_passes = ent.entity_score >= score_threshold
@@ -185,9 +233,15 @@ def score_and_promote_entities(
     aggregated: list[AggregatedEntity],
     *,
     total_pages: int,
+    keyword: str = "",
 ) -> list[AggregatedEntity]:
     """Compute composite `entity_score` per aggregate and return only
     promoted entities (with `promotion_reason` stamped in place).
+
+    `keyword` (optional) enables the highest-priority "keyword_match"
+    promotion path: entities whose tokens appear in the keyword text
+    are auto-promoted regardless of composite score. Pass the user's
+    seed keyword from the SIE request.
 
     No-op when `aggregated` is empty or `total_pages == 0` (returns
     empty list — there's nothing to score against).
@@ -237,6 +291,7 @@ def score_and_promote_entities(
             ent,
             score_threshold=score_threshold,
             recurrence_override=recurrence_override,
+            keyword=keyword,
         )
         if reason is not None:
             ent.promotion_reason = reason
@@ -397,6 +452,8 @@ def merge_entities_into_terms(
 
 async def extract_entities(
     pages: list[PageZones],
+    *,
+    keyword: str = "",
 ) -> tuple[list[AggregatedEntity], list[str]]:
     """High-level entity extraction. Returns (promoted_entities, failed_urls).
 
@@ -406,6 +463,10 @@ async def extract_entities(
       3. Composite scoring + promotion (only promoted entities continue)
       4. LLM dedup/categorization on the promoted set (cheaper than v1.0
          since the noise has already been filtered)
+
+    `keyword` enables auto-promotion for entities whose tokens appear
+    in the user's seed keyword. Optional for backward compat with
+    legacy callers, but should always be passed in production.
     """
     page_inputs = [(p.url, p.body_text or "") for p in pages]
     per_page = await analyze_many(page_inputs)
@@ -414,7 +475,9 @@ async def extract_entities(
 
     aggregated = aggregate_ner_results(per_page)
     promoted = score_and_promote_entities(
-        aggregated, total_pages=max(successful_pages, 1),
+        aggregated,
+        total_pages=max(successful_pages, 1),
+        keyword=keyword,
     )
     refined = await llm_dedupe_and_categorize(promoted)
     return (refined, failed_urls)

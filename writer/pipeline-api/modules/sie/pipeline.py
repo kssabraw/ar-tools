@@ -184,7 +184,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
 
     # ---- Track A + Track B in parallel ----
     track_a = asyncio.create_task(_run_track_a(pages, keyword, page_to_classified))
-    track_b = asyncio.create_task(_run_track_b(pages))
+    track_b = asyncio.create_task(_run_track_b(pages, keyword=keyword))
 
     aggregates, sem_scores, tfidf_scores, signals = await track_a
     entities, nlp_failed_urls, word_count_min, word_count_target_p50, word_count_max, source_word_counts = await track_b
@@ -413,9 +413,16 @@ async def _run_track_a(
 
 async def _run_track_b(
     pages: list[PageZones],
+    *,
+    keyword: str = "",
 ) -> tuple[list, list[str], int, int, int, list[int]]:
-    """Track B: entity extraction + word count analysis."""
-    entities_task = asyncio.create_task(extract_entities(pages))
+    """Track B: entity extraction + word count analysis.
+
+    `keyword` is forwarded to entity scoring so any entity whose tokens
+    appear in the user's seed keyword is auto-promoted (highest-priority
+    `keyword_match` reason in PromotionReason).
+    """
+    entities_task = asyncio.create_task(extract_entities(pages, keyword=keyword))
 
     wc_min, wc_target, wc_max, source_counts = compute_word_count_target(pages)
 
