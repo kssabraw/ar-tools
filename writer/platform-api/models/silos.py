@@ -18,7 +18,27 @@ SiloStatus = Literal[
 ]
 
 
-SiloRoutedFrom = Literal["non_selected_region", "scope_verification"]
+# Must stay in sync with pipeline-api's models.brief.SiloRoutedFrom.
+# Adding a value to the pipeline-api literal without mirroring it here
+# causes the /silos endpoint to 500 on the row Pydantic-validation step
+# the moment any silo with the new routed_from value lands in the DB
+# via silo_dedup. Order: oldest values first; keep comments aligned
+# with the pipeline-api source so the next add is easy to find.
+SiloRoutedFrom = Literal[
+    "non_selected_region",
+    "scope_verification",
+    # PRD v2.0.3 — Step 8.5b authority-gap H3 scope-verification rejects
+    "scope_verification_h3",
+    # Step 5.1 relevance gate — heading discarded as below_relevance_floor
+    # but surfaced as adjacent-topic silo
+    "relevance_floor_reject",
+    # PRD v2.2 — Step 8.7 H3 parent-fit verification outcomes
+    "h3_parent_mismatch",
+    "h3_promote_candidate",
+    # PRD v2.4 — fanout candidate not used as H2; surfaced as silo
+    # bypassing the search-demand floor
+    "llm_fanout_unused",
+]
 
 
 IntentType = Literal[
