@@ -34,7 +34,22 @@ STOPWORDS: frozenset[str] = frozenset({
     "what", "which", "who", "whom", "whose", "as", "than", "so", "very",
     "just", "also", "only", "any", "some", "no", "not", "all", "each",
     "every", "few", "more", "most", "such", "own", "same", "other",
+    # SIE v1.2 — possessives/reflexives that the v1.0 list missed.
+    # Production output was leaking "your" / "your tiktok" / "on tiktok"
+    # because none of these were filtered. The reflexives ("yourself"
+    # etc.) are extremely unlikely to be a useful related-keyword on
+    # their own and serve only as bigram pollution.
+    "your", "yours", "yourself", "yourselves",
+    "myself", "ourselves", "themselves", "himself", "herself", "itself",
+    "us", "me", "him",
 })
+
+
+# SIE v1.2 — multi-token n-grams with this fraction or more of
+# stopword tokens are dropped at extraction time. "your tiktok" (50%),
+# "how to" (100%), "on tiktok shop" (33% — kept) are the canonical
+# cases this floor was tuned against.
+STOPWORD_DENSITY_FLOOR = 0.50
 
 ZONE_WEIGHTS = {
     "title": 4.0,
@@ -92,15 +107,32 @@ def tokenize(text: str) -> list[str]:
     return [lemmatize(m.group(0)) for m in WORD_RE.finditer(text.lower())]
 
 
+def _stopword_density(tokens: list[str]) -> float:
+    if not tokens:
+        return 1.0
+    return sum(1 for t in tokens if t in STOPWORDS) / len(tokens)
+
+
 def _generate_ngrams(tokens: list[str], n: int) -> list[str]:
+    """Generate n-grams of length `n` from `tokens`.
+
+    Unigrams: skip stopwords entirely.
+    Bigrams+ (SIE v1.2): drop n-grams with stopword density at or above
+    STOPWORD_DENSITY_FLOOR (0.50). Catches "your tiktok" (50%), "how to"
+    (100%) without removing legitimate phrases like "on tiktok shop"
+    (33%) or "tiktok shop" (0%).
+    """
     if len(tokens) < n:
         return []
     if n == 1:
         return [t for t in tokens if t not in STOPWORDS]
-    return [
-        " ".join(tokens[i:i + n])
-        for i in range(len(tokens) - n + 1)
-    ]
+    grams: list[str] = []
+    for i in range(len(tokens) - n + 1):
+        window = tokens[i:i + n]
+        if _stopword_density(window) >= STOPWORD_DENSITY_FLOOR:
+            continue
+        grams.append(" ".join(window))
+    return grams
 
 
 @dataclass
@@ -208,6 +240,73 @@ def apply_subsumption(aggregates: dict[str, TermAggregate]) -> int:
             merges += 1
             del aggregates[sub]
     return merges
+
+
+# ---- Seed-keyword-fragment filter (SIE v1.2) ----
+
+
+def filter_seed_keyword_fragments(
+    aggregates: dict[str, TermAggregate],
+    target_keyword: str,
+    *,
+    entity_meta: Optional[dict[str, dict]] = None,
+) -> int:
+    """Drop n-gram terms whose normalized tokens are a contiguous
+    subsequence of the seed keyword's normalized tokens.
+
+    Production was producing related-keyword lists dominated by
+    fragments of the input ("tiktok", "tiktok shop", "roi" for the
+    seed "how to increase roi for a tiktok shop"). These ARE useful
+    for SEO awareness but they aren't "related" — they're echoes of
+    the input. The writer already commits to using the keyword
+    verbatim via the brief's title/H1; the related_keywords list
+    should surface DIFFERENT concepts.
+
+    Entities (`entity_meta[term]["is_entity"]` truthy) are PROTECTED —
+    "TikTok Shop" might be both a keyword fragment AND a Google NLP /
+    TextRazor entity. Entities ride out their own pipeline (still
+    surface in the entity bucket); fragment-stripping only targets
+    pure-n-gram noise. The target keyword itself is also protected
+    via `coverage_exception="target_keyword"`.
+
+    Returns the number of terms removed.
+    """
+    if not target_keyword:
+        return 0
+    keyword_tokens = [lemmatize(t) for t in target_keyword.lower().split() if t]
+    if not keyword_tokens:
+        return 0
+    target_norm = " ".join(sorted(keyword_tokens))
+    meta = entity_meta or {}
+
+    removed = 0
+    for term in list(aggregates.keys()):
+        agg = aggregates[term]
+        # Don't strip the target keyword itself — it's a required term.
+        if agg.coverage_exception == "target_keyword":
+            continue
+        if " ".join(sorted(term.split())) == target_norm:
+            continue
+        # Don't strip entities — they belong in the entity bucket
+        # regardless of whether their text overlaps the seed keyword.
+        if meta.get(term, {}).get("is_entity"):
+            continue
+        term_tokens = term.split()
+        if not term_tokens or len(term_tokens) >= len(keyword_tokens):
+            continue
+        n = len(term_tokens)
+        for i in range(len(keyword_tokens) - n + 1):
+            if keyword_tokens[i:i + n] == term_tokens:
+                del aggregates[term]
+                removed += 1
+                break
+
+    if removed:
+        logger.info(
+            "sie.ngrams.seed_fragments_removed",
+            extra={"removed_count": removed, "seed_keyword": target_keyword},
+        )
+    return removed
 
 
 # ---- Coverage gate ----

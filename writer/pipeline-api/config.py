@@ -11,6 +11,12 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     google_nlp_api_key: str = ""
     perplexity_api_key: str = ""
+    # SIE v1.2 — TextRazor entity extraction (parallel to Google NLP).
+    # Free tier: 500 requests/day. A brief calls TextRazor once per
+    # scraped page (typically ~10), so the free tier supports ~50 briefs
+    # per day. Empty key disables TextRazor extraction silently — the
+    # SIE pipeline falls back to Google-NLP-only entities.
+    textrazor_api_key: str = ""
     sie_cache_ttl_days: int = 7
     sie_min_pages: int = 5
     log_level: str = "INFO"

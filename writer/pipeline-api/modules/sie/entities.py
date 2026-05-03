@@ -490,6 +490,100 @@ def merge_entities_into_terms(
     return (aggregates, entity_meta)
 
 
+def merge_textrazor_entities_into_terms(
+    aggregates: dict[str, TermAggregate],
+    entity_meta: dict[str, dict],
+    textrazor_entities: list,  # list[AggregatedTextRazorEntity] — typed loosely to avoid circular imports
+) -> tuple[dict[str, TermAggregate], dict[str, dict]]:
+    """Merge TextRazor entities into the SIE aggregates dict (SIE v1.2).
+
+    Mirrors `merge_entities_into_terms` (Google NLP path) but takes
+    TextRazor's per-entity stats instead of Google NLP's. When the
+    same term is already present (from n-gram extraction OR Google
+    NLP merge), the existing `entity_meta` row gets `is_textrazor=True`
+    and the TextRazor source URLs are unioned into the existing term's
+    `source_urls`. Net effect: one term, one row, multi-source
+    provenance.
+
+    Source flag rules (kept compatible with `score_terms`):
+      - Term already in aggregates (n-gram match): source stays
+        "ngram_and_entity" if Google NLP also flagged it, else
+        upgrades to "ngram_and_entity" since TextRazor entities count
+        as entities for scoring.
+      - Term new to aggregates: added with source = "entity_only"
+        (matches Google NLP's entity-only path).
+
+    Returns (updated aggregates, updated entity_meta).
+    """
+    for ent in textrazor_entities:
+        norm_name = _normalize_entity_name(ent.name)
+        if not norm_name:
+            continue
+
+        # Direct + variant match against existing aggregates
+        match_term: Optional[str] = None
+        if norm_name in aggregates:
+            match_term = norm_name
+        else:
+            for variant in ent.variants:
+                v_norm = _normalize_entity_name(variant)
+                if v_norm and v_norm in aggregates:
+                    match_term = v_norm
+                    break
+
+        if match_term:
+            existing_meta = entity_meta.get(match_term, {})
+            existing_meta.setdefault("is_entity", True)
+            existing_meta.setdefault("entity_category", "concepts")
+            existing_meta.setdefault("ner_variants", [])
+            # The term came from at least the n-gram pipeline; if
+            # Google NLP also flagged it the source is already
+            # "ngram_and_entity". Either way, having TextRazor agree
+            # bumps source to "ngram_and_entity" (covers the case
+            # where the n-gram had no Google NLP signal).
+            existing_meta["source"] = "ngram_and_entity"
+            existing_meta["is_textrazor"] = True
+            existing_meta["textrazor_relevance"] = round(ent.avg_relevance, 4)
+            existing_meta["textrazor_confidence"] = round(ent.max_confidence, 4)
+            existing_meta["textrazor_types"] = ent.types
+            existing_meta["textrazor_wiki_link"] = ent.wiki_link
+            entity_meta[match_term] = existing_meta
+            # Union the source URLs so coverage gates downstream see
+            # the combined corpus reach.
+            aggregates[match_term].source_urls.update(ent.source_urls)
+            aggregates[match_term].pages_found = len(
+                aggregates[match_term].source_urls
+            )
+        else:
+            # Brand-new term — add it with entity-only source flag.
+            # Variants stay matched_text + canonical so downstream
+            # `usage.py:build_usage` substring-matches against either.
+            new_term = TermAggregate(
+                term=norm_name,
+                n_gram_length=len(norm_name.split()),
+                total_count=ent.pages_found,
+                pages_found=ent.pages_found,
+                source_urls=set(ent.source_urls),
+            )
+            new_term.passes_coverage_threshold = True
+            new_term.coverage_exception = "entity_only"
+            aggregates[norm_name] = new_term
+            entity_meta[norm_name] = {
+                "is_entity": True,
+                "entity_category": "concepts",  # TextRazor doesn't map cleanly to our SIE categories
+                "ner_variants": ent.variants,
+                "source": "entity_only",
+                "is_textrazor": True,
+                "textrazor_relevance": round(ent.avg_relevance, 4),
+                "textrazor_confidence": round(ent.max_confidence, 4),
+                "textrazor_types": ent.types,
+                "textrazor_wiki_link": ent.wiki_link,
+                "pages_found": ent.pages_found,
+            }
+
+    return (aggregates, entity_meta)
+
+
 async def extract_entities(
     pages: list[PageZones],
     *,

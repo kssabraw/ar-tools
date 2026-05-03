@@ -38,7 +38,12 @@ from .classification import (
     dominant_page_type,
     near_duplicate_pairs,
 )
-from .entities import extract_entities, merge_entities_into_terms
+from . import textrazor_client
+from .entities import (
+    extract_entities,
+    merge_entities_into_terms,
+    merge_textrazor_entities_into_terms,
+)
 from .filters import (
     DEFAULT_TFIDF_THRESHOLD,
     compute_tfidf,
@@ -51,12 +56,14 @@ from .ngrams import (
     analyze_pages,
     apply_coverage_gate,
     apply_subsumption,
+    filter_seed_keyword_fragments,
     flag_template_boilerplate,
     lemmatize,
     tokenize,
 )
 from .scoring import score_terms
 from .scraper import scrape_many
+from .textrazor_entities import aggregate_textrazor_results
 from .usage import build_usage
 from .word_count import compute_word_count_target
 from .zones import PageZones, cross_page_fingerprint_filter, extract_zones
@@ -187,7 +194,16 @@ async def run_sie(req: SIERequest) -> SIEResponse:
     track_b = asyncio.create_task(_run_track_b(pages, keyword=keyword))
 
     aggregates, sem_scores, tfidf_scores, signals = await track_a
-    entities, nlp_failed_urls, word_count_min, word_count_target_p50, word_count_max, source_word_counts = await track_b
+    (
+        entities,
+        nlp_failed_urls,
+        textrazor_entities,
+        textrazor_failed_urls,
+        word_count_min,
+        word_count_target_p50,
+        word_count_max,
+        source_word_counts,
+    ) = await track_b
 
     if nlp_failed_urls:
         warnings.append(SIEWarning(
@@ -197,8 +213,39 @@ async def run_sie(req: SIERequest) -> SIEResponse:
             details={"failed_urls": nlp_failed_urls},
         ))
 
+    # PRD v1.2 — TextRazor partial-failure warning. Note "not_configured"
+    # is silently ignored (it's expected when the env var isn't set);
+    # only true errors get surfaced.
+    real_textrazor_failures = [
+        u for u in textrazor_failed_urls
+        if u  # `not_configured` would mark every page as failed; we
+              # detect that via no surviving entities below
+    ]
+    if textrazor_entities and real_textrazor_failures and len(real_textrazor_failures) < len(pages):
+        warnings.append(SIEWarning(
+            level="info",
+            code="textrazor_partial",
+            message=f"TextRazor failed for {len(real_textrazor_failures)} pages.",
+            details={"failed_urls": real_textrazor_failures},
+        ))
+
     # ---- Module 11 merge: entities into terms ----
+    # Google NLP first, then TextRazor folds in on top so any term that
+    # both vendors flagged ends up with a single row carrying both
+    # provenance flags (is_entity from Google NLP + is_textrazor from
+    # TextRazor) and `source = "ngram_and_entity"`.
     aggregates, entity_meta = merge_entities_into_terms(aggregates, entities)
+    aggregates, entity_meta = merge_textrazor_entities_into_terms(
+        aggregates, entity_meta, textrazor_entities,
+    )
+
+    # PRD v1.2 — strip seed-keyword fragments AFTER all merges so we
+    # don't accidentally drop an entity that happens to share a token
+    # with the keyword (e.g. "TikTok Shop" entity for the keyword "how
+    # to grow your TikTok shop"). Entities are protected via
+    # entity_meta["is_entity"] inside the filter; pure n-gram fragments
+    # of the seed keyword get stripped.
+    filter_seed_keyword_fragments(aggregates, keyword, entity_meta=entity_meta)
 
     # ---- Module 13: scoring ----
     rank_by_url = {p.url: page_to_classified[p.url].rank for p in pages}
@@ -359,7 +406,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
         keyword=keyword,
         location_code=req.location_code,
         outlier_mode=req.outlier_mode,
-        schema_version="1.1",
+        schema_version="1.2",
         output_payload=response.model_dump(mode="json"),
         duration_ms=duration_ms,
     )
@@ -415,16 +462,42 @@ async def _run_track_b(
     pages: list[PageZones],
     *,
     keyword: str = "",
-) -> tuple[list, list[str], int, int, int, list[int]]:
+) -> tuple[list, list[str], list, list[str], int, int, int, list[int]]:
     """Track B: entity extraction + word count analysis.
 
     `keyword` is forwarded to entity scoring so any entity whose tokens
     appear in the user's seed keyword is auto-promoted (highest-priority
     `keyword_match` reason in PromotionReason).
+
+    SIE v1.2 — also runs TextRazor entity extraction in parallel.
+    Returns a tuple of (google_entities, google_failed_urls,
+    textrazor_entities, textrazor_failed_urls, wc_min, wc_target,
+    wc_max, source_counts).
     """
-    entities_task = asyncio.create_task(extract_entities(pages, keyword=keyword))
+    google_entities_task = asyncio.create_task(
+        extract_entities(pages, keyword=keyword)
+    )
+    # PRD v1.2 — TextRazor runs in parallel with Google NLP. Empty
+    # API key → all results return failed=True with reason=
+    # "not_configured" and aggregation yields []; the rest of the
+    # pipeline proceeds with Google-NLP-only entities.
+    textrazor_task = asyncio.create_task(
+        textrazor_client.analyze_many(
+            [(p.url, p.body_text or "") for p in pages]
+        )
+    )
 
     wc_min, wc_target, wc_max, source_counts = compute_word_count_target(pages)
 
-    entities, failed_urls = await entities_task
-    return (entities, failed_urls, wc_min, wc_target, wc_max, source_counts)
+    google_entities, google_failed = await google_entities_task
+    textrazor_per_page = await textrazor_task
+    textrazor_failed = [r.url for r in textrazor_per_page if r.failed]
+    textrazor_entities = aggregate_textrazor_results(textrazor_per_page)
+
+    return (
+        google_entities,
+        google_failed,
+        textrazor_entities,
+        textrazor_failed,
+        wc_min, wc_target, wc_max, source_counts,
+    )
