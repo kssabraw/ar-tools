@@ -177,3 +177,58 @@ async def test_prompt_includes_level_assignment_instructions():
     assert "H2" in sys and "H3" in sys
     # Cap reference so the LLM knows there's an outer limit.
     assert "ONE H2-level gap" in sys or "one H2" in sys.lower()
+
+
+@pytest.mark.asyncio
+async def test_prompt_includes_information_gain_discipline():
+    """Information Gain Discipline tells the agent to fill gaps in the
+    existing-coverage list, not restate it. Surfaces the differentiation
+    surface explicitly rather than relying on the implicit dedup check."""
+    captured: dict = {}
+
+    async def capturing(system, user, **kw):
+        captured["system"] = system
+        return {"headings": [
+            {"text": "h1", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h2", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h3", "level": "H3", "scope_alignment_note": "in"},
+        ]}
+
+    await authority_gap_headings(
+        keyword="kw",
+        existing_headings=["existing 1", "existing 2"],
+        reddit_context=[],
+        llm_json_fn=capturing,
+    )
+    sys = captured["system"]
+    assert "INFORMATION GAIN DISCIPLINE" in sys
+    # Anchors the gap-finding behavior to the existing-coverage list.
+    assert "existing" in sys.lower() and "fill" in sys.lower()
+
+
+@pytest.mark.asyncio
+async def test_prompt_human_behavioral_pillar_has_fears_values_recommendations():
+    """The Human/Behavioral pillar carries the three-bucket framing
+    (fears/values/recommendations) borrowed from the Reddit research
+    methodology so the agent surfaces concrete signals rather than
+    generic 'psychological drivers'."""
+    captured: dict = {}
+
+    async def capturing(system, user, **kw):
+        captured["system"] = system
+        return {"headings": [
+            {"text": "h1", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h2", "level": "H3", "scope_alignment_note": "in"},
+            {"text": "h3", "level": "H3", "scope_alignment_note": "in"},
+        ]}
+
+    await authority_gap_headings(
+        keyword="kw",
+        existing_headings=[],
+        reddit_context=[],
+        llm_json_fn=capturing,
+    )
+    sys = captured["system"]
+    assert "FEARS" in sys
+    assert "VALUES" in sys
+    assert "RECOMMENDATIONS" in sys
