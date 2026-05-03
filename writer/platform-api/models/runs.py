@@ -14,6 +14,11 @@ class RunCreateRequest(BaseModel):
     intent_override: Optional[str] = None
     sie_outlier_mode: Literal["safe", "aggressive"] = "safe"
     sie_force_refresh: bool = False
+    # PRD v2.6 — when True, the brief generator skips its 7-day cache
+    # lookup and produces a fresh brief. Set by the run-create UX when
+    # the user explicitly chose "regenerate" on the cache-decision
+    # modal.
+    brief_force_refresh: bool = False
 
 
 class RunListItem(BaseModel):

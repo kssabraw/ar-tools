@@ -245,6 +245,7 @@ async def create_run(
             "intent_override": body.intent_override,
             "sie_outlier_mode": body.sie_outlier_mode,
             "sie_force_refresh": body.sie_force_refresh,
+            "brief_force_refresh": body.brief_force_refresh,
             "status": "queued",
             "created_by": auth["user_id"],
         }
@@ -387,6 +388,14 @@ async def resume_run(
 async def rerun(
     run_id: UUID,
     background_tasks: BackgroundTasks,
+    brief_force_refresh: bool = Query(
+        False,
+        description=(
+            "When true, the new run will regenerate the brief from "
+            "scratch instead of reusing the 7-day cache. Set by the "
+            "frontend's cache-decision modal."
+        ),
+    ),
     auth: dict = Depends(require_auth),
 ) -> RunCreateResponse:
     supabase = get_supabase()
@@ -414,6 +423,10 @@ async def rerun(
             "intent_override": original.get("intent_override"),
             "sie_outlier_mode": original.get("sie_outlier_mode", "safe"),
             "sie_force_refresh": original.get("sie_force_refresh", False),
+            # Caller's explicit choice on the modal wins. Don't inherit
+            # from the original run (which might have force-refreshed
+            # for an unrelated reason a week ago).
+            "brief_force_refresh": brief_force_refresh,
             "status": "queued",
             "created_by": auth["user_id"],
         }

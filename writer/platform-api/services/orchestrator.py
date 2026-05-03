@@ -466,6 +466,10 @@ def _build_brief_payload(run: dict) -> dict:
         "keyword": run["keyword"],
         "location_code": 2840,  # US default
         "intent_override": run.get("intent_override"),
+        # PRD v2.6 — when the user picks "regenerate" on the cache-
+        # decision modal, the run row carries brief_force_refresh=True
+        # and the brief generator skips its cache lookup.
+        "force_refresh": run.get("brief_force_refresh", False),
     }
 
 

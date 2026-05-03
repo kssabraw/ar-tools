@@ -4,6 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
 import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, RotateCcw, Repeat, Play, ExternalLink } from 'lucide-react'
+import {
+  BriefCacheDecisionModal,
+  type BriefCacheStatus,
+} from '../components/BriefCacheDecisionModal'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -314,12 +318,41 @@ export function RunDetail() {
   })
 
   const rerunMutation = useMutation({
-    mutationFn: () => api.post<{ run_id: string; status: RunStatus }>(`/runs/${id}/rerun`, {}),
+    mutationFn: (forceRefresh: boolean) =>
+      api.post<{ run_id: string; status: RunStatus }>(
+        `/runs/${id}/rerun?brief_force_refresh=${forceRefresh}`,
+        {},
+      ),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['runs'] })
       navigate(`/runs/${data.run_id}`)
     },
   })
+
+  // PRD v2.6 — cache-decision modal state for the rerun button.
+  // When the user clicks Restart, we first check whether the brief
+  // for this keyword is cached. If yes, the modal opens; if no, we
+  // rerun straight away.
+  const [rerunCacheStatus, setRerunCacheStatus] = useState<BriefCacheStatus | null>(null)
+  const [rerunModalOpen, setRerunModalOpen] = useState(false)
+
+  async function handleRerunClick() {
+    if (!run) return
+    try {
+      const status = await api.get<BriefCacheStatus>(
+        `/briefs/cache-status?keyword=${encodeURIComponent(run.keyword)}&location_code=2840`,
+      )
+      if (status?.exists) {
+        setRerunCacheStatus(status)
+        setRerunModalOpen(true)
+        return
+      }
+    } catch {
+      // Pre-flight failure is non-fatal — fall through and rerun
+      // without prompting (preserves prior behavior).
+    }
+    rerunMutation.mutate(false)
+  }
 
   const resumeMutation = useMutation({
     mutationFn: () => api.post<{ run_id: string; status: RunStatus }>(`/runs/${id}/resume`, {}),
@@ -453,7 +486,7 @@ export function RunDetail() {
           {canRestart && (
             <button onClick={() => {
               if (!window.confirm('Restart with the same client and keyword? This creates a new run.')) return
-              rerunMutation.mutate()
+              handleRerunClick()
             }} disabled={rerunMutation.isPending} style={restartBtn}>
               <RotateCcw size={13} /> {rerunMutation.isPending ? 'Starting…' : 'Restart'}
             </button>
@@ -461,7 +494,7 @@ export function RunDetail() {
           {canRerun && (
             <button onClick={() => {
               if (!window.confirm('Rerun with the same client and keyword? This creates a new run.')) return
-              rerunMutation.mutate()
+              handleRerunClick()
             }} disabled={rerunMutation.isPending} style={rerunBtnStyle}>
               <Repeat size={13} /> {rerunMutation.isPending ? 'Starting…' : 'Rerun'}
             </button>
@@ -594,6 +627,26 @@ export function RunDetail() {
           <div>This run failed. Check the error above, then use Resume to continue from where it stopped.</div>
         </div>
       )}
+
+      <BriefCacheDecisionModal
+        open={rerunModalOpen}
+        cacheStatus={rerunCacheStatus}
+        busy={rerunMutation.isPending}
+        onReuse={() => {
+          rerunMutation.mutate(false)
+          setRerunModalOpen(false)
+          setRerunCacheStatus(null)
+        }}
+        onRegenerate={() => {
+          rerunMutation.mutate(true)
+          setRerunModalOpen(false)
+          setRerunCacheStatus(null)
+        }}
+        onCancel={() => {
+          setRerunModalOpen(false)
+          setRerunCacheStatus(null)
+        }}
+      />
     </div>
   )
 }

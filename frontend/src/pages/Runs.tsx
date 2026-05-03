@@ -4,6 +4,10 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunListResponse, ClientListItem, RunStatus } from '../lib/types'
 import { Plus, RefreshCw } from 'lucide-react'
+import {
+  BriefCacheDecisionModal,
+  type BriefCacheStatus,
+} from '../components/BriefCacheDecisionModal'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
 
@@ -55,8 +59,13 @@ export function Runs() {
   })
 
   const createRun = useMutation({
-    mutationFn: (body: { client_id: string; keyword: string; sie_outlier_mode: string; sie_force_refresh: boolean }) =>
-      api.post('/runs', body),
+    mutationFn: (body: {
+      client_id: string
+      keyword: string
+      sie_outlier_mode: string
+      sie_force_refresh: boolean
+      brief_force_refresh: boolean
+    }) => api.post('/runs', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['runs'] })
       setShowNewRun(false)
@@ -65,8 +74,16 @@ export function Runs() {
     },
   })
 
-  async function handleCreate(e: React.FormEvent) {
-    e.preventDefault()
+  // PRD v2.6 — cache-decision modal state. When the user submits the
+  // form, we first check whether a cached brief already exists for the
+  // (keyword, location_code). If yes, the modal opens and lets them
+  // pick "reuse" or "regenerate" — that choice flows into
+  // `brief_force_refresh` on the eventual create call. If no, we
+  // skip the modal entirely.
+  const [cacheStatus, setCacheStatus] = useState<BriefCacheStatus | null>(null)
+  const [showCacheModal, setShowCacheModal] = useState(false)
+
+  async function submitCreate(briefForceRefresh: boolean) {
     setCreating(true)
     try {
       await createRun.mutateAsync({
@@ -74,9 +91,41 @@ export function Runs() {
         keyword,
         sie_outlier_mode: 'safe',
         sie_force_refresh: false,
+        brief_force_refresh: briefForceRefresh,
       })
     } finally {
       setCreating(false)
+      setShowCacheModal(false)
+      setCacheStatus(null)
+    }
+  }
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault()
+    setCreating(true)
+    try {
+      // Pre-flight cache check. Failure to fetch is non-fatal —
+      // proceed with the run as if no cache existed (worst case the
+      // user gets the cached result silently, the prior behavior).
+      let status: BriefCacheStatus | null = null
+      try {
+        status = await api.get<BriefCacheStatus>(
+          `/briefs/cache-status?keyword=${encodeURIComponent(keyword)}&location_code=2840`
+        )
+      } catch {
+        status = null
+      }
+      if (status?.exists) {
+        setCacheStatus(status)
+        setShowCacheModal(true)
+        return // wait for the user's modal choice
+      }
+      // No cache → straight to create.
+      await submitCreate(false)
+    } finally {
+      // Only release the spinner here when we DIDN'T open the modal.
+      // The modal path manages `creating` itself via submitCreate.
+      if (!showCacheModal) setCreating(false)
     }
   }
 
@@ -171,6 +220,19 @@ export function Runs() {
           </table>
         </div>
       )}
+
+      <BriefCacheDecisionModal
+        open={showCacheModal}
+        cacheStatus={cacheStatus}
+        busy={creating}
+        onReuse={() => submitCreate(false)}
+        onRegenerate={() => submitCreate(true)}
+        onCancel={() => {
+          setShowCacheModal(false)
+          setCacheStatus(null)
+          setCreating(false)
+        }}
+      />
     </div>
   )
 }

@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import settings
+from routers.briefs import router as briefs_router
 from routers.clients import router as clients_router
 from routers.files import router as files_router
 from routers.publish import router as publish_router
@@ -89,6 +90,7 @@ app.add_middleware(
 )
 
 
+app.include_router(briefs_router)
 app.include_router(clients_router)
 app.include_router(files_router)
 app.include_router(runs_router)
