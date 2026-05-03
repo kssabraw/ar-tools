@@ -223,6 +223,29 @@ async def validate_h2_body_lengths(
         if isinstance(h, dict) and isinstance(h.get("order"), int):
             structure_by_order[h["order"]] = h
 
+
+    def _lookup(order: int, expected_level: str) -> Optional[dict]:
+        """Phase 3 review fix #4 — guard against `order` collisions.
+        Brief assembly assigns unique sequential `order` values, but a
+        defensive level check guarantees we never pair an H2 with an
+        H3-keyed dict (or vice-versa) under last-wins dict semantics.
+        Returns None when the dict's level disagrees with the expected.
+        """
+        item = structure_by_order.get(order)
+        if item is None:
+            return None
+        if item.get("level") != expected_level:
+            logger.warning(
+                "writer.h2_length.level_mismatch",
+                extra={
+                    "order": order,
+                    "expected_level": expected_level,
+                    "got_level": item.get("level"),
+                },
+            )
+            return None
+        return item
+
     result = H2BodyLengthResult(validated_article=list(article))
     under_length: list[dict] = []
     retries_attempted = 0
@@ -237,10 +260,10 @@ async def validate_h2_body_lengths(
             continue
 
         h2_order = group.h2_section.order
-        h2_item = structure_by_order.get(h2_order)
+        h2_item = _lookup(h2_order, "H2")
         if h2_item is None:
-            # No corresponding heading_structure entry — can't drive a
-            # retry. Flag and move on.
+            # No corresponding H2 entry in heading_structure (or order
+            # collided with a non-H2 dict). Can't drive a retry safely.
             logger.warning(
                 "writer.h2_length.no_brief_heading",
                 extra={"h2_order": h2_order, "h2_text": group.h2_section.heading},
@@ -253,10 +276,27 @@ async def validate_h2_body_lengths(
             continue
 
         h3_items: list[dict] = []
+        children_lookup_failed = False
         for _, child in group.children:
-            child_struct = structure_by_order.get(child.order)
+            child_struct = _lookup(child.order, "H3")
             if child_struct is not None:
                 h3_items.append(child_struct)
+            else:
+                children_lookup_failed = True
+
+        # Phase 3 review fix #1 — refusing the retry when any child
+        # lookup failed is the safest correctness guarantee. A retry
+        # with fewer h3_items than original children would produce a
+        # section-count mismatch downstream and trigger our splice
+        # guard anyway; bailing here makes the intent explicit and
+        # avoids a wasted LLM call.
+        if children_lookup_failed:
+            under_length.append({
+                "section_order": h2_order,
+                "word_count": group_words,
+                "floor": min_h2_body_words,
+            })
+            continue
 
         retries_attempted += 1
         directive = _retry_directive(group_words, min_h2_body_words)
@@ -298,6 +338,32 @@ async def validate_h2_body_lengths(
             continue
 
         retry_word_count = sum(_word_count(s.body) for s in retry_result.sections)
+
+        # Phase 3 review fix #1 — guard against section-count mismatch.
+        # The contract is "1 H2 + N H3s in → 1 H2 + N H3s out". If the
+        # retry returns a different count (LLM merged H3 content into
+        # the parent body, or a defensive child-lookup miss meant we
+        # passed fewer h3_items into the retry call), splicing the
+        # retry sections in would silently DROP H3 sections from the
+        # original article. Refuse the splice and flag as under-length.
+        expected_count = 1 + len(group.children)
+        retry_section_count = len(retry_result.sections)
+        if retry_section_count != expected_count:
+            logger.warning(
+                "writer.h2_length.retry_section_count_mismatch",
+                extra={
+                    "h2_order": h2_order,
+                    "expected": expected_count,
+                    "got": retry_section_count,
+                    "fallback": "keep_original_sections",
+                },
+            )
+            under_length.append({
+                "section_order": h2_order,
+                "word_count": group_words,
+                "floor": min_h2_body_words,
+            })
+            continue
 
         if retry_word_count >= min_h2_body_words:
             retries_succeeded += 1

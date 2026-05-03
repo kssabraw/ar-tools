@@ -171,7 +171,7 @@ async def test_validator_no_op_when_floor_is_zero():
         min_h2_body_words=0,  # disabled
         keyword="k",
         intent="how-to",
-        heading_structure=[{"order": 1, "text": "Topic"}],
+        heading_structure=[{"order": 1, "text": "Topic", "level": "H2", "type": "content"}],
         section_budgets={},
         filtered_terms=_filtered_terms(),
         citations=[],
@@ -195,7 +195,7 @@ async def test_validator_no_op_when_all_groups_at_or_above_floor():
         min_h2_body_words=120,
         keyword="k",
         intent="how-to",
-        heading_structure=[{"order": 1, "text": "Topic"}],
+        heading_structure=[{"order": 1, "text": "Topic", "level": "H2", "type": "content"}],
         section_budgets={},
         filtered_terms=_filtered_terms(),
         citations=[],
@@ -220,7 +220,7 @@ async def test_validator_retries_under_length_h2():
         min_h2_body_words=120,
         keyword="k",
         intent="how-to",
-        heading_structure=[{"order": 1, "text": "Topic"}],
+        heading_structure=[{"order": 1, "text": "Topic", "level": "H2", "type": "content"}],
         section_budgets={},
         filtered_terms=_filtered_terms(),
         citations=[],
@@ -252,7 +252,7 @@ async def test_validator_accepts_and_flags_when_retry_still_short():
         min_h2_body_words=120,
         keyword="k",
         intent="how-to",
-        heading_structure=[{"order": 1, "text": "Topic"}],
+        heading_structure=[{"order": 1, "text": "Topic", "level": "H2", "type": "content"}],
         section_budgets={},
         filtered_terms=_filtered_terms(),
         citations=[],
@@ -284,7 +284,7 @@ async def test_validator_keeps_better_of_original_and_retry():
         min_h2_body_words=120,
         keyword="k",
         intent="how-to",
-        heading_structure=[{"order": 1, "text": "Topic"}],
+        heading_structure=[{"order": 1, "text": "Topic", "level": "H2", "type": "content"}],
         section_budgets={},
         filtered_terms=_filtered_terms(),
         citations=[],
@@ -314,9 +314,9 @@ async def test_validator_aggregates_h2_with_h3_word_counts():
         keyword="k",
         intent="how-to",
         heading_structure=[
-            {"order": 1, "text": "Topic"},
-            {"order": 2, "text": "Sub A"},
-            {"order": 3, "text": "Sub B"},
+            {"order": 1, "text": "Topic", "level": "H2", "type": "content"},
+            {"order": 2, "text": "Sub A", "level": "H3", "type": "content"},
+            {"order": 3, "text": "Sub B", "level": "H3", "type": "content"},
         ],
         section_budgets={},
         filtered_terms=_filtered_terms(),
@@ -344,7 +344,7 @@ async def test_validator_retry_failure_logs_and_flags():
         min_h2_body_words=120,
         keyword="k",
         intent="how-to",
-        heading_structure=[{"order": 1, "text": "Topic"}],
+        heading_structure=[{"order": 1, "text": "Topic", "level": "H2", "type": "content"}],
         section_budgets={},
         filtered_terms=_filtered_terms(),
         citations=[],
@@ -374,8 +374,8 @@ async def test_validator_retries_each_under_length_h2_independently():
         keyword="k",
         intent="how-to",
         heading_structure=[
-            {"order": 1, "text": "Topic A"},
-            {"order": 2, "text": "Topic B"},
+            {"order": 1, "text": "Topic A", "level": "H2", "type": "content"},
+            {"order": 2, "text": "Topic B", "level": "H2", "type": "content"},
         ],
         section_budgets={},
         filtered_terms=_filtered_terms(),
@@ -412,4 +412,181 @@ async def test_validator_skips_when_brief_heading_missing():
     )
     assert state["calls"] == 0
     assert result.retries_attempted == 0
+    assert len(result.under_length_h2_sections) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 review fix #1 — section-count mismatch guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_validator_refuses_splice_when_retry_returns_fewer_sections():
+    """Phase 3 review fix #1 — if write_h2_group's retry returns FEWER
+    sections than the original group (e.g. LLM merged H3 content into
+    the parent), splicing would silently drop H3 sections from the
+    article. The guard refuses the splice and flags as under-length."""
+    article = [
+        _h2(1, "Topic", "short"),
+        _h3(2, "Sub A", "child a body"),
+        _h3(3, "Sub B", "child b body"),
+    ]
+
+    # Retry returns ONLY the H2 — drops the two H3 children.
+    async def fake_drop_h3s(*, h2_item, **kwargs):
+        sec = ArticleSection(
+            order=h2_item["order"],
+            level="H2",
+            type="content",
+            heading=h2_item["text"],
+            body=" ".join(["w"] * 200),
+            word_count=200,
+        )
+        return SectionWriteResult(sections=[sec])  # 1 section, not 1+2=3
+
+    result = await validate_h2_body_lengths(
+        article,
+        min_h2_body_words=120,
+        keyword="k",
+        intent="how-to",
+        heading_structure=[
+            {"order": 1, "text": "Topic", "level": "H2", "type": "content"},
+            {"order": 2, "text": "Sub A", "level": "H3", "type": "content"},
+            {"order": 3, "text": "Sub B", "level": "H3", "type": "content"},
+        ],
+        section_budgets={},
+        filtered_terms=_filtered_terms(),
+        citations=[],
+        brand_voice_card=None,
+        banned_regex=None,
+        write_h2_group_fn=fake_drop_h3s,
+    )
+
+    # Original article preserved — H3s NOT dropped.
+    assert len(result.validated_article) == 3
+    assert result.validated_article[1].heading == "Sub A"
+    assert result.validated_article[2].heading == "Sub B"
+    # Section flagged as under-length because the retry was refused.
+    assert len(result.under_length_h2_sections) == 1
+    assert result.under_length_h2_sections[0]["section_order"] == 1
+    # No retry success counted.
+    assert result.retries_succeeded == 0
+
+
+@pytest.mark.asyncio
+async def test_validator_refuses_splice_when_retry_returns_more_sections():
+    """Section-count mismatch in the OTHER direction (LLM split a child
+    into two, returning more sections than expected) is also refused."""
+    article = [
+        _h2(1, "Topic", "short"),
+        _h3(2, "Sub A", "child body"),
+    ]
+
+    async def fake_extra_h3(*, h2_item, **kwargs):
+        secs = [
+            ArticleSection(
+                order=1, level="H2", type="content", heading="Topic",
+                body=" ".join(["w"] * 100), word_count=100,
+            ),
+            ArticleSection(
+                order=2, level="H3", type="content", heading="Sub A",
+                body=" ".join(["w"] * 80), word_count=80,
+            ),
+            ArticleSection(
+                order=3, level="H3", type="content", heading="Extra Sub",
+                body=" ".join(["w"] * 80), word_count=80,
+            ),
+        ]
+        return SectionWriteResult(sections=secs)
+
+    result = await validate_h2_body_lengths(
+        article,
+        min_h2_body_words=120,
+        keyword="k",
+        intent="how-to",
+        heading_structure=[
+            {"order": 1, "text": "Topic", "level": "H2", "type": "content"},
+            {"order": 2, "text": "Sub A", "level": "H3", "type": "content"},
+        ],
+        section_budgets={},
+        filtered_terms=_filtered_terms(),
+        citations=[],
+        brand_voice_card=None,
+        banned_regex=None,
+        write_h2_group_fn=fake_extra_h3,
+    )
+
+    # Original 2 sections preserved.
+    assert len(result.validated_article) == 2
+    assert result.validated_article[0].heading == "Topic"
+    assert result.validated_article[1].heading == "Sub A"
+    assert len(result.under_length_h2_sections) == 1
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 review fix #4 — structure_by_order level-mismatch guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_validator_skips_when_h2_order_collides_with_h3_in_structure():
+    """If `order` collides between an H2 and an H3 in heading_structure
+    (defensive — brief assembly assigns unique sequential orders, but
+    a regression elsewhere could break the invariant), the level guard
+    refuses to use the H3-keyed dict as the H2's source of truth."""
+    article = [_h2(1, "Topic", "short")]
+    fake, state = _make_retry_fn("ignored")
+
+    # Heading_structure has order=1 mapped to an H3 entry — wrong level.
+    result = await validate_h2_body_lengths(
+        article,
+        min_h2_body_words=120,
+        keyword="k",
+        intent="how-to",
+        heading_structure=[
+            {"order": 1, "text": "An H3", "level": "H3", "type": "content"},
+        ],
+        section_budgets={},
+        filtered_terms=_filtered_terms(),
+        citations=[],
+        brand_voice_card=None,
+        banned_regex=None,
+        write_h2_group_fn=fake,
+    )
+
+    # Lookup mismatch → no retry, flag as under-length.
+    assert state["calls"] == 0
+    assert len(result.under_length_h2_sections) == 1
+
+
+@pytest.mark.asyncio
+async def test_validator_skips_when_h3_order_collides_with_h2_in_structure():
+    """Same guard, opposite direction: an H3 child in the article
+    whose order maps to an H2 dict in heading_structure."""
+    article = [
+        _h2(1, "Topic", "short"),
+        _h3(2, "Sub A", "body"),
+    ]
+    fake, state = _make_retry_fn("ignored")
+
+    # heading_structure has order=2 mapped to an H2 (wrong level for the H3 child).
+    result = await validate_h2_body_lengths(
+        article,
+        min_h2_body_words=120,
+        keyword="k",
+        intent="how-to",
+        heading_structure=[
+            {"order": 1, "text": "Topic", "level": "H2", "type": "content"},
+            {"order": 2, "text": "Phantom H2", "level": "H2", "type": "content"},
+        ],
+        section_budgets={},
+        filtered_terms=_filtered_terms(),
+        citations=[],
+        brand_voice_card=None,
+        banned_regex=None,
+        write_h2_group_fn=fake,
+    )
+
+    # The H3 child lookup fails → fix #1 path: refuse retry, flag.
+    assert state["calls"] == 0
     assert len(result.under_length_h2_sections) == 1

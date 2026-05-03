@@ -270,7 +270,7 @@ def run_sources_cited(req: SourcesCitedRequest) -> SourcesCitedResponse:
         entries_with_placeholder=flags.get("entries_with_placeholder", []),
         unresolvable_markers_stripped=unresolvable_markers_stripped,
         integrity_violations=integrity_violations,
-        writer_schema_version=(writer.get("metadata") or {}).get("schema_version", "1.5"),
+        writer_schema_version=(writer.get("metadata") or {}).get("schema_version", "1.6"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),
     )
     enriched["sources_cited_metadata"] = sc_metadata.model_dump(mode="json")
