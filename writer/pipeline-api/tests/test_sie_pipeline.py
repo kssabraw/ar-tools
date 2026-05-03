@@ -87,7 +87,9 @@ async def fake_claude_json(system, user, **kwargs):
     return {}
 
 
-async def fake_extract_entities(pages):
+async def fake_extract_entities(pages, *, keyword: str = ""):
+    # `keyword` was added in commit 9000d54 to enable seed-keyword-token
+    # auto-promotion. Tests don't exercise that path; ignore the value.
     return ([], [])  # No entities, no failures
 
 
@@ -119,7 +121,7 @@ async def test_sie_happy_path():
     ):
         result = await run_sie(req)
 
-    assert result.schema_version == "1.0"
+    assert result.schema_version == "1.4"
     assert result.keyword == "water heater repair"
     assert result.outlier_mode == "safe"
     assert result.cached is False
@@ -141,7 +143,7 @@ async def test_sie_cache_hit_short_circuits():
     from modules.sie.pipeline import run_sie
 
     cached_payload = {
-        "schema_version": "1.0",
+        "schema_version": "1.4",
         "keyword": "water heater repair",
         "location_code": 2840,
         "language_code": "en",

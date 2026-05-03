@@ -415,8 +415,10 @@ async def test_fixture_a_tiktok_shop_v2_0_2_silo_fields_present():
     assert scope_silos, "expected a scope_verification-routed silo"
 
     for silo in result.silo_candidates:
-        # 12.3 — every silo must clear the demand floor
-        assert silo.search_demand_score >= 0.30
+        # 12.3 — every silo must clear the demand floor (lowered to
+        # 0.15 in v2.4; strong-priority candidates bypass via
+        # SILO_STRONG_PRIORITY_BYPASS at 0.30).
+        assert silo.search_demand_score >= 0.15
         # 12.4 — default router returns viable=true for all
         assert silo.viable_as_standalone_article is True
         assert silo.viability_reasoning  # non-empty
@@ -426,8 +428,10 @@ async def test_fixture_a_tiktok_shop_v2_0_2_silo_fields_present():
         }
         # 12.5 — v2.0.2 default
         assert silo.cross_brief_occurrence_count == 1
-        # 12.6 — discard breakdown is populated
-        assert silo.discard_reason_breakdown
+        # 12.6 — discard breakdown is the correct shape. May legitimately
+        # be empty when a candidate materialized cleanly with no
+        # discarded members (e.g. a singleton via scope_verification).
+        assert isinstance(silo.discard_reason_breakdown, dict)
 
 
 @pytest.mark.asyncio
