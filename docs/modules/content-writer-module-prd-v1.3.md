@@ -558,6 +558,60 @@ The validation pass also scans the Key Takeaways bullets — any single bullet >
 
 ---
 
+### Step 6.7 — Per-H2 Body Length Validator — added per Phase 3 (Brief PRD v2.3)
+
+**Purpose:** Catch H2 sections shipping with empty/lightweight bodies (the audited "an H2 followed by two sentences and a stat before jumping to the next H2" case). The brief generator stamps a per-intent floor on `format_directives.min_h2_body_words`; this validator enforces it.
+
+**Position in the pipeline:** runs **after** Step 6.6 paragraph length validation and the heading-level banned-term scan, **before** Step 7 citation reconciliation.
+
+**Algorithm:** For each H2 SECTION GROUP (parent H2 + child H3 bodies):
+
+1. Compute `group_word_count` = sum of word counts across the group, after stripping `{{cit_N}}` markers.
+2. If `group_word_count >= format_directives.min_h2_body_words`: pass.
+3. Otherwise: re-run `write_h2_group` ONCE with a length-retry directive that names the floor and the current word count, and asks for additional substance (not padding).
+4. After the retry:
+   - If now ≥ floor: succeeded, replace the original sections.
+   - If still under: accept whichever attempt has more words and append `{section_order, word_count, floor}` to `metadata.under_length_h2_sections`.
+
+**Failure-mode policy** (matches Step 6.6 R6 convention):
+- Never aborts the run. Empty H2 sections are recoverable in post-edit; aborting the whole article on a length miss is worse.
+- Retry uses a single LLM call per offending H2.
+- If the retry call itself raises, the H2 is flagged as under-length and the original output is preserved.
+
+**Floor table** (from `intent_format_template.h2_pattern`):
+
+| Pattern | Floor | Intent |
+|---|---|---|
+| `sequential_steps` | 120 | how-to |
+| `ranked_items` | 80 | listicle |
+| `parallel_axes` | 150 | comparison |
+| `topic_questions` | 180 | informational |
+| `buyer_education_axes` | 180 | informational-commercial |
+| `feature_benefit` | 150 | ecom |
+| `place_bound_topics` | 150 | local-seo |
+| `news_lede` | 100 | news |
+
+**Output additions to writer metadata:**
+
+```json
+{
+  "under_length_h2_sections": [
+    {"section_order": 4, "word_count": 47, "floor": 120}
+  ],
+  "h2_body_length_retries_attempted": 2,
+  "h2_body_length_retries_succeeded": 1
+}
+```
+
+**Logging:**
+- `writer.h2_length.complete` (INFO) — totals (groups inspected / retries attempted / retries succeeded / under-length after retry).
+- `writer.h2_length.retry` (INFO) — per-H2 trigger with current word count + floor.
+- `writer.h2_length.retry_succeeded` (INFO) — per-H2 success with before/after.
+- `writer.h2_length.retry_still_under` (WARN) — per-H2 retry didn't clear the floor.
+- `writer.h2_length.retry_failed` (WARN) — LLM call exception path.
+
+---
+
 ### Step 7 — Citation Usage Reconciliation
 
 After all content sections, FAQs, and the conclusion are written, the module performs a final pass to reconcile citation usage across the full article.

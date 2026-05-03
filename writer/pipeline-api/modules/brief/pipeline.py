@@ -36,6 +36,7 @@ from models.brief import (
     BriefRequest,
     BriefResponse,
     DiscardedHeading,
+    FormatDirectives,
     LLMFanoutCounts,
     LLMUnavailable,
     PersonaInfo,
@@ -89,7 +90,42 @@ from .title_scope import generate_title_and_scope
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = "2.2"
+SCHEMA_VERSION = "2.3"
+
+
+# PRD v2.3 / Phase 3 — per-intent-pattern minimum-words floor for H2
+# section groups (parent H2 body + child H3 bodies). The Writer's new
+# Step 6.7 validator retries any H2 group falling below this floor once
+# and warns-and-accepts if the retry still falls short.
+#
+# Defaults are calibrated for a 2,500-word article distributed across
+# the template's typical H2 count:
+#   - how-to with 6–8 steps → ~280 words/step → 120 floor catches
+#     "step-stub" cases (audited "two sentences and a stat" was ~30w)
+#   - listicle with 8–10 items → ~200 words/item → 80 floor catches
+#     header-only items
+#   - comparison with 4–6 axes → ~400 words/axis → 150 floor catches
+#     vacuous "Pricing: it varies" sections
+#   - informational with 4–6 H2s → ~400 words/H2 → 180 floor (strictest)
+_MIN_H2_BODY_WORDS_BY_PATTERN: dict[str, int] = {
+    "sequential_steps": 120,        # how-to
+    "ranked_items": 80,             # listicle
+    "parallel_axes": 150,           # comparison
+    "topic_questions": 180,         # informational
+    "buyer_education_axes": 180,    # informational-commercial
+    "feature_benefit": 150,         # ecom
+    "place_bound_topics": 150,      # local-seo
+    "news_lede": 100,               # news
+}
+
+
+def _min_h2_body_words_for_template(template) -> int:
+    """Derive the per-H2 body floor from the intent template's
+    `h2_pattern`. Falls back to 100 (the schema default) for unknown
+    patterns or when the template is None."""
+    if template is None:
+        return 100
+    return _MIN_H2_BODY_WORDS_BY_PATTERN.get(template.h2_pattern, 100)
 
 
 # Re-export for callers that historically imported BriefError from pipeline.
@@ -917,6 +953,13 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faq_intent_gate_full_relaxation_applied=faq_gate_result.full_relaxation_applied,
     )
 
+    # PRD v2.3 / Phase 3 — derive the per-H2 body floor from the
+    # template's pattern so the Writer's Step 6.7 validator can apply
+    # an intent-appropriate minimum without re-deriving from the brief.
+    format_directives = FormatDirectives(
+        min_h2_body_words=_min_h2_body_words_for_template(intent_template),
+    )
+
     response = BriefResponse(
         keyword=keyword,
         title=title_scope.title,
@@ -933,6 +976,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         ),
         heading_structure=heading_structure,
         faqs=faqs,
+        format_directives=format_directives,
         discarded_headings=discarded_models,
         silo_candidates=silos,
         intent_format_template=intent_template,

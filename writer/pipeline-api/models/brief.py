@@ -242,6 +242,14 @@ class FormatDirectives(BaseModel):
     min_tables_per_article: int = 1
     preferred_paragraph_max_words: int = 80
     answer_first_paragraphs: bool = True
+    # PRD v2.3 / Phase 3 — minimum words per H2 SECTION GROUP (parent H2
+    # body + all child H3 bodies, after stripping `{{cit_N}}` markers).
+    # The Writer's new Step 6.7 validator retries any H2 group falling
+    # below this floor once, then warns-and-accepts. Default per intent
+    # pattern is set at brief assembly time from the
+    # `intent_format_template`; the schema default below is used only by
+    # legacy callers / fixtures that don't supply a template.
+    min_h2_body_words: int = 100
 
 
 # ---- Intent format template (Phase 1 / Brief PRD v2.1 Step 7.5 + Step 11) ----
@@ -512,7 +520,7 @@ class BriefMetadata(BaseModel):
     # Echoed for tuning, like the other threshold values above.
     faq_intent_floor_threshold: float = 0.55
 
-    schema_version: Literal["2.2"] = "2.2"
+    schema_version: Literal["2.3"] = "2.3"
 
 
 # ---- Top-level response ----

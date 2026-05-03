@@ -43,7 +43,7 @@ WRITER_OUTPUT = {
         ],
     },
     "format_compliance": {},
-    "metadata": {"schema_version": "1.5", "brief_schema_version": "1.7"},
+    "metadata": {"schema_version": "1.6", "brief_schema_version": "1.7"},
 }
 
 
@@ -105,7 +105,7 @@ def test_happy_path_with_stacked_marker_sort():
 
     # Schema version bookkeeping
     assert md.schema_version == "1.1"
-    assert md.writer_schema_version == "1.5"
+    assert md.writer_schema_version == "1.6"
 
 
 def test_aborts_on_marker_in_heading():

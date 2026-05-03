@@ -185,7 +185,7 @@ async def test_writer_happy_path_with_client_context():
     ):
         result = await run_writer(req)
 
-    assert result.metadata.schema_version == "1.5"
+    assert result.metadata.schema_version == "1.6"
     assert result.title  # title generated
     assert result.brand_voice_card_used is not None
     assert "premium" in result.brand_voice_card_used.banned_terms
@@ -223,7 +223,7 @@ async def test_writer_no_client_context_falls_back_to_v14():
     ):
         result = await run_writer(req)
 
-    assert result.metadata.schema_version == "1.5-no-context"
+    assert result.metadata.schema_version == "1.6-no-context"
     assert result.brand_voice_card_used is None
     assert result.brand_conflict_log == []
 

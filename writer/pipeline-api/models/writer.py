@@ -1,6 +1,8 @@
-"""Pydantic models for the Content Writer module — schema v1.5.
+"""Pydantic models for the Content Writer module — schema v1.6.
 
 Per writer-module-v1_5-change-spec_2.md plus content-writer-module-prd-v1.3.md.
+PRD v2.3 / Phase 3: bumped to 1.6 with new Step 6.7 H2 body length
+validator + new `under_length_h2_sections` metadata field.
 """
 
 from typing import Any, Literal, Optional
@@ -8,7 +10,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-SchemaVersion = Literal["1.5", "1.5-no-context", "1.5-degraded"]
+SchemaVersion = Literal["1.6", "1.6-no-context", "1.6-degraded"]
 ArticleLevel = Literal["H1", "H2", "H3", "none"]
 ArticleType = Literal[
     "content", "faq-header", "faq-question", "conclusion", "h1-enrichment", "title", "intro",
@@ -85,7 +87,7 @@ class ClientContextSummary(BaseModel):
     brand_guide_provided: bool = False
     icp_provided: bool = False
     website_analysis_used: bool = False
-    schema_version_effective: SchemaVersion = "1.5"
+    schema_version_effective: SchemaVersion = "1.6"
 
 
 # ---- Article output ----
@@ -143,7 +145,17 @@ class WriterMetadata(BaseModel):
     # "leverage" as banned). Headings remain hard-abort. Reviewers can
     # find and fix these terms during article QA.
     banned_terms_leaked_in_body: list[str] = []
-    schema_version: SchemaVersion = "1.5"
+    # PRD v2.3 / Phase 3 — Step 6.7 H2 body length validator outcomes.
+    # `under_length_h2_sections` carries the H2 sections (by their order
+    # in heading_structure) that fell below `format_directives.
+    # min_h2_body_words` after a single retry. The retry pass is
+    # warn-and-accept — production never aborts on under-length, but the
+    # flagged sections are surfaced so editors can review or expand
+    # them post-publish.
+    under_length_h2_sections: list[dict] = []
+    h2_body_length_retries_attempted: int = 0
+    h2_body_length_retries_succeeded: int = 0
+    schema_version: SchemaVersion = "1.6"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0
 

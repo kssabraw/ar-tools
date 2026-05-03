@@ -41,6 +41,7 @@ from .distillation import distill_brand_voice, is_card_empty
 from .faqs import write_faqs
 from .intro import write_intro
 from .reconciliation import FilteredSIETerms, reconcile_terms, ReconciledTerm
+from .h2_body_length import H2BodyLengthResult, validate_h2_body_lengths
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
 from .title import generate_h1_enrichment, generate_title
@@ -217,7 +218,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     section_budgets = allocate_budget(heading_structure, word_budget)
 
     # ---- Brand voice distillation + reconciliation in parallel ----
-    schema_effective: SchemaVersion = "1.5"
+    schema_effective: SchemaVersion = "1.6"
     brand_voice_card: Optional[BrandVoiceCard] = None
     filtered_terms = FilteredSIETerms()
     brand_conflict_log: list[BrandConflictEntry] = []
@@ -225,7 +226,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
 
     if req.client_context is None:
         # v1.4 fallback path
-        schema_effective = "1.5-no-context"
+        schema_effective = "1.6-no-context"
         # Build a flat filtered terms list (all keep)
         from .reconciliation import _all_keep, _avoid_terms_from_sie, _required_terms_from_sie
         filtered_terms = _all_keep(
@@ -240,7 +241,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         no_website = ctx.website_analysis_unavailable
 
         if brand_empty and icp_empty and no_website:
-            schema_effective = "1.5-degraded"
+            schema_effective = "1.6-degraded"
             from .reconciliation import _all_keep, _avoid_terms_from_sie, _required_terms_from_sie
             filtered_terms = _all_keep(
                 _required_terms_from_sie(sie),
@@ -421,6 +422,37 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # ---- Heading-level post-hoc banned-term scan ----
     _scan_headings_for_banned(article, banned_regex)
 
+    # ---- Step 6.7 — H2 body length validator (PRD v2.3 / Phase 3) ----
+    # Catches H2 sections shipping with empty/lightweight bodies (the
+    # audited "two sentences and a stat" failure mode). Retries each
+    # under-length H2 group ONCE with a stricter prompt; warns-and-
+    # accepts if the retry still falls short. Floor comes from the
+    # brief's `format_directives.min_h2_body_words`, which the brief
+    # generator stamps from the per-intent template at assembly time.
+    directives_dict = (brief.get("format_directives") or {})
+    min_h2_body_words = int(directives_dict.get("min_h2_body_words", 0) or 0)
+    h2_length_result: Optional[H2BodyLengthResult] = None
+    if min_h2_body_words > 0:
+        h2_length_result = await validate_h2_body_lengths(
+            article,
+            min_h2_body_words=min_h2_body_words,
+            keyword=keyword,
+            intent=intent_type,
+            heading_structure=heading_structure,
+            section_budgets=section_budgets,
+            filtered_terms=filtered_terms,
+            citations=citations,
+            brand_voice_card=brand_voice_card,
+            banned_regex=banned_regex,
+        )
+        # Re-run the heading-level banned-term scan on any retry-replaced
+        # sections — write_h2_group only catches body-level leakage; if a
+        # retry produced a different heading text (it shouldn't — retry
+        # never regenerates headings — but defensive), the heading scan
+        # would catch it.
+        article = h2_length_result.validated_article
+        _scan_headings_for_banned(article, banned_regex)
+
     # ---- Citation reconciliation ----
     citation_usage = reconcile_citation_usage(article, citations)
 
@@ -445,6 +477,19 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         no_citations=no_citations,
         retry_count=0,
         banned_terms_leaked_in_body=sorted(set(banned_terms_leaked_in_body)),
+        # PRD v2.3 / Phase 3 — Step 6.7 outcomes
+        under_length_h2_sections=(
+            h2_length_result.under_length_h2_sections
+            if h2_length_result is not None else []
+        ),
+        h2_body_length_retries_attempted=(
+            h2_length_result.retries_attempted
+            if h2_length_result is not None else 0
+        ),
+        h2_body_length_retries_succeeded=(
+            h2_length_result.retries_succeeded
+            if h2_length_result is not None else 0
+        ),
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),
