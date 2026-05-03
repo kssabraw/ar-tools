@@ -107,7 +107,28 @@ async def test_generate_title_includes_title_zone_directive(monkeypatch):
     )
     assert "tiktok shop roi" in title.lower()
     assert "at least 2" in captured["user"].lower()
-    assert "do not exceed 3" in captured["user"].lower()
+    # 3 entity max requested, but only 2 entities listed → clamp to 2.
+    assert "do not exceed 2" in captured["user"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_title_clamps_directive_to_entity_count(monkeypatch):
+    """Title prompt only lists top 5 entities — even if SIE recommends 30,
+    the directive count must clamp to len(top_entities)."""
+    call, captured = _capturing_json({"candidates": ["TikTok Shop Guide"]})
+    monkeypatch.setattr("modules.writer.title.claude_json", call)
+
+    await generate_title(
+        keyword="tiktok shop",
+        intent_type="how-to",
+        required_terms=[],
+        entities=["E1", "E2", "E3", "E4", "E5", "E6", "E7"],
+        title_zone_target=30,
+        title_zone_max=40,
+    )
+    assert "at least 5" in captured["user"].lower()
+    assert "at least 30" not in captured["user"].lower()
+    assert "do not exceed 5" in captured["user"].lower()
 
 
 @pytest.mark.asyncio
@@ -141,16 +162,39 @@ async def test_generate_h1_enrichment_includes_h1_zone_directive(monkeypatch):
         h1_text="Driving ROI on TikTok Shop",
         high_salience_entities=[
             {"term": "Checkout Flow", "entity_category": "methods"},
-            {"term": "Conversion Rate", "entity_category": "concepts"},
+            {"term": "Repair Service", "entity_category": "services"},
         ],
         h1_zone_target=2,
         h1_zone_max=2,
     )
     assert sentence == "lede sentence here"
-    # The "concepts" entity is filtered out (only services/equipment/problems/methods),
-    # so only "Checkout Flow" qualifies.
+    # Both qualify (services + methods). Directive clamped to available=2.
     assert "include at least 2" in captured["user"].lower()
     assert "no more than 2" in captured["user"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_h1_enrichment_clamps_to_lede_ceiling(monkeypatch):
+    """A 25-word lede can't carry more than 2 entities readably — even if
+    SIE recommends 5, the directive must cap at LEDE_ENTITY_CEILING (2)."""
+    call, captured = _capturing_json({"sentence": "x"})
+    monkeypatch.setattr("modules.writer.title.claude_json", call)
+
+    await generate_h1_enrichment(
+        keyword="kw",
+        h1_text="H1",
+        high_salience_entities=[
+            {"term": "E1", "entity_category": "services"},
+            {"term": "E2", "entity_category": "equipment"},
+            {"term": "E3", "entity_category": "problems"},
+        ],
+        h1_zone_target=5,
+        h1_zone_max=8,
+    )
+    # 3 qualifying entities listed, but ceiling caps directive at 2.
+    assert "include at least 2" in captured["user"].lower()
+    assert "no more than 2" in captured["user"].lower()
+    assert "include at least 5" not in captured["user"].lower()
 
 
 @pytest.mark.asyncio
@@ -274,7 +318,42 @@ async def test_write_faqs_includes_faq_target_directive(monkeypatch):
         banned_regex=None,
     )
     assert "REQUIRED_TERM_USAGE_TARGET" in captured["user"]
-    assert "at least 1 distinct REQUIRED_TERM mentions" in captured["user"]
+    # 2 terms × paragraphs.target=5 → sum 10, ×0.12 → 1; "1 mention" (singular).
+    assert "at least 1 distinct REQUIRED_TERM mention" in captured["user"]
+    assert "REQUIRED_TERM mentions" not in captured["user"]
+
+
+@pytest.mark.asyncio
+async def test_write_faqs_directive_clamps_to_listed_terms(monkeypatch):
+    """If derived target exceeds listed REQUIRED_TERMS (top 8), clamp.
+
+    With paragraphs.target=100 across one term, derived target = 12,
+    but only 1 term is listed — the directive must say "at least 1" not
+    "at least 12"."""
+    captured = {}
+
+    async def _call(system, user, **kw):
+        captured["user"] = user
+        return {"faqs": [
+            {"question": "Q1?", "answer": "answer placeholder text."},
+        ]}
+
+    monkeypatch.setattr("modules.writer.faqs.claude_json", _call)
+    filtered = FilteredSIETerms(required=[
+        ReconciledTerm(
+            term="solo term",
+            zones={"paragraphs": {"min": 50, "target": 100, "max": 150}},
+        ),
+    ])
+    await write_faqs(
+        keyword="kw",
+        faq_questions=["Q1?"],
+        filtered_terms=filtered,
+        brand_voice_card=None,
+        banned_regex=None,
+    )
+    assert "at least 1 distinct REQUIRED_TERM mention" in captured["user"]
+    assert "at least 12" not in captured["user"]
 
 
 @pytest.mark.asyncio

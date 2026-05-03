@@ -54,13 +54,20 @@ async def generate_title(
     """
     top_terms = required_terms[:8]
     top_entities = entities[:5]
-    if title_zone_target > 0:
+    # Clamp the directive count by the entities we actually list so the
+    # prompt can't ask for "at least 30" when only 5 are shown — that
+    # framing is impossible and confuses the LLM.
+    effective_target = min(title_zone_target, len(top_entities)) if title_zone_target > 0 else 0
+    effective_max = min(title_zone_max, len(top_entities)) if title_zone_max > 0 else 0
+    if effective_max and effective_max < effective_target:
+        effective_max = effective_target
+    if effective_target > 0:
         coverage_directive = (
-            f"Aim to incorporate at least {title_zone_target} of the listed "
+            f"Aim to incorporate at least {effective_target} of the listed "
             f"entities naturally"
         )
-        if title_zone_max > 0:
-            coverage_directive += f" (do not exceed {title_zone_max} entities)"
+        if effective_max > 0:
+            coverage_directive += f" (do not exceed {effective_max} entities)"
         coverage_directive += "."
     else:
         coverage_directive = (
@@ -137,11 +144,20 @@ async def generate_h1_enrichment(
         "section. The sentence is NOT a heading. No promotional language. "
         "Output JSON: {\"sentence\": \"...\"}."
     )
-    if h1_zone_target > 0:
-        cap = h1_zone_max if h1_zone_max >= h1_zone_target else h1_zone_target
+    # Clamp by the number we actually list — same reasoning as
+    # generate_title. Also cap at 2 absolute: a 25-word lede can't
+    # carry more than 2 entities without losing readability, regardless
+    # of what SIE recommends.
+    LEDE_ENTITY_CEILING = 2
+    available = len(relevant_entities)
+    effective_h1_target = min(h1_zone_target, available, LEDE_ENTITY_CEILING) if h1_zone_target > 0 else 0
+    effective_h1_max = min(h1_zone_max if h1_zone_max > 0 else h1_zone_target, available, LEDE_ENTITY_CEILING) if h1_zone_target > 0 else 0
+    if effective_h1_max and effective_h1_max < effective_h1_target:
+        effective_h1_max = effective_h1_target
+    if effective_h1_target > 0:
         entity_directive = (
-            f"Entities to weave in (include at least {h1_zone_target}, "
-            f"no more than {cap}): {entity_list}"
+            f"Entities to weave in (include at least {effective_h1_target}, "
+            f"no more than {effective_h1_max}): {entity_list}"
         )
     else:
         entity_directive = (

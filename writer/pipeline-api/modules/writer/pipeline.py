@@ -310,16 +310,17 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         if isinstance(t, dict) and t.get("is_entity")
     ]
 
-    # PRD v2.6 wiring — title / h1 zone aggregates across reconciled
-    # entities. Sum each entity's per-zone target/max so the title and
-    # H1 prompts know how many distinct entities to fit and the absolute
-    # ceiling (don't let titles read like keyword-stuffed grocery lists).
-    # Skip entities flagged as seed fragments — keyword echoes already
-    # appear via the keyword-must-be-present rule.
-    title_zone_target_sum = 0
-    title_zone_max_sum = 0
-    h1_zone_target_sum = 0
-    h1_zone_max_sum = 0
+    # PRD v2.6 wiring — title / h1 prompts express "include at least N
+    # distinct entities, no more than M". SIE assigns title.target /
+    # h1.target as a per-term occurrence count (typically 0 or 1 per
+    # entity per zone — you don't repeat an entity in a title). So the
+    # natural prompt-side number is a COUNT of entities recommended for
+    # the zone (target ≥ 1), not a sum of targets. Skip seed fragments
+    # — those echo the keyword which is already required separately.
+    title_zone_target_count = 0
+    title_zone_max_count = 0
+    h1_zone_target_count = 0
+    h1_zone_max_count = 0
     for rt in filtered_terms.required:
         if not getattr(rt, "is_entity", False):
             continue
@@ -331,11 +332,15 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         title_zone = zones.get("title") or {}
         h1_zone = zones.get("h1") or {}
         if isinstance(title_zone, dict):
-            title_zone_target_sum += int(title_zone.get("target", 0) or 0)
-            title_zone_max_sum += int(title_zone.get("max", 0) or 0)
+            if int(title_zone.get("target", 0) or 0) >= 1:
+                title_zone_target_count += 1
+            if int(title_zone.get("max", 0) or 0) >= 1:
+                title_zone_max_count += 1
         if isinstance(h1_zone, dict):
-            h1_zone_target_sum += int(h1_zone.get("target", 0) or 0)
-            h1_zone_max_sum += int(h1_zone.get("max", 0) or 0)
+            if int(h1_zone.get("target", 0) or 0) >= 1:
+                h1_zone_target_count += 1
+            if int(h1_zone.get("max", 0) or 0) >= 1:
+                h1_zone_max_count += 1
     # The article's on-page H1 and the SEO/meta title are SEPARATE concepts:
     # - title = SEO/meta title (browser tab, SERP, og:title). Brief emits this
     #   in `brief.title`. Surfaced as WriterResponse.title.
@@ -361,22 +366,22 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         h1_enrichment = await generate_h1_enrichment(
             keyword=keyword, h1_text=h1_text,
             high_salience_entities=entity_terms,
-            h1_zone_target=h1_zone_target_sum,
-            h1_zone_max=h1_zone_max_sum,
+            h1_zone_target=h1_zone_target_count,
+            h1_zone_max=h1_zone_max_count,
         )
     else:
         title_task = asyncio.create_task(generate_title(
             keyword=keyword, intent_type=intent_type,
             required_terms=required_terms_list,
             entities=[e["term"] for e in entity_terms],
-            title_zone_target=title_zone_target_sum,
-            title_zone_max=title_zone_max_sum,
+            title_zone_target=title_zone_target_count,
+            title_zone_max=title_zone_max_count,
         ))
         h1_task = asyncio.create_task(generate_h1_enrichment(
             keyword=keyword, h1_text=h1_text,
             high_salience_entities=entity_terms,
-            h1_zone_target=h1_zone_target_sum,
-            h1_zone_max=h1_zone_max_sum,
+            h1_zone_target=h1_zone_target_count,
+            h1_zone_max=h1_zone_max_count,
         ))
         title = await title_task
         h1_enrichment = await h1_task

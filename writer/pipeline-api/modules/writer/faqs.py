@@ -127,11 +127,21 @@ async def write_faqs(
     if required_terms_str:
         user_parts.append(f"\nREQUIRED_TERMS: {required_terms_str}")
         if faq_target > 0:
+            # Clamp by REQUIRED_TERMS we actually listed (top 8) so the
+            # directive can't ask for more distinct mentions than terms
+            # are available. Without this clamp a high paragraphs.target
+            # sum could exceed the listed terms and become impossible.
+            listed_count = len(required_terms_str.split(", "))
+            effective_target = min(faq_target, listed_count)
+            effective_max = min(faq_max, listed_count) if faq_max > 0 else effective_target
+            if effective_max < effective_target:
+                effective_max = effective_target
+            mention_word = "mention" if effective_target == 1 else "mentions"
             user_parts.append(
-                f"REQUIRED_TERM_USAGE_TARGET: aim for at least {faq_target} "
-                f"distinct REQUIRED_TERM mentions across the FAQ set "
-                f"(do not exceed {faq_max}). Distribute naturally; not "
-                f"every answer needs one."
+                f"REQUIRED_TERM_USAGE_TARGET: aim for at least "
+                f"{effective_target} distinct REQUIRED_TERM {mention_word} "
+                f"across the FAQ set (do not exceed {effective_max}). "
+                f"Distribute naturally; not every answer needs one."
             )
 
     if forbidden_combined:
