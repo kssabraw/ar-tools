@@ -107,10 +107,20 @@ class FAQIntentGateResult:
     """Output of `apply_faq_intent_gate`."""
 
     kept: list[FAQCandidate] = field(default_factory=list)
+    # Per-kept embedding, parallel to `kept`. Phase 2 review fix #6:
+    # exposed so the pipeline can pass them into `score_faqs` and
+    # avoid a second embedding API call. Empty list when the gate
+    # was skipped (embed fallback) or when `kept` is empty.
+    kept_embeddings: list[list[float]] = field(default_factory=list)
     rejected: list[FAQCandidate] = field(default_factory=list)
     floor_rejected_count: int = 0
     llm_rejected_count: int = 0
     relaxation_applied: bool = False
+    # Phase 2 review fix #4 — when the gate would otherwise produce zero
+    # kept on a non-empty input pool (every candidate failed both
+    # cosine floor AND any LLM filter), the gate falls back to the
+    # original pool to honor PRD §5 Step 10's 3–5 FAQ guarantee.
+    full_relaxation_applied: bool = False
     intent_profile_text: str = ""
     intent_profile_embedding: list[float] = field(default_factory=list)
     fallback_embed_applied: bool = False
@@ -174,17 +184,34 @@ def apply_cosine_floor(
     faq_embeddings: list[list[float]],
     *,
     floor: float = INTENT_FLOOR,
-) -> tuple[list[FAQCandidate], list[FAQCandidate]]:
-    """Pure-CPU floor pass. Returns (survivors, rejected).
+) -> tuple[
+    list[FAQCandidate],
+    list[list[float]],
+    list[FAQCandidate],
+]:
+    """Pure-CPU floor pass. Returns (survivors, survivor_embeddings,
+    rejected).
+
+    Stamps `intent_profile_cosine` on every candidate (survivors and
+    rejects) so the relaxation path can rank `adjacent_intent`
+    candidates by intent alignment without re-computing — Phase 2
+    review fix #3.
+
+    Returns the survivors' embeddings parallel to `survivors` so
+    callers can hand them downstream to `score_faqs` without a second
+    embedding API call — Phase 2 review fix #6.
 
     A candidate's `faq_score` is NOT recomputed here — only the floor
-    decision. Callers are expected to have already computed faq_score
-    via `faqs.score_faqs` with the new Phase 2 weighted formula.
+    decision. Callers are expected to compute faq_score via
+    `faqs.score_faqs` after the gate runs (the gate result carries the
+    embeddings to enable that).
     """
     survivors: list[FAQCandidate] = []
+    survivor_embeddings: list[list[float]] = []
     rejected: list[FAQCandidate] = []
     for c, vec in zip(candidates, faq_embeddings):
         alignment = _cosine_unit(intent_profile_embedding, vec)
+        c.intent_profile_cosine = alignment  # type: ignore[assignment]
         if alignment < floor:
             rejected.append(c)
             logger.debug(
@@ -197,7 +224,8 @@ def apply_cosine_floor(
             )
         else:
             survivors.append(c)
-    return survivors, rejected
+            survivor_embeddings.append(vec)
+    return survivors, survivor_embeddings, rejected
 
 
 def _format_user_prompt(
@@ -300,31 +328,51 @@ async def apply_faq_intent_gate(
         )
         result.fallback_embed_applied = True
         result.kept = list(candidates)
+        # No embeddings to expose; score_faqs will re-embed (acceptable
+        # under fallback — embed outage isn't a steady state).
         return result
 
-    survivors, floor_rejected = apply_cosine_floor(
+    survivors, survivor_embeddings, floor_rejected = apply_cosine_floor(
         candidates, profile_embedding, faq_embeddings, floor=floor,
     )
-    for c in floor_rejected:
-        # FAQCandidate doesn't carry a discard_reason field today (it's
-        # an in-flight scoring DTO, not a Heading). The pipeline-side
-        # consumer handles "rejected" semantics via the result.rejected
-        # list — no schema change required on FAQCandidate itself.
-        pass
     result.floor_rejected_count = len(floor_rejected)
     result.rejected.extend(floor_rejected)
 
     if not survivors:
-        # Everyone failed the cosine floor. The pipeline will see an
-        # empty kept list and `relaxation_applied=False`; downstream
-        # `select_faqs` then has nothing to choose from. The audit case
-        # would have surfaced as `faq_intent_gate_floor_rejected_count`
-        # ≥ all candidates with no survivors — a clear signal.
+        # Phase 2 review fix #4 — every candidate failed the cosine
+        # floor. PRD §5 Step 10 promises 3–5 FAQs always, so falling
+        # back to an empty FAQ section regresses on a stronger
+        # guarantee. Re-admit the original pool with intent_role=
+        # "adjacent_intent" so consumers can highlight the full-
+        # relaxation case for review.
+        if not candidates:
+            return result
+        for c in candidates:
+            c.intent_role = "adjacent_intent"  # type: ignore[assignment]
+        result.kept = list(candidates)
+        result.kept_embeddings = list(faq_embeddings)
+        result.full_relaxation_applied = True
+        # The candidates are no longer in `result.rejected` — the floor
+        # rejection was overturned by the full-relaxation fallback.
+        result.rejected = []
+        result.floor_rejected_count = 0
+        logger.warning(
+            "brief.faq_intent_gate.full_relaxation",
+            extra={
+                "fallback": "accept_all_as_adjacent_intent",
+                "candidate_count": len(candidates),
+            },
+        )
         return result
 
     # ---- Stage 2: LLM intent-role classifier on survivors ----
+    # Map id → (FAQCandidate, embedding) so we can carry embeddings
+    # forward into the kept list (Phase 2 review fix #6).
+    survivor_embedding_by_id: dict[str, list[float]] = {}
     call = llm_json_fn or claude_json
     user, by_id = _format_user_prompt(profile_text, survivors)
+    for (faq_id, c), vec in zip(by_id.items(), survivor_embeddings):
+        survivor_embedding_by_id[faq_id] = vec
     classifications: Optional[dict[str, str]] = None
     last_error = "unknown"
 
@@ -371,45 +419,81 @@ async def apply_faq_intent_gate(
         for c in survivors:
             c.intent_role = "matches_primary_intent"  # type: ignore[assignment]
         result.kept = list(survivors)
+        result.kept_embeddings = list(survivor_embeddings)
         return result
 
     primary: list[FAQCandidate] = []
+    primary_embeddings: list[list[float]] = []
     adjacent: list[FAQCandidate] = []
+    adjacent_embeddings: list[list[float]] = []
     different: list[FAQCandidate] = []
 
     for faq_id, c in by_id.items():
         role = classifications.get(faq_id, "matches_primary_intent")
+        emb = survivor_embedding_by_id.get(faq_id, [])
         if role == "matches_primary_intent":
             c.intent_role = "matches_primary_intent"  # type: ignore[assignment]
             primary.append(c)
+            primary_embeddings.append(emb)
         elif role == "adjacent_intent":
             c.intent_role = "adjacent_intent"  # type: ignore[assignment]
             adjacent.append(c)
+            adjacent_embeddings.append(emb)
         else:  # different_audience
             different.append(c)
 
     result.llm_rejected_count = len(different)
     result.rejected.extend(different)
 
-    # Relaxation: if fewer than 3 primary, top up with adjacent until 3.
+    # Phase 2 review fix #3 — sort adjacent candidates by their cached
+    # `intent_profile_cosine` (stamped during apply_cosine_floor), NOT
+    # by `faq_score`, which is 0.0 for every candidate at this point
+    # because `score_faqs` runs after the gate. Higher cosine to the
+    # intent profile = "least off-topic among the adjacent" = best
+    # relaxation fallback.
     if len(primary) < min_faq_floor and adjacent:
-        # Sort adjacent by faq_score desc so the highest-quality
-        # adjacent candidates fill in first.
-        adjacent_sorted = sorted(
-            adjacent, key=lambda c: c.faq_score, reverse=True,
+        adjacent_paired = sorted(
+            zip(adjacent, adjacent_embeddings),
+            key=lambda pair: pair[0].intent_profile_cosine,
+            reverse=True,
         )
         needed = min_faq_floor - len(primary)
-        kept_adjacent = adjacent_sorted[:needed]
-        result.kept = primary + kept_adjacent
+        kept_adjacent_pairs = adjacent_paired[:needed]
+        result.kept = primary + [p[0] for p in kept_adjacent_pairs]
+        result.kept_embeddings = primary_embeddings + [p[1] for p in kept_adjacent_pairs]
         result.relaxation_applied = True
-        # The adjacent candidates not promoted are NOT rejected — they
-        # simply don't make the cut. They retain their intent_role flag
-        # so callers can see they were classified.
+        # Adjacent candidates not promoted into kept are still
+        # informative for the consumer (they were classified, just not
+        # needed); rejected list intentionally excludes them so the
+        # rejected count reflects only LLM-filtered different_audience.
     else:
         result.kept = primary
+        result.kept_embeddings = primary_embeddings
         # Adjacent candidates that didn't survive ARE included in
         # `rejected` so downstream metadata reflects the LLM filter.
         result.rejected.extend(adjacent)
+
+    # Phase 2 review fix #4 — even after the LLM stage, kept might be
+    # empty (everyone different_audience, or LLM filtered everything).
+    # Honor the 3–5 FAQ guarantee by full-relaxing on the original pool.
+    if not result.kept and candidates:
+        for c in candidates:
+            c.intent_role = "adjacent_intent"  # type: ignore[assignment]
+        result.kept = list(candidates)
+        result.kept_embeddings = list(faq_embeddings)
+        result.full_relaxation_applied = True
+        # Reset bookkeeping that no longer reflects reality.
+        result.rejected = []
+        result.floor_rejected_count = 0
+        result.llm_rejected_count = 0
+        logger.warning(
+            "brief.faq_intent_gate.full_relaxation",
+            extra={
+                "fallback": "accept_all_as_adjacent_intent",
+                "candidate_count": len(candidates),
+                "stage": "post_llm",
+            },
+        )
 
     logger.info(
         "brief.faq_intent_gate.complete",
@@ -422,6 +506,7 @@ async def apply_faq_intent_gate(
                 max(0, len(result.kept) - len(primary))
             ),
             "relaxation_applied": result.relaxation_applied,
+            "full_relaxation_applied": result.full_relaxation_applied,
         },
     )
     return result

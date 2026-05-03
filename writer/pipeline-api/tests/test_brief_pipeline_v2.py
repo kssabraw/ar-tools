@@ -796,3 +796,57 @@ async def test_pipeline_reembeds_rewritten_h2s(monkeypatch):
         "expected re-embed pass to re-vectorize the rewritten H2 text; "
         f"saw embed batches: {captured_embed_inputs}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 review fix #5 — h2s_with_zero_h3s recomputed post-Step-8.7
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pipeline_h2s_with_zero_h3s_reflects_step_8_7_mutations(monkeypatch):
+    """Fix #5 — when Step 8.7 routes H3s to silos, the final
+    `h2s_with_zero_h3s` metadata must reflect the post-Step-8.7
+    attachment map, not the pre-Step-8.7 snapshot."""
+    from modules.brief import pipeline as brief_pipeline
+
+    # Fake Step 8.7 that empties the first H2's attachment list (as if
+    # the LLM marked everything under H2[0] as `promote_to_h2`).
+    async def empty_first_h2(*, selected_h2s, h2_attachments, **kwargs):
+        from modules.brief.h3_parent_fit import FitVerificationResult
+        result = FitVerificationResult()
+        if selected_h2s and h2_attachments.get(0):
+            for h3 in list(h2_attachments[0]):
+                if h3.source != "authority_gap_sme":
+                    h3.discard_reason = "h3_promoted_to_h2_candidate"
+                    result.routed_to_silos.append(h3)
+                    result.promoted_count += 1
+            # Remove only non-authority H3s (preserves auth-gap exemption).
+            h2_attachments[0] = [
+                c for c in h2_attachments[0]
+                if c.source == "authority_gap_sme"
+            ]
+        result.llm_called = True
+        return result
+
+    with _AllMocks():
+        with monkeypatch.context() as m:
+            m.setattr(
+                brief_pipeline,
+                "verify_h3_parent_fit",
+                empty_first_h2,
+            )
+            req = BriefRequest(run_id="zh1", keyword="what is tiktok shop")
+            result = await brief_pipeline.run_brief(req)
+
+    # The final metric must count H2[0] (now empty of non-auth H3s) in
+    # `h2s_with_zero_h3s` — the pre-Step-8.7 snapshot would have missed it.
+    h2_count = sum(
+        1 for h in result.heading_structure
+        if h.level == "H2" and h.type == "content"
+    )
+    assert h2_count >= 1
+    # h2s_with_zero_h3s is bounded by h2_count
+    assert result.metadata.h2s_with_zero_h3s <= h2_count
+    # And at least the H2 we just emptied should be counted
+    assert result.metadata.h2s_with_zero_h3s >= 1

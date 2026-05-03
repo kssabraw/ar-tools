@@ -143,17 +143,19 @@ good, marginal, wrong_parent, promote_to_h2), and a brief reasoning."""
 def _format_user_prompt(
     selected_h2s: list[Candidate],
     h2_attachments: dict[int, list[Candidate]],
-) -> tuple[str, dict[str, tuple[int, int]]]:
+) -> tuple[str, dict[str, tuple[int, Candidate]]]:
     """Build the LLM prompt and a lookup table mapping each generated
-    h3_id back to (h2_idx, list_position_under_that_h2).
+    h3_id back to (parent_h2_idx, candidate_reference).
 
     Each H3 carries a synthetic id like "h2_2.h3_0" — encodes the parent
-    H2 index and the H3's position under that H2. The LLM only reads
-    these as opaque tokens; the caller decodes them when applying the
-    classifications.
+    H2 index and the H3's enumeration position at PROMPT-BUILD time. The
+    parent H2 index is needed for re-attachment routing (we use it to
+    find "OTHER" H2s); the candidate reference is needed to find the H3
+    in the (possibly mutated) attachment list at routing time without
+    relying on positional indices that go stale after `attached.remove`.
     """
     blocks: list[dict[str, Any]] = []
-    id_to_pos: dict[str, tuple[int, int]] = {}
+    id_to_ref: dict[str, tuple[int, Candidate]] = {}
     for h2_idx, h2 in enumerate(selected_h2s):
         attached = h2_attachments.get(h2_idx, [])
         if not attached:
@@ -161,7 +163,7 @@ def _format_user_prompt(
         h3_entries = []
         for h3_idx, h3 in enumerate(attached):
             h3_id = f"h2_{h2_idx}.h3_{h3_idx}"
-            id_to_pos[h3_id] = (h2_idx, h3_idx)
+            id_to_ref[h3_id] = (h2_idx, h3)
             h3_entries.append({
                 "h3_id": h3_id,
                 "h3_text": h3.text,
@@ -176,12 +178,12 @@ def _format_user_prompt(
         "Per-H2 H3 attachments to audit (JSON):\n"
         f"{json.dumps(blocks, ensure_ascii=False)}"
     )
-    return user, id_to_pos
+    return user, id_to_ref
 
 
 def _validate_payload(
     payload: Any,
-    id_to_pos: dict[str, tuple[int, int]],
+    id_to_ref: dict[str, tuple[int, Candidate]],
 ) -> tuple[bool, str, Optional[dict[str, tuple[str, str]]]]:
     if not isinstance(payload, dict):
         return False, "payload_not_object", None
@@ -195,7 +197,7 @@ def _validate_payload(
         h3_id = entry.get("h3_id")
         cls = entry.get("classification")
         reasoning = entry.get("reasoning", "") or ""
-        if not isinstance(h3_id, str) or h3_id not in id_to_pos:
+        if not isinstance(h3_id, str) or h3_id not in id_to_ref:
             logger.warning(
                 "brief.h3_fit.rogue_id",
                 extra={"h3_id": h3_id, "classification": cls},
@@ -238,11 +240,20 @@ def _find_better_parent(
     max_h3_per_h2: int,
     authority_overflow_max: int,
 ) -> Optional[int]:
-    """Find the highest-cosine OTHER H2 that (a) has capacity and
-    (b) clears the parent_relevance floor for this H3. Returns the H2
-    index, or None if no candidate parent fits.
+    """Find the highest-cosine OTHER H2 that (a) sits in the SAME
+    coverage-graph region as the H3 (PRD v2.2 / Phase 2 same-region
+    constraint), (b) has capacity, and (c) clears the parent_relevance
+    floor for this H3. Returns the H2 index, or None if no candidate
+    parent fits.
+
+    The same-region requirement is what keeps Step 8.7 from silently
+    re-introducing the cross-region drift Step 8.6's tightening was
+    designed to prevent. If the LLM says `wrong_parent` but no other
+    H2 in the H3's region has capacity, we route to silos (or downgrade
+    auth-gap H3s to `marginal`) rather than violate the region
+    invariant.
     """
-    if not h3.embedding:
+    if not h3.embedding or h3.region_id is None:
         return None
     best_idx: Optional[int] = None
     best_relevance = parent_relevance_floor  # require strictly above floor
@@ -250,6 +261,9 @@ def _find_better_parent(
         if idx == current_h2_idx:
             continue
         if not h2.embedding:
+            continue
+        # Same-region constraint (PRD v2.2)
+        if h2.region_id != h3.region_id:
             continue
         capacity = _h2_capacity(
             h2_attachments.get(idx, []),
@@ -298,8 +312,8 @@ async def verify_h3_parent_fit(
     if not has_any:
         return result
 
-    user, id_to_pos = _format_user_prompt(selected_h2s, h2_attachments)
-    if not id_to_pos:
+    user, id_to_ref = _format_user_prompt(selected_h2s, h2_attachments)
+    if not id_to_ref:
         return result
 
     call = llm_json_fn or claude_json
@@ -325,7 +339,7 @@ async def verify_h3_parent_fit(
                 extra={"attempt": attempt, "error": str(exc)},
             )
             continue
-        ok, reason, parsed = _validate_payload(payload, id_to_pos)
+        ok, reason, parsed = _validate_payload(payload, id_to_ref)
         if ok and parsed is not None:
             classifications = parsed
             break
@@ -342,25 +356,20 @@ async def verify_h3_parent_fit(
             extra={
                 "reason": last_error,
                 "fallback": "accept_all_as_good",
-                "attachment_count": len(id_to_pos),
+                "attachment_count": len(id_to_ref),
             },
         )
         result.fallback_applied = True
         return result
 
-    # Apply routing. Process H3s in deterministic order (h2 idx, h3 idx)
-    # so re-attachment decisions are stable under retries.
-    ordered = sorted(id_to_pos.items(), key=lambda kv: kv[1])
+    # Apply routing. Iterate by H3 REFERENCE captured at prompt-build
+    # time — positional indices into `attached` lists go stale once we
+    # start removing/re-attaching, and a positional iteration silently
+    # routes the wrong H3 (or skips H3s entirely) when the same H2 has
+    # ≥ 2 H3s and any of them needs removal.
+    ordered = sorted(id_to_ref.items(), key=lambda kv: kv[0])
 
-    for h3_id, (h2_idx, h3_idx) in ordered:
-        # The attachment list may have shifted under us if a prior
-        # iteration reattached an H3 to this H2 — re-resolve by lookup.
-        attached = h2_attachments.get(h2_idx, [])
-        if h3_idx >= len(attached):
-            # Shouldn't happen, but be defensive — the LLM gave us an
-            # h3_id whose original position no longer holds.
-            continue
-        h3 = attached[h3_idx]
+    for h3_id, (current_h2_idx, h3) in ordered:
         cls, _reason = classifications.get(h3_id, ("good", "default_pass"))
 
         if cls == "good":
@@ -373,6 +382,18 @@ async def verify_h3_parent_fit(
 
         is_authority = h3.source == "authority_gap_sme"
 
+        # Locate the H3 in its current parent's attachment list. This
+        # may differ from `current_h2_idx` if a prior iteration already
+        # re-attached this H3 (shouldn't happen — id_to_ref is unique
+        # per H3 — but defensive).
+        attached = h2_attachments.get(current_h2_idx, [])
+        try:
+            attached_idx = attached.index(h3)
+        except ValueError:
+            # Already removed by a prior iteration (or never attached).
+            # Don't double-process.
+            continue
+
         if cls == "promote_to_h2":
             if is_authority:
                 # Authority-gap H3s cannot be discarded — downgrade to
@@ -381,7 +402,7 @@ async def verify_h3_parent_fit(
                 result.marginal_count += 1
                 continue
             # Remove from attachment and route to silo as standalone.
-            attached.remove(h3)
+            attached.pop(attached_idx)
             h3.discard_reason = "h3_promoted_to_h2_candidate"  # type: ignore[assignment]
             result.routed_to_silos.append(h3)
             result.promoted_count += 1
@@ -390,7 +411,7 @@ async def verify_h3_parent_fit(
         if cls == "wrong_parent":
             new_idx = _find_better_parent(
                 h3,
-                current_h2_idx=h2_idx,
+                current_h2_idx=current_h2_idx,
                 selected_h2s=selected_h2s,
                 h2_attachments=h2_attachments,
                 parent_relevance_floor=parent_relevance_floor,
@@ -399,22 +420,22 @@ async def verify_h3_parent_fit(
             )
             if new_idx is not None:
                 # Re-attach to better parent.
-                attached.remove(h3)
+                attached.pop(attached_idx)
                 # Refresh parent_h2_text + parent_relevance for the new parent.
                 new_parent = selected_h2s[new_idx]
                 h3.parent_h2_text = new_parent.text
                 h3.parent_relevance = _cosine_unit(h3.embedding, new_parent.embedding)
                 h2_attachments.setdefault(new_idx, []).append(h3)
-                result.reattached.append((h2_idx, new_idx, h3))
+                result.reattached.append((current_h2_idx, new_idx, h3))
                 result.wrong_parent_count += 1
                 continue
-            # No fitting parent — route to silo (unless authority-gap,
-            # which downgrades to marginal under current parent).
+            # No fitting parent (after same-region constraint) — route
+            # to silo for non-auth, downgrade to marginal for auth.
             if is_authority:
                 h3.parent_fit_classification = "marginal"  # type: ignore[assignment]
                 result.marginal_count += 1
                 continue
-            attached.remove(h3)
+            attached.pop(attached_idx)
             h3.discard_reason = "h3_wrong_parent"  # type: ignore[assignment]
             result.routed_to_silos.append(h3)
             result.wrong_parent_count += 1

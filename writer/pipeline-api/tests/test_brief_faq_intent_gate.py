@@ -96,22 +96,31 @@ def test_cosine_floor_drops_low_alignment():
     profile = _unit([1.0, 0.0, 0.0])
     candidates = [_faq("aligned"), _faq("misaligned")]
     embeddings = [_unit([1.0, 0.05, 0.0]), _unit([0.0, 1.0, 0.0])]
-    survivors, rejected = apply_cosine_floor(
+    survivors, survivor_embeddings, rejected = apply_cosine_floor(
         candidates, profile, embeddings, floor=INTENT_FLOOR,
     )
     assert [c.question for c in survivors] == ["aligned"]
+    assert len(survivor_embeddings) == 1
     assert [c.question for c in rejected] == ["misaligned"]
+    # Phase 2 review fix #3 — intent_profile_cosine stamped on every
+    # candidate (kept and rejected) so relaxation can rank by it.
+    assert candidates[0].intent_profile_cosine > INTENT_FLOOR
+    assert candidates[1].intent_profile_cosine < INTENT_FLOOR
 
 
 def test_cosine_floor_keeps_all_when_above_threshold():
     profile = _unit([1.0, 0.0, 0.0])
     candidates = [_faq("a"), _faq("b")]
     embeddings = [_unit([1.0, 0.05, 0.0]), _unit([0.99, 0.1, 0.0])]
-    survivors, rejected = apply_cosine_floor(
+    survivors, survivor_embeddings, rejected = apply_cosine_floor(
         candidates, profile, embeddings, floor=0.5,
     )
     assert len(survivors) == 2
+    assert len(survivor_embeddings) == 2
     assert rejected == []
+    # Survivor embeddings are returned in the same order as survivors.
+    assert survivor_embeddings[0] == embeddings[0]
+    assert survivor_embeddings[1] == embeddings[1]
 
 
 # ---------------------------------------------------------------------------
@@ -321,3 +330,224 @@ async def test_empty_candidates_returns_empty_noop():
     )
     assert result.kept == []
     assert result.rejected == []
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 review fixes — relaxation ranking + zero-kept fallback +
+# embeddings reuse
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_relaxation_ranks_adjacent_by_intent_profile_cosine():
+    """Phase 2 review fix #3 — when fewer than 3 primary survive, the
+    relaxation must keep the highest-`intent_profile_cosine` adjacent
+    candidates, NOT the first ones in input order. faq_score is 0 for
+    every candidate at gate-time so the previous code's score-based
+    sort was meaningless."""
+    candidates = [
+        _faq("primary 1"),
+        # Three adjacent candidates in input order — but the LLM picks
+        # them as adjacent regardless of cosine, so the gate's sort
+        # decides who fills the relaxation slots.
+        _faq("adjacent low"),
+        _faq("adjacent mid"),
+        _faq("adjacent high"),
+    ]
+
+    # Embedder pushes intent_profile_cosine: high > mid > low.
+    async def graded_embed(texts):
+        out = []
+        for t in texts:
+            tl = t.lower()
+            if "primary" in tl or "intent profile" in tl:
+                out.append(_unit([1.0, 0.0, 0.0]))
+            elif "high" in tl:
+                out.append(_unit([0.9, 0.4, 0.0]))   # cos ~0.91
+            elif "mid" in tl:
+                out.append(_unit([0.7, 0.7, 0.0]))   # cos ~0.71
+            elif "low" in tl:
+                out.append(_unit([0.6, 0.8, 0.0]))   # cos ~0.6
+            else:
+                out.append(_unit([0.0, 1.0, 0.0]))
+        return out
+
+    async def fake_llm(system, user, **kwargs):
+        import json as _json
+        marker = "FAQs to verify (JSON):\n"
+        payload = user.split(marker, 1)[1].strip()
+        end = payload.rfind("]")
+        if end != -1:
+            payload = payload[: end + 1]
+        items = _json.loads(payload)
+        verifications = []
+        for item in items:
+            ql = item["question"].lower()
+            role = (
+                "matches_primary_intent" if "primary" in ql
+                else "adjacent_intent"
+            )
+            verifications.append({
+                "faq_id": item["faq_id"],
+                "intent_role": role,
+                "reasoning": "test",
+            })
+        return {"verifications": verifications}
+
+    result = await apply_faq_intent_gate(
+        candidates,
+        intent_type="how-to",
+        title="Title",
+        scope_statement="Scope. Does not cover X.",
+        persona_primary_goal="Reader goal",
+        embed_fn=graded_embed,
+        llm_json_fn=fake_llm,
+    )
+
+    assert result.relaxation_applied is True
+    # 1 primary + 2 adjacent (top-up to 3). The adjacent picks must
+    # be by intent_profile_cosine descending: high, mid (NOT low).
+    kept_questions = [c.question for c in result.kept]
+    assert "primary 1" in kept_questions
+    assert "adjacent high" in kept_questions
+    assert "adjacent mid" in kept_questions
+    assert "adjacent low" not in kept_questions
+
+
+@pytest.mark.asyncio
+async def test_full_relaxation_when_floor_rejects_everything():
+    """Phase 2 review fix #4 — when every candidate fails the cosine
+    floor, the gate must NOT return an empty kept list. PRD §5 Step 10
+    promises 3–5 FAQs always; the gate falls back to admitting the
+    original pool tagged adjacent_intent."""
+    candidates = [_faq("q1"), _faq("q2"), _faq("q3")]
+
+    # Profile orthogonal to all questions so every cosine is 0.
+    async def orthogonal_embed(texts):
+        out = []
+        for t in texts:
+            if "intent profile" in t.lower() or "Article intent" in t:
+                out.append(_unit([1.0, 0.0, 0.0]))
+            else:
+                out.append(_unit([0.0, 1.0, 0.0]))
+        return out
+
+    async def boom_llm(*args, **kwargs):
+        raise AssertionError(
+            "LLM should not be called when full-relaxation kicks in pre-stage-2"
+        )
+
+    result = await apply_faq_intent_gate(
+        candidates,
+        intent_type="how-to",
+        title="Title",
+        scope_statement="Scope. Does not cover X.",
+        persona_primary_goal="Reader goal",
+        embed_fn=orthogonal_embed,
+        llm_json_fn=boom_llm,
+    )
+
+    assert result.full_relaxation_applied is True
+    assert len(result.kept) == 3
+    assert result.floor_rejected_count == 0  # reset by full-relaxation
+    for c in result.kept:
+        assert c.intent_role == "adjacent_intent"
+    # Embeddings exposed so score_faqs can skip the second embed call
+    assert len(result.kept_embeddings) == 3
+
+
+@pytest.mark.asyncio
+async def test_full_relaxation_post_llm_when_all_different_audience():
+    """Phase 2 review fix #4 — even when survivors pass the cosine
+    floor, the LLM might mark every one `different_audience`. The gate
+    must full-relax post-LLM rather than return an empty FAQ block."""
+    candidates = [_faq("q1"), _faq("q2"), _faq("q3")]
+
+    async def aligned_embed(texts):
+        return [_unit([1.0, 0.0, 0.0]) for _ in texts]
+
+    async def reject_all_llm(system, user, **kwargs):
+        import json as _json
+        marker = "FAQs to verify (JSON):\n"
+        payload = user.split(marker, 1)[1].strip()
+        end = payload.rfind("]")
+        if end != -1:
+            payload = payload[: end + 1]
+        items = _json.loads(payload)
+        return {
+            "verifications": [
+                {
+                    "faq_id": item["faq_id"],
+                    "intent_role": "different_audience",
+                    "reasoning": "wrong stakeholder",
+                }
+                for item in items
+            ]
+        }
+
+    result = await apply_faq_intent_gate(
+        candidates,
+        intent_type="how-to",
+        title="Title",
+        scope_statement="Scope. Does not cover X.",
+        persona_primary_goal="Reader goal",
+        embed_fn=aligned_embed,
+        llm_json_fn=reject_all_llm,
+    )
+
+    assert result.full_relaxation_applied is True
+    assert len(result.kept) == 3
+    assert result.llm_rejected_count == 0  # reset
+    for c in result.kept:
+        assert c.intent_role == "adjacent_intent"
+
+
+@pytest.mark.asyncio
+async def test_kept_embeddings_parallel_to_kept():
+    """Phase 2 review fix #6 — gate exposes per-candidate embeddings on
+    `kept_embeddings`, parallel to `kept`, so the pipeline can pass them
+    to score_faqs and skip a second embed API call."""
+    candidates = [_faq("q1"), _faq("q2")]
+    captured_calls = {"n": 0}
+
+    async def aligned_embed(texts):
+        captured_calls["n"] += 1
+        return [_unit([1.0, 0.0, 0.0]) for _ in texts]
+
+    async def primary_llm(system, user, **kwargs):
+        import json as _json
+        marker = "FAQs to verify (JSON):\n"
+        payload = user.split(marker, 1)[1].strip()
+        end = payload.rfind("]")
+        if end != -1:
+            payload = payload[: end + 1]
+        items = _json.loads(payload)
+        return {
+            "verifications": [
+                {
+                    "faq_id": item["faq_id"],
+                    "intent_role": "matches_primary_intent",
+                    "reasoning": "ok",
+                }
+                for item in items
+            ]
+        }
+
+    result = await apply_faq_intent_gate(
+        candidates,
+        intent_type="how-to",
+        title="Title",
+        scope_statement="Scope. Does not cover X.",
+        persona_primary_goal="Reader goal",
+        embed_fn=aligned_embed,
+        llm_json_fn=primary_llm,
+    )
+
+    assert len(result.kept) == len(candidates)
+    assert len(result.kept_embeddings) == len(result.kept)
+    # Each kept embedding has the expected shape (3-d unit vector here)
+    for vec in result.kept_embeddings:
+        assert len(vec) == 3
+    # Two embed calls expected: profile + faq batch (NOT a third call
+    # downstream — that's the pipeline-level optimization).
+    assert captured_calls["n"] == 2
