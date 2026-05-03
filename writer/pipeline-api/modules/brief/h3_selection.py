@@ -1,4 +1,4 @@
-"""Step 8.6 — H3 Selection (Brief Generator v2.0.x).
+"""Step 8.6 — H3 Selection (Brief Generator v2.0.x → v2.2).
 
 Implements PRD §5 Step 8.6. Per-H2 MMR over the candidate pool that
 remains after Step 8 (the eligible pool minus the H2s themselves).
@@ -7,9 +7,8 @@ Algorithm — for each selected H2:
 
   1. parent_relevance = cosine(H3_candidate, H2)
   2. Filter:
-       parent_relevance ∈ [0.60, 0.85]
-       same region as H2, OR adjacent region with edge to H2's region
-         centroid ≥ 0.65
+       parent_relevance ∈ [0.65, 0.85]                (PRD v2.2: 0.60 → 0.65)
+       same region as H2                              (PRD v2.2: drop adj.)
        not already selected as an H2
   3. MMR with target=2, inter_h3_threshold=0.78, mmr_lambda=0.7,
      where each candidate's "priority" reuses the Step 7 formula but
@@ -17,12 +16,20 @@ Algorithm — for each selected H2:
   4. Accept shortfalls. Per-H2 H3 count is informational only — H3s
      are never required.
 
+PRD v2.2 / Phase 2 tightening: the floor moved from 0.60 → 0.65 and the
+adjacent-region relaxation was removed. The previous "same OR adjacent
+region with edge ≥ 0.65" rule allowed H3s to attach under H2s on
+loosely-related topics (the audited "affiliate vetting under cart-
+abandonment H2" case). Restricting to strict same-region keeps H3s
+topically locked to the parent H2's region, and the new 0.65 cosine
+floor ensures even within-region H3s are tightly aligned.
+
 Authority gap H3s do NOT flow through this module. They run in Step 9
 and Step 11 reconciles cap-displacement when an authority gap H3 is
 assigned to an H2 that already has 2 H3s from this step.
 
 Discard reason mapping (PRD §5 Step 12.1):
-  parent_relevance < 0.60 → discard_reason="h3_below_parent_relevance_floor"
+  parent_relevance < 0.65 → discard_reason="h3_below_parent_relevance_floor"
   parent_relevance > 0.85 → discard_reason="h3_above_parent_restatement_ceiling"
   Lost MMR → discard_reason="below_priority_threshold"
 
@@ -42,51 +49,18 @@ from .graph import Candidate, RegionInfo
 logger = logging.getLogger(__name__)
 
 
-PARENT_RELEVANCE_FLOOR = 0.60
+# PRD v2.2 / Phase 2 — floor raised from 0.60 to 0.65.
+PARENT_RELEVANCE_FLOOR = 0.65
 PARENT_RESTATEMENT_CEILING = 0.85
 INTER_H3_THRESHOLD = 0.78
 MAX_H3_PER_H2 = 2
 H3_MMR_LAMBDA = 0.7
-
-# Edge weight required for an H3 candidate's region to count as "adjacent"
-# to an H2's region. Matches Step 5's coverage graph edge_threshold so
-# adjacency reuses the same notion of relatedness.
-ADJACENT_REGION_EDGE_WEIGHT = 0.65
 
 
 def _cosine_unit(a: list[float], b: list[float]) -> float:
     if not a or not b:
         return 0.0
     return sum(x * y for x, y in zip(a, b))
-
-
-def _build_adjacent_regions_map(
-    regions: list[RegionInfo],
-    edge_threshold: float = ADJACENT_REGION_EDGE_WEIGHT,
-) -> dict[str, set[str]]:
-    """Pre-compute adjacency: region_id → set of adjacent region_ids.
-
-    Two regions are adjacent if the cosine between their centroids
-    exceeds `edge_threshold` (default 0.65, matching Step 5's coverage
-    graph edge_threshold). This is the region-level interpretation of
-    PRD §5 Step 8.6's "adjacent region with edge weight ≥ 0.65 to the
-    H2's region centroid": the centroid-to-centroid cosine becomes the
-    adjacency criterion. Eliminated regions (off_topic /
-    restates_title) are excluded from the adjacency map so H3 candidates
-    in those regions can never enter the H3 selection pool.
-    """
-    adjacency: dict[str, set[str]] = {r.region_id: set() for r in regions}
-    for i, r_i in enumerate(regions):
-        if not r_i.centroid or r_i.eliminated:
-            continue
-        for r_j in regions[i + 1:]:
-            if not r_j.centroid or r_j.eliminated:
-                continue
-            sim = _cosine_unit(r_i.centroid, r_j.centroid)
-            if sim >= edge_threshold:
-                adjacency[r_i.region_id].add(r_j.region_id)
-                adjacency[r_j.region_id].add(r_i.region_id)
-    return adjacency
 
 
 def _h3_priority(parent_relevance: float, c: Candidate) -> float:
@@ -163,7 +137,12 @@ def select_h3s_for_h2s(
     if not selected_h2s:
         return H3SelectionResult()
 
-    adjacency = _build_adjacent_regions_map(regions)
+    # Phase 2 / PRD v2.2: dropped the adjacent-region relaxation. H3s
+    # must sit in the SAME region as the parent H2; the `regions` arg
+    # is preserved on the signature for backward compatibility but no
+    # longer feeds an adjacency map. This stops cross-region drift like
+    # the audited "affiliate vetting under cart-abandonment H2" case.
+    _ = regions  # intentionally unused after PRD v2.2 tightening
 
     # Track each candidate's worst-case fate across all H2s. Once any H2
     # accepts it as an MMR candidate (in-band parent_relevance + region OK),
@@ -187,7 +166,8 @@ def select_h3s_for_h2s(
                 extra={"h2_text": h2.text},
             )
             continue
-        allowed_regions = {h2_region} | adjacency.get(h2_region, set())
+        # Phase 2 / PRD v2.2: same-region only.
+        allowed_regions = {h2_region}
 
         # ---- per-H2 filter pass ----
         per_h2_candidates: list[tuple[Candidate, float]] = []

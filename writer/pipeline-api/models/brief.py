@@ -64,6 +64,23 @@ HeadingSource = Literal[
 
 FAQSource = Literal["paa", "reddit", "llm_extracted", "persona_gap"]
 
+# PRD v2.2 / Phase 2 — FAQ intent role assigned by Step 10.5's LLM classifier.
+# `matches_primary_intent` = FAQ aligns with the primary keyword's intent
+# cluster; `adjacent_intent` = topically related but a different stakeholder
+# question (kept only as fallback when fewer than 3 primary FAQs survive).
+# `different_audience` candidates are dropped at the gate and never reach
+# the brief output, so the enum here is only the kept values.
+FAQIntentRole = Literal["matches_primary_intent", "adjacent_intent"]
+
+# PRD v2.2 / Phase 2 — H3 parent-fit classification from Step 8.7.
+# `good` = H3 belongs under its current parent H2; default state for H3s
+# we don't surface a flag for. `marginal` = LLM signaled "could go either
+# way" — kept under current parent + flagged for review. `wrong_parent`
+# and `promote_to_h2` are NOT kept on the candidate (those route to silos
+# / re-attach to a different H2), so the literal here only carries the
+# kept values that downstream renderers may surface.
+H3ParentFitClassification = Literal["good", "marginal"]
+
 ScopeClassification = Literal["in_scope", "borderline"]
 
 DiscardReason = Literal[
@@ -80,6 +97,11 @@ DiscardReason = Literal[
     "h3_below_parent_relevance_floor",
     "h3_above_parent_restatement_ceiling",
     "displaced_by_authority_gap_h3",
+    # PRD v2.2 / Phase 2 — Step 8.7 H3 Parent-Fit Verification
+    "h3_wrong_parent",                # re-attached or routed to silo
+    "h3_promoted_to_h2_candidate",    # routed to silo as standalone topic
+    # PRD v2.2 / Phase 2 — Step 10.5 FAQ Intent Gate
+    "faq_intent_mismatch",
 ]
 
 SiloRoutedFrom = Literal[
@@ -93,6 +115,13 @@ SiloRoutedFrom = Literal[
     # worth surfacing as standalone silos (filtered by search demand + the
     # Step 12.4 viability LLM check before reaching the user).
     "relevance_floor_reject",
+    # PRD v2.2 / Phase 2 — Step 8.7 outcomes
+    # H3 was classified `wrong_parent` and no other selected H2 had
+    # capacity (or the H3 was below all parent_relevance floors).
+    "h3_parent_mismatch",
+    # H3 was classified `promote_to_h2` — represents a different topic
+    # than its assigned parent and warrants its own article.
+    "h3_promote_candidate",
 ]
 
 
@@ -160,6 +189,13 @@ class HeadingItem(BaseModel):
     # Step 9 (v2.0.3): populated only for source='authority_gap_sme' entries —
     # the agent's own justification that the H3 stays within the brief's scope.
     scope_alignment_note: Optional[str] = None
+    # PRD v2.2 / Phase 2 — Step 8.7 H3 Parent-Fit Verification.
+    # Populated only on H3 entries the LLM examined; defaults to None on
+    # H1, H2, and on H3s that bypassed Step 8.7 (e.g. when the LLM call
+    # failed and the fallback accepted everyone). `good` is left as None
+    # for terseness — only `marginal` is surfaced explicitly so consumers
+    # can highlight reviewer-attention H3s.
+    parent_fit_classification: Optional[H3ParentFitClassification] = None
     order: int = 0
 
 
@@ -171,6 +207,15 @@ class FAQItem(BaseModel):
     question: str
     source: FAQSource
     faq_score: float = 0.0
+    # PRD v2.2 / Phase 2 — Step 10.5 FAQ Intent Gate.
+    # `matches_primary_intent` = LLM confirmed FAQ aligns with the primary
+    # keyword's intent cluster (the expected case). `adjacent_intent` =
+    # FAQ is on-topic but represents a different stakeholder question
+    # (only kept as fallback when fewer than 3 matches_primary_intent
+    # candidates survive both the cosine floor and the LLM filter).
+    # `None` = Step 10.5 was a no-op for this FAQ (LLM call failed and
+    # fallback accepted everything, or the gate was disabled).
+    intent_role: Optional[FAQIntentRole] = None
 
 
 # ---- Structural + format directives ----
@@ -403,8 +448,12 @@ class BriefMetadata(BaseModel):
     edge_threshold: float = 0.65
     mmr_lambda: float = 0.7
 
-    # Step 8.6 H3 thresholds (echoed for tuning)
-    parent_relevance_floor_threshold: float = 0.60
+    # Step 8.6 H3 thresholds (echoed for tuning).
+    # Phase 2 / PRD v2.2 tightened the floor 0.60 → 0.65 and removed the
+    # adjacent-region relaxation (H3s must now sit in the SAME region as
+    # the parent H2, not just an adjacent one). Default echoes the new
+    # value so tuning sessions see the live config.
+    parent_relevance_floor_threshold: float = 0.65
     parent_restatement_ceiling_threshold: float = 0.85
     inter_h3_threshold: float = 0.78
 
@@ -432,7 +481,30 @@ class BriefMetadata(BaseModel):
     framing_rewrites_applied: int = 0
     framing_rewrites_accepted_with_violation: int = 0
 
-    schema_version: Literal["2.1"] = "2.1"
+    # Phase 2 / PRD v2.2 — Step 8.7 H3 Parent-Fit Verification counters.
+    # `marginal_count` covers H3s the LLM flagged for review; `wrong_parent_
+    # count` covers H3s re-attached to a different H2 OR routed to silos;
+    # `promoted_count` covers H3s the LLM said deserve their own article
+    # (always routed to silos). `fallback_applied` is true when both LLM
+    # attempts failed and we accepted every H3 as `good`.
+    h3_parent_fit_marginal_count: int = 0
+    h3_parent_fit_wrong_parent_count: int = 0
+    h3_parent_fit_promoted_count: int = 0
+    h3_parent_fit_fallback_applied: bool = False
+
+    # Phase 2 / PRD v2.2 — Step 10.5 FAQ Intent Gate counters.
+    # `floor_rejected_count` counts FAQs killed by the cosine-floor cut
+    # against the intent profile; `llm_rejected_count` counts FAQs killed
+    # by the `different_audience` LLM verdict. `relaxation_applied` =
+    # fewer than 3 `matches_primary_intent` survivors so we kept
+    # `adjacent_intent` candidates to reach the 3-FAQ floor.
+    faq_intent_gate_floor_rejected_count: int = 0
+    faq_intent_gate_llm_rejected_count: int = 0
+    faq_intent_gate_relaxation_applied: bool = False
+    # Echoed for tuning, like the other threshold values above.
+    faq_intent_floor_threshold: float = 0.55
+
+    schema_version: Literal["2.2"] = "2.2"
 
 
 # ---- Top-level response ----

@@ -115,8 +115,16 @@ def test_excludes_h3_from_non_adjacent_region():
     assert h3 not in res.globally_rejected
 
 
-def test_includes_h3_from_adjacent_region():
-    """Adjacent region (centroid cos ≥ 0.65 to parent's region) is allowed."""
+def test_excludes_h3_from_adjacent_region_v22():
+    """PRD v2.2 / Phase 2 — adjacent-region relaxation removed.
+    H3s in a different region from the parent H2 are NOT selected
+    even when the regions are highly similar (centroid cos ≥ 0.65).
+
+    Pre-v2.2 this case would have attached the H3; v2.2 strict same-
+    region keeps cross-region drift out of the parent H2's slot.
+    Cross-region candidates that would have qualified can still
+    surface as silos via the relevance-floor / scope paths.
+    """
     h2 = _cand("How TikTok Shop Works", "region_0", [1.0, 0.0, 0.0])
     h3 = _cand("Seller onboarding", "region_1", [0.7, 0.7, 0.0])
     regions = [
@@ -126,7 +134,7 @@ def test_includes_h3_from_adjacent_region():
     res = select_h3s_for_h2s(
         selected_h2s=[h2], h3_pool=[h3], regions=regions,
     )
-    assert res.attachments[0] == [h3]
+    assert res.attachments[0] == []
 
 
 # ----------------------------------------------------------------------
@@ -311,7 +319,9 @@ def test_logs_complete_summary(caplog):
 # ----------------------------------------------------------------------
 
 def test_thresholds_match_prd():
-    assert PARENT_RELEVANCE_FLOOR == 0.60
+    # PRD v2.2 / Phase 2 — floor raised 0.60 → 0.65 (drop adjacent-region
+    # relaxation; tighter same-region only).
+    assert PARENT_RELEVANCE_FLOOR == 0.65
     assert PARENT_RESTATEMENT_CEILING == 0.85
     assert INTER_H3_THRESHOLD == 0.78
     assert MAX_H3_PER_H2 == 2

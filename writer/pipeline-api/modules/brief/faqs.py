@@ -1,4 +1,4 @@
-"""Step 10 — FAQ Generation (Brief Generator v2.0).
+"""Step 10 — FAQ Generation (Brief Generator v2.0 → v2.2).
 
 Implements PRD §5 Step 10. Mostly unchanged from v1.7 except:
 
@@ -6,6 +6,14 @@ Implements PRD §5 Step 10. Mostly unchanged from v1.7 except:
   - persona gap questions that did NOT make it into the H2 outline feed
     the FAQ candidate pool (Source C)
   - persona_gap source carries source_signal = 0.6 in the scoring formula
+  - PRD v2.2 / Phase 2: semantic_relevance is now a 50/50 weighted blend
+    of cosine-to-title and cosine-to-intent-profile so an FAQ that
+    matches the title's surface vocabulary but a different stakeholder's
+    intent (audited "creator monetization on a seller-ROI article" case)
+    gets penalized. The intent_profile vector is supplied by the caller
+    (built by `faq_intent_gate.build_intent_profile_text` and embedded
+    once); when omitted, the score falls back to the v2.1 title-only
+    behavior so legacy callers continue to work.
 
 Sources:
   A. Regex extraction over PAA + Reddit titles + Reddit comment text
@@ -13,7 +21,11 @@ Sources:
   B. LLM concern extraction across all Reddit content (one Claude call).
   C. Persona gap questions from Step 6 (PRD v2.0 NEW source).
 
-Scoring (PRD §5 Step 10):
+Scoring (PRD §5 Step 10, blended in v2.2):
+
+    semantic_relevance = (0.5 · cos(title) + 0.5 · cos(intent_profile))
+                          if intent_profile_embedding is provided,
+                          else cos(title) only (v2.1 behavior).
 
     faq_score = 0.4·source_signal + 0.4·semantic_relevance + 0.2·novelty_bonus
 
@@ -24,7 +36,6 @@ Scoring (PRD §5 Step 10):
         reddit (<10 upvotes)             = 0.3
         llm_extracted                    = 0.5
         persona_gap                      = 0.6
-    semantic_relevance: cosine(title_embedding, question_embedding) — v2.0
     novelty_bonus: 1.0 if question's normalized text not in heading_texts_norm
 
 Selection (unchanged from v1.7):
@@ -63,6 +74,15 @@ class FAQCandidate:
     semantic_score: float = 0.0
     novelty_bonus: float = 0.0
     faq_score: float = 0.0
+    # PRD v2.2 / Phase 2 — Step 10.5 FAQ Intent Gate.
+    # `intent_role` is stamped by Step 10.5 when the LLM classifier runs
+    # over the cosine-floor survivors. Stays None when Step 10.5 hasn't
+    # run yet (between score_faqs and the gate) or when the gate's LLM
+    # call failed and we accepted everyone via the fallback.
+    intent_role: Optional[str] = None
+    # Cached cosines so Step 10.5's gate doesn't have to re-embed.
+    title_cosine: float = 0.0
+    intent_profile_cosine: float = 0.0
 
 
 # Type alias so tests can inject a synthetic embedder.
@@ -195,30 +215,58 @@ async def score_faqs(
     heading_texts_norm: set[str],
     *,
     embed_fn: Optional[EmbedFn] = None,
+    intent_profile_embedding: Optional[list[float]] = None,
+    candidate_embeddings: Optional[list[list[float]]] = None,
 ) -> list[FAQCandidate]:
-    """Compute faq_score per PRD §5 Step 10 (v2.0: cosine to title, not seed).
+    """Compute faq_score per PRD §5 Step 10 (v2.0: cosine to title, not seed;
+    v2.2: blended cosine-to-title + cosine-to-intent_profile).
 
     Embeddings come from text-embedding-3-large via embed_batch_large
     (unit-normalized → cosine == dot product). Title embedding is the
     same vector produced in Step 5.1 — passing it in keeps FAQ scoring
     consistent with H2 selection.
 
-    Mutates each candidate in place: writes `semantic_score`, `novelty_
-    bonus`, `faq_score`. Returns the same list for chaining.
+    PRD v2.2 / Phase 2 — when `intent_profile_embedding` is supplied,
+    `semantic_score` becomes the 50/50 weighted average of cosine-to-
+    title and cosine-to-intent-profile. When omitted (legacy callers
+    or when the intent profile failed to embed upstream), `semantic_
+    score` falls back to cosine-to-title only.
+
+    `candidate_embeddings` is an optional pre-computed embeddings
+    array (one entry per candidate). Phase 2's pipeline computes these
+    once before invoking score_faqs so they can be reused by the
+    intent gate without a second API call.
+
+    Mutates each candidate in place: writes `title_cosine`,
+    `intent_profile_cosine`, `semantic_score`, `novelty_bonus`,
+    `faq_score`. Returns the same list for chaining.
     """
     if not candidates:
         return []
     embed = embed_fn or embed_batch_large
 
-    embeddings = await embed([c.question for c in candidates])
+    if candidate_embeddings is not None and len(candidate_embeddings) == len(candidates):
+        embeddings = candidate_embeddings
+    else:
+        embeddings = await embed([c.question for c in candidates])
     for c, vec in zip(candidates, embeddings):
         # title_embedding is unit-normalized; embed_batch_large normalizes
         # by default → cosine reduces to dot product.
-        c.semantic_score = (
+        title_cos = (
             sum(a * b for a, b in zip(title_embedding, vec))
             if title_embedding and vec
             else 0.0
         )
+        c.title_cosine = title_cos
+        if intent_profile_embedding and vec:
+            intent_cos = sum(
+                a * b for a, b in zip(intent_profile_embedding, vec)
+            )
+            c.intent_profile_cosine = intent_cos
+            c.semantic_score = 0.5 * title_cos + 0.5 * intent_cos
+        else:
+            c.intent_profile_cosine = 0.0
+            c.semantic_score = title_cos
         c.novelty_bonus = 0.0 if normalize_text(c.question) in heading_texts_norm else 1.0
         c.faq_score = (
             0.4 * _source_signal(c)
@@ -242,7 +290,10 @@ def select_faqs(
         FAQ block when ANY candidates exist)
       - Empty input → empty output
 
-    Returns API-ready FAQItem objects with rounded faq_score.
+    Returns API-ready FAQItem objects with rounded faq_score. PRD v2.2 /
+    Phase 2: when the candidate carries an `intent_role` (set by Step
+    10.5's gate), it's surfaced verbatim on the FAQItem so consumers
+    can highlight `adjacent_intent` fallbacks.
     """
     if not scored:
         return []
@@ -250,6 +301,11 @@ def select_faqs(
     above = [c for c in ranked if c.faq_score >= min_score]
     chosen = above[:MAX_FAQS] if len(above) >= MIN_FAQS_FALLBACK else ranked[:MIN_FAQS_FALLBACK]
     return [
-        FAQItem(question=c.question, source=c.source, faq_score=round(c.faq_score, 4))
+        FAQItem(
+            question=c.question,
+            source=c.source,
+            faq_score=round(c.faq_score, 4),
+            intent_role=c.intent_role,  # type: ignore[arg-type]
+        )
         for c in chosen
     ]

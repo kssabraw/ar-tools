@@ -65,7 +65,9 @@ from .graph import (
     embed_with_gates,
     score_regions,
 )
+from .faq_intent_gate import apply_faq_intent_gate
 from .framing import validate_and_rewrite_framing
+from .h3_parent_fit import verify_h3_parent_fit
 from .h3_selection import select_h3s_for_h2s
 from .intent import classify_intent
 from .intent_template import get_template
@@ -87,7 +89,7 @@ from .title_scope import generate_title_and_scope
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = "2.1"
+SCHEMA_VERSION = "2.2"
 
 
 # Re-export for callers that historically imported BriefError from pipeline.
@@ -634,6 +636,18 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     )
     h3_attachments = auth_attach.attachments
 
+    # ---- Step 8.7 — H3 Parent-Fit Verification (PRD v2.2 / Phase 2) ----
+    # Catches H3s that pass Step 8.6's [0.65, 0.85] cosine band + same-
+    # region constraint but answer a different reader question than the
+    # parent H2 actually commits to. Single batched LLM call. Mutates
+    # h3_attachments in place: re-attaches `wrong_parent` H3s to a
+    # better-fit H2 when capacity exists, otherwise routes to silos
+    # via the new `h3_parent_mismatch` / `h3_promote_candidate` paths.
+    parent_fit_result = await verify_h3_parent_fit(
+        selected_h2s=selected_h2s,
+        h2_attachments=h3_attachments,
+    )
+
     # ---- Step 10 — FAQ generation ----
     # Persona gap questions that did NOT make it into the H2 outline feed
     # the FAQ pool (PRD §5 Step 10 Source C).
@@ -654,8 +668,29 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faq_pool.extend(await llm_concern_extraction(reddit_blob))
 
     heading_norm_set = {normalize_text(c.text) for c in selected_h2s}
+
+    # ---- Step 10.5 — FAQ Intent Gate (PRD v2.2 / Phase 2) ----
+    # Filters FAQs whose stakeholder/intent doesn't match the article's
+    # primary intent (audited "creator monetization on a seller-ROI
+    # article" case). Two-stage gate: cosine floor against an intent
+    # profile vector + LLM intent-role classifier. Runs BEFORE select_
+    # faqs so the final FAQ list reflects the gate's filtering.
+    #
+    # The gate also produces `intent_profile_embedding`, which is reused
+    # by Step 10's score_faqs to blend cosine-to-title + cosine-to-
+    # intent-profile into the v2.2 semantic_score formula.
+    faq_gate_result = await apply_faq_intent_gate(
+        faq_pool,
+        intent_type=intent,
+        title=title_scope.title,
+        scope_statement=title_scope.scope_statement,
+        persona_primary_goal=persona.primary_goal,
+    )
+    gated_pool = faq_gate_result.kept
+
     scored_faqs = await score_faqs(
-        faq_pool, title_embedding, heading_norm_set,
+        gated_pool, title_embedding, heading_norm_set,
+        intent_profile_embedding=faq_gate_result.intent_profile_embedding or None,
     )
     faqs = select_faqs(scored_faqs)
 
@@ -692,6 +727,9 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         scope_rejects=scope_result.rejected,
         h3_scope_rejects=h3_scope_result.rejected,
         relevance_rejects=relevance_rejects,
+        # PRD v2.2 / Phase 2 — Step 8.7 outcomes route to silos with
+        # routed_from values "h3_parent_mismatch" / "h3_promote_candidate".
+        h3_parent_fit_rejects=parent_fit_result.routed_to_silos,
     )
     viability_result = await verify_silo_viability(
         silo_id_result.candidates,
@@ -729,6 +767,9 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     discarded.extend(h3_scope_result.rejected)
     discarded.extend(h3_selection_result.globally_rejected)
     discarded.extend(auth_attach.displaced)
+    # PRD v2.2 / Phase 2 — Step 8.7 H3 parent-fit rejects (carry
+    # discard_reason="h3_wrong_parent" or "h3_promoted_to_h2_candidate").
+    discarded.extend(parent_fit_result.routed_to_silos)
     discarded.extend(low_coherence)
 
     for c in cap_cuts:
@@ -820,8 +861,9 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         inter_heading_threshold=settings.brief_inter_heading_threshold,
         edge_threshold=settings.brief_edge_threshold,
         mmr_lambda=settings.brief_mmr_lambda,
-        # Step 8.6 + Step 12.3 thresholds (echoed for tuning)
-        parent_relevance_floor_threshold=0.60,
+        # Step 8.6 + Step 12.3 thresholds (echoed for tuning).
+        # PRD v2.2 tightened the H3 parent-relevance floor 0.60 → 0.65.
+        parent_relevance_floor_threshold=0.65,
         parent_restatement_ceiling_threshold=0.85,
         inter_h3_threshold=0.78,
         silo_search_demand_threshold=0.30,
@@ -836,6 +878,14 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         framing_rewrites_accepted_with_violation=(
             len(framing_result.accepted_with_violation_indices)
         ),
+        # PRD v2.2 / Phase 2 — Step 8.7 H3 parent-fit + Step 10.5 FAQ gate.
+        h3_parent_fit_marginal_count=parent_fit_result.marginal_count,
+        h3_parent_fit_wrong_parent_count=parent_fit_result.wrong_parent_count,
+        h3_parent_fit_promoted_count=parent_fit_result.promoted_count,
+        h3_parent_fit_fallback_applied=parent_fit_result.fallback_applied,
+        faq_intent_gate_floor_rejected_count=faq_gate_result.floor_rejected_count,
+        faq_intent_gate_llm_rejected_count=faq_gate_result.llm_rejected_count,
+        faq_intent_gate_relaxation_applied=faq_gate_result.relaxation_applied,
     )
 
     response = BriefResponse(

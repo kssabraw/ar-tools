@@ -1,11 +1,20 @@
 # PRD: Content Brief Generator Module
 
-**Version:** 2.1
+**Version:** 2.2
 **Status:** Ready for Engineering Spec
 **Last Updated:** May 3, 2026
 **Part of:** [Parent Content Creation Platform — TBD name]
 **Downstream Dependency:** Content Writer Module (v1.5+)
-**Supersedes:** v2.0.3 (filename retains the `-v2_0` suffix; canonical version is in this header)
+**Supersedes:** v2.1 (Phase 1 of the article-quality defect fixes). Filename retains the `-v2_0` suffix; canonical version is in this header.
+
+> **v2.2 changes (2026-05-03):** Phase 2 of the article-quality defect fixes — addresses Defect 3 (H3 → H2 topical drift) and Defect 4 (FAQ intent mismatch) from the 2026-05-03 audit.
+>
+> 1. **Step 8.6 tightened** — H3 parent-relevance floor raised `0.60 → 0.65` and the adjacent-region relaxation removed (H3s must sit in the SAME region as the parent H2, not just an adjacent one). Stops the audited "affiliate vetting under cart-abandonment H2" cross-region drift case.
+> 2. **Step 8.7 — H3 Parent-Fit Verification** (NEW) — single batched Claude call after Step 9 + auth_attach. Each H3 is classified `good` / `marginal` / `wrong_parent` / `promote_to_h2`. `wrong_parent` re-attaches to a better-fit H2 when capacity exists, otherwise routes to silos via `routed_from="h3_parent_mismatch"`. `promote_to_h2` routes to silos via `routed_from="h3_promote_candidate"`. Authority-gap H3s are exempt from discard (downgrade `promote_to_h2` to `marginal`).
+> 3. **Step 10.5 — FAQ Intent Gate** (NEW) — two-stage filter on FAQ candidates. (a) Cosine floor (default 0.55) against an `intent_profile` vector built from `intent_type + title + scope_statement + persona.primary_goal`. (b) Single batched Claude call classifies survivors as `matches_primary_intent` / `adjacent_intent` / `different_audience`; `different_audience` are dropped. Relaxation: when fewer than 3 `matches_primary_intent` survive, top up with the highest-scoring `adjacent_intent` candidates and stamp `metadata.faq_intent_gate_relaxation_applied = true`. Stops the audited "creator monetization on a seller-ROI article" case.
+> 4. **`semantic_relevance` formula updated** — Step 10's `score_faqs` now produces a 50/50 blended cosine (cosine-to-title + cosine-to-intent-profile) when the intent profile is supplied. Falls back to title-only cosine for legacy callers.
+>
+> Schema bump: `2.1` → `2.2`. Additive — new optional `parent_fit_classification` on `HeadingItem`, new optional `intent_role` on `FAQItem`, three new `DiscardReason` values (`h3_wrong_parent`, `h3_promoted_to_h2_candidate`, `faq_intent_mismatch`), two new `SiloRoutedFrom` values (`h3_parent_mismatch`, `h3_promote_candidate`), seven new metadata counters. Consumers that ignore the new fields continue to work. v2.1 intent format template + anchor reservation + framing validator unchanged.
 
 > **v2.1 changes (2026-05-03):** Phase 1 of the article-quality defect fixes — addresses Defect 1 from the 2026-05-03 audit (keyword-intent → article-format mismatch on the run for "How to Increase ROI for Your TikTok Shop", which classified correctly as `how-to` but produced topic-cluster Q&A H2s instead of procedural steps). Three additions:
 >
@@ -678,9 +687,9 @@ This step formalizes H3 selection as a parent-scoped mirror of Step 8: same MMR 
 1. Compute `parent_relevance` for every H3 candidate as the cosine similarity between the H3 candidate embedding and the H2 embedding.
 
 2. Filter the candidate pool to that H2's scope. Keep only H3 candidates that:
-   - Have `parent_relevance >= 0.60` (must be related to the H2)
+   - Have `parent_relevance >= 0.65` *(PRD v2.2 / Phase 2: raised from 0.60)* (must be related to the H2)
    - Have `parent_relevance <= 0.85` (must not restate the H2; threshold is slightly looser than the title-level 0.78 because H3s legitimately drill into narrower scopes)
-   - Belong to the same coverage graph region as the H2, OR an adjacent region with edge weight `>= 0.65` to the H2's region centroid
+   - Belong to the **same coverage graph region as the H2** *(PRD v2.2 / Phase 2: dropped the adjacent-region relaxation; previously also accepted regions with edge ≥ 0.65 to the H2's region centroid, which let cross-region drift through — the audited "affiliate vetting under cart-abandonment H2" case)*
    - Were not already selected as H2s elsewhere
 
 3. Apply MMR within the filtered pool, using:
@@ -696,7 +705,7 @@ H3 candidates dropped during this step are routed to `discarded_headings` with o
 
 | Filter | discard_reason |
 |---|---|
-| Below `parent_relevance >= 0.60` | `h3_below_parent_relevance_floor` |
+| Below `parent_relevance >= 0.65` *(v2.2)* | `h3_below_parent_relevance_floor` |
 | Above `parent_relevance <= 0.85` | `h3_above_parent_restatement_ceiling` |
 | Lost the per-H2 MMR competition | `below_priority_threshold` |
 
@@ -726,6 +735,64 @@ Each selected H2 carries an h3s array (possibly empty), and each H3 carries:
 | Embedding required for H2 or H3 candidate is missing (defensive) | Skip that pairing; do not abort |
 
 This step adds no new LLM calls — it is pure embedding math and MMR over the same vectors produced in Step 5.
+
+### Step 8.7 — H3 Parent-Fit Verification (NEW in v2.2 / Phase 2)
+
+**Purpose:** Catch H3s that pass Step 8.6's numerical filters (parent_relevance in [0.65, 0.85], same region as parent H2) but answer a different reader question than the parent H2 actually commits to. The audited "affiliate vetting under cart-abandonment H2" case made it through Step 8.6's bands; LLM classification distinguishes "near-topic" from "actually belongs under this H2".
+
+This is the H3-level analogue of Step 8.5 (scope verification for H2s). Step 8.5b already covers authority-gap H3s vs the article scope; Step 8.7 covers the H2↔H3 parent-fit relationship for ALL H3s in the final attachment map (Step 8.6 selections + authority-gap survivors).
+
+**Position in the pipeline:** runs **after** Step 9's authority-gap injection + Step 8.5b's scope verification + `attach_authority_h3s_with_displacement` so the LLM operates on the final per-H2 attachment map. Runs **before** Step 11 structure assembly.
+
+**Method:** Single batched Claude call.
+
+**Inputs:**
+- `h2_attachments`: dict[h2_idx, list[H3 Candidate]] — the final per-H2 attachment map
+- `selected_h2s`: list[Candidate] — the parent H2 list (indices align with attachment dict keys)
+
+**Output schema (strict JSON, additionalProperties: false):**
+
+```json
+{
+  "verifications": [
+    {
+      "h3_id": "h2_<i>.h3_<j>",
+      "classification": "good" | "marginal" | "wrong_parent" | "promote_to_h2",
+      "reasoning": "string (≤200 chars)"
+    }
+  ]
+}
+```
+
+**Routing:**
+
+| Classification | Action |
+|---|---|
+| `good` | Keep under current parent. No metadata flag. |
+| `marginal` | Keep under current parent. Stamp `parent_fit_classification: "marginal"` on the heading. Increment `metadata.h3_parent_fit_marginal_count`. |
+| `wrong_parent` | Try to re-attach: pick the OTHER selected H2 with (a) capacity (≤ 2 H3s, or ≤ 3 if authority-overflow) and (b) `cosine(h3, h2) > parent_relevance_floor` (default 0.65). If found, refresh `parent_h2_text` and `parent_relevance` on the H3 and move it. If no fitting parent: route to silos with `routed_from="h3_parent_mismatch"` and `discard_reason="h3_wrong_parent"`. Increment `metadata.h3_parent_fit_wrong_parent_count`. |
+| `promote_to_h2` | The H3 is substantial enough for its own article. Route to silos with `routed_from="h3_promote_candidate"` and `discard_reason="h3_promoted_to_h2_candidate"`. Increment `metadata.h3_parent_fit_promoted_count`. |
+
+**Authority-gap exemption:** H3s with `source == "authority_gap_sme"` are never discarded per PRD §5 Step 9. For authority H3s only:
+- `wrong_parent` with no fitting alternative parent → downgrade to `marginal` (kept under current parent with the flag).
+- `promote_to_h2` → downgrade to `marginal`.
+
+**Failure handling:**
+
+| Scenario | Behavior |
+|---|---|
+| Empty attachments | No-op. No LLM call. |
+| Malformed JSON | One retry with a stricter prompt. |
+| Both attempts fail | Accept ALL H3s as `good`; stamp `metadata.h3_parent_fit_fallback_applied = true`. Never aborts. |
+| LLM classifies an H3 with an `h3_id` not in the input | Drop the rogue classification; log warning. |
+
+**Cost:** One LLM call per brief, ~$0.02. Skipped entirely when no H2 has any attached H3s.
+
+**Logging:**
+- `brief.h3_fit.complete` (INFO) — totals (marginal / wrong_parent / promoted / reattached / routed_to_silos)
+- `brief.h3_fit.fallback` (WARN) — both LLM attempts failed
+- `brief.h3_fit.rogue_id` (WARN) — LLM emitted unknown h3_id
+- `brief.h3_fit.invalid` / `brief.h3_fit.llm_failed` (WARN)
 
 ### Step 9 — Authority Gap Analysis (REVISED in v2.0.3 — adds scope-aware inputs)
 
@@ -771,7 +838,7 @@ Each emitted H3 carries a new `scope_alignment_note` string (≤200 chars) where
 - Persona gap questions from Step 6 that did NOT make it into the H2 outline (either because they weren't aggregated as H2 candidates, or because they were aggregated but not selected) feed the FAQ candidate pool
 - Tagged `source: "persona_gap"`
 
-**Scoring formula (unchanged from v1.7):**
+**Scoring formula (REVISED in v2.2 / Phase 2):**
 
 ```
 faq_score = (0.4 × source_signal) + (0.4 × semantic_relevance) + (0.2 × novelty_bonus)
@@ -784,11 +851,81 @@ Where:
     - Reddit <10 upvotes = 0.3
     - LLM-extracted concern = 0.5
     - Persona gap question = 0.6
-- semantic_relevance: cosine similarity to title embedding (changed from seed in v1.7)
+- semantic_relevance:
+    v2.2 (Phase 2): 0.5 × cos(question, title_embedding) + 0.5 × cos(question, intent_profile_embedding)
+    v2.1 fallback: cos(question, title_embedding) only — used when intent_profile is unavailable
 - novelty_bonus: 1.0 if topic not in heading_structure, else 0.0
 ```
 
+The `intent_profile_embedding` is built and embedded by Step 10.5 below; the orchestrator passes the same vector into `score_faqs` so both stages share a single API call.
+
 **Selection rules (unchanged):** Top 5 by score with minimum threshold 0.5; if <3 pass, accept top 3 regardless; always output 3–5 FAQs.
+
+### Step 10.5 — FAQ Intent Gate (NEW in v2.2 / Phase 2)
+
+**Purpose:** Catch FAQs that are topically related to the keyword but represent a DIFFERENT stakeholder's question. The audited example: a seller-ROI article keyword shipped FAQs about creator-monetization because the underlying SERP/Reddit pool surfaced both stakeholder voices and the top-by-search-volume FAQs leaked across cohorts.
+
+**Position in the pipeline:** runs **between** the Step 10 candidate-pool construction and `score_faqs`/`select_faqs`. The gate's `intent_profile_embedding` is the same vector that Step 10's `score_faqs` consumes for the v2.2 blended `semantic_relevance`.
+
+**Method:** Two-stage gate.
+
+**Stage 1 — Cosine floor (deterministic):**
+
+1. Build the `intent_profile` text by concatenating: `intent_type + title + scope_statement + persona.primary_goal`.
+2. Embed it once with `text-embedding-3-large` (single API call).
+3. Embed every FAQ candidate's question (single batched API call; reused by `score_faqs` so `score_faqs` doesn't re-embed).
+4. Compute `intent_alignment = cos(faq, intent_profile)` for each candidate.
+5. Drop candidates with `intent_alignment < INTENT_FLOOR` (default `0.55`); record them in `metadata.faq_intent_gate_floor_rejected_count`.
+
+**Stage 2 — LLM intent-role classifier (single batched call):**
+
+For each cosine-floor survivor, classify into one of three intent roles:
+
+- `matches_primary_intent` — FAQ aligns with the primary keyword's intent cluster (the expected case).
+- `adjacent_intent` — FAQ is on-topic but represents a different stakeholder question. Acceptable as fallback when fewer than 3 primary FAQs survive.
+- `different_audience` — FAQ targets a different stakeholder entirely (e.g. creator-monetization on a seller-ROI article). Drop.
+
+**Output schema (strict JSON, additionalProperties: false):**
+
+```json
+{
+  "verifications": [
+    {
+      "faq_id": "faq_<i>",
+      "intent_role": "matches_primary_intent" | "adjacent_intent" | "different_audience",
+      "reasoning": "string (≤200 chars)"
+    }
+  ]
+}
+```
+
+**Routing:**
+
+| Intent role | Action |
+|---|---|
+| `matches_primary_intent` | Stamp `intent_role` on the FAQItem. Surface in the brief output. |
+| `adjacent_intent` | Stamp `intent_role`. Kept ONLY as fallback when fewer than 3 `matches_primary_intent` survive (relaxation path). Otherwise dropped. |
+| `different_audience` | Drop. Counted in `metadata.faq_intent_gate_llm_rejected_count`. |
+
+**Relaxation:** when fewer than 3 `matches_primary_intent` survivors exist, the highest-scoring `adjacent_intent` candidates are added until the count reaches 3 (PRD §5 Step 10's `MIN_FAQS_FALLBACK`). When relaxation fires, `metadata.faq_intent_gate_relaxation_applied = true`.
+
+**Failure handling:**
+
+| Scenario | Behavior |
+|---|---|
+| Empty candidate pool | No-op. |
+| Intent-profile embed fails | Skip the gate entirely; pass all candidates through. Stamp `metadata.faq_intent_gate_relaxation_applied = false`. The fallback is logged but not surfaced as an explicit metadata field; consumers infer it from `floor_rejected_count == 0` AND `llm_rejected_count == 0` AND non-empty pool. |
+| FAQ candidate embed fails | Same as intent-profile embed failure — skip the gate. |
+| LLM call fails (after one retry) | Keep all cosine-floor survivors; stamp each as `matches_primary_intent`. Run continues normally. |
+| LLM emits `intent_role` for an unknown `faq_id` | Drop the rogue classification; log warning. |
+
+**Cost:** 1 embedding API call (intent profile) + 1 embedding API call (FAQ candidates, reused by `score_faqs`) + 1 LLM call (intent-role classification, only fires when at least one candidate survives the cosine floor). Total: ~$0.01–$0.02.
+
+**Logging:**
+- `brief.faq_intent_gate.complete` (INFO) — input / floor_rejected / llm_rejected / primary_kept / adjacent_kept_via_relaxation
+- `brief.faq_intent_gate.embed_skipped` (WARN) — intent-profile embed failed; gate skipped
+- `brief.faq_intent_gate.llm_fallback` (WARN) — both LLM attempts failed
+- `brief.faq_intent_gate.floor_rejected` (DEBUG) — per-FAQ alignment vs floor for tuning
 
 ### Step 11 — Structure Assembly (Unchanged from v1.7)
 
@@ -1017,7 +1154,7 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
 
 ```json
 {
-  "schema_version": "2.1",
+  "schema_version": "2.2",
   "keyword": "string",
   "title": "string",
   "scope_statement": "string",
@@ -1059,6 +1196,7 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
       "scope_alignment_note": "string | null (populated only for source='authority_gap_sme' entries by Step 9; ≤200 chars — NEW in v2.0.3)",
       "parent_h2_text": "string | null",
       "parent_relevance": 0.0,
+      "parent_fit_classification": "good | marginal | null (NEW in v2.2 / Phase 2 — populated only on H3 entries that the Step 8.7 LLM tagged `marginal`; null on `good` H3s and on H1/H2)",
       "order": 0
     }
   ],
@@ -1066,7 +1204,8 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
     {
       "question": "string",
       "source": "paa | reddit | llm_extracted | persona_gap",
-      "faq_score": 0.0
+      "faq_score": 0.0,
+      "intent_role": "matches_primary_intent | adjacent_intent | null (NEW in v2.2 / Phase 2 — set by Step 10.5; null when the gate's LLM call failed and the fallback accepted everything)"
     }
   ],
   "structural_constants": {
@@ -1186,7 +1325,15 @@ The `routed_from: "scope_verification"` flag remains particularly valuable — t
     "anchor_slots_total": 0,
     "anchor_slots_reserved_count": 0,
     "framing_rewrites_applied": 0,
-    "framing_rewrites_accepted_with_violation": 0
+    "framing_rewrites_accepted_with_violation": 0,
+    "h3_parent_fit_marginal_count": 0,
+    "h3_parent_fit_wrong_parent_count": 0,
+    "h3_parent_fit_promoted_count": 0,
+    "h3_parent_fit_fallback_applied": false,
+    "faq_intent_gate_floor_rejected_count": 0,
+    "faq_intent_gate_llm_rejected_count": 0,
+    "faq_intent_gate_relaxation_applied": false,
+    "faq_intent_floor_threshold": 0.55
   }
 }
 ```
@@ -1587,3 +1734,4 @@ To validate v2.0 against the failure modes that motivated the rewrite:
 | **2.0.2** | **2026-05-01** | **Refined Step 12 (Silo Cluster Identification) into six numbered subsections: 12.1 explicit `discard_reason` filtering (only `scope_verification_out_of_scope`, conditional `below_priority_threshold`, and `global_cap_exceeded` route to silos; restatement ceiling and off-topic rejects are excluded so silos never compete with the parent brief); 12.2 cluster formation (preserves region reuse + coherence + centroid); 12.3 search demand validation with hard threshold 0.30 against a five-signal `search_demand_score` (max SERP frequency, max LLM consensus, PAA / autocomplete / Reddit presence indicators); 12.4 per-candidate viability LLM check with strict JSON output (`viable_as_standalone_article`, `reasoning`, `estimated_intent`) and parallel execution; 12.5 cross-brief deduplication scoped out as a v2.1 requirement; 12.6 expanded silo candidate output with `discard_reason_breakdown`, `search_demand_score`, `viable_as_standalone_article`, `viability_reasoning`, `estimated_intent`, and `cross_brief_occurrence_count`. New metadata counters: `silo_candidates_rejected_by_discard_reason`, `silo_candidates_rejected_by_search_demand`, `silo_candidates_rejected_by_viability_check`, `silo_viability_fallback_applied`. Cost range updated to $0.35–$0.89 reflecting up to 10 parallel viability checks at $0.01–$0.02 each; $1.00 ceiling preserved; end-to-end target stays at 75s under parallel execution. New test fixtures I (discard-reason filtering) and J (viability rejection); Fixture A extended to verify silo `search_demand_score > 0` and `viable_as_standalone_article: true` for in-band scope rejects. No breaking schema changes — new fields are additive.** |
 | **2.0.3** | **2026-05-01** | **Three surgical bug fixes diagnosed from a production run on `"how to open a tiktok shop"`. (1) **Intent classifier keyword pattern pre-check**: Step 3 now runs a deterministic keyword pattern check (Step 3.1) BEFORE the SERP-feature-signal classifier; matching keywords short-circuit at 0.90–0.95 confidence with `intent_review_required=false`. Patterns cover `how to`/`how do i`/`how can i`/`ways to`/`steps to`/`guide to` (→ how-to), `what is`/`what are`/`what does`/`definition of` (→ informational), `best`/`top`/`<n> <plurals>` (→ listicle), and ` vs `/` versus `/` or `/`compared to` (→ comparison). Fixes a production miss where a how-to keyword was classified informational at 0.55 confidence because top SERP titles didn't literally start with "how to". (2) **Authority Gap scope discipline**: Step 9 now receives `title`, `scope_statement`, and `intent_type` as inputs and emits a `scope_alignment_note` per H3. A new Step 8.5b runs scope verification on Authority Gap H3s with the same in_scope / borderline / out_of_scope routing as Step 8.5; out-of-scope H3s route to `silo_candidates` with new `routed_from: "scope_verification_h3"`. Adds ~$0.02 per brief for the extra LLM call. Fixes the production failure mode where compliance / tax / abandonment H3s bypassed scope verification entirely. (3) **Title case normalization**: a new Step 11.x applies AP/Chicago-style title case via the `titlecase` PyPI library to every `heading_structure[].text` after all upstream processing. Pure CPU, free, deterministic. Fixes inconsistent capitalization in published articles. New fixtures: K (Authority Gap H3 scope rejection), L (title case round-trip). Cost range updated to $0.37–$0.91; end-to-end target unchanged at 75s; ceiling unchanged at $1.00.** |
 | **2.1** | **2026-05-03** | **Phase 1 of the article-quality defect fixes (proposal accepted 2026-05-03). Addresses Defect 1 from the audit: keyword-intent → article-format mismatch (the run on "How to Increase ROI for Your TikTok Shop" classified correctly as `how-to` but produced topic-cluster Q&A H2s instead of procedural steps). Three additions, all additive on the v2.0 schema. **(1) `intent_format_template`** — Step 3.3 maps the classified intent to a per-intent heading-skeleton template emitting `h2_pattern`, `h2_framing_rule`, `ordering`, `min_h2_count`, `max_h2_count`, and `anchor_slots`. Templates registered for all 8 intent enum values; `local-seo` and `news` use `framing_rule="no_constraint"` and remain deferred to v1.x. **(2) Step 7.5 — Anchor-Slot Reservation** — runs immediately before Step 8 MMR. Embeds template `anchor_slots` (single API call), then for each slot reserves the highest-cosine candidate above `MIN_ANCHOR_COSINE = 0.55` while honoring region uniqueness and the inter-heading threshold. Reserved candidates seed `select_h2s_mmr`'s `pre_reserved` parameter so MMR's hard constraints account for them. Failures (embedding outage, no candidate above floor) are logged and skipped — Step 8 falls through to plain MMR. **(3) Step 11.0 — H2 Framing Validator** — runs after Step 8.5 scope verification, before how-to reorder and Step 11.x title casing. Each H2 is regex-checked against the template's framing rule; failures route through one batched LLM rewrite call (preserving topic, swapping framing). Rewrites that still fail the regex are accepted with `framing_rewrites_accepted_with_violation` flagged in metadata — never aborts the run. New top-level output field `intent_format_template`; new metadata counters `anchor_slots_total`, `anchor_slots_reserved_count`, `framing_rewrites_applied`, `framing_rewrites_accepted_with_violation`. Schema bump `2.0` → `2.1`. Orchestrator's `EXPECTED_MODULE_VERSIONS["brief"]` bumped to `2.1` in lockstep. Cost increase: ~$0.0001 (anchor embedding) + 0–$0.02 (framing rewrite, only when triggered). End-to-end timing unchanged (Step 7.5 is one embedding call running before Step 8; framing pass adds ≤2s when LLM call fires).** |
+| **2.2** | **2026-05-03** | **Phase 2 of the article-quality defect fixes (proposal accepted 2026-05-03). Addresses Defect 3 (H3 → H2 topical drift — the audited "affiliate vetting under cart-abandonment H2" cross-region case) and Defect 4 (FAQ intent mismatch — "creator monetization on a seller-ROI article"). Three additions, all additive on the v2.1 schema. **(1) Step 8.6 tightened** — H3 parent-relevance floor raised `0.60 → 0.65`; the adjacent-region relaxation removed (H3s must sit in the SAME coverage-graph region as the parent H2, not just an adjacent one). **(2) Step 8.7 — H3 Parent-Fit Verification** (NEW) — runs after Step 9 + auth_attach. Single batched Claude call classifies every per-H2-attached H3 as `good` / `marginal` / `wrong_parent` / `promote_to_h2`. `wrong_parent` re-attaches to a better-fit H2 when capacity exists, otherwise routes to silos with `routed_from="h3_parent_mismatch"` + `discard_reason="h3_wrong_parent"`. `promote_to_h2` always routes to silos via `routed_from="h3_promote_candidate"` + `discard_reason="h3_promoted_to_h2_candidate"`. Authority-gap H3s exempt from discard (downgrade `promote_to_h2` to `marginal`). **(3) Step 10.5 — FAQ Intent Gate** (NEW) — two-stage filter on FAQ candidates. Stage 1: cosine floor (default 0.55) against an `intent_profile` vector built from `intent_type + title + scope_statement + persona.primary_goal`. Stage 2: single batched Claude call classifies survivors as `matches_primary_intent` / `adjacent_intent` / `different_audience`; `different_audience` are dropped, `adjacent_intent` are kept only as relaxation fallback when fewer than 3 primary survive. **(4) `semantic_relevance` formula updated** — Step 10's `score_faqs` now produces a 50/50 blended cosine (cosine-to-title + cosine-to-intent-profile) when the intent profile is supplied. New top-level fields `parent_fit_classification` on `HeadingItem` and `intent_role` on `FAQItem`. New `DiscardReason` values: `h3_wrong_parent`, `h3_promoted_to_h2_candidate`, `faq_intent_mismatch`. New `SiloRoutedFrom` values: `h3_parent_mismatch`, `h3_promote_candidate`. Seven new metadata counters: `h3_parent_fit_marginal_count`, `h3_parent_fit_wrong_parent_count`, `h3_parent_fit_promoted_count`, `h3_parent_fit_fallback_applied`, `faq_intent_gate_floor_rejected_count`, `faq_intent_gate_llm_rejected_count`, `faq_intent_gate_relaxation_applied`. Schema bump `2.1` → `2.2`. Orchestrator's `EXPECTED_MODULE_VERSIONS["brief"]` bumped to `2.2` in lockstep. Cost increase: ~$0.02 (Step 8.7 LLM call) + ~$0.01–$0.02 (Step 10.5 LLM call) + 1 embedding (intent profile, ~$0.0001). End-to-end timing impact: <2s when both LLM calls fire.** |

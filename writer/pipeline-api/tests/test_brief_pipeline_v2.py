@@ -191,6 +191,56 @@ async def fake_claude_json(system: str, user: str, **kwargs):
     if "extract all distinct subtopics" in sys_l:
         return ["Setup process", "Seller fees", "Payment methods"]
 
+    # PRD v2.2 / Phase 2 — H3 parent-fit verification: "you audit per-h2 h3 attachments"
+    if "audit per-h2 h3 attachments" in sys_l:
+        # Default: every H3 is `good`. Tests that need different routing
+        # patch this branch case-by-case via monkeypatch.
+        import json as _json
+        import re as _re
+        verifications = []
+        marker = "Per-H2 H3 attachments to audit (JSON):\n"
+        if marker in user:
+            try:
+                payload = user.split(marker, 1)[1].strip()
+                end = payload.rfind("]")
+                if end != -1:
+                    payload = payload[: end + 1]
+                blocks = _json.loads(payload)
+                for blk in blocks:
+                    for h3 in blk.get("h3s", []):
+                        verifications.append({
+                            "h3_id": h3["h3_id"],
+                            "classification": "good",
+                            "reasoning": "ok",
+                        })
+            except Exception:
+                pass
+        return {"verifications": verifications}
+
+    # PRD v2.2 / Phase 2 — FAQ intent gate: "you audit faqs for an seo blog brief"
+    if "audit faqs for an seo blog brief" in sys_l:
+        # Default: every FAQ matches_primary_intent (cosine floor pass
+        # already cut the egregious ones).
+        import json as _json
+        verifications = []
+        marker = "FAQs to verify (JSON):\n"
+        if marker in user:
+            try:
+                payload = user.split(marker, 1)[1].strip()
+                end = payload.rfind("]")
+                if end != -1:
+                    payload = payload[: end + 1]
+                items = _json.loads(payload)
+                for item in items:
+                    verifications.append({
+                        "faq_id": item["faq_id"],
+                        "intent_role": "matches_primary_intent",
+                        "reasoning": "ok",
+                    })
+            except Exception:
+                pass
+        return {"verifications": verifications}
+
     # Framing rewrite: "you normalize blog h2 headings"
     if "normalize blog h2 headings" in sys_l:
         # Echo input headings unchanged so the validator's regex re-check
@@ -265,6 +315,10 @@ class _AllMocks:
             # PRD v2.1 — anchor-slot embedding + framing rewrite LLM call
             patch("modules.brief.skeleton_slots.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.framing.claude_json", fake_claude_json),
+            # PRD v2.2 / Phase 2 — H3 parent-fit + FAQ intent gate LLM/embed calls
+            patch("modules.brief.h3_parent_fit.claude_json", fake_claude_json),
+            patch("modules.brief.faq_intent_gate.claude_json", fake_claude_json),
+            patch("modules.brief.faq_intent_gate.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.pipeline.get_cached", fake_get_cached),
             patch("modules.brief.pipeline.write_cache", fake_write_cache),
         ]
@@ -293,7 +347,7 @@ async def test_pipeline_produces_schema_v2_response():
         result = await run_brief(req)
 
     # ---- Schema contract ----
-    assert result.metadata.schema_version == "2.1"
+    assert result.metadata.schema_version == "2.2"
     assert result.metadata.embedding_model == "text-embedding-3-large"
 
     # ---- Step 3.5 outputs surface on the response ----
@@ -477,7 +531,7 @@ async def test_cache_hit_short_circuits_pipeline():
         "discarded_headings": [],
         "silo_candidates": [],
         "metadata": {
-            "schema_version": "2.1",
+            "schema_version": "2.2",
             "word_budget": 2500,
             "faq_count": 0,
             "h2_count": 0,
@@ -574,7 +628,7 @@ async def test_pipeline_writes_to_cache_after_generation():
     args = write_called["args"]
     assert args["keyword"] == "what is tiktok shop"
     assert args["location_code"] == 2840
-    assert args["schema_version"] == "2.1"
+    assert args["schema_version"] == "2.2"
     assert args["triggered_by_client_id"] == "client-uuid-123"
     assert args["duration_ms"] >= 0
 

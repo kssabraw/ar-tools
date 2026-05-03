@@ -219,8 +219,8 @@ def test_metadata_defaults_match_prd_thresholds():
     assert m.inter_heading_threshold == 0.75
     assert m.edge_threshold == 0.65
     assert m.mmr_lambda == 0.7
-    # Step 8.6 + Step 12 refinement defaults (PRD v2.0.2)
-    assert m.parent_relevance_floor_threshold == 0.60
+    # Step 8.6 thresholds — PRD v2.2 / Phase 2 raised the floor 0.60 → 0.65.
+    assert m.parent_relevance_floor_threshold == 0.65
     assert m.parent_restatement_ceiling_threshold == 0.85
     assert m.inter_h3_threshold == 0.78
     assert m.silo_search_demand_threshold == 0.30
@@ -230,7 +230,7 @@ def test_metadata_defaults_match_prd_thresholds():
     assert m.silo_candidates_rejected_by_search_demand == 0
     assert m.silo_candidates_rejected_by_viability_check == 0
     assert m.silo_viability_fallback_applied is False
-    assert m.schema_version == "2.1"
+    assert m.schema_version == "2.2"
 
 
 def test_heading_item_carries_step_8_6_fields():
@@ -337,7 +337,7 @@ def _minimal_response() -> BriefResponse:
 def test_brief_response_minimum_valid():
     r = _minimal_response()
     assert r.title.startswith("What TikTok Shop Is")
-    assert r.metadata.schema_version == "2.1"
+    assert r.metadata.schema_version == "2.2"
     assert r.persona.description == ""
     assert r.heading_structure == []
 
@@ -378,4 +378,4 @@ def test_brief_response_serializes_round_trip():
     payload = r.model_dump()
     parsed = BriefResponse.model_validate(payload)
     assert parsed.heading_structure[0].region_id == "region_1"
-    assert parsed.metadata.schema_version == "2.1"
+    assert parsed.metadata.schema_version == "2.2"
