@@ -58,6 +58,15 @@ class ReconciledTerm:
     effective_target: int = 0
     effective_max: int = 0
     reconciliation_action: str = "keep"
+    # PRD v2.6 — Heading SEO Optimizer needs per-zone targets (title /
+    # h1 / h2 / h3 / paragraphs). The legacy `zone_usage_*` / `effective_*`
+    # fields above carry the paragraphs zone for back-compat with the
+    # existing writer-section prompt; `zones` carries every zone the
+    # SIE pipeline computes so the optimizer can enforce per-zone min/
+    # target/max.
+    zones: dict = field(default_factory=dict)
+    is_entity: bool = False
+    entity_category: Optional[str] = None
 
 
 @dataclass
@@ -89,20 +98,48 @@ def _avoid_terms_from_sie(sie: dict) -> list[str]:
     return [t for t in out if t]
 
 
-def _zone_usage_for_term(usage_recs: list[dict], term: str) -> tuple[int, int, int]:
-    """Pull paragraph zone min/target/max for a given term from usage_recommendations."""
+_USAGE_ZONES = ("title", "h1", "h2", "h3", "paragraphs")
+
+
+def _zones_for_term(usage_recs: list[dict], term: str) -> dict:
+    """Pull every zone's {min, target, max} for a term from usage_recommendations.
+
+    Returns a dict keyed by zone name with each value `{min, target, max}`.
+    Zones missing from the SIE usage_rec default to all-zero. PRD v2.6 —
+    consumed by the Heading SEO Optimizer to enforce per-zone entity
+    targets when rewriting H2/H3.
+    """
+    zones: dict[str, dict[str, int]] = {
+        z: {"min": 0, "target": 0, "max": 0} for z in _USAGE_ZONES
+    }
     for rec in usage_recs:
-        if not isinstance(rec, dict):
+        if not isinstance(rec, dict) or rec.get("term") != term:
             continue
-        if rec.get("term") == term:
-            usage = rec.get("usage", {}) or {}
-            paras = usage.get("paragraphs", {}) if isinstance(usage, dict) else {}
-            return (
-                int(paras.get("min", 0)),
-                int(paras.get("target", 0)),
-                int(paras.get("max", 0)),
-            )
-    return (0, 0, 0)
+        usage = rec.get("usage", {}) or {}
+        if not isinstance(usage, dict):
+            return zones
+        for z in _USAGE_ZONES:
+            zone_rec = usage.get(z, {}) or {}
+            if not isinstance(zone_rec, dict):
+                continue
+            zones[z] = {
+                "min": int(zone_rec.get("min", 0)),
+                "target": int(zone_rec.get("target", 0)),
+                "max": int(zone_rec.get("max", 0)),
+            }
+        return zones
+    return zones
+
+
+def _zone_usage_for_term(usage_recs: list[dict], term: str) -> tuple[int, int, int]:
+    """Backward-compat wrapper — returns the paragraphs-zone (min, target, max).
+
+    Existing callers in `sections.py` rely on this exact triple shape. New
+    callers should use `_zones_for_term` to access per-zone targets across
+    all five zones (title / h1 / h2 / h3 / paragraphs).
+    """
+    paras = _zones_for_term(usage_recs, term)["paragraphs"]
+    return (paras["min"], paras["target"], paras["max"])
 
 
 async def reconcile_terms(
@@ -158,6 +195,20 @@ async def reconcile_terms(
     return _all_keep(required_terms, avoid_terms, usage_recs), []
 
 
+def _entity_metadata_for_term(rec: dict) -> tuple[bool, Optional[str]]:
+    """Pluck (is_entity, entity_category) from a SIE term entry. Defaults
+    to (False, None) when the SIE row doesn't carry the metadata —
+    keeps backward compat with v1.0 SIE responses."""
+    data = rec.get("data") or {}
+    if not isinstance(data, dict):
+        return (False, None)
+    is_entity = bool(data.get("is_entity", False))
+    entity_category = data.get("entity_category")
+    if not isinstance(entity_category, str):
+        entity_category = None
+    return (is_entity, entity_category)
+
+
 def _all_keep(
     required: list[dict],
     avoid: list[str],
@@ -170,11 +221,16 @@ def _all_keep(
         if not term:
             continue
         mn, tg, mx = _zone_usage_for_term(usage_recs, term)
+        zones = _zones_for_term(usage_recs, term)
+        is_entity, entity_category = _entity_metadata_for_term(r)
         out.required.append(ReconciledTerm(
             term=term,
             zone_usage_target=tg, zone_usage_min=mn, zone_usage_max=mx,
             effective_target=tg, effective_max=mx,
             reconciliation_action="keep",
+            zones=zones,
+            is_entity=is_entity,
+            entity_category=entity_category,
         ))
     out.avoid = [t for t in avoid if t]
     return out
@@ -209,6 +265,8 @@ def _build_filtered(
         if not term:
             continue
         mn, tg, mx = _zone_usage_for_term(usage_recs, term)
+        zones = _zones_for_term(usage_recs, term)
+        is_entity, entity_category = _entity_metadata_for_term(r)
         cls = req_class_by_term.get(term, {})
         action = cls.get("classification", "keep")
         reasoning = (cls.get("brand_guide_reasoning") or "")[:300]
@@ -228,6 +286,9 @@ def _build_filtered(
                 effective_target=mn,
                 effective_max=tg,
                 reconciliation_action="reduce_due_to_brand_preference",
+                zones=zones,
+                is_entity=is_entity,
+                entity_category=entity_category,
             ))
             log.append(BrandConflictEntry(
                 term=term,
@@ -241,6 +302,9 @@ def _build_filtered(
                 zone_usage_target=tg, zone_usage_min=mn, zone_usage_max=mx,
                 effective_target=tg, effective_max=mx,
                 reconciliation_action="keep",
+                zones=zones,
+                is_entity=is_entity,
+                entity_category=entity_category,
             ))
 
     final_avoid: list[str] = []

@@ -46,6 +46,7 @@ from .citation_coverage_validator import (
     validate_citation_coverage,
 )
 from .h2_body_length import H2BodyLengthResult, validate_h2_body_lengths
+from .heading_seo_optimizer import optimize_headings
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
 from .title import generate_h1_enrichment, generate_title
@@ -279,6 +280,23 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             )
 
     banned_regex = build_banned_regex(brand_voice_card.banned_terms if brand_voice_card else [])
+
+    # ---- Heading SEO Optimizer (PRD v2.6) ----
+    # Mutate heading_structure so each H2/H3 carries at least one
+    # entity from the SIE recommended set. Closes the prior gap where
+    # entities only landed in paragraphs because the brief generator
+    # picked H2/H3 text BEFORE SIE per-zone targets were known.
+    # Failure-safe: on LLM error / malformed response / forbidden-term
+    # in rewrite, the original heading is preserved.
+    heading_opt_result = await optimize_headings(
+        heading_structure,
+        keyword=keyword,
+        reconciled_terms=filtered_terms.required,
+        forbidden_terms=(
+            list(brand_voice_card.banned_terms) if brand_voice_card else []
+        ) + list(filtered_terms.avoid),
+    )
+    heading_structure = heading_opt_result.heading_structure
 
     # ---- Title + H1 enrichment in parallel ----
     required_terms_list = [
