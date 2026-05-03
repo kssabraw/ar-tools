@@ -137,16 +137,19 @@ async def test_no_h2_h3_candidates_skips():
 
 @pytest.mark.asyncio
 async def test_no_entities_available_skips():
-    """When SIE returned no entity-flagged terms, skip silently."""
+    """When SIE returned no terms across any of the three v1.4
+    categories, skip silently. A single non-entity n-gram still
+    populates the related_keywords bucket — so the LLM is invoked.
+    Use an empty term list to verify the skip path."""
     structure = [_heading("H2", "Original H2", 1)]
     result = await optimize_headings(
         structure,
         keyword="kw",
-        reconciled_terms=[_non_entity_term("plain ngram")],
+        reconciled_terms=[],
         forbidden_terms=[],
         llm_json_fn=_mock_call({"rewrites": []}),
     )
-    assert result.skipped_reason == "no_entities_available"
+    assert result.skipped_reason == "no_terms_available"
     assert result.llm_called is False
 
 
@@ -323,9 +326,10 @@ async def test_order_mismatch_in_llm_response_skipped():
 
 
 @pytest.mark.asyncio
-async def test_prompt_carries_per_zone_targets():
-    """The user prompt MUST surface per-zone targets so the LLM knows
-    how aggressive to be with each entity."""
+async def test_prompt_carries_subheadings_aggregate_targets():
+    """SIE v1.4 — the user prompt surfaces the H2+H3 aggregate target
+    per category so the LLM knows what aggregate distinct count the
+    rewrites should hit."""
     captured: dict = {}
 
     async def capturing(system, user, **kw):
@@ -337,16 +341,21 @@ async def test_prompt_carries_per_zone_targets():
         structure,
         keyword="kw",
         reconciled_terms=[
-            _entity_term("Entity One", h2_target=2, h2_max=3),
-            _entity_term("Entity Two", h2_target=1, h2_max=1),
+            _entity_term("Entity One"),
+            _entity_term("Entity Two"),
         ],
         forbidden_terms=[],
+        subheadings_targets={
+            "entities": 5, "related_keywords": 3, "keyword_variants": 1,
+        },
         llm_json_fn=capturing,
     )
     user = captured["user"]
     assert "Entity One" in user
-    assert "h2_target" in user
-    assert "h2_max" in user
+    # Aggregate targets serialized as JSON in the prompt.
+    assert '"entities": 5' in user
+    assert '"related_keywords": 3' in user
+    assert '"keyword_variants": 1' in user
 
 
 @pytest.mark.asyncio
@@ -496,7 +505,7 @@ async def test_llm_returns_non_numeric_order_skipped_safely():
 @pytest.mark.asyncio
 async def test_none_reconciled_terms_treated_as_empty():
     """Defensive guard: None instead of [] for reconciled_terms must
-    not raise — should skip with no_entities_available."""
+    not raise — should skip with no_terms_available (v1.4)."""
     structure = [_heading("H2", "Original", 1)]
     result = await optimize_headings(
         structure,
@@ -505,7 +514,7 @@ async def test_none_reconciled_terms_treated_as_empty():
         forbidden_terms=[],
         llm_json_fn=_mock_call({"rewrites": []}),
     )
-    assert result.skipped_reason == "no_entities_available"
+    assert result.skipped_reason == "no_terms_available"
 
 
 @pytest.mark.asyncio

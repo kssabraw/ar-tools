@@ -23,41 +23,39 @@ logger = logging.getLogger(__name__)
 
 
 # FAQs aren't a SIE-tracked zone (the SIE pipeline computes
-# title / h1 / h2 / h3 / paragraphs only). Derive a FAQ usage target
-# from the paragraphs target by the typical FAQ-to-paragraphs word
-# budget ratio (~150 FAQ words across 3-5 answers vs ~1500 main-body
-# paragraph words). That gives us a reasonable per-question pacing
-# floor without inventing a new SIE zone.
+# title / h1 / h2 / h3 / paragraphs only). Derive FAQ-zone category
+# targets from the paragraphs-zone aggregate (sie.zone_category_targets
+# ["paragraphs"]) by the typical FAQ-to-paragraphs word budget ratio
+# (~150 FAQ words across 3-5 answers vs ~1500 main-body paragraph
+# words).
 _FAQ_TO_PARAGRAPHS_BUDGET_RATIO = 0.12
 
 
-def _derive_faq_zone_target(
-    filtered_terms: FilteredSIETerms,
-) -> tuple[int, int]:
-    """Sum the paragraphs-zone target/max across required terms and scale
-    by the FAQ-vs-paragraphs budget ratio. Returns (target, max) — the
-    aggregate count of distinct required-term mentions the FAQ section
-    should hit (target) and absolute ceiling (max). Both are 0 when SIE
-    hasn't surfaced per-zone targets (legacy responses).
+def _scale_paragraphs_target(target: int) -> int:
+    """Scale a paragraphs-zone target into a FAQ-zone target with a
+    floor of 1 when the source is non-zero (FAQs always benefit from at
+    least one mention of a category if paragraphs needs coverage)."""
+    if target <= 0:
+        return 0
+    scaled = int(round(target * _FAQ_TO_PARAGRAPHS_BUDGET_RATIO))
+    return max(scaled, 1)
+
+
+def _derive_faq_category_targets(
+    paragraphs_aggregate: dict[str, int],
+) -> dict[str, int]:
+    """Translate the paragraphs zone's category aggregate into a
+    FAQ-zone equivalent. Returns the same three-key shape as the
+    source: {entities, related_keywords, keyword_variants}.
+
+    `paragraphs_aggregate` is a dict like
+    `{"entities": 20, "related_keywords": 14, "keyword_variants": 6}`
+    drawn from `sie.zone_category_targets["paragraphs"]`.
     """
-    para_target = 0
-    para_max = 0
-    for term in filtered_terms.required:
-        zones = getattr(term, "zones", {}) or {}
-        if not isinstance(zones, dict):
-            continue
-        para = zones.get("paragraphs") or {}
-        if not isinstance(para, dict):
-            continue
-        para_target += int(para.get("target", 0) or 0)
-        para_max += int(para.get("max", 0) or 0)
-    derived_target = int(round(para_target * _FAQ_TO_PARAGRAPHS_BUDGET_RATIO))
-    derived_max = int(round(para_max * _FAQ_TO_PARAGRAPHS_BUDGET_RATIO))
-    if para_target > 0 and derived_target == 0:
-        derived_target = 1
-    if derived_max < derived_target:
-        derived_max = derived_target
-    return (derived_target, derived_max)
+    return {
+        cat: _scale_paragraphs_target(int(paragraphs_aggregate.get(cat, 0) or 0))
+        for cat in ("entities", "related_keywords", "keyword_variants")
+    }
 
 
 FAQ_SYSTEM = """You write FAQ answers for a blog post.
@@ -85,8 +83,15 @@ async def write_faqs(
     faq_header_text: str = "Frequently Asked Questions",
     faq_header_order: int = 0,
     question_orders: Optional[list[int]] = None,
+    paragraphs_zone_targets: Optional[dict[str, int]] = None,
 ) -> list[ArticleSection]:
-    """Returns ArticleSection list: FAQ header H2 + per-question H3."""
+    """Returns ArticleSection list: FAQ header H2 + per-question H3.
+
+    SIE v1.4 — `paragraphs_zone_targets` is the body-zone three-bucket
+    aggregate (`sie.zone_category_targets["paragraphs"]`). Internally
+    scaled to FAQ-appropriate values via the FAQ_TO_PARAGRAPHS_BUDGET
+    ratio.
+    """
     if not faq_questions:
         return []
 
@@ -98,13 +103,24 @@ async def write_faqs(
     avoid = filtered_terms.avoid
     forbidden_combined = sorted(set(t.lower() for t in forbidden_terms + excluded + avoid if t))
 
-    required_terms_str = ""
-    if filtered_terms.required:
-        top = filtered_terms.required[:8]
-        required_terms_str = ", ".join(t.term for t in top)
+    # SIE v1.4 — bucket required terms into three categories and surface
+    # each separately to the FAQ prompt. Caps per category keep the
+    # prompt small (FAQs are short — 3-5 answers × 40-80 words).
+    entities_top: list[str] = []
+    related_top: list[str] = []
+    variants_top: list[str] = []
+    for t in filtered_terms.required:
+        if getattr(t, "is_entity", False):
+            entities_top.append(t.term)
+        elif getattr(t, "is_seed_fragment", False):
+            variants_top.append(t.term)
+        else:
+            related_top.append(t.term)
+    entities_top = entities_top[:6]
+    related_top = related_top[:6]
+    variants_top = variants_top[:4]
 
-    # PRD v2.6 wiring — FAQs aren't a SIE zone, derive from paragraphs.
-    faq_target, faq_max = _derive_faq_zone_target(filtered_terms)
+    faq_targets = _derive_faq_category_targets(paragraphs_zone_targets or {})
 
     user_parts = [
         f"KEYWORD: {keyword}",
@@ -124,25 +140,33 @@ async def write_faqs(
         if brand_voice_card.audience_goals:
             user_parts.append(f"GOALS: {', '.join(brand_voice_card.audience_goals[:3])}")
 
-    if required_terms_str:
-        user_parts.append(f"\nREQUIRED_TERMS: {required_terms_str}")
-        if faq_target > 0:
-            # Clamp by REQUIRED_TERMS we actually listed (top 8) so the
-            # directive can't ask for more distinct mentions than terms
-            # are available. Without this clamp a high paragraphs.target
-            # sum could exceed the listed terms and become impossible.
-            listed_count = len(required_terms_str.split(", "))
-            effective_target = min(faq_target, listed_count)
-            effective_max = min(faq_max, listed_count) if faq_max > 0 else effective_target
-            if effective_max < effective_target:
-                effective_max = effective_target
-            mention_word = "mention" if effective_target == 1 else "mentions"
-            user_parts.append(
-                f"REQUIRED_TERM_USAGE_TARGET: aim for at least "
-                f"{effective_target} distinct REQUIRED_TERM {mention_word} "
-                f"across the FAQ set (do not exceed {effective_max}). "
-                f"Distribute naturally; not every answer needs one."
-            )
+    if entities_top:
+        user_parts.append(f"\nENTITIES: {', '.join(entities_top)}")
+    if related_top:
+        user_parts.append(f"RELATED_KEYWORDS: {', '.join(related_top)}")
+    if variants_top:
+        user_parts.append(f"KEYWORD_VARIANTS: {', '.join(variants_top)}")
+
+    coverage_directives = []
+
+    def _add_directive(name: str, target: int, listed: int):
+        if target <= 0 or listed <= 0:
+            return
+        eff = min(target, listed)
+        plural = name if eff != 1 else name.rstrip("s") or name
+        coverage_directives.append(
+            f"  - at least {eff} distinct {plural} across the FAQ set"
+        )
+
+    _add_directive("entities", faq_targets["entities"], len(entities_top))
+    _add_directive("related keywords", faq_targets["related_keywords"], len(related_top))
+    _add_directive("keyword variants", faq_targets["keyword_variants"], len(variants_top))
+
+    if coverage_directives:
+        user_parts.append(
+            "\nCOVERAGE_TARGETS (distribute naturally; not every answer "
+            "needs one of each):\n" + "\n".join(coverage_directives)
+        )
 
     if forbidden_combined:
         user_parts.append(f"\nFORBIDDEN_TERMS: {', '.join(forbidden_combined[:50])}")

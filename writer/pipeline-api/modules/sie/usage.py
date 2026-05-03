@@ -21,6 +21,24 @@ HARD_CAP_PER_1000_WORDS = 10
 SAFE_OUTLIER_MULT = 3.0
 ZONES = ("title", "h1", "h2", "h3", "paragraphs")
 
+# SIE v1.4 — three-bucket category aggregate, benchmarked at 50% of
+# trimmed-max competitor distinct-item count. The 0.50 multiplier is
+# the user-spec'd "target half of the most aggressive competitor."
+# We use absolute counts (no per-1000 normalization) because category
+# coverage in title/h1/h2/h3 zones is structurally bounded by the
+# zone's natural length — competitor titles aren't longer because
+# their articles are longer.
+ZONE_CATEGORY_TARGET_MULT = 0.50
+
+CATEGORY_ENTITIES = "entities"
+CATEGORY_RELATED_KEYWORDS = "related_keywords"
+CATEGORY_KEYWORD_VARIANTS = "keyword_variants"
+CATEGORIES = (
+    CATEGORY_ENTITIES,
+    CATEGORY_RELATED_KEYWORDS,
+    CATEGORY_KEYWORD_VARIANTS,
+)
+
 
 def _per_1000(count: int, word_count: int) -> float:
     if word_count <= 0:
@@ -172,5 +190,117 @@ def build_usage(
             "confidence": confidence,
             "warning": "; ".join(warnings) if warnings else None,
         })
+
+    return out
+
+
+def _classify_term(
+    term: str,
+    entity_meta: dict[str, dict],
+    seed_fragment_terms: set[str],
+) -> str:
+    """Bucket a term into the v1.4 three-bucket taxonomy.
+
+    Order matters: a term that's BOTH an entity and a seed fragment
+    should never happen (mark_seed_keyword_fragments protects entities
+    from being flagged), but if upstream invariants break we prefer
+    the entity classification — it carries more semantic weight than
+    the keyword-echo signal.
+    """
+    if entity_meta.get(term, {}).get("is_entity"):
+        return CATEGORY_ENTITIES
+    if term in seed_fragment_terms:
+        return CATEGORY_KEYWORD_VARIANTS
+    return CATEGORY_RELATED_KEYWORDS
+
+
+def build_zone_category_targets(
+    aggregates: dict[str, TermAggregate],
+    pages: list[PageZones],
+    entity_meta: dict[str, dict],
+    seed_fragment_terms: set[str],
+    outlier_mode: str = "safe",
+) -> dict[str, dict[str, dict[str, int]]]:
+    """SIE v1.4 — per-zone per-category aggregate distinct-item targets.
+
+    For each (zone, category) pair, count distinct items present in
+    each competitor page's zone, find the trimmed-max across competitor
+    pages, and target = round(trimmed_max × 0.50). Outlier exclusion
+    follows the same SAFE_OUTLIER_MULT logic as `_compute_zone_range`
+    but operates on per-page distinct counts instead of per-1000-words
+    frequencies.
+
+    Returns a dict shaped:
+        {zone: {category: {target: int, max: int}}}
+    where category ∈ {entities, related_keywords, keyword_variants}
+    and zone ∈ ZONES.
+
+    Empty when `aggregates` is empty (no pages to benchmark against).
+    """
+    # Default-zero scaffold so callers can index without KeyError even
+    # when a (zone, category) pair had zero distinct items in every
+    # competitor page.
+    out: dict[str, dict[str, dict[str, int]]] = {
+        z: {c: {"target": 0, "max": 0} for c in CATEGORIES} for z in ZONES
+    }
+    if not aggregates or not pages:
+        return out
+
+    term_to_category = {
+        term: _classify_term(term, entity_meta, seed_fragment_terms)
+        for term in aggregates.keys() if term
+    }
+
+    # For each page, for each zone, count distinct terms per category.
+    # Substring/word-boundary search mirrors `build_usage` so the same
+    # term-presence semantics drive both per-term and aggregate
+    # benchmarks.
+    import re as _re
+
+    distinct_counts: dict[str, dict[str, dict[str, int]]] = {
+        p.url: {z: {c: 0 for c in CATEGORIES} for z in ZONES} for p in pages
+    }
+    for page in pages:
+        zones_text = page.all_zone_text()
+        for zone_name in ZONES:
+            blocks = zones_text.get(zone_name, [])
+            if not blocks:
+                continue
+            joined = " ".join(blocks).lower()
+            seen_per_category: dict[str, set[str]] = {c: set() for c in CATEGORIES}
+            for term, category in term_to_category.items():
+                if term in seen_per_category[category]:
+                    continue
+                if " " in term:
+                    if term in joined:
+                        seen_per_category[category].add(term)
+                else:
+                    if _re.search(rf"\b{_re.escape(term)}\b", joined):
+                        seen_per_category[category].add(term)
+            for category, terms in seen_per_category.items():
+                distinct_counts[page.url][zone_name][category] = len(terms)
+
+    # Across-page aggregation with outlier exclusion + 0.50 multiplier.
+    for zone in ZONES:
+        for category in CATEGORIES:
+            counts = [
+                distinct_counts[p.url][zone][category] for p in pages
+            ]
+            if not counts:
+                continue
+            freqs = list(counts)
+            if outlier_mode == "safe":
+                outlier_indices = _detect_outliers([float(c) for c in freqs])
+                if outlier_indices:
+                    freqs = [
+                        c for i, c in enumerate(freqs) if i not in outlier_indices
+                    ]
+            if not freqs:
+                freqs = counts
+            trimmed_max = max(freqs) if freqs else 0
+            out[zone][category] = {
+                "target": int(round(trimmed_max * ZONE_CATEGORY_TARGET_MULT)),
+                "max": int(trimmed_max),
+            }
 
     return out

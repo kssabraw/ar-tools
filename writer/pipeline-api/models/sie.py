@@ -162,8 +162,36 @@ class TargetKeywordRecord(BaseModel):
     minimum_usage: dict[str, int] = {"title": 1, "h1": 1, "paragraphs": 1}
 
 
+class CategoryTarget(BaseModel):
+    """SIE v1.4 — per-zone per-category aggregate target.
+
+    `target` is 0.50 × trimmed-max competitor count of distinct items
+    in that (zone, category). `max` is the trimmed-max itself (the
+    highest competitor count after outlier removal).
+    """
+
+    target: int = 0
+    max: int = 0
+
+
+class ZoneCategoryAggregate(BaseModel):
+    """Three-bucket distinct-item aggregate per zone (SIE v1.4).
+
+    Categories partition the SIE required-term set:
+      - entities: terms flagged as entities (Google NLP and/or TextRazor)
+      - related_keywords: required n-gram terms that aren't entities
+        and aren't seed-keyword fragments
+      - keyword_variants: terms whose tokens are a contiguous
+        subsequence of the seed keyword (is_seed_fragment=True)
+    """
+
+    entities: CategoryTarget = CategoryTarget()
+    related_keywords: CategoryTarget = CategoryTarget()
+    keyword_variants: CategoryTarget = CategoryTarget()
+
+
 class SIEResponse(BaseModel):
-    schema_version: Literal["1.3"] = "1.3"
+    schema_version: Literal["1.4"] = "1.4"
     keyword: str
     location_code: int
     language_code: str
@@ -178,5 +206,12 @@ class SIEResponse(BaseModel):
     terms: TermBuckets
     term_signals: TermSignals
     usage_recommendations: list[UsageRecommendation] = []
+    # SIE v1.4 — distinct-item aggregate per zone, per category. Keys
+    # are zone names (title / h1 / h2 / h3 / paragraphs); values carry
+    # entities / related_keywords / keyword_variants targets benchmarked
+    # at 0.50 × trimmed-max competitor count. Writer consumes these to
+    # drive prompt-level category coverage instead of summing per-term
+    # zone targets.
+    zone_category_targets: dict[str, ZoneCategoryAggregate] = {}
     target_keyword: TargetKeywordRecord
     warnings: list[SIEWarning] = []

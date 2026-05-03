@@ -281,13 +281,49 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
 
     banned_regex = build_banned_regex(brand_voice_card.banned_terms if brand_voice_card else [])
 
-    # ---- Heading SEO Optimizer (PRD v2.6) ----
-    # Mutate heading_structure so each H2/H3 carries at least one
-    # entity from the SIE recommended set. Closes the prior gap where
-    # entities only landed in paragraphs because the brief generator
-    # picked H2/H3 text BEFORE SIE per-zone targets were known.
-    # Failure-safe: on LLM error / malformed response / forbidden-term
-    # in rewrite, the original heading is preserved.
+    # ---- SIE v1.4 — pull zone × category aggregate targets ----
+    # Each zone aggregate carries {entities, related_keywords,
+    # keyword_variants}, each with {target, max}. `target` is 0.50 ×
+    # trimmed-max competitor distinct-item count for that zone.
+    sie_zone_targets = sie.get("zone_category_targets") or {}
+
+    def _zone_targets(zone: str) -> dict[str, int]:
+        z = sie_zone_targets.get(zone) or {}
+        if not isinstance(z, dict):
+            return {"entities": 0, "related_keywords": 0, "keyword_variants": 0}
+        return {
+            cat: int((z.get(cat) or {}).get("target", 0) or 0)
+            for cat in ("entities", "related_keywords", "keyword_variants")
+        }
+
+    title_targets = _zone_targets("title")
+    h1_targets = _zone_targets("h1")
+    h2_targets = _zone_targets("h2")
+    h3_targets = _zone_targets("h3")
+    paragraphs_targets = _zone_targets("paragraphs")
+    # Subheadings = H2 + H3 combined (the heading optimizer rewrites
+    # both as one set).
+    subheadings_targets = {
+        cat: h2_targets[cat] + h3_targets[cat]
+        for cat in ("entities", "related_keywords", "keyword_variants")
+    }
+
+    # Bucket reconciled terms once for downstream consumers.
+    reconciled_entities: list[dict] = []
+    reconciled_related: list[str] = []
+    reconciled_variants: list[str] = []
+    for rt in filtered_terms.required:
+        if getattr(rt, "is_entity", False):
+            reconciled_entities.append({
+                "term": rt.term,
+                "entity_category": getattr(rt, "entity_category", None),
+            })
+        elif getattr(rt, "is_seed_fragment", False):
+            reconciled_variants.append(rt.term)
+        else:
+            reconciled_related.append(rt.term)
+
+    # ---- Heading SEO Optimizer (SIE v1.4 wiring) ----
     heading_opt_result = await optimize_headings(
         heading_structure,
         keyword=keyword,
@@ -295,52 +331,9 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         forbidden_terms=(
             list(brand_voice_card.banned_terms) if brand_voice_card else []
         ) + list(filtered_terms.avoid),
+        subheadings_targets=subheadings_targets,
     )
     heading_structure = heading_opt_result.heading_structure
-
-    # ---- Title + H1 enrichment in parallel ----
-    required_terms_list = [
-        t.get("term", "")
-        for t in ((sie.get("terms") or {}).get("required") or [])
-        if isinstance(t, dict) and t.get("term")
-    ]
-    entity_terms = [
-        {"term": t.get("term", ""), "entity_category": t.get("entity_category")}
-        for t in ((sie.get("terms") or {}).get("required") or [])
-        if isinstance(t, dict) and t.get("is_entity")
-    ]
-
-    # PRD v2.6 wiring — title / h1 prompts express "include at least N
-    # distinct entities, no more than M". SIE assigns title.target /
-    # h1.target as a per-term occurrence count (typically 0 or 1 per
-    # entity per zone — you don't repeat an entity in a title). So the
-    # natural prompt-side number is a COUNT of entities recommended for
-    # the zone (target ≥ 1), not a sum of targets. Skip seed fragments
-    # — those echo the keyword which is already required separately.
-    title_zone_target_count = 0
-    title_zone_max_count = 0
-    h1_zone_target_count = 0
-    h1_zone_max_count = 0
-    for rt in filtered_terms.required:
-        if not getattr(rt, "is_entity", False):
-            continue
-        if getattr(rt, "is_seed_fragment", False):
-            continue
-        zones = getattr(rt, "zones", {}) or {}
-        if not isinstance(zones, dict):
-            continue
-        title_zone = zones.get("title") or {}
-        h1_zone = zones.get("h1") or {}
-        if isinstance(title_zone, dict):
-            if int(title_zone.get("target", 0) or 0) >= 1:
-                title_zone_target_count += 1
-            if int(title_zone.get("max", 0) or 0) >= 1:
-                title_zone_max_count += 1
-        if isinstance(h1_zone, dict):
-            if int(h1_zone.get("target", 0) or 0) >= 1:
-                h1_zone_target_count += 1
-            if int(h1_zone.get("max", 0) or 0) >= 1:
-                h1_zone_max_count += 1
     # The article's on-page H1 and the SEO/meta title are SEPARATE concepts:
     # - title = SEO/meta title (browser tab, SERP, og:title). Brief emits this
     #   in `brief.title`. Surfaced as WriterResponse.title.
@@ -365,23 +358,25 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         title = (brief.get("title") or "").strip() or h1_text
         h1_enrichment = await generate_h1_enrichment(
             keyword=keyword, h1_text=h1_text,
-            high_salience_entities=entity_terms,
-            h1_zone_target=h1_zone_target_count,
-            h1_zone_max=h1_zone_max_count,
+            entities=reconciled_entities,
+            related_keywords=reconciled_related,
+            keyword_variants=reconciled_variants,
+            h1_targets=h1_targets,
         )
     else:
         title_task = asyncio.create_task(generate_title(
             keyword=keyword, intent_type=intent_type,
-            required_terms=required_terms_list,
-            entities=[e["term"] for e in entity_terms],
-            title_zone_target=title_zone_target_count,
-            title_zone_max=title_zone_max_count,
+            entities=[e["term"] for e in reconciled_entities],
+            related_keywords=reconciled_related,
+            keyword_variants=reconciled_variants,
+            title_targets=title_targets,
         ))
         h1_task = asyncio.create_task(generate_h1_enrichment(
             keyword=keyword, h1_text=h1_text,
-            high_salience_entities=entity_terms,
-            h1_zone_target=h1_zone_target_count,
-            h1_zone_max=h1_zone_max_count,
+            entities=reconciled_entities,
+            related_keywords=reconciled_related,
+            keyword_variants=reconciled_variants,
+            h1_targets=h1_targets,
         ))
         title = await title_task
         h1_enrichment = await h1_task
@@ -431,8 +426,19 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     article.append(intro_section)
 
     # ---- Section writing (sequential per H2 group) ----
+    # SIE v1.4 — pro-rate the article-wide body category target across
+    # H2 groups by their share of the total body word budget. Each
+    # section gets an aspirational fair-share target so the LLM can
+    # self-pace; per-term targets remain the hard guidance.
+    total_body_budget = sum(section_budgets.values()) or 1
     banned_terms_leaked_in_body: list[str] = []
     for h2_item, h3_items in h2_groups:
+        section_budget = section_budgets.get(h2_item.get("order"), 0)
+        share = section_budget / total_body_budget if total_body_budget else 0.0
+        section_aspirational = {
+            cat: max(0, int(round(paragraphs_targets[cat] * share)))
+            for cat in ("entities", "related_keywords", "keyword_variants")
+        }
         result = await write_h2_group(
             keyword=keyword, intent=intent_type,
             h2_item=h2_item, h3_items=h3_items,
@@ -441,6 +447,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             citations=citations,
             brand_voice_card=brand_voice_card,
             banned_regex=banned_regex,
+            section_category_aspirational=section_aspirational,
         )
         article.extend(result.sections)
         banned_terms_leaked_in_body.extend(result.banned_terms_leaked)
@@ -464,6 +471,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         faq_header_text=faq_header_text,
         faq_header_order=faq_header_order,
         question_orders=question_orders,
+        paragraphs_zone_targets=paragraphs_targets,
     )
     article.extend(faq_sections)
 

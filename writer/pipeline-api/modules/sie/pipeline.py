@@ -14,6 +14,7 @@ from typing import Optional
 
 from config import settings
 from models.sie import (
+    CategoryTarget,
     ExcludedURL,
     FailedURL,
     SERPSummary,
@@ -27,6 +28,7 @@ from models.sie import (
     TermUsage,
     UsageRecommendation,
     WordCountTarget,
+    ZoneCategoryAggregate,
     ZoneUsage,
 )
 from modules.brief import dataforseo as dfs
@@ -64,7 +66,7 @@ from .ngrams import (
 from .scoring import score_terms
 from .scraper import scrape_many
 from .textrazor_entities import aggregate_textrazor_results
-from .usage import build_usage
+from .usage import build_usage, build_zone_category_targets
 from .word_count import compute_word_count_target
 from .zones import PageZones, cross_page_fingerprint_filter, extract_zones
 
@@ -327,6 +329,26 @@ async def run_sie(req: SIERequest) -> SIEResponse:
     top_for_usage = {r.term: aggregates[r.term] for r in required[:50] if r.term in aggregates}
     usage_dicts = build_usage(top_for_usage, pages, target_word_count, req.outlier_mode)
 
+    # ---- SIE v1.4: zone × category aggregate targets ----
+    # Per-zone per-category distinct-item targets benchmarked at 0.50 ×
+    # trimmed-max competitor count. Uses the same `top_for_usage` term
+    # set so the aggregate matches the term universe the writer
+    # actually consumes (per-term targets in usage_recommendations).
+    zone_category_targets_raw = build_zone_category_targets(
+        top_for_usage,
+        pages,
+        entity_meta,
+        seed_fragment_terms,
+        req.outlier_mode,
+    )
+    zone_category_targets_models: dict[str, ZoneCategoryAggregate] = {}
+    for zone_name, cat_dict in zone_category_targets_raw.items():
+        zone_category_targets_models[zone_name] = ZoneCategoryAggregate(
+            entities=CategoryTarget(**cat_dict.get("entities", {"target": 0, "max": 0})),
+            related_keywords=CategoryTarget(**cat_dict.get("related_keywords", {"target": 0, "max": 0})),
+            keyword_variants=CategoryTarget(**cat_dict.get("keyword_variants", {"target": 0, "max": 0})),
+        )
+
     usage_models: list[UsageRecommendation] = []
     for u in usage_dicts:
         zones = u["usage"]
@@ -399,6 +421,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
         ),
         term_signals=signals,
         usage_recommendations=usage_models,
+        zone_category_targets=zone_category_targets_models,
         target_keyword=target_record,
         warnings=warnings,
     )
@@ -408,7 +431,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
         keyword=keyword,
         location_code=req.location_code,
         outlier_mode=req.outlier_mode,
-        schema_version="1.3",
+        schema_version="1.4",
         output_payload=response.model_dump(mode="json"),
         duration_ms=duration_ms,
     )

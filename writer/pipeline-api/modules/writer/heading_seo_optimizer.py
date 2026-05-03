@@ -59,9 +59,10 @@ SOFTENED_CHANGE_RATIO = 0.50
 # picks from a curated top-N.
 MAX_ENTITIES_PER_PROMPT = 30
 
-# Per-heading soft minimums. The prompt asks the LLM to incorporate at
-# least these many entities per zone. Configurable so we can tune
-# per-client / per-keyword if certain niches need more or fewer.
+# Legacy per-heading soft minimums (PRD v2.6 — pre-v1.4). Retained as
+# named constants for backward-compat callers / tests; the v1.4 wiring
+# uses an aggregate `subheadings_targets` dict instead of per-level
+# minimums and these constants are no longer threaded into the prompt.
 MIN_ENTITIES_PER_H2 = 1
 MIN_ENTITIES_PER_H3 = 1
 
@@ -93,27 +94,28 @@ class HeadingOptimizationResult:
 
 SYSTEM_PROMPT = """\
 You are an SEO heading optimizer. You receive an article's H2 / H3
-headings (already chosen by an upstream brief generator) plus the
-article's seed keyword and a curated entity list with per-zone target
-counts. Your job is to rewrite each heading so that:
+headings (already chosen by an upstream brief generator) plus three
+category-bucketed term lists (entities, related keywords, keyword
+variants) and aggregate target counts for the subheadings zone (H2 +
+H3 combined). Your job is to rewrite each heading so that:
 
 1. The heading's TOPIC stays the same. You add words; you do not change
    what the section is about.
-2. Each H2 contains at least N_H2 entity from the entity list (where
-   `entity_target` is specified per heading).
-3. Each H3 contains at least N_H3 entity from the entity list.
-4. The seed keyword's tokens are preserved verbatim where they already
+2. Across all H2 + H3 headings combined, the rewrites carry at least
+   the target distinct count per category (entities target, related
+   keywords target, keyword variants target). Distribute naturally —
+   not every heading needs items from every category.
+3. The seed keyword's tokens are preserved verbatim where they already
    appear. If the keyword's tokens don't appear in any heading, leave
    that to the brief — don't try to inject the keyword everywhere.
-5. Forbidden terms NEVER appear in any heading.
-6. Per-zone max counts are respected — don't stuff a heading with 4
-   entities when the zone max is 2.
-7. Heading text remains natural. "TikTok Shop ROI Optimization Tactics
+4. Forbidden terms NEVER appear in any heading.
+5. Heading text remains natural. "TikTok Shop ROI Optimization Tactics
    Strategy Tips" is bad. "Optimize TikTok Shop ROI" is good.
 
-LIGHT TOUCH RULE: If a heading already contains an appropriate entity,
-keep it as-is. Only rewrite when the entity count is below the minimum
-or when an obviously-better entity from the list fits naturally.
+LIGHT TOUCH RULE: If a heading already contains an appropriate term
+from any category, keep it as-is. Only rewrite when the aggregate
+category count is below target or when an obviously-better term from
+the list fits naturally.
 
 Output strict JSON only (no preamble, no markdown fences):
 {
@@ -134,17 +136,29 @@ def _build_user_prompt(
     keyword: str,
     headings: list[dict],
     entities: list[dict],
+    related_keywords: list[str],
+    keyword_variants: list[str],
     forbidden_terms: list[str],
-    min_h2: int,
-    min_h3: int,
+    subheadings_targets: dict[str, int],
 ) -> str:
+    targets_block = json.dumps({
+        "entities": int(subheadings_targets.get("entities", 0) or 0),
+        "related_keywords": int(subheadings_targets.get("related_keywords", 0) or 0),
+        "keyword_variants": int(subheadings_targets.get("keyword_variants", 0) or 0),
+    }, ensure_ascii=False)
     return (
         f"Seed keyword (preserve tokens where they appear): {keyword}\n\n"
-        f"Min entities per H2: {min_h2}\n"
-        f"Min entities per H3: {min_h3}\n\n"
-        f"Recommended entities (each carries per-zone targets — pick "
-        f"naturally from this set):\n"
+        f"Subheadings (H2 + H3 combined) aggregate targets — distinct\n"
+        f"counts the rewrites must hit across ALL headings:\n"
+        f"{targets_block}\n\n"
+        f"Recommended entities (each carries metadata; pick naturally\n"
+        f"from this set):\n"
         f"{json.dumps(entities, ensure_ascii=False, indent=2)}\n\n"
+        f"Related keywords:\n"
+        f"{json.dumps(related_keywords, ensure_ascii=False)}\n\n"
+        f"Keyword variants (seed-keyword echoes — usable as headings\n"
+        f"where natural, but don't force them into every H3):\n"
+        f"{json.dumps(keyword_variants, ensure_ascii=False)}\n\n"
         f"Forbidden terms (must not appear):\n"
         f"{json.dumps(forbidden_terms, ensure_ascii=False)}\n\n"
         f"Headings to optimize (return one rewrite per input order):\n"
@@ -250,23 +264,30 @@ async def optimize_headings(
     keyword: str,
     reconciled_terms: list,  # list[ReconciledTerm] — typed loosely to avoid circular imports
     forbidden_terms: list[str],
-    min_h2: int = MIN_ENTITIES_PER_H2,
-    min_h3: int = MIN_ENTITIES_PER_H3,
+    subheadings_targets: Optional[dict[str, int]] = None,
     llm_json_fn: Optional[LLMJsonFn] = None,
 ) -> HeadingOptimizationResult:
-    """Rewrite H2 / H3 headings to incorporate SIE-recommended entities.
+    """Rewrite H2 / H3 headings to incorporate SIE-recommended terms.
+
+    SIE v1.4 — three-bucket category injection. The optimizer offers
+    the LLM three category-bucketed term lists (entities, related
+    keywords, keyword variants) and an aggregate target across the
+    H2 + H3 zone (`subheadings_targets`). Keyword variants ARE included
+    at the user's spec — they're explicit injection candidates, not
+    keyword echoes to be filtered out.
 
     Args:
         heading_structure: the brief's heading list. List of dicts with
             `level`, `text`, `order`, etc.
         keyword: the seed keyword (preserved in headings where present).
         reconciled_terms: ReconciledTerm objects from the writer's
-            reconciliation stage. Only entities (`is_entity=True`) get
-            offered to the LLM; non-entity terms are surfaced through
-            the existing required-terms path in section prompts.
+            reconciliation stage. Bucketed by is_entity / is_seed_fragment
+            into entities / keyword_variants / related_keywords.
         forbidden_terms: brand-voice avoid list. Headings containing
             any of these are rejected and the original is preserved.
-        min_h2 / min_h3: minimum entities per heading at each level.
+        subheadings_targets: SIE v1.4 zone aggregate keyed by category;
+            sum of h2 + h3 zone aggregates from
+            `sie.zone_category_targets`. Defaults to all-zero when None.
         llm_json_fn: injectable for tests.
 
     Returns:
@@ -279,6 +300,9 @@ async def optimize_headings(
     # short-circuited.
     reconciled_terms = reconciled_terms or []
     forbidden_terms = forbidden_terms or []
+    subheadings_targets = subheadings_targets or {
+        "entities": 0, "related_keywords": 0, "keyword_variants": 0,
+    }
 
     # Always populate with the original so callers can rely on the
     # field being present.
@@ -295,38 +319,33 @@ async def optimize_headings(
         result.skipped_reason = "no_h2_h3_candidates"
         return result
 
-    # Filter reconciled terms to entities only and compose a curated
-    # list with per-zone targets. Cap at MAX_ENTITIES_PER_PROMPT to
-    # keep token budget bounded.
+    # Bucket reconciled terms into the v1.4 three categories.
     entity_payload: list[dict] = []
+    related_keywords: list[str] = []
+    keyword_variants: list[str] = []
     for term in reconciled_terms:
-        if not getattr(term, "is_entity", False):
+        term_str = getattr(term, "term", None)
+        if not term_str:
             continue
-        # SIE v1.3 defensive guard — entities should never be flagged as
-        # seed fragments (sie/pipeline.py guarantees this), but if the
-        # invariant breaks upstream we still don't want to inject a
-        # keyword echo into H2/H3. Skip silently.
-        if getattr(term, "is_seed_fragment", False):
-            continue
-        zones = getattr(term, "zones", {}) or {}
-        h2_zone = zones.get("h2", {}) if isinstance(zones, dict) else {}
-        h3_zone = zones.get("h3", {}) if isinstance(zones, dict) else {}
-        entity_payload.append({
-            "term": term.term,
-            "category": getattr(term, "entity_category", None),
-            "h2_target": int(h2_zone.get("target", 0)) if isinstance(h2_zone, dict) else 0,
-            "h2_max": int(h2_zone.get("max", 0)) if isinstance(h2_zone, dict) else 0,
-            "h3_target": int(h3_zone.get("target", 0)) if isinstance(h3_zone, dict) else 0,
-            "h3_max": int(h3_zone.get("max", 0)) if isinstance(h3_zone, dict) else 0,
-        })
+        if getattr(term, "is_entity", False):
+            entity_payload.append({
+                "term": term_str,
+                "category": getattr(term, "entity_category", None),
+            })
+        elif getattr(term, "is_seed_fragment", False):
+            keyword_variants.append(term_str)
+        else:
+            related_keywords.append(term_str)
 
-    if not entity_payload:
-        # Nothing to inject — skip silently. Common when SIE returned no
-        # entities (small SERP / NLP unavailable / etc.).
-        result.skipped_reason = "no_entities_available"
-        return result
-
+    # Truncate per-category to keep prompt token budget bounded.
     entity_payload = entity_payload[:MAX_ENTITIES_PER_PROMPT]
+    related_keywords = related_keywords[:MAX_ENTITIES_PER_PROMPT]
+    keyword_variants = keyword_variants[:15]
+
+    if not (entity_payload or related_keywords or keyword_variants):
+        # Nothing to inject across any category — skip silently.
+        result.skipped_reason = "no_terms_available"
+        return result
 
     headings_payload = [
         {
@@ -341,9 +360,10 @@ async def optimize_headings(
         keyword=keyword,
         headings=headings_payload,
         entities=entity_payload,
+        related_keywords=related_keywords,
+        keyword_variants=keyword_variants,
         forbidden_terms=forbidden_terms,
-        min_h2=min_h2,
-        min_h3=min_h3,
+        subheadings_targets=subheadings_targets,
     )
 
     call = llm_json_fn or claude_json
