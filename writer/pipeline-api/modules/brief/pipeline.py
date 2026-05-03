@@ -464,6 +464,11 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     if intent_template.h2_pattern == "sequential_steps":
         # how-to baseline target — favor the template max within reason.
         target_h2 = max(target_h2, min(8, intent_template.max_h2_count))
+    # Final clamp: never ask MMR for more than the template allows. A
+    # template with max_h2_count below the 6-baseline (e.g. a 3-axis
+    # comparison) must NOT trigger a 6-slot ask.
+    if intent_template.max_h2_count:
+        target_h2 = min(target_h2, intent_template.max_h2_count)
 
     # ---- Step 7.5 — anchor-slot reservation (PRD v2.1 / Phase 1) ----
     # Embed the template's anchor strings (single API call) and reserve
@@ -520,6 +525,37 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         h2s=selected_h2s,
         template=intent_template,
     )
+
+    # Re-embed rewritten H2s so downstream parent_relevance computations
+    # (Step 8.6 H3 selection, authority gap attachment) operate on
+    # vectors aligned with the displayed text. The framing prompt
+    # constrains rewrites to preserve topic, so the embedding shift is
+    # small — but small drifts can push H3 candidates across the
+    # parent_relevance band [0.60, 0.85] in either direction. One
+    # embedding API call per run, only fires when at least one rewrite
+    # landed (typical case is zero).
+    if framing_result.rewritten_indices:
+        rewritten = [selected_h2s[i] for i in framing_result.rewritten_indices]
+        try:
+            new_vecs = await embed_batch_large([c.text for c in rewritten])
+            for c, v in zip(rewritten, new_vecs):
+                if v:
+                    c.embedding = v
+                    # Refresh title_relevance against the new vector so
+                    # any downstream consumer that re-reads it (e.g. the
+                    # discarded_headings audit) sees a coherent number.
+                    c.title_relevance = (
+                        sum(a * b for a, b in zip(v, title_embedding))
+                        if title_embedding else c.title_relevance
+                    )
+        except Exception as exc:
+            logger.warning(
+                "brief.framing.reembed_failed",
+                extra={
+                    "rewritten_count": len(rewritten),
+                    "error": str(exc),
+                },
+            )
 
     # ---- how-to reorder must run BEFORE Step 8.6 ----
     # Step 8.6's H3 attachments are keyed by H2 index. Reordering H2s

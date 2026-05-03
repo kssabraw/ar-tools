@@ -43,6 +43,7 @@ Regex rules per framing_rule:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -63,19 +64,57 @@ LLMJsonFn = Callable[..., Awaitable[Any]]
 # Regex tables
 # ---------------------------------------------------------------------------
 
-# Common action-verb starters. Not exhaustive — the "ing"/"e"-stem fallback
-# below catches generic verbs (Optimize, Configure, Validate, …).
+# Common action-verb starters. Not exhaustive — `_passes_verb_leading`
+# additionally accepts any first word that is NOT in the non-verb-leader
+# reject list (`_NON_VERB_LEADERS`), since English imperatives are too
+# varied to whitelist comprehensively. The whitelist is kept primarily
+# so a future tightening of the predicate can flip back to whitelist-
+# only mode without rebuilding the registry.
 _ACTION_VERBS: frozenset[str] = frozenset({
     "add", "audit", "build", "buy", "check", "choose", "clean", "configure",
-    "connect", "create", "decide", "deploy", "design", "draft", "enable",
-    "evaluate", "execute", "explore", "find", "fix", "generate", "identify",
-    "implement", "improve", "increase", "install", "integrate", "iterate",
-    "launch", "learn", "list", "load", "log", "make", "map", "measure",
-    "monitor", "open", "optimize", "organize", "outline", "plan", "post",
-    "prepare", "prepare", "publish", "refine", "register", "research",
-    "review", "run", "schedule", "select", "set", "setup", "sign",
-    "start", "store", "submit", "test", "track", "tune", "update",
-    "upload", "validate", "verify", "write",
+    "connect", "consider", "create", "decide", "deploy", "design", "draft",
+    "enable", "evaluate", "execute", "explore", "find", "fix", "generate",
+    "handle", "identify", "implement", "improve", "increase", "install",
+    "integrate", "iterate", "launch", "learn", "list", "load", "log",
+    "make", "manage", "map", "maximize", "measure", "minimize", "monitor",
+    "open", "optimize", "organize", "outline", "pick", "plan", "post",
+    "prepare", "publish", "refine", "register", "research", "review", "run",
+    "schedule", "select", "set", "setup", "ship", "sign", "start", "store",
+    "submit", "test", "track", "tune", "update", "upload", "validate",
+    "verify", "write",
+})
+
+
+# Words that signal an H2 is NOT a verb-leading action — questions,
+# auxiliaries, articles, determiners, generic superlatives. If the first
+# word is in this set, `_passes_verb_leading` returns False and the
+# framing validator routes the H2 to LLM rewrite. Conversely, if the
+# first word is NOT in this set, the validator accepts it as plausibly
+# verb-leading. This permissive default exists because English
+# imperatives are too varied to whitelist exhaustively (configure, ship,
+# pick, handle, scale, …) and the previous verb-stem regex had both
+# false-pass cases (e.g. "Where", "Should") and false-reject cases
+# (e.g. "Configuring", "Consider", "Handle").
+_NON_VERB_LEADERS: frozenset[str] = frozenset({
+    # Question/interrogative words
+    "what", "how", "why", "where", "who", "when", "which", "whose",
+    # Auxiliary / modal verbs that lead questions
+    "are", "is", "am", "was", "were", "be", "been",
+    "do", "does", "did",
+    "can", "could", "may", "might", "shall", "should", "will", "would",
+    "has", "have", "had",
+    # Articles
+    "a", "an", "the",
+    # Determiners / possessives
+    "this", "that", "these", "those",
+    "your", "my", "our", "his", "her", "their", "its",
+    # Generic superlatives / commercial AI-tells (PRD §11 banned phrases)
+    "best", "top", "ultimate", "complete", "definitive", "everything",
+    # "Number N:" listicle marker — treat the bare word "number" as a
+    # non-verb leader; the "Number 2: Validate" pattern is unwrapped
+    # by the numeric-ordinal recursion in `_passes_verb_leading` so the
+    # actual first word ("validate") is what's tested.
+    "number",
 })
 
 
@@ -84,14 +123,22 @@ _ORDINAL_RE = re.compile(
     r"^\s*(?:#?\d+[\.\)]?\s+|top\s+\d+\s+|number\s+\d+[:\.]?\s+)",
     re.IGNORECASE,
 )
-_QUESTION_LEAD_RE = re.compile(
-    r"^\s*(?:what|how|why|where|who|when|which|are|is|do|does|can|should)\b",
+# Numeric ordinal only — used by `_passes_verb_leading` to peel off
+# "1. " / "2) " / "#3 " / "Number 4:" prefixes and recurse on the rest.
+# Distinct from `_ORDINAL_RE` because "Top N" should NOT auto-pass
+# verb-leading (the word "Top" is itself a non-verb leader).
+_NUMERIC_ORDINAL_PREFIX_RE = re.compile(
+    r"^\s*(?:number\s+)?#?\d+[\.\):]?\s+",
     re.IGNORECASE,
 )
-_VERB_LEAD_HEURISTIC_RE = re.compile(
-    # Falls back to "looks like a verb" — first word ends in a typical
-    # verb-stem letter and the heading isn't obviously a question.
-    r"^\s*[A-Za-z]+(?:e|t|n|d|p|y|h|w|ze|fy|ate|ize|ise)\b",
+# Match a leading question/auxiliary word — used by axis_noun_phrase to
+# reject question-style headings without going through verb_leading.
+_QUESTION_LEAD_RE = re.compile(
+    r"^\s*(?:what|how|why|where|who|when|which|whose|"
+    r"are|is|am|was|were|be|been|"
+    r"do|does|did|"
+    r"can|could|may|might|shall|should|will|would|"
+    r"has|have|had)\b",
     re.IGNORECASE,
 )
 
@@ -113,18 +160,43 @@ def _first_word(text: str) -> str:
 
 
 def _passes_verb_leading(text: str) -> bool:
+    """Verb-leading predicate (PRD v2.1 Step 11.0).
+
+    Pass conditions:
+      - Explicit "Step <N>:" prefix
+      - Leading ordinal "1. " / "2. " etc. (a how-to step is still
+        action-leading even when the verb is preceded by a numeral)
+      - First lexical token is in the action-verb whitelist
+      - First lexical token is NOT in the non-verb-leader reject list
+        (questions, auxiliaries, articles, determiners, superlatives)
+
+    The fall-through-to-accept policy is deliberately permissive: English
+    imperatives are too varied to whitelist exhaustively, and "false
+    positives" (a non-verb noun phrase passing the predicate) are
+    preferable to "false rejects" (a valid imperative routed through an
+    unnecessary LLM rewrite). The framing validator's purpose is to
+    catch the *clear* failure case — Q&A-style H2s on a how-to article —
+    not to nitpick word forms.
+    """
     if _STEP_PREFIX_RE.match(text):
         return True
+    # Numeric ordinal prefix: peel off "1. " / "#3 " / "Number 4:" and
+    # recurse on the remainder. This makes "1. Choose a niche" pass
+    # because "choose" is in the action-verb whitelist, while "Top 5
+    # tactics" still fails (no numeric ordinal at the very start; the
+    # bare word "top" is in `_NON_VERB_LEADERS`).
+    m = _NUMERIC_ORDINAL_PREFIX_RE.match(text)
+    if m and m.end() < len(text):
+        return _passes_verb_leading(text[m.end():])
     first = _first_word(text)
     if not first:
         return False
+    if first in _NON_VERB_LEADERS:
+        return False
     if first in _ACTION_VERBS:
         return True
-    # Verb-stem heuristic — covers Optimize/Configure/Validate/Iterate/etc.
-    # Be careful not to match obvious non-verbs ("the", "your", "best").
-    if first in {"the", "your", "best", "top", "a", "an", "what", "how", "why"}:
-        return False
-    return bool(_VERB_LEAD_HEURISTIC_RE.match(text))
+    # Default-accept: first word isn't in either set, presume verb.
+    return True
 
 
 def _passes_ordinal(text: str) -> bool:
@@ -132,25 +204,28 @@ def _passes_ordinal(text: str) -> bool:
 
 
 def _passes_axis_noun_phrase(text: str) -> bool:
-    """Short noun-phrase headings — typically ≤6 words, no leading verb,
-    no leading question word. We accept anything that's NOT verb-leading
-    AND NOT question-leading; the upstream Step 5 gates already enforce
-    topical relevance, so this is a shape check only.
+    """Short noun-phrase headings (comparison axes, ecom feature-benefit).
+
+    Pass conditions:
+      - Non-empty after stripping whitespace
+      - Does NOT lead with a question/auxiliary word
+      - Does NOT lead with a listicle ordinal (those belong under
+        `ordinal_then_noun_phrase`, not axis)
+      - ≤ 8 words (axes are short by convention; "Pricing and Plans"
+        passes, "How to evaluate which TikTok Shop fits your business
+        model" does not)
+
+    Action-leading is NOT explicitly rejected here — short imperative
+    forms like "Compare" or "Pick" are sometimes valid axis labels. The
+    upstream Step 5 relevance gates already filter for on-topic content;
+    this predicate enforces *shape* only.
     """
     stripped = text.strip()
     if not stripped:
         return False
-    if _passes_verb_leading(stripped):
-        # Verb-leading H2s aren't axis-style (they're action H2s); reject
-        # so the validator nudges these toward axis framing.
-        # But: many short verbs share noun forms ("Pricing" vs "Price").
-        # We accept verb-stems-as-axis when they're standalone single
-        # words; this handles "Pricing", "Support", "Performance".
-        words = stripped.split()
-        if len(words) <= 2:
-            return True
-        return False
     if _QUESTION_LEAD_RE.match(stripped):
+        return False
+    if _ORDINAL_RE.match(stripped):
         return False
     return len(stripped.split()) <= 8
 
@@ -278,10 +353,13 @@ async def validate_and_rewrite_framing(
     items_payload = [
         {"index": i, "text": c.text} for i, c in failing
     ]
+    # Serialize as JSON (not Python repr) so headings containing
+    # apostrophes / backslashes / unicode never produce ambiguous
+    # quoting in the prompt.
     user = (
         f"Framing rule: {rule}\n"
         f"Hint: {_RULE_PROMPT_HINTS.get(rule, '')}\n"
-        f"Headings to rewrite:\n{items_payload}"
+        f"Headings to rewrite (JSON):\n{json.dumps(items_payload, ensure_ascii=False)}"
     )
 
     result.llm_called = True

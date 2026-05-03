@@ -63,6 +63,73 @@ def test_ordinal_rejects_non_ordinal(text):
     assert not passes_framing(text, "ordinal_then_noun_phrase")
 
 
+# ---------------------------------------------------------------------------
+# Bug-fix regression cases (Phase 1 review fixes)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text", [
+    "Where Should You Sell?",
+    "When to Launch Your Shop",
+    "Which TikTok Shop Plan Fits",
+    "Should You Sell on TikTok",
+    "Could TikTok Shop Work for You",
+    "Are TikTok Shops Profitable",
+    "Will TikTok Shop Survive a Ban",
+    "Has TikTok Shop Changed Recently",
+])
+def test_verb_leading_rejects_extended_question_words(text):
+    """Fix #1 — pre-Phase-1 the verb-stem heuristic falsely passed
+    `Where`, `When`, `Should`, `Are`, etc. because each ends in a
+    stem letter on the alternation list. After the fix, every common
+    question/auxiliary leader is rejected by `_NON_VERB_LEADERS`."""
+    assert not passes_framing(text, "verb_leading_action")
+
+
+@pytest.mark.parametrize("text", [
+    "Configuring your storefront",   # ends in 'g'; old regex rejected
+    "Consider audience overlap",     # ends in 'r'; old regex rejected
+    "Handle returns gracefully",     # already has 'handle' in whitelist
+    "Increase your conversion rate", # 'increase' in whitelist
+    "Maximize engagement velocity",  # 'maximize' in whitelist
+    "Pick a profitable niche",       # 'pick' in whitelist
+    "Ship your first batch",         # 'ship' in whitelist
+    "Scale operations carefully",    # not in whitelist; default-accept
+    "Streamline your fulfillment",   # not in whitelist; default-accept
+])
+def test_verb_leading_accepts_common_imperatives(text):
+    """Fix #2 — the old verb-stem heuristic falsely rejected many valid
+    imperative verbs (Configuring, Consider, Handle, …). After the fix,
+    the predicate's default-accept policy plus the broader whitelist
+    let these pass on first try."""
+    assert passes_framing(text, "verb_leading_action")
+
+
+@pytest.mark.parametrize("text", [
+    "1. Pick a niche",
+    "2) Set up your store",
+    "#3 Optimize listings",
+])
+def test_verb_leading_accepts_ordinal_prefix(text):
+    """Action H2s with an ordinal prefix should pass — `1. Pick a niche`
+    is still action-leading even though the first lexical token is '1.'."""
+    assert passes_framing(text, "verb_leading_action")
+
+
+@pytest.mark.parametrize("text", [
+    "The best storefront layout",   # 'the'
+    "Your TikTok Shop dashboard",   # 'your'
+    "Top 5 monetization tactics",   # 'top'
+    "Best practices for sellers",   # 'best'
+    "Ultimate Guide to TikTok Shop",  # 'ultimate'
+    "This year's TikTok trends",    # 'this'
+])
+def test_verb_leading_rejects_articles_determiners_and_superlatives(text):
+    """Articles, possessive determiners, and superlative AI-tells are all
+    rejected — these are noun-phrase / commercial leaders, not action."""
+    assert not passes_framing(text, "verb_leading_action")
+
+
 @pytest.mark.parametrize("text", [
     "Pricing",
     "Feature Set",
