@@ -316,18 +316,22 @@ Before writing begins, the module distributes the 2,500-word content budget acro
 **Allocation formula:**
 
 ```
-base_section_budget = word_budget / total_content_sections
+body_budget = word_budget − conclusion_budget          (≈2,375 of 2,500)
+per_group_budget = body_budget / h2_group_count        (every promised H2 group gets one share)
 
-Where:
-total_content_sections = h2_count + h3_count
-  (from brief.metadata; conclusion counts as one section)
+For each H2 group (parent H2 + its child H3s):
+  weight(parent_H2) = 1.0
+  weight(H3)        = 1.0          if regular
+                    = 1.2          if source == "authority_gap_sme"
+  section_budget(s) = per_group_budget × weight(s) / Σ weights_in_group
 ```
 
 **Adjustment rules:**
-- Authority gap H3s (tagged `source: "authority_gap_sme"`) receive a 1.2x budget multiplier — these sections contain the highest-value original information and should not be constrained to base budget
+- Each H2 *group* (parent H2 + its child H3s) receives an equal share of the body budget. This protects promised H2 sections that ship without H3 children from being starved by sibling groups that carry one or more authority-gap H3s
+- Authority-gap H3s (tagged `source: "authority_gap_sme"`) receive a 1.2x multiplier *within* their group, so the bonus reallocates words from the parent H2 of the same group rather than pulling from neighboring promised H2s
 - How-to and listicle intents allocate equal budget per step/item (no adjustment)
 - Conclusion receives a fixed budget of 100–150 words regardless of section count
-- If total allocated words exceed `word_budget`, scale all non-conclusion sections proportionally downward
+- Each section receives at least 50 words to keep prompts viable when the brief produces an unusually large heading count for a small `word_budget`
 
 **Output:** A `section_budget` map keyed by heading `order` index.
 
