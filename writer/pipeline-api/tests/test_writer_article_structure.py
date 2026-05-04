@@ -154,6 +154,37 @@ def test_faq_after_conclusion_no_warning():
 # ---------------------------------------------------------------------------
 
 
+def test_write_conclusion_emits_h2_with_conclusion_heading(monkeypatch):
+    """User feedback: 'I also didn't see a specific conclusion heading.'
+    write_conclusion must emit an ArticleSection with level='H2' and
+    heading='Conclusion' so the rendered article has a visible
+    section break before the wrap-up."""
+    import asyncio
+
+    from models.writer import BrandVoiceCard
+    from modules.writer.banned_terms import build_banned_regex
+    from modules.writer.conclusion import write_conclusion
+
+    async def _fake_call(system, user, **kw):
+        return {"conclusion": " ".join(["wrap"] * 100)}
+
+    monkeypatch.setattr("modules.writer.conclusion.claude_json", _fake_call)
+
+    section = asyncio.run(write_conclusion(
+        keyword="kw",
+        intent_type="how-to",
+        section_summaries=["A: foo", "B: bar"],
+        brand_voice_card=None,
+        banned_regex=build_banned_regex([]),
+        conclusion_order=99,
+    ))
+
+    assert section.type == "conclusion"
+    assert section.level == "H2"
+    assert section.heading == "Conclusion"
+    assert section.body  # non-empty
+
+
 def test_renumbered_orders_match_list_position():
     """Sanity: after the writer's resequencing loop (idx, start=1),
     each section's `order` field equals its 1-indexed list position.

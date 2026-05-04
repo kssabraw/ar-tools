@@ -141,9 +141,14 @@ async def write_conclusion(
 
         return ArticleSection(
             order=conclusion_order,
-            level="none",
+            # Emit as H2 with an explicit "Conclusion" heading so the
+            # rendered article carries a visible section break before
+            # the wrap-up. Previously level="none" / heading=None ran
+            # the conclusion as a free-floating prose block, which
+            # readers experience as the body just trailing off.
+            level="H2",
             type="conclusion",
-            heading=None,
+            heading="Conclusion",
             body=body,
             word_count=len(body.split()),
             section_budget=125,
@@ -155,9 +160,9 @@ async def write_conclusion(
 def _placeholder_conclusion(order: int) -> ArticleSection:
     return ArticleSection(
         order=order,
-        level="none",
+        level="H2",
         type="conclusion",
-        heading=None,
+        heading="Conclusion",
         body="[CONCLUSION GENERATION FAILED — MANUAL REVIEW REQUIRED]",
         word_count=0,
     )
