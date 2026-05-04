@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -201,6 +202,85 @@ def _build_section_summaries(article: list[ArticleSection], max_chars: int = 200
         if first:
             out.append(f"{s.heading}: {first[:max_chars]}")
     return out
+
+
+_ORPHAN_ORDINAL_PATTERN = re.compile(r"\bStep\s+(\d+)\b", re.IGNORECASE)
+
+
+def _validate_article_structure(article: list[ArticleSection]) -> list[str]:
+    """Post-assembly structural checks (PRD: article output structure).
+
+    Returns a list of warning strings — non-blocking observability
+    hooks. These run after assembly but before the final response so
+    we surface drift in logs without aborting an otherwise-valid run.
+
+    Checks:
+      1. Orphan ordinal references — body says "Step 3" with no
+         preceding Step 1 / Step 2 antecedent (the user reported this
+         specifically: "Step 3: Rewrite every product listing..." with
+         no Step 1 or Step 2 anywhere in the article).
+      2. Intro must be the first prose block after H1 (and optional
+         h1-enrichment) — defends the order-resequencing fix.
+      3. Conclusion must be present.
+      4. FAQ header must come AFTER the conclusion (FAQ-last
+         convention enforced by run_writer's assembly order).
+    """
+    warnings: list[str] = []
+
+    # 1. Orphan ordinal references.
+    seen_steps: set[int] = set()
+    for s in article:
+        body = s.body or ""
+        for m in _ORPHAN_ORDINAL_PATTERN.finditer(body):
+            n = int(m.group(1))
+            if n > 1 and (n - 1) not in seen_steps:
+                warnings.append(
+                    f"orphan_ordinal: 'Step {n}' in section "
+                    f"order={s.order} ({s.heading or s.type}) with no "
+                    f"preceding 'Step {n - 1}'"
+                )
+            seen_steps.add(n)
+
+    # 2. Intro position — must precede the first H2.
+    intro_index = next(
+        (i for i, s in enumerate(article) if s.type == "intro"),
+        None,
+    )
+    h2_first_index = next(
+        (i for i, s in enumerate(article)
+         if s.level == "H2" and s.type == "content"),
+        None,
+    )
+    if intro_index is not None and h2_first_index is not None:
+        if intro_index >= h2_first_index:
+            warnings.append(
+                f"intro_position: intro at index {intro_index} but first "
+                f"H2 at index {h2_first_index} — intro should precede body"
+            )
+
+    # 3. Conclusion present.
+    has_conclusion = any(s.type == "conclusion" for s in article)
+    if not has_conclusion:
+        warnings.append("missing_conclusion: article has no conclusion section")
+
+    # 4. FAQ header after conclusion.
+    conclusion_index = next(
+        (i for i, s in enumerate(article) if s.type == "conclusion"),
+        None,
+    )
+    faq_header_index = next(
+        (i for i, s in enumerate(article) if s.type == "faq-header"),
+        None,
+    )
+    if (conclusion_index is not None and faq_header_index is not None
+            and faq_header_index < conclusion_index):
+        warnings.append(
+            f"faq_before_conclusion: FAQ at index {faq_header_index} "
+            f"but conclusion at index {conclusion_index} — FAQ should "
+            f"come last"
+        )
+
+    return warnings
 
 
 async def run_writer(req: WriterRequest) -> WriterResponse:
@@ -392,38 +472,39 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
                 raise BannedTermLeakage(term=matches[0], location=chk_loc, snippet=chk_text)
 
     # ---- Build initial article scaffolding ----
+    # Article assembly note (post-bug fix):
+    # The writer used to generate intro BEFORE body sections. That
+    # produced two related defects:
+    #   1. The intro promised "you'll work through X, Y, Z" without
+    #      knowing which H2s actually got written — section count
+    #      drift.
+    #   2. The intro's `order` field collided with heading_structure's
+    #      `order` field (both used integer counters from 1). After
+    #      stable-sort by order in the markdown renderer, intro at
+    #      order=3 ended up rendering AFTER H2 #1 (also at order=2)
+    #      and BEFORE H2 #2 — visually merging into the bottom of
+    #      H2 #1's body.
+    # Fix: build the article in execution order (H1 → enrichment →
+    # body → conclusion → FAQ → intro-LAST), then INSERT intro at the
+    # correct render position and resequence `order` 1..N based on
+    # final list position. Generation order ≠ render order.
     article: list[ArticleSection] = []
-    next_order = 1
 
     article.append(ArticleSection(
-        order=next_order, level="H1", type="content",
+        order=0, level="H1", type="content",
         heading=h1_text, body="",
     ))
     if h1_enrichment:
-        next_order += 1
         article.append(ArticleSection(
-            order=next_order, level="none", type="h1-enrichment",
+            order=0, level="none", type="h1-enrichment",
             heading=None, body=h1_enrichment, word_count=len(h1_enrichment.split()),
         ))
 
-    # ---- Intro paragraph (Writer v1.6 §4.3.1 — Agree/Promise/Preview) ----
     h2_groups = _split_h2_groups(heading_structure)
     h2_titles = [(h2_item.get("text") or "").strip() for h2_item, _ in h2_groups]
     h2_titles = [t for t in h2_titles if t]
     scope_statement = (brief.get("scope_statement") or "").strip()
     intro_title = (brief.get("title") or h1_text).strip()
-    next_order += 1
-    intro_section = await write_intro(
-        keyword=keyword,
-        title=intro_title,
-        scope_statement=scope_statement,
-        intent_type=intent_type,
-        h2_list=h2_titles,
-        brand_voice_card=brand_voice_card,
-        banned_regex=banned_regex,
-        intro_order=next_order,
-    )
-    article.append(intro_section)
 
     # ---- Section writing (sequential per H2 group) ----
     # SIE v1.4 — pro-rate the article-wide body category target across
@@ -452,16 +533,23 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         article.extend(result.sections)
         banned_terms_leaked_in_body.extend(result.banned_terms_leaked)
 
-    # ---- FAQ writing ----
+    # ---- Conclusion (BEFORE FAQ — render order is body → conclusion → FAQ) ----
+    section_summaries = _build_section_summaries(article)
+    conclusion_section = await write_conclusion(
+        keyword=keyword, intent_type=intent_type,
+        section_summaries=section_summaries,
+        brand_voice_card=brand_voice_card,
+        banned_regex=banned_regex,
+        conclusion_order=0,
+    )
+    article.append(conclusion_section)
+
+    # ---- FAQ writing (AFTER conclusion per standard article convention) ----
     faq_header_item = next(
         (h for h in heading_structure if isinstance(h, dict) and h.get("type") == "faq-header"),
         None,
     )
     faq_header_text = (faq_header_item or {}).get("text", "Frequently Asked Questions")
-
-    next_order = max((s.order for s in article), default=0) + 1
-    faq_header_order = next_order
-    question_orders = list(range(faq_header_order + 1, faq_header_order + 1 + len(faq_questions)))
     faq_sections = await write_faqs(
         keyword=keyword,
         faq_questions=faq_questions,
@@ -469,26 +557,58 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         brand_voice_card=brand_voice_card,
         banned_regex=banned_regex,
         faq_header_text=faq_header_text,
-        faq_header_order=faq_header_order,
-        question_orders=question_orders,
+        faq_header_order=0,
+        question_orders=[0] * len(faq_questions),
         paragraphs_zone_targets=paragraphs_targets,
     )
     article.extend(faq_sections)
 
-    # ---- Conclusion ----
-    next_order = max((s.order for s in article), default=0) + 1
-    section_summaries = _build_section_summaries(article)
-    conclusion_section = await write_conclusion(
-        keyword=keyword, intent_type=intent_type,
-        section_summaries=section_summaries,
+    # ---- Intro (generated LAST so it can preview actual H2s) ----
+    # Writer v1.6 §4.3.1 — Agree/Promise/Preview. By generating the
+    # intro after body+conclusion+FAQ are all finalized, the prompt
+    # can promise EXACTLY the H2s that exist. Eliminates the "intro
+    # promises 4, body delivers 8" drift the user reported when the
+    # heading_structure mutated mid-pipeline.
+    intro_section = await write_intro(
+        keyword=keyword,
+        title=intro_title,
+        scope_statement=scope_statement,
+        intent_type=intent_type,
+        h2_list=h2_titles,
         brand_voice_card=brand_voice_card,
         banned_regex=banned_regex,
-        conclusion_order=next_order,
+        intro_order=0,
     )
-    article.append(conclusion_section)
+    # Insert intro right after H1 + (optional) h1-enrichment so the
+    # render order is: H1 → enrichment → intro → body... → conclusion
+    # → FAQ. Without this insertion, sequential resequencing below
+    # would put the intro at the END of the article.
+    intro_insert_position = 1 + (1 if h1_enrichment else 0)
+    article.insert(intro_insert_position, intro_section)
+
+    # ---- Order resequencing ----
+    # Stamp `order` 1..N based on final list position. The markdown
+    # renderer (platform-api/routers/publish.py) sorts sections by
+    # `order` before emitting, so after this loop sort-order matches
+    # iteration-order — eliminating the order-collision rendering bug
+    # that caused intro to render mid-body.
+    for idx, section in enumerate(article, start=1):
+        section.order = idx
 
     # ---- Heading-level post-hoc banned-term scan ----
     _scan_headings_for_banned(article, banned_regex)
+
+    # ---- Article structure validator ----
+    # Non-blocking observability — surfaces orphan ordinal references
+    # (e.g., "Step 3" with no Step 1/2), wrong-position intro, missing
+    # conclusion, FAQ-before-conclusion. Logged for review; doesn't
+    # abort an otherwise-valid run.
+    for warning in _validate_article_structure(article):
+        logger.warning(
+            "writer.structure.%s",
+            warning.split(":", 1)[0],
+            extra={"detail": warning},
+        )
 
     # ---- Step 6.7 — H2 body length validator (PRD v2.3 / Phase 3) ----
     # Catches H2 sections shipping with empty/lightweight bodies (the
