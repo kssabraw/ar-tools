@@ -91,10 +91,24 @@ def _build_intro_user_prompt(
                 "topic is broad or when no concrete anchor fits naturally."
             )
         if brand_voice_card.tone_adjectives:
-            parts.append(f"\nTONE: {', '.join(brand_voice_card.tone_adjectives)}")
+            parts.append(
+                f"\nTONE (every sentence should read as): "
+                f"{', '.join(brand_voice_card.tone_adjectives)}"
+            )
         if brand_voice_card.voice_directives:
             parts.append(
-                f"VOICE_DIRECTIVES: {' | '.join(brand_voice_card.voice_directives[:5])}"
+                f"VOICE_DIRECTIVES (apply throughout): "
+                f"{' | '.join(brand_voice_card.voice_directives[:5])}"
+            )
+        if brand_voice_card.preferred_terms:
+            parts.append(
+                f"FAVORED_PHRASING (use naturally where they fit): "
+                f"{', '.join(brand_voice_card.preferred_terms[:15])}"
+            )
+        if brand_voice_card.discouraged_terms:
+            parts.append(
+                f"DISCOURAGED (avoid where possible — softer than forbidden): "
+                f"{', '.join(brand_voice_card.discouraged_terms[:10])}"
             )
         if brand_voice_card.audience_summary:
             parts.append(f"\nAUDIENCE: {brand_voice_card.audience_summary}")

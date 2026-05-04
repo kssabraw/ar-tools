@@ -160,13 +160,35 @@ def _build_section_user_prompt(
             )
 
     if brand_voice_card:
-        parts.append("\nBRAND_VOICE:")
+        parts.append("\nBRAND_VOICE (write the section in this voice — these are not optional):")
         if brand_voice_card.brand_name:
             parts.append(f"  brand_name: {brand_voice_card.brand_name}")
         if brand_voice_card.tone_adjectives:
-            parts.append(f"  tone: {', '.join(brand_voice_card.tone_adjectives)}")
+            parts.append(
+                f"  tone (every paragraph should read as): "
+                f"{', '.join(brand_voice_card.tone_adjectives)}"
+            )
         if brand_voice_card.voice_directives:
-            parts.append(f"  directives: {' | '.join(brand_voice_card.voice_directives[:5])}")
+            parts.append(
+                f"  voice directives (apply throughout): "
+                f"{' | '.join(brand_voice_card.voice_directives[:5])}"
+            )
+        # Preferred terms (brand's `do_say` vocabulary) — favor these
+        # phrasings where natural. Distillation extracts these but
+        # earlier prompts dropped them on the floor, leaving the LLM
+        # with no positive signal about what the brand DOES want to
+        # sound like (only what it doesn't, via banned/discouraged).
+        if brand_voice_card.preferred_terms:
+            parts.append(
+                f"  favored phrasing (use naturally where they fit; "
+                f"don't force every one): "
+                f"{', '.join(brand_voice_card.preferred_terms[:15])}"
+            )
+        if brand_voice_card.discouraged_terms:
+            parts.append(
+                f"  discouraged (avoid where possible — softer than "
+                f"forbidden): {', '.join(brand_voice_card.discouraged_terms[:10])}"
+            )
         if brand_voice_card.audience_summary:
             parts.append(f"\nAUDIENCE: {brand_voice_card.audience_summary}")
         if brand_voice_card.audience_personas:

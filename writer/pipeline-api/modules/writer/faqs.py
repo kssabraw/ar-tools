@@ -130,9 +130,25 @@ async def write_faqs(
 
     if brand_voice_card:
         if brand_voice_card.tone_adjectives:
-            user_parts.append(f"\nTONE: {', '.join(brand_voice_card.tone_adjectives)}")
+            user_parts.append(
+                f"\nTONE (every answer should read as): "
+                f"{', '.join(brand_voice_card.tone_adjectives)}"
+            )
         if brand_voice_card.voice_directives:
-            user_parts.append(f"VOICE_DIRECTIVES: {' | '.join(brand_voice_card.voice_directives[:3])}")
+            user_parts.append(
+                f"VOICE_DIRECTIVES (apply throughout): "
+                f"{' | '.join(brand_voice_card.voice_directives[:3])}"
+            )
+        if brand_voice_card.preferred_terms:
+            user_parts.append(
+                f"FAVORED_PHRASING (use naturally where they fit): "
+                f"{', '.join(brand_voice_card.preferred_terms[:15])}"
+            )
+        if brand_voice_card.discouraged_terms:
+            user_parts.append(
+                f"DISCOURAGED (avoid where possible — softer than forbidden): "
+                f"{', '.join(brand_voice_card.discouraged_terms[:10])}"
+            )
         if brand_voice_card.audience_summary:
             user_parts.append(f"\nAUDIENCE: {brand_voice_card.audience_summary}")
         if brand_voice_card.audience_pain_points:
