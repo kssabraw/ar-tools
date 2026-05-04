@@ -48,6 +48,7 @@ from .citation_coverage_validator import (
     validate_citation_coverage,
 )
 from .h2_body_length import H2BodyLengthResult, validate_h2_body_lengths
+from .heading_sanitizer import SanitizationLog, sanitize_heading_structure
 from .heading_seo_optimizer import optimize_headings
 from .icp_verification import verify_icp_callout_landed
 from .sections import SectionWriteResult, write_h2_group
@@ -319,6 +320,20 @@ def _validate_article_structure(article: list[ArticleSection]) -> list[str]:
 async def run_writer(req: WriterRequest) -> WriterResponse:
     started = time.perf_counter()
     keyword, intent_type, heading_structure, faq_questions, citations = _validate_inputs(req)
+
+    # ---- Step 0.5 — Heading-structure sanitizer ----
+    # Cleans two structural drift modes observed in real briefs:
+    # (a) duplicate body H2s (same normalized heading text) — used to
+    #     ship as two near-identical sections under the same heading;
+    # (b) FAQ-as-content body H2s ("Frequently Asked Questions" with
+    #     type="content") — used to render as a body section before
+    #     the conclusion, with the real faq-header block landing AFTER
+    #     the conclusion (the user-reported "conclusion in the middle
+    #     of the FAQs" bug).
+    # Drops are warn-and-accept; surfaced in WriterMetadata so editors
+    # can audit. Order values are preserved (no renumbering) so all
+    # downstream lookups by `order` keep working.
+    heading_structure, sanitization_log = sanitize_heading_structure(heading_structure)
 
     sie = req.sie_output
     brief = req.brief_output
@@ -814,6 +829,9 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         icp_callout_landed=icp_landed,
         icp_callout_evidence=icp_evidence,
         icp_callout_judge_status=icp_judge_status,
+        duplicate_h2_headings_dropped=sanitization_log.duplicate_h2s_dropped,
+        faq_like_h2_content_dropped=sanitization_log.faq_like_h2s_dropped,
+        h3_children_dropped_under_h2=sanitization_log.h3_children_dropped,
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),

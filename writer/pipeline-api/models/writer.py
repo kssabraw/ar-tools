@@ -202,6 +202,18 @@ class WriterMetadata(BaseModel):
     icp_callout_landed: Optional[bool] = None
     icp_callout_evidence: Optional[str] = None
     icp_callout_judge_status: Optional[str] = None
+    # Step 0.5 — Heading sanitizer drops. The writer cleans two
+    # structural drift modes from upstream briefs before generating
+    # any content: duplicate body H2s with identical heading text, and
+    # body H2s whose heading reads as "Frequently Asked Questions" /
+    # "FAQs" / "Q&A" (which used to land BEFORE the conclusion while
+    # the real faq-header block landed after, producing the
+    # "conclusion in the middle of the FAQs" rendering bug). H3
+    # children of dropped body H2s are dropped along with them. Empty
+    # lists are the steady state; non-empty entries flag editor review.
+    duplicate_h2_headings_dropped: list[dict] = []
+    faq_like_h2_content_dropped: list[dict] = []
+    h3_children_dropped_under_h2: list[dict] = []
     schema_version: SchemaVersion = "1.7"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0
