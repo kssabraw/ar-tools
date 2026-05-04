@@ -501,8 +501,16 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         ))
 
     h2_groups = _split_h2_groups(heading_structure)
+    # Keep `h2_titles` index-aligned with `h2_groups` so that
+    # `current_h2_index=h2_idx` from the section loop indexes into
+    # the right slot. Filtering empties here desyncs the lists and
+    # places the ▶ marker on the wrong section. Empty entries are
+    # handled at render time in _build_section_user_prompt.
     h2_titles = [(h2_item.get("text") or "").strip() for h2_item, _ in h2_groups]
-    h2_titles = [t for t in h2_titles if t]
+    # For the intro's `h2_list` argument we still want non-empties only
+    # (the intro just enumerates titles — empty rows would render as
+    # bullets with no text).
+    h2_titles_for_intro = [t for t in h2_titles if t]
     scope_statement = (brief.get("scope_statement") or "").strip()
     intro_title = (brief.get("title") or h1_text).strip()
 
@@ -590,7 +598,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         title=intro_title,
         scope_statement=scope_statement,
         intent_type=intent_type,
-        h2_list=h2_titles,
+        h2_list=h2_titles_for_intro,
         brand_voice_card=brand_voice_card,
         banned_regex=banned_regex,
         intro_order=0,

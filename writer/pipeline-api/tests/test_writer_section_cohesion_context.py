@@ -113,6 +113,46 @@ async def test_section_prompt_carries_preceding_section_summaries(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_outline_skips_empty_sibling_titles_without_breaking_marker(monkeypatch):
+    """Defensive: if an H2 in the brief has empty text, it must NOT
+    render as a blank-numbered row, and the ▶ marker on a later
+    section must stay on the section the writer actually intended.
+    Regression for the h2_titles-filter bug where filtering empties
+    re-indexed and misaligned current_h2_index."""
+    call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
+    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+
+    siblings = [
+        "Optimize ROI",
+        "",  # an empty H2 in the brief — desync trap
+        "Read Analytics",
+        "Performance Score",
+    ]
+    h2_item = {"order": 6, "text": "Read Analytics",
+               "type": "content", "level": "H2"}
+    await write_h2_group(
+        keyword="kw", intent="how-to",
+        h2_item=h2_item, h3_items=[],
+        section_budgets={6: 300},
+        filtered_terms=FilteredSIETerms(),
+        citations=[], brand_voice_card=None,
+        banned_regex=build_banned_regex([]),
+        sibling_h2_titles=siblings,
+        current_h2_index=2,  # "Read Analytics" — third in the original list
+    )
+    user = captured["user"]
+    # Empty entry must NOT produce a "  2. " line.
+    assert "  2. " not in user
+    assert "▶ 2. " not in user
+    # ▶ marker stays on the original index 2 ("Read Analytics"), preserving
+    # the writer's intended numbering rather than re-indexing.
+    assert "▶ 3. Read Analytics" in user
+    # First and fourth still rendered with their original indices.
+    assert "  1. Optimize ROI" in user
+    assert "  4. Performance Score" in user
+
+
+@pytest.mark.asyncio
 async def test_section_prompt_omits_cohesion_blocks_when_args_absent(monkeypatch):
     """Backward compat: legacy callers that don't pass the new kwargs
     get the old prompt shape — no ARTICLE_TITLE / ARTICLE_OUTLINE /

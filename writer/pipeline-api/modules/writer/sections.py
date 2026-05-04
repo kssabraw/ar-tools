@@ -148,11 +148,17 @@ def _build_section_user_prompt(
     # repetition of setups already established by sibling sections.
     if article_title:
         parts.append(f"\nARTICLE_TITLE: {article_title}")
-    if sibling_h2_titles:
+    # Render only non-empty siblings so we don't emit blank-numbered
+    # rows ("  1. ") when the brief produced an H2 with empty text.
+    # We DON'T re-index — preserving the original 1..N numbering keeps
+    # the ▶ marker on the section the writer actually intended.
+    if sibling_h2_titles and any(t.strip() for t in sibling_h2_titles if t):
         parts.append(
             "ARTICLE_OUTLINE (the section you are writing is marked with ▶):"
         )
         for i, sibling_title in enumerate(sibling_h2_titles):
+            if not (sibling_title or "").strip():
+                continue
             marker = "▶" if (current_h2_index is not None and i == current_h2_index) else " "
             parts.append(f"  {marker} {i + 1}. {sibling_title}")
     if preceding_section_summaries:

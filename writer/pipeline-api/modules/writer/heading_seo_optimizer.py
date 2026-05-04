@@ -59,13 +59,6 @@ SOFTENED_CHANGE_RATIO = 0.50
 # picks from a curated top-N.
 MAX_ENTITIES_PER_PROMPT = 30
 
-# Legacy per-heading soft minimums (PRD v2.6 — pre-v1.4). Retained as
-# named constants for backward-compat callers / tests; the v1.4 wiring
-# uses an aggregate `subheadings_targets` dict instead of per-level
-# minimums and these constants are no longer threaded into the prompt.
-MIN_ENTITIES_PER_H2 = 1
-MIN_ENTITIES_PER_H3 = 1
-
 
 # ---------------------------------------------------------------------------
 # Result dataclass
