@@ -19,6 +19,8 @@ from models.runs import (
     RunListItem,
     RunListResponse,
     RunPollResponse,
+    SIETermsByCategory,
+    bucket_sie_required_terms,
 )
 from services.orchestrator import NON_TERMINAL_STATUSES, orchestrate_run
 from services.file_parser import detect_format
@@ -191,6 +193,18 @@ async def get_run(
         if isinstance(h1_candidate, str) and h1_candidate.strip():
             article_h1 = h1_candidate.strip()
 
+    # Pre-bucket SIE required terms into entities / related_keywords /
+    # keyword_variants for the UI (mirrors writer/sections.py and
+    # faqs.py prompt-side bucketing). Frontend can render three
+    # categorized lists without re-implementing the classification
+    # rule (and without needing to know about is_entity /
+    # is_seed_fragment flags).
+    sie_terms_by_category: Optional[SIETermsByCategory] = None
+    sie_mo = module_outputs.get("sie")
+    if sie_mo and sie_mo.output_payload:
+        required = (sie_mo.output_payload.get("terms") or {}).get("required") or []
+        sie_terms_by_category = bucket_sie_required_terms(required)
+
     return RunDetail(
         id=run["id"],
         keyword=run["keyword"],
@@ -207,6 +221,7 @@ async def get_run(
         completed_at=run.get("completed_at"),
         client_context_snapshot=snapshot,
         module_outputs=module_outputs,
+        sie_terms_by_category=sie_terms_by_category,
     )
 
 

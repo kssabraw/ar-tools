@@ -266,9 +266,46 @@ def _build_section_user_prompt(
                 parts.append(f"  locations: {', '.join(brand_voice_card.client_locations[:8])}")
 
     if required_terms:
+        # SIE v1.4 — bucket the required terms into the three categories
+        # so the LLM has explicit signal about which terms to use as
+        # entities (hard SEO weight), which to vary the keyword with
+        # (variants), and which are general topical anchors (related
+        # keywords). Mirrors faqs.py's bucketed output. Without this
+        # the section prompt presented a flat REQUIRED_TERMS list and
+        # the LLM had no way to associate the section_category_
+        # aspirational counts with specific candidate terms.
+        entities_top: list[str] = []
+        related_top: list[str] = []
+        variants_top: list[str] = []
+        for t in required_terms:
+            if getattr(t, "is_entity", False):
+                entities_top.append(t.term)
+            elif getattr(t, "is_seed_fragment", False):
+                variants_top.append(t.term)
+            else:
+                related_top.append(t.term)
+
+        # Per-term target/max (the hard guidance) stays as the
+        # canonical REQUIRED_TERMS block — sections may need to use a
+        # specific term N times, not just "any entity N times".
         parts.append("\nREQUIRED_TERMS (use naturally, aim for target count):")
         for t in required_terms:
-            parts.append(f"  - {t.term} (target: {t.effective_target}, max: {t.effective_max})")
+            parts.append(
+                f"  - {t.term} (target: {t.effective_target}, max: {t.effective_max})"
+            )
+
+        # Three-bucket view of the same terms — gives the LLM the
+        # "which-to-use-when" signal alongside the per-term targets.
+        if entities_top:
+            parts.append(f"\nENTITIES (SEO weight — use as proper-noun anchors): {', '.join(entities_top)}")
+        if related_top:
+            parts.append(f"RELATED_KEYWORDS (topical anchors — favor over generic phrasing): {', '.join(related_top)}")
+        if variants_top:
+            parts.append(
+                f"KEYWORD_VARIANTS (alternate ways to refer to the seed — "
+                f"vary instead of repeating the seed verbatim every paragraph): "
+                f"{', '.join(variants_top)}"
+            )
 
     # SIE v1.4 — section-level pro-rated category target. Informational
     # only (the per-term targets above are the hard guidance). The

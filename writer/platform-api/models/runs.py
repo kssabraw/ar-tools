@@ -52,6 +52,51 @@ class ClientContextSnapshot(BaseModel):
     website_analysis_unavailable: bool = False
 
 
+class SIETermsByCategory(BaseModel):
+    """Convenience three-bucket view of SIE required terms for the UI.
+
+    The SIE module_output already carries `terms.required[]` with each
+    TermRecord flagged via `is_entity` and `is_seed_fragment`. The UI
+    can derive these buckets itself, but pre-computing them server-
+    side makes rendering trivial and keeps category boundaries
+    consistent with the writer's prompt-side bucketing.
+    """
+
+    entities: list[str] = []
+    related_keywords: list[str] = []
+    keyword_variants: list[str] = []
+
+
+def bucket_sie_required_terms(required: list) -> SIETermsByCategory:
+    """Split SIE `terms.required[]` into the three v1.4 buckets.
+
+    Mirrors the writer's `_classify_term` ordering — entity check
+    takes precedence over seed-fragment, default is related_keyword.
+    Defensive against malformed entries (non-dicts, empty `term`,
+    missing flags).
+    """
+    entities: list[str] = []
+    related: list[str] = []
+    variants: list[str] = []
+    for term in required or []:
+        if not isinstance(term, dict):
+            continue
+        term_str = (term.get("term") or "").strip()
+        if not term_str:
+            continue
+        if term.get("is_entity"):
+            entities.append(term_str)
+        elif term.get("is_seed_fragment"):
+            variants.append(term_str)
+        else:
+            related.append(term_str)
+    return SIETermsByCategory(
+        entities=entities,
+        related_keywords=related,
+        keyword_variants=variants,
+    )
+
+
 class RunDetail(BaseModel):
     id: UUID
     keyword: str
@@ -76,6 +121,10 @@ class RunDetail(BaseModel):
             "sources_cited": None,
         }
     )
+    # Pre-bucketed SIE terms for the UI. Populated when the SIE
+    # module_output is available. None for runs that haven't reached
+    # the SIE stage yet.
+    sie_terms_by_category: Optional[SIETermsByCategory] = None
 
 
 class RunCreateResponse(BaseModel):

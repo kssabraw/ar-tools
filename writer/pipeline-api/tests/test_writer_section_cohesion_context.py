@@ -177,6 +177,50 @@ async def test_section_prompt_omits_cohesion_blocks_when_args_absent(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_section_prompt_buckets_required_terms_into_three_categories(monkeypatch):
+    """User feedback: section prompt presented a flat REQUIRED_TERMS
+    list with all categories mixed, so the LLM had no signal to use
+    entities as proper-noun anchors vs vary the keyword via variants
+    vs reach for related keywords as topical anchors. Bucket the
+    same terms into three explicit lists so the section LLM has the
+    same view as the FAQ LLM."""
+    from modules.writer.reconciliation import ReconciledTerm
+
+    call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
+    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+
+    filtered = FilteredSIETerms(required=[
+        ReconciledTerm(term="TikTok Shop", is_entity=True),
+        ReconciledTerm(term="GMV Max", is_entity=True),
+        ReconciledTerm(term="checkout flow", is_entity=False),
+        ReconciledTerm(term="conversion rate", is_entity=False),
+        ReconciledTerm(term="roi", is_seed_fragment=True),
+        ReconciledTerm(term="tiktok shop roi", is_seed_fragment=True),
+    ])
+    h2_item = {"order": 3, "text": "Section",
+               "type": "content", "level": "H2"}
+    await write_h2_group(
+        keyword="kw", intent="how-to",
+        h2_item=h2_item, h3_items=[],
+        section_budgets={3: 300},
+        filtered_terms=filtered,
+        citations=[], brand_voice_card=None,
+        banned_regex=build_banned_regex([]),
+    )
+    user = captured["user"]
+    # All three category headers present.
+    assert "ENTITIES" in user
+    assert "RELATED_KEYWORDS" in user
+    assert "KEYWORD_VARIANTS" in user
+    # Each term in the right bucket.
+    assert "ENTITIES (SEO weight" in user and "TikTok Shop" in user
+    assert "RELATED_KEYWORDS" in user and "checkout flow" in user
+    assert "KEYWORD_VARIANTS" in user and "tiktok shop roi" in user
+    # The flat REQUIRED_TERMS block (per-term targets) still present.
+    assert "REQUIRED_TERMS" in user
+
+
+@pytest.mark.asyncio
 async def test_first_section_has_no_preceding_summaries_subsequent_sections_do(monkeypatch):
     """Integration-style: simulate the running-summary loop from
     pipeline.py. Section #1's prompt has empty PRECEDING_SECTIONS
