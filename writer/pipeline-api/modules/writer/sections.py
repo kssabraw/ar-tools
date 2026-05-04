@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from config import settings
 from models.writer import ArticleSection, BrandVoiceCard
 
 from modules.brief.llm import claude_json
@@ -79,9 +80,43 @@ def _intent_guidance(intent: str) -> str:
     return INTENT_GUIDANCE.get(intent, INTENT_GUIDANCE["informational"])
 
 
-def _terms_for_section(filtered: FilteredSIETerms, max_required: int = 10) -> tuple[list[ReconciledTerm], list[str], list[str]]:
-    """Split into (required to use with effective targets, excluded to avoid, raw avoid)."""
-    required = filtered.required[:max_required]
+def _terms_for_section(
+    filtered: FilteredSIETerms,
+    *,
+    max_entities: int = 15,
+    max_related_keywords: int = 15,
+    max_keyword_variants: int = 15,
+) -> tuple[list[ReconciledTerm], list[str], list[str]]:
+    """Bucket-aware top-N selection from `filtered.required`.
+
+    Walks the SIE-score-sorted required pool and takes the first N from
+    each bucket (entities / related keywords / keyword variants)
+    independently. The prior single combined cap routinely shipped
+    sections with 3-5 entities even when SIE supplied 15+, because
+    related keywords with higher composite scores would crowd entities
+    out of the top 10. Bucket-aware caps guarantee minimum entity
+    representation per section.
+
+    Order in the returned `required` list: entities first, then related
+    keywords, then keyword variants. The section prompt iterates the
+    list to print `REQUIRED_TERMS (use naturally, aim for target
+    count): ...`, so entities-first puts the user's primary signal at
+    the top of the prompt.
+    """
+    entities: list[ReconciledTerm] = []
+    related: list[ReconciledTerm] = []
+    variants: list[ReconciledTerm] = []
+    for term in filtered.required:
+        if getattr(term, "is_entity", False):
+            if len(entities) < max_entities:
+                entities.append(term)
+        elif getattr(term, "is_seed_fragment", False):
+            if len(variants) < max_keyword_variants:
+                variants.append(term)
+        else:
+            if len(related) < max_related_keywords:
+                related.append(term)
+    required = entities + related + variants
     excluded_terms = [e["term"] for e in filtered.excluded if e.get("term")]
     return (required, excluded_terms, filtered.avoid)
 
@@ -510,7 +545,12 @@ async def write_h2_group(
     a previous attempt produced under-50% citation coverage on detected
     citable claims. The directive lists the offending sentences and asks
     the LLM to either add a marker or rewrite to remove the claim."""
-    required_terms, excluded_terms, avoid_terms = _terms_for_section(filtered_terms)
+    required_terms, excluded_terms, avoid_terms = _terms_for_section(
+        filtered_terms,
+        max_entities=settings.writer_section_max_entities,
+        max_related_keywords=settings.writer_section_max_related_keywords,
+        max_keyword_variants=settings.writer_section_max_keyword_variants,
+    )
     forbidden_terms = (brand_voice_card.banned_terms if brand_voice_card else []) or []
 
     # Resolve citations applicable to the H2 group

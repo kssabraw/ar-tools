@@ -100,6 +100,20 @@ class Settings(BaseSettings):
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 
+    # Writer §4 — per-section term cap, bucket-aware. The section prompt
+    # sends this many of each (entities, related keywords, keyword
+    # variants) from the reconciled SIE pool to each H2 group's LLM
+    # call. A single combined top-N cap (the prior v1.4 default of 10)
+    # routinely starved entities, which tend to score mid-band on SIE's
+    # composite recurrence+salience metric — articles shipped with only
+    # 3-5 distinct entities used. Bucket-aware caps guarantee minimum
+    # entity representation per section regardless of where entities
+    # fell in SIE's combined ranking. Tunable via env var if 15 still
+    # under-surfaces entities in production.
+    writer_section_max_entities: int = 15
+    writer_section_max_related_keywords: int = 15
+    writer_section_max_keyword_variants: int = 15
+
     class Config:
         env_file = ".env"
 
