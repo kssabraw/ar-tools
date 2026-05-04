@@ -67,13 +67,16 @@ class SIETermsByCategory(BaseModel):
     keyword_variants: list[str] = []
 
 
-def bucket_sie_required_terms(required: list) -> SIETermsByCategory:
+def bucket_sie_required_terms(
+    required: Optional[list[dict[str, Any]]],
+) -> SIETermsByCategory:
     """Split SIE `terms.required[]` into the three v1.4 buckets.
 
     Mirrors the writer's `_classify_term` ordering — entity check
     takes precedence over seed-fragment, default is related_keyword.
     Defensive against malformed entries (non-dicts, empty `term`,
-    missing flags).
+    missing flags) and a `None` input (e.g., when SIE module_output
+    lacks the `terms.required` field).
     """
     entities: list[str] = []
     related: list[str] = []
