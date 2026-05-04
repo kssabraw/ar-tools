@@ -35,6 +35,7 @@ from models.writer import (
 )
 
 from .banned_terms import BannedTermLeakage, build_banned_regex, find_banned
+from .brand_placement import BrandPlacementPlan, build_brand_placement_plan
 from .budget import allocate_budget, CONCLUSION_BUDGET_TARGET
 from .citations import reconcile_citation_usage
 from .conclusion import write_conclusion
@@ -514,6 +515,16 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     scope_statement = (brief.get("scope_statement") or "").strip()
     intro_title = (brief.get("title") or h1_text).strip()
 
+    # ---- Step 3.6 — Deterministic brand & ICP placement plan ----
+    # Pre-allocates exactly one H2 to anchor the brand mention and one
+    # H2 to anchor the ICP callout, before any section LLM runs. Without
+    # this step every section's prompt sees the same soft "1–2 times
+    # across the article… let another carry it" guidance and every
+    # section punts, shipping zero brand mentions and no ICP callout.
+    # No LLM call — token-overlap scoring against client_services /
+    # audience_pain_points / audience_verticals.
+    placement_plan = build_brand_placement_plan(heading_structure, brand_voice_card)
+
     # ---- Section writing (sequential per H2 group) ----
     # SIE v1.4 — pro-rate the article-wide body category target across
     # H2 groups by their share of the total body word budget. Each
@@ -550,6 +561,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             sibling_h2_titles=h2_titles,
             current_h2_index=h2_idx,
             preceding_section_summaries=list(preceding_summaries_running),
+            placement_directive=placement_plan.for_order(h2_item.get("order", -1)),
         )
         article.extend(result.sections)
         banned_terms_leaked_in_body.extend(result.banned_terms_leaked)
@@ -656,6 +668,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             citations=citations,
             brand_voice_card=brand_voice_card,
             banned_regex=banned_regex,
+            placement_plan=placement_plan,
         )
         # Re-run the heading-level banned-term scan on any retry-replaced
         # sections — write_h2_group only catches body-level leakage; if a
@@ -685,6 +698,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         citations=citations,
         brand_voice_card=brand_voice_card,
         banned_regex=banned_regex,
+        placement_plan=placement_plan,
     )
     article = coverage_result.validated_article
     _scan_headings_for_banned(article, banned_regex)
@@ -743,6 +757,9 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             coverage_result.retries_succeeded
             if coverage_result is not None else 0
         ),
+        brand_anchor_h2_order=placement_plan.brand_anchor_order,
+        icp_anchor_h2_order=placement_plan.icp_anchor_order,
+        icp_hook_phrase=placement_plan.icp_hook_phrase,
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),

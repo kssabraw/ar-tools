@@ -169,6 +169,15 @@ class WriterMetadata(BaseModel):
     operational_claims_softened: list[dict] = []
     citation_coverage_retries_attempted: int = 0
     citation_coverage_retries_succeeded: int = 0
+    # Step 3.6 — Brand & ICP placement plan outcome. The pipeline pre-
+    # allocates exactly one H2 to anchor the brand mention and one H2 to
+    # anchor the ICP callout, so editors can see (and override) the
+    # decisions. `brand_anchor_h2_order` / `icp_anchor_h2_order` are
+    # `None` when no anchor was assigned (e.g. brand_voice_card empty,
+    # no audience signals available, or no content H2s).
+    brand_anchor_h2_order: Optional[int] = None
+    icp_anchor_h2_order: Optional[int] = None
+    icp_hook_phrase: Optional[str] = None
     schema_version: SchemaVersion = "1.7"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0

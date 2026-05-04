@@ -50,6 +50,7 @@ from .citation_coverage import (
     coverage_retry_directive,
 )
 from .h2_body_length import _H2Group, _collect_h2_groups, _replace_group_in_article
+from .brand_placement import BrandPlacementPlan
 from .reconciliation import FilteredSIETerms
 from .sections import SectionWriteResult, write_h2_group
 
@@ -144,6 +145,7 @@ async def validate_citation_coverage(
     brand_voice_card: Optional[BrandVoiceCard],
     banned_regex,
     threshold: float = COVERAGE_THRESHOLD,
+    placement_plan: Optional[BrandPlacementPlan] = None,
     write_h2_group_fn: Optional[WriteH2GroupFn] = None,
 ) -> CoverageValidationResult:
     """Step 4F.1 — per-H2 citable-claim detection + coverage retry +
@@ -256,6 +258,9 @@ async def validate_citation_coverage(
                 brand_voice_card=brand_voice_card,
                 banned_regex=banned_regex,
                 coverage_retry_directive=directive,
+                placement_directive=(
+                    placement_plan.for_order(h2_order) if placement_plan else None
+                ),
             )
         except Exception as exc:
             logger.warning(

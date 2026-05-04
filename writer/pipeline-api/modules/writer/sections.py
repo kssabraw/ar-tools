@@ -28,6 +28,7 @@ from models.writer import ArticleSection, BrandVoiceCard
 from modules.brief.llm import claude_json
 
 from .banned_terms import BannedTermLeakage, find_banned
+from .brand_placement import H2PlacementDirective
 from .reconciliation import FilteredSIETerms, ReconciledTerm
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,7 @@ def _build_section_user_prompt(
     sibling_h2_titles: Optional[list[str]] = None,
     current_h2_index: Optional[int] = None,
     preceding_section_summaries: Optional[list[str]] = None,
+    placement_directive: Optional[H2PlacementDirective] = None,
 ) -> str:
     parts: list[str] = []
     parts.append(f"KEYWORD: {keyword}")
@@ -250,13 +252,39 @@ def _build_section_user_prompt(
                 "\nCLIENT_CONTEXT (anchor the section to this brand where it adds credibility):"
             )
             if brand_voice_card.brand_name:
-                parts.append(
-                    f"  Across the article, mention {brand_voice_card.brand_name} 1–2 times "
-                    f"total — anchored to evidence (data, methodology, or a specific service), "
-                    f"never as standalone promotion. In any single section you may include AT "
-                    f"MOST 1 mention; if the topic is far from the brand's offering, omit the "
-                    f"mention in this section and let another carry it."
-                )
+                # Hard placement directive (Step 3.6 brand_placement plan):
+                # The pipeline pre-allocates exactly one section to anchor
+                # the brand mention. Without this, every section's prompt
+                # got the same "1–2 times across the article… let another
+                # carry it" guidance and every section punted, shipping the
+                # article with zero brand mentions.
+                if placement_directive and placement_directive.must_mention_brand:
+                    parts.append(
+                        f"  REQUIRED: This is the designated section to anchor the brand "
+                        f"mention. You MUST mention {brand_voice_card.brand_name} EXACTLY ONCE "
+                        f"in this section, anchored to evidence (a specific service, "
+                        f"methodology, or piece of data) — never as standalone promotion. "
+                        f"This is the only section in the article that will mention the "
+                        f"brand; do not omit it."
+                    )
+                elif placement_directive and placement_directive.must_not_mention_brand:
+                    parts.append(
+                        f"  DO NOT mention {brand_voice_card.brand_name} in this section. "
+                        f"Another designated section in the article carries the brand "
+                        f"mention. Write this section as topic-focused prose without "
+                        f"naming the brand."
+                    )
+                else:
+                    # No directive (e.g., placement plan disabled or H2
+                    # not in the plan). Fall back to the original soft
+                    # guidance so older callers still work.
+                    parts.append(
+                        f"  Across the article, mention {brand_voice_card.brand_name} 1–2 times "
+                        f"total — anchored to evidence (data, methodology, or a specific service), "
+                        f"never as standalone promotion. In any single section you may include AT "
+                        f"MOST 1 mention; if the topic is far from the brand's offering, omit the "
+                        f"mention in this section and let another carry it."
+                    )
             if brand_voice_card.client_services:
                 parts.append(
                     f"  services (reference one where it naturally extends a section's argument): "
@@ -264,6 +292,21 @@ def _build_section_user_prompt(
                 )
             if brand_voice_card.client_locations:
                 parts.append(f"  locations: {', '.join(brand_voice_card.client_locations[:8])}")
+
+        # ICP callout hook — hard directive that forces ONE section to
+        # explicitly call out the audience using a specific pain point
+        # or vertical from the brand voice card. Without this, the
+        # audience signals lived in the prompt as background context
+        # but never surfaced as a concrete callout in the prose.
+        if placement_directive and placement_directive.icp_callout_hook:
+            parts.append(
+                f"\nICP_CALLOUT (REQUIRED): This is the designated section to surface "
+                f"the target audience explicitly. Include a sentence or short paragraph "
+                f"that names this audience signal directly — '{placement_directive.icp_callout_hook}' — "
+                f"and ties the section's argument to it. The callout must be "
+                f"specific (not generic 'B2B leaders' framing) and grounded in the "
+                f"section's topic."
+            )
 
     if required_terms:
         # SIE v1.4 — bucket the required terms into the three categories
@@ -452,6 +495,7 @@ async def write_h2_group(
     sibling_h2_titles: Optional[list[str]] = None,
     current_h2_index: Optional[int] = None,
     preceding_section_summaries: Optional[list[str]] = None,
+    placement_directive: Optional[H2PlacementDirective] = None,
 ) -> SectionWriteResult:
     """Single LLM call for the H2 + nested H3 children. Retries once on
     body banned-term match. Headings are NOT regenerated by this function —
@@ -535,6 +579,7 @@ async def write_h2_group(
             sibling_h2_titles=sibling_h2_titles,
             current_h2_index=current_h2_index,
             preceding_section_summaries=preceding_section_summaries,
+            placement_directive=placement_directive,
         )
         try:
             # 8000 tokens accommodates an H2 + up to ~6 H3 children, each with

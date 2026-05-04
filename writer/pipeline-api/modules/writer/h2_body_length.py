@@ -65,6 +65,7 @@ from typing import Awaitable, Callable, Optional
 
 from models.writer import ArticleSection, BrandVoiceCard
 
+from .brand_placement import BrandPlacementPlan
 from .reconciliation import FilteredSIETerms
 from .sections import SectionWriteResult, write_h2_group
 
@@ -195,6 +196,7 @@ async def validate_h2_body_lengths(
     citations: list[dict],
     brand_voice_card: Optional[BrandVoiceCard],
     banned_regex,
+    placement_plan: Optional[BrandPlacementPlan] = None,
     write_h2_group_fn: Optional[WriteH2GroupFn] = None,
 ) -> H2BodyLengthResult:
     """Per-H2 body length validator (Step 6.7).
@@ -321,6 +323,9 @@ async def validate_h2_body_lengths(
                 brand_voice_card=brand_voice_card,
                 banned_regex=banned_regex,
                 length_retry_directive=directive,
+                placement_directive=(
+                    placement_plan.for_order(h2_order) if placement_plan else None
+                ),
             )
         except Exception as exc:
             logger.warning(

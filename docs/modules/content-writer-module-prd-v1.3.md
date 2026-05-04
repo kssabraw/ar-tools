@@ -337,6 +337,32 @@ For each H2 group (parent H2 + its child H3s):
 
 ---
 
+### Step 3.6 — Brand & ICP Placement Plan
+
+Before any section LLM runs, the writer pre-allocates which body H2 sections must carry (a) the brand mention and (b) the ICP callout. Without this step every section receives the same soft "1–2 times across the article… let another section carry it" instruction; each section independently decides the *other* section will carry the mention, and the article ships with zero brand mentions and no ICP callout.
+
+**Selection logic (deterministic; no LLM call):**
+
+- `brand_anchor_order` — the H2 whose heading text shares the most tokens with any `client_services` entry. Tie-break: lowest `order` (most prominent in the article). Falls back to the first content H2 when no service overlap exists.
+- `icp_anchor_order` — the H2 whose heading text shares the most tokens with any `audience_pain_points` or `audience_verticals` entry. If the highest scorer is the same H2 as `brand_anchor_order`, picks the next-best for variety. Falls back to the first content H2 ≠ brand anchor when no audience overlap exists.
+- `icp_hook_phrase` — the specific pain point / vertical that matched best, so the section prompt can ground its callout concretely instead of generically.
+
+**Tokenization:** lowercased, alphanumeric, stopword-filtered. Token-set intersection (size), not Jaccard — long descriptive service names ("influencer marketing campaigns") should outscore short ones ("ads") when they share more tokens with the heading.
+
+**Section prompt directives (consumed in Step 4):**
+
+| Directive | Set on | Effect |
+|---|---|---|
+| `must_mention_brand: true` | brand anchor H2 | Section MUST mention the brand exactly once, anchored to evidence |
+| `must_not_mention_brand: true` | every non-anchor body H2 | Section MUST NOT mention the brand (suppresses the punt-to-another-section failure mode) |
+| `icp_callout_hook: <phrase>` | ICP anchor H2 | Section MUST surface the named pain point / vertical as an explicit callout |
+
+**Bypass conditions:** when `brand_voice_card` is `None`, `brand_name` is empty, or no audience signals exist, the relevant directives are not stamped and individual sections fall back to the soft default. This preserves backward compatibility with v1.4 fallback paths.
+
+**Surfaced in metadata:** `brand_anchor_h2_order`, `icp_anchor_h2_order`, `icp_hook_phrase` — so editors can audit (and, if needed, override post-publish) the placement decisions.
+
+---
+
 ### Step 4 — Section Writing
 
 Sections are written sequentially, following `heading_structure[].order`. Each H2 and its child H3s are written as a group (one LLM call per H2 group).
