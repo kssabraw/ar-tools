@@ -172,12 +172,23 @@ class WriterMetadata(BaseModel):
     # Step 3.6 — Brand & ICP placement plan outcome. The pipeline pre-
     # allocates exactly one H2 to anchor the brand mention and one H2 to
     # anchor the ICP callout, so editors can see (and override) the
-    # decisions. `brand_anchor_h2_order` / `icp_anchor_h2_order` are
-    # `None` when no anchor was assigned (e.g. brand_voice_card empty,
-    # no audience signals available, or no content H2s).
+    # decisions. The `_order` fields refer to the heading_structure
+    # `order` *before* article-end resequencing — the `_text` fields are
+    # the unambiguous editor-facing reference. All fields are `None`
+    # when no anchor was assigned (e.g. brand_voice_card empty, no
+    # audience signals available, or no content H2s).
     brand_anchor_h2_order: Optional[int] = None
+    brand_anchor_h2_text: Optional[str] = None
     icp_anchor_h2_order: Optional[int] = None
+    icp_anchor_h2_text: Optional[str] = None
     icp_hook_phrase: Optional[str] = None
+    # Post-write verification: the section writer is *told* to mention
+    # the brand exactly once, but the LLM can ignore the directive.
+    # `brand_mention_landed=False` means the anchor section's body did
+    # not contain the brand_name — surface for editor review (matches
+    # the warn-and-accept pattern from h2_body_length / coverage).
+    # `None` when no brand anchor was assigned (no verification needed).
+    brand_mention_landed: Optional[bool] = None
     schema_version: SchemaVersion = "1.7"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0

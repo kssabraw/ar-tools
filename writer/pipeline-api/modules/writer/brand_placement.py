@@ -67,6 +67,17 @@ _STOPWORDS = frozenset({
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
+def brand_mention_present(body: str, brand_name: str) -> bool:
+    """Word-boundary check for `brand_name` in `body`. Used post-write
+    to verify the anchor section honored the MUST_MENTION_BRAND
+    directive. Word-boundary (\\b) avoids substring false positives
+    (e.g. a brand named "Net" matching "internet")."""
+    if not body or not brand_name:
+        return False
+    pattern = r"\b" + re.escape(brand_name.strip()) + r"\b"
+    return re.search(pattern, body, re.IGNORECASE) is not None
+
+
 @dataclass
 class H2PlacementDirective:
     """Per-H2 directives consumed by the section writer."""
@@ -83,11 +94,19 @@ class BrandPlacementPlan:
     `directives` is keyed by H2 `order`. Sections whose order is not in
     the map should treat both flags as False / None (i.e. fall back to
     the soft default — no forced mention, no forced ICP hook).
+
+    `_text` fields carry the heading text for the anchor H2s so callers
+    can surface an unambiguous editor-facing reference without having
+    to re-look-up the heading_structure (and without depending on order
+    semantics that change when the article is resequenced at the end of
+    the pipeline).
     """
 
     directives: dict[int, H2PlacementDirective] = field(default_factory=dict)
     brand_anchor_order: Optional[int] = None
+    brand_anchor_text: Optional[str] = None
     icp_anchor_order: Optional[int] = None
+    icp_anchor_text: Optional[str] = None
     icp_hook_phrase: Optional[str] = None
 
     def for_order(self, order: int) -> H2PlacementDirective:
@@ -186,10 +205,19 @@ def build_brand_placement_plan(
     pain_points = [p for p in (brand_voice_card.audience_pain_points or []) if p]
     verticals = [v for v in (brand_voice_card.audience_verticals or []) if v]
 
+    # Build a quick order -> heading-text lookup so we can surface the
+    # text in the plan without callers having to re-walk heading_structure.
+    text_by_order: dict[int, str] = {
+        h.get("order"): (h.get("text") or "").strip()
+        for h in h2s
+        if isinstance(h.get("order"), int)
+    }
+
     if brand_name:
         anchor_order, _ = _pick_anchor(h2s, services)
         if anchor_order is not None:
             plan.brand_anchor_order = anchor_order
+            plan.brand_anchor_text = text_by_order.get(anchor_order)
 
     if pain_points or verticals:
         # Pain points carry more semantic weight for an ICP callout
@@ -203,6 +231,7 @@ def build_brand_placement_plan(
         )
         if icp_anchor_order is not None:
             plan.icp_anchor_order = icp_anchor_order
+            plan.icp_anchor_text = text_by_order.get(icp_anchor_order)
             plan.icp_hook_phrase = hook
 
     # Build the per-order directive map. Every content H2 gets an

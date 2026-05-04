@@ -35,7 +35,7 @@ from models.writer import (
 )
 
 from .banned_terms import BannedTermLeakage, build_banned_regex, find_banned
-from .brand_placement import BrandPlacementPlan, build_brand_placement_plan
+from .brand_placement import brand_mention_present, build_brand_placement_plan
 from .budget import allocate_budget, CONCLUSION_BUDGET_TARGET
 from .citations import reconcile_citation_usage
 from .conclusion import write_conclusion
@@ -206,6 +206,37 @@ def _build_section_summaries(article: list[ArticleSection], max_chars: int = 200
 
 
 _ORPHAN_ORDINAL_PATTERN = re.compile(r"\bStep\s+(\d+)\b", re.IGNORECASE)
+
+
+def _verify_brand_mention_landed(
+    article: list[ArticleSection],
+    anchor_heading_text: Optional[str],
+    brand_name: str,
+) -> Optional[bool]:
+    """Post-write verification: did the LLM honor the MUST_MENTION_BRAND
+    directive? Locates the anchor section by heading text (orders are
+    resequenced before this runs) and checks the body for the brand
+    name. Returns None when no anchor was assigned (nothing to verify).
+
+    Warn-and-accept — same pattern as h2_body_length / coverage. The
+    return value lands in WriterMetadata.brand_mention_landed for editor
+    review; we never auto-retry the section here (cost discipline)."""
+    if not anchor_heading_text or not brand_name:
+        return None
+    anchor_text_norm = anchor_heading_text.strip().lower()
+    for section in article:
+        if section.level != "H2" or section.type != "content":
+            continue
+        if (section.heading or "").strip().lower() == anchor_text_norm:
+            return brand_mention_present(section.body or "", brand_name)
+    # The anchor heading isn't in the article (e.g., section dropped /
+    # heading text was rewritten elsewhere). Surface as "not landed"
+    # rather than None so editors see something went wrong.
+    logger.warning(
+        "writer.brand_placement.anchor_not_in_article",
+        extra={"anchor_heading": anchor_heading_text[:120]},
+    )
+    return False
 
 
 def _validate_article_structure(article: list[ArticleSection]) -> list[str]:
@@ -758,8 +789,15 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             if coverage_result is not None else 0
         ),
         brand_anchor_h2_order=placement_plan.brand_anchor_order,
+        brand_anchor_h2_text=placement_plan.brand_anchor_text,
         icp_anchor_h2_order=placement_plan.icp_anchor_order,
+        icp_anchor_h2_text=placement_plan.icp_anchor_text,
         icp_hook_phrase=placement_plan.icp_hook_phrase,
+        brand_mention_landed=_verify_brand_mention_landed(
+            article,
+            placement_plan.brand_anchor_text,
+            brand_voice_card.brand_name if brand_voice_card else "",
+        ),
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),

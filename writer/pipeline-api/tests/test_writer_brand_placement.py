@@ -13,6 +13,7 @@ from models.writer import BrandVoiceCard
 from modules.writer.brand_placement import (
     BrandPlacementPlan,
     H2PlacementDirective,
+    brand_mention_present,
     build_brand_placement_plan,
 )
 
@@ -279,6 +280,64 @@ def test_section_prompt_keeps_soft_fallback_when_no_directive_passed():
     )
     assert "1–2 times" in prompt or "1-2 times" in prompt
     assert "let another carry" in prompt
+
+
+def test_plan_records_anchor_heading_text():
+    """The heading text is the unambiguous editor reference; the
+    pre-resequence `order` is meaningless after pipeline.py:632
+    renumbers every section to its final position."""
+    structure = [_h2(1, "Pricing"), _h2(2, "Returns")]
+    card = BrandVoiceCard(
+        brand_name="Ubiquitous",
+        client_services=["pricing strategy"],
+        audience_pain_points=["return rate"],
+    )
+    plan = build_brand_placement_plan(structure, card)
+    assert plan.brand_anchor_text == "Pricing"
+    assert plan.icp_anchor_text == "Returns"
+
+
+def test_plan_text_fields_none_when_no_anchor():
+    structure = [_h2(1, "Pricing")]
+    plan = build_brand_placement_plan(structure, None)
+    assert plan.brand_anchor_text is None
+    assert plan.icp_anchor_text is None
+
+
+def test_brand_mention_present_positive_match():
+    assert brand_mention_present(
+        "At Ubiquitous we run creator marketing.",
+        "Ubiquitous",
+    )
+
+
+def test_brand_mention_present_word_boundary_blocks_substring():
+    """A brand named "Net" must NOT match 'internet'. Without word
+    boundaries the verifier would report success on a body that never
+    actually mentioned the brand."""
+    assert not brand_mention_present(
+        "We use the internet for outreach.",
+        "Net",
+    )
+
+
+def test_brand_mention_present_case_insensitive():
+    assert brand_mention_present("UBIQUITOUS leads the space.", "Ubiquitous")
+    assert brand_mention_present("ubiquitous leads.", "Ubiquitous")
+
+
+def test_brand_mention_present_empty_inputs():
+    assert not brand_mention_present("", "Ubiquitous")
+    assert not brand_mention_present("something", "")
+    assert not brand_mention_present("", "")
+
+
+def test_brand_mention_present_escapes_regex_special_chars():
+    """Brand names with regex metacharacters (e.g. 'Foo+Bar', 'A.B
+    Inc.') must be escaped before the boundary check, otherwise the
+    pattern explodes or matches the wrong thing."""
+    assert brand_mention_present("We partner with Foo+Bar.", "Foo+Bar")
+    assert brand_mention_present("Hired by A.B Inc.", "A.B Inc.")
 
 
 def test_user_failure_layout_assigns_a_brand_anchor():
