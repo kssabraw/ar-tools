@@ -426,6 +426,14 @@ export function RunDetail() {
   const articleSections = enrichedArticle?.article as unknown[] | undefined
   const articleTitle = typeof enrichedArticle?.title === 'string' ? enrichedArticle.title : undefined
   const articleMarkdown = articleSections ? sectionsToMarkdown(articleSections, articleTitle) : null
+  // The page chrome already renders the article title as an <h1> above
+  // (line ~444). Showing the same `# title` line at the top of the
+  // markdown preview made readers see the headline twice. Strip the
+  // leading H1 from the preview only — copy / download / export still
+  // use `articleMarkdown` so the exported file is self-contained.
+  const articleMarkdownPreview = articleMarkdown
+    ? articleMarkdown.replace(/^# [^\n]*\n+/, '')
+    : null
   const termUsageByZone = run.module_outputs?.writer?.output_payload?.term_usage_by_zone as
     | Record<string, { related_keywords: any[]; entities: any[]; quadgrams: any[] }>
     | undefined
@@ -610,7 +618,7 @@ export function RunDetail() {
             </div>
           )}
           <pre style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, overflowX: 'auto', fontSize: 13, lineHeight: 1.7, color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 600, overflowY: 'auto' }}>
-            {articleMarkdown}
+            {articleMarkdownPreview}
           </pre>
         </div>
       )}

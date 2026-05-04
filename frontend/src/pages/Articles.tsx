@@ -75,6 +75,13 @@ function ArticleCard({ run }: { run: any }) {
   const articleTitle: string | undefined =
     writerPayload?.title || briefPayload?.title || undefined
   const markdown = articleSections ? sectionsToMarkdown(articleSections, articleTitle) : null
+  // The card header above already shows the article title (line ~94).
+  // Stripping the leading H1 from the preview keeps the user from
+  // reading the headline twice; copy / download / publish still use
+  // `markdown` so the exported file remains self-contained.
+  const markdownPreview = markdown
+    ? markdown.replace(/^# [^\n]*\n+/, '')
+    : null
   const slug = run.keyword.replace(/\s+/g, '-').toLowerCase()
 
   function handleCopy() {
@@ -164,7 +171,7 @@ function ArticleCard({ run }: { run: any }) {
               overflowY: 'auto',
               margin: 0,
             }}>
-              {markdown}
+              {markdownPreview}
             </pre>
           )}
         </div>
