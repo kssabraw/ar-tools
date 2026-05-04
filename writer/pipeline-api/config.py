@@ -83,6 +83,15 @@ class Settings(BaseSettings):
     google_nlp_min_salience_floor: float = 0.10
     entity_score_promotion_threshold: float = 0.15
     entity_recurrence_override_pages: int = 3
+    # Single-page entity with avg_salience BELOW this floor gets the
+    # noise-penalty multiplier (0.30) applied to its composite score.
+    # Lowered 0.30 → 0.15 in v1.4 retuning to surface more entities.
+    entity_single_page_low_salience_floor: float = 0.15
+    # Standalone-promotion path: a single-page entity bypasses the
+    # composite-score path when avg_salience >= this floor. Lowered
+    # 0.50 → 0.33 in v1.4 retuning so mid-salience single-page
+    # entities can promote without high recurrence.
+    entity_high_salience_floor: float = 0.33
     entity_score_weights_recurrence: float = 0.45
     entity_score_weights_salience: float = 0.30
     entity_score_weights_mention: float = 0.20

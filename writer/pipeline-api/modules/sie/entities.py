@@ -151,7 +151,14 @@ def _noise_penalty(ent: AggregatedEntity) -> float:
         return 0.9
     if lowered in _GENERIC_TOKENS:
         return 0.5
-    if ent.pages_found <= 1 and ent.avg_salience < 0.15:
+    # Single-page entity with weak salience → noise penalty 0.3
+    # (subtracted via the noise weight in the composite score). Floor
+    # is configurable via `entity_single_page_low_salience_floor` so
+    # operators can tune yield vs noise without a code change.
+    if (
+        ent.pages_found <= 1
+        and ent.avg_salience < settings.entity_single_page_low_salience_floor
+    ):
         return 0.3
     return 0.0
 
@@ -248,7 +255,9 @@ def _classify_promotion(
                 return "keyword_match"
 
     high_recurrence = ent.pages_found >= recurrence_override
-    high_salience = ent.avg_salience >= 0.33
+    # Standalone-promotion path for single-page entities with high
+    # salience. Floor is configurable via `entity_high_salience_floor`.
+    high_salience = ent.avg_salience >= settings.entity_high_salience_floor
     score_passes = ent.entity_score >= score_threshold
 
     if not (score_passes or high_recurrence):
