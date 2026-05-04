@@ -513,7 +513,16 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # self-pace; per-term targets remain the hard guidance.
     total_body_budget = sum(section_budgets.values()) or 1
     banned_terms_leaked_in_body: list[str] = []
-    for h2_item, h3_items in h2_groups:
+    # Cohesion context passed into every section prompt:
+    #   (A) article_title + sibling_h2_titles + current_h2_index gives
+    #       each section global positioning — knows which spot in the
+    #       outline it occupies.
+    #   (B) preceding_section_summaries grows as we iterate so each
+    #       section sees what previous sections actually wrote and can
+    #       differentiate (instead of repeating setups / definitions).
+    # Both are free (no extra LLM calls — just bigger prompts).
+    preceding_summaries_running: list[str] = []
+    for h2_idx, (h2_item, h3_items) in enumerate(h2_groups):
         section_budget = section_budgets.get(h2_item.get("order"), 0)
         share = section_budget / total_body_budget if total_body_budget else 0.0
         section_aspirational = {
@@ -529,9 +538,16 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             brand_voice_card=brand_voice_card,
             banned_regex=banned_regex,
             section_category_aspirational=section_aspirational,
+            article_title=title,
+            sibling_h2_titles=h2_titles,
+            current_h2_index=h2_idx,
+            preceding_section_summaries=list(preceding_summaries_running),
         )
         article.extend(result.sections)
         banned_terms_leaked_in_body.extend(result.banned_terms_leaked)
+        # Append a one-sentence summary of THIS section's body so the
+        # next iteration's prompt can avoid repeating it.
+        preceding_summaries_running.extend(_build_section_summaries(result.sections))
 
     # ---- Conclusion (BEFORE FAQ — render order is body → conclusion → FAQ) ----
     section_summaries = _build_section_summaries(article)
