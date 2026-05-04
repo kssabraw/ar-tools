@@ -82,10 +82,13 @@ def allocate_budget(
     # Orphan H3s (H3 entries appearing before any H2 — shouldn't happen
     # in well-formed briefs, but guard anyway). Treat them as singleton
     # groups so they still get a share rather than dropping out silently.
+    # Use object identity (id) rather than `in` because `in` would invoke
+    # dict equality and could falsely match two H3 dicts with identical
+    # field values.
+    grouped_h3_ids = {id(h3) for _, h3s in groups for h3 in h3s}
     orphan_h3s = [
         h for h in content_items
-        if h.get("level") == "H3"
-        and not any(h in h3s for _, h3s in groups)
+        if h.get("level") == "H3" and id(h) not in grouped_h3_ids
     ]
     group_count = len(groups) + len(orphan_h3s)
     if group_count == 0:
