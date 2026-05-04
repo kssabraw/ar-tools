@@ -49,8 +49,40 @@ logger = logging.getLogger(__name__)
 
 JudgeFn = Callable[..., Awaitable[Any]]
 
-_BODY_CHAR_CAP = 4000
+_BODY_HEAD_CHARS = 2500
+_BODY_TAIL_CHARS = 2500
 _EVIDENCE_CHAR_CAP = 240
+
+# Punctuation we strip from the END of headings before comparing. ICP
+# callouts often land in the wrap-up of a section, and the heading SEO
+# optimizer / markdown renderer can append a colon or strip a question
+# mark from the brief's heading. Only trailing punctuation matters —
+# leading punctuation on a heading would itself be a brief bug, not
+# an artifact of the optimizer.
+_HEADING_TRAILING_PUNCT = ".,;:!?—–-"  # em-dash, en-dash, hyphen
+
+
+def _normalize_heading(text: str) -> str:
+    """Lowercase, strip whitespace, then strip trailing punctuation.
+    Used so a brief heading "Reduce Returns" matches an article
+    heading "Reduce Returns:" emitted by the optimizer."""
+    return text.strip().lower().rstrip(_HEADING_TRAILING_PUNCT).rstrip()
+
+
+def _truncate_body(body: str) -> str:
+    """Head + tail truncation. ICP callouts can land anywhere in a
+    section — head-only truncation clipped the wrap-up paragraph in
+    long sections (5K-9K chars), causing the judge to evaluate prose
+    that never contained the callout. Take the first 2,500 chars and
+    the last 2,500 chars with a `[truncated middle]` marker between
+    them so the judge sees both ends."""
+    if len(body) <= _BODY_HEAD_CHARS + _BODY_TAIL_CHARS:
+        return body
+    return (
+        body[:_BODY_HEAD_CHARS]
+        + "\n\n…[truncated middle]…\n\n"
+        + body[-_BODY_TAIL_CHARS:]
+    )
 
 
 _JUDGE_SYSTEM = """You are evaluating whether an article section explicitly surfaces a target audience callout.
@@ -95,9 +127,7 @@ def _build_judge_user_prompt(
             "AUDIENCE_VERTICALS (mentioning one of these by name when discussing the hook also counts): "
             + ", ".join(audience_verticals[:8])
         )
-    truncated = body[:_BODY_CHAR_CAP]
-    if len(body) > _BODY_CHAR_CAP:
-        truncated += "…[truncated]"
+    truncated = _truncate_body(body)
     parts.append("\nSECTION_BODY:\n" + truncated)
     parts.append("\nReturn the JSON object now.")
     return "\n".join(parts)
@@ -108,16 +138,17 @@ def _find_anchor_body(
     anchor_heading_text: str,
 ) -> Optional[str]:
     """Return the body of the H2 whose heading matches `anchor_heading_text`
-    (case-insensitive, whitespace-normalized). Returns None if no match.
+    after normalization (case-folded, whitespace-stripped, trailing
+    punctuation stripped). Returns None if no match.
 
     Match by heading text rather than `order` because pipeline.py:632
     resequences every section's order to its final 1..N position before
     this validator runs."""
-    target = anchor_heading_text.strip().lower()
+    target = _normalize_heading(anchor_heading_text)
     for section in article:
         if section.level != "H2" or section.type != "content":
             continue
-        if (section.heading or "").strip().lower() == target:
+        if _normalize_heading(section.heading or "") == target:
             return section.body or ""
     return None
 

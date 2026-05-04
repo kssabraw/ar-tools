@@ -308,10 +308,15 @@ async def test_anchor_heading_match_is_case_insensitive_and_whitespace_tolerant(
 
 
 @pytest.mark.asyncio
-async def test_long_body_is_truncated_before_judge_call():
-    """Body cap keeps the judge prompt cost bounded. Verify the cap
-    fires at 4,000 chars and the truncation marker is appended."""
-    huge_body = "lorem " * 1500  # ~9000 chars
+async def test_long_body_uses_head_plus_tail_truncation():
+    """ICP callouts often land in the section's wrap-up paragraph.
+    Head-only truncation would clip exactly that prose on long
+    sections (5K-9K chars). Verify the head AND tail are both in
+    the prompt, with a truncation marker between them."""
+    head_marker = "HEAD_PROSE_MARKER"
+    tail_marker = "TAIL_PROSE_MARKER"
+    middle = "filler " * 1500  # ~10500 chars
+    huge_body = head_marker + " " + middle + " " + tail_marker
     judge = _make_judge(landed=True, evidence="x")
     article = [_h2(1, "Returns", huge_body)]
     await verify_icp_callout_landed(
@@ -322,8 +327,62 @@ async def test_long_body_is_truncated_before_judge_call():
         judge_fn=judge,
     )
     user = judge.captured["user"]  # type: ignore[attr-defined]
-    assert "[truncated]" in user
-    # Body section should be bounded — the exact cap is 4000 chars of
-    # body content, plus the truncation marker, plus surrounding prompt.
     body_section = user.split("SECTION_BODY:\n", 1)[1]
-    assert len(body_section) < 4500
+    # Both the head and tail markers must survive truncation so the
+    # judge sees the prose at both ends of the section.
+    assert head_marker in body_section
+    assert tail_marker in body_section
+    assert "[truncated middle]" in body_section
+    # Bounded prompt size — head (2500) + tail (2500) + marker + frame.
+    assert len(body_section) < 5500
+
+
+@pytest.mark.asyncio
+async def test_short_body_is_not_truncated():
+    """Bodies that fit under the head+tail budget should pass through
+    untouched (no truncation marker)."""
+    body = "Short prose about returns."
+    judge = _make_judge(landed=True, evidence="x")
+    await verify_icp_callout_landed(
+        [_h2(1, "Returns", body)],
+        icp_anchor_text="Returns",
+        icp_hook_phrase="refund pain",
+        brand_voice_card=BrandVoiceCard(audience_pain_points=["refund pain"]),
+        judge_fn=judge,
+    )
+    user = judge.captured["user"]  # type: ignore[attr-defined]
+    assert "[truncated middle]" not in user
+    assert body in user
+
+
+@pytest.mark.asyncio
+async def test_anchor_heading_match_tolerates_trailing_punctuation():
+    """The heading SEO optimizer can append punctuation (e.g. a colon)
+    or the brief can author a heading with a question mark; either
+    side may have it. Match must succeed when only trailing punctuation
+    differs — without this, the validator silently flags
+    `anchor_not_in_article` on otherwise-fine articles."""
+    judge = _make_judge(landed=True, evidence="audience")
+    # Article heading has trailing colon; plan stored bare text.
+    article = [_h2(1, "Reduce Returns and Refund Rates:", "Audience prose.")]
+    landed, _, status = await verify_icp_callout_landed(
+        article,
+        icp_anchor_text="Reduce Returns and Refund Rates",
+        icp_hook_phrase="refund pain",
+        brand_voice_card=BrandVoiceCard(audience_pain_points=["refund pain"]),
+        judge_fn=judge,
+    )
+    assert landed is True
+    assert status == "landed"
+
+    # Reverse: plan has trailing punctuation, article doesn't.
+    article2 = [_h2(1, "How to Reduce Returns", "Audience prose.")]
+    landed2, _, status2 = await verify_icp_callout_landed(
+        article2,
+        icp_anchor_text="How to Reduce Returns?",
+        icp_hook_phrase="refund pain",
+        brand_voice_card=BrandVoiceCard(audience_pain_points=["refund pain"]),
+        judge_fn=judge,
+    )
+    assert landed2 is True
+    assert status2 == "landed"
