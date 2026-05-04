@@ -117,11 +117,26 @@ def _all_citation_ids_in_usage(writer: dict) -> set[str]:
 
 
 def _conclusion_order(article: list[dict]) -> int:
-    for s in article:
-        if isinstance(s, dict) and s.get("type") == "conclusion":
-            return s.get("order", 0)
-    # Fall back to the highest order if no conclusion found
-    return max((s.get("order", 0) for s in article if isinstance(s, dict)), default=0)
+    """Return the highest `order` in the article — the order AFTER which
+    Sources Cited sections should be inserted.
+
+    The historical name (`_conclusion_order`) reflected an earlier
+    layout where the conclusion was always the last numbered section.
+    After the writer's article-structure refactor (commit d80e4bd) the
+    layout became `body → conclusion → FAQ`, so the conclusion is
+    no longer last. Returning conclusion.order + 1/+2 then collided
+    with FAQ orders, causing Sources Cited to render INSIDE the FAQ
+    section after stable-sort.
+
+    Fix: return max(order) regardless of where the conclusion sits.
+    The function name is preserved to avoid an API change in
+    build_sources_cited_sections; semantically it now means "the
+    insertion anchor for Sources Cited."
+    """
+    return max(
+        (s.get("order", 0) for s in article if isinstance(s, dict)),
+        default=0,
+    )
 
 
 def _strip_marker_ids_from_article(article: list[dict], invalid_ids: set[str]) -> None:
