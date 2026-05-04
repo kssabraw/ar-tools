@@ -189,6 +189,19 @@ class WriterMetadata(BaseModel):
     # the warn-and-accept pattern from h2_body_length / coverage).
     # `None` when no brand anchor was assigned (no verification needed).
     brand_mention_landed: Optional[bool] = None
+    # Step 6.8 — ICP callout LLM judge (post-write). The judge tolerates
+    # paraphrase ("margin erosion from refunds" → "shrinking unit
+    # economics on returned orders") which a regex check cannot. `None`
+    # means either no ICP anchor was assigned or the judge call failed
+    # — unknown is the honest answer; flagging False would mislead.
+    # `icp_callout_evidence` is a short verbatim quote from the body
+    # when `landed=True`, for editor audit. `icp_callout_judge_status`
+    # is an observability tag: "landed" / "not_landed" / "no_anchor" /
+    # "empty_body" / "anchor_not_in_article" / "judge_error:<type>" /
+    # "judge_payload_invalid".
+    icp_callout_landed: Optional[bool] = None
+    icp_callout_evidence: Optional[str] = None
+    icp_callout_judge_status: Optional[str] = None
     schema_version: SchemaVersion = "1.7"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0

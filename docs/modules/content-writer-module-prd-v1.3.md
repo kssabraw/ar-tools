@@ -705,6 +705,29 @@ The validation pass also scans the Key Takeaways bullets — any single bullet >
 
 ---
 
+### Step 6.8 — ICP Callout LLM Judge — added per Step 3.6 enforcement
+
+After the article is fully assembled and citation reconciliation has run, a small LLM judge call verifies that the section designated as the ICP anchor in Step 3.6 actually surfaced the audience callout. A regex / substring check would generate false negatives whenever the LLM paraphrased the hook ("margin erosion from refunds" → "shrinking unit economics on returned orders"); the judge tolerates paraphrase.
+
+**Position in the pipeline:** runs after format-compliance computation, before metadata construction. Sees the post-resequencing `article` and matches the anchor section by heading text (the pre-resequence `order` is no longer meaningful at this stage).
+
+**Inputs:** the anchor section's body (truncated to 4,000 chars), the ICP hook phrase, and the brand voice card's `audience_pain_points` + `audience_verticals` (so the judge can recognize close synonyms).
+
+**Output:** a small JSON payload — `icp_callout_landed` (bool), `evidence` (≤200-char verbatim quote when landed), `reasoning` (one-sentence justification).
+
+**Failure-mode policy** (matches Step 6.6 / 6.7 / 4F.1 convention):
+- Never aborts the run.
+- LLM call failure / malformed payload → `icp_callout_landed = None` (unknown). Returning False would falsely flag the run.
+- No ICP anchor assigned → skipped, returns `None`.
+- Anchor heading not found in `article` (heading rewritten or section dropped) → returns `False` with a `anchor_not_in_article` status tag.
+- Empty anchor body → returns `False` with an `empty_body` status tag, no LLM call.
+
+**Cost discipline:** at most one LLM call per article, only when an ICP anchor was assigned, with a 256-token output cap and a 4,000-char body cap on input.
+
+**Surfaced in metadata:** `icp_callout_landed`, `icp_callout_evidence`, `icp_callout_judge_status`.
+
+---
+
 ### Step 7 — Citation Usage Reconciliation
 
 After all content sections, FAQs, and the conclusion are written, the module performs a final pass to reconcile citation usage across the full article.

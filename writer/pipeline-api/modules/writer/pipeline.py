@@ -49,6 +49,7 @@ from .citation_coverage_validator import (
 )
 from .h2_body_length import H2BodyLengthResult, validate_h2_body_lengths
 from .heading_seo_optimizer import optimize_headings
+from .icp_verification import verify_icp_callout_landed
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
 from .title import generate_h1_enrichment, generate_title
@@ -741,6 +742,18 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     directives = (brief.get("format_directives") or {})
     fmt = _format_compliance(article, directives)
 
+    # ---- Step 6.8 — ICP callout judge ----
+    # One small LLM call to verify the ICP anchor section actually
+    # surfaced the audience callout. Tolerates paraphrase that a
+    # substring check would falsely flag. Skipped (returns None) when
+    # no ICP anchor was assigned. Never aborts the run.
+    icp_landed, icp_evidence, icp_judge_status = await verify_icp_callout_landed(
+        article,
+        icp_anchor_text=placement_plan.icp_anchor_text,
+        icp_hook_phrase=placement_plan.icp_hook_phrase,
+        brand_voice_card=brand_voice_card,
+    )
+
     # ---- Metadata ----
     total_words = sum(s.word_count for s in article if s.type not in ("faq-header", "faq-question"))
     faq_words = sum(s.word_count for s in article if s.type == "faq-question")
@@ -798,6 +811,9 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             placement_plan.brand_anchor_text,
             brand_voice_card.brand_name if brand_voice_card else "",
         ),
+        icp_callout_landed=icp_landed,
+        icp_callout_evidence=icp_evidence,
+        icp_callout_judge_status=icp_judge_status,
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),
