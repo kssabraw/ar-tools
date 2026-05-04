@@ -218,14 +218,18 @@ async def analyze_entities(
 async def analyze_many(
     pages: list[tuple[str, str]],
     *,
-    concurrency: int = 5,
+    concurrency: int = 2,
     language_code: str = "en",
 ) -> list[PageTextRazorResult]:
     """Run analyze_entities on many (url, text) pairs concurrently.
 
-    Concurrency bounded with a semaphore (default 5) to stay under the
-    free tier's rate and play nicely with retries. Returns one result
-    per input in the same order, including failures.
+    Concurrency defaults to 2 to stay under TextRazor free-tier's
+    per-second concurrency cap (~3 simultaneous requests). Earlier
+    runs with concurrency=5 produced a storm of 401 Unauthorized
+    responses interleaved with 200s — TextRazor's free tier returns
+    401 (rather than the documented 429) when concurrency is
+    exceeded. Lowering to 2 fits comfortably under the limit at the
+    cost of slightly longer total latency on a 20-page corpus.
 
     A single shared `httpx.AsyncClient` is used across all calls so we
     benefit from connection pooling — without this, each per-page call
