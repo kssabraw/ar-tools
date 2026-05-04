@@ -415,6 +415,18 @@ async def rerun(
             "cache reuse (cheaper / faster)."
         ),
     ),
+    sie_force_refresh: bool = Query(
+        True,
+        description=(
+            "When true (default for rerun), the new run regenerates the "
+            "SIE entity set from scratch instead of reusing the 7-day "
+            "cache. Defaults to true so that the entities feeding the "
+            "brief's title/h1 prompts can shift between reruns — without "
+            "this, the same entity list flows into the same prompts and "
+            "constrains title diversity. Frontend can pass false to opt "
+            "into cache reuse."
+        ),
+    ),
     auth: dict = Depends(require_auth),
 ) -> RunCreateResponse:
     supabase = get_supabase()
@@ -441,10 +453,10 @@ async def rerun(
             "keyword": original["keyword"],
             "intent_override": original.get("intent_override"),
             "sie_outlier_mode": original.get("sie_outlier_mode", "safe"),
-            "sie_force_refresh": original.get("sie_force_refresh", False),
             # Caller's explicit choice on the modal wins. Don't inherit
             # from the original run (which might have force-refreshed
             # for an unrelated reason a week ago).
+            "sie_force_refresh": sie_force_refresh,
             "brief_force_refresh": brief_force_refresh,
             "status": "queued",
             "created_by": auth["user_id"],
