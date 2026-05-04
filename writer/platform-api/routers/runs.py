@@ -389,11 +389,15 @@ async def rerun(
     run_id: UUID,
     background_tasks: BackgroundTasks,
     brief_force_refresh: bool = Query(
-        False,
+        True,
         description=(
-            "When true, the new run will regenerate the brief from "
-            "scratch instead of reusing the 7-day cache. Set by the "
-            "frontend's cache-decision modal."
+            "When true (default for rerun), the new run regenerates the "
+            "brief from scratch instead of reusing the 7-day cache. "
+            "Defaults to true because 'rerun' implies the user wants a "
+            "different result — reusing the cached brief produces an "
+            "identical title/h1/heading_structure and defeats the "
+            "purpose. Frontend can pass false explicitly to opt into "
+            "cache reuse (cheaper / faster)."
         ),
     ),
     auth: dict = Depends(require_auth),

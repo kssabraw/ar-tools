@@ -77,6 +77,49 @@ async def test_first_attempt_success_returns_validated_output():
 
 
 @pytest.mark.asyncio
+async def test_first_attempt_uses_high_temperature_for_variation():
+    """Title is the source of truth for the writer's title/h1 (writer
+    consumes them verbatim). On regenerate the brief cache is bypassed,
+    so all variation has to come from THIS LLM call. First attempt must
+    use a non-trivial temperature (≥0.5) to produce meaningfully
+    different titles across regenerations of the same keyword."""
+    captured: list[float] = []
+
+    async def _capturing_mock(system, user, **kw):
+        captured.append(kw.get("temperature", 0.0))
+        return VALID_PAYLOAD
+
+    await generate_title_and_scope(**_INPUTS, llm_json_fn=_capturing_mock)
+    assert captured, "expected at least one LLM call"
+    assert captured[0] >= 0.5, (
+        f"first-attempt temperature {captured[0]} too low for "
+        "regeneration variation"
+    )
+
+
+@pytest.mark.asyncio
+async def test_retry_uses_low_temperature_for_structure():
+    """When the first attempt returns malformed output, retry drops
+    temperature low so the structured JSON is more likely to validate."""
+    captured: list[float] = []
+
+    async def _capturing_mock(system, user, **kw):
+        captured.append(kw.get("temperature", 0.0))
+        # First call returns bad payload (missing scope phrase),
+        # second call returns valid.
+        if len(captured) == 1:
+            return dict(VALID_PAYLOAD, scope_statement="totally off-scope text")
+        return VALID_PAYLOAD
+
+    await generate_title_and_scope(**_INPUTS, llm_json_fn=_capturing_mock)
+    assert len(captured) == 2
+    assert captured[1] < captured[0], (
+        "retry temperature must be lower than first-attempt temperature"
+    )
+    assert captured[1] <= 0.2
+
+
+@pytest.mark.asyncio
 async def test_rationale_truncated_when_overlong():
     payload = dict(VALID_PAYLOAD, title_rationale="x" * 500)
     res = await generate_title_and_scope(

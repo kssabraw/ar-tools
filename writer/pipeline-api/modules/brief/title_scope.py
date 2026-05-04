@@ -282,7 +282,14 @@ async def generate_title_and_scope(
             payload = await call(
                 system, user,
                 max_tokens=900,
-                temperature=0.3 if attempt == 1 else 0.1,
+                # First attempt: 0.7 for meaningful variation across
+                # regenerations of the same keyword (the brief generator
+                # is the source of truth for title/h1, and the writer
+                # consumes them verbatim — so title diversity has to come
+                # from THIS call). Retry drops to 0.1 to maximize the
+                # chance the structured output validates after a
+                # malformed first response.
+                temperature=0.7 if attempt == 1 else 0.1,
             )
         except Exception as exc:
             last_error = f"llm_call_exception: {exc}"
