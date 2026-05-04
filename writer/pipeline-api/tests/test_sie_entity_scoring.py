@@ -106,13 +106,16 @@ def test_dual_signal_strong_when_both_dimensions_high():
 def test_entity_only_promoted_via_composite_score():
     """An entity that doesn't hit the recurrence override OR the high
     salience floor but has a strong COMPOSITE score is promoted as
-    'entity_only_promoted'. Constructed: pages 2/5, mid-salience, high
-    relative mentions → composite score crosses threshold."""
+    'entity_only_promoted'. Constructed: pages 2/5, low-mid salience
+    (below the 0.33 standalone-salience floor), high relative mentions
+    → composite score crosses the 0.15 promotion threshold."""
     ents = [
-        # The mention-share leader: 100% of mentions go to this candidate
-        _agg("Topic A", avg_salience=0.35, pages_found=2, total_mentions=20),
+        # The mention-share leader: 100% of mentions go to this candidate.
+        # Salience 0.20 is below the standalone high_salience floor (0.33)
+        # so the path through promote_reason is composite-score-only.
+        _agg("Topic A", avg_salience=0.20, pages_found=2, total_mentions=20),
         # Comparison candidate that sets max_mentions
-        _agg("Topic B", avg_salience=0.10, pages_found=1, total_mentions=1),
+        _agg("Topic B", avg_salience=0.05, pages_found=1, total_mentions=1),
     ]
     promoted = score_and_promote_entities(ents, total_pages=5)
     a = next((e for e in promoted if e.name == "Topic A"), None)
@@ -290,8 +293,19 @@ def test_noise_penalty_scoring(name, expected):
 
 
 def test_noise_penalty_single_page_low_salience():
-    ent = _agg("Some Entity", avg_salience=0.20, pages_found=1)
+    """Single-page entities below the 0.15 salience floor get the
+    noise penalty (0.30 multiplier). Threshold lowered from 0.30 to
+    0.15 to surface more candidate entities."""
+    ent = _agg("Some Entity", avg_salience=0.10, pages_found=1)
     assert _noise_penalty(ent) == pytest.approx(0.3)
+
+
+def test_noise_penalty_single_page_borderline_salience():
+    """At the new 0.15 threshold, a single-page entity with salience
+    just above 0.15 should NOT get the single-page-low-salience
+    noise penalty (returns 0.0 = no penalty, vs 0.3 when it triggers)."""
+    ent = _agg("Some Entity", avg_salience=0.20, pages_found=1)
+    assert _noise_penalty(ent) == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -413,9 +427,21 @@ def test_no_keyword_falls_back_to_existing_logic():
     assert promoted[0].promotion_reason == "dual_signal_strong"
 
 
-def test_empty_keyword_does_not_auto_promote_junk():
-    """Defensive: empty keyword must not somehow auto-promote every
-    entity. A weak entity with no other signal still gets dropped."""
-    ents = [_agg("Weak", avg_salience=0.05, pages_found=1, total_mentions=1)]
-    promoted = score_and_promote_entities(ents, total_pages=10, keyword="")
+def test_empty_keyword_drops_structurally_noisy_single_page_entity():
+    """Defensive: a single-page entity flagged as structurally noisy
+    (length<3, pure numeric, etc.) with weak salience still gets
+    dropped — neither the recurrence override (1<3) nor the
+    standalone-salience floor (0.05<0.33) promotes it, and the noise
+    penalty pushes its composite score below 0.15.
+
+    Note: at the v1.4 thresholds (promotion 0.15, single-page low-
+    salience 0.15) the bar is intentionally permissive — most
+    semi-weak entities now promote. This test guards the floor:
+    structural noise + single-page + weak salience still doesn't
+    pass."""
+    ents = [
+        _agg("X", avg_salience=0.05, pages_found=1, total_mentions=1),  # length<3
+        _agg("12345", avg_salience=0.05, pages_found=1, total_mentions=1),  # numeric
+    ]
+    promoted = score_and_promote_entities(ents, total_pages=20, keyword="")
     assert promoted == []

@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # high-recurrence override. See `modules/sie/entities.py` and
     # `modules/sie/google_nlp.py`.
     google_nlp_min_salience_floor: float = 0.10
-    entity_score_promotion_threshold: float = 0.30
+    entity_score_promotion_threshold: float = 0.15
     entity_recurrence_override_pages: int = 3
     entity_score_weights_recurrence: float = 0.45
     entity_score_weights_salience: float = 0.30

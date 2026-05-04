@@ -151,7 +151,7 @@ def _noise_penalty(ent: AggregatedEntity) -> float:
         return 0.9
     if lowered in _GENERIC_TOKENS:
         return 0.5
-    if ent.pages_found <= 1 and ent.avg_salience < 0.30:
+    if ent.pages_found <= 1 and ent.avg_salience < 0.15:
         return 0.3
     return 0.0
 
@@ -248,7 +248,7 @@ def _classify_promotion(
                 return "keyword_match"
 
     high_recurrence = ent.pages_found >= recurrence_override
-    high_salience = ent.avg_salience >= 0.50
+    high_salience = ent.avg_salience >= 0.33
     score_passes = ent.entity_score >= score_threshold
 
     if not (score_passes or high_recurrence):
@@ -387,8 +387,10 @@ async def llm_dedupe_and_categorize(
         "tools, equipment, brands, locations, people, organizations, regulations, "
         "concepts, problems, symptoms, materials, methods, comparisons, pricing_factors, "
         "(3) write a short example_context sentence describing how the entity is used "
-        "across pages, and (4) drop entities that are off-topic, navigational, or have "
-        "no SEO value.\n\n"
+        "across pages, and (4) drop ONLY entities that are clearly navigational "
+        "(login, signup, footer links, sidebar nav) or pure UI chrome (cookie "
+        "banners, breadcrumbs, social-share buttons). Keep anything topical — "
+        "even if it seems tangential, it may be relevant to the writer's framing.\n\n"
         "STRICT RULE: You may only output entities whose `name` matches an entry in "
         "the provided list. Do not invent or rename entities.\n\n"
         'Respond with: {"entities": [{"name": "...", "category": "...", '
