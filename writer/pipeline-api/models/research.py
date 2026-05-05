@@ -89,8 +89,14 @@ class ResearchResponse(BaseModel):
     heading_structure item, plus top-level `citations` array and
     `metadata.citations_metadata` block. We model it as a dict to avoid
     duplicating the full Brief schema; only the additions are typed.
+
+    `supporting_stats` is a compact string of up to 3 verified statistical
+    claims (verbatim-extracted, relevance ≥ 0.5) formatted for direct
+    injection as `supporting_data` in the intro APP prompt. None when no
+    qualifying claims exist across all citations.
     """
 
     enriched_brief: dict[str, Any]
     citations: list[Citation]
     citations_metadata: CitationsMetadata
+    supporting_stats: Optional[str] = None

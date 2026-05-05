@@ -652,6 +652,11 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # can promise EXACTLY the H2s that exist. Eliminates the "intro
     # promises 4, body delivers 8" drift the user reported when the
     # heading_structure mutated mid-pipeline.
+    supporting_stats: Optional[str] = (
+        req.research_output.get("supporting_stats")
+        if isinstance(req.research_output, dict)
+        else None
+    )
     intro_section = await write_intro(
         keyword=keyword,
         title=intro_title,
@@ -661,6 +666,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         brand_voice_card=brand_voice_card,
         banned_regex=banned_regex,
         intro_order=0,
+        supporting_data=supporting_stats,
     )
     # Insert intro right after H1 + (optional) h1-enrichment so the
     # render order is: H1 → enrichment → intro → body... → conclusion

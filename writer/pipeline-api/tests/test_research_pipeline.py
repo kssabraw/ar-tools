@@ -282,3 +282,80 @@ def test_research_request_validation():
         ResearchRequest(run_id="r", keyword="", brief_output={})
     with pytest.raises(ValidationError):
         ResearchRequest(run_id="r", keyword="x" * 151, brief_output={})
+
+
+# ---------------------------------------------------------------------------
+# _select_supporting_stats
+# ---------------------------------------------------------------------------
+
+def _make_citation(claims_data, title="Source Title", citation_score=0.7):
+    from models.research import Citation, ResearchClaim
+    return Citation(
+        citation_id="cit_001",
+        scope="heading",
+        url="https://example.com",
+        title=title,
+        tier=1,
+        recency_label="fresh",
+        citation_score=citation_score,
+        claims=[
+            ResearchClaim(
+                claim_text=c["text"],
+                relevance_score=c["relevance"],
+                extraction_method=c.get("method", "verbatim_extraction"),
+                verification_method=c.get("verification", "verbatim_match"),
+            )
+            for c in claims_data
+        ],
+    )
+
+
+def test_select_supporting_stats_picks_verified_claims_with_digits():
+    from modules.research.pipeline import _select_supporting_stats
+
+    cit = _make_citation([
+        {"text": "72% of homeowners replace HVAC within 15 years.", "relevance": 0.9},
+        {"text": "Energy Star units cut bills by 30%.", "relevance": 0.8},
+        {"text": "General qualitative observation without numbers.", "relevance": 0.75},
+    ])
+    result = _select_supporting_stats([cit])
+    assert result is not None
+    assert "72%" in result
+    assert "30%" in result
+    assert "Source Title" in result
+
+
+def test_select_supporting_stats_excludes_fallback_stubs():
+    from modules.research.pipeline import _select_supporting_stats
+
+    cit = _make_citation([
+        {"text": "Some stat 50%.", "relevance": 0.9, "method": "fallback_stub", "verification": "none"},
+    ])
+    assert _select_supporting_stats([cit]) is None
+
+
+def test_select_supporting_stats_excludes_low_relevance():
+    from modules.research.pipeline import _select_supporting_stats
+
+    cit = _make_citation([
+        {"text": "Stat with 40% relevance score.", "relevance": 0.3},
+    ])
+    assert _select_supporting_stats([cit]) is None
+
+
+def test_select_supporting_stats_caps_at_three():
+    from modules.research.pipeline import _select_supporting_stats
+
+    cit = _make_citation([
+        {"text": f"Stat {i}: {i * 10}% of users prefer X.", "relevance": 0.9 - i * 0.05}
+        for i in range(6)
+    ])
+    result = _select_supporting_stats([cit])
+    assert result is not None
+    assert result.count(" | ") == 2  # 3 items joined by " | "
+
+
+def test_select_supporting_stats_returns_none_when_no_citations():
+    from modules.research.pipeline import _select_supporting_stats
+
+    assert _select_supporting_stats([]) is None

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -368,6 +369,47 @@ async def _process_target(
     )
 
 
+_DIGIT_RE = re.compile(r"\d")
+
+MAX_SUPPORTING_STATS = 3
+MIN_CLAIM_RELEVANCE = 0.5
+
+
+def _select_supporting_stats(citations: list[Citation]) -> Optional[str]:
+    """Return up to 3 verified statistical claims as a formatted string.
+
+    Only verbatim-extracted, verification-confirmed claims qualify — this
+    keeps the data_led / research_reframe Agree styles grounded in real
+    numbers rather than LLM-generated figures.
+
+    Claims containing a digit are ranked ahead of non-numeric claims because
+    they carry more weight as statistical evidence in the intro prompt.
+    """
+    candidates: list[tuple[int, float, float, str, str]] = []
+    for cit in citations:
+        for claim in cit.claims:
+            if claim.extraction_method != "verbatim_extraction":
+                continue
+            if claim.verification_method == "none":
+                continue
+            if claim.relevance_score < MIN_CLAIM_RELEVANCE:
+                continue
+            has_digit = 1 if _DIGIT_RE.search(claim.claim_text) else 0
+            candidates.append((has_digit, claim.relevance_score, cit.citation_score, claim.claim_text, cit.title))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+
+    parts = []
+    for _, _, _, claim_text, source_title in candidates[:MAX_SUPPORTING_STATS]:
+        entry = f"{claim_text} (Source: {source_title})" if source_title else claim_text
+        parts.append(entry)
+
+    return " | ".join(parts)
+
+
 async def run_research(req: ResearchRequest) -> ResearchResponse:
     brief = req.brief_output
     if not isinstance(brief, dict):
@@ -544,4 +586,5 @@ async def run_research(req: ResearchRequest) -> ResearchResponse:
         enriched_brief=enriched_brief,
         citations=citations,
         citations_metadata=citations_metadata,
+        supporting_stats=_select_supporting_stats(citations),
     )
