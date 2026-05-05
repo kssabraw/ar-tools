@@ -67,16 +67,16 @@ AGREE STYLES — select the single best style given the topic, audience, and dat
 
 ⚠️ HALLUCINATION WARNING: `data_led` and `research_reframe` require real numbers or studies. Only select these styles when SUPPORTING_DATA is provided. If either would be best but no data is available, select the next most appropriate style instead.
 
-counterintuitive_claim — Opens with a statement that flips conventional wisdom. Use when a widely-held belief is demonstrably wrong. Example: "More TikTok content doesn't mean more ROI."
-false_solution — Names an approach everyone uses, then immediately undercuts it. Use when the audience is invested in a popular but ineffective method. Example: "Tracking likes and shares feels like ROI measurement. It isn't."
-failure_mode — Leads with the mistake the reader is probably making, or the cost of the unchanged status quo. Example: "The instinct is to post more. That's usually what's holding you back."
-data_led — Anchors with a specific number or average-vs-top-performer comparison. Requires SUPPORTING_DATA. Example: "Brands running TikTok ads see a 15% average return. The top 10% see 4x that."
-research_reframe — References a study or trend that recontextualizes the problem. Requires SUPPORTING_DATA. Example: "Recent data shows TikTok drives more purchase intent than any other short-form platform — yet most brands still can't measure it."
-scene_setting — Drops into a specific, recognizable moment — third person or no person. Example: "The content performs. The budget meeting doesn't."
-before_after — Contrasts two states with tension and resolution implied, no roadmap. Example: "Inconsistent ROI isn't a content problem. It's a measurement problem. And measurement problems have clean solutions."
-core_distinction — Opens by drawing a line between two things the audience conflates. Example: "There's a difference between TikTok reach and TikTok revenue. Most brands are optimizing for the wrong one."
-reframe_the_question — Suggests the reader has been asking the wrong question. Example: "The question isn't whether TikTok works. It's whether you're set up to see it working."
-direct_thesis — Plain, confident statement of exactly what's true and what this piece proves. Use as the fallback when no other style fits cleanly. Example: "TikTok ROI is measurable, defensible, and scalable. This is how you get there."
+counterintuitive_claim — Opens with a statement that flips conventional wisdom. Use when a widely-held belief is demonstrably wrong. Example: "Doing more of the same thing rarely produces different results."
+false_solution — Names an approach everyone uses, then immediately undercuts it. Use when the audience is invested in a popular but ineffective method. Example: "Tracking activity feels like measuring progress. It usually isn't."
+failure_mode — Leads with the mistake the reader is probably making, or the cost of the unchanged status quo. Example: "The instinct is to add more. That's often exactly what slows things down."
+data_led — Anchors with a specific number or average-vs-top-performer comparison. Requires SUPPORTING_DATA. Example: "Most teams hit their targets roughly half the time. High performers hit them consistently."
+research_reframe — References a study or trend that recontextualizes the problem. Requires SUPPORTING_DATA. Example: "Recent data shows buyers decide earlier in the process than most teams assume — yet most content is built for the wrong stage."
+scene_setting — Drops into a specific, recognizable moment — third person or no person. Example: "The work gets done. The results meeting doesn't reflect it."
+before_after — Contrasts two states with tension and resolution implied, no roadmap. Example: "Inconsistent results aren't a strategy problem. They're an execution problem. And execution problems have repeatable fixes."
+core_distinction — Opens by drawing a line between two things the audience conflates. Example: "There's a difference between being busy and making progress. Most teams are optimizing for the wrong one."
+reframe_the_question — Suggests the reader has been asking the wrong question. Example: "The question isn't whether the approach works. It's whether you're set up to see it working."
+direct_thesis — Plain, confident statement of exactly what's true and what this piece proves. Use as the fallback when no other style fits cleanly. Example: "This is solvable, repeatable, and measurable. Here's how to get there."
 
 STYLE SELECTION CRITERIA (apply in order):
 1. If SUPPORTING_DATA is provided and a specific stat or study would strengthen the Agree, prefer data_led or research_reframe.
