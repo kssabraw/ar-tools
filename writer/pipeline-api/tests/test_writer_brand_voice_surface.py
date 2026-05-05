@@ -94,7 +94,12 @@ async def test_section_prompt_surfaces_preferred_and_discouraged_terms(monkeypat
 async def test_intro_prompt_surfaces_preferred_and_discouraged_terms(monkeypatch):
     from modules.writer.intro import write_intro
 
-    call, captured = _capturing({"intro": " ".join(["word"] * 100)})
+    call, captured = _capturing({
+        "agree_style_selected": "direct_thesis",
+        "agree": " ".join(["word"] * 30),
+        "promise": " ".join(["word"] * 27),
+        "preview": " ".join(["word"] * 25),
+    })
     monkeypatch.setattr("modules.writer.intro.claude_json", call)
 
     await write_intro(

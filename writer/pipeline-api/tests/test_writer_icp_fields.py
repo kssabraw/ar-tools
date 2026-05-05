@@ -80,8 +80,12 @@ def _fake(*responses):
 
 @pytest.mark.asyncio
 async def test_intro_prompt_includes_personas_verticals_goals(monkeypatch):
-    body = " ".join(["word"] * 100)
-    fake = _fake({"intro": body})
+    fake = _fake({
+        "agree_style_selected": "failure_mode",
+        "agree": " ".join(["word"] * 30),
+        "promise": " ".join(["word"] * 27),
+        "preview": " ".join(["word"] * 25),
+    })
     monkeypatch.setattr("modules.writer.intro.claude_json", fake)
 
     card = BrandVoiceCard(
@@ -102,7 +106,7 @@ async def test_intro_prompt_includes_personas_verticals_goals(monkeypatch):
     assert "Beauty" in user and "Pet Care" in user
     assert "$30M–$100M ARR" in user
     assert "Predictable acquisition" in user
-    assert "Promise beat should advance" in user
+    assert "Promise should advance" in user
 
 
 # -----------------------------------------------------------------------
