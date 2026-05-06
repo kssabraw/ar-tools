@@ -855,7 +855,10 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # LLMs occasionally emit em dashes (U+2014) despite instructions.
     # Normalize to plain hyphens before serialization so downstream
     # consumers (markdown renderer, CMS importer) receive clean ASCII.
+    title = _strip_em_dashes(title)
     for section in article:
+        if section.heading:
+            section.heading = _strip_em_dashes(section.heading)
         if section.body:
             section.body = _strip_em_dashes(section.body)
             section.word_count = _word_count(section.body)
