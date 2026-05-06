@@ -226,7 +226,7 @@ async def write_key_takeaways(
                 continue
             return _placeholder_key_takeaways(key_takeaways_order)
 
-        bullets = [str(b).strip() for b in raw_bullets if isinstance(b, (str, int, float)) and str(b).strip()]
+        bullets = [str(b).strip() for b in raw_bullets if isinstance(b, (str, int, float)) and not isinstance(b, bool) and str(b).strip()]
         last_bullets = bullets
         body = _format_body(bullets)
 

@@ -234,3 +234,20 @@ async def test_write_key_takeaways_banned_term_retries(monkeypatch):
         banned_regex=build_banned_regex(["badterm"]), key_takeaways_order=2,
     )
     assert "badterm" not in section.body.lower()
+
+
+@pytest.mark.asyncio
+async def test_write_key_takeaways_filters_bool_bullets(monkeypatch):
+    # bool is a subclass of int; True/False must not become "- True" / "- False"
+    payload = {"key_takeaways": [True, False] + _bullets(count=4, words_per=10)}
+    monkeypatch.setattr(
+        "modules.writer.key_takeaways.claude_json",
+        _fake(payload, _valid_payload()),
+    )
+    section = await write_key_takeaways(
+        keyword="kw", intent_type="how-to",
+        article_body="Body.", brand_voice_card=None,
+        banned_regex=build_banned_regex([]), key_takeaways_order=2,
+    )
+    assert "True" not in section.body
+    assert "False" not in section.body
