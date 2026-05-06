@@ -42,6 +42,7 @@ from .conclusion import write_conclusion
 from .distillation import distill_brand_voice, is_card_empty
 from .faqs import write_faqs
 from .intro import write_intro
+from .key_takeaways import write_key_takeaways
 from .reconciliation import FilteredSIETerms, reconcile_terms, ReconciledTerm
 from .citation_coverage_validator import (
     CoverageValidationResult,
@@ -682,6 +683,27 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # would put the intro at the END of the article.
     intro_insert_position = 1 + (1 if h1_enrichment else 0)
     article.insert(intro_insert_position, intro_section)
+
+    # ---- Key Takeaways (content-quality PRD §R4) ----
+    # Generated AFTER body+conclusion+FAQ+intro so the prompt sees the
+    # final assembled article and can summarize what was actually
+    # written. Position: between H1 enrichment and the APP intro.
+    article_body_for_takeaways = "\n\n".join(
+        s.body for s in article
+        if s.body and s.type in {"content", "conclusion"}
+    )
+    key_takeaways_section = await write_key_takeaways(
+        keyword=keyword,
+        intent_type=intent_type,
+        article_body=article_body_for_takeaways,
+        brand_voice_card=brand_voice_card,
+        banned_regex=banned_regex,
+        key_takeaways_order=0,
+    )
+    # Insert between H1 enrichment and intro. Render order becomes:
+    # H1 → enrichment → Key Takeaways → intro → body... → conclusion → FAQ.
+    key_takeaways_insert_position = intro_insert_position
+    article.insert(key_takeaways_insert_position, key_takeaways_section)
 
     # ---- Order resequencing ----
     # Stamp `order` 1..N based on final list position. The markdown

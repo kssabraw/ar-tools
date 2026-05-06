@@ -153,6 +153,14 @@ async def fake_claude_json(system, user, **kwargs):
     # Conclusion writing
     if "blog post conclusion" in sl:
         return {"conclusion": "Choosing the best hvac systems 2026 means weighing energy efficiency, brand reputation, and total cost of ownership. Higher SEER ratings cut utility bills over the system's lifetime, and heat pumps offer dual heating and cooling benefits. When choosing among options, weigh the criteria that matter most to your home and climate."}
+    # Key Takeaways
+    if "key takeaways" in sl:
+        return {"key_takeaways": [
+            "Modern HVAC systems can be up to 50 percent more energy efficient than older units.",
+            "Higher SEER ratings produce larger utility savings over the system's working lifetime.",
+            "Heat pumps deliver both heating and cooling, with federal tax credits offsetting upfront cost.",
+            "Most HVAC systems last 15 to 20 years when serviced regularly by a professional.",
+        ]}
     return {}
 
 
@@ -182,6 +190,8 @@ async def test_writer_happy_path_with_client_context():
         patch("modules.writer.sections.claude_json", fake_claude_json),
         patch("modules.writer.faqs.claude_json", fake_claude_json),
         patch("modules.writer.conclusion.claude_json", fake_claude_json),
+        patch("modules.writer.intro.claude_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
     ):
         result = await run_writer(req)
 
@@ -197,6 +207,16 @@ async def test_writer_happy_path_with_client_context():
     assert "faq-header" in levels
     assert sum(1 for t in levels if t == "faq-question") == 3
     assert "conclusion" in levels
+    # Content-quality PRD §R4: Key Takeaways section must be present
+    assert "key-takeaways" in levels
+    key_takeaways = next(s for s in result.article if s.type == "key-takeaways")
+    assert key_takeaways.heading == "Key Takeaways"
+    assert key_takeaways.body.startswith("- ")
+    # Render order: H1 -> (h1-enrichment) -> key-takeaways -> intro -> content...
+    types_in_order = [s.type for s in result.article]
+    kt_idx = types_in_order.index("key-takeaways")
+    intro_idx = types_in_order.index("intro")
+    assert kt_idx < intro_idx  # Key Takeaways before APP intro
     # Citation marker captured in section body
     citation_used = any("cit_001" in (s.body or "") for s in result.article)
     assert citation_used
@@ -220,6 +240,8 @@ async def test_writer_no_client_context_falls_back_to_v14():
         patch("modules.writer.sections.claude_json", fake_claude_json),
         patch("modules.writer.faqs.claude_json", fake_claude_json),
         patch("modules.writer.conclusion.claude_json", fake_claude_json),
+        patch("modules.writer.intro.claude_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
     ):
         result = await run_writer(req)
 
@@ -310,6 +332,8 @@ async def test_writer_aborts_on_banned_term_in_heading():
         patch("modules.writer.sections.claude_json", fake_claude_json),
         patch("modules.writer.faqs.claude_json", fake_claude_json),
         patch("modules.writer.conclusion.claude_json", fake_claude_json),
+        patch("modules.writer.intro.claude_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
     ):
         with pytest.raises(BannedTermLeakage) as exc_info:
             await run_writer(req)
@@ -395,6 +419,8 @@ async def test_writer_pipeline_invokes_h2_body_length_retry(monkeypatch):
         patch("modules.writer.sections.claude_json", fake_claude_json),
         patch("modules.writer.faqs.claude_json", fake_claude_json),
         patch("modules.writer.conclusion.claude_json", fake_claude_json),
+        patch("modules.writer.intro.claude_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
         patch(
             "modules.writer.pipeline.validate_h2_body_lengths",
             wrapping_validator,
@@ -458,6 +484,8 @@ async def test_writer_pipeline_skips_h2_body_length_when_floor_zero():
         patch("modules.writer.sections.claude_json", fake_claude_json),
         patch("modules.writer.faqs.claude_json", fake_claude_json),
         patch("modules.writer.conclusion.claude_json", fake_claude_json),
+        patch("modules.writer.intro.claude_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
         patch(
             "modules.writer.pipeline.validate_h2_body_lengths",
             spy_validator,
@@ -531,6 +559,8 @@ async def test_writer_pipeline_invokes_citation_coverage_validator(monkeypatch):
         patch("modules.writer.sections.claude_json", fake_claude_json),
         patch("modules.writer.faqs.claude_json", fake_claude_json),
         patch("modules.writer.conclusion.claude_json", fake_claude_json),
+        patch("modules.writer.intro.claude_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
         patch(
             "modules.writer.pipeline.validate_citation_coverage",
             spy,
