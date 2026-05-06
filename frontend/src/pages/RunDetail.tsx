@@ -8,6 +8,7 @@ import {
   BriefCacheDecisionModal,
   type BriefCacheStatus,
 } from '../components/BriefCacheDecisionModal'
+import { sectionsToMarkdown } from '../lib/sectionsToMarkdown'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -94,82 +95,6 @@ const MODULES: ModuleMeta[] = [
 ]
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
-
-// Words that stay lowercase in title case unless they're the first or last word.
-// Conservative list following Chicago/AP conventions for short prepositions,
-// articles, and coordinating conjunctions.
-const TITLE_CASE_MINOR_WORDS = new Set([
-  'a', 'an', 'the',
-  'and', 'as', 'but', 'for', 'if', 'nor', 'or', 'so', 'yet',
-  'at', 'by', 'in', 'of', 'off', 'on', 'per', 'to', 'up', 'via', 'vs',
-])
-
-function toTitleCase(str: string): string {
-  if (!str) return str
-  const tokens = str.split(/(\s+)/) // preserve whitespace tokens
-
-  const wordPositions: number[] = []
-  tokens.forEach((t, i) => { if (t.trim()) wordPositions.push(i) })
-  if (wordPositions.length === 0) return str
-  const firstIdx = wordPositions[0]
-  const lastIdx = wordPositions[wordPositions.length - 1]
-
-  return tokens.map((piece, i) => {
-    if (!piece.trim()) return piece
-
-    // Preserve mixed-case brand words (TikTok, iPhone, eBay, McDonald's)
-    if (/[a-z][A-Z]/.test(piece)) return piece
-    // Preserve all-caps acronyms of 2+ chars (FAQ, USA, B2B, AI)
-    if (piece.length >= 2 && piece === piece.toUpperCase() && /[A-Z]/.test(piece)) return piece
-
-    const isFirstOrLast = i === firstIdx || i === lastIdx
-    const cleaned = piece.toLowerCase().replace(/[^a-z']/g, '')
-
-    if (!isFirstOrLast && TITLE_CASE_MINOR_WORDS.has(cleaned)) {
-      return piece.toLowerCase()
-    }
-
-    // Capitalize the first letter (skipping leading punctuation),
-    // then lowercase the rest of the word.
-    return piece.replace(/^([^A-Za-z]*)([A-Za-z])(.*)$/, (_m, lead, first, rest) =>
-      lead + first.toUpperCase() + rest.toLowerCase()
-    )
-  }).join('')
-}
-
-function sectionsToMarkdown(article: unknown[], title?: string): string {
-  if (!Array.isArray(article)) return ''
-
-  const HEADING_PREFIX: Record<string, string> = {
-    H1: '# ',
-    H2: '## ',
-    H3: '### ',
-    H4: '#### ',
-  }
-
-  const sorted = article
-    .slice()
-    .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
-
-  const parts: string[] = []
-  if (title) parts.push(`# ${toTitleCase(title)}`)
-
-  for (const s of sorted as any[]) {
-    // Skip the article's H1 section if we've already rendered the title
-    // (writer emits H1 with empty body — it would just duplicate the title)
-    if (title && s.level === 'H1' && !(s.body ?? '').trim()) continue
-
-    const prefix = HEADING_PREFIX[s.level] ?? ''
-    const heading = s.heading ? `${prefix}${toTitleCase(s.heading)}` : ''
-    const body = s.body ?? ''
-
-    if (heading && body) parts.push(`${heading}\n\n${body}`)
-    else if (heading) parts.push(heading)
-    else if (body) parts.push(body)
-  }
-
-  return parts.join('\n\n')
-}
 
 // ---------------------------------------------------------------------------
 // Sub-components

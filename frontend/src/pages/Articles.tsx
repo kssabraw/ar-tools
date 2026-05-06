@@ -4,6 +4,7 @@ import { useQuery, useMutation } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunListResponse } from '../lib/types'
 import { Download, Copy, FileText, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
+import { sectionsToMarkdown } from '../lib/sectionsToMarkdown'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -13,39 +14,6 @@ function downloadFile(content: string, filename: string, mime: string) {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
-}
-
-const HEADING_PREFIX: Record<string, string> = {
-  H1: '# ',
-  H2: '## ',
-  H3: '### ',
-  H4: '#### ',
-  H5: '##### ',
-  H6: '###### ',
-}
-
-function sectionsToMarkdown(article: unknown[], title?: string): string {
-  if (!Array.isArray(article)) return ''
-  const sorted = article
-    .slice()
-    .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
-
-  const hasH1 = sorted.some((s: any) => s.level === 'H1')
-  const parts: string[] = []
-
-  if (title && !hasH1) {
-    parts.push(`# ${title}`)
-  }
-
-  for (const s of sorted as any[]) {
-    // 'none' level (e.g. h1-enrichment paragraph) renders body only.
-    const prefix = HEADING_PREFIX[s.level] ?? ''
-    const heading = s.heading && prefix ? `${prefix}${s.heading}\n\n` : ''
-    const body = s.body ?? ''
-    const piece = `${heading}${body}`
-    if (piece.trim().length > 0) parts.push(piece)
-  }
-  return parts.join('\n\n')
 }
 
 function ArticleCard({ run }: { run: any }) {
