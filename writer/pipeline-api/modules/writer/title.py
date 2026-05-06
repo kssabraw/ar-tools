@@ -1,4 +1,4 @@
-"""Step 1 + 2 — Title generation and H1 enrichment.
+"""Step 1 + 2 - Title generation and H1 enrichment.
 
 Title rules per intent (PRD §6 Step 1):
 - how-to: starts with "How to" or "How [Audience] Can"
@@ -6,7 +6,7 @@ Title rules per intent (PRD §6 Step 1):
 - comparison: includes "vs." or "or"
 - others: declarative, value-led
 
-SIE v1.4 — both functions consume the three-bucket per-zone aggregate
+SIE v1.4 - both functions consume the three-bucket per-zone aggregate
 target (entities / related_keywords / keyword_variants) computed by
 SIE at 0.50 × trimmed-max competitor count. Lists carry the actual
 candidate terms; targets carry "include at least N of each" counts.
@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 TITLE_SYSTEM = (
     "You write SEO-optimized blog post titles. Output is a single JSON object: "
-    '{"candidates": ["title 1", "title 2", "title 3"]}.'
+    '{"candidates": ["title 1", "title 2", "title 3"]}. '
+    "Do not use em dashes. Use a plain hyphen (-) instead."
 )
 
 
@@ -74,7 +75,7 @@ async def generate_title(
     truncated to a sensible top-N by the caller) the LLM should pick
     from.
     """
-    # Title is a short zone — cap each list aggressively. The SIE
+    # Title is a short zone - cap each list aggressively. The SIE
     # aggregate may legitimately be 4+ for entities, but a 70-char
     # title can only carry ~3 distinct categories without keyword
     # stuffing. Show enough candidates that the LLM has choice but
@@ -117,7 +118,7 @@ async def generate_title(
         candidates = []
 
     if not candidates:
-        return f"{keyword.title()} — A Complete Guide"
+        return f"{keyword.title()} - A Complete Guide"
 
     all_terms = top_entities + top_related + top_variants
 
@@ -155,7 +156,7 @@ async def generate_h1_enrichment(
     aggregate, same shape as `title_targets` in generate_title.
     """
     # The lede only carries entity categories that fit a lede sentence
-    # naturally — services / equipment / problems / methods. Other
+    # naturally - services / equipment / problems / methods. Other
     # entity types (locations, brands, people) read as filler. Keyword
     # variants and related keywords have no such category restriction.
     relevant_entities = [

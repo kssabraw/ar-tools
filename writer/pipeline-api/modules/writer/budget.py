@@ -1,4 +1,4 @@
-"""Step 3 — Word budget allocation across heading sections.
+"""Step 3 - Word budget allocation across heading sections.
 
 Per content-writer-module-prd-v1.3.md §6 Step 3:
 - Conclusion gets a fixed 100-150 words regardless.
@@ -20,7 +20,7 @@ Why per-group fair shares (vs. the previous flat per-section weighting):
   articles where a promised "spine" H2 shipped as 3 short paragraphs
   while an authority-gap-rich sibling ran the longest section in the
   article. Per-group fair shares fix the spine-vs-sibling imbalance
-  without removing the authority-gap multiplier — auth-gap H3s still
+  without removing the authority-gap multiplier - auth-gap H3s still
   outweigh their parent H2 inside the group, just not at the article
   level.
 """
@@ -79,7 +79,7 @@ def allocate_budget(
 
     groups = _group_h2s(content_items)
 
-    # Orphan H3s (H3 entries appearing before any H2 — shouldn't happen
+    # Orphan H3s (H3 entries appearing before any H2 - shouldn't happen
     # in well-formed briefs, but guard anyway). Treat them as singleton
     # groups so they still get a share rather than dropping out silently.
     # Use object identity (id) rather than `in` because `in` would invoke

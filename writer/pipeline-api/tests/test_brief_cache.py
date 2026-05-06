@@ -78,7 +78,7 @@ async def test_get_cached_returns_none_when_payload_not_dict():
 
 @pytest.mark.asyncio
 async def test_get_cached_swallows_db_errors():
-    """Lookup failures degrade silently — pipeline regenerates."""
+    """Lookup failures degrade silently - pipeline regenerates."""
     client = MagicMock()
     client.table.side_effect = RuntimeError("network down")
     with patch("modules.brief.cache.get_supabase", return_value=client):

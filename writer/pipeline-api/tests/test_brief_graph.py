@@ -1,4 +1,4 @@
-"""Unit tests for Brief Generator v2.0 Step 5 — coverage graph + regions.
+"""Unit tests for Brief Generator v2.0 Step 5 - coverage graph + regions.
 
 These tests use deterministic synthetic embeddings (no real OpenAI calls).
 The injected embed_fn returns vectors from a lookup table keyed on text,
@@ -50,7 +50,7 @@ def _make_candidate(text: str, source: str = "serp", **kw) -> Candidate:
 
 
 # ----------------------------------------------------------------------
-# embed_with_gates — Step 5.1 + 5.2
+# embed_with_gates - Step 5.1 + 5.2
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -175,7 +175,7 @@ async def test_embed_with_gates_logs_summary(caplog):
 
 
 # ----------------------------------------------------------------------
-# build_coverage_graph — Step 5.3
+# build_coverage_graph - Step 5.3
 # ----------------------------------------------------------------------
 
 def test_build_coverage_graph_creates_edges_above_threshold():
@@ -215,7 +215,7 @@ def test_build_coverage_graph_single_node():
 
 
 # ----------------------------------------------------------------------
-# detect_regions — Step 5.4
+# detect_regions - Step 5.4
 # ----------------------------------------------------------------------
 
 def test_detect_regions_separates_distant_clusters():
@@ -259,7 +259,7 @@ def test_detect_regions_empty_graph():
 
 
 # ----------------------------------------------------------------------
-# score_regions — Step 5.5
+# score_regions - Step 5.5
 # ----------------------------------------------------------------------
 
 def _make_pair(text_a: str, text_b: str, vec_a, vec_b, source_a="serp", source_b="serp"):
@@ -280,7 +280,7 @@ def test_score_regions_density_and_diversity():
     scored = score_regions(regions, cands, title,
                            relevance_floor=0.40, restatement_ceiling=0.95)
     by_id = {r.region_id: r for r in scored}
-    # region_0 (largest by density-desc tiebreak; both have density 2 — use
+    # region_0 (largest by density-desc tiebreak; both have density 2 - use
     # smallest member index → {0,1} comes first).
     assert by_id["region_0"].member_indices == [0, 1]
     assert by_id["region_0"].density == 2

@@ -250,7 +250,7 @@ def test_claim_verification():
         "minimum SEER rating required for new central air conditioners is 14",
         source,
     ) == "verbatim_match"
-    # Numeric integrity violation — should reject
+    # Numeric integrity violation - should reject
     assert verify_claim(
         "average homeowner spends $9,999 per year on heating",
         source,

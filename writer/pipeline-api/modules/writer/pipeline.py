@@ -58,6 +58,14 @@ from .title import generate_h1_enrichment, generate_title
 logger = logging.getLogger(__name__)
 
 
+def _strip_em_dashes(text: str) -> str:
+    return text.replace("—", "-")
+
+
+def _word_count(text: str) -> int:
+    return len(text.split()) if text else 0
+
+
 class WriterError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -220,7 +228,7 @@ def _verify_brand_mention_landed(
     resequenced before this runs) and checks the body for the brand
     name. Returns None when no anchor was assigned (nothing to verify).
 
-    Warn-and-accept — same pattern as h2_body_length / coverage. The
+    Warn-and-accept - same pattern as h2_body_length / coverage. The
     return value lands in WriterMetadata.brand_mention_landed for editor
     review; we never auto-retry the section here (cost discipline)."""
     if not anchor_heading_text or not brand_name:
@@ -244,17 +252,17 @@ def _verify_brand_mention_landed(
 def _validate_article_structure(article: list[ArticleSection]) -> list[str]:
     """Post-assembly structural checks (PRD: article output structure).
 
-    Returns a list of warning strings — non-blocking observability
+    Returns a list of warning strings - non-blocking observability
     hooks. These run after assembly but before the final response so
     we surface drift in logs without aborting an otherwise-valid run.
 
     Checks:
-      1. Orphan ordinal references — body says "Step 3" with no
+      1. Orphan ordinal references - body says "Step 3" with no
          preceding Step 1 / Step 2 antecedent (the user reported this
          specifically: "Step 3: Rewrite every product listing..." with
          no Step 1 or Step 2 anywhere in the article).
       2. Intro must be the first prose block after H1 (and optional
-         h1-enrichment) — defends the order-resequencing fix.
+         h1-enrichment) - defends the order-resequencing fix.
       3. Conclusion must be present.
       4. FAQ header must come AFTER the conclusion (FAQ-last
          convention enforced by run_writer's assembly order).
@@ -275,7 +283,7 @@ def _validate_article_structure(article: list[ArticleSection]) -> list[str]:
                 )
             seen_steps.add(n)
 
-    # 2. Intro position — must precede the first H2.
+    # 2. Intro position - must precede the first H2.
     intro_index = next(
         (i for i, s in enumerate(article) if s.type == "intro"),
         None,
@@ -289,7 +297,7 @@ def _validate_article_structure(article: list[ArticleSection]) -> list[str]:
         if intro_index >= h2_first_index:
             warnings.append(
                 f"intro_position: intro at index {intro_index} but first "
-                f"H2 at index {h2_first_index} — intro should precede body"
+                f"H2 at index {h2_first_index} - intro should precede body"
             )
 
     # 3. Conclusion present.
@@ -310,7 +318,7 @@ def _validate_article_structure(article: list[ArticleSection]) -> list[str]:
             and faq_header_index < conclusion_index):
         warnings.append(
             f"faq_before_conclusion: FAQ at index {faq_header_index} "
-            f"but conclusion at index {conclusion_index} — FAQ should "
+            f"but conclusion at index {conclusion_index} - FAQ should "
             f"come last"
         )
 
@@ -321,12 +329,12 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     started = time.perf_counter()
     keyword, intent_type, heading_structure, faq_questions, citations = _validate_inputs(req)
 
-    # ---- Step 0.5 — Heading-structure sanitizer ----
+    # ---- Step 0.5 - Heading-structure sanitizer ----
     # Cleans two structural drift modes observed in real briefs:
-    # (a) duplicate body H2s (same normalized heading text) — used to
+    # (a) duplicate body H2s (same normalized heading text) - used to
     #     ship as two near-identical sections under the same heading;
     # (b) FAQ-as-content body H2s ("Frequently Asked Questions" with
-    #     type="content") — used to render as a body section before
+    #     type="content") - used to render as a body section before
     #     the conclusion, with the real faq-header block landing AFTER
     #     the conclusion (the user-reported "conclusion in the middle
     #     of the FAQs" bug).
@@ -409,7 +417,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
 
     banned_regex = build_banned_regex(brand_voice_card.banned_terms if brand_voice_card else [])
 
-    # ---- SIE v1.4 — pull zone × category aggregate targets ----
+    # ---- SIE v1.4 - pull zone × category aggregate targets ----
     # Each zone aggregate carries {entities, related_keywords,
     # keyword_variants}, each with {target, max}. `target` is 0.50 ×
     # trimmed-max competitor distinct-item count for that zone.
@@ -524,13 +532,13 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # The writer used to generate intro BEFORE body sections. That
     # produced two related defects:
     #   1. The intro promised "you'll work through X, Y, Z" without
-    #      knowing which H2s actually got written — section count
+    #      knowing which H2s actually got written - section count
     #      drift.
     #   2. The intro's `order` field collided with heading_structure's
     #      `order` field (both used integer counters from 1). After
     #      stable-sort by order in the markdown renderer, intro at
     #      order=3 ended up rendering AFTER H2 #1 (also at order=2)
-    #      and BEFORE H2 #2 — visually merging into the bottom of
+    #      and BEFORE H2 #2 - visually merging into the bottom of
     #      H2 #1's body.
     # Fix: build the article in execution order (H1 → enrichment →
     # body → conclusion → FAQ → intro-LAST), then INSERT intro at the
@@ -556,24 +564,24 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # handled at render time in _build_section_user_prompt.
     h2_titles = [(h2_item.get("text") or "").strip() for h2_item, _ in h2_groups]
     # For the intro's `h2_list` argument we still want non-empties only
-    # (the intro just enumerates titles — empty rows would render as
+    # (the intro just enumerates titles - empty rows would render as
     # bullets with no text).
     h2_titles_for_intro = [t for t in h2_titles if t]
     scope_statement = (brief.get("scope_statement") or "").strip()
     intro_title = (brief.get("title") or h1_text).strip()
 
-    # ---- Step 3.6 — Deterministic brand & ICP placement plan ----
+    # ---- Step 3.6 - Deterministic brand & ICP placement plan ----
     # Pre-allocates exactly one H2 to anchor the brand mention and one
     # H2 to anchor the ICP callout, before any section LLM runs. Without
     # this step every section's prompt sees the same soft "1–2 times
     # across the article… let another carry it" guidance and every
     # section punts, shipping zero brand mentions and no ICP callout.
-    # No LLM call — token-overlap scoring against client_services /
+    # No LLM call - token-overlap scoring against client_services /
     # audience_pain_points / audience_verticals.
     placement_plan = build_brand_placement_plan(heading_structure, brand_voice_card)
 
     # ---- Section writing (sequential per H2 group) ----
-    # SIE v1.4 — pro-rate the article-wide body category target across
+    # SIE v1.4 - pro-rate the article-wide body category target across
     # H2 groups by their share of the total body word budget. Each
     # section gets an aspirational fair-share target so the LLM can
     # self-pace; per-term targets remain the hard guidance.
@@ -581,12 +589,12 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     banned_terms_leaked_in_body: list[str] = []
     # Cohesion context passed into every section prompt:
     #   (A) article_title + sibling_h2_titles + current_h2_index gives
-    #       each section global positioning — knows which spot in the
+    #       each section global positioning - knows which spot in the
     #       outline it occupies.
     #   (B) preceding_section_summaries grows as we iterate so each
     #       section sees what previous sections actually wrote and can
     #       differentiate (instead of repeating setups / definitions).
-    # Both are free (no extra LLM calls — just bigger prompts).
+    # Both are free (no extra LLM calls - just bigger prompts).
     preceding_summaries_running: list[str] = []
     for h2_idx, (h2_item, h3_items) in enumerate(h2_groups):
         section_budget = section_budgets.get(h2_item.get("order"), 0)
@@ -616,7 +624,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         # next iteration's prompt can avoid repeating it.
         preceding_summaries_running.extend(_build_section_summaries(result.sections))
 
-    # ---- Conclusion (BEFORE FAQ — render order is body → conclusion → FAQ) ----
+    # ---- Conclusion (BEFORE FAQ - render order is body → conclusion → FAQ) ----
     section_summaries = _build_section_summaries(article)
     conclusion_section = await write_conclusion(
         keyword=keyword, intent_type=intent_type,
@@ -647,7 +655,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     article.extend(faq_sections)
 
     # ---- Intro (generated LAST so it can preview actual H2s) ----
-    # Writer v1.6 §4.3.1 — Agree/Promise/Preview. By generating the
+    # Writer v1.6 §4.3.1 - Agree/Promise/Preview. By generating the
     # intro after body+conclusion+FAQ are all finalized, the prompt
     # can promise EXACTLY the H2s that exist. Eliminates the "intro
     # promises 4, body delivers 8" drift the user reported when the
@@ -679,7 +687,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # Stamp `order` 1..N based on final list position. The markdown
     # renderer (platform-api/routers/publish.py) sorts sections by
     # `order` before emitting, so after this loop sort-order matches
-    # iteration-order — eliminating the order-collision rendering bug
+    # iteration-order - eliminating the order-collision rendering bug
     # that caused intro to render mid-body.
     for idx, section in enumerate(article, start=1):
         section.order = idx
@@ -688,7 +696,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     _scan_headings_for_banned(article, banned_regex)
 
     # ---- Article structure validator ----
-    # Non-blocking observability — surfaces orphan ordinal references
+    # Non-blocking observability - surfaces orphan ordinal references
     # (e.g., "Step 3" with no Step 1/2), wrong-position intro, missing
     # conclusion, FAQ-before-conclusion. Logged for review; doesn't
     # abort an otherwise-valid run.
@@ -699,7 +707,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             extra={"detail": warning},
         )
 
-    # ---- Step 6.7 — H2 body length validator (PRD v2.3 / Phase 3) ----
+    # ---- Step 6.7 - H2 body length validator (PRD v2.3 / Phase 3) ----
     # Catches H2 sections shipping with empty/lightweight bodies (the
     # audited "two sentences and a stat" failure mode). Retries each
     # under-length H2 group ONCE with a stricter prompt; warns-and-
@@ -724,14 +732,14 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             placement_plan=placement_plan,
         )
         # Re-run the heading-level banned-term scan on any retry-replaced
-        # sections — write_h2_group only catches body-level leakage; if a
-        # retry produced a different heading text (it shouldn't — retry
-        # never regenerates headings — but defensive), the heading scan
+        # sections - write_h2_group only catches body-level leakage; if a
+        # retry produced a different heading text (it shouldn't - retry
+        # never regenerates headings - but defensive), the heading scan
         # would catch it.
         article = h2_length_result.validated_article
         _scan_headings_for_banned(article, banned_regex)
 
-    # ---- Step 4F.1 — Citation Coverage Validator (PRD v1.7 / Phase 4) ----
+    # ---- Step 4F.1 - Citation Coverage Validator (PRD v1.7 / Phase 4) ----
     # Detects citable claims (C1–C9) per H2 group. If coverage is below
     # 50%, retries the section ONCE with a directive listing the uncited
     # claims and asking the LLM to add markers or rewrite to remove the
@@ -763,7 +771,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     directives = (brief.get("format_directives") or {})
     fmt = _format_compliance(article, directives)
 
-    # ---- Step 6.8 — ICP callout judge ----
+    # ---- Step 6.8 - ICP callout judge ----
     # One small LLM call to verify the ICP anchor section actually
     # surfaced the audience callout. Tolerates paraphrase that a
     # substring check would falsely flag. Skipped (returns None) when
@@ -792,7 +800,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         no_citations=no_citations,
         retry_count=0,
         banned_terms_leaked_in_body=sorted(set(banned_terms_leaked_in_body)),
-        # PRD v2.3 / Phase 3 — Step 6.7 outcomes
+        # PRD v2.3 / Phase 3 - Step 6.7 outcomes
         under_length_h2_sections=(
             h2_length_result.under_length_h2_sections
             if h2_length_result is not None else []
@@ -805,7 +813,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             h2_length_result.retries_succeeded
             if h2_length_result is not None else 0
         ),
-        # PRD v1.7 / Phase 4 — Step 4F.1 outcomes
+        # PRD v1.7 / Phase 4 - Step 4F.1 outcomes
         under_cited_sections=(
             coverage_result.under_cited_sections
             if coverage_result is not None else []
@@ -842,6 +850,15 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),
     )
+
+    # ---- Em dash sanitizer ----
+    # LLMs occasionally emit em dashes (U+2014) despite instructions.
+    # Normalize to plain hyphens before serialization so downstream
+    # consumers (markdown renderer, CMS importer) receive clean ASCII.
+    for section in article:
+        if section.body:
+            section.body = _strip_em_dashes(section.body)
+            section.word_count = _word_count(section.body)
 
     # ---- Per-zone term usage analysis ----
     sie_required_raw = (sie.get("terms") or {}).get("required") or []

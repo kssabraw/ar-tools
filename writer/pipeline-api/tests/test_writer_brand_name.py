@@ -50,7 +50,7 @@ def test_parse_card_brand_name_trimmed_and_capped():
 
 
 def test_brand_voice_card_default_brand_name_is_empty():
-    """The model's default value is an empty string, not None — keeps
+    """The model's default value is an empty string, not None - keeps
     the prompt builder branches simple."""
     card = BrandVoiceCard()
     assert card.brand_name == ""

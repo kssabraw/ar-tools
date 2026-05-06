@@ -1,4 +1,4 @@
-"""Step 8 — Constrained H2 Selection via MMR (Brief Generator v2.0).
+"""Step 8 - Constrained H2 Selection via MMR (Brief Generator v2.0).
 
 Implements the greedy Maximum Marginal Relevance algorithm with hard
 constraints from PRD §5 Step 8. This is the v2.0 mechanism that
@@ -6,9 +6,9 @@ mathematically prevents the paraphrase-H2 and topical-clone outline
 failure modes documented in PRD §1.
 
 Hard constraints (any violation eliminates a candidate from the round):
-  1. REGION UNIQUENESS — at most one selected H2 per coverage-graph
+  1. REGION UNIQUENESS - at most one selected H2 per coverage-graph
      region (PRD §5.5). Topical-clone outlines die here.
-  2. INTER-HEADING ANTI-REDUNDANCY — pairwise cosine to any already-
+  2. INTER-HEADING ANTI-REDUNDANCY - pairwise cosine to any already-
      selected H2 must be ≤ inter_heading_threshold (default 0.75).
      Paraphrase outlines die here.
 
@@ -24,11 +24,11 @@ pairwise cosine is a dot product.
 Shortfall policy (PRD §5 Step 8):
   If the loop terminates before reaching `target_count`, return what we
   have and flag `shortfall=True` with reason "constraints_exhausted_
-  eligible_pool". DO NOT relax thresholds or invent synthetic H2s — the
+  eligible_pool". DO NOT relax thresholds or invent synthetic H2s - the
   PRD is emphatic that an honest 4-H2 brief beats a padded 6-H2 brief.
 
 Each non-selected eligible candidate gets `discard_reason =
-"below_priority_threshold"` set in place — they lost the MMR competition.
+"below_priority_threshold"` set in place - they lost the MMR competition.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class SelectionResult:
     """Output of `select_h2s_mmr`.
 
     `not_selected` carries every eligible candidate that lost the MMR
-    competition — each already has `discard_reason` stamped to
+    competition - each already has `discard_reason` stamped to
     "below_priority_threshold". The orchestrator routes them into the
     discard list (and feeds non-eliminated regions into silos).
     """
@@ -76,7 +76,7 @@ def select_h2s_mmr(
       - Every candidate in `eligible` must have `embedding` populated
         (unit-normalized) and `heading_priority` computed (Step 7).
       - Every candidate must have `region_id` populated (Step 5.5).
-      - `eligible` is the post-region-elimination pool — gates and
+      - `eligible` is the post-region-elimination pool - gates and
         region-off-topic / region-restates-title cuts already applied
         upstream.
       - `pre_reserved` (PRD v2.1 Step 7.5): candidates already chosen by
@@ -91,7 +91,7 @@ def select_h2s_mmr(
       - Greedy: each MMR round picks the surviving candidate with the
         highest mmr_score against the union of (pre-reserved + already-
         selected-by-MMR).
-      - Region uniqueness and inter-heading constraints are HARD —
+      - Region uniqueness and inter-heading constraints are HARD -
         violators are skipped, never penalized.
       - When no surviving candidate exists, the loop exits and shortfall
         is flagged.
@@ -99,7 +99,7 @@ def select_h2s_mmr(
     Argument validation:
       - target_count <= 0 returns empty selection without iterating.
       - mmr_lambda must be in [0, 1]; values outside raise ValueError.
-      - len(pre_reserved) > target_count raises ValueError — the caller
+      - len(pre_reserved) > target_count raises ValueError - the caller
         passed more anchors than slots to fill.
     """
     if not 0.0 <= mmr_lambda <= 1.0:
@@ -181,7 +181,7 @@ def select_h2s_mmr(
                 best_redundancy = redundancy
 
         if best_idx is None:
-            # No surviving candidate — every remaining one violates a
+            # No surviving candidate - every remaining one violates a
             # hard constraint. Accept the shortfall.
             logger.info(
                 "brief.mmr.shortfall",
@@ -213,7 +213,7 @@ def select_h2s_mmr(
     # Stamp discard_reason on the losers (PRD §5 Step 8 Discarded
     # headings clause). Anything still in `pool` was either never picked
     # (lost the MMR competition) or violated a hard constraint when it
-    # was its turn — either way the reason is below_priority_threshold.
+    # was its turn - either way the reason is below_priority_threshold.
     for loser in pool:
         loser.discard_reason = "below_priority_threshold"
 

@@ -1,7 +1,7 @@
 """Bucket-aware per-section term selection (sections._terms_for_section).
 
 The prior single combined cap (top 10 from a score-mixed list) was
-crowding entities out of section prompts — articles shipped with only
+crowding entities out of section prompts - articles shipped with only
 3-5 distinct entities used even when SIE supplied 15+. The bucket-
 aware cap takes top N from each of (entities / related keywords /
 keyword variants) independently.
@@ -44,7 +44,7 @@ def test_empty_input_returns_empty():
 
 def test_buckets_independently_capped():
     """20 entities + 20 related + 20 variants in the pool. With caps
-    of 5/5/5, the result must be exactly 5 of each — not 15 of one
+    of 5/5/5, the result must be exactly 5 of each - not 15 of one
     bucket because they happened to come first in SIE's score order."""
     pool = (
         [_term(f"ent_{i}", is_entity=True) for i in range(20)]
@@ -85,7 +85,7 @@ def test_entities_first_in_returned_list():
 
 def test_within_bucket_score_order_preserved():
     """SIE sorts the required pool by recommendation_score descending.
-    Within each bucket, that order must be preserved — taking the top
+    Within each bucket, that order must be preserved - taking the top
     N by SIE score is the whole point of "top N per bucket"."""
     pool = [
         _term("ent_high", is_entity=True),
@@ -106,7 +106,7 @@ def test_within_bucket_score_order_preserved():
 def test_underfilled_bucket_does_not_steal_from_other_buckets():
     """If only 3 entities exist but the cap is 15, the related-keyword
     bucket does NOT get the leftover 12 slots. Each bucket is
-    independent — that's the whole point of the redesign vs the
+    independent - that's the whole point of the redesign vs the
     prior combined cap."""
     pool = (
         [_term(f"ent_{i}", is_entity=True) for i in range(3)]
@@ -167,7 +167,7 @@ def test_excluded_and_avoid_pass_through_unchanged():
 
 
 def test_cap_of_zero_yields_empty_bucket():
-    """Operator-tunable to zero — useful for ablation runs that want to
+    """Operator-tunable to zero - useful for ablation runs that want to
     test sections with NO entities (or no related keywords, etc.)."""
     pool = [
         _term("ent_1", is_entity=True),

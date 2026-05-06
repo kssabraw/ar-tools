@@ -1,18 +1,18 @@
 """Per-intent heading-skeleton templates (Brief Generator PRD v2.1).
 
 The template defines:
-  - `h2_pattern`         — abstract shape of the H2 sequence
-  - `h2_framing_rule`    — what each H2's wording must look like (validated
+  - `h2_pattern`         - abstract shape of the H2 sequence
+  - `h2_framing_rule`    - what each H2's wording must look like (validated
     deterministically in Step 11 via regex; rewritten by LLM on miss)
-  - `ordering`           — strict_sequential / logical / none — drives
+  - `ordering`           - strict_sequential / logical / none - drives
     downstream how-to reorder step
-  - `anchor_slots`       — short semantic-anchor strings that Step 7.5
+  - `anchor_slots`       - short semantic-anchor strings that Step 7.5
     embeds and matches against the candidate pool. Anchors describe
     *phases* of the article, not specific topics, so they generalize
     across keywords (e.g. how-to anchors: "plan", "set up", "launch",
-    "iterate" — same skeleton works for opening a TikTok shop, building
+    "iterate" - same skeleton works for opening a TikTok shop, building
     a deck, or launching a podcast).
-  - `min_h2_count` / `max_h2_count` — soft bounds the assembly pass uses
+  - `min_h2_count` / `max_h2_count` - soft bounds the assembly pass uses
     to set MMR target_count. The brief-wide global cap (15 / 20) still
     overrides on the high end.
 
@@ -26,7 +26,7 @@ Out-of-scope intents in v1 (per Phase 1 proposal): `news`, `local-seo`.
 Both still classify correctly, but their templates use
 `framing_rule="no_constraint"` and empty `anchor_slots` so neither the
 slot-reservation pass nor the framing validator does anything.
-`guide` / `definition` / `review` are aliases — the classifier already
+`guide` / `definition` / `review` are aliases - the classifier already
 collapses them to `informational` / `informational-commercial`, so the
 registry keys to the canonical intent set only.
 """
@@ -47,7 +47,7 @@ from models.brief import (
 # ---------------------------------------------------------------------------
 # Each anchor is a short phrase the embedding model can match against
 # real heading candidates. Stick to phase-level concepts ("plan", "set up")
-# rather than topic-specific phrases — the latter wouldn't generalize.
+# rather than topic-specific phrases - the latter wouldn't generalize.
 
 _HOW_TO_ANCHORS: list[str] = [
     "plan and prepare",
@@ -140,7 +140,7 @@ def _build_registry() -> dict[IntentType, IntentFormatTemplate]:
             min_h2=5,
             max_h2=10,
             description=(
-                "Ranked / numbered items. No anchor slots — the listicle "
+                "Ranked / numbered items. No anchor slots - the listicle "
                 "pool is dictated by topic, not phase."
             ),
         ),
@@ -178,8 +178,8 @@ def _build_registry() -> dict[IntentType, IntentFormatTemplate]:
             min_h2=4,
             max_h2=6,
             description=(
-                "Buyer-education axes — what to look for, how to compare, "
-                "common mistakes — with no endorsement framing."
+                "Buyer-education axes - what to look for, how to compare, "
+                "common mistakes - with no endorsement framing."
             ),
         ),
         "ecom": _template(
@@ -194,7 +194,7 @@ def _build_registry() -> dict[IntentType, IntentFormatTemplate]:
                 "Feature-benefit / product-spec axes for commercial pages."
             ),
         ),
-        # v1 deferred — keep templates so the schema is complete, but
+        # v1 deferred - keep templates so the schema is complete, but
         # neither pass enforces anything.
         "local-seo": _template(
             "local-seo",
@@ -226,7 +226,7 @@ def get_template(intent: IntentType) -> IntentFormatTemplate:
     """Return a fresh copy of the template for `intent`.
 
     Falls back to the `informational` template for any intent we don't
-    have a registration for (defensive — the IntentType literal already
+    have a registration for (defensive - the IntentType literal already
     constrains valid values, but a future enum addition without a
     corresponding template registration would otherwise crash here).
     """

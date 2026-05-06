@@ -1,5 +1,5 @@
 """Tests for the authority-gap H3 displacement logic in assembly.py
-(PRD §5 Step 8.6 — Authority Gap H3 Interaction)."""
+(PRD §5 Step 8.6 - Authority Gap H3 Interaction)."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ def _h3(
 
 
 # ----------------------------------------------------------------------
-# Capacity available — straightforward attach
+# Capacity available - straightforward attach
 # ----------------------------------------------------------------------
 
 def test_authority_h3_attaches_to_most_similar_h2_when_capacity_available():
@@ -102,7 +102,7 @@ def test_authority_h3_with_lower_priority_routes_to_next_h2():
     the auth H3 routes to the next-most-relevant H2."""
     h2_a = _h2("Most similar H2", [1.0, 0.0, 0.0])
     h2_b = _h2("Adjacent H2", [0.7, 0.7, 0.0])
-    # H2-A has two strong H3s — auth would lose displacement here.
+    # H2-A has two strong H3s - auth would lose displacement here.
     a1 = _h3("A1 strong", [0.8, 0.6, 0.0], priority=0.9)
     a2 = _h3("A2 strong", [0.85, 0.5, 0.0], priority=0.85)
     # H2-B has capacity available
@@ -136,7 +136,7 @@ def test_authority_h3_kept_even_when_lowest_priority_everywhere():
         authority_h3s=[auth],
         existing_attachments={0: [a1, a2]},
     )
-    # Auth is kept anyway — cap exceeded by 1
+    # Auth is kept anyway - cap exceeded by 1
     assert auth in res.attachments[0]
     assert len(res.attachments[0]) == 3  # over the 2-cap
     assert res.displaced == []  # nothing displaced
@@ -157,7 +157,7 @@ def test_cap_overflow_logs(caplog):
 
 
 # ----------------------------------------------------------------------
-# Multiple authority H3s — processed in priority-desc order
+# Multiple authority H3s - processed in priority-desc order
 # ----------------------------------------------------------------------
 
 def test_multiple_authority_h3s_processed_by_priority_desc():

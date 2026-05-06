@@ -124,7 +124,7 @@ def test_levenshtein_dedup_url_union_after_merge():
 
 def test_llm_consensus_counts_distinct_llms():
     """4 distinct LLMs surface the same query → consensus = 4."""
-    # Identical strings (modulo punctuation — sanitize_heading + normalize
+    # Identical strings (modulo punctuation - sanitize_heading + normalize
     # collapse them) so all four merge into one candidate.
     same = "How does TikTok Shop work for sellers"
     cands = aggregate_candidates(
@@ -180,7 +180,7 @@ def test_llm_consensus_bumps_when_llm_merges_into_existing_serp_entry():
     """SERP entry + LLM near-paraphrase: SERP wins identity, consensus bumps."""
     # Use exact-match paraphrases of the SERP heading so the Levenshtein
     # gate (≤ 0.15) collapses them. Larger differences fall outside the
-    # threshold and would form separate candidates — tested elsewhere.
+    # threshold and would form separate candidates - tested elsewhere.
     cands = aggregate_candidates(
         serp_stats=_serp_stats(
             ("what is tiktok shop", "What is TikTok Shop", 18, 2.0, []),
@@ -278,7 +278,7 @@ def test_pure_punctuation_dropped_real_question_kept():
 # ----------------------------------------------------------------------
 
 def test_levenshtein_threshold_constant_matches_prd():
-    """Sanity: PRD §5 Step 4 specifies 0.15 — ensure we don't drift."""
+    """Sanity: PRD §5 Step 4 specifies 0.15 - ensure we don't drift."""
     assert LEVENSHTEIN_DEDUP_THRESHOLD == 0.15
 
 

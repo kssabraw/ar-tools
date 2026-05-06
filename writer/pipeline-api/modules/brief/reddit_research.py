@@ -59,7 +59,7 @@ PERPLEXITY_FN = Callable[..., Awaitable[dict]]
 class RedditInsights:
     """Structured output of `research_reddit`.
 
-    `available=False` is the explicit "no signal" state — caller should
+    `available=False` is the explicit "no signal" state - caller should
     fall back to whatever Reddit context it had before this module was
     introduced. `markdown_report` carries the raw synthesized body for
     consumers that want the full narrative; the parsed `sections` dict
@@ -129,7 +129,7 @@ Positive and negative first-hand experiences. Use bullets. Cite each
 claim with a [N] reference matching the citation list.
 
 ## 2. Common Fears & Concerns
-What worries readers about this topic — costs, risks, mistakes, bad
+What worries readers about this topic - costs, risks, mistakes, bad
 outcomes. Use bullets.
 
 ## 3. What Redditors Value & Recommend
@@ -147,7 +147,7 @@ Be specific.
 
 ## 6. Emotional, Cultural & Experiential Insights
 Tone, vocabulary, cultural context, regional variation, multilingual
-notes — anything that signals the human texture of the discussion.
+notes - anything that signals the human texture of the discussion.
 
 ## 7. Citations
 Numbered list (1, 2, 3, ...) of the reddit.com URLs you drew from. At
@@ -262,7 +262,7 @@ async def research_reddit(
             attempt uses STRICTER_RETRY_SUFFIX appended to the system prompt.
 
     Returns:
-        RedditInsights — `available=True` only when a synthesis call
+        RedditInsights - `available=True` only when a synthesis call
         succeeded and validation passed. Other cases return
         `available=False` with `fallback_reason` populated so the caller
         can log + downgrade gracefully.

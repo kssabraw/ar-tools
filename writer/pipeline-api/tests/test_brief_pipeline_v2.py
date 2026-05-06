@@ -31,7 +31,7 @@ for i in range(20):
         "rank_absolute": i + 1,
         "rank_group": i + 1,
         "url": f"https://site{i}.example.com/article",
-        "title": f"What TikTok Shop Is and How It Works — Article {i}",
+        "title": f"What TikTok Shop Is and How It Works - Article {i}",
         "description": (
             f"Overview of TikTok Shop selling for new creators (variant {i}). "
             "How it works:\nSetup process for sellers:\nFees structure:"
@@ -61,7 +61,7 @@ REDDIT_ITEMS = [
 # ----------------------------------------------------------------------
 
 def _normalized_vec(text: str, dim: int = 16) -> list[float]:
-    """Deterministic synthetic embedding — mostly along axis 0 for any text
+    """Deterministic synthetic embedding - mostly along axis 0 for any text
     containing 'tiktok shop' so cosine to title is high."""
     vec = [0.0] * dim
     seed = sum(ord(c) for c in text)
@@ -109,7 +109,7 @@ async def fake_embed_batch_large(texts, normalize=True):
 
 async def fake_claude_json(system: str, user: str, **kwargs):
     """Route Anthropic calls by uniquely identifying phrases in each
-    prompt. Ordering matters — most specific matches first.
+    prompt. Ordering matters - most specific matches first.
 
     Each step's SYSTEM_PROMPT is grep'd for a phrase that appears nowhere
     else; this lets the mock disambiguate without false positives between
@@ -191,7 +191,7 @@ async def fake_claude_json(system: str, user: str, **kwargs):
     if "extract all distinct subtopics" in sys_l:
         return ["Setup process", "Seller fees", "Payment methods"]
 
-    # PRD v2.2 / Phase 2 — H3 parent-fit verification: "you audit per-h2 h3 attachments"
+    # PRD v2.2 / Phase 2 - H3 parent-fit verification: "you audit per-h2 h3 attachments"
     if "audit per-h2 h3 attachments" in sys_l:
         # Default: every H3 is `good`. Tests that need different routing
         # patch this branch case-by-case via monkeypatch.
@@ -217,7 +217,7 @@ async def fake_claude_json(system: str, user: str, **kwargs):
                 pass
         return {"verifications": verifications}
 
-    # PRD v2.2 / Phase 2 — FAQ intent gate: "you audit faqs for an seo blog brief"
+    # PRD v2.2 / Phase 2 - FAQ intent gate: "you audit faqs for an seo blog brief"
     if "audit faqs for an seo blog brief" in sys_l:
         # Default: every FAQ matches_primary_intent (cosine floor pass
         # already cut the egregious ones).
@@ -312,10 +312,10 @@ class _AllMocks:
             patch("modules.brief.faqs.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.graph.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.intent.claude_json", fake_claude_json),
-            # PRD v2.1 — anchor-slot embedding + framing rewrite LLM call
+            # PRD v2.1 - anchor-slot embedding + framing rewrite LLM call
             patch("modules.brief.skeleton_slots.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.framing.claude_json", fake_claude_json),
-            # PRD v2.2 / Phase 2 — H3 parent-fit + FAQ intent gate LLM/embed calls
+            # PRD v2.2 / Phase 2 - H3 parent-fit + FAQ intent gate LLM/embed calls
             patch("modules.brief.h3_parent_fit.claude_json", fake_claude_json),
             patch("modules.brief.faq_intent_gate.claude_json", fake_claude_json),
             patch("modules.brief.faq_intent_gate.embed_batch_large", fake_embed_batch_large),
@@ -373,7 +373,7 @@ async def test_pipeline_produces_h1_h2_outline():
     assert levels[0] == "H1"
     # H1 text is the Step 3.5 generated title, NOT the raw keyword. The
     # mock title router returns "What TikTok Shop Is and How It Works in
-    # 2026" — that string must surface as the article's H1.
+    # 2026" - that string must surface as the article's H1.
     assert result.heading_structure[0].text == result.title
     assert result.heading_structure[0].text.startswith("What TikTok Shop")
     # At least one H2
@@ -480,7 +480,7 @@ async def test_how_to_reorder_keeps_h3_attachments_aligned():
         result = await run_brief(req)
 
     # For each H3 with a parent_h2_text, the parent text must literally
-    # appear among the H2s in the heading_structure — i.e., we never
+    # appear among the H2s in the heading_structure - i.e., we never
     # emit an H3 whose parent is "stale" from a pre-reorder index.
     h2_texts = {
         h.text for h in result.heading_structure
@@ -663,14 +663,14 @@ async def test_pipeline_validation_error_on_empty_keyword():
 
 
 # ---------------------------------------------------------------------------
-# Phase 1 / PRD v2.1 — intent format template + framing + re-embedding
+# Phase 1 / PRD v2.1 - intent format template + framing + re-embedding
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_pipeline_emits_intent_format_template():
     """Brief output must carry `intent_format_template` populated from
-    Step 3.3 + the registry — informational keyword → topic_questions
+    Step 3.3 + the registry - informational keyword → topic_questions
     pattern, no anchor slots configured, non-empty description."""
     from modules.brief.pipeline import run_brief
 
@@ -708,7 +708,7 @@ async def test_pipeline_metadata_carries_phase1_counters():
 
 @pytest.mark.asyncio
 async def test_pipeline_target_h2_clamps_to_template_max(monkeypatch):
-    """Fix #6 — when the template's max_h2_count is below the 6-slot
+    """Fix #6 - when the template's max_h2_count is below the 6-slot
     baseline (e.g. a 3-axis comparison), MMR must not be asked for
     more slots than the template allows. We patch get_template to
     return a template with max_h2_count=3 and verify the resulting
@@ -747,7 +747,7 @@ async def test_pipeline_target_h2_clamps_to_template_max(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pipeline_reembeds_rewritten_h2s(monkeypatch):
-    """Fix #3 — when the framing validator rewrites an H2's text, the
+    """Fix #3 - when the framing validator rewrites an H2's text, the
     pipeline must re-embed it so downstream parent_relevance maths
     operates on a vector aligned with the new text. We force the
     framing validator to mutate one H2 and assert that the re-embed
@@ -799,13 +799,13 @@ async def test_pipeline_reembeds_rewritten_h2s(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 review fix #5 — h2s_with_zero_h3s recomputed post-Step-8.7
+# Phase 2 review fix #5 - h2s_with_zero_h3s recomputed post-Step-8.7
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_pipeline_h2s_with_zero_h3s_reflects_step_8_7_mutations(monkeypatch):
-    """Fix #5 — when Step 8.7 routes H3s to silos, the final
+    """Fix #5 - when Step 8.7 routes H3s to silos, the final
     `h2s_with_zero_h3s` metadata must reflect the post-Step-8.7
     attachment map, not the pre-Step-8.7 snapshot."""
     from modules.brief import pipeline as brief_pipeline
@@ -840,7 +840,7 @@ async def test_pipeline_h2s_with_zero_h3s_reflects_step_8_7_mutations(monkeypatc
             result = await brief_pipeline.run_brief(req)
 
     # The final metric must count H2[0] (now empty of non-auth H3s) in
-    # `h2s_with_zero_h3s` — the pre-Step-8.7 snapshot would have missed it.
+    # `h2s_with_zero_h3s` - the pre-Step-8.7 snapshot would have missed it.
     h2_count = sum(
         1 for h in result.heading_structure
         if h.level == "H2" and h.type == "content"
@@ -853,7 +853,7 @@ async def test_pipeline_h2s_with_zero_h3s_reflects_step_8_7_mutations(monkeypatc
 
 
 # ---------------------------------------------------------------------------
-# PRD v2.3 / Phase 3 — min_h2_body_words plumbed end-to-end
+# PRD v2.3 / Phase 3 - min_h2_body_words plumbed end-to-end
 # ---------------------------------------------------------------------------
 
 

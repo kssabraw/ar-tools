@@ -15,17 +15,17 @@ from modules.brief.sanitization import sanitize_heading
         (
             "What exactly is tiktok shop ? : r/TikTokshop",
             "What exactly is tiktok shop",
-            "S1 — strip subreddit suffix",
+            "S1 - strip subreddit suffix",
         ),
         (
             "What is TikTok Shop and How is it Different ...",
             "What is TikTok Shop and How is it Different",
-            "S2 — strip trailing ellipsis (three periods)",
+            "S2 - strip trailing ellipsis (three periods)",
         ),
         (
             "What is TikTok Shop…",
             "What is TikTok Shop",
-            "S2 — strip unicode horizontal-ellipsis",
+            "S2 - strip unicode horizontal-ellipsis",
         ),
     ],
 )
@@ -39,7 +39,7 @@ def test_audited_serp_artifact_examples(raw, expected_substring, note):
 
 
 def test_pipe_separated_tagline_drops_trailing_segment():
-    """`Title | Marketing Tagline` — drop the tagline."""
+    """`Title | Marketing Tagline` - drop the tagline."""
     cleaned = sanitize_heading(
         "TikTok Shop | Discover the Future of Social Commerce",
     )
@@ -59,7 +59,7 @@ def test_pipe_separated_tagline_with_meaningful_lead_keeps_lead():
 
 
 def test_pipe_separated_question_tail_preserved():
-    """`Title | How does it work?` — trailing segment is question-shaped, keep it."""
+    """`Title | How does it work?` - trailing segment is question-shaped, keep it."""
     cleaned = sanitize_heading(
         "Choosing a Plan: How Long Does It Take? | Shopify",
         source_url="https://shopify.com/x",
@@ -103,7 +103,7 @@ def test_s8_trailing_punctuation_runs_reduced():
 
 
 def test_s9_too_short_after_sanitization_returns_none():
-    # "TikTok Shop" alone — 2 words, S9 discards
+    # "TikTok Shop" alone - 2 words, S9 discards
     assert sanitize_heading("TikTok Shop") is None
     assert sanitize_heading("Shop") is None
     assert sanitize_heading("...") is None

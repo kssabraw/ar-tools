@@ -58,7 +58,7 @@ def _region(rid, members, eliminated=False, elimination_reason=None):
 
 
 # ----------------------------------------------------------------------
-# Step 12.1 — discard-reason filtering
+# Step 12.1 - discard-reason filtering
 # ----------------------------------------------------------------------
 
 @pytest.mark.parametrize("reason,expected", [
@@ -106,7 +106,7 @@ def test_silo_filters_out_ineligible_members():
 
 
 # ----------------------------------------------------------------------
-# Step 12.3 — search-demand score
+# Step 12.3 - search-demand score
 # ----------------------------------------------------------------------
 
 def test_search_demand_score_max_signals():
@@ -130,7 +130,7 @@ def test_search_demand_score_no_signals():
 
 def test_search_demand_score_partial():
     """SERP source with frequency=10 + consensus=2; no other signals.
-    Expected: 0.30 * 0.5 + 0.25 * 0.5 = 0.275 — below 0.30 floor."""
+    Expected: 0.30 * 0.5 + 0.25 * 0.5 = 0.275 - below 0.30 floor."""
     cands = [
         _cand("a", [1.0, 0], source="serp",
               serp_frequency=10, llm_fanout_consensus=2),
@@ -226,7 +226,7 @@ def test_silo_carries_discard_reason_breakdown():
 
 def test_singleton_scope_reject_dropped_when_demand_below_threshold():
     """A scope-verification reject with no demand AND low priority is
-    filtered. v2.4 added a strong-priority bypass — the fixture sets
+    filtered. v2.4 added a strong-priority bypass - the fixture sets
     heading_priority=0.10 (below the 0.30 bypass) so the demand-floor
     rejection path actually fires."""
     rejected = _cand(
@@ -246,7 +246,7 @@ def test_singleton_scope_reject_dropped_when_demand_below_threshold():
 
 
 # ----------------------------------------------------------------------
-# Step 12.4 — viability check
+# Step 12.4 - viability check
 # ----------------------------------------------------------------------
 
 def _silo(keyword: str, recommended_intent="informational") -> SiloCandidate:
@@ -266,7 +266,7 @@ def _silo(keyword: str, recommended_intent="informational") -> SiloCandidate:
 
 
 def _llm_mock(*responses):
-    """Deterministic LLM mock — returns each response in turn."""
+    """Deterministic LLM mock - returns each response in turn."""
     iterator = iter(responses)
 
     async def _mock(system, user, **kw):

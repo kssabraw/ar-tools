@@ -1,4 +1,4 @@
-"""Pydantic models for the SIE (SERP Intelligence Engine) module — schema v1.0."""
+"""Pydantic models for the SIE (SERP Intelligence Engine) module - schema v1.0."""
 
 from typing import Literal, Optional
 
@@ -70,17 +70,17 @@ class UsageRecommendation(BaseModel):
 
 
 class TermRecord(BaseModel):
-    """Unified term entry — n-gram terms, entity-only terms, or merged."""
+    """Unified term entry - n-gram terms, entity-only terms, or merged."""
 
     term: str
     source: TermSource = "ngram"
     n_gram_length: int = 1
     is_entity: bool = False
     is_target_keyword: bool = False
-    # SIE v1.3 — n-gram terms whose tokens are a contiguous subsequence
+    # SIE v1.3 - n-gram terms whose tokens are a contiguous subsequence
     # of the seed keyword (e.g. "tiktok shop" / "roi" / "how to" for
     # the seed "how to increase roi for a tiktok shop"). Frontend should
-    # bucket these separately from "related concepts" — they're echoes
+    # bucket these separately from "related concepts" - they're echoes
     # of the input, not topical adjacent terms. Writer still uses them
     # via the per-zone targets in usage_recommendations. Entities and
     # the seed keyword itself are NEVER flagged as fragments.
@@ -163,7 +163,7 @@ class TargetKeywordRecord(BaseModel):
 
 
 class CategoryTarget(BaseModel):
-    """SIE v1.4 — per-zone per-category aggregate target.
+    """SIE v1.4 - per-zone per-category aggregate target.
 
     `target` is 0.50 × trimmed-max competitor count of distinct items
     in that (zone, category). `max` is the trimmed-max itself (the
@@ -206,7 +206,7 @@ class SIEResponse(BaseModel):
     terms: TermBuckets
     term_signals: TermSignals
     usage_recommendations: list[UsageRecommendation] = []
-    # SIE v1.4 — distinct-item aggregate per zone, per category. Keys
+    # SIE v1.4 - distinct-item aggregate per zone, per category. Keys
     # are zone names (title / h1 / h2 / h3 / paragraphs); values carry
     # entities / related_keywords / keyword_variants targets benchmarked
     # at 0.50 × trimmed-max competitor count. Writer consumes these to

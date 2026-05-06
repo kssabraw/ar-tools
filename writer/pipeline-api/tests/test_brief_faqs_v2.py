@@ -1,4 +1,4 @@
-"""Tests for Brief Generator v2.0 Step 10 — FAQ generation.
+"""Tests for Brief Generator v2.0 Step 10 - FAQ generation.
 
 Mocks the LLM and embedder via injected functions; no real API calls.
 """
@@ -55,7 +55,7 @@ def test_extract_question_filters_by_word_count():
 
 
 # ----------------------------------------------------------------------
-# regex_faq_pool — Source A + C dedup
+# regex_faq_pool - Source A + C dedup
 # ----------------------------------------------------------------------
 
 def test_paa_questions_are_first_class_candidates():
@@ -129,7 +129,7 @@ def test_persona_gap_question_without_question_mark_is_normalized():
 
 
 # ----------------------------------------------------------------------
-# llm_concern_extraction (Source B) — injected LLM
+# llm_concern_extraction (Source B) - injected LLM
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -191,7 +191,7 @@ async def test_llm_concern_extraction_handles_malformed_payload():
 
 
 # ----------------------------------------------------------------------
-# score_faqs — uses TITLE embedding (v2.0 change from seed)
+# score_faqs - uses TITLE embedding (v2.0 change from seed)
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -287,7 +287,7 @@ async def test_score_empty_candidates_returns_empty():
 
 
 # ----------------------------------------------------------------------
-# select_faqs — top-5 with min-score, fallback to top-3
+# select_faqs - top-5 with min-score, fallback to top-3
 # ----------------------------------------------------------------------
 
 def _scored(question: str, source: str, score: float) -> FAQCandidate:
@@ -343,7 +343,7 @@ def test_select_rounds_score_in_output():
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 / PRD v2.2 — Blended semantic_score (cosine-to-title +
+# Phase 2 / PRD v2.2 - Blended semantic_score (cosine-to-title +
 # cosine-to-intent-profile)
 # ---------------------------------------------------------------------------
 

@@ -1,4 +1,4 @@
-"""Step 7 — Citation usage reconciliation.
+"""Step 7 - Citation usage reconciliation.
 
 Walk every section's body, collect {{cit_N}} markers, and produce the
 CitationUsage block.

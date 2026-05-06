@@ -1,4 +1,4 @@
-"""Pydantic models for the Research & Citations module — schema v1.1."""
+"""Pydantic models for the Research & Citations module - schema v1.1."""
 
 from typing import Any, Literal, Optional
 

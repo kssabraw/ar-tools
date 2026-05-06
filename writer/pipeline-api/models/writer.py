@@ -1,4 +1,4 @@
-"""Pydantic models for the Content Writer module — schema v1.7.
+"""Pydantic models for the Content Writer module - schema v1.7.
 
 Per writer-module-v1_5-change-spec_2.md plus content-writer-module-prd-v1.3.md.
 PRD v2.3 / Phase 3: bumped to 1.6 with new Step 6.7 H2 body length
@@ -148,32 +148,32 @@ class WriterMetadata(BaseModel):
     # "leverage" as banned). Headings remain hard-abort. Reviewers can
     # find and fix these terms during article QA.
     banned_terms_leaked_in_body: list[str] = []
-    # PRD v2.3 / Phase 3 — Step 6.7 H2 body length validator outcomes.
+    # PRD v2.3 / Phase 3 - Step 6.7 H2 body length validator outcomes.
     # `under_length_h2_sections` carries the H2 sections (by their order
     # in heading_structure) that fell below `format_directives.
     # min_h2_body_words` after a single retry. The retry pass is
-    # warn-and-accept — production never aborts on under-length, but the
+    # warn-and-accept - production never aborts on under-length, but the
     # flagged sections are surfaced so editors can review or expand
     # them post-publish.
     under_length_h2_sections: list[dict] = []
     h2_body_length_retries_attempted: int = 0
     h2_body_length_retries_succeeded: int = 0
-    # PRD v1.7 / Phase 4 — Step 4F.1 citation-coverage validator outcomes.
+    # PRD v1.7 / Phase 4 - Step 4F.1 citation-coverage validator outcomes.
     # `under_cited_sections` carries the H2 sections whose detected
     # citable claims (C1-C9) fell under the 50% citation-coverage
     # threshold even after a single retry. `operational_claims_softened`
     # records every C7-C9 phrase that was deterministically rewritten
     # to hedge phrasing because no citation could be added during the
-    # retry. Both are warn-and-accept — runs never abort on coverage.
+    # retry. Both are warn-and-accept - runs never abort on coverage.
     under_cited_sections: list[dict] = []
     operational_claims_softened: list[dict] = []
     citation_coverage_retries_attempted: int = 0
     citation_coverage_retries_succeeded: int = 0
-    # Step 3.6 — Brand & ICP placement plan outcome. The pipeline pre-
+    # Step 3.6 - Brand & ICP placement plan outcome. The pipeline pre-
     # allocates exactly one H2 to anchor the brand mention and one H2 to
     # anchor the ICP callout, so editors can see (and override) the
     # decisions. The `_order` fields refer to the heading_structure
-    # `order` *before* article-end resequencing — the `_text` fields are
+    # `order` *before* article-end resequencing - the `_text` fields are
     # the unambiguous editor-facing reference. All fields are `None`
     # when no anchor was assigned (e.g. brand_voice_card empty, no
     # audience signals available, or no content H2s).
@@ -185,15 +185,15 @@ class WriterMetadata(BaseModel):
     # Post-write verification: the section writer is *told* to mention
     # the brand exactly once, but the LLM can ignore the directive.
     # `brand_mention_landed=False` means the anchor section's body did
-    # not contain the brand_name — surface for editor review (matches
+    # not contain the brand_name - surface for editor review (matches
     # the warn-and-accept pattern from h2_body_length / coverage).
     # `None` when no brand anchor was assigned (no verification needed).
     brand_mention_landed: Optional[bool] = None
-    # Step 6.8 — ICP callout LLM judge (post-write). The judge tolerates
+    # Step 6.8 - ICP callout LLM judge (post-write). The judge tolerates
     # paraphrase ("margin erosion from refunds" → "shrinking unit
     # economics on returned orders") which a regex check cannot. `None`
     # means either no ICP anchor was assigned or the judge call failed
-    # — unknown is the honest answer; flagging False would mislead.
+    # - unknown is the honest answer; flagging False would mislead.
     # `icp_callout_evidence` is a short verbatim quote from the body
     # when `landed=True`, for editor audit. `icp_callout_judge_status`
     # is an observability tag: "landed" / "not_landed" / "no_anchor" /
@@ -202,7 +202,7 @@ class WriterMetadata(BaseModel):
     icp_callout_landed: Optional[bool] = None
     icp_callout_evidence: Optional[str] = None
     icp_callout_judge_status: Optional[str] = None
-    # Step 0.5 — Heading sanitizer drops. The writer cleans two
+    # Step 0.5 - Heading sanitizer drops. The writer cleans two
     # structural drift modes from upstream briefs before generating
     # any content: duplicate body H2s with identical heading text, and
     # body H2s whose heading reads as "Frequently Asked Questions" /

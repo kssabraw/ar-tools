@@ -1,4 +1,4 @@
-"""Step 10.5 — FAQ Intent Gate (PRD v2.2 / Phase 2)."""
+"""Step 10.5 - FAQ Intent Gate (PRD v2.2 / Phase 2)."""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def test_cosine_floor_drops_low_alignment():
     assert [c.question for c in survivors] == ["aligned"]
     assert len(survivor_embeddings) == 1
     assert [c.question for c in rejected] == ["misaligned"]
-    # Phase 2 review fix #3 — intent_profile_cosine stamped on every
+    # Phase 2 review fix #3 - intent_profile_cosine stamped on every
     # candidate (kept and rejected) so relaxation can rank by it.
     assert candidates[0].intent_profile_cosine > INTENT_FLOOR
     assert candidates[1].intent_profile_cosine < INTENT_FLOOR
@@ -124,7 +124,7 @@ def test_cosine_floor_keeps_all_when_above_threshold():
 
 
 # ---------------------------------------------------------------------------
-# apply_faq_intent_gate — full flow
+# apply_faq_intent_gate - full flow
 # ---------------------------------------------------------------------------
 
 
@@ -145,7 +145,7 @@ def fake_embed_factory():
                 elif "creator" in low or "monetiz" in low:
                     vectors.append(_unit([0.0, 1.0, 0.0]))
                 else:
-                    # Neutral — sits between the axes
+                    # Neutral - sits between the axes
                     vectors.append(_unit([0.7, 0.7, 0.0]))
             return vectors
         return embed
@@ -333,21 +333,21 @@ async def test_empty_candidates_returns_empty_noop():
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 review fixes — relaxation ranking + zero-kept fallback +
+# Phase 2 review fixes - relaxation ranking + zero-kept fallback +
 # embeddings reuse
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_relaxation_ranks_adjacent_by_intent_profile_cosine():
-    """Phase 2 review fix #3 — when fewer than 3 primary survive, the
+    """Phase 2 review fix #3 - when fewer than 3 primary survive, the
     relaxation must keep the highest-`intent_profile_cosine` adjacent
     candidates, NOT the first ones in input order. faq_score is 0 for
     every candidate at gate-time so the previous code's score-based
     sort was meaningless."""
     candidates = [
         _faq("primary 1"),
-        # Three adjacent candidates in input order — but the LLM picks
+        # Three adjacent candidates in input order - but the LLM picks
         # them as adjacent regardless of cosine, so the gate's sort
         # decides who fills the relaxation slots.
         _faq("adjacent low"),
@@ -416,7 +416,7 @@ async def test_relaxation_ranks_adjacent_by_intent_profile_cosine():
 
 @pytest.mark.asyncio
 async def test_full_relaxation_when_floor_rejects_everything():
-    """Phase 2 review fix #4 — when every candidate fails the cosine
+    """Phase 2 review fix #4 - when every candidate fails the cosine
     floor, the gate must NOT return an empty kept list. PRD §5 Step 10
     promises 3–5 FAQs always; the gate falls back to admitting the
     original pool tagged adjacent_intent."""
@@ -458,7 +458,7 @@ async def test_full_relaxation_when_floor_rejects_everything():
 
 @pytest.mark.asyncio
 async def test_full_relaxation_post_llm_when_all_different_audience():
-    """Phase 2 review fix #4 — even when survivors pass the cosine
+    """Phase 2 review fix #4 - even when survivors pass the cosine
     floor, the LLM might mark every one `different_audience`. The gate
     must full-relax post-LLM rather than return an empty FAQ block."""
     candidates = [_faq("q1"), _faq("q2"), _faq("q3")]
@@ -504,7 +504,7 @@ async def test_full_relaxation_post_llm_when_all_different_audience():
 
 @pytest.mark.asyncio
 async def test_kept_embeddings_parallel_to_kept():
-    """Phase 2 review fix #6 — gate exposes per-candidate embeddings on
+    """Phase 2 review fix #6 - gate exposes per-candidate embeddings on
     `kept_embeddings`, parallel to `kept`, so the pipeline can pass them
     to score_faqs and skip a second embed API call."""
     candidates = [_faq("q1"), _faq("q2")]
@@ -549,5 +549,5 @@ async def test_kept_embeddings_parallel_to_kept():
     for vec in result.kept_embeddings:
         assert len(vec) == 3
     # Two embed calls expected: profile + faq batch (NOT a third call
-    # downstream — that's the pipeline-level optimization).
+    # downstream - that's the pipeline-level optimization).
     assert captured_calls["n"] == 2

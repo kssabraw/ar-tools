@@ -1,4 +1,4 @@
-"""Step 8.5b — Authority Gap H3 scope verification (PRD v2.0.3)."""
+"""Step 8.5b - Authority Gap H3 scope verification (PRD v2.0.3)."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ _SCOPE = (
 
 
 # ----------------------------------------------------------------------
-# Routing — in_scope / borderline / out_of_scope
+# Routing - in_scope / borderline / out_of_scope
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -182,7 +182,7 @@ async def test_retry_on_invalid_payload_then_success():
 
 @pytest.mark.asyncio
 async def test_missing_h3_in_response_defaults_to_in_scope():
-    """LLM only classified one of two — the other defaults to in_scope."""
+    """LLM only classified one of two - the other defaults to in_scope."""
     h3_a = _make_h3("A")
     h3_b = _make_h3("B")
     res = await verify_h3_scope(

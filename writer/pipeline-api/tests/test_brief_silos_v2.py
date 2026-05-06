@@ -1,4 +1,4 @@
-"""Unit tests for Brief Generator v2.0 Step 12 — region-based silos."""
+"""Unit tests for Brief Generator v2.0 Step 12 - region-based silos."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ def test_eliminated_region_excluded():
         regions=regions, candidate_pool=pool,
         contributing_region_ids=set(), scope_rejects=[],
     )
-    # Eliminated regions are silently skipped — their members are
+    # Eliminated regions are silently skipped - their members are
     # already in discarded_headings via apply_region_outcomes.
     assert silos == []
     assert low == []

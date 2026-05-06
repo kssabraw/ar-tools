@@ -1,11 +1,11 @@
 """DataForSEO API client.
 
 Endpoints used by the Brief Generator:
-- SERP organic (live, depth=20) — Step 1 SERP scrape
-- SERP organic (live) with `site:reddit.com` — Step 2B Reddit search
-- Autocomplete (live) — Step 2C
-- Keyword Suggestions (DataForSEO Labs, live) — Step 2C
-- LLM Responses (live) for ChatGPT/Claude/Gemini/Perplexity — Step 2D
+- SERP organic (live, depth=20) - Step 1 SERP scrape
+- SERP organic (live) with `site:reddit.com` - Step 2B Reddit search
+- Autocomplete (live) - Step 2C
+- Keyword Suggestions (DataForSEO Labs, live) - Step 2C
+- LLM Responses (live) for ChatGPT/Claude/Gemini/Perplexity - Step 2D
 
 All calls use HTTP Basic Auth with login + password from env vars.
 """
@@ -68,7 +68,7 @@ async def serp_organic_advanced(
     location_code: int = DEFAULT_LOCATION_CODE,
     depth: int = 20,
 ) -> dict[str, Any]:
-    """Step 1 — Top 20 organic results, plus PAA, related searches, SERP features."""
+    """Step 1 - Top 20 organic results, plus PAA, related searches, SERP features."""
     payload = [
         {
             "keyword": keyword,
@@ -88,7 +88,7 @@ async def serp_reddit(
     location_code: int = DEFAULT_LOCATION_CODE,
     depth: int = 5,
 ) -> list[dict[str, Any]]:
-    """Step 2B — Top Reddit threads via `site:reddit.com` query."""
+    """Step 2B - Top Reddit threads via `site:reddit.com` query."""
     payload = [
         {
             "keyword": f"{keyword} site:reddit.com",
@@ -106,7 +106,7 @@ async def autocomplete(
     keyword: str,
     location_code: int = DEFAULT_LOCATION_CODE,
 ) -> list[str]:
-    """Step 2C — Google Autocomplete suggestions."""
+    """Step 2C - Google Autocomplete suggestions."""
     payload = [
         {
             "keyword": keyword,
@@ -124,7 +124,7 @@ async def keyword_suggestions(
     location_code: int = DEFAULT_LOCATION_CODE,
     limit: int = 50,
 ) -> list[str]:
-    """Step 2C — DataForSEO Labs keyword suggestions."""
+    """Step 2C - DataForSEO Labs keyword suggestions."""
     payload = [
         {
             "keyword": keyword,
@@ -155,7 +155,7 @@ async def llm_response(
     location_iso: str = "US",
     max_output_tokens: int = 500,
 ) -> dict[str, Any]:
-    """Step 2D — single LLM fan-out call via DataForSEO LLM Responses API.
+    """Step 2D - single LLM fan-out call via DataForSEO LLM Responses API.
 
     Returns dict with keys: text, fan_out_queries (list of strings).
     Raises DataForSEOError on failure so caller can flag the LLM as unavailable.

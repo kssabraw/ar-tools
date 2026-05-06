@@ -1,4 +1,4 @@
-"""Step 10.5 — FAQ Intent Gate (Brief Generator PRD v2.2 / Phase 2).
+"""Step 10.5 - FAQ Intent Gate (Brief Generator PRD v2.2 / Phase 2).
 
 Catches FAQs that are topically related to the keyword but represent a
 DIFFERENT stakeholder's question. The audit example: a seller-ROI
@@ -30,7 +30,7 @@ Failure handling:
     treat each as `matches_primary_intent` for accounting purposes;
     flag fallback. Run continues normally.
 
-This module mutates the input candidate list — both kept and rejected
+This module mutates the input candidate list - both kept and rejected
 candidates retain their FAQCandidate objects, but rejected ones are
 appended to `rejected` and excluded from `kept`. The faq_score is
 NOT recomputed here; that's the responsibility of `score_faqs` upstream
@@ -69,7 +69,7 @@ stakeholder who happens to share keyword surface area.
 Example failure mode: an article about increasing ROI for TikTok Shop
 SELLERS has FAQs about CREATOR monetization mixed in. Both touch
 TikTok, but the seller-ROI reader doesn't want creator-monetization
-guidance — that's a different stakeholder's question.
+guidance - that's a different stakeholder's question.
 
 Classifications:
   - "matches_primary_intent": FAQ aligns with the persona's primary
@@ -80,7 +80,7 @@ Classifications:
   - "different_audience": FAQ targets a different stakeholder entirely
     (e.g. creator-monetization on a seller-ROI article). Drop.
 
-Output strict JSON only — no preamble, no markdown fences:
+Output strict JSON only - no preamble, no markdown fences:
 {
   "verifications": [
     {
@@ -116,7 +116,7 @@ class FAQIntentGateResult:
     floor_rejected_count: int = 0
     llm_rejected_count: int = 0
     relaxation_applied: bool = False
-    # Phase 2 review fix #4 — when the gate would otherwise produce zero
+    # Phase 2 review fix #4 - when the gate would otherwise produce zero
     # kept on a non-empty input pool (every candidate failed both
     # cosine floor AND any LLM filter), the gate falls back to the
     # original pool to honor PRD §5 Step 10's 3–5 FAQ guarantee.
@@ -137,7 +137,7 @@ def build_intent_profile_text(
     """Compose the natural-language intent profile fed to the embedding
     model. We include persona.primary_goal because it captures the
     stakeholder framing (the audit failure case turned on
-    seller-vs-creator phrasing — `persona.primary_goal` is the
+    seller-vs-creator phrasing - `persona.primary_goal` is the
     cleanest signal of which stakeholder the article targets).
     """
     parts = [
@@ -194,14 +194,14 @@ def apply_cosine_floor(
 
     Stamps `intent_profile_cosine` on every candidate (survivors and
     rejects) so the relaxation path can rank `adjacent_intent`
-    candidates by intent alignment without re-computing — Phase 2
+    candidates by intent alignment without re-computing - Phase 2
     review fix #3.
 
     Returns the survivors' embeddings parallel to `survivors` so
     callers can hand them downstream to `score_faqs` without a second
-    embedding API call — Phase 2 review fix #6.
+    embedding API call - Phase 2 review fix #6.
 
-    A candidate's `faq_score` is NOT recomputed here — only the floor
+    A candidate's `faq_score` is NOT recomputed here - only the floor
     decision. Callers are expected to compute faq_score via
     `faqs.score_faqs` after the gate runs (the gate result carries the
     embeddings to enable that).
@@ -329,7 +329,7 @@ async def apply_faq_intent_gate(
         result.fallback_embed_applied = True
         result.kept = list(candidates)
         # No embeddings to expose; score_faqs will re-embed (acceptable
-        # under fallback — embed outage isn't a steady state).
+        # under fallback - embed outage isn't a steady state).
         return result
 
     survivors, survivor_embeddings, floor_rejected = apply_cosine_floor(
@@ -339,7 +339,7 @@ async def apply_faq_intent_gate(
     result.rejected.extend(floor_rejected)
 
     if not survivors:
-        # Phase 2 review fix #4 — every candidate failed the cosine
+        # Phase 2 review fix #4 - every candidate failed the cosine
         # floor. PRD §5 Step 10 promises 3–5 FAQs always, so falling
         # back to an empty FAQ section regresses on a stronger
         # guarantee. Re-admit the original pool with intent_role=
@@ -352,7 +352,7 @@ async def apply_faq_intent_gate(
         result.kept = list(candidates)
         result.kept_embeddings = list(faq_embeddings)
         result.full_relaxation_applied = True
-        # The candidates are no longer in `result.rejected` — the floor
+        # The candidates are no longer in `result.rejected` - the floor
         # rejection was overturned by the full-relaxation fallback.
         result.rejected = []
         result.floor_rejected_count = 0
@@ -445,7 +445,7 @@ async def apply_faq_intent_gate(
     result.llm_rejected_count = len(different)
     result.rejected.extend(different)
 
-    # Phase 2 review fix #3 — sort adjacent candidates by their cached
+    # Phase 2 review fix #3 - sort adjacent candidates by their cached
     # `intent_profile_cosine` (stamped during apply_cosine_floor), NOT
     # by `faq_score`, which is 0.0 for every candidate at this point
     # because `score_faqs` runs after the gate. Higher cosine to the
@@ -473,7 +473,7 @@ async def apply_faq_intent_gate(
         # `rejected` so downstream metadata reflects the LLM filter.
         result.rejected.extend(adjacent)
 
-    # Phase 2 review fix #4 — even after the LLM stage, kept might be
+    # Phase 2 review fix #4 - even after the LLM stage, kept might be
     # empty (everyone different_audience, or LLM filtered everything).
     # Honor the 3–5 FAQ guarantee by full-relaxing on the original pool.
     if not result.kept and candidates:

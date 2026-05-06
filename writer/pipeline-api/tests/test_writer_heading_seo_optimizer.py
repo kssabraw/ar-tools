@@ -2,7 +2,7 @@
 
 Covers:
 - Pass-through when no H2/H3 candidates or no entities available
-- Happy path — LLM returns rewrites, structure mutates, indices recorded
+- Happy path - LLM returns rewrites, structure mutates, indices recorded
 - Softened-flag threshold behavior
 - Forbidden-term guard rejects rewrites that contain banned text
 - LLM exception → no abort, no mutations
@@ -118,7 +118,7 @@ def test_contains_forbidden_word_boundary(text, forbidden, expected):
 @pytest.mark.asyncio
 async def test_no_h2_h3_candidates_skips():
     """Heading structure with only an H1 and FAQ block has nothing to
-    optimize — return original structure with reason populated."""
+    optimize - return original structure with reason populated."""
     structure = [
         {"level": "H1", "text": "Article H1", "order": 1, "type": "content", "source": "serp"},
         {"level": "H2", "text": "FAQs", "order": 2, "type": "faq-header", "source": "serp"},
@@ -139,7 +139,7 @@ async def test_no_h2_h3_candidates_skips():
 async def test_no_entities_available_skips():
     """When SIE returned no terms across any of the three v1.4
     categories, skip silently. A single non-entity n-gram still
-    populates the related_keywords bucket — so the LLM is invoked.
+    populates the related_keywords bucket - so the LLM is invoked.
     Use an empty term list to verify the skip path."""
     structure = [_heading("H2", "Original H2", 1)]
     result = await optimize_headings(
@@ -327,7 +327,7 @@ async def test_order_mismatch_in_llm_response_skipped():
 
 @pytest.mark.asyncio
 async def test_prompt_carries_subheadings_aggregate_targets():
-    """SIE v1.4 — the user prompt surfaces the H2+H3 aggregate target
+    """SIE v1.4 - the user prompt surfaces the H2+H3 aggregate target
     per category so the LLM knows what aggregate distinct count the
     rewrites should hit."""
     captured: dict = {}
@@ -380,7 +380,7 @@ async def test_prompt_carries_forbidden_terms():
 
 
 # ---------------------------------------------------------------------------
-# ReconciledTerm zone exposure (regression — ensures _zones_for_term
+# ReconciledTerm zone exposure (regression - ensures _zones_for_term
 # pulls all five zones not just paragraphs)
 # ---------------------------------------------------------------------------
 
@@ -424,7 +424,7 @@ def test_zones_for_term_partial_zones_default_to_zero():
 
 
 # ---------------------------------------------------------------------------
-# Robustness fixes — LLM type drift and pre-compiled forbidden regex
+# Robustness fixes - LLM type drift and pre-compiled forbidden regex
 # ---------------------------------------------------------------------------
 
 
@@ -435,7 +435,7 @@ async def test_llm_returns_order_as_string_still_matches():
     lookup matches."""
     structure = [_heading("H2", "Original", 1)]
     response = {"rewrites": [
-        # `order` as string — should still match input order=1
+        # `order` as string - should still match input order=1
         {"order": "1", "level": "H2", "text": "Optimize Original With Entity"},
     ]}
     result = await optimize_headings(
@@ -505,7 +505,7 @@ async def test_llm_returns_non_numeric_order_skipped_safely():
 @pytest.mark.asyncio
 async def test_none_reconciled_terms_treated_as_empty():
     """Defensive guard: None instead of [] for reconciled_terms must
-    not raise — should skip with no_terms_available (v1.4)."""
+    not raise - should skip with no_terms_available (v1.4)."""
     structure = [_heading("H2", "Original", 1)]
     result = await optimize_headings(
         structure,
@@ -536,7 +536,7 @@ async def test_none_forbidden_terms_treated_as_empty():
 
 def test_forbidden_pattern_dedupes_and_compiles_once():
     """Compiled pattern is built once per call regardless of duplicate
-    terms in the input — same brand-voice term often shows up in both
+    terms in the input - same brand-voice term often shows up in both
     `banned_terms` and `filtered_terms.avoid`."""
     from modules.writer.heading_seo_optimizer import (
         _compile_forbidden_pattern,

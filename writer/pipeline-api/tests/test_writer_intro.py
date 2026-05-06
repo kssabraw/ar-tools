@@ -62,7 +62,7 @@ def test_validate_intro_blocks_accepts_valid_blocks():
 
 
 def test_validate_intro_blocks_rejects_total_too_short():
-    # 10 + 10 + 10 = 30 words — below INTRO_MIN_WORDS (80)
+    # 10 + 10 + 10 = 30 words - below INTRO_MIN_WORDS (80)
     agree, promise, preview = _blocks(agree_n=10, promise_n=10, preview_n=10)
     ok, msg = _validate_intro_blocks(agree, promise, preview)
     assert ok is False
@@ -70,7 +70,7 @@ def test_validate_intro_blocks_rejects_total_too_short():
 
 
 def test_validate_intro_blocks_rejects_total_too_long():
-    # 45 + 45 + 45 = 135 words — above INTRO_MAX_WORDS (120); each block ≤ 50
+    # 45 + 45 + 45 = 135 words - above INTRO_MAX_WORDS (120); each block ≤ 50
     agree, promise, preview = _blocks(agree_n=45, promise_n=45, preview_n=45)
     ok, msg = _validate_intro_blocks(agree, promise, preview)
     assert ok is False
@@ -185,7 +185,7 @@ async def test_write_intro_body_joins_three_blocks(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_write_intro_retries_on_word_count_then_succeeds(monkeypatch):
-    # First attempt: total only 30 words — too short
+    # First attempt: total only 30 words - too short
     short_payload = {
         "agree_style_selected": "direct_thesis",
         "agree": " ".join(["word"] * 10),
@@ -207,7 +207,7 @@ async def test_write_intro_retries_on_word_count_then_succeeds(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_write_intro_accepts_with_warning_after_two_failures(monkeypatch):
-    # Both attempts produce too-short blocks — module accepts with warning
+    # Both attempts produce too-short blocks - module accepts with warning
     bad_payload = {
         "agree_style_selected": "direct_thesis",
         "agree": "tiny agree",

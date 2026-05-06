@@ -1,4 +1,4 @@
-"""Step 9 — Authority Agent scope-aware inputs (PRD v2.0.3)."""
+"""Step 9 - Authority Agent scope-aware inputs (PRD v2.0.3)."""
 
 from __future__ import annotations
 
@@ -111,7 +111,7 @@ async def test_authority_agent_truncates_long_scope_alignment_note():
 @pytest.mark.asyncio
 async def test_authority_agent_backward_compat_with_string_payload():
     """Older mocks that returned a flat list of strings (legacy v2.0.x
-    shape) still work — scope_alignment_note just stays None."""
+    shape) still work - scope_alignment_note just stays None."""
     payload = {"headings": [
         "Common cognitive biases that derail new sellers",
         "Tax compliance documents to gather before signup",

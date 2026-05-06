@@ -1,4 +1,4 @@
-"""Step 7.6 — LLM heading quality scoring tests (PRD v2.4).
+"""Step 7.6 - LLM heading quality scoring tests (PRD v2.4).
 
 Validates the bell-curve LLM scoring pass that runs after compute_priority
 and folds a 0-1 quality score into `heading_priority` via a 70/30
@@ -70,7 +70,7 @@ def test_clamp_score_rejects_non_int():
     assert _clamp_score("2") is None
     assert _clamp_score(None) is None
     assert _clamp_score(2.5) is None  # non-integer float
-    # bool is technically int in Python — must be excluded explicitly
+    # bool is technically int in Python - must be excluded explicitly
     assert _clamp_score(True) is None
     assert _clamp_score(False) is None
 
@@ -139,7 +139,7 @@ async def test_only_top_k_get_scored():
         _cand("h4", 0.40),
         _cand("h5 (highest)", 0.50),
     ]
-    # LLM scores all three within its window the same — all 3s.
+    # LLM scores all three within its window the same - all 3s.
     response = {"scores": [
         {"index": 0, "topical_relevance": 3, "engagement_value": 3, "information_depth": 3},
         {"index": 1, "topical_relevance": 3, "engagement_value": 3, "information_depth": 3},

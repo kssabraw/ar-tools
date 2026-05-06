@@ -1,5 +1,5 @@
 """Regression tests for the relevance-floor singleton path in
-identify_silos (PRD §5 Step 12 — extension).
+identify_silos (PRD §5 Step 12 - extension).
 
 Production observation that motivated this path: runs whose SERP is
 dominated by restatement clusters (e.g., "what is a tiktok shop")
@@ -88,7 +88,7 @@ def test_relevance_floor_reject_with_low_search_demand_filtered():
 
 def test_relevance_floor_path_skips_above_restatement_ceiling():
     """Candidates discarded as `above_restatement_ceiling` restate the
-    parent title — they are NOT silo candidates and must be skipped
+    parent title - they are NOT silo candidates and must be skipped
     even when passed in via relevance_rejects."""
     rejects = [
         _cand("TikTok Shop overview", [1.0, 0.0, 0.0],

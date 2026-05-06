@@ -1,12 +1,12 @@
-"""Step 6 — Hypothetical Searcher Persona Generation (Brief Generator v2.0).
+"""Step 6 - Hypothetical Searcher Persona Generation (Brief Generator v2.0).
 
 Implements PRD §5 Step 6. Single Claude Sonnet 4.6 LLM call that
 produces a hypothetical persona for the search query plus 5-10 gap
-questions — questions a curious searcher would ask that the existing
+questions - questions a curious searcher would ask that the existing
 candidate pool doesn't address well.
 
 Critical constraint (PRD §2): the persona is derived from topic + SERP
-signal ONLY. Brand and ICP context never feed into this — that's the
+signal ONLY. Brand and ICP context never feed into this - that's the
 Writer Module's job. The brief generator stays client-agnostic, which
 is why the cache can be shared across clients.
 
@@ -29,7 +29,7 @@ Output (strict JSON, additionalProperties: false):
     ]
   }
 
-Failure handling (PRD §5 Step 6) — never aborts the run:
+Failure handling (PRD §5 Step 6) - never aborts the run:
   - Malformed JSON → one retry with stricter prompt; second failure
     returns empty result and logs warning
   - Empty persona description → continue (persona is informational)
@@ -82,7 +82,7 @@ questions they would ask that the existing candidate pool doesn't address.
 Your output feeds two downstream uses:
 1. The persona description appears in the brief metadata so Writer agents
    can keep the article calibrated to the right reader.
-2. Gap questions become candidate H2s that re-enter the heading pool —
+2. Gap questions become candidate H2s that re-enter the heading pool -
    they're the differentiation lever for headings that compete against
    the SERP convention.
 
@@ -94,21 +94,21 @@ Process:
 3. Scan the aggregated candidate headings to map what's already covered.
 4. Infer a single hypothetical searcher: what they know, what they
    assume, what they're trying to accomplish.
-5. Write 5-10 gap questions — questions this persona would ask that
+5. Write 5-10 gap questions - questions this persona would ask that
    the candidate pool covers poorly or not at all. Each question MUST
    stay within the scope statement; if a question would force the
    article outside scope, leave it out.
 
 Hard requirements:
 - The persona is derived from topic + SERP signal ONLY. Do not invent
-  brand context, ICP context, or company-specific framings — none of
+  brand context, ICP context, or company-specific framings - none of
   that is provided to you and inventing it produces unusable personas.
 - 5-10 gap questions (NOT fewer than 5, NOT more than 10).
 - Each gap question must be answerable within the article's stated scope.
 - Description ≤ 300 chars. Primary goal ≤ 200 chars. Each rationale ≤ 200 chars.
 - Maximum 5 background assumptions.
 
-Output strict JSON only — no preamble, no markdown fences, no commentary:
+Output strict JSON only - no preamble, no markdown fences, no commentary:
 {
   "persona": {
     "description": "Short profile (≤300 chars). Who this person is.",

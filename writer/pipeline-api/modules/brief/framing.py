@@ -1,9 +1,9 @@
-"""Step 11 — H2 Framing Validator (Brief Generator PRD v2.1).
+"""Step 11 - H2 Framing Validator (Brief Generator PRD v2.1).
 
 Per the proposal accepted alongside Phase 1: every selected H2 must
 satisfy the framing rule of its `intent_format_template`. Failures
 trigger a single LLM rewrite pass; if the rewrite still fails, we
-warn-and-accept (don't block — empty briefs are worse than imperfectly
+warn-and-accept (don't block - empty briefs are worse than imperfectly
 framed ones).
 
 The validator runs AFTER Step 8 (MMR selection) and Step 8.5 (scope
@@ -27,7 +27,7 @@ Regex rules per framing_rule:
 | framing_rule                | Pass condition                                       |
 |-----------------------------|------------------------------------------------------|
 | verb_leading_action         | First token is a verb (action verb whitelist or     |
-|                             | "ing"/"e"-stem heuristic) — captures "Plan…",       |
+|                             | "ing"/"e"-stem heuristic) - captures "Plan…",       |
 |                             | "Set Up…", "Optimize…". Also accepts an explicit    |
 |                             | "Step <N>:" prefix.                                  |
 | ordinal_then_noun_phrase    | Leading numeral followed by space (e.g. "1. ") OR  |
@@ -64,7 +64,7 @@ LLMJsonFn = Callable[..., Awaitable[Any]]
 # Regex tables
 # ---------------------------------------------------------------------------
 
-# Common action-verb starters. Not exhaustive — `_passes_verb_leading`
+# Common action-verb starters. Not exhaustive - `_passes_verb_leading`
 # additionally accepts any first word that is NOT in the non-verb-leader
 # reject list (`_NON_VERB_LEADERS`), since English imperatives are too
 # varied to whitelist comprehensively. The whitelist is kept primarily
@@ -85,7 +85,7 @@ _ACTION_VERBS: frozenset[str] = frozenset({
 })
 
 
-# Words that signal an H2 is NOT a verb-leading action — questions,
+# Words that signal an H2 is NOT a verb-leading action - questions,
 # auxiliaries, articles, determiners, generic superlatives. If the first
 # word is in this set, `_passes_verb_leading` returns False and the
 # framing validator routes the H2 to LLM rewrite. Conversely, if the
@@ -110,7 +110,7 @@ _NON_VERB_LEADERS: frozenset[str] = frozenset({
     "your", "my", "our", "his", "her", "their", "its",
     # Generic superlatives / commercial AI-tells (PRD §11 banned phrases)
     "best", "top", "ultimate", "complete", "definitive", "everything",
-    # "Number N:" listicle marker — treat the bare word "number" as a
+    # "Number N:" listicle marker - treat the bare word "number" as a
     # non-verb leader; the "Number 2: Validate" pattern is unwrapped
     # by the numeric-ordinal recursion in `_passes_verb_leading` so the
     # actual first word ("validate") is what's tested.
@@ -123,7 +123,7 @@ _ORDINAL_RE = re.compile(
     r"^\s*(?:#?\d+[\.\)]?\s+|top\s+\d+\s+|number\s+\d+[:\.]?\s+)",
     re.IGNORECASE,
 )
-# Numeric ordinal only — used by `_passes_verb_leading` to peel off
+# Numeric ordinal only - used by `_passes_verb_leading` to peel off
 # "1. " / "2) " / "#3 " / "Number 4:" prefixes and recurse on the rest.
 # Distinct from `_ORDINAL_RE` because "Top N" should NOT auto-pass
 # verb-leading (the word "Top" is itself a non-verb leader).
@@ -131,7 +131,7 @@ _NUMERIC_ORDINAL_PREFIX_RE = re.compile(
     r"^\s*(?:number\s+)?#?\d+[\.\):]?\s+",
     re.IGNORECASE,
 )
-# Match a leading question/auxiliary word — used by axis_noun_phrase to
+# Match a leading question/auxiliary word - used by axis_noun_phrase to
 # reject question-style headings without going through verb_leading.
 _QUESTION_LEAD_RE = re.compile(
     r"^\s*(?:what|how|why|where|who|when|which|whose|"
@@ -175,7 +175,7 @@ def _passes_verb_leading(text: str) -> bool:
     positives" (a non-verb noun phrase passing the predicate) are
     preferable to "false rejects" (a valid imperative routed through an
     unnecessary LLM rewrite). The framing validator's purpose is to
-    catch the *clear* failure case — Q&A-style H2s on a how-to article —
+    catch the *clear* failure case - Q&A-style H2s on a how-to article -
     not to nitpick word forms.
     """
     if _STEP_PREFIX_RE.match(text):
@@ -215,7 +215,7 @@ def _passes_axis_noun_phrase(text: str) -> bool:
         passes, "How to evaluate which TikTok Shop fits your business
         model" does not)
 
-    Action-leading is NOT explicitly rejected here — short imperative
+    Action-leading is NOT explicitly rejected here - short imperative
     forms like "Compare" or "Pick" are sometimes valid axis labels. The
     upstream Step 5 relevance gates already filter for on-topic content;
     this predicate enforces *shape* only.
@@ -251,7 +251,7 @@ _PASS_PREDICATES: dict[H2FramingRule, Callable[[str], bool]] = {
 
 
 def passes_framing(text: str, rule: H2FramingRule) -> bool:
-    """Public predicate — also exposed for tests."""
+    """Public predicate - also exposed for tests."""
     pred = _PASS_PREDICATES.get(rule, _PASS_PREDICATES["no_constraint"])
     return pred(text)
 
@@ -265,7 +265,7 @@ _RULE_PROMPT_HINTS: dict[H2FramingRule, str] = {
     "verb_leading_action": (
         "Each H2 must start with an action verb (e.g. 'Plan', 'Set Up', "
         "'Optimize', 'Validate'). Keep the heading specific to its current "
-        "topic — do not change what the section is about."
+        "topic - do not change what the section is about."
     ),
     "ordinal_then_noun_phrase": (
         "Each H2 must start with a numeral and period (e.g. '1. ', '2. '). "
@@ -281,7 +281,7 @@ _RULE_PROMPT_HINTS: dict[H2FramingRule, str] = {
         "'How X works'). Do not turn it into a sales line."
     ),
     "buyer_education_phrase": (
-        "Each H2 must be a buyer-education phrase — either a question "
+        "Each H2 must be a buyer-education phrase - either a question "
         "('What to look for in X') or a comparison axis ('Pricing models')."
     ),
     "no_constraint": "No specific constraint.",
@@ -292,7 +292,7 @@ _REWRITE_SYSTEM = """You normalize blog H2 headings to a target framing rule.
 
 You receive a list of H2 headings and the target framing rule. For each
 heading, return the same heading rewritten to satisfy the framing rule.
-Preserve the heading's topic exactly — do NOT change what the section
+Preserve the heading's topic exactly - do NOT change what the section
 covers. Keep the rewrite concise (≤ 80 characters preferred).
 
 Output strict JSON:
@@ -309,7 +309,7 @@ class FramingResult:
     `rewritten_indices` records H2 positions whose text was rewritten by
     the LLM (regardless of whether the rewrite passed the regex on
     second look). `accepted_with_violation_indices` records H2s that
-    failed the regex on BOTH attempts and were accepted as-is — these
+    failed the regex on BOTH attempts and were accepted as-is - these
     are the warn-and-accept fallback cases.
     """
 

@@ -1,4 +1,4 @@
-"""Step 11 — Structure Assembly (Brief Generator v2.0.2).
+"""Step 11 - Structure Assembly (Brief Generator v2.0.2).
 
 Implements PRD §5 Step 11. In v2.0.2 the non-authority H3 attachment
 moved to Step 8.6 (`h3_selection.py`); this module now handles only
@@ -7,7 +7,7 @@ the authority-gap reconciliation and final structure assembly.
 Output:
   - H1: exact-match seed keyword
   - H2 sequence per intent (capped at 6 unless intent ∈ {listicle, how-to})
-  - Up to 2 H3s per H2 (3 only when Authority Gap overflow occurred —
+  - Up to 2 H3s per H2 (3 only when Authority Gap overflow occurred -
     PRD §5 Step 8.6 / Section 11)
   - FAQ block as a synthesized H2 + question H3s (outside the global cap)
   - Global cap: 15 (default) or 20 (uncapped intents)
@@ -50,7 +50,7 @@ MAX_H3_PER_H2_WITH_AUTHORITY_OVERFLOW = 3
 
 
 def _cosine_unit(a: list[float], b: list[float]) -> float:
-    """Dot product — embeddings are unit-normalized so cosine == dot."""
+    """Dot product - embeddings are unit-normalized so cosine == dot."""
     if not a or not b:
         return 0.0
     return sum(x * y for x, y in zip(a, b))
@@ -63,7 +63,7 @@ class AuthorityAttachResult:
     `attachments` mirrors the input shape (H2-index → H3 list). Authority
     H3s sit at the start of each H2's list so the published order keeps
     them visually distinct from Step 8.6 H3s. `displaced` carries any
-    Step 8.6 H3s evicted by higher-priority authority H3s — each has
+    Step 8.6 H3s evicted by higher-priority authority H3s - each has
     `discard_reason="displaced_by_authority_gap_h3"` stamped.
     """
     attachments: dict[int, list[Candidate]] = field(default_factory=dict)
@@ -96,7 +96,7 @@ def attach_authority_h3s_with_displacement(
 ) -> AuthorityAttachResult:
     """Merge authority gap H3s into existing per-H2 H3 attachments.
 
-    Algorithm (PRD §5 Step 8.6 — Authority Gap H3 Interaction):
+    Algorithm (PRD §5 Step 8.6 - Authority Gap H3 Interaction):
       For each authority H3 in priority-desc order:
         1. Rank H2s by cosine(auth_h3, h2) descending.
         2. Walk the ranked list; first H2 with capacity (< max_h3_per_h2)
@@ -106,7 +106,7 @@ def attach_authority_h3s_with_displacement(
              a. If the auth H3 outranks any existing H3, displace it
                 (discard_reason="displaced_by_authority_gap_h3").
              b. Otherwise the auth H3 has the lowest priority across the
-                board; place it under the most-relevant H2 anyway —
+                board; place it under the most-relevant H2 anyway -
                 authority H3s are never discarded (per PRD §5 Step 9).
                 The H2's H3 count is allowed to exceed `max_h3_per_h2`
                 by 1 in this edge case.
@@ -201,7 +201,7 @@ async def reorder_how_to(
 ) -> list[Candidate]:
     """For how-to intent: reorder H2s into setup → execution → validation.
 
-    Falls back to the original (priority) order on any failure — never
+    Falls back to the original (priority) order on any failure - never
     aborts the run.
     """
     if len(h2s) <= 2:
@@ -262,12 +262,12 @@ def _to_heading_item(
         heading_priority=round(c.heading_priority, 4),
         region_id=c.region_id,
         scope_classification=c.scope_classification,
-        # Step 9 Authority Agent's scope-alignment justification —
+        # Step 9 Authority Agent's scope-alignment justification -
         # populated for source='authority_gap_sme' candidates only.
         scope_alignment_note=c.scope_alignment_note,
         parent_h2_text=c.parent_h2_text,
         parent_relevance=round(c.parent_relevance, 4) if c.parent_relevance else 0.0,
-        # PRD v2.2 / Phase 2 — Step 8.7 H3 Parent-Fit Verification flag.
+        # PRD v2.2 / Phase 2 - Step 8.7 H3 Parent-Fit Verification flag.
         # Populated only when the LLM tagged the H3 `marginal`; None
         # otherwise (`good` H3s and H2/H1 entries).
         parent_fit_classification=getattr(c, "parent_fit_classification", None),
@@ -360,7 +360,7 @@ def assemble_structure(
                 order=order,
             ))
 
-    # Step 11.x — Title case normalization (PRD v2.0.3).
+    # Step 11.x - Title case normalization (PRD v2.0.3).
     # Last heading-text mutation in the pipeline. Applies AP/Chicago title
     # case via the `titlecase` PyPI library to every content + faq-header
     # heading. FAQ questions stay in sentence case (they end with `?` and

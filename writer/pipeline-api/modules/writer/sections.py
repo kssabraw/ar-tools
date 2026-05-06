@@ -1,4 +1,4 @@
-"""Step 4 — Section writing.
+"""Step 4 - Section writing.
 
 Sequential per H2 group. Each H2 group = parent H2 + its child H3s. One
 LLM call per group. Body is GitHub-flavored Markdown with {{cit_N}}
@@ -54,7 +54,8 @@ WRITING RULES:
 - Use the citation_id values provided. Never invent citation IDs.
 - For sentences without a verifiable claim from the provided citations, do not place a marker.
 - Do NOT use any term in the FORBIDDEN_TERMS list anywhere.
-- Use REQUIRED_TERMS naturally where they fit; aim for the target counts listed."""
+- Use REQUIRED_TERMS naturally where they fit; aim for the target counts listed.
+- Do not use em dashes. Use a plain hyphen (-) instead."""
 
 
 INTENT_GUIDANCE = {
@@ -127,7 +128,7 @@ def _resolve_citations(
 ) -> list[dict]:
     """Look up citations by ID, filter to relevance >= 0.50.
 
-    Per PRD §4F: fallback_stub claims may not be used as factual assertions —
+    Per PRD §4F: fallback_stub claims may not be used as factual assertions -
     we still expose them but mark them so the LLM uses them only as source
     acknowledgment.
     """
@@ -187,7 +188,7 @@ def _build_section_user_prompt(
         parts.append(f"\nARTICLE_TITLE: {article_title}")
     # Render only non-empty siblings so we don't emit blank-numbered
     # rows ("  1. ") when the brief produced an H2 with empty text.
-    # We DON'T re-index — preserving the original 1..N numbering keeps
+    # We DON'T re-index - preserving the original 1..N numbering keeps
     # the ▶ marker on the section the writer actually intended.
     if sibling_h2_titles and any(t.strip() for t in sibling_h2_titles if t):
         parts.append(
@@ -200,7 +201,7 @@ def _build_section_user_prompt(
             parts.append(f"  {marker} {i + 1}. {sibling_title}")
     if preceding_section_summaries:
         parts.append(
-            "\nPRECEDING_SECTIONS (already written — do NOT restate "
+            "\nPRECEDING_SECTIONS (already written - do NOT restate "
             "their setups, definitions, or framings; build on or "
             "differentiate from them):"
         )
@@ -215,22 +216,22 @@ def _build_section_user_prompt(
         for h3 in h3_items:
             # Internal SME-flagged H3s carry source='authority_gap_sme'.
             # The directive below tells the writer this section must add
-            # substantive insight competitors miss — but we deliberately
+            # substantive insight competitors miss - but we deliberately
             # avoid the literal phrase "authority gap" because the
             # writer LLM has parroted it back into article bodies in the
             # past (e.g. "The authority gap has four failure points...").
             tag = (
-                " [must add a specific expert insight competitors don't cover — non-obvious angle, hidden trade-off, or insider perspective]"
+                " [must add a specific expert insight competitors don't cover - non-obvious angle, hidden trade-off, or insider perspective]"
                 if h3.get("source") == "authority_gap_sme"
                 else ""
             )
             parts.append(
                 f"  - order {h3.get('order')}: {h3.get('text')}"
-                f" — budget: {section_budgets.get(h3.get('order'), 150)} words{tag}"
+                f" - budget: {section_budgets.get(h3.get('order'), 150)} words{tag}"
             )
 
     if brand_voice_card:
-        parts.append("\nBRAND_VOICE (write the section in this voice — these are not optional):")
+        parts.append("\nBRAND_VOICE (write the section in this voice - these are not optional):")
         if brand_voice_card.brand_name:
             parts.append(f"  brand_name: {brand_voice_card.brand_name}")
         if brand_voice_card.tone_adjectives:
@@ -243,7 +244,7 @@ def _build_section_user_prompt(
                 f"  voice directives (apply throughout): "
                 f"{' | '.join(brand_voice_card.voice_directives[:5])}"
             )
-        # Preferred terms (brand's `do_say` vocabulary) — favor these
+        # Preferred terms (brand's `do_say` vocabulary) - favor these
         # phrasings where natural. Distillation extracts these but
         # earlier prompts dropped them on the floor, leaving the LLM
         # with no positive signal about what the brand DOES want to
@@ -256,7 +257,7 @@ def _build_section_user_prompt(
             )
         if brand_voice_card.discouraged_terms:
             parts.append(
-                f"  discouraged (avoid where possible — softer than "
+                f"  discouraged (avoid where possible - softer than "
                 f"forbidden): {', '.join(brand_voice_card.discouraged_terms[:10])}"
             )
         if brand_voice_card.audience_summary:
@@ -298,7 +299,7 @@ def _build_section_user_prompt(
                         f"  REQUIRED: This is the designated section to anchor the brand "
                         f"mention. You MUST mention {brand_voice_card.brand_name} EXACTLY ONCE "
                         f"in this section, anchored to evidence (a specific service, "
-                        f"methodology, or piece of data) — never as standalone promotion. "
+                        f"methodology, or piece of data) - never as standalone promotion. "
                         f"This is the only section in the article that will mention the "
                         f"brand; do not omit it."
                     )
@@ -315,7 +316,7 @@ def _build_section_user_prompt(
                     # guidance so older callers still work.
                     parts.append(
                         f"  Across the article, mention {brand_voice_card.brand_name} 1–2 times "
-                        f"total — anchored to evidence (data, methodology, or a specific service), "
+                        f"total - anchored to evidence (data, methodology, or a specific service), "
                         f"never as standalone promotion. In any single section you may include AT "
                         f"MOST 1 mention; if the topic is far from the brand's offering, omit the "
                         f"mention in this section and let another carry it."
@@ -328,7 +329,7 @@ def _build_section_user_prompt(
             if brand_voice_card.client_locations:
                 parts.append(f"  locations: {', '.join(brand_voice_card.client_locations[:8])}")
 
-        # ICP callout hook — hard directive that forces ONE section to
+        # ICP callout hook - hard directive that forces ONE section to
         # explicitly call out the audience using a specific pain point
         # or vertical from the brand voice card. Without this, the
         # audience signals lived in the prompt as background context
@@ -337,14 +338,14 @@ def _build_section_user_prompt(
             parts.append(
                 f"\nICP_CALLOUT (REQUIRED): This is the designated section to surface "
                 f"the target audience explicitly. Include a sentence or short paragraph "
-                f"that names this audience signal directly — '{placement_directive.icp_callout_hook}' — "
+                f"that names this audience signal directly - '{placement_directive.icp_callout_hook}' - "
                 f"and ties the section's argument to it. The callout must be "
                 f"specific (not generic 'B2B leaders' framing) and grounded in the "
                 f"section's topic."
             )
 
     if required_terms:
-        # SIE v1.4 — bucket the required terms into the three categories
+        # SIE v1.4 - bucket the required terms into the three categories
         # so the LLM has explicit signal about which terms to use as
         # entities (hard SEO weight), which to vary the keyword with
         # (variants), and which are general topical anchors (related
@@ -364,7 +365,7 @@ def _build_section_user_prompt(
                 related_top.append(t.term)
 
         # Per-term target/max (the hard guidance) stays as the
-        # canonical REQUIRED_TERMS block — sections may need to use a
+        # canonical REQUIRED_TERMS block - sections may need to use a
         # specific term N times, not just "any entity N times".
         parts.append("\nREQUIRED_TERMS (use naturally, aim for target count):")
         for t in required_terms:
@@ -372,20 +373,20 @@ def _build_section_user_prompt(
                 f"  - {t.term} (target: {t.effective_target}, max: {t.effective_max})"
             )
 
-        # Three-bucket view of the same terms — gives the LLM the
+        # Three-bucket view of the same terms - gives the LLM the
         # "which-to-use-when" signal alongside the per-term targets.
         if entities_top:
-            parts.append(f"\nENTITIES (SEO weight — use as proper-noun anchors): {', '.join(entities_top)}")
+            parts.append(f"\nENTITIES (SEO weight - use as proper-noun anchors): {', '.join(entities_top)}")
         if related_top:
-            parts.append(f"RELATED_KEYWORDS (topical anchors — favor over generic phrasing): {', '.join(related_top)}")
+            parts.append(f"RELATED_KEYWORDS (topical anchors - favor over generic phrasing): {', '.join(related_top)}")
         if variants_top:
             parts.append(
-                f"KEYWORD_VARIANTS (alternate ways to refer to the seed — "
+                f"KEYWORD_VARIANTS (alternate ways to refer to the seed - "
                 f"vary instead of repeating the seed verbatim every paragraph): "
                 f"{', '.join(variants_top)}"
             )
 
-    # SIE v1.4 — section-level pro-rated category target. Informational
+    # SIE v1.4 - section-level pro-rated category target. Informational
     # only (the per-term targets above are the hard guidance). The
     # writer pipeline pre-divides the article-wide body aggregate by
     # this section's word-budget share before passing it in.
@@ -396,7 +397,7 @@ def _build_section_user_prompt(
         if ent or rel or var:
             parts.append(
                 f"\nSECTION_CATEGORY_TARGET (this section's fair-share "
-                f"contribution to article-wide body coverage — aspirational, "
+                f"contribution to article-wide body coverage - aspirational, "
                 f"distribute naturally): {ent} entities, {rel} related "
                 f"keywords, {var} keyword variants."
             )
@@ -410,7 +411,7 @@ def _build_section_user_prompt(
         parts.append(f"\nRETRY: A previous attempt included the forbidden term '{retry_term}'. Rewrite without it.")
 
     if length_retry_directive:
-        # PRD v2.3 / Phase 3 — Step 6.7 H2 body length retry directive.
+        # PRD v2.3 / Phase 3 - Step 6.7 H2 body length retry directive.
         # The validator passes this string when the previous attempt
         # produced a section group below `format_directives.min_h2_body_
         # words`. The directive names the floor and instructs additional
@@ -418,7 +419,7 @@ def _build_section_user_prompt(
         parts.append(f"\nLENGTH_RETRY: {length_retry_directive}")
 
     if coverage_retry_directive:
-        # PRD v1.7 / Phase 4 — Step 4F.1 citation-coverage retry directive.
+        # PRD v1.7 / Phase 4 - Step 4F.1 citation-coverage retry directive.
         # The validator passes this string when the previous attempt
         # produced fewer than 50% citation markers on detected citable
         # claims. The directive lists the offending sentences and asks
@@ -430,7 +431,7 @@ def _build_section_user_prompt(
         valid_ids = sorted({c.get("citation_id", "") for c in citations if c.get("citation_id")})
         if citations_were_fallback:
             parts.append(
-                "\nCITATIONS (general references for this article — cite where any "
+                "\nCITATIONS (general references for this article - cite where any "
                 "actually fits a factual claim in your section; otherwise omit the marker):"
             )
         else:
@@ -442,12 +443,12 @@ def _build_section_user_prompt(
             cid = c.get("citation_id", "")
             url = c.get("url", "")
             title = c.get("title", "")
-            parts.append(f"  {cid}: {title} — {url}")
+            parts.append(f"  {cid}: {title} - {url}")
             for claim in c.get("claims", [])[:5]:
                 method = claim.get("extraction_method", "verbatim_extraction")
                 if method == "fallback_stub":
                     parts.append(
-                        f"    [stub-only — reference as source, do not assert specific stats]: {claim.get('claim_text', '')}"
+                        f"    [stub-only - reference as source, do not assert specific stats]: {claim.get('claim_text', '')}"
                     )
                 else:
                     parts.append(f"    fact: {claim.get('claim_text', '')}")
@@ -533,7 +534,7 @@ async def write_h2_group(
     placement_directive: Optional[H2PlacementDirective] = None,
 ) -> SectionWriteResult:
     """Single LLM call for the H2 + nested H3 children. Retries once on
-    body banned-term match. Headings are NOT regenerated by this function —
+    body banned-term match. Headings are NOT regenerated by this function -
     headings come from the brief verbatim, so the only retry source is body.
 
     `length_retry_directive` (PRD v2.3 / Phase 3): set by Step 6.7 when a
@@ -708,7 +709,7 @@ async def write_h2_group(
                 },
             )
 
-        # Strip invented citation markers — any {{cit_NNN}} that doesn't
+        # Strip invented citation markers - any {{cit_NNN}} that doesn't
         # match an actual citation_id in `resolved_citations` is removed
         # from every body. The Section LLM occasionally hallucinates IDs
         # (matching the example in the system prompt's format) when no or
@@ -741,7 +742,7 @@ def _placeholder_result(
     reason: str = "unknown",
 ) -> SectionWriteResult:
     placeholder = (
-        f"[SECTION GENERATION FAILED — MANUAL REVIEW REQUIRED — reason: {reason}]"
+        f"[SECTION GENERATION FAILED - MANUAL REVIEW REQUIRED - reason: {reason}]"
     )
     sections = [ArticleSection(
         order=h2_item.get("order", 0),

@@ -1,4 +1,4 @@
-"""Unit tests for Brief Generator v2.0 Step 6 — persona generation.
+"""Unit tests for Brief Generator v2.0 Step 6 - persona generation.
 
 Mocks the LLM via injected llm_json_fn; no real Claude calls.
 """

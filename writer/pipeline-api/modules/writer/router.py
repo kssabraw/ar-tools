@@ -1,4 +1,4 @@
-"""POST /write — Content Writer endpoint."""
+"""POST /write - Content Writer endpoint."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ async def generate_article(request: WriterRequest) -> WriterResponse:
             },
         )
     except WriterError as exc:
-        logger.warning("writer.failed: %s — %s", exc.code, exc.message)
+        logger.warning("writer.failed: %s - %s", exc.code, exc.message)
         raise HTTPException(status_code=422, detail=exc.message)
     except Exception as exc:
         logger.exception("writer.unexpected: %s", exc)

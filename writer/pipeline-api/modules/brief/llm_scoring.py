@@ -1,9 +1,9 @@
-"""Step 7.6 — LLM Heading Quality Scoring (PRD v2.4).
+"""Step 7.6 - LLM Heading Quality Scoring (PRD v2.4).
 
 Adds a qualitative LLM signal on top of the existing vector-based
 `heading_priority` (priority.py). Vector signals stay primary (SEO/AEO
 ranking still dominates); the LLM bell-curve score adds discrimination
-on dimensions vector embeddings can't see — engagement value and
+on dimensions vector embeddings can't see - engagement value and
 information depth.
 
 Ported pattern: the n8n "Score Headings" stage from the Content Brief
@@ -23,7 +23,7 @@ Cost-bounded:
 
 Combination rule:
   combined = (1 - w) * heading_priority + w * llm_quality_score
-  where w = `brief_llm_scoring_weight` (default 0.30 — vector still
+  where w = `brief_llm_scoring_weight` (default 0.30 - vector still
   dominates at 70%). Mutates `heading_priority` in place so downstream
   consumers (Step 7.5 anchor reservation, Step 8 MMR, Step 8.6 H3
   selection) consume the combined score transparently.
@@ -100,26 +100,26 @@ For each heading, assign three integer scores from 0 to 3:
     0 = off-topic for the article's keyword
     1 = tangentially related; would feel like a digression
     2 = clearly on-topic
-    3 = core to the reader's intent — the article fails without it
+    3 = core to the reader's intent - the article fails without it
 
   engagement_value:
     0 = dull, generic, boilerplate ("Overview", "Introduction")
     1 = ok but unmemorable
-    2 = good hook — surfaces a real reason to keep reading
-    3 = highly clickable / useful — the heading itself promises specific value
+    2 = good hook - surfaces a real reason to keep reading
+    3 = highly clickable / useful - the heading itself promises specific value
 
   information_depth:
     0 = redundant or shallow (paraphrases another heading; common knowledge)
     1 = covers familiar ground without new angle
-    2 = substantive — readers learn something concrete
-    3 = expert synthesis — covers a non-obvious angle, hidden trade-off,
+    2 = substantive - readers learn something concrete
+    3 = expert synthesis - covers a non-obvious angle, hidden trade-off,
         or insider insight competitor articles miss
 
 BELL-CURVE CONSTRAINT (mandatory):
 - Use the FULL 0-3 range across the candidate set.
 - Only the top ~15% of headings should receive 3 on any axis.
 - The mean across all axes should be approximately 2.0.
-- DO NOT cluster all candidates at 2 or 3 — that defeats scoring purpose.
+- DO NOT cluster all candidates at 2 or 3 - that defeats scoring purpose.
 - It is OK and expected for some candidates to receive 0 or 1.
 
 OUTPUT (strict JSON only, no preamble, no markdown fences):
@@ -131,7 +131,7 @@ OUTPUT (strict JSON only, no preamble, no markdown fences):
 }
 
 Return one entry per input heading, in the same order, with the same
-indices. Integers only — no floats, no strings."""
+indices. Integers only - no floats, no strings."""
 
 
 def _build_user_prompt(
@@ -162,7 +162,7 @@ def _build_user_prompt(
 
 def _clamp_score(raw: Any) -> Optional[int]:
     """Return raw as int in [SCORE_MIN, SCORE_MAX], or None when invalid."""
-    if isinstance(raw, bool):  # bool is an int in Python — exclude explicitly
+    if isinstance(raw, bool):  # bool is an int in Python - exclude explicitly
         return None
     if isinstance(raw, int):
         return max(SCORE_MIN, min(SCORE_MAX, raw))
@@ -187,7 +187,7 @@ def _normalize_quality(
 def _distribution_summary(
     candidates: list[Candidate],
 ) -> dict[str, float]:
-    """Cheap stats for the structured log line — operators can tell at a
+    """Cheap stats for the structured log line - operators can tell at a
     glance whether the LLM is collapsing all scores into a narrow band."""
     if not candidates:
         return {}
@@ -227,8 +227,8 @@ async def score_top_candidates_llm(
     quality score into `heading_priority` in place.
 
     No-ops (returns `skipped_reason` populated, `llm_called=False`) when:
-      - `weight <= 0.0` — feature disabled via config
-      - `top_k <= 0` — no candidates would be scored
+      - `weight <= 0.0` - feature disabled via config
+      - `top_k <= 0` - no candidates would be scored
       - `candidates` is empty
 
     Mutates each scored candidate in place:

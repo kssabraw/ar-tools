@@ -223,7 +223,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
             details={"failed_urls": nlp_failed_urls},
         ))
 
-    # PRD v1.2 — TextRazor partial-failure warning. The
+    # PRD v1.2 - TextRazor partial-failure warning. The
     # `textrazor_entities` truthy gate filters out the "not_configured"
     # case (no API key → every page fails → zero aggregated entities,
     # which is silent-by-design rather than a partial-failure warning).
@@ -247,7 +247,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
         aggregates, entity_meta, textrazor_entities,
     )
 
-    # PRD v1.3 — flag (don't strip) seed-keyword fragments. Frontend
+    # PRD v1.3 - flag (don't strip) seed-keyword fragments. Frontend
     # filters them out of "related concepts" via is_seed_fragment;
     # writer still uses them via per-zone targets in usage_recommendations.
     # Entities are NEVER flagged as fragments (protected via the
@@ -304,7 +304,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
             record_kwargs["recommendation_score"] = round((score_data or {}).get("score", 0.0), 4)
             record_kwargs["recommendation_category"] = "required"
             record_kwargs["confidence"] = "low"
-            record_kwargs["reason"] = "Low coverage — fewer than 3 pages."
+            record_kwargs["reason"] = "Low coverage - fewer than 3 pages."
             low_coverage.append(TermRecord(**record_kwargs))
             continue
 
@@ -334,7 +334,7 @@ async def run_sie(req: SIERequest) -> SIEResponse:
     # Build usage only for top required terms (cap to keep payload reasonable)
     top_for_usage = {r.term: aggregates[r.term] for r in required[:50] if r.term in aggregates}
     # Single page-zone scan shared between per-term usage targets and
-    # category aggregates — without sharing each consumer would scan
+    # category aggregates - without sharing each consumer would scan
     # 50 terms × 5 zones × N pages independently, doubling the work.
     zone_count_by_term_and_url = build_zone_count_map(top_for_usage, pages)
     usage_dicts = build_usage(
@@ -471,7 +471,7 @@ async def _run_track_a(
     tfidf_scores, tfidf_filtered = compute_tfidf(aggregates, pages)
     sem_scores, sem_threshold = await filter_semantic(keyword, aggregates, tfidf_scores)
 
-    # Apply semantic filter — drop terms below threshold unless zone-protected
+    # Apply semantic filter - drop terms below threshold unless zone-protected
     surviving: dict[str, TermAggregate] = {}
     for term, agg in aggregates.items():
         if agg.template_boilerplate:
@@ -509,7 +509,7 @@ async def _run_track_b(
     appear in the user's seed keyword is auto-promoted (highest-priority
     `keyword_match` reason in PromotionReason).
 
-    SIE v1.2 — also runs TextRazor entity extraction in parallel.
+    SIE v1.2 - also runs TextRazor entity extraction in parallel.
     `language_code` is the SIE request's ISO-639-1 code; forwarded to
     TextRazor as `languageOverride` so non-English content gets
     analyzed against the correct entity model.
@@ -520,7 +520,7 @@ async def _run_track_b(
     google_entities_task = asyncio.create_task(
         extract_entities(pages, keyword=keyword)
     )
-    # PRD v1.2 — TextRazor runs in parallel with Google NLP. Empty
+    # PRD v1.2 - TextRazor runs in parallel with Google NLP. Empty
     # API key → all results return failed=True with reason=
     # "not_configured" and aggregation yields []; the rest of the
     # pipeline proceeds with Google-NLP-only entities.

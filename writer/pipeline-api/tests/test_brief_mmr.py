@@ -1,4 +1,4 @@
-"""Unit tests for Brief Generator v2.0 Step 8 — MMR selection."""
+"""Unit tests for Brief Generator v2.0 Step 8 - MMR selection."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _make(text: str, region: str, priority: float, embedding: list[float],
 # ----------------------------------------------------------------------
 
 def test_mmr_selects_one_per_region_in_priority_order():
-    """Three regions with one strong candidate each — all selected."""
+    """Three regions with one strong candidate each - all selected."""
     cands = [
         _make("a1", "region_0", 0.9, [1.0, 0.0, 0.0]),
         _make("b1", "region_1", 0.8, [0.0, 1.0, 0.0]),
@@ -61,7 +61,7 @@ def test_mmr_picks_strongest_within_each_region():
 # ----------------------------------------------------------------------
 
 def test_mmr_blocks_inter_heading_above_threshold():
-    """Two candidates in different regions but with cosine > 0.75 — second blocked."""
+    """Two candidates in different regions but with cosine > 0.75 - second blocked."""
     # Same vector but different regions → cosine = 1.0
     cands = [
         _make("a1", "region_0", 0.9, [1.0, 0.0]),
@@ -102,7 +102,7 @@ def test_mmr_shortfall_when_pool_too_small():
 
 
 def test_mmr_shortfall_when_all_in_one_region():
-    """Five candidates but only one region — only one H2 possible."""
+    """Five candidates but only one region - only one H2 possible."""
     cands = [
         _make(f"x{i}", "region_0", 0.9 - i * 0.1, [1.0, 0.0, 0.0])
         for i in range(5)
@@ -297,7 +297,7 @@ def test_mmr_pre_reserved_seeds_selected_set():
     ]
     res = select_h2s_mmr(pool, target_count=3, pre_reserved=pre)
     assert [c.text for c in res.selected] == ["plan", "launch", "iterate"]
-    # alt_plan must NOT have been selected — region_0 was reserved.
+    # alt_plan must NOT have been selected - region_0 was reserved.
     assert all(c.text != "alt_plan" for c in res.selected)
 
 
@@ -333,7 +333,7 @@ def test_mmr_pre_reserved_missing_region_raises():
     bad = Candidate(text="x", source="serp")
     bad.embedding = [1.0, 0.0]
     bad.heading_priority = 0.5
-    # region_id is None — pre_reserved validation must catch it
+    # region_id is None - pre_reserved validation must catch it
     with pytest.raises(ValueError, match="pre_reserved"):
         select_h2s_mmr([], target_count=2, pre_reserved=[bad])
 

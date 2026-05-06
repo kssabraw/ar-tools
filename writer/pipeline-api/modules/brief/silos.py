@@ -1,6 +1,6 @@
-"""Step 12 — Silo Cluster Identification (Brief Generator v2.0.2).
+"""Step 12 - Silo Cluster Identification (Brief Generator v2.0.2).
 
-Implements PRD §5 Step 12.1–12.6. Reuses regions from Step 5 — zero
+Implements PRD §5 Step 12.1–12.6. Reuses regions from Step 5 - zero
 additional embedding or clustering cost over what's already been
 computed. Adds three layers of refinement so the silo output is a
 prioritized roadmap rather than a noisy list:
@@ -9,7 +9,7 @@ prioritized roadmap rather than a noisy list:
   12.2 Cluster formation (region reuse + coherence + centroid keyword)
   12.3 Search-demand validation (five-signal demand score, hard floor 0.30)
   12.4 Independent article viability check (parallel LLM call)
-  12.5 Cross-brief deduplication (DEFERRED to v2.1 — count defaults to 1)
+  12.5 Cross-brief deduplication (DEFERRED to v2.1 - count defaults to 1)
   12.6 Output format (carries discard_reason_breakdown + demand + viability)
 
 Step 12.4 is async and lives in `verify_silo_viability` so the
@@ -44,8 +44,8 @@ REVIEW_RECOMMENDED_MAX = 0.70
 MAX_SILO_CANDIDATES = 10
 SINGLETON_COHERENCE = 1.0
 
-# PRD §5 Step 12.3 — search-demand floor.
-# Lowered from 0.30 to 0.15 in v2.4 — the original threshold was tuned
+# PRD §5 Step 12.3 - search-demand floor.
+# Lowered from 0.30 to 0.15 in v2.4 - the original threshold was tuned
 # for multi-source clusters and rejected nearly every singleton (one
 # PAA, one SERP heading), leaving production with zero silos on most
 # keywords. Configurable via `brief_silo_search_demand_threshold`.
@@ -59,7 +59,7 @@ MIN_SEARCH_DEMAND_SCORE = 0.15
 # `brief_silo_strong_priority_bypass`. Set to 1.0+ to disable.
 SILO_STRONG_PRIORITY_BYPASS = 0.30
 
-# PRD §5 Step 12.4 — viability LLM payload limits
+# PRD §5 Step 12.4 - viability LLM payload limits
 MAX_VIABILITY_REASONING_LEN = 150
 VALID_INTENTS: frozenset[str] = frozenset({
     "informational",
@@ -74,7 +74,7 @@ VALID_INTENTS: frozenset[str] = frozenset({
 
 
 # ----------------------------------------------------------------------
-# Step 12.1 — Discard-reason filtering
+# Step 12.1 - Discard-reason filtering
 # ----------------------------------------------------------------------
 
 # Discard reasons that route members into the silo pipeline. "No" reasons
@@ -84,7 +84,7 @@ VALID_INTENTS: frozenset[str] = frozenset({
 _SILO_ELIGIBLE_REASONS_YES: frozenset[str] = frozenset({
     "scope_verification_out_of_scope",
     "global_cap_exceeded",
-    # PRD v2.2 / Phase 2 — Step 8.7 outputs route via singleton paths
+    # PRD v2.2 / Phase 2 - Step 8.7 outputs route via singleton paths
     # (`h3_parent_fit_rejects`) but this table stays internally consistent
     # so future cluster-aware aggregation doesn't need a second update.
     "h3_wrong_parent",
@@ -100,7 +100,7 @@ def _is_fanout_source(source: str) -> bool:
 
     Fan-out queries are LLM-generated query expansions (chatgpt / claude /
     gemini / perplexity). When a candidate is sourced from fan-out and
-    didn't make the H2 cut, the LLMs themselves are the demand signal —
+    didn't make the H2 cut, the LLMs themselves are the demand signal -
     so the search-demand floor is bypassed for these candidates in the
     singleton routing paths and an explicit `llm_fanout_unused` pass picks
     up any that weren't routed elsewhere.
@@ -145,7 +145,7 @@ def _is_member_eligible(
     *,
     region_contributed: bool,
 ) -> bool:
-    """PRD §5 Step 12.1 — per-member eligibility check.
+    """PRD §5 Step 12.1 - per-member eligibility check.
 
     Members with no `discard_reason` are eligible (they were in the pool
     but the orchestrator routed them here for cluster formation). Members
@@ -162,7 +162,7 @@ def _is_member_eligible(
 
 
 # ----------------------------------------------------------------------
-# Step 12.2 — Cluster formation helpers
+# Step 12.2 - Cluster formation helpers
 # ----------------------------------------------------------------------
 
 def _coherence(members: list[Candidate]) -> float:
@@ -205,7 +205,7 @@ def _centroid_heading(members: list[Candidate]) -> str:
 
 def _infer_intent(headings: list[str]) -> IntentType:
     """Cheap heading-pattern intent inference for silo seeds. Same logic
-    as the legacy v1.7 path — preserved verbatim because PRD §14.2 lists
+    as the legacy v1.7 path - preserved verbatim because PRD §14.2 lists
     silo cluster quality rules as unchanged."""
     blob = " ".join(h.lower() for h in headings)
     if "vs " in blob or "versus" in blob or "comparison" in blob:
@@ -239,11 +239,11 @@ def _discard_reason_breakdown(members: list[Candidate]) -> dict[str, int]:
 
 
 # ----------------------------------------------------------------------
-# Step 12.3 — Search-demand score
+# Step 12.3 - Search-demand score
 # ----------------------------------------------------------------------
 
 def _search_demand_score(members: list[Candidate]) -> float:
-    """PRD §5 Step 12.3 — five-signal weighted score over member metadata.
+    """PRD §5 Step 12.3 - five-signal weighted score over member metadata.
 
     Returns 0.0 for empty input. Each signal is normalized to [0, 1].
     """
@@ -267,7 +267,7 @@ def _search_demand_score(members: list[Candidate]) -> float:
 
 
 # ----------------------------------------------------------------------
-# identify_silos — orchestrates 12.1 → 12.3 (sync)
+# identify_silos - orchestrates 12.1 → 12.3 (sync)
 # ----------------------------------------------------------------------
 
 @dataclass
@@ -315,7 +315,7 @@ def identify_silos(
       Step 12.3: drop clusters whose search_demand_score < min_search_demand
 
     Returns a `SiloIdentificationResult` whose `candidates` are pre-
-    viability — the orchestrator runs `verify_silo_viability` on them
+    viability - the orchestrator runs `verify_silo_viability` on them
     next to apply Step 12.4.
     """
     silos_with_score: list[tuple[float, SiloCandidate]] = []
@@ -335,12 +335,12 @@ def identify_silos(
         region_contributed = region.region_id in contributing_region_ids
         if region_contributed:
             # Members of contributing regions can still be eligible for
-            # silos via their discard reason ("Yes — global_cap_exceeded"),
+            # silos via their discard reason ("Yes - global_cap_exceeded"),
             # but we'd treat them as singletons; the cluster path is for
             # non-contributing regions only.
             continue
 
-        # 12.1 — filter members
+        # 12.1 - filter members
         all_members = [candidate_pool[i] for i in region.member_indices]
         eligible_members = [
             c for c in all_members
@@ -351,7 +351,7 @@ def identify_silos(
         if len(eligible_members) < MIN_HEADINGS_PER_CLUSTER:
             continue
 
-        # 12.2 — coherence + centroid
+        # 12.2 - coherence + centroid
         coh = _coherence(eligible_members)
         if coh < min_coherence:
             for cand in eligible_members:
@@ -368,7 +368,7 @@ def identify_silos(
             )
             continue
 
-        # 12.3 — search demand
+        # 12.3 - search demand
         demand = _search_demand_score(eligible_members)
         if demand < min_search_demand:
             rejected_demand += 1
@@ -401,10 +401,10 @@ def identify_silos(
         routed_candidate_ids.update(id(c) for c in eligible_members)
 
     # ---- contributing-region members with global_cap_exceeded ----
-    # PRD §5 Step 12.1 marks `global_cap_exceeded` as "Yes — medium
+    # PRD §5 Step 12.1 marks `global_cap_exceeded` as "Yes - medium
     # priority" (eligible regardless of region). When their region also
     # contributed an H2, the cluster path can't form a silo around them
-    # — the H2 already won that topic. Surface them as singleton silos
+    # - the H2 already won that topic. Surface them as singleton silos
     # so cut-for-length material doesn't get silently dropped.
     cluster_member_ids: set[int] = set()
     for region in regions:
@@ -560,7 +560,7 @@ def identify_silos(
     # Headings discarded as below_relevance_floor are below the title's
     # relevance floor (so excluded from the parent article) but often
     # represent adjacent topics. Without this path, runs whose SERP is
-    # dominated by restatement clusters produce zero silos every time —
+    # dominated by restatement clusters produce zero silos every time -
     # observed empirically on "what is a tiktok shop" and similar
     # broad-overview keywords. Search-demand floor + Step 12.4 viability
     # LLM keep noise out of the surfaced set.
@@ -613,7 +613,7 @@ def identify_silos(
         silos_with_score.append((SINGLETON_COHERENCE, silo))
         routed_candidate_ids.add(id(cand))
 
-    # ---- Phase 2 / PRD v2.2 — Step 8.7 H3 parent-fit rejects ----
+    # ---- Phase 2 / PRD v2.2 - Step 8.7 H3 parent-fit rejects ----
     # H3s the LLM classified as `wrong_parent` (no fitting parent
     # available) or `promote_to_h2` (substantial standalone topic) are
     # routed to silos as singletons with their own routed_from value so
@@ -677,12 +677,12 @@ def identify_silos(
     # Final pass: any candidate sourced from an LLM fanout that didn't
     # land in a cluster or any of the singleton routing paths above is
     # surfaced as a silo. The fanout LLMs already nominated the query, so
-    # we treat it as having sufficient demand on its own — the search-
+    # we treat it as having sufficient demand on its own - the search-
     # demand floor is bypassed for this path. The Step 12.4 viability
     # check still runs, so non-defensible standalone topics are filtered
     # downstream. Without this path, fanout queries that fall below the
     # title's relevance floor *and* score under the demand threshold
-    # (common — most singleton fanout queries don't clear 0.30) get
+    # (common - most singleton fanout queries don't clear 0.30) get
     # silently dropped.
     for cand in candidate_pool:
         if not _is_fanout_source(cand.source):
@@ -739,12 +739,12 @@ def identify_silos(
 
 
 # ----------------------------------------------------------------------
-# Step 12.4 — Viability check (async)
+# Step 12.4 - Viability check (async)
 # ----------------------------------------------------------------------
 
 VIABILITY_SYSTEM_PROMPT = """\
 You verify whether a candidate silo keyword would make a defensible
-standalone article — distinct from the parent article it was rejected
+standalone article - distinct from the parent article it was rejected
 from, and substantive enough to support its own outline.
 
 Inputs:
@@ -756,7 +756,7 @@ Inputs:
 - The candidate's member headings (text fragments other articles or
   searchers used for this topic)
 
-Output strict JSON only — no preamble, no markdown fences:
+Output strict JSON only - no preamble, no markdown fences:
 {
   "candidate_keyword": "string (must match the input candidate keyword)",
   "viable_as_standalone_article": true | false,
@@ -853,7 +853,7 @@ async def _viability_check_one(
     viable_as_standalone_article is set per the LLM verdict.
 
     On double LLM failure, defaults `viable_as_standalone_article=True`
-    with a fallback flag — never aborts the run.
+    with a fallback flag - never aborts the run.
     """
     user = _format_viability_user_prompt(silo, title, scope_statement)
     last_error = "unknown"
@@ -922,12 +922,12 @@ async def verify_silo_viability(
     scope_statement: str,
     llm_json_fn: Optional[LLMJsonFn] = None,
 ) -> SiloViabilityResult:
-    """Step 12.4 — verify each silo candidate's standalone viability.
+    """Step 12.4 - verify each silo candidate's standalone viability.
 
     Runs candidate checks concurrently. Concurrency is bounded globally
     by the Anthropic-side semaphore in `modules/brief/llm.py` (default
     5), so this gather can fire all silos at once without tripping
-    Anthropic's per-account concurrent-connections rate limit — at most
+    Anthropic's per-account concurrent-connections rate limit - at most
     `anthropic_max_concurrency` will reach the API simultaneously.
 
     Mutates each input `SiloCandidate` in place:

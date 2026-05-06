@@ -1,7 +1,7 @@
 """Verify preferred_terms + discouraged_terms surface in every writer
 prompt. Distillation extracts the brand's `do_say` vocabulary into
 preferred_terms but the four writer prompt builders (sections, intro,
-conclusion, faqs) used to drop it on the floor — leaving the LLM with
+conclusion, faqs) used to drop it on the floor - leaving the LLM with
 only forbidden_terms (negative signal) and no positive signal about
 what the brand wants to sound like.
 """

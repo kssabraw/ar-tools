@@ -94,7 +94,7 @@ def _group_coverage(
 
 def _extract_entities(filtered_terms: FilteredSIETerms) -> list[str]:
     """Pull entity terms from SIE Required terms (`is_entity == True`).
-    The reconciliation DTO doesn't carry the entity flag explicitly —
+    The reconciliation DTO doesn't carry the entity flag explicitly -
     we conservatively include every required term so C6 fires on any
     of them."""
     out: list[str] = []
@@ -148,7 +148,7 @@ async def validate_citation_coverage(
     placement_plan: Optional[BrandPlacementPlan] = None,
     write_h2_group_fn: Optional[WriteH2GroupFn] = None,
 ) -> CoverageValidationResult:
-    """Step 4F.1 — per-H2 citable-claim detection + coverage retry +
+    """Step 4F.1 - per-H2 citable-claim detection + coverage retry +
     auto-soften fallback.
 
     Empty `article` or `threshold <= 0` → no-op.
@@ -201,7 +201,7 @@ async def validate_citation_coverage(
         h2_order = group.h2_section.order
         h2_item = _lookup(h2_order, "H2")
         if h2_item is None:
-            # Defensive — flag without retrying.
+            # Defensive - flag without retrying.
             under_cited.append({
                 "section_order": h2_order,
                 "citable_claims": coverage.citable_claims,
@@ -221,7 +221,7 @@ async def validate_citation_coverage(
                 children_lookup_failed = True
 
         if children_lookup_failed:
-            # Same guard as Step 6.7 — refuse retry rather than dropping
+            # Same guard as Step 6.7 - refuse retry rather than dropping
             # H3 sections via section-count mismatch downstream.
             under_cited.append({
                 "section_order": h2_order,
@@ -270,7 +270,7 @@ async def validate_citation_coverage(
             # Fall through to soften pass on original sections.
             retry_result = None
 
-        # Same section-count guard as Step 6.7 fix #1 — refuse splice
+        # Same section-count guard as Step 6.7 fix #1 - refuse splice
         # if the retry returned the wrong number of sections.
         expected_count = 1 + len(group.children)
         if (
@@ -314,7 +314,7 @@ async def validate_citation_coverage(
             current_sections = sections_in_group
             current_coverage = coverage
 
-        # Auto-soften fallback — Phase 4. Only operational claims (C7-C9)
+        # Auto-soften fallback - Phase 4. Only operational claims (C7-C9)
         # are softened; C1-C6 statistics/years stay flagged.
         softened_sections, replacements = _apply_soften_to_group(
             current_sections, h2_order=h2_order,
@@ -324,7 +324,7 @@ async def validate_citation_coverage(
             softened_records.extend(replacements)
             # Splice softened sections back in. Group's h2_index in
             # `result.validated_article` may have shifted if a previous
-            # iteration modified the list — rebuild groups isn't worth
+            # iteration modified the list - rebuild groups isn't worth
             # it here; the splice helper indexes by group structure
             # which we still hold.
             result.validated_article = _replace_group_in_article(

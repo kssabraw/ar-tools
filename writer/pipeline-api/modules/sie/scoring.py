@@ -1,4 +1,4 @@
-"""Module 13 — Recommendation scoring engine.
+"""Module 13 - Recommendation scoring engine.
 
 Inputs (per spec):
 - semantic_similarity (0.25)
@@ -11,12 +11,12 @@ Inputs (per spec):
 All inputs min-max normalized across the candidate set before weighting.
 Quadgrams in title/H1/H2/H3 receive a multiplicative zone boost.
 
-SIE v1.2 — differentiated entity boosts (Option C):
+SIE v1.2 - differentiated entity boosts (Option C):
   - ngram_and_entity terms get 1.20x (was 1.15x in v1.1)
-  - entity_only terms get 1.10x (NEW — v1.1 had no boost for these)
+  - entity_only terms get 1.10x (NEW - v1.1 had no boost for these)
   - plain n-grams get 1.0x (unchanged)
 Both Google NLP entities and TextRazor entities feed the same
-classification — provenance is recorded separately on entity_meta.
+classification - provenance is recorded separately on entity_meta.
 """
 
 from __future__ import annotations
@@ -147,7 +147,7 @@ def score_terms(
         zone_mult, zone_reason = _quadgram_zone_multiplier(c)
         score = base * zone_mult
 
-        # SIE v1.2 — differentiated entity boosts (Option C):
+        # SIE v1.2 - differentiated entity boosts (Option C):
         #   ngram_and_entity (entity flagged AND n-gram match) → 1.20×
         #   entity_only      (entity flagged, no n-gram match) → 1.10×
         #   plain n-gram                                       → 1.00×

@@ -1,6 +1,6 @@
-"""Module 11 — Entity extraction (Google NLP + LLM dedup) and merge into terms.
+"""Module 11 - Entity extraction (Google NLP + LLM dedup) and merge into terms.
 
-SIE v1.1 — hybrid scoring replaces the prior salience-only gate:
+SIE v1.1 - hybrid scoring replaces the prior salience-only gate:
 
   Pass 1: Google NLP analyzeEntities with low salience floor (0.10) +
           all entity types allowed. See `google_nlp.py`.
@@ -18,7 +18,7 @@ SIE v1.1 — hybrid scoring replaces the prior salience-only gate:
           The LLM may NOT invent entities.
 
 The hybrid model lets cross-SERP recurrence rescue low-salience entities
-(e.g. "GMV Max" surfaces with salience 0.18 across 4 pages — strong
+(e.g. "GMV Max" surfaces with salience 0.18 across 4 pages - strong
 topical signal that the prior 0.40 hard gate threw away).
 """
 
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 PromotionReason = Literal[
-    # Highest priority — entity name (or one of its variants) appears
+    # Highest priority - entity name (or one of its variants) appears
     # as a contiguous token-sequence inside the user's keyword. Forces
     # promotion regardless of score; the reasoning is that anything
     # the user explicitly typed is by definition relevant.
@@ -112,7 +112,7 @@ def aggregate_ner_results(per_page: list[PageNERResult]) -> list[AggregatedEntit
 
 
 # ----------------------------------------------------------------------
-# SIE v1.1 — composite scoring + promotion (replaces the prior
+# SIE v1.1 - composite scoring + promotion (replaces the prior
 # salience-only gate at extract time)
 # ----------------------------------------------------------------------
 
@@ -123,7 +123,7 @@ _DATE_LIKE_RE = re.compile(
     re.IGNORECASE,
 )
 _CURRENCY_RE = re.compile(r"^\s*[$€£¥₹]\s*\d")
-# Minimal generic-stopword set — names that are ONLY a single stopword
+# Minimal generic-stopword set - names that are ONLY a single stopword
 # get a partial noise penalty even when they pass the length check.
 _GENERIC_TOKENS: frozenset[str] = frozenset({
     "data", "info", "thing", "item", "stuff", "way", "type",
@@ -185,7 +185,7 @@ def _matches_keyword_tokens(
     """Token-level contiguous-subsequence match.
 
     "shop" matches "tiktok shop" but "ip" does NOT match "trip".
-    Multi-word entities must appear in order — "tiktok shop" matches
+    Multi-word entities must appear in order - "tiktok shop" matches
     "how to start a tiktok shop" but "shop tiktok" does not.
 
     Caller passes pre-tokenized lists so the keyword's tokens can be
@@ -207,7 +207,7 @@ def _matches_keyword(entity_name: str, keyword: str) -> bool:
     """Convenience wrapper for tests and callers without pre-tokenized
     keyword. Internal hot path uses `_matches_keyword_tokens` directly.
 
-    Empty inputs return False — keyword is optional and we don't want
+    Empty inputs return False - keyword is optional and we don't want
     to silently auto-promote everything when it's missing.
     """
     if not entity_name or not keyword:
@@ -230,12 +230,12 @@ def _classify_promotion(
     Returns None when the entity should NOT be promoted. The five
     reasons are checked in priority order:
 
-      1. keyword_match — entity tokens appear in the user's keyword.
+      1. keyword_match - entity tokens appear in the user's keyword.
          Always promotes (the user said this matters).
-      2. dual_signal_strong — high recurrence AND mid+ salience.
-      3. high_recurrence_low_salience — recurrence override path.
-      4. high_salience_low_recurrence — single-source strong entity.
-      5. entity_only_promoted — composite-score path.
+      2. dual_signal_strong - high recurrence AND mid+ salience.
+      3. high_recurrence_low_salience - recurrence override path.
+      4. high_salience_low_recurrence - single-source strong entity.
+      5. entity_only_promoted - composite-score path.
 
     `keyword_tokens` is the pre-normalized + tokenized keyword (passed
     once from `score_and_promote_entities`). Pass None or an empty
@@ -287,7 +287,7 @@ def score_and_promote_entities(
     seed keyword from the SIE request.
 
     No-op when `aggregated` is empty or `total_pages == 0` (returns
-    empty list — there's nothing to score against).
+    empty list - there's nothing to score against).
     """
     if not aggregated or total_pages <= 0:
         return []
@@ -303,7 +303,7 @@ def score_and_promote_entities(
 
     # Normalize the keyword ONCE (not per-entity). The previous
     # implementation called `_normalize_entity_name(keyword)` inside
-    # `_matches_keyword` for every entity × variant pair — wasted NLTK
+    # `_matches_keyword` for every entity × variant pair - wasted NLTK
     # lemmatizer calls when the keyword is the same the whole loop.
     keyword_tokens = _tokens_for_keyword_match(keyword)
 
@@ -370,7 +370,7 @@ async def llm_dedupe_and_categorize(
     *,
     llm_json_fn=None,
 ) -> list[AggregatedEntity]:
-    """Pass 2 — Claude dedup + categorization. May NOT invent entities.
+    """Pass 2 - Claude dedup + categorization. May NOT invent entities.
 
     `llm_json_fn` is injectable for tests; defaults to `claude_json`.
     """
@@ -398,7 +398,7 @@ async def llm_dedupe_and_categorize(
         "(3) write a short example_context sentence describing how the entity is used "
         "across pages, and (4) drop ONLY entities that are clearly navigational "
         "(login, signup, footer links, sidebar nav) or pure UI chrome (cookie "
-        "banners, breadcrumbs, social-share buttons). Keep anything topical — "
+        "banners, breadcrumbs, social-share buttons). Keep anything topical - "
         "even if it seems tangential, it may be relevant to the writer's framing.\n\n"
         "STRICT RULE: You may only output entities whose `name` matches an entry in "
         "the provided list. Do not invent or rename entities.\n\n"
@@ -408,7 +408,7 @@ async def llm_dedupe_and_categorize(
     try:
         result = await call(system, str(items), max_tokens=2500, temperature=0.2)
     except Exception as exc:
-        logger.warning("Entity LLM dedup failed: %s — using raw NER aggregates", exc)
+        logger.warning("Entity LLM dedup failed: %s - using raw NER aggregates", exc)
         return aggregated
 
     if not isinstance(result, dict) or "entities" not in result:
@@ -465,7 +465,7 @@ def merge_entities_into_terms(
                 "ner_variants": ent.ner_variants,
                 "source": "ngram_and_entity",
                 "example_context": ent.example_context,
-                # SIE v1.1 — surface the composite score + reason flag
+                # SIE v1.1 - surface the composite score + reason flag
                 # so dashboards / debugging can see WHY each entity was
                 # promoted (recurrence vs salience vs dual-signal).
                 "entity_score": round(ent.entity_score, 4),
@@ -504,7 +504,7 @@ def merge_entities_into_terms(
 def merge_textrazor_entities_into_terms(
     aggregates: dict[str, TermAggregate],
     entity_meta: dict[str, dict],
-    textrazor_entities: list,  # list[AggregatedTextRazorEntity] — typed loosely to avoid circular imports
+    textrazor_entities: list,  # list[AggregatedTextRazorEntity] - typed loosely to avoid circular imports
 ) -> tuple[dict[str, TermAggregate], dict[str, dict]]:
     """Merge TextRazor entities into the SIE aggregates dict (SIE v1.2).
 
@@ -547,12 +547,12 @@ def merge_textrazor_entities_into_terms(
             existing_meta.setdefault("is_entity", True)
             existing_meta.setdefault("entity_category", "concepts")
             existing_meta.setdefault("ner_variants", [])
-            # Source-flag rules — TextRazor agreement is a
+            # Source-flag rules - TextRazor agreement is a
             # cross-vendor confirmation, not a new signal type. It
             # MUST NOT promote an entity_only term to
             # ngram_and_entity (no n-gram exists to back the claim,
             # and scoring.py applies a 1.20× boost to
-            # ngram_and_entity vs 1.10× to entity_only — falsely
+            # ngram_and_entity vs 1.10× to entity_only - falsely
             # upgrading inflates the score by ~9%).
             #   - existing "entity_only" (Google NLP only) → stays
             #     "entity_only"; TextRazor adds a confidence flag
@@ -578,7 +578,7 @@ def merge_textrazor_entities_into_terms(
                 aggregates[match_term].source_urls
             )
         else:
-            # Brand-new term — add it with entity-only source flag.
+            # Brand-new term - add it with entity-only source flag.
             # Variants stay matched_text + canonical so downstream
             # `usage.py:build_usage` substring-matches against either.
             new_term = TermAggregate(

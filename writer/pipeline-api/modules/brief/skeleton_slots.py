@@ -1,4 +1,4 @@
-"""Step 7.5 — Anchor-slot reservation (Brief Generator PRD v2.1).
+"""Step 7.5 - Anchor-slot reservation (Brief Generator PRD v2.1).
 
 Per the proposal accepted alongside Phase 1: before generic MMR runs
 (Step 8), each anchor slot from the intent template tries to claim its
@@ -18,9 +18,9 @@ Behavior:
     invariants.
 
 The module returns:
-  - `reserved`: list[Candidate] — preserved in slot order, ready to feed
+  - `reserved`: list[Candidate] - preserved in slot order, ready to feed
     `select_h2s_mmr` as pre-selected entries.
-  - `unmatched_slot_indices`: list[int] — slots that found no candidate
+  - `unmatched_slot_indices`: list[int] - slots that found no candidate
     above the floor; logged so operators can spot pools that genuinely
     lack procedural coverage (a how-to keyword whose candidate pool is
     all definitional, for example).
@@ -65,7 +65,7 @@ EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 class AnchorReservation:
     """Output of `reserve_anchor_slots`.
 
-    `reserved` preserves the order of the template's anchor slots — when
+    `reserved` preserves the order of the template's anchor slots - when
     `template.ordering == "strict_sequential"` (e.g. how-to), this means
     the reserved H2s already arrive in narrative order and the
     downstream `reorder_how_to` LLM call becomes a no-op for these.
@@ -95,9 +95,9 @@ async def embed_anchor_slots(
 
     Returns a list of unit-normalized embeddings aligned to
     `template.anchor_slots` order. Returns [] when the template has no
-    anchor slots — callers must handle the empty case.
+    anchor slots - callers must handle the empty case.
 
-    On embedding failure: logs and returns [] (Step 7.5 is best-effort —
+    On embedding failure: logs and returns [] (Step 7.5 is best-effort -
     we never abort the run because anchor embedding flaked).
     """
     if not template.anchor_slots:
@@ -105,7 +105,7 @@ async def embed_anchor_slots(
     fn = embed_fn or embed_batch_large
     try:
         return await fn(list(template.anchor_slots))
-    except Exception as exc:  # pragma: no cover — defensive
+    except Exception as exc:  # pragma: no cover - defensive
         logger.warning(
             "brief.anchor.embed_failed",
             extra={"intent": template.intent, "error": str(exc)},
@@ -142,7 +142,7 @@ def reserve_anchor_slots(
     if not eligible or not template.anchor_slots or not anchor_embeddings:
         return AnchorReservation()
     if len(anchor_embeddings) != len(template.anchor_slots):
-        # Embedding step partially failed — be conservative.
+        # Embedding step partially failed - be conservative.
         logger.warning(
             "brief.anchor.embedding_count_mismatch",
             extra={
@@ -172,7 +172,7 @@ def reserve_anchor_slots(
                 continue
             if not cand.embedding:
                 continue
-            # Anti-redundancy guard — never reserve a candidate that
+            # Anti-redundancy guard - never reserve a candidate that
             # would violate Step 8's pairwise threshold once it's in
             # the selected set.
             if reserved_embeddings:

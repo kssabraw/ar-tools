@@ -1,4 +1,4 @@
-"""Step 5b/5c — Claim extraction (LLM) + verification (deterministic).
+"""Step 5b/5c - Claim extraction (LLM) + verification (deterministic).
 
 Extraction: single Claude call per winning candidate. Asks for up to 5
 verbatim claims. 25-second timeout, no retry on extraction (per PRD §5d
@@ -209,7 +209,7 @@ async def extract_claims(
 
 
 def fallback_stub(title: str, meta_description: str) -> ExtractedClaim:
-    """Per PRD §5d — when no candidates yield verified claims, use the
+    """Per PRD §5d - when no candidates yield verified claims, use the
     rank-1 candidate's title + meta as a stub claim (relevance 0.30)."""
     text = (title or "").strip()
     if meta_description:

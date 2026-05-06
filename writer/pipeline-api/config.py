@@ -11,10 +11,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     google_nlp_api_key: str = ""
     perplexity_api_key: str = ""
-    # SIE v1.2 — TextRazor entity extraction (parallel to Google NLP).
+    # SIE v1.2 - TextRazor entity extraction (parallel to Google NLP).
     # Free tier: 500 requests/day. A brief calls TextRazor once per
     # scraped page (typically ~10), so the free tier supports ~50 briefs
-    # per day. Empty key disables TextRazor extraction silently — the
+    # per day. Empty key disables TextRazor extraction silently - the
     # SIE pipeline falls back to Google-NLP-only entities.
     textrazor_api_key: str = ""
     sie_cache_ttl_days: int = 7
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # ------------------------------------------------------------
-    # Brief Generator v2.0 — threshold tuning (PRD §12.6)
+    # Brief Generator v2.0 - threshold tuning (PRD §12.6)
     # ------------------------------------------------------------
     # All thresholds must be configurable per the PRD. Defaults match the
     # PRD's starting values; expect first-week tuning, especially on the
@@ -39,19 +39,19 @@ class Settings(BaseSettings):
     # metadata (even for discards) so operators can tune thresholds offline.
     brief_tuning_mode: bool = False
 
-    # PRD v2.4 — Step 7.6 LLM scoring blend.
+    # PRD v2.4 - Step 7.6 LLM scoring blend.
     # `brief_llm_scoring_weight` is the LLM share of the combined priority
     # (0.30 by default). Set to 0.0 to disable LLM scoring entirely and
     # fall back to pure vector priority. `brief_llm_scoring_top_k` caps
-    # the number of candidates LLM-scored — only the top-K by vector
+    # the number of candidates LLM-scored - only the top-K by vector
     # priority are sent to the LLM, keeping cost bounded.
     brief_llm_scoring_weight: float = 0.30
     brief_llm_scoring_top_k: int = 25
 
-    # PRD §5 Step 12.3 — silo search-demand threshold.
+    # PRD §5 Step 12.3 - silo search-demand threshold.
     # Originally 0.30, designed for multi-source clusters. Lowered to
     # 0.15 because the same threshold applied to singletons (one PAA, one
-    # SERP heading) was rejecting every candidate — production was
+    # SERP heading) was rejecting every candidate - production was
     # producing zero silos on most keywords. Singletons with strong
     # priority signal additionally bypass this floor (see
     # `brief_silo_strong_priority_bypass`).
@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     # surface as a silo even when its demand-side signals are sparse.
     brief_silo_strong_priority_bypass: float = 0.30
 
-    # Global cap on concurrent Anthropic API calls — protects against
+    # Global cap on concurrent Anthropic API calls - protects against
     # the per-account "concurrent connections" rate limit (HTTP 429
     # rate_limit_error). Wraps every `claude_json` / `claude_text` entry
     # point in `modules/brief/llm.py`. Production hit this on the silo
@@ -73,7 +73,7 @@ class Settings(BaseSettings):
     # account tiers; 5 is safe for the default Anthropic plan.
     anthropic_max_concurrency: int = 5
 
-    # SIE v1.1 — Hybrid entity scoring (replaces the prior hard
+    # SIE v1.1 - Hybrid entity scoring (replaces the prior hard
     # salience >= 0.40 gate at NLP-extract time). Google NLP returns
     # everything above the floor; entities are then scored on a
     # composite of cross-SERP recurrence + salience + mentions - noise
@@ -100,12 +100,12 @@ class Settings(BaseSettings):
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 
-    # Writer §4 — per-section term cap, bucket-aware. The section prompt
+    # Writer §4 - per-section term cap, bucket-aware. The section prompt
     # sends this many of each (entities, related keywords, keyword
     # variants) from the reconciled SIE pool to each H2 group's LLM
     # call. A single combined top-N cap (the prior v1.4 default of 10)
     # routinely starved entities, which tend to score mid-band on SIE's
-    # composite recurrence+salience metric — articles shipped with only
+    # composite recurrence+salience metric - articles shipped with only
     # 3-5 distinct entities used. Bucket-aware caps guarantee minimum
     # entity representation per section regardless of where entities
     # fell in SIE's combined ranking. Tunable via env var if 15 still

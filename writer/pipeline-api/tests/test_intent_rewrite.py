@@ -1,4 +1,4 @@
-"""Step 11.5 — Intent Rewriter tests (PRD v2.4).
+"""Step 11.5 - Intent Rewriter tests (PRD v2.4).
 
 Covers the archetype-specific structural rewriting that runs after the
 H2 set is finalized. Distinct from `test_brief_framing.py`, which tests
@@ -149,9 +149,9 @@ async def test_listicle_h2s_get_value_leading_rewrites():
         _h2("Tool C"),
     ]
     response = {"rewrites": [
-        {"index": 0, "text": "1. Tool A — Best for Tight-Budget Teams"},
-        {"index": 1, "text": "2. Tool B — Best for Enterprise Scale"},
-        {"index": 2, "text": "3. Tool C — Best for Solo Creators"},
+        {"index": 0, "text": "1. Tool A - Best for Tight-Budget Teams"},
+        {"index": 1, "text": "2. Tool B - Best for Enterprise Scale"},
+        {"index": 2, "text": "3. Tool C - Best for Solo Creators"},
     ]}
     result = await rewrite_h2s_for_intent(
         h2s, keyword="best tools for x", title="Best Tools for X",
@@ -263,7 +263,7 @@ async def test_rewrite_containing_faq_is_rejected():
     h2s = [_h2("Common Questions About X")]
     original = h2s[0].text
     response = {"rewrites": [
-        {"index": 0, "text": "FAQ About X"},  # invalid — contains FAQ
+        {"index": 0, "text": "FAQ About X"},  # invalid - contains FAQ
     ]}
     result = await rewrite_h2s_for_intent(
         h2s, keyword="x", title="X", intent="how-to",
@@ -284,7 +284,7 @@ async def test_partial_rewrites_only_mutate_specified_indices():
     ]
     response = {"rewrites": [
         {"index": 0, "text": "Configure X for Your Use Case"},
-        # index 1 omitted — already good
+        # index 1 omitted - already good
         {"index": 2, "text": "Understand How X Works Internally"},
     ]}
     result = await rewrite_h2s_for_intent(

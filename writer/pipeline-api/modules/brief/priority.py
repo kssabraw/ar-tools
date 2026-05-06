@@ -1,4 +1,4 @@
-"""Step 7 — Heading Priority Scoring (Brief Generator v2.0).
+"""Step 7 - Heading Priority Scoring (Brief Generator v2.0).
 
 Implements the revised priority formula from PRD §5 Step 7:
 
@@ -16,15 +16,15 @@ Plus the information_gain_score tier function:
     0.0 otherwise
 
 Per PRD rationale §5 Step 7:
-- title_relevance (0.30) — replaces v1.7's seed similarity. The title is
+- title_relevance (0.30) - replaces v1.7's seed similarity. The title is
   the article's actual commitment.
-- normalized_serp_frequency (0.20) — proven topical-centrality signal,
+- normalized_serp_frequency (0.20) - proven topical-centrality signal,
   but no longer dominant.
-- position_weight (0.10) — reduced from v1.7's 0.15 because top-position
+- position_weight (0.10) - reduced from v1.7's 0.15 because top-position
   bias compounds SERP convergence (the failure mode v2.0 fixes).
-- normalized_llm_consensus (0.20) — preserved at v1.7 level; cross-model
+- normalized_llm_consensus (0.20) - preserved at v1.7 level; cross-model
   agreement is a strong citation-optimization signal.
-- information_gain_score (0.20) — NEW. A heading that appears in Reddit/
+- information_gain_score (0.20) - NEW. A heading that appears in Reddit/
   PAA/LLM fan-out but not in competitor SERP is exactly the
   differentiation we want to surface.
 
@@ -51,7 +51,7 @@ def information_gain_score(source: str, llm_fanout_consensus: int) -> float:
     """Per-heading information-gain tier (PRD §5 Step 7).
 
     Higher values indicate the heading represents reader-side demand
-    that competitor SERP isn't covering — exactly the differentiation
+    that competitor SERP isn't covering - exactly the differentiation
     the brief should surface.
     """
     is_non_serp = source not in _SERP_SOURCES
@@ -65,12 +65,12 @@ def information_gain_score(source: str, llm_fanout_consensus: int) -> float:
 
 def compute_priority(candidates: list[Candidate]) -> None:
     """Stamp `information_gain_score` and `heading_priority` on each
-    candidate, in place. Idempotent — safe to call repeatedly.
+    candidate, in place. Idempotent - safe to call repeatedly.
 
     Assumes `title_relevance` is already populated (graph.embed_with_gates
     handles that). For candidates with `avg_serp_position == None` the
     position component contributes 0.5 (a neutral midpoint) so non-SERP
-    headings aren't unfairly penalized — matches the PRD formula.
+    headings aren't unfairly penalized - matches the PRD formula.
     """
     for c in candidates:
         gain = information_gain_score(c.source, c.llm_fanout_consensus or 0)

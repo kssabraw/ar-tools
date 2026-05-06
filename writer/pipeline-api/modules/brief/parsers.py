@@ -1,7 +1,7 @@
 """Parsers and source extractors for SERP/Reddit/LLM responses.
 
-Step 1 — turn DataForSEO SERP items into heading candidates and SERP feature flags.
-Step 2 — turn Reddit threads, PAA blocks, and LLM response bodies into
+Step 1 - turn DataForSEO SERP items into heading candidates and SERP feature flags.
+Step 2 - turn Reddit threads, PAA blocks, and LLM response bodies into
          heading/FAQ candidates.
 """
 
@@ -118,10 +118,10 @@ def _add_sanitized(
 def parse_serp(
     items: list[dict[str, Any]],
 ) -> tuple[list[dict], IntentSignals, list[str], list[str], list[str]]:
-    """Step 1 — extract headings (H1/H2/H3) from organic results, and SERP signals.
+    """Step 1 - extract headings (H1/H2/H3) from organic results, and SERP signals.
 
     PRD §5 Step 1 outputs (v2.0): headings, page titles, AND meta descriptions
-    are first-class — meta descriptions feed Step 3.5 title generation alongside
+    are first-class - meta descriptions feed Step 3.5 title generation alongside
     titles and H1s.
 
     Returns:
@@ -193,7 +193,7 @@ def parse_serp(
         if snippet.strip():
             meta_descriptions.append(snippet.strip())
         for line in snippet.splitlines():
-            line = line.strip(" •-—:")
+            line = line.strip(" •--:")
             if line.endswith(":") and 3 <= len(line.split()) <= 12 and not is_boilerplate(line):
                 _add_sanitized(
                     headings, line.rstrip(":"),
@@ -204,11 +204,11 @@ def parse_serp(
 
 
 def parse_reddit(items: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
-    """Step 2B — return (post_titles, comment_texts).
+    """Step 2B - return (post_titles, comment_texts).
 
     DataForSEO SERP results don't include comments; we only have titles +
     descriptions from the search results page. Pulling actual thread
-    comments would require ScrapeOwl or the Reddit API — out of scope here.
+    comments would require ScrapeOwl or the Reddit API - out of scope here.
     For v1 we treat the description as comment-equivalent text.
     """
     titles: list[str] = []
@@ -226,7 +226,7 @@ def parse_reddit(items: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
 def aggregate_serp_stats(headings: list[dict]) -> dict[str, dict]:
     """Compute serp_frequency, avg_serp_position, and source URLs keyed by normalized text.
 
-    Headings flagged with `sanitization_discarded` are excluded — they were
+    Headings flagged with `sanitization_discarded` are excluded - they were
     sanitized to nothing meaningful and don't enter the SERP stats pool.
     The pre-sanitization raw text is preserved on the representative entry
     so downstream `discarded_headings` records can show the original artifact.

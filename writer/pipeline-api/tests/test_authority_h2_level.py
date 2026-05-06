@@ -1,4 +1,4 @@
-"""Step 9 — H2-level authority gap support.
+"""Step 9 - H2-level authority gap support.
 
 The Universal Authority Agent emits a `level: "H2" | "H3"` per heading.
 H3-level gaps continue through Step 8.5b verification and the existing
@@ -96,7 +96,7 @@ async def test_legacy_string_only_response_defaults_to_h3():
 @pytest.mark.asyncio
 async def test_invalid_level_value_falls_back_to_h3():
     """An unexpected `level` string (e.g. 'h4', 'h1', 'section') is
-    treated as H3 — the parser only accepts the two valid literals."""
+    treated as H3 - the parser only accepts the two valid literals."""
     response = {"headings": [
         {"text": "Heading with invalid level",
          "scope_alignment_note": "in-scope",
@@ -235,7 +235,7 @@ async def test_prompt_human_behavioral_pillar_has_fears_values_recommendations()
 
 
 # ---------------------------------------------------------------------------
-# PRD v2.6 — Customer review insights wiring
+# PRD v2.6 - Customer review insights wiring
 # ---------------------------------------------------------------------------
 
 
@@ -301,7 +301,7 @@ async def test_user_prompt_omits_customer_review_section_when_unavailable():
 @pytest.mark.asyncio
 async def test_user_prompt_carries_both_reddit_and_customer_review_synthesis():
     """Reddit and customer review prompt sections are independent
-    conditionals — both must render when both are supplied. Regression
+    conditionals - both must render when both are supplied. Regression
     guard so a future refactor (e.g. consolidating the two into a
     helper) doesn't accidentally make them mutually exclusive."""
     captured: dict = {}

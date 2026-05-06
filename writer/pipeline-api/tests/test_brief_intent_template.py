@@ -1,4 +1,4 @@
-"""Per-intent heading skeleton template registry — Brief Generator PRD v2.1."""
+"""Per-intent heading skeleton template registry - Brief Generator PRD v2.1."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ def test_how_to_template_has_phase_anchors():
     reserve plan / set up / launch / iterate slots regardless of topic."""
     template = get_template("how-to")
     assert len(template.anchor_slots) == 4
-    # Anchors should be phase-level, not topic-level — they read as
+    # Anchors should be phase-level, not topic-level - they read as
     # generic verbs/phrases applicable to any how-to keyword.
     joined = " ".join(template.anchor_slots).lower()
     assert "plan" in joined
@@ -41,7 +41,7 @@ def test_how_to_template_has_phase_anchors():
 
 
 def test_listicle_template_has_no_anchors():
-    """Listicle slots are pure ranked items — semantic anchors would
+    """Listicle slots are pure ranked items - semantic anchors would
     over-constrain. Framing validator does the work instead."""
     template = get_template("listicle")
     assert template.anchor_slots == []
@@ -75,14 +75,14 @@ def test_get_template_returns_fresh_copy_each_call():
 
 
 def test_unknown_intent_falls_back_to_informational():
-    # Pass a value outside the literal — the registry's defensive
+    # Pass a value outside the literal - the registry's defensive
     # fallback should still return an IntentFormatTemplate.
     template = get_template("nonexistent-intent")  # type: ignore[arg-type]
     assert template.intent == "informational"
 
 
 def test_template_min_h2_count_is_at_least_3():
-    """Every template should ask for at least 3 H2s — anything less
+    """Every template should ask for at least 3 H2s - anything less
     produces an underweight outline."""
     for intent in (
         "how-to", "listicle", "comparison", "informational",
@@ -95,7 +95,7 @@ def test_template_min_h2_count_is_at_least_3():
 
 
 # ---------------------------------------------------------------------------
-# PRD v2.3 / Phase 3 — min_h2_body_words derivation
+# PRD v2.3 / Phase 3 - min_h2_body_words derivation
 # ---------------------------------------------------------------------------
 
 
@@ -113,7 +113,7 @@ import pytest as _pytest
     ("news", 100),
 ])
 def test_min_h2_body_words_per_intent(intent, expected_floor):
-    """Phase 3 — the brief generator stamps a per-intent
+    """Phase 3 - the brief generator stamps a per-intent
     min_h2_body_words floor on format_directives at assembly time.
     Each intent's template has its own floor calibrated for typical
     article shape."""

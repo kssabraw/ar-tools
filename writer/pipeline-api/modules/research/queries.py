@@ -1,4 +1,4 @@
-"""Step 1 — Research query generation via Claude.
+"""Step 1 - Research query generation via Claude.
 
 Per Research PRD §5.1: generate 2-3 specific research queries per citation
 target. 25-second per-call timeout with one retry; on second timeout, fall

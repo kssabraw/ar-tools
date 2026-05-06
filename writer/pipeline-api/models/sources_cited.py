@@ -1,4 +1,4 @@
-"""Pydantic models for the Sources Cited module — schema v1.1.
+"""Pydantic models for the Sources Cited module - schema v1.1.
 
 Per docs/modules/sources-cited-module-prd-v1_1.md.
 The output extends the Writer v1.5 schema with marker-substituted bodies,

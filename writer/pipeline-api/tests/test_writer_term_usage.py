@@ -51,7 +51,7 @@ def test_quadgrams_basic():
 
 
 def test_quadgrams_filters_all_stopword_phrases():
-    # "in the of and" is all stopwords — filtered out.
+    # "in the of and" is all stopwords - filtered out.
     out = _quadgrams("in the of and in the of and", top_n=5)
     assert all("in the of and" != q.phrase for q in out)
 

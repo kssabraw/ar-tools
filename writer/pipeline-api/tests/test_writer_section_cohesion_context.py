@@ -1,4 +1,4 @@
-"""Section cohesion context — verify each section prompt receives:
+"""Section cohesion context - verify each section prompt receives:
   (A) article_title + sibling_h2_titles + ▶ marker on current section
   (B) preceding_section_summaries built incrementally as the loop
       progresses through the body sections
@@ -124,7 +124,7 @@ async def test_outline_skips_empty_sibling_titles_without_breaking_marker(monkey
 
     siblings = [
         "Optimize ROI",
-        "",  # an empty H2 in the brief — desync trap
+        "",  # an empty H2 in the brief - desync trap
         "Read Analytics",
         "Performance Score",
     ]
@@ -138,7 +138,7 @@ async def test_outline_skips_empty_sibling_titles_without_breaking_marker(monkey
         citations=[], brand_voice_card=None,
         banned_regex=build_banned_regex([]),
         sibling_h2_titles=siblings,
-        current_h2_index=2,  # "Read Analytics" — third in the original list
+        current_h2_index=2,  # "Read Analytics" - third in the original list
     )
     user = captured["user"]
     # Empty entry must NOT produce a "  2. " line.
@@ -155,7 +155,7 @@ async def test_outline_skips_empty_sibling_titles_without_breaking_marker(monkey
 @pytest.mark.asyncio
 async def test_section_prompt_omits_cohesion_blocks_when_args_absent(monkeypatch):
     """Backward compat: legacy callers that don't pass the new kwargs
-    get the old prompt shape — no ARTICLE_TITLE / ARTICLE_OUTLINE /
+    get the old prompt shape - no ARTICLE_TITLE / ARTICLE_OUTLINE /
     PRECEDING_SECTIONS lines."""
     call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
     monkeypatch.setattr("modules.writer.sections.claude_json", call)

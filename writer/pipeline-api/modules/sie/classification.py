@@ -1,7 +1,7 @@
-"""Module 3 — SERP URL classification.
+"""Module 3 - SERP URL classification.
 
 Heuristic-based classifier that decides whether a URL is content-eligible
-for n-gram and entity analysis. We deliberately avoid an LLM call here —
+for n-gram and entity analysis. We deliberately avoid an LLM call here -
 the rules are deterministic and the cost is negligible.
 """
 
@@ -80,7 +80,7 @@ def classify(url: str, rank: int, title: str = "") -> ClassifiedURL:
             url=url, rank=rank, title=title,
             page_category="government_educational",
             content_eligible=True,
-            reason="gov/edu domain — high authority",
+            reason="gov/edu domain - high authority",
             domain=host,
         )
 

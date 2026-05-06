@@ -62,7 +62,7 @@ def _perplexity_payload(content: str, citations: list[str]) -> dict:
 
 
 # ===========================================================================
-# #1 — Cross-domain analogy in Authority Agent prompt
+# #1 - Cross-domain analogy in Authority Agent prompt
 # ===========================================================================
 
 
@@ -97,7 +97,7 @@ async def test_authority_prompt_includes_cross_domain_perspective():
 
 
 # ===========================================================================
-# #3 — LLM disagreement detector
+# #3 - LLM disagreement detector
 # ===========================================================================
 
 
@@ -133,10 +133,10 @@ def test_disagreement_finds_contested_topics():
     assert result.available is True
     contested_texts = {t.text for t in result.contested_topics}
     assert "edge topic from chatgpt" in contested_texts
-    # "another shared topic" surfaced by 3/4 — at the consensus threshold,
+    # "another shared topic" surfaced by 3/4 - at the consensus threshold,
     # so not contested
     assert "another shared topic" not in contested_texts
-    # "consensus topic" surfaced by 4/4 — definitely not contested
+    # "consensus topic" surfaced by 4/4 - definitely not contested
     assert "consensus topic" not in contested_texts
 
 
@@ -172,7 +172,7 @@ def test_disagreement_consensus_strength_calculation():
 
 
 # ===========================================================================
-# #8 — Customer review research
+# #8 - Customer review research
 # ===========================================================================
 
 
@@ -291,7 +291,7 @@ async def test_customer_review_falls_back_after_two_http_errors():
 
 
 # ===========================================================================
-# #2 — Adversarial editorial critique
+# #2 - Adversarial editorial critique
 # ===========================================================================
 
 
@@ -320,7 +320,7 @@ def test_critique_validates_substantive_payload():
 
 def test_critique_rejects_completely_empty_payload():
     """An LLM response with all empty arrays AND no overall assessment
-    is treated as no useful signal — caller records fallback_reason."""
+    is treated as no useful signal - caller records fallback_reason."""
     payload = {
         "stale_framings": [],
         "missing_angles": [],

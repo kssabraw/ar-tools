@@ -221,7 +221,7 @@ def _filter_and_sort(candidates: list[CandidateSource]) -> list[CandidateSource]
     for c in candidates:
         c.tier = classify_tier(c.url)
         out.append(c)
-    # Sort by (tier, recency placeholder) — recency comes after fetch
+    # Sort by (tier, recency placeholder) - recency comes after fetch
     out.sort(key=lambda c: c.tier or 99)
     return out[:TOP_CANDIDATES_PER_TARGET]
 
@@ -378,7 +378,7 @@ MIN_CLAIM_RELEVANCE = 0.5
 def _select_supporting_stats(citations: list[Citation]) -> Optional[str]:
     """Return up to 3 verified statistical claims as a formatted string.
 
-    Only verbatim-extracted, verification-confirmed claims qualify — this
+    Only verbatim-extracted, verification-confirmed claims qualify - this
     keeps the data_led / research_reframe Agree styles grounded in real
     numbers rather than LLM-generated figures.
 

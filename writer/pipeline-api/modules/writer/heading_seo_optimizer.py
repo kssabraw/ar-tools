@@ -1,9 +1,9 @@
-"""Heading SEO Optimizer (Writer Module — PRD v2.6).
+"""Heading SEO Optimizer (Writer Module - PRD v2.6).
 
 Closes a real gap: the brief generator picks H2 / H3 text BEFORE SIE's
 per-zone entity targets are known, so entities never get explicitly
 placed in headings. The writer's `term_usage.py` audit shows entities
-landing in paragraphs but not in titles / headings — exactly the
+landing in paragraphs but not in titles / headings - exactly the
 opposite of where they carry the most SEO weight.
 
 This stage runs AFTER reconciliation (so brand-voice exclusions are
@@ -11,15 +11,15 @@ applied) and BEFORE per-section generation. One Claude call rewrites
 each H2 / H3 to incorporate at least one entity from the SIE
 recommended set, respecting:
 
-  - The seed keyword's tokens (preserve case-insensitively — the brief
+  - The seed keyword's tokens (preserve case-insensitively - the brief
     promised this keyword in the URL/SEO meta; we don't reword it).
-  - The heading's underlying TOPIC (light-touch only — we add words,
+  - The heading's underlying TOPIC (light-touch only - we add words,
     we don't change what the section covers).
   - Forbidden / avoid terms from brand-voice reconciliation.
   - Per-zone target/max from the SIE usage_recommendations (so we
     don't stuff a single H2 with 5 entities just because they all
     qualified).
-  - Min entity count per heading (default 1 — n8n used 2 but that
+  - Min entity count per heading (default 1 - n8n used 2 but that
     over-stuffs short headings).
 
 Failure-safe: missing API key, LLM exception, malformed response, or
@@ -68,7 +68,7 @@ MAX_ENTITIES_PER_PROMPT = 30
 @dataclass
 class HeadingOptimizationResult:
     """Outcome of `optimize_headings`. The `heading_structure` field is
-    the new structure to feed downstream stages — even on failure it's
+    the new structure to feed downstream stages - even on failure it's
     populated with the original structure so callers can use it
     unconditionally."""
 
@@ -96,11 +96,11 @@ H3 combined). Your job is to rewrite each heading so that:
    what the section is about.
 2. Across all H2 + H3 headings combined, the rewrites carry at least
    the target distinct count per category (entities target, related
-   keywords target, keyword variants target). Distribute naturally —
+   keywords target, keyword variants target). Distribute naturally -
    not every heading needs items from every category.
 3. The seed keyword's tokens are preserved verbatim where they already
    appear. If the keyword's tokens don't appear in any heading, leave
-   that to the brief — don't try to inject the keyword everywhere.
+   that to the brief - don't try to inject the keyword everywhere.
 4. Forbidden terms NEVER appear in any heading.
 5. Heading text remains natural. "TikTok Shop ROI Optimization Tactics
    Strategy Tips" is bad. "Optimize TikTok Shop ROI" is good.
@@ -141,7 +141,7 @@ def _build_user_prompt(
     }, ensure_ascii=False)
     return (
         f"Seed keyword (preserve tokens where they appear): {keyword}\n\n"
-        f"Subheadings (H2 + H3 combined) aggregate targets — distinct\n"
+        f"Subheadings (H2 + H3 combined) aggregate targets - distinct\n"
         f"counts the rewrites must hit across ALL headings:\n"
         f"{targets_block}\n\n"
         f"Recommended entities (each carries metadata; pick naturally\n"
@@ -149,7 +149,7 @@ def _build_user_prompt(
         f"{json.dumps(entities, ensure_ascii=False, indent=2)}\n\n"
         f"Related keywords:\n"
         f"{json.dumps(related_keywords, ensure_ascii=False)}\n\n"
-        f"Keyword variants (seed-keyword echoes — usable as headings\n"
+        f"Keyword variants (seed-keyword echoes - usable as headings\n"
         f"where natural, but don't force them into every H3):\n"
         f"{json.dumps(keyword_variants, ensure_ascii=False)}\n\n"
         f"Forbidden terms (must not appear):\n"
@@ -200,7 +200,7 @@ def _contains_forbidden(text: str, forbidden_terms: list[str]) -> Optional[str]:
 
     Word-boundary regex match (case-insensitive) so "free" doesn't match
     inside "freedom". Convenience wrapper that compiles a fresh regex
-    each call — for the inner loop in `optimize_headings`, callers
+    each call - for the inner loop in `optimize_headings`, callers
     should use `_compile_forbidden_pattern` once and re-use it via
     `_match_forbidden_compiled` to avoid recompiling per heading.
     """
@@ -222,7 +222,7 @@ def _compile_forbidden_pattern(forbidden_terms: list[str]) -> Optional[re.Patter
         return None
     # De-dupe to avoid wasted alternation branches when the same term
     # surfaces from both brand_voice_card.banned_terms and
-    # filtered_terms.avoid (common — they overlap).
+    # filtered_terms.avoid (common - they overlap).
     deduped = sorted(set(t.lower() for t in cleaned), key=len, reverse=True)
     alternation = "|".join(re.escape(t) for t in deduped)
     return re.compile(rf"\b({alternation})\b", re.IGNORECASE)
@@ -255,18 +255,18 @@ async def optimize_headings(
     heading_structure: list[dict],
     *,
     keyword: str,
-    reconciled_terms: list,  # list[ReconciledTerm] — typed loosely to avoid circular imports
+    reconciled_terms: list,  # list[ReconciledTerm] - typed loosely to avoid circular imports
     forbidden_terms: list[str],
     subheadings_targets: Optional[dict[str, int]] = None,
     llm_json_fn: Optional[LLMJsonFn] = None,
 ) -> HeadingOptimizationResult:
     """Rewrite H2 / H3 headings to incorporate SIE-recommended terms.
 
-    SIE v1.4 — three-bucket category injection. The optimizer offers
+    SIE v1.4 - three-bucket category injection. The optimizer offers
     the LLM three category-bucketed term lists (entities, related
     keywords, keyword variants) and an aggregate target across the
     H2 + H3 zone (`subheadings_targets`). Keyword variants ARE included
-    at the user's spec — they're explicit injection candidates, not
+    at the user's spec - they're explicit injection candidates, not
     keyword echoes to be filtered out.
 
     Args:
@@ -302,7 +302,7 @@ async def optimize_headings(
     original_structure = [dict(h) for h in heading_structure]
     result = HeadingOptimizationResult(heading_structure=original_structure)
 
-    # Filter to H2 / H3 (we don't rewrite H1 here — title.py / intro.py
+    # Filter to H2 / H3 (we don't rewrite H1 here - title.py / intro.py
     # handle title and H1 entity injection at generation time).
     candidates: list[tuple[int, dict]] = [
         (i, h) for i, h in enumerate(heading_structure)
@@ -336,7 +336,7 @@ async def optimize_headings(
     keyword_variants = keyword_variants[:15]
 
     if not (entity_payload or related_keywords or keyword_variants):
-        # Nothing to inject across any category — skip silently.
+        # Nothing to inject across any category - skip silently.
         result.skipped_reason = "no_terms_available"
         return result
 
@@ -424,7 +424,7 @@ async def optimize_headings(
         rewrites_by_key[key] = text.strip()
 
     # Compile the forbidden-term regex ONCE per call. Inner loop runs
-    # the compiled pattern against each rewrite — saves N×M regex
+    # the compiled pattern against each rewrite - saves N×M regex
     # compiles for N candidates × M forbidden terms.
     forbidden_pattern = _compile_forbidden_pattern(forbidden_terms)
 
@@ -439,7 +439,7 @@ async def optimize_headings(
             continue
         if new_text == original.get("text"):
             continue
-        # Forbidden-term guard — if the LLM ignored the constraint and
+        # Forbidden-term guard - if the LLM ignored the constraint and
         # produced a heading with a forbidden term, keep the original.
         if forbidden_pattern is not None:
             forbidden_hit = _match_forbidden_compiled(

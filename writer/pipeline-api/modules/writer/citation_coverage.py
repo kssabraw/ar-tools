@@ -1,12 +1,12 @@
-r"""Step 4F.1 — Citable-Claim Detection + Coverage (Writer PRD §4F.1, R7).
+r"""Step 4F.1 - Citable-Claim Detection + Coverage (Writer PRD §4F.1, R7).
 
 Phase 4 introduces the whole validator. Base patterns C1–C6 come from
 the writer PRD §4F.1 (Content Quality PRD R7). C7–C9 are NEW in Phase 4
-to catch the audited "unsourced operational claims" failure mode —
+to catch the audited "unsourced operational claims" failure mode -
 durations / frequencies / operational percentages stated as fact
 without an adjacent citation marker.
 
-Detection patterns (sentence-level — a sentence containing any C-pattern
+Detection patterns (sentence-level - a sentence containing any C-pattern
 counts as ONE citable claim):
 
 | ID | Pattern (informal description) |
@@ -33,16 +33,16 @@ Retry policy:
      the LLM to either add a marker (from the available pool) or
      rewrite the sentence to remove the specific claim.
   2. After retry, recompute coverage. If still < 50%, run the
-     auto-soften pass on the section body — it deterministically
+     auto-soften pass on the section body - it deterministically
      rewrites C7/C8/C9-style operational claims to hedge phrasing
      ("4-to-6 week refresh cadence" → "a typical refresh cadence
-     (every few weeks)"). Auto-soften does NOT touch C1-C6 claims —
+     (every few weeks)"). Auto-soften does NOT touch C1-C6 claims -
      those are statistics/years/source-attributed facts where
      softening would introduce more harm than it fixes.
   3. Section is accepted, with under-cited sections + softened spans
      surfaced in metadata.
 
-The auto-soften table is intentionally small in v1 — adds entries as
+The auto-soften table is intentionally small in v1 - adds entries as
 production data shows which patterns recur. Each entry is a regex +
 soften function so soften logic can be deterministic and reviewable.
 """
@@ -60,7 +60,7 @@ logger = logging.getLogger(__name__)
 # Citation marker (matches Step 4F's marker convention).
 _MARKER_RE = re.compile(r"\{\{cit_\d+\}\}")
 
-# Sentence splitter — finds sentence boundaries AND tracks the
+# Sentence splitter - finds sentence boundaries AND tracks the
 # `{{cit_N}}` marker (if any) attached immediately after each
 # boundary's closing punctuation. The PRD specifies markers go
 # "immediately after the closing punctuation of the cited sentence,"
@@ -68,7 +68,7 @@ _MARKER_RE = re.compile(r"\{\{cit_\d+\}\}")
 # `Foo.` sentence, not with `Bar.`.
 _SENTENCE_END_RE = re.compile(r"[.?!](?:\{\{cit_\d+\}\})*(?=\s+|$)")
 
-# Common abbreviations that shouldn't terminate a sentence — keeps the
+# Common abbreviations that shouldn't terminate a sentence - keeps the
 # "27%" sentence from splitting at "i.e." or "etc.".
 _ABBREVIATIONS = (
     "e.g.", "i.e.", "etc.", "vs.", "Mr.", "Mrs.", "Ms.", "Dr.",
@@ -83,7 +83,7 @@ def _split_sentences(body: str) -> list[str]:
     closing punctuation (so `_sentence_has_marker` correctly assigns
     citation to the cited sentence rather than the following one).
 
-    Markdown structures (lists, tables) are kept inline — each list
+    Markdown structures (lists, tables) are kept inline - each list
     item or table row is treated as one sentence for citable-claim
     purposes.
     """
@@ -114,13 +114,13 @@ def _split_sentences(body: str) -> list[str]:
 # Pattern registry
 # ---------------------------------------------------------------------------
 
-# C1 — Percentage / percent / pct / percentage points.
+# C1 - Percentage / percent / pct / percentage points.
 _C1_RE = re.compile(
     r"\b\d[\d,.]*\s*(?:%|percent\b|pct\b|percentage\s+points\b)",
     re.IGNORECASE,
 )
 
-# C2 — Numeral with currency. Handles `$100M`, `$1,000`, `1.2 billion USD`,
+# C2 - Numeral with currency. Handles `$100M`, `$1,000`, `1.2 billion USD`,
 # `€50`, `£20`, `1.5 trillion EUR`.
 _C2_RE = re.compile(
     r"(?:[$€£¥]\s*\d[\d,.]*(?:\s*(?:million|billion|trillion|m|bn|k))?"
@@ -129,7 +129,7 @@ _C2_RE = re.compile(
     re.IGNORECASE,
 )
 
-# C3 — Four-digit year 1990–2099 used as a date. Requires the year be
+# C3 - Four-digit year 1990–2099 used as a date. Requires the year be
 # preceded by a date-context word so we don't false-positive on bare
 # numbers ("Model 2024X", "Order number 2024 in queue"). The bare-year
 # arm was tried in early Phase 4 but produced too many false positives;
@@ -141,7 +141,7 @@ _C3_RE = re.compile(
     re.IGNORECASE,
 )
 
-# C4 — `according to <ProperNoun>` / `<ProperNoun> reports/found/survey`.
+# C4 - `according to <ProperNoun>` / `<ProperNoun> reports/found/survey`.
 # The proper-noun arm requires capitalized initial char. Inline
 # `(?i:according\s+to\s+)` lowercases the lead phrase so "According" /
 # "according" both match without lowercasing the proper-noun arm.
@@ -150,7 +150,7 @@ _C4_RE = re.compile(
     r"|\b[A-Z][\w&.-]+(?:\s+[A-Z][\w&.-]+){0,3}\s+(?:reports?|found|survey(?:ed)?|study|studied|study\s+found)\b",
 )
 
-# C5 — `studies show` / `research shows` / `data shows` / `analysts predict`.
+# C5 - `studies show` / `research shows` / `data shows` / `analysts predict`.
 _C5_RE = re.compile(
     r"\b(?:studies?|research|data|analysts?|surveys?|polls?|reports?)\s+"
     r"(?:show(?:s|ed)?|indicate(?:s|d)?|suggest(?:s|ed)?|predict(?:s|ed)?|"
@@ -158,7 +158,7 @@ _C5_RE = re.compile(
     re.IGNORECASE,
 )
 
-# C7 — Duration-as-recommendation (NEW in Phase 4).
+# C7 - Duration-as-recommendation (NEW in Phase 4).
 # Catches forms like:
 #   `a 4-to-6 week refresh cadence`
 #   `a 60-day affiliate audit window`
@@ -166,13 +166,13 @@ _C5_RE = re.compile(
 #   `a 2-week sprint cooldown`
 #
 # Phase 4 review fix #1: the range arm `4-to-6` failed under the original
-# `(?:to|-|–|—)` alternation because the structure `<hyphen><to><hyphen>`
-# can't be matched as a single token. Rewriting as `[\s-]*(?:to|–|—)?[\s-]*`
+# `(?:to|-|–|-)` alternation because the structure `<hyphen><to><hyphen>`
+# can't be matched as a single token. Rewriting as `[\s-]*(?:to|–|-)?[\s-]*`
 # accepts `4-to-6` / `4-6` / `4 to 6` uniformly. The regex also now:
 #   - Consumes optional leading article (`a`/`an`/`the`) so soften can
-#     replace the phrase including the article — no more `"a a typical"`
+#     replace the phrase including the article - no more `"a a typical"`
 #     duplication.
-#   - Consumes trailing recommendation noun phrases — `refresh cadence`
+#   - Consumes trailing recommendation noun phrases - `refresh cadence`
 #     matches as a unit instead of leaving `cadence` orphaned after
 #     soften.
 _C7_NOUNS = (
@@ -182,7 +182,7 @@ _C7_NOUNS = (
 )
 _C7_RE = re.compile(
     r"(?:\b(?:a|an|the)\s+)?"                  # optional leading article
-    r"\b\d+(?:[\s-]*(?:to|–|—)?[\s-]*\d+)?"    # numeric duration / range
+    r"\b\d+(?:[\s-]*(?:to|–|-)?[\s-]*\d+)?"    # numeric duration / range
     r"[\s-]+"                                  # space or hyphen before unit
     r"(?:second|minute|hour|day|week|month|year)s?\b"
     r"(?:[\s-]+\w+){0,3}?[\s-]+"               # up to 3 modifier words
@@ -192,7 +192,7 @@ _C7_RE = re.compile(
     re.IGNORECASE,
 )
 
-# C8 — Frequency-as-recommendation (NEW).
+# C8 - Frequency-as-recommendation (NEW).
 # Phase 4 review fix #1: optional leading article so soften can replace
 # the article-bearing phrase ("a weekly review") without doubling it.
 _C8_RE = re.compile(
@@ -205,7 +205,7 @@ _C8_RE = re.compile(
     re.IGNORECASE,
 )
 
-# C9 — Operational-percentage-as-recommendation (NEW).
+# C9 - Operational-percentage-as-recommendation (NEW).
 _C9_RE = re.compile(
     r"\b\d+(?:\.\d+)?%\s+(?:rule|threshold|target|cap|floor|ceiling|"
     r"minimum|maximum|baseline|benchmark|cutoff|cut-off)\b"
@@ -230,7 +230,7 @@ _PATTERN_REGISTRY: tuple[tuple[str, re.Pattern], ...] = (
 
 
 # C7-C9 are operational claims eligible for auto-soften when the LLM
-# retry can't produce a citation. C1-C6 are NOT softened — they're
+# retry can't produce a citation. C1-C6 are NOT softened - they're
 # statistics/years/source-attributed facts where softening would
 # introduce more harm than it fixes.
 _OPERATIONAL_CLAIM_PATTERN_IDS = frozenset({"C7", "C8", "C9"})
@@ -243,7 +243,7 @@ _OPERATIONAL_CLAIM_PATTERN_IDS = frozenset({"C7", "C8", "C9"})
 # Each entry is a (regex, soften_fn) pair. The soften_fn receives the
 # regex match object and returns the replacement string. Entries are
 # tried in order; the first match that yields a different string is
-# applied. Entries are intentionally small in v1 — extend as production
+# applied. Entries are intentionally small in v1 - extend as production
 # data shows which patterns recur.
 
 @dataclass
@@ -423,7 +423,7 @@ def detect_citable_claims(
     containing one or more pattern matches is one ClaimMatch.
 
     `entities` is the SIE Required-term entity list (`is_entity == True`
-    only) — used by C6 to detect "entity name + quantitative qualifier"
+    only) - used by C6 to detect "entity name + quantitative qualifier"
     sentences. Pass an empty list to skip C6.
     """
     if not body:
@@ -489,7 +489,7 @@ def coverage_retry_directive(
     )
     pool = (
         ", ".join(sorted(available_citation_ids))
-        if available_citation_ids else "NONE — rewrite to remove the claim"
+        if available_citation_ids else "NONE - rewrite to remove the claim"
     )
     return (
         f"Coverage of citable claims is below {int(threshold * 100)}% "
@@ -498,8 +498,8 @@ def coverage_retry_directive(
         f"marker from the available pool [{pool}] immediately after the "
         f"sentence's closing punctuation, OR rewrite the sentence to "
         f"remove the specific statistic/year/duration so no marker is "
-        f"needed. Operational durations and frequencies (C7/C8) — like "
-        f"'4-to-6 week refresh cadence' — should be SOFTENED if no "
+        f"needed. Operational durations and frequencies (C7/C8) - like "
+        f"'4-to-6 week refresh cadence' - should be SOFTENED if no "
         f"citation supports them; do not invent sources.\n\n"
         f"Uncited sentences:\n{listed}"
     )
@@ -517,21 +517,21 @@ _PLACEHOLDER_RE = re.compile(r"\x00CITED_(\d+)\x00")
 
 
 def _find_cited_sentence_spans(body: str) -> list[tuple[int, int]]:
-    """Phase 4 review fix #2 — locate every cited sentence's character
+    """Phase 4 review fix #2 - locate every cited sentence's character
     span [start, end] in `body`. A "cited sentence" ends in `.?!`
     immediately followed by a `{{cit_N}}` marker; the span runs from
     the previous sentence boundary (or start of body) through the end
     of the marker.
 
     The walk-back for the previous sentence boundary is bounded by the
-    end of the PREVIOUS cited span (`last_end`) — without this bound,
+    end of the PREVIOUS cited span (`last_end`) - without this bound,
     a body containing `"Foo.{{cit_1}} Bar.{{cit_2}}"` would compute
     Bar's span starting at position-after-Foo's-period (i.e. inside
     Foo's marker), causing restoration to scramble both spans.
 
     Used by `apply_soften` to mask cited regions before running the
     soften rules so already-cited operational claims keep their
-    precise wording — the citation marker grounds the precise text,
+    precise wording - the citation marker grounds the precise text,
     not a hedged version of it.
     """
     spans: list[tuple[int, int]] = []
@@ -540,7 +540,7 @@ def _find_cited_sentence_spans(body: str) -> list[tuple[int, int]]:
         marker_start = marker.start()
         marker_end = marker.end()
         if marker_start == 0 or body[marker_start - 1] not in ".?!":
-            # Marker not attached to a sentence terminator — malformed,
+            # Marker not attached to a sentence terminator - malformed,
             # leave the surrounding region open to soften.
             continue
         # Walk backward from the terminator to find the previous
@@ -570,7 +570,7 @@ def apply_soften(body: str) -> tuple[str, list[SoftenReplacement]]:
     before moving to the next rule.
 
     Phase 4 review fix #2: sentences with `{{cit_N}}` markers are
-    EXCLUDED from soften — the citation grounds the precise claim, so
+    EXCLUDED from soften - the citation grounds the precise claim, so
     softening would leave the marker pointing at hedged text. We mask
     cited regions with stable placeholders before running soften, then
     restore them. The placeholders contain control characters that no
@@ -593,7 +593,7 @@ def apply_soften(body: str) -> tuple[str, list[SoftenReplacement]]:
         def _sub(m: re.Match, _rule: _SoftenRule = rule) -> str:
             try:
                 soft = _rule.fn(m)
-            except Exception as exc:  # pragma: no cover — defensive
+            except Exception as exc:  # pragma: no cover - defensive
                 logger.warning(
                     "writer.soften.rule_failed",
                     extra={"rule": _rule.description, "error": str(exc)},

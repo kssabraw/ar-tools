@@ -1,5 +1,5 @@
 """Regression tests for graceful degradation of body-content banned-term
-leakage (Writer §4.4 — production fix).
+leakage (Writer §4.4 - production fix).
 
 Background: production runs were aborting with HTTP 422 when the section
 LLM emitted a banned term in body content even after a single retry.
@@ -85,7 +85,7 @@ async def test_section_body_leakage_degrades_to_log_not_abort():
 
     # Two attempts (initial + 1 retry) both leaked.
     assert call_count[0] == 2
-    # Run did NOT abort — sections were returned.
+    # Run did NOT abort - sections were returned.
     assert len(result.sections) >= 1
     # Leaked term is recorded for downstream metadata.
     assert "leverage" in result.banned_terms_leaked

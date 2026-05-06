@@ -7,7 +7,7 @@ keyword_variants) wired through:
   - write_faqs (paragraphs-zone aggregate scaled to FAQ-zone)
   - optimize_headings (h2 + h3 = subheadings aggregate)
 
-Plus the SIE benchmark math (`build_zone_category_targets`) — trimmed-
+Plus the SIE benchmark math (`build_zone_category_targets`) - trimmed-
 max competitor counts × 0.50, with outlier exclusion in safe mode.
 """
 
@@ -54,7 +54,7 @@ def _capturing_json(response):
 
 
 # ---------------------------------------------------------------------------
-# SIE benchmark — _classify_term
+# SIE benchmark - _classify_term
 # ---------------------------------------------------------------------------
 
 
@@ -88,7 +88,7 @@ def test_classify_default_related_keyword():
 
 
 # ---------------------------------------------------------------------------
-# SIE benchmark — build_zone_category_targets
+# SIE benchmark - build_zone_category_targets
 # ---------------------------------------------------------------------------
 
 
@@ -159,15 +159,15 @@ def test_zone_category_target_excludes_outlier_in_safe_mode():
         entity_meta=entity_meta, seed_fragment_terms=set(),
         outlier_mode="aggressive",
     )
-    # Safe mode drops the outlier — trimmed max becomes 1.
+    # Safe mode drops the outlier - trimmed max becomes 1.
     assert safe["paragraphs"]["entities"]["max"] == 1
-    # Aggressive keeps the outlier — max stays 4.
+    # Aggressive keeps the outlier - max stays 4.
     assert aggressive["paragraphs"]["entities"]["max"] == 4
 
 
 def test_zone_category_target_buckets_three_categories():
     """Pages contain a mix: one entity, one related keyword, one variant
-    each. Each bucket should get max=1, target=1 (or 0 — round depends
+    each. Each bucket should get max=1, target=1 (or 0 - round depends
     on multiplier)."""
     pages = [
         _page_with_paragraphs(f"https://t.com/{i}", [
@@ -211,7 +211,7 @@ def test_zone_category_target_consumes_shared_scan():
     """When the caller passes a pre-built zone_count_by_term_and_url
     map, build_zone_category_targets must use it instead of re-scanning.
     We verify by passing a map that contradicts the page text (terms
-    flagged present in pages where they don't textually appear) — if
+    flagged present in pages where they don't textually appear) - if
     the function honors the map the result reflects the map; if it
     re-scans we'd see the empty pages and produce zero counts."""
     pages = [
@@ -428,13 +428,13 @@ async def test_write_faqs_skips_directive_when_no_paragraphs_data(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Heading optimizer — three-bucket payload
+# Heading optimizer - three-bucket payload
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_optimize_headings_includes_keyword_variants():
-    """SIE v1.4 — the optimizer no longer excludes seed fragments. They
+    """SIE v1.4 - the optimizer no longer excludes seed fragments. They
     appear in the keyword_variants bucket as explicit injection
     candidates."""
     captured = {}

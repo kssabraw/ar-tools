@@ -1,4 +1,4 @@
-"""Step 10 — FAQ Generation (Brief Generator v2.0 → v2.2).
+"""Step 10 - FAQ Generation (Brief Generator v2.0 → v2.2).
 
 Implements PRD §5 Step 10. Mostly unchanged from v1.7 except:
 
@@ -74,7 +74,7 @@ class FAQCandidate:
     semantic_score: float = 0.0
     novelty_bonus: float = 0.0
     faq_score: float = 0.0
-    # PRD v2.2 / Phase 2 — Step 10.5 FAQ Intent Gate.
+    # PRD v2.2 / Phase 2 - Step 10.5 FAQ Intent Gate.
     # `intent_role` is stamped by Step 10.5 when the LLM classifier runs
     # over the cosine-floor survivors. Stays None when Step 10.5 hasn't
     # run yet (between score_faqs and the gate) or when the gate's LLM
@@ -109,7 +109,7 @@ def regex_faq_pool(
     """Source A + Source C (deterministic) FAQ candidates.
 
     Persona gap questions only enter as FAQ candidates here (Source C);
-    the LLM concern extractor (Source B) does not see them — they're
+    the LLM concern extractor (Source B) does not see them - they're
     already explicit questions.
 
     Same-text dedup uses normalized text (lowercased + punctuation
@@ -162,7 +162,7 @@ async def llm_concern_extraction(
     *,
     llm_json_fn: Optional[Callable[..., Awaitable]] = None,
 ) -> list[FAQCandidate]:
-    """Source B — single Claude call across all Reddit content.
+    """Source B - single Claude call across all Reddit content.
 
     Returns up to 10 implicit questions/concerns. Failures degrade to an
     empty list (the run never aborts because of FAQ extraction).
@@ -223,10 +223,10 @@ async def score_faqs(
 
     Embeddings come from text-embedding-3-large via embed_batch_large
     (unit-normalized → cosine == dot product). Title embedding is the
-    same vector produced in Step 5.1 — passing it in keeps FAQ scoring
+    same vector produced in Step 5.1 - passing it in keeps FAQ scoring
     consistent with H2 selection.
 
-    PRD v2.2 / Phase 2 — when `intent_profile_embedding` is supplied,
+    PRD v2.2 / Phase 2 - when `intent_profile_embedding` is supplied,
     `semantic_score` becomes the 50/50 weighted average of cosine-to-
     title and cosine-to-intent-profile. When omitted (legacy callers
     or when the intent profile failed to embed upstream), `semantic_
@@ -280,7 +280,7 @@ def select_faqs(
     scored: list[FAQCandidate],
     min_score: float = DEFAULT_MIN_FAQ_SCORE,
 ) -> list[FAQItem]:
-    """PRD §5 Step 10 selection — top 5 by score, threshold 0.5.
+    """PRD §5 Step 10 selection - top 5 by score, threshold 0.5.
 
     Behavior:
       - Sort by faq_score desc

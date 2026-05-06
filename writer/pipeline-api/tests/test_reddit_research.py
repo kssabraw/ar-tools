@@ -1,4 +1,4 @@
-"""Reddit research module — Perplexity synthesis (PRD v2.4).
+"""Reddit research module - Perplexity synthesis (PRD v2.4).
 
 Covers:
 - Section parsing on a representative Markdown response

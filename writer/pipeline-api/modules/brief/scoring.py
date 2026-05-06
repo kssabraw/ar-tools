@@ -1,4 +1,4 @@
-"""Step 4 + 5 — Aggregation, semantic scoring, and heading polish.
+"""Step 4 + 5 - Aggregation, semantic scoring, and heading polish.
 
 v1.8 (CQ PRD v1.0 R1, R2):
 - aggregate_candidates() applies sanitization at intake (R2) and threads
@@ -6,7 +6,7 @@ v1.8 (CQ PRD v1.0 R1, R2):
 - HeadingCandidate gains cluster fields (cluster_id, is_canonical,
   cluster_variants) populated by clustering.cluster_candidates +
   clustering.pick_canonicals.
-- polish_headings() operates on canonicals only — see polish_canonicals().
+- polish_headings() operates on canonicals only - see polish_canonicals().
 - compute_priority() unchanged in formula; clustering rolls up SERP /
   consensus signals onto canonicals before this is recomputed.
 """
@@ -71,7 +71,7 @@ class HeadingCandidate:
     embedding: list[float] = field(default_factory=list)
     discard_reason: Optional[str] = None
     exempt: bool = False
-    # CQ PRD v1.0 R1 — cluster fields
+    # CQ PRD v1.0 R1 - cluster fields
     cluster_id: int = -1
     is_canonical: bool = False
     cluster_variants: list[ClusterVariant] = field(default_factory=list)
@@ -86,7 +86,7 @@ def aggregate_candidates(
     llm_fanout_by_source: dict[str, list[str]],
     llm_response_by_source: dict[str, list[str]],
 ) -> list[HeadingCandidate]:
-    """Step 4 — combine all sources, sanitize, dedup with Levenshtein 0.15.
+    """Step 4 - combine all sources, sanitize, dedup with Levenshtein 0.15.
 
     Sanitization (CQ PRD R2) runs at intake on all non-SERP sources here
     (SERP gets sanitized earlier in parse_serp). Tracks `llm_fanout_consensus`
@@ -189,7 +189,7 @@ async def score_candidates(
     candidates: list[HeadingCandidate],
     semantic_threshold: float = 0.55,
 ) -> tuple[list[HeadingCandidate], list[HeadingCandidate], list[float]]:
-    """Step 5 — embed everything, compute semantic scores, filter below threshold.
+    """Step 5 - embed everything, compute semantic scores, filter below threshold.
 
     Returns (kept, discarded_low_score, keyword_embedding).
     """
@@ -231,7 +231,7 @@ async def score_candidates(
 
 
 def compute_priority(candidates: list[HeadingCandidate]) -> None:
-    """Step 5 — heading_priority = 0.4*semantic + 0.25*serp_freq_norm
+    """Step 5 - heading_priority = 0.4*semantic + 0.25*serp_freq_norm
     + 0.15*position_weight + 0.2*llm_consensus_norm.
 
     After clustering rolls up cluster-level SERP/consensus signals onto
@@ -254,13 +254,13 @@ def compute_priority(candidates: list[HeadingCandidate]) -> None:
 
 
 async def polish_headings(candidates: list[HeadingCandidate]) -> None:
-    """Step 5 — LLM polish for awkward, keyword-stuffed, or raw query-format
+    """Step 5 - LLM polish for awkward, keyword-stuffed, or raw query-format
     candidates (autocomplete, fan-out, etc.). Updates text in place and
     sets source='synthesized' with original_source preserved.
 
     v1.8: when called after clustering, the caller passes ONLY canonicals
     so we don't waste polish budget rewriting paraphrases that have already
-    been merged. This function itself is unchanged — it just receives a
+    been merged. This function itself is unchanged - it just receives a
     smaller pool.
 
     Single batched LLM call; on failure leaves headings unchanged.
@@ -300,7 +300,7 @@ async def polish_headings(candidates: list[HeadingCandidate]) -> None:
 
 async def arbitrate_soft_pairs(
     candidates: list[HeadingCandidate],
-    soft_pairs: list,  # list[clustering.SoftPair] — typed loosely to avoid circular import
+    soft_pairs: list,  # list[clustering.SoftPair] - typed loosely to avoid circular import
 ) -> set[tuple[int, int]]:
     """Optional second pass: ask the LLM to confirm which soft-cluster pairs
     are actually paraphrases of the same idea.
@@ -325,7 +325,7 @@ async def arbitrate_soft_pairs(
         "same underlying question. Two candidates are paraphrases when an "
         "article that answered one would necessarily answer the other. "
         "Respond with a JSON array: [{k: int, paraphrase: bool}]. "
-        "Be conservative — if the headings ask about different aspects "
+        "Be conservative - if the headings ask about different aspects "
         "(e.g., 'What is X' vs 'How does X work'), they are NOT paraphrases."
     )
     user = (

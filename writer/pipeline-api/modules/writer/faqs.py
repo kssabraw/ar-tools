@@ -1,4 +1,4 @@
-"""Step 5 — FAQ writing.
+"""Step 5 - FAQ writing.
 
 One LLM call covering all FAQs at once. Each answer: 40-80 words,
 self-contained, no cross-references to article sections, answer-first.
@@ -71,7 +71,8 @@ WRITING RULES:
 - Reflect ICP audience phrasing patterns; not generic SEO question templates.
 - Do NOT use any FORBIDDEN_TERM anywhere in the answer.
 - Use REQUIRED_TERMS naturally where they fit; do not force them.
-- The seed keyword or its primary sub-phrase must appear in at least 2 answers across the FAQ set."""
+- The seed keyword or its primary sub-phrase must appear in at least 2 answers across the FAQ set.
+- Do not use em dashes. Use a plain hyphen (-) instead."""
 
 
 async def write_faqs(
@@ -87,7 +88,7 @@ async def write_faqs(
 ) -> list[ArticleSection]:
     """Returns ArticleSection list: FAQ header H2 + per-question H3.
 
-    SIE v1.4 — `paragraphs_zone_targets` is the body-zone three-bucket
+    SIE v1.4 - `paragraphs_zone_targets` is the body-zone three-bucket
     aggregate (`sie.zone_category_targets["paragraphs"]`). Internally
     scaled to FAQ-appropriate values via the FAQ_TO_PARAGRAPHS_BUDGET
     ratio.
@@ -103,9 +104,9 @@ async def write_faqs(
     avoid = filtered_terms.avoid
     forbidden_combined = sorted(set(t.lower() for t in forbidden_terms + excluded + avoid if t))
 
-    # SIE v1.4 — bucket required terms into three categories and surface
+    # SIE v1.4 - bucket required terms into three categories and surface
     # each separately to the FAQ prompt. Caps per category keep the
-    # prompt small (FAQs are short — 3-5 answers × 40-80 words).
+    # prompt small (FAQs are short - 3-5 answers × 40-80 words).
     entities_top: list[str] = []
     related_top: list[str] = []
     variants_top: list[str] = []
@@ -146,7 +147,7 @@ async def write_faqs(
             )
         if brand_voice_card.discouraged_terms:
             user_parts.append(
-                f"DISCOURAGED (avoid where possible — softer than forbidden): "
+                f"DISCOURAGED (avoid where possible - softer than forbidden): "
                 f"{', '.join(brand_voice_card.discouraged_terms[:10])}"
             )
         if brand_voice_card.audience_summary:
@@ -278,6 +279,6 @@ def _placeholder_faqs(
         sections.append(ArticleSection(
             order=q_order, level="H3", type="faq-question",
             heading=q,
-            body="[FAQ GENERATION FAILED — MANUAL REVIEW REQUIRED]",
+            body="[FAQ GENERATION FAILED - MANUAL REVIEW REQUIRED]",
         ))
     return sections

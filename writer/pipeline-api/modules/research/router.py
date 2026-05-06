@@ -1,4 +1,4 @@
-"""POST /research — Research & Citations endpoint."""
+"""POST /research - Research & Citations endpoint."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ async def generate_research(request: ResearchRequest) -> ResearchResponse:
     try:
         result = await run_research(request)
     except ResearchError as exc:
-        logger.warning("research.failed: %s — %s", exc.code, exc.message)
+        logger.warning("research.failed: %s - %s", exc.code, exc.message)
         raise HTTPException(status_code=422, detail=exc.message)
     except Exception as exc:
         logger.exception("research.unexpected: %s", exc)

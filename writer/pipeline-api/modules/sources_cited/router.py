@@ -1,4 +1,4 @@
-"""POST /sources-cited — Sources Cited endpoint."""
+"""POST /sources-cited - Sources Cited endpoint."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ async def generate_sources_cited(request: SourcesCitedRequest) -> SourcesCitedRe
     try:
         result = run_sources_cited(request)
     except SourcesCitedError as exc:
-        logger.warning("sources_cited.failed: %s — %s", exc.code, exc.message)
+        logger.warning("sources_cited.failed: %s - %s", exc.code, exc.message)
         raise HTTPException(status_code=422, detail=exc.message)
     except Exception as exc:
         logger.exception("sources_cited.unexpected: %s", exc)

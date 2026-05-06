@@ -1,4 +1,4 @@
-"""Step 8.7 — H3 Parent-Fit Verification (Brief Generator PRD v2.2 / Phase 2).
+"""Step 8.7 - H3 Parent-Fit Verification (Brief Generator PRD v2.2 / Phase 2).
 
 Catches H3s that pass Step 8.6's numerical filters (parent_relevance in
 [0.65, 0.85], same region as parent H2) but answer a different reader
@@ -13,9 +13,9 @@ Step 8.5b already covered authority-gap H3s vs the article scope; Step
 attachment map (Step 8.6 selections + authority-gap survivors).
 
 Inputs:
-  - h2_attachments: dict[int, list[Candidate]] — final per-H2 attachment
+  - h2_attachments: dict[int, list[Candidate]] - final per-H2 attachment
     map after Step 8.6 + Step 9 + auth_attach. Mutated in place.
-  - selected_h2s: list[Candidate] — the parent H2 list (indices align
+  - selected_h2s: list[Candidate] - the parent H2 list (indices align
     with attachment dict keys).
 
 Output (FitVerificationResult):
@@ -40,7 +40,7 @@ Routing rules (per the proposal accepted alongside Phase 1):
                     discard_reason="h3_promoted_to_h2_candidate"
 
 Authority gap H3s (`source == "authority_gap_sme"`) are never discarded
-per PRD §5 Step 9 — for them, `wrong_parent` triggers re-attachment but
+per PRD §5 Step 9 - for them, `wrong_parent` triggers re-attachment but
 `promote_to_h2` is downgraded to `marginal` (kept under current parent
 with the flag).
 
@@ -92,12 +92,12 @@ class FitVerificationResult:
 SYSTEM_PROMPT = """\
 You audit per-H2 H3 attachments in a blog brief outline. For each H3
 under its parent H2, decide whether the H3 is the right kind of sub-
-heading to nest beneath that H2 — not just topically related, but a
+heading to nest beneath that H2 - not just topically related, but a
 sub-question the reader would expect under that specific H2.
 
 Examples of failure modes you should flag:
   - An H3 about "vetting affiliate partners" placed under an H2 about
-    "reducing cart abandonment" — both touch e-commerce ops, but the
+    "reducing cart abandonment" - both touch e-commerce ops, but the
     H3 answers a different question.
   - An H3 that's its own substantial topic ("How algorithm signals
     weight new sellers") placed as a sub-heading instead of as a
@@ -111,14 +111,14 @@ Classifications (choose exactly one per H3):
   - "wrong_parent": The H3 is on-topic for the article but not for THIS
     H2. It would fit better under a different H2.
   - "promote_to_h2": The H3 is substantial enough to warrant its own
-    standalone article — it's not a sub-question, it's a different
+    standalone article - it's not a sub-question, it's a different
     article's lead topic.
 
 Be conservative. Default to "good" or "marginal". Only mark
 "wrong_parent" or "promote_to_h2" when you can clearly state which
 other H2 (or which standalone topic) the H3 belongs to.
 
-Output strict JSON only — no preamble, no markdown fences:
+Output strict JSON only - no preamble, no markdown fences:
 {
   "verifications": [
     {
@@ -147,7 +147,7 @@ def _format_user_prompt(
     """Build the LLM prompt and a lookup table mapping each generated
     h3_id back to (parent_h2_idx, candidate_reference).
 
-    Each H3 carries a synthetic id like "h2_2.h3_0" — encodes the parent
+    Each H3 carries a synthetic id like "h2_2.h3_0" - encodes the parent
     H2 index and the H3's enumeration position at PROMPT-BUILD time. The
     parent H2 index is needed for re-attachment routing (we use it to
     find "OTHER" H2s); the candidate reference is needed to find the H3
@@ -219,7 +219,7 @@ def _h2_capacity(
     max_h3_per_h2: int,
     authority_overflow_max: int,
 ) -> int:
-    """Per PRD §5 Step 8.6, an H2 normally holds ≤ 2 H3s — but when
+    """Per PRD §5 Step 8.6, an H2 normally holds ≤ 2 H3s - but when
     authority-gap displacement exceeds the cap, the H2 may hold up to
     3. Use the higher cap when the H2 already holds an authority-gap
     H3 (signal that overflow happened); otherwise use the standard
@@ -288,7 +288,7 @@ async def verify_h3_parent_fit(
     authority_overflow_max: int = 3,
     llm_json_fn: Optional[LLMJsonFn] = None,
 ) -> FitVerificationResult:
-    """Step 8.7 — classify every H3 in `h2_attachments` and route per the
+    """Step 8.7 - classify every H3 in `h2_attachments` and route per the
     rules in this module's docstring.
 
     Mutates `h2_attachments` in place:
@@ -363,7 +363,7 @@ async def verify_h3_parent_fit(
         return result
 
     # Apply routing. Iterate by H3 REFERENCE captured at prompt-build
-    # time — positional indices into `attached` lists go stale once we
+    # time - positional indices into `attached` lists go stale once we
     # start removing/re-attaching, and a positional iteration silently
     # routes the wrong H3 (or skips H3s entirely) when the same H2 has
     # ≥ 2 H3s and any of them needs removal.
@@ -384,8 +384,8 @@ async def verify_h3_parent_fit(
 
         # Locate the H3 in its current parent's attachment list. This
         # may differ from `current_h2_idx` if a prior iteration already
-        # re-attached this H3 (shouldn't happen — id_to_ref is unique
-        # per H3 — but defensive).
+        # re-attached this H3 (shouldn't happen - id_to_ref is unique
+        # per H3 - but defensive).
         attached = h2_attachments.get(current_h2_idx, [])
         try:
             attached_idx = attached.index(h3)
@@ -396,7 +396,7 @@ async def verify_h3_parent_fit(
 
         if cls == "promote_to_h2":
             if is_authority:
-                # Authority-gap H3s cannot be discarded — downgrade to
+                # Authority-gap H3s cannot be discarded - downgrade to
                 # marginal so the flag still surfaces on review.
                 h3.parent_fit_classification = "marginal"  # type: ignore[assignment]
                 result.marginal_count += 1
@@ -429,7 +429,7 @@ async def verify_h3_parent_fit(
                 result.reattached.append((current_h2_idx, new_idx, h3))
                 result.wrong_parent_count += 1
                 continue
-            # No fitting parent (after same-region constraint) — route
+            # No fitting parent (after same-region constraint) - route
             # to silo for non-auth, downgrade to marginal for auth.
             if is_authority:
                 h3.parent_fit_classification = "marginal"  # type: ignore[assignment]

@@ -1,6 +1,6 @@
 """Tests for parsers.parse_serp meta_descriptions extraction (Brief v2.0).
 
-Only covers the v2.0 additions — the heading / PAA / signal extraction
+Only covers the v2.0 additions - the heading / PAA / signal extraction
 paths are exercised by upstream integration tests.
 """
 
@@ -68,7 +68,7 @@ def test_parse_serp_ignores_descriptions_on_non_organic_items():
 
 
 def test_parse_serp_returns_five_tuple_signature():
-    """v2.0 schema change — parse_serp now returns 5 elements."""
+    """v2.0 schema change - parse_serp now returns 5 elements."""
     result = parse_serp([])
     assert len(result) == 5
     headings, signals, paa, titles, metas = result

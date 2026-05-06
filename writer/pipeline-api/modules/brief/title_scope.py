@@ -1,11 +1,11 @@
-"""Step 3.5 — Title + Scope Statement Generation (Brief Generator v2.0).
+"""Step 3.5 - Title + Scope Statement Generation (Brief Generator v2.0).
 
 Implements PRD §5 Step 3.5. Single Claude Sonnet 4.6 LLM call that
 produces the article's committed title and scope_statement, which
 anchor every downstream selection and verification step in v2.0.
 
 Without this commitment, scope discipline can only be approximated from
-indirect signals — that's the v1.7 failure mode this module fixes.
+indirect signals - that's the v1.7 failure mode this module fixes.
 
 Inputs (PRD §5 Step 3.5):
   - Seed keyword
@@ -83,7 +83,7 @@ Process:
 1. Examine the competitor titles, H1s, and meta descriptions to identify
    the SERP convention for this query (definitional? listicle? how-to?
    comparison?). The intent classification you receive is a strong hint.
-2. Note what no competitor is doing — angles, framings, or differentiators
+2. Note what no competitor is doing - angles, framings, or differentiators
    that none of the top 20 are using. These are candidates for the article's
    unique angle.
 3. Read the LLM fan-out response bodies to see what searchers ask AI
@@ -95,7 +95,7 @@ Process:
    Writer Module. The scope MUST include a "does not cover:" clause
    listing 1-3 adjacent topics this article will explicitly NOT address.
 
-Hard requirements for the title (SEO / meta title — appears in browser
+Hard requirements for the title (SEO / meta title - appears in browser
 tab, SERP snippet, and og:title):
 - 50-80 characters preferred; 100 character maximum
 - AVOID generic AI-tells: "Ultimate Guide to", "Complete Guide",
@@ -104,13 +104,13 @@ tab, SERP snippet, and og:title):
   (rapidly changing space, version-specific content). Do not reflexively
   stamp a year on every title.
 
-Hard requirements for the h1 (on-page main heading — appears at the
+Hard requirements for the h1 (on-page main heading - appears at the
 top of the article body):
 - 130 character maximum (longer leeway than the title)
 - Often similar to the title, but MAY be slightly more descriptive,
   more conversational, or expand on the title's framing. The H1's job
   is to confirm to the on-page reader that they landed on the right
-  article — it does NOT have to be SERP-optimized.
+  article - it does NOT have to be SERP-optimized.
 - It is acceptable for h1 == title when the title already reads as a
   natural on-page heading. Do not force a difference.
 - Same banned-phrase rules as the title.
@@ -121,7 +121,7 @@ Hard requirements for the scope statement:
   exclusion clause
 - Name 1-3 specific adjacent topics that are out of scope
 
-Output strict JSON only — no preamble, no markdown fences, no commentary:
+Output strict JSON only - no preamble, no markdown fences, no commentary:
 {
   "title": "SEO/meta title (50-80 chars preferred, ≤100 max)",
   "h1": "On-page H1 heading (≤130 chars; may equal the title or expand it slightly)",
@@ -256,7 +256,7 @@ async def generate_title_and_scope(
     """Run Step 3.5: single Claude call with one strict-retry on failure.
 
     Aborts the run with BriefError("title_generation_failed") on second
-    failure — every downstream step depends on the title.
+    failure - every downstream step depends on the title.
 
     `llm_json_fn` is injectable for tests; defaults to `claude_json` so
     production code calls Sonnet 4.6 directly.
@@ -285,7 +285,7 @@ async def generate_title_and_scope(
                 # First attempt: 0.7 for meaningful variation across
                 # regenerations of the same keyword (the brief generator
                 # is the source of truth for title/h1, and the writer
-                # consumes them verbatim — so title diversity has to come
+                # consumes them verbatim - so title diversity has to come
                 # from THIS call). Retry drops to 0.1 to maximize the
                 # chance the structured output validates after a
                 # malformed first response.

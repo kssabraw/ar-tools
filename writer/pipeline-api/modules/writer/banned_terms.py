@@ -1,4 +1,4 @@
-"""Step 4.4 — Post-hoc banned-term regex validation.
+"""Step 4.4 - Post-hoc banned-term regex validation.
 
 Per writer-module-v1_5-change-spec_2.md §4.4:
 - Case-insensitive word-boundary regex from brand_voice_card.banned_terms

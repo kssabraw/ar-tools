@@ -1,4 +1,4 @@
-"""Step 3.5b — Brand-SIE Term Reconciliation.
+"""Step 3.5b - Brand-SIE Term Reconciliation.
 
 Single Claude call. Classifies each SIE-Required term against the brand
 guide as keep / exclude_due_to_brand_conflict / reduce_due_to_brand_preference.
@@ -24,17 +24,17 @@ logger = logging.getLogger(__name__)
 RECONCILIATION_SYSTEM = """You are a categorization-only LLM. Reconcile each term against the provided brand guide and assign a classification. You MUST cite specific brand-guide text in `brand_guide_reasoning` for any non-`keep` / non-`keep_avoiding` decision.
 
 For each REQUIRED term, classify as:
-- "keep" — no conflict; brand guide is silent or supportive
-- "exclude_due_to_brand_conflict" — brand guide explicitly bans this term
-- "reduce_due_to_brand_preference" — brand guide ambiguously discourages without prohibition
+- "keep" - no conflict; brand guide is silent or supportive
+- "exclude_due_to_brand_conflict" - brand guide explicitly bans this term
+- "reduce_due_to_brand_preference" - brand guide ambiguously discourages without prohibition
 
 For each AVOID term, classify as:
-- "keep_avoiding" — no brand-guide preference for this term
-- "use_due_to_brand_preference" — brand guide explicitly prefers this term
+- "keep_avoiding" - no brand-guide preference for this term
+- "use_due_to_brand_preference" - brand guide explicitly prefers this term
 
 CRITICAL RULES:
 - Cite specific brand-guide text in brand_guide_reasoning for every non-keep / non-keep_avoiding decision.
-- Do not infer that a term is banned because it "feels off-brand" — base every decision on text in the brand guide.
+- Do not infer that a term is banned because it "feels off-brand" - base every decision on text in the brand guide.
 - If the brand guide does not address a term either way, classify as "keep" or "keep_avoiding".
 - Do not add any term that is not in the input lists.
 
@@ -58,7 +58,7 @@ class ReconciledTerm:
     effective_target: int = 0
     effective_max: int = 0
     reconciliation_action: str = "keep"
-    # PRD v2.6 — Heading SEO Optimizer needs per-zone targets (title /
+    # PRD v2.6 - Heading SEO Optimizer needs per-zone targets (title /
     # h1 / h2 / h3 / paragraphs). The legacy `zone_usage_*` / `effective_*`
     # fields above carry the paragraphs zone for back-compat with the
     # existing writer-section prompt; `zones` carries every zone the
@@ -67,7 +67,7 @@ class ReconciledTerm:
     zones: dict = field(default_factory=dict)
     is_entity: bool = False
     entity_category: Optional[str] = None
-    # SIE v1.3 — n-gram terms whose tokens are a contiguous subsequence of
+    # SIE v1.3 - n-gram terms whose tokens are a contiguous subsequence of
     # the seed keyword. Heading SEO Optimizer must NOT inject these into
     # H2/H3 (they're keyword echoes, not topical adjacents). Entities and
     # the seed itself are never flagged. Defaults False for legacy SIE
@@ -111,7 +111,7 @@ def _zones_for_term(usage_recs: list[dict], term: str) -> dict:
     """Pull every zone's {min, target, max} for a term from usage_recommendations.
 
     Returns a dict keyed by zone name with each value `{min, target, max}`.
-    Zones missing from the SIE usage_rec default to all-zero. PRD v2.6 —
+    Zones missing from the SIE usage_rec default to all-zero. PRD v2.6 -
     consumed by the Heading SEO Optimizer to enforce per-zone entity
     targets when rewriting H2/H3.
     """
@@ -138,7 +138,7 @@ def _zones_for_term(usage_recs: list[dict], term: str) -> dict:
 
 
 def _zone_usage_for_term(usage_recs: list[dict], term: str) -> tuple[int, int, int]:
-    """Backward-compat wrapper — returns the paragraphs-zone (min, target, max).
+    """Backward-compat wrapper - returns the paragraphs-zone (min, target, max).
 
     Existing callers in `sections.py` rely on this exact triple shape. New
     callers should use `_zones_for_term` to access per-zone targets across
@@ -197,14 +197,14 @@ async def reconcile_terms(
             last_exc = exc
             logger.warning("Reconciliation attempt %d failed: %s", attempt + 1, exc)
 
-    logger.warning("Reconciliation gave up — falling back to all-keep: %s", last_exc)
+    logger.warning("Reconciliation gave up - falling back to all-keep: %s", last_exc)
     return _all_keep(required_terms, avoid_terms, usage_recs), []
 
 
 def _entity_metadata_for_term(rec: dict) -> tuple[bool, Optional[str], bool]:
     """Pluck (is_entity, entity_category, is_seed_fragment) from a SIE term
     entry. Defaults to (False, None, False) when the SIE row doesn't carry
-    the metadata — keeps backward compat with pre-v1.3 SIE responses."""
+    the metadata - keeps backward compat with pre-v1.3 SIE responses."""
     data = rec.get("data") or {}
     if not isinstance(data, dict):
         return (False, None, False)
@@ -329,7 +329,7 @@ def _build_filtered(
                 resolution="brand_preference_overridden_by_sie",
                 brand_guide_reasoning=reasoning,
             ))
-            # Term is NOT added to required — but it's also removed from avoid
+            # Term is NOT added to required - but it's also removed from avoid
         else:
             final_avoid.append(term)
 

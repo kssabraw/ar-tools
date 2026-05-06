@@ -27,7 +27,7 @@ SERP_ITEMS = [
 SAMPLE_HTML_TEMPLATE = """
 <html>
   <head>
-    <title>Water Heater Repair Guide {i} — Complete Service Information</title>
+    <title>Water Heater Repair Guide {i} - Complete Service Information</title>
     <meta name="description" content="Professional water heater repair services for homeowners">
   </head>
   <body>

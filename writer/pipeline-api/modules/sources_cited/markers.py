@@ -1,4 +1,4 @@
-"""Step 1 — marker discovery + first-appearance numbering.
+"""Step 1 - marker discovery + first-appearance numbering.
 
 Per sources-cited-module-prd-v1_1.md §7 Step 1.
 Marker pattern is `\\{\\{(cit_[0-9]+)\\}\\}` per the v1.1 PRD constraint.

@@ -96,13 +96,13 @@ async def fake_claude_json(system, user, **kwargs):
     if "blog post titles" in sl or "title candidates" in sl:
         return {"candidates": [
             "Best HVAC Systems 2026: Energy Efficiency, SEER Ratings, and Heat Pump Guide",
-            "HVAC Systems for 2026 — A Buyer's Guide",
+            "HVAC Systems for 2026 - A Buyer's Guide",
             "Best HVAC Systems 2026 Compared",
         ]}
     # H1 enrichment
     if "introduces a blog section" in sl:
         return {"sentence": "This guide compares heat pump and central HVAC system options for energy-conscious homeowners."}
-    # Brand-SIE reconciliation (check FIRST — its system prompt also contains
+    # Brand-SIE reconciliation (check FIRST - its system prompt also contains
     # "categorization-only" so it must beat the distillation matcher)
     if "reconcile each term" in sl:
         return {
@@ -168,7 +168,7 @@ async def test_writer_happy_path_with_client_context():
         sie_output=SAMPLE_SIE,
         research_output=SAMPLE_RESEARCH,
         client_context=ClientContextInput(
-            brand_guide_text="Avoid the words 'premium' and 'luxury' — sounds like upselling.",
+            brand_guide_text="Avoid the words 'premium' and 'luxury' - sounds like upselling.",
             icp_text="Homeowners 35-65 researching HVAC upgrades.",
             website_analysis={"services": ["HVAC installation"], "locations": ["Austin, TX"]},
             website_analysis_unavailable=False,
@@ -325,13 +325,13 @@ def test_writer_request_validation():
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 review fix #3 — pipeline-level Step 6.7 retry integration test
+# Phase 3 review fix #3 - pipeline-level Step 6.7 retry integration test
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_writer_pipeline_invokes_h2_body_length_retry(monkeypatch):
-    """Phase 3 — when an H2 group ships under the brief's
+    """Phase 3 - when an H2 group ships under the brief's
     `min_h2_body_words` floor, the writer pipeline must invoke Step 6.7
     which retries the section group ONCE. We patch validate_h2_body_lengths
     to verify it's called with the correct floor + state, then assert the
@@ -355,7 +355,7 @@ async def test_writer_pipeline_invokes_h2_body_length_retry(monkeypatch):
         captured["keyword"] = keyword
         captured["kwargs_keys"] = sorted(kwargs.keys())
         # Simulate a successful retry: pretend one section was retried
-        # successfully — the article passed in is returned unchanged.
+        # successfully - the article passed in is returned unchanged.
         article = kwargs["article"] if "article" in kwargs else None
         # The actual signature passes article as positional; reconstruct.
         return H2BodyLengthResult(
@@ -423,7 +423,7 @@ async def test_writer_pipeline_invokes_h2_body_length_retry(monkeypatch):
 @pytest.mark.asyncio
 async def test_writer_pipeline_skips_h2_body_length_when_floor_zero():
     """When the brief carries no `min_h2_body_words` floor (or 0), the
-    validator does NOT run — saving the LLM call when defaults haven't
+    validator does NOT run - saving the LLM call when defaults haven't
     been calibrated for the intent."""
     from modules.writer import pipeline as writer_pipeline
 
@@ -473,13 +473,13 @@ async def test_writer_pipeline_skips_h2_body_length_when_floor_zero():
 
 
 # ---------------------------------------------------------------------------
-# Phase 4 — pipeline-level integration test for Step 4F.1 citation coverage
+# Phase 4 - pipeline-level integration test for Step 4F.1 citation coverage
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_writer_pipeline_invokes_citation_coverage_validator(monkeypatch):
-    """Phase 4 — the writer pipeline must invoke Step 4F.1 between Step
+    """Phase 4 - the writer pipeline must invoke Step 4F.1 between Step
     6.7 and Step 7. We patch the validator with a wrapping spy and
     assert it's called with the right state and that the metadata
     surfaces the new Phase 4 fields."""

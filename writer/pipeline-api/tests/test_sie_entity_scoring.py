@@ -1,4 +1,4 @@
-"""SIE v1.1 — hybrid entity scoring + promotion.
+"""SIE v1.1 - hybrid entity scoring + promotion.
 
 Covers the seven scenarios from the implementation brief:
 
@@ -8,7 +8,7 @@ Covers the seven scenarios from the implementation brief:
 4. LLM cannot introduce unseen entities (regression)
 5. Merge semantics unchanged (`ngram_and_entity` vs `entity_only`)
 6. Reason flags attached correctly
-7. Backward compat — entity_meta keys/structure preserved
+7. Backward compat - entity_meta keys/structure preserved
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ def _mock_call(response):
 
 def test_low_salience_high_recurrence_promoted():
     """A low-salience (0.18) entity appearing on 4/5 pages must survive
-    via the recurrence override path — the v1.0 hard 0.40 gate would
+    via the recurrence override path - the v1.0 hard 0.40 gate would
     have dropped it at extraction time."""
     ents = [
         _agg("GMV Max", avg_salience=0.18, pages_found=4, total_mentions=8),
@@ -80,13 +80,13 @@ def test_low_salience_high_recurrence_promoted():
 
 
 # ---------------------------------------------------------------------------
-# 2. High-salience one-off — deterministic
+# 2. High-salience one-off - deterministic
 # ---------------------------------------------------------------------------
 
 
 def test_high_salience_one_off_promoted_with_correct_reason():
     """A single-page entity with strong salience (0.70) is promoted as
-    'high_salience_low_recurrence' — captures the 'one source nailed
+    'high_salience_low_recurrence' - captures the 'one source nailed
     this' case."""
     ents = [
         _agg("Niche Authority Source", avg_salience=0.70, pages_found=1, total_mentions=3),
@@ -245,7 +245,7 @@ def test_classify_promotion_returns_none_below_thresholds():
 
 
 # ---------------------------------------------------------------------------
-# 7. Backward compat — entity_meta shape
+# 7. Backward compat - entity_meta shape
 # ---------------------------------------------------------------------------
 
 
@@ -354,9 +354,9 @@ def test_score_and_promote_with_zero_total_pages():
     # Single-word entity appears in keyword
     ("ROI", "how to increase tiktok shop roi", True),
     ("TikTok", "how to increase tiktok shop roi", True),
-    # Token appears via lemmatization (basic case — depends on lemmatize impl)
+    # Token appears via lemmatization (basic case - depends on lemmatize impl)
     ("Shop", "tiktok shops near me", True),
-    # Tokens out of order — no match (must be contiguous subsequence)
+    # Tokens out of order - no match (must be contiguous subsequence)
     ("Shop TikTok", "how to increase tiktok shop roi", False),
     # Entity not in keyword at all
     ("Shopify", "how to increase tiktok shop roi", False),
@@ -374,10 +374,10 @@ def test_matches_keyword_token_boundary(entity_name, keyword, expected):
 def test_keyword_match_auto_promotes_low_signal_entity():
     """An entity that would otherwise fail every promotion path is
     auto-promoted when its name appears in the keyword. The user
-    explicitly searched for this — by definition relevant."""
+    explicitly searched for this - by definition relevant."""
     ents = [
         # No recurrence (1 page), low salience (0.05), no mentions to speak
-        # of — would never pass composite score or recurrence override
+        # of - would never pass composite score or recurrence override
         _agg("TikTok Shop", avg_salience=0.05, pages_found=1, total_mentions=1),
     ]
     promoted = score_and_promote_entities(
@@ -420,7 +420,7 @@ def test_keyword_match_via_variant():
 
 def test_no_keyword_falls_back_to_existing_logic():
     """When `keyword=''` (or omitted), the keyword_match path is
-    skipped entirely — entities promote via the existing four reasons."""
+    skipped entirely - entities promote via the existing four reasons."""
     ents = [_agg("Strong Entity", avg_salience=0.55, pages_found=4, total_mentions=10)]
     promoted = score_and_promote_entities(ents, total_pages=5, keyword="")
     assert len(promoted) == 1
@@ -430,12 +430,12 @@ def test_no_keyword_falls_back_to_existing_logic():
 def test_empty_keyword_drops_structurally_noisy_single_page_entity():
     """Defensive: a single-page entity flagged as structurally noisy
     (length<3, pure numeric, etc.) with weak salience still gets
-    dropped — neither the recurrence override (1<3) nor the
+    dropped - neither the recurrence override (1<3) nor the
     standalone-salience floor (0.05<0.33) promotes it, and the noise
     penalty pushes its composite score below 0.15.
 
     Note: at the v1.4 thresholds (promotion 0.15, single-page low-
-    salience 0.15) the bar is intentionally permissive — most
+    salience 0.15) the bar is intentionally permissive - most
     semi-weak entities now promote. This test guards the floor:
     structural noise + single-page + weak salience still doesn't
     pass."""

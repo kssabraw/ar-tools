@@ -1,6 +1,6 @@
 """Schema validation tests for Brief Generator v2.0 models.
 
-These tests cover only the typed-model layer — they assert that the
+These tests cover only the typed-model layer - they assert that the
 models accept valid v2.0 payloads, reject extras (additionalProperties:
 false per PRD §12), and enforce the new field constraints. Pipeline
 behavior tests come in later stages.
@@ -219,7 +219,7 @@ def test_metadata_defaults_match_prd_thresholds():
     assert m.inter_heading_threshold == 0.75
     assert m.edge_threshold == 0.65
     assert m.mmr_lambda == 0.7
-    # Step 8.6 thresholds — PRD v2.2 / Phase 2 raised the floor 0.60 → 0.65.
+    # Step 8.6 thresholds - PRD v2.2 / Phase 2 raised the floor 0.60 → 0.65.
     assert m.parent_relevance_floor_threshold == 0.65
     assert m.parent_restatement_ceiling_threshold == 0.85
     assert m.inter_h3_threshold == 0.78
@@ -313,12 +313,12 @@ def test_metadata_rejects_legacy_fields():
 
 
 def test_metadata_embedding_model_locked_to_large():
-    # Pydantic Literal enforces this — small no longer accepted.
+    # Pydantic Literal enforces this - small no longer accepted.
     with pytest.raises(ValidationError):
         BriefMetadata(embedding_model="text-embedding-3-small")  # type: ignore[arg-type]
 
 
-# ---- BriefResponse — full envelope ----
+# ---- BriefResponse - full envelope ----
 
 def _minimal_response() -> BriefResponse:
     return BriefResponse(

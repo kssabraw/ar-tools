@@ -1,4 +1,4 @@
-"""Step 3 + 4 — MLA-derived entry generation + Sources Cited section assembly.
+"""Step 3 + 4 - MLA-derived entry generation + Sources Cited section assembly.
 
 Per sources-cited-module-prd-v1_1.md §7 Steps 3 + 4. Format (no author/date in v1):
     "Title of Page." <em>Publication Name</em>, <a href="URL" rel="nofollow">URL</a>.
@@ -11,7 +11,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 
-PLACEHOLDER_TEXT = "[Citation data unavailable — manual review required]"
+PLACEHOLDER_TEXT = "[Citation data unavailable - manual review required]"
 
 
 def _root_domain(url: str) -> str:
@@ -104,7 +104,7 @@ def build_sources_cited_sections(
 
     Returns (sections, flags_by_kind).
 
-    When `ordered_used_citations` is empty, returns ([], empty_flags) —
+    When `ordered_used_citations` is empty, returns ([], empty_flags) -
     rendering an empty `<ol class="sources-cited"></ol>` with no entries
     is worse than omitting the section entirely. The article body still
     publishes; it just lacks a Sources Cited section because no inline

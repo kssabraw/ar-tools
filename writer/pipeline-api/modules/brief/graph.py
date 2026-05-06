@@ -1,4 +1,4 @@
-"""Step 5 — Embedding + Coverage Graph Construction (Brief Generator v2.0).
+"""Step 5 - Embedding + Coverage Graph Construction (Brief Generator v2.0).
 
 Implements PRD §5 Step 5 (5.1 through 5.5):
 
@@ -42,7 +42,7 @@ logger = logging.getLogger(__name__)
 # ----------------------------------------------------------------------
 # Internal v2.0 candidate type
 # ----------------------------------------------------------------------
-# This is a working dataclass for in-pipeline state — distinct from the
+# This is a working dataclass for in-pipeline state - distinct from the
 # Pydantic HeadingItem on the API boundary. Pipeline code mutates these
 # in place; assembly converts the survivors into HeadingItem instances.
 
@@ -75,7 +75,7 @@ class Candidate:
     information_gain_score: float = 0.0
     heading_priority: float = 0.0
 
-    # Set by Step 7.6 LLM scoring (PRD v2.4) — 0-3 integer scores from a
+    # Set by Step 7.6 LLM scoring (PRD v2.4) - 0-3 integer scores from a
     # batched LLM call against top-K candidates by vector priority. The
     # combined `llm_quality_score` (0-1) is folded into `heading_priority`
     # via a 70/30 vector/LLM blend before MMR runs. Defaults stay at 0
@@ -99,7 +99,7 @@ class Candidate:
     # H3 stays within the brief's scope_statement.
     scope_alignment_note: Optional[str] = None
 
-    # Set by Step 9 Authority Agent — the level the agent intended for
+    # Set by Step 9 Authority Agent - the level the agent intended for
     # this gap. Most authority gaps are sub-topic H3s under an existing
     # H2, but some are substantive enough to deserve their own H2. When
     # set to "H2", pipeline.py routes the candidate through scope
@@ -109,7 +109,7 @@ class Candidate:
     authority_gap_level: Optional[Literal["H2", "H3"]] = None
 
     # Set by Step 8.7 H3 Parent-Fit Verification (PRD v2.2 / Phase 2).
-    # Only populated when the LLM tagged the H3 as `marginal` — `good`
+    # Only populated when the LLM tagged the H3 as `marginal` - `good`
     # leaves it None for terseness, `wrong_parent` and `promote_to_h2`
     # exit through routed_to_silos with their discard_reason set.
     parent_fit_classification: Optional[str] = None
@@ -138,7 +138,7 @@ class RegionInfo:
     """Scored region from PRD §5.5.
 
     Centroid is the unit-normalized mean of member embeddings.
-    `centroid_title_distance` is poorly named in the PRD — it's actually
+    `centroid_title_distance` is poorly named in the PRD - it's actually
     a *similarity* (cosine), not a distance. We preserve the PRD name to
     keep grep paths consistent, but the value is in [-1, 1] where higher
     = more similar to title.
@@ -159,7 +159,7 @@ class RegionInfo:
 
 
 # ----------------------------------------------------------------------
-# embed_with_gates — Step 5.1 + 5.2
+# embed_with_gates - Step 5.1 + 5.2
 # ----------------------------------------------------------------------
 
 @dataclass
@@ -252,7 +252,7 @@ async def embed_with_gates(
             cand.discard_reason = "above_restatement_ceiling"
             discarded.append(cand)
             # Restatement ceiling is the most consequential threshold per
-            # PRD §12.6 — log at INFO so it's visible in default Railway
+            # PRD §12.6 - log at INFO so it's visible in default Railway
             # views during tuning.
             logger.info(
                 "brief.gate.restatement_ceiling.discard",
@@ -301,7 +301,7 @@ async def embed_with_gates(
 
 
 # ----------------------------------------------------------------------
-# build_coverage_graph — Step 5.3
+# build_coverage_graph - Step 5.3
 # ----------------------------------------------------------------------
 
 def build_coverage_graph(
@@ -315,7 +315,7 @@ def build_coverage_graph(
     cosine value for downstream debugging / tuning visualizations.
 
     Embeddings are assumed unit-normalized (cosine == dot product). If a
-    candidate has no embedding it gets a node with no edges — Louvain
+    candidate has no embedding it gets a node with no edges - Louvain
     will isolate it.
     """
     n = len(candidates)
@@ -350,7 +350,7 @@ def build_coverage_graph(
 
 
 # ----------------------------------------------------------------------
-# detect_regions — Step 5.4
+# detect_regions - Step 5.4
 # ----------------------------------------------------------------------
 
 def detect_regions(
@@ -384,7 +384,7 @@ def detect_regions(
 
 
 # ----------------------------------------------------------------------
-# score_regions — Step 5.5 (scoring + elimination)
+# score_regions - Step 5.5 (scoring + elimination)
 # ----------------------------------------------------------------------
 
 def _centroid(indices: list[int], candidates: list[Candidate]) -> list[float]:
@@ -434,7 +434,7 @@ def score_regions(
     Eliminated regions stay in the returned list (with `eliminated=True`
     and `elimination_reason` set) so the caller can route members into
     `discarded_headings` with the correct reason. Singletons are flagged
-    but not eliminated — they remain selectable in MMR but cannot become
+    but not eliminated - they remain selectable in MMR but cannot become
     silos (PRD §5.5 elimination rules).
 
     Region IDs are assigned in stable density-desc order with a min-index
@@ -516,7 +516,7 @@ def score_regions(
 
 
 # ----------------------------------------------------------------------
-# apply_region_outcomes — propagate region elimination to candidates
+# apply_region_outcomes - propagate region elimination to candidates
 # ----------------------------------------------------------------------
 
 def apply_region_outcomes(
@@ -533,7 +533,7 @@ def apply_region_outcomes(
       title (their `discard_reason` is set, `region_id` still recorded).
 
     This does NOT touch candidates already discarded by the relevance/
-    restatement gates in Step 5.2 — those were never put into a region.
+    restatement gates in Step 5.2 - those were never put into a region.
     """
     kept: list[Candidate] = []
     eliminated: list[Candidate] = []

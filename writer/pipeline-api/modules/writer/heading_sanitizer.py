@@ -1,4 +1,4 @@
-"""Step 0.5 — Heading-structure sanitizer.
+"""Step 0.5 - Heading-structure sanitizer.
 
 Runs immediately after `_validate_inputs` in the writer pipeline.
 Cleans up two structural drift modes that have been observed in real
@@ -7,7 +7,7 @@ briefs:
 1. **Duplicate H2 headings.** Briefs occasionally produce two body H2s
    with identical (case-folded, whitespace-normalized) heading text.
    The writer used to faithfully call `write_h2_group` once per
-   duplicate, generating divergent prose for each — the article then
+   duplicate, generating divergent prose for each - the article then
    shipped with two near-identical sections under the same heading,
    confusing readers and starving the brand-placement plan (which
    counted the duplicates as separate anchor candidates).
@@ -16,7 +16,7 @@ briefs:
    `type="content"` whose heading text is "Frequently Asked Questions"
    (or a close variant). The writer rendered it as a body section,
    then later appended the actual FAQ block (`type="faq-header"` plus
-   `type="faq-question"` items) — and the conclusion landed *between*
+   `type="faq-question"` items) - and the conclusion landed *between*
    the two, because conclusion is appended after body sections but
    before the FAQ block. Filtering FAQ-like body H2s out fixes the
    "conclusion in the middle of the FAQs" rendering bug.
@@ -24,9 +24,9 @@ briefs:
 The sanitizer is conservative:
 - It keeps the FIRST occurrence of a duplicate H2 (and its H3 children).
 - It drops the duplicate H2 along with everything between it and the
-  next surviving H2 — H3s under the duplicate are dropped too. We
+  next surviving H2 - H3s under the duplicate are dropped too. We
   prefer "lossy and predictable" over "smart-reparenting and
-  unpredictable" — editors can review the drop log if they want the
+  unpredictable" - editors can review the drop log if they want the
   dropped H3s back.
 - Non-content items (H1, faq-header, faq-question, conclusion,
   h1-enrichment) pass through untouched.
@@ -49,7 +49,7 @@ logger = logging.getLogger(__name__)
 # Matches an H2 heading whose entire (normalized) text reads as a
 # variant of "Frequently Asked Questions" / "FAQs" / "Q&A". We require
 # a full-string match so an H2 like "Frequently Asked Questions About
-# Pricing" — which is a legitimate body section — is NOT dropped.
+# Pricing" - which is a legitimate body section - is NOT dropped.
 _FAQ_LIKE_H2_RE = re.compile(
     r"^(frequently asked questions?|faqs?|q ?(?:&|and) ?a)$",
     re.IGNORECASE,
@@ -69,11 +69,11 @@ class SanitizationLog:
 def _normalize_heading(text: str) -> str:
     """Lowercase, collapse internal whitespace, strip surrounding
     whitespace and trailing punctuation. Used for duplicate detection
-    only — the kept H2's original casing/punctuation passes through to
+    only - the kept H2's original casing/punctuation passes through to
     the section writer untouched."""
     norm = (text or "").strip().lower()
     norm = re.sub(r"\s+", " ", norm)
-    norm = norm.rstrip(".,;:!?—–-").rstrip()
+    norm = norm.rstrip(".,;:!?-–-").rstrip()
     return norm
 
 
@@ -117,7 +117,7 @@ def sanitize_heading_structure(
         level = item.get("level")
         item_type = item.get("type")
 
-        # End-of-body markers reset the drop flag — H3 questions under
+        # End-of-body markers reset the drop flag - H3 questions under
         # a faq-header are not "children of a dropped body H2".
         if item_type in {"faq-header", "faq-question", "conclusion"}:
             dropping_under_h2 = False
@@ -172,7 +172,7 @@ def sanitize_heading_structure(
             cleaned.append(item)
             continue
 
-        # H1, h1-enrichment, anything else — pass through untouched.
+        # H1, h1-enrichment, anything else - pass through untouched.
         cleaned.append(item)
 
     if log.duplicate_h2s_dropped or log.faq_like_h2s_dropped:

@@ -1,7 +1,7 @@
 """SIE Supabase 7-day cache.
 
 Lookup is keyed on (keyword, location_code, outlier_mode). The freshest row
-within the TTL window wins. Writes are append-only — historical rows are
+within the TTL window wins. Writes are append-only - historical rows are
 preserved for trend analysis (per SIE PRD §6 Output Storage).
 
 Defensive against DB schema drift: the cache deliberately operates on a
@@ -10,7 +10,7 @@ created_at). Schema-version validation happens IN PYTHON against the
 payload's own `schema_version` field so that adding/removing the
 optional `schema_version` / `cost_usd` / `duration_ms` columns at the
 DB layer doesn't break reads or writes. Older deploys had those columns
-in their migration but never applied them in production — keeping the
+in their migration but never applied them in production - keeping the
 code resilient avoids hard failures when DB and code versions drift.
 """
 
@@ -42,7 +42,7 @@ async def get_cached(
     `schema_version` is validated against the payload's own
     `schema_version` field (which lives inside output_payload) AFTER
     fetch, rather than via a SQL filter on a `schema_version` column.
-    This makes the lookup robust against DB column drift — the live
+    This makes the lookup robust against DB column drift - the live
     `sie_cache` table may or may not carry that column depending on
     whether the migration was applied. Stale-shape rows still get
     treated as misses and trigger a rebuild.
@@ -76,7 +76,7 @@ async def get_cached(
     if not isinstance(payload, dict):
         return None
 
-    # Schema-version gate — payload-level so DB column presence is
+    # Schema-version gate - payload-level so DB column presence is
     # irrelevant. Older payloads with a different schema_version fail
     # Pydantic Literal validation downstream; treat them as misses.
     if schema_version:
@@ -110,14 +110,14 @@ async def write_cache(
     outlier_mode, output_payload). The optional `schema_version`,
     `cost_usd`, `duration_ms` columns aren't included in the INSERT
     because they may not be present on every deploy's `sie_cache`
-    table — the migration that adds them hasn't necessarily been
+    table - the migration that adds them hasn't necessarily been
     applied. Schema_version is preserved INSIDE output_payload (every
     SIEResponse carries it) so retrieval-time validation still works.
     `cost_usd` and `duration_ms` are diagnostics-only and acceptable
     to drop here.
     """
     # `schema_version` and `cost_usd`/`duration_ms` are intentionally
-    # NOT in this dict — see docstring.
+    # NOT in this dict - see docstring.
     row = {
         "keyword": _normalize_keyword(keyword),
         "location_code": location_code,

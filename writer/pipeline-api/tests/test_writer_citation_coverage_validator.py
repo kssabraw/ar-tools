@@ -185,13 +185,13 @@ async def test_validator_softens_operational_claims_when_retry_fails():
         ],
         section_budgets={},
         filtered_terms=_filtered_terms(),
-        citations=[],  # no pool — soften is the only path
+        citations=[],  # no pool - soften is the only path
         brand_voice_card=None, banned_regex=None,
         write_h2_group_fn=fake,
     )
     assert result.retries_attempted == 1
     assert result.retries_succeeded == 0
-    # Section was softened — operational phrase replaced cleanly with
+    # Section was softened - operational phrase replaced cleanly with
     # `a typical refresh cadence` (Phase 4 review fix #1).
     body = result.validated_article[0].body
     assert "4-to-6" not in body
@@ -206,7 +206,7 @@ async def test_validator_softens_operational_claims_when_retry_fails():
 
 @pytest.mark.asyncio
 async def test_validator_does_not_soften_c1_c6_claims_when_retry_fails():
-    """C1 percent / C2 currency claims must NOT be softened — only
+    """C1 percent / C2 currency claims must NOT be softened - only
     C7-C9 operational claims are eligible."""
     article = [_h2(
         1, "Topic",
@@ -226,7 +226,7 @@ async def test_validator_does_not_soften_c1_c6_claims_when_retry_fails():
         write_h2_group_fn=fake,
     )
     body = result.validated_article[0].body
-    # C1/C2 claims preserved verbatim — no soften
+    # C1/C2 claims preserved verbatim - no soften
     assert "27%" in body
     assert "$100M" in body
     assert result.operational_claims_softened == []

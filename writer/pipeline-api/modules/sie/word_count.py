@@ -1,4 +1,4 @@
-"""Module 12 — Word count analysis (percentile-based recommendation)."""
+"""Module 12 - Word count analysis (percentile-based recommendation)."""
 
 from __future__ import annotations
 

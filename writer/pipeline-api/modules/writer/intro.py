@@ -1,4 +1,4 @@
-"""Step 2.5 — Intro writing (Writer v1.6 §4.3.1).
+"""Step 2.5 - Intro writing (Writer v1.6 §4.3.1).
 
 Three-beat Agree / Promise / Preview intro placed between H1 and the
 first content H2. Each beat is a discrete prose block:
@@ -6,7 +6,7 @@ first content H2. Each beat is a discrete prose block:
               selects the best Agree style from 10 options based on
               topic, ICP audience context, and supporting data.
   - Promise: 1 sentence stating what the article will deliver.
-  - Preview: 1 sentence creating curiosity or momentum — no topic
+  - Preview: 1 sentence creating curiosity or momentum - no topic
               enumeration, no ordered roadmap.
 
 Hard constraints:
@@ -49,34 +49,34 @@ OUTPUT FORMAT:
 
 THE THREE BEATS:
 
-1. Agree — Meet the reader where they are. Validate a frustration, feeling, or belief they already hold.
+1. Agree - Meet the reader where they are. Validate a frustration, feeling, or belief they already hold.
    - When AUDIENCE context is provided, ground it in the audience's specific situation, pain points, or language. Do not write generically when ICP context is available.
    - 2–3 sentences maximum.
    - Select the best Agree style from the list below.
 
-2. Promise — One sentence. Specific, concrete commitment about what this article delivers.
+2. Promise - One sentence. Specific, concrete commitment about what this article delivers.
    - No vague language like "we'll cover everything you need to know."
 
-3. Preview — One sentence. Create curiosity or momentum.
+3. Preview - One sentence. Create curiosity or momentum.
    - Do NOT enumerate topics or write an ordered roadmap ("You'll start with X, move into Y, then Z" or any variation).
    - The sentence should pull the reader forward, not summarize structure.
 
 TOTAL LENGTH: 80–120 words across all three beats combined. Each individual beat ≤ 50 words.
 
-AGREE STYLES — select the single best style given the topic, audience, and data:
+AGREE STYLES - select the single best style given the topic, audience, and data:
 
 ⚠️ HALLUCINATION WARNING: `data_led` and `research_reframe` require real numbers or studies. Only select these styles when SUPPORTING_DATA is provided. If either would be best but no data is available, select the next most appropriate style instead.
 
-counterintuitive_claim — Opens with a statement that flips conventional wisdom. Use when a widely-held belief is demonstrably wrong. Example: "Doing more of the same thing rarely produces different results."
-false_solution — Names an approach everyone uses, then immediately undercuts it. Use when the audience is invested in a popular but ineffective method. Example: "Tracking activity feels like measuring progress. It usually isn't."
-failure_mode — Leads with the mistake the reader is probably making, or the cost of the unchanged status quo. Example: "The instinct is to add more. That's often exactly what slows things down."
-data_led — Anchors with a specific number or average-vs-top-performer comparison. Requires SUPPORTING_DATA. Example: "Most teams hit their targets roughly half the time. High performers hit them consistently."
-research_reframe — References a study or trend that recontextualizes the problem. Requires SUPPORTING_DATA. Example: "Recent data shows buyers decide earlier in the process than most teams assume — yet most content is built for the wrong stage."
-scene_setting — Drops into a specific, recognizable moment — third person or no person. Example: "The work gets done. The results meeting doesn't reflect it."
-before_after — Contrasts two states with tension and resolution implied, no roadmap. Example: "Inconsistent results aren't a strategy problem. They're an execution problem. And execution problems have repeatable fixes."
-core_distinction — Opens by drawing a line between two things the audience conflates. Example: "There's a difference between being busy and making progress. Most teams are optimizing for the wrong one."
-reframe_the_question — Suggests the reader has been asking the wrong question. Example: "The question isn't whether the approach works. It's whether you're set up to see it working."
-direct_thesis — Plain, confident statement of exactly what's true and what this piece proves. Use as the fallback when no other style fits cleanly. Example: "This is solvable, repeatable, and measurable. Here's how to get there."
+counterintuitive_claim - Opens with a statement that flips conventional wisdom. Use when a widely-held belief is demonstrably wrong. Example: "Doing more of the same thing rarely produces different results."
+false_solution - Names an approach everyone uses, then immediately undercuts it. Use when the audience is invested in a popular but ineffective method. Example: "Tracking activity feels like measuring progress. It usually isn't."
+failure_mode - Leads with the mistake the reader is probably making, or the cost of the unchanged status quo. Example: "The instinct is to add more. That's often exactly what slows things down."
+data_led - Anchors with a specific number or average-vs-top-performer comparison. Requires SUPPORTING_DATA. Example: "Most teams hit their targets roughly half the time. High performers hit them consistently."
+research_reframe - References a study or trend that recontextualizes the problem. Requires SUPPORTING_DATA. Example: "Recent data shows buyers decide earlier in the process than most teams assume - yet most content is built for the wrong stage."
+scene_setting - Drops into a specific, recognizable moment - third person or no person. Example: "The work gets done. The results meeting doesn't reflect it."
+before_after - Contrasts two states with tension and resolution implied, no roadmap. Example: "Inconsistent results aren't a strategy problem. They're an execution problem. And execution problems have repeatable fixes."
+core_distinction - Opens by drawing a line between two things the audience conflates. Example: "There's a difference between being busy and making progress. Most teams are optimizing for the wrong one."
+reframe_the_question - Suggests the reader has been asking the wrong question. Example: "The question isn't whether the approach works. It's whether you're set up to see it working."
+direct_thesis - Plain, confident statement of exactly what's true and what this piece proves. Use as the fallback when no other style fits cleanly. Example: "This is solvable, repeatable, and measurable. Here's how to get there."
 
 STYLE SELECTION CRITERIA (apply in order):
 1. If SUPPORTING_DATA is provided and a specific stat or study would strengthen the Agree, prefer data_led or research_reframe.
@@ -89,6 +89,7 @@ HARD CONSTRAINTS:
 - Do not introduce topics outside the article's scope.
 - No sales framing or hard CTA language in any beat.
 - Do NOT use any FORBIDDEN_TERM.
+- Do not use em dashes. Use a plain hyphen (-) instead.
 - Match the BRAND_VOICE tone throughout."""
 
 
@@ -112,7 +113,7 @@ def _build_intro_user_prompt(
     if scope_statement:
         parts.append(f"SCOPE_STATEMENT: {scope_statement}")
 
-    # ICP / audience context — primary driver of Agree style selection and
+    # ICP / audience context - primary driver of Agree style selection and
     # grounding. Pulled from the distilled brand voice card, which encodes
     # client_context.icp_text.
     if brand_voice_card:
@@ -139,14 +140,14 @@ def _build_intro_user_prompt(
             parts.append("\nAUDIENCE:")
             parts.extend(f"  {p}" for p in audience_parts)
 
-    # Supporting data — enables data_led / research_reframe styles.
+    # Supporting data - enables data_led / research_reframe styles.
     if supporting_data:
         parts.append(f"\nSUPPORTING_DATA: {supporting_data}")
 
-    # Article topic context — helps the LLM understand the article's scope
+    # Article topic context - helps the LLM understand the article's scope
     # when crafting the curiosity-hook Preview. Not to be enumerated.
     if h2_list:
-        parts.append("\nARTICLE_TOPICS (context only — do NOT enumerate these in the Preview):")
+        parts.append("\nARTICLE_TOPICS (context only - do NOT enumerate these in the Preview):")
         for h2 in h2_list[:8]:
             parts.append(f"  - {h2}")
 
@@ -170,7 +171,7 @@ def _build_intro_user_prompt(
             )
         if brand_voice_card.discouraged_terms:
             parts.append(
-                f"DISCOURAGED (avoid where possible — softer than forbidden): "
+                f"DISCOURAGED (avoid where possible - softer than forbidden): "
                 f"{', '.join(brand_voice_card.discouraged_terms[:10])}"
             )
 
@@ -229,7 +230,7 @@ def _validate_intro_blocks(
     if _LIST_MARKER_RE.search(combined):
         return (
             False,
-            "Previous attempt contained list markers. Write prose only — no "
+            "Previous attempt contained list markers. Write prose only - no "
             "bulleted or numbered lists.",
         )
 
@@ -295,7 +296,7 @@ async def write_intro(
         last_blocks = (agree, promise, preview)
         body = f"{agree}\n\n{promise}\n\n{preview}"
 
-        # Banned-term check — same retry-then-abort policy as body sections
+        # Banned-term check - same retry-then-abort policy as body sections
         # per Writer v1.5 §4.4.3.
         matches = find_banned(body, banned_regex)
         if matches and attempt == 0:
@@ -370,6 +371,6 @@ def _placeholder_intro(order: int) -> ArticleSection:
         level="none",
         type="intro",
         heading=None,
-        body="[INTRO GENERATION FAILED — MANUAL REVIEW REQUIRED]",
+        body="[INTRO GENERATION FAILED - MANUAL REVIEW REQUIRED]",
         word_count=0,
     )

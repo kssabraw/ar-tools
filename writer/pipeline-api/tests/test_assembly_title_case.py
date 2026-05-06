@@ -1,4 +1,4 @@
-"""Step 11.x — Title case normalization (PRD v2.0.3)."""
+"""Step 11.x - Title case normalization (PRD v2.0.3)."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ def test_h2_and_h3_normalized():
 
 
 def test_faq_questions_NOT_normalized():
-    """FAQ questions are full sentences ending with `?` — they must
+    """FAQ questions are full sentences ending with `?` - they must
     NOT be passed through titlecase (would mangle natural sentence case)."""
     items, _ = assemble_structure(
         keyword="kw",
@@ -112,7 +112,7 @@ def test_idempotent_round_trip():
 
 def test_apply_title_case_preserves_brand_proper_nouns():
     """The titlecase library handles 'TikTok', 'iPhone', etc.
-    correctly — should not mangle them to 'Tiktok' or 'IPhone'."""
+    correctly - should not mangle them to 'Tiktok' or 'IPhone'."""
     h2 = _h2("how does TikTok rank stores")
     items, _ = assemble_structure(
         keyword="kw", intent="how-to",
@@ -128,7 +128,7 @@ def test_apply_title_case_preserves_brand_proper_nouns():
 def test_no_changes_to_silo_or_discarded_paths():
     """Title case applies only to heading_structure[].text. This test
     confirms the assemble_structure scope is limited to its return value
-    — no spillover into other module outputs."""
+    - no spillover into other module outputs."""
     items, cut = assemble_structure(
         keyword="kw", intent="how-to",
         h2s=[],
@@ -137,6 +137,6 @@ def test_no_changes_to_silo_or_discarded_paths():
         title="how to do x",
     )
     # cut is empty (no candidates rejected by global cap in this fixture);
-    # nothing to assert beyond that it's a list — ensures we didn't leak
+    # nothing to assert beyond that it's a list - ensures we didn't leak
     # title-case mutation into the cut path.
     assert isinstance(cut, list)

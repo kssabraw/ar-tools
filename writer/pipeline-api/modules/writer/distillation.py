@@ -1,8 +1,8 @@
-"""Step 3.5a — Brand Voice Distillation.
+"""Step 3.5a - Brand Voice Distillation.
 
 Single Claude call. Compresses brand_guide_text + icp_text + (optional)
 website_analysis into a structured BrandVoiceCard. Tone signals come ONLY
-from brand_guide_text — website_analysis provides factual reference data
+from brand_guide_text - website_analysis provides factual reference data
 (services, locations, contact_info) only.
 
 Categorization-only: never invent banned/preferred terms.
@@ -20,7 +20,7 @@ from modules.brief.llm import claude_json
 logger = logging.getLogger(__name__)
 
 
-DISTILLATION_SYSTEM = """You are a categorization-only LLM. Your job is to extract and summarize brand voice signals from the provided source documents — never to infer brand opinions that are not stated.
+DISTILLATION_SYSTEM = """You are a categorization-only LLM. Your job is to extract and summarize brand voice signals from the provided source documents - never to infer brand opinions that are not stated.
 
 You must output a single JSON object matching this exact schema:
 {
@@ -28,9 +28,9 @@ You must output a single JSON object matching this exact schema:
   "tone_adjectives": [string],
   "voice_directives": [string, max 200 chars each, max 8 items],
   "audience_summary": string (max 300 chars),
-  "audience_personas": [string, max 8 items — job titles or roles the ICP names, e.g. "VP of Growth", "CMO", "Director of Marketing"],
-  "audience_verticals": [string, max 12 items — industry verticals or categories the ICP targets, e.g. "Beauty", "Health & Wellness", "Pet Care"],
-  "audience_company_size": string (max 120 chars — the company-size descriptor the ICP uses, e.g. "$20M+ ARR (sweet spot $30M–$100M)"),
+  "audience_personas": [string, max 8 items - job titles or roles the ICP names, e.g. "VP of Growth", "CMO", "Director of Marketing"],
+  "audience_verticals": [string, max 12 items - industry verticals or categories the ICP targets, e.g. "Beauty", "Health & Wellness", "Pet Care"],
+  "audience_company_size": string (max 120 chars - the company-size descriptor the ICP uses, e.g. "$20M+ ARR (sweet spot $30M–$100M)"),
   "audience_pain_points": [string, max 5 items],
   "audience_goals": [string, max 5 items],
   "preferred_terms": [string, max 20 items],
@@ -42,10 +42,10 @@ You must output a single JSON object matching this exact schema:
 }
 
 CRITICAL RULES:
-- brand_name is the proper noun the brand uses for itself in the brand guide. Extract it verbatim — do NOT paraphrase or expand acronyms. If the brand guide does not state a name, return "".
+- brand_name is the proper noun the brand uses for itself in the brand guide. Extract it verbatim - do NOT paraphrase or expand acronyms. If the brand guide does not state a name, return "".
 - tone_adjectives and voice_directives come ONLY from the brand guide text. NEVER from website analysis.
-- A term is "banned" ONLY when the brand guide uses literal prohibitive language about it: "never use", "do not use", "DO NOT", "banned", "prohibited", "must not appear", "absolute no", or equivalent. The bar is HIGH — banned means the writer must error if the term appears.
-- A term is "discouraged" when the brand guide expresses any softer preference against it — "avoid", "we prefer X over Y", "try not to use", "lean away from", "use sparingly", "minimize", or any preference-without-prohibition language. When in doubt between banned and discouraged, classify as discouraged.
+- A term is "banned" ONLY when the brand guide uses literal prohibitive language about it: "never use", "do not use", "DO NOT", "banned", "prohibited", "must not appear", "absolute no", or equivalent. The bar is HIGH - banned means the writer must error if the term appears.
+- A term is "discouraged" when the brand guide expresses any softer preference against it - "avoid", "we prefer X over Y", "try not to use", "lean away from", "use sparingly", "minimize", or any preference-without-prohibition language. When in doubt between banned and discouraged, classify as discouraged.
 - A term is "preferred" when the brand guide names it as preferred phrasing.
 - audience_summary, audience_personas, audience_verticals, audience_company_size, audience_pain_points, audience_goals all come from the ICP text.
 - audience_personas: extract the named job titles/roles verbatim (e.g. "VP of Growth", "Director of Marketing"). Do not infer titles that aren't in the ICP.
@@ -63,7 +63,7 @@ def _build_user_prompt(ctx: ClientContextInput) -> str:
     parts.append("\n=== ICP (IDEAL CUSTOMER PROFILE) TEXT ===")
     parts.append(ctx.icp_text or "(empty)")
     if not ctx.website_analysis_unavailable and ctx.website_analysis:
-        parts.append("\n=== WEBSITE ANALYSIS (factual reference only — services, locations, contact_info) ===")
+        parts.append("\n=== WEBSITE ANALYSIS (factual reference only - services, locations, contact_info) ===")
         wa = ctx.website_analysis
         parts.append(f"services: {wa.get('services', [])}")
         parts.append(f"locations: {wa.get('locations', [])}")

@@ -1,4 +1,4 @@
-"""Step 4 — Subtopic Aggregation (Brief Generator v2.0).
+"""Step 4 - Subtopic Aggregation (Brief Generator v2.0).
 
 Implements PRD §5 Step 4. Combines every candidate source into a unified
 list of v2 `Candidate` objects (defined in graph.py) with:
@@ -15,7 +15,7 @@ Sources combined (PRD §5 Step 4):
   - Keyword suggestions
   - LLM fan-out queries (4 LLMs)
   - LLM response extractions (4 LLMs)
-  - Persona gap questions (added in second pass — PRD §5 Step 4 ordering note)
+  - Persona gap questions (added in second pass - PRD §5 Step 4 ordering note)
 
 Dedup uses Levenshtein ratio ≤ 0.15 (matching the v1.7 threshold) so
 near-paraphrases collapse into a single candidate. The first occurrence
@@ -23,7 +23,7 @@ wins on text + source attribution; SERP signal beats LLM signal when
 merging since SERP frequency is strictly more authoritative.
 
 This module is the v2.0 replacement for `scoring.aggregate_candidates`.
-The output type is the v2 `Candidate` from graph.py — not the v1.8
+The output type is the v2 `Candidate` from graph.py - not the v1.8
 HeadingCandidate.
 """
 
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 # `llm_fanout_consensus`. fan-out and response from the same LLM count once.
 _LLM_PREFIXES = ("llm_fanout_", "llm_response_")
 
-# Levenshtein ratio threshold for fuzzy dedup (PRD §5 Step 4 — unchanged).
+# Levenshtein ratio threshold for fuzzy dedup (PRD §5 Step 4 - unchanged).
 LEVENSHTEIN_DEDUP_THRESHOLD = 0.15
 
 
@@ -117,7 +117,7 @@ def aggregate_candidates(
     """
     raw: list[Candidate] = []
 
-    # SERP candidates first — they bring serp_frequency and avg_serp_position.
+    # SERP candidates first - they bring serp_frequency and avg_serp_position.
     for stats in serp_stats.values():
         text = stats.get("representative_text") or ""
         if not text:

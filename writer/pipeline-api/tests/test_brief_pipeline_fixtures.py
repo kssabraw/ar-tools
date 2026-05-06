@@ -4,11 +4,11 @@ Each fixture mocks the appropriate external layers and asserts the
 PRD's expected behavior over the full orchestrator. These tests are
 the integration-level regression net for the v2.0.x feature set:
 
-  Fixture A — TikTok Shop replication (extended for v2.0.2 silo fields)
-  Fixture D — Constraint exhaustion (h2_shortfall handling)
-  Fixture H — H3 sparsity (Step 8.6 zero-attachment edge case)
-  Fixture I — Silo discard reason filtering (Step 12.1)
-  Fixture J — Silo viability rejection (Step 12.4)
+  Fixture A - TikTok Shop replication (extended for v2.0.2 silo fields)
+  Fixture D - Constraint exhaustion (h2_shortfall handling)
+  Fixture H - H3 sparsity (Step 8.6 zero-attachment edge case)
+  Fixture I - Silo discard reason filtering (Step 12.1)
+  Fixture J - Silo viability rejection (Step 12.4)
 """
 
 from __future__ import annotations
@@ -39,13 +39,13 @@ def _normalize(v: list[float]) -> list[float]:
 # eligible band [0.55, 0.78] for in-scope topics.
 _TOPIC_AXES: list[tuple[str, int, float]] = [
     # (substring, axis, title-axis weight)
-    # — title-restatement (cosine > 0.85): drop directly on axis 0
+    # - title-restatement (cosine > 0.85): drop directly on axis 0
     ("what is tiktok shop", 0, 0.97),
     ("what is the tiktok shop", 0, 0.97),
     ("what exactly is tiktok shop", 0, 0.97),
     ("what does tiktok shop", 0, 0.95),
     ("what tiktok shop", 0, 0.94),
-    # — in-band useful subtopics: cosine ~0.70 to title; spread axes 1–4
+    # - in-band useful subtopics: cosine ~0.70 to title; spread axes 1–4
     ("how does tiktok shop work", 1, 0.70),
     ("how it works", 1, 0.70),
     ("how tiktok shop works", 1, 0.70),
@@ -57,12 +57,12 @@ _TOPIC_AXES: list[tuple[str, int, float]] = [
     ("charge", 3, 0.70),
     ("cost", 3, 0.70),
     ("payment", 3, 0.70),
-    # — persona gap questions land on axis 4 so they cluster together
+    # - persona gap questions land on axis 4 so they cluster together
     ("gap question", 4, 0.70),
-    # — algorithm-tactical: in eligible band but typically out-of-scope
+    # - algorithm-tactical: in eligible band but typically out-of-scope
     ("algorithm", 5, 0.65),
     ("optimize", 5, 0.65),
-    # — off-topic: orthogonal to title (below relevance floor)
+    # - off-topic: orthogonal to title (below relevance floor)
     ("cooking", 7, 0.0),
     ("recipes", 7, 0.0),
 ]
@@ -141,7 +141,7 @@ def _build_serp_items(
             "rank_absolute": i + 1,
             "rank_group": i + 1,
             "url": f"https://site{i}.example.com/article",
-            "title": f"What TikTok Shop Is and How It Works — Article {i}",
+            "title": f"What TikTok Shop Is and How It Works - Article {i}",
             "description": description_template.format(i=i),
         })
     if extras:
@@ -302,7 +302,7 @@ def _make_default_claude_router(
         if "extract all distinct subtopics" in sys_l:
             return ["Setup process", "Seller fees", "Payment methods"]
 
-        # Step 12.4 viability — Anthropic prompt starts with
+        # Step 12.4 viability - Anthropic prompt starts with
         # "You verify whether a candidate silo keyword..."
         if "viable" in sys_l and "standalone" in sys_l:
             # Extract the candidate keyword from the user prompt
@@ -383,7 +383,7 @@ def _fixture_mocks(
 
 
 # ----------------------------------------------------------------------
-# Fixture A — TikTok Shop replication (extended for v2.0.2)
+# Fixture A - TikTok Shop replication (extended for v2.0.2)
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -415,20 +415,20 @@ async def test_fixture_a_tiktok_shop_v2_0_2_silo_fields_present():
     assert scope_silos, "expected a scope_verification-routed silo"
 
     for silo in result.silo_candidates:
-        # 12.3 — every silo must clear the demand floor (lowered to
+        # 12.3 - every silo must clear the demand floor (lowered to
         # 0.15 in v2.4; strong-priority candidates bypass via
         # SILO_STRONG_PRIORITY_BYPASS at 0.30).
         assert silo.search_demand_score >= 0.15
-        # 12.4 — default router returns viable=true for all
+        # 12.4 - default router returns viable=true for all
         assert silo.viable_as_standalone_article is True
         assert silo.viability_reasoning  # non-empty
         assert silo.estimated_intent in {
             "informational", "listicle", "how-to", "comparison",
             "ecom", "local-seo", "news", "informational-commercial",
         }
-        # 12.5 — v2.0.2 default
+        # 12.5 - v2.0.2 default
         assert silo.cross_brief_occurrence_count == 1
-        # 12.6 — discard breakdown is the correct shape. May legitimately
+        # 12.6 - discard breakdown is the correct shape. May legitimately
         # be empty when a candidate materialized cleanly with no
         # discarded members (e.g. a singleton via scope_verification).
         assert isinstance(silo.discard_reason_breakdown, dict)
@@ -462,13 +462,13 @@ async def test_fixture_a_h3s_within_h2s_obey_step_8_6_bounds():
 
 
 # ----------------------------------------------------------------------
-# Fixture D — Constraint exhaustion
+# Fixture D - Constraint exhaustion
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_fixture_d_constraint_exhaustion_flags_h2_shortfall():
     """Construct a scenario where eligible candidates cluster heavily into
-    a single region — MMR's region uniqueness constraint produces a
+    a single region - MMR's region uniqueness constraint produces a
     shortfall, which must be flagged in metadata (PRD §5 Step 8)."""
     from modules.brief.pipeline import run_brief
 
@@ -504,14 +504,14 @@ async def test_fixture_d_constraint_exhaustion_flags_h2_shortfall():
 
 
 # ----------------------------------------------------------------------
-# Fixture H — H3 sparsity
+# Fixture H - H3 sparsity
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_fixture_h_h3_sparsity_metadata_populated():
     """The smart embedder produces tight intra-region cosines (≥0.95) so
     Step 8.6's parent_restatement_ceiling (0.85) rejects most candidates
-    — every selected H2 ends up with zero non-authority H3s. The
+    - every selected H2 ends up with zero non-authority H3s. The
     metadata must surface that condition cleanly.
     """
     from modules.brief.pipeline import run_brief
@@ -522,7 +522,7 @@ async def test_fixture_h_h3_sparsity_metadata_populated():
 
     # Sanity: at least one H2 selected so the metadata is meaningful
     assert result.metadata.h2_count >= 1
-    # h2s_with_zero_h3s ≤ h2_count — they're counts of the same set
+    # h2s_with_zero_h3s ≤ h2_count - they're counts of the same set
     assert (
         result.metadata.h2s_with_zero_h3s <= result.metadata.h2_count
     )
@@ -537,12 +537,12 @@ async def test_fixture_h_h3_sparsity_metadata_populated():
 
 
 # ----------------------------------------------------------------------
-# Fixture I — Silo discard reason filtering (Step 12.1)
+# Fixture I - Silo discard reason filtering (Step 12.1)
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_fixture_i_above_restatement_ceiling_excluded_from_silos():
-    """PRD §5 Step 12.1: above_restatement_ceiling is "No" — these
+    """PRD §5 Step 12.1: above_restatement_ceiling is "No" - these
     headings must NOT appear in silo_candidates."""
     from modules.brief.pipeline import run_brief
 
@@ -557,7 +557,7 @@ async def test_fixture_i_above_restatement_ceiling_excluded_from_silos():
     }
     # Non-vacuous: synthetic SERP titles include "What TikTok Shop Is"
     # paraphrases that the smart embedder maps to axis 0 with cosine
-    # ≥ 0.94 to title — these must end up in restatement discards.
+    # ≥ 0.94 to title - these must end up in restatement discards.
     assert restatement_texts, (
         "expected at least one above_restatement_ceiling discard"
     )
@@ -580,7 +580,7 @@ async def test_fixture_i_above_restatement_ceiling_excluded_from_silos():
 
 
 # ----------------------------------------------------------------------
-# Fixture J — Silo viability rejection (Step 12.4)
+# Fixture J - Silo viability rejection (Step 12.4)
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""Step 6.8 — ICP callout LLM judge.
+"""Step 6.8 - ICP callout LLM judge.
 
 The judge runs after the article is finalized and verifies that the
 section designated as the ICP anchor actually surfaced the audience
@@ -115,7 +115,7 @@ async def test_judge_prompt_contains_hook_and_audience_signals():
 
 
 # ---------------------------------------------------------------------------
-# Skip / no-op paths — must NOT call the judge
+# Skip / no-op paths - must NOT call the judge
 # ---------------------------------------------------------------------------
 
 
@@ -244,7 +244,7 @@ async def test_judge_payload_not_dict_returns_none():
 
 @pytest.mark.asyncio
 async def test_judge_landed_field_not_bool_returns_none():
-    """LLM occasionally returns a string instead of a bool — must not
+    """LLM occasionally returns a string instead of a bool - must not
     silently coerce 'true' / 'false' strings into True/False because
     they could mask real judge failures."""
     async def _judge(*a, **kw):
@@ -333,7 +333,7 @@ async def test_long_body_uses_head_plus_tail_truncation():
     assert head_marker in body_section
     assert tail_marker in body_section
     assert "[truncated middle]" in body_section
-    # Bounded prompt size — head (2500) + tail (2500) + marker + frame.
+    # Bounded prompt size - head (2500) + tail (2500) + marker + frame.
     assert len(body_section) < 5500
 
 
@@ -360,7 +360,7 @@ async def test_anchor_heading_match_tolerates_trailing_punctuation():
     """The heading SEO optimizer can append punctuation (e.g. a colon)
     or the brief can author a heading with a question mark; either
     side may have it. Match must succeed when only trailing punctuation
-    differs — without this, the validator silently flags
+    differs - without this, the validator silently flags
     `anchor_not_in_article` on otherwise-fine articles."""
     judge = _make_judge(landed=True, evidence="audience")
     # Article heading has trailing colon; plan stored bare text.

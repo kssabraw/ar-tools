@@ -1,4 +1,4 @@
-"""POST /sie — SERP Intelligence Engine endpoint."""
+"""POST /sie - SERP Intelligence Engine endpoint."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ async def generate_sie(request: SIERequest) -> SIEResponse:
     try:
         result = await run_sie(request)
     except SIEError as exc:
-        logger.warning("sie.failed: %s — %s", exc.code, exc.message)
+        logger.warning("sie.failed: %s - %s", exc.code, exc.message)
         raise HTTPException(status_code=422, detail=exc.message)
     except Exception as exc:
         logger.exception("sie.unexpected: %s", exc)

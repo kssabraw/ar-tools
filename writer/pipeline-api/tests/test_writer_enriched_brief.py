@@ -51,7 +51,7 @@ def _base_sie() -> dict:
 
 def test_validate_inputs_uses_enriched_brief_when_research_provides_it():
     """If research_output.enriched_brief.heading_structure exists,
-    _validate_inputs MUST return that — not the original brief — so
+    _validate_inputs MUST return that - not the original brief - so
     citation_ids attached by Research flow into section writing."""
     brief = _base_brief()  # citation_ids all empty
     enriched = _base_brief(citation_ids_in_brief=["cit_001"])
@@ -94,7 +94,7 @@ def test_validate_inputs_falls_back_to_brief_when_no_research_output():
 
 def test_validate_inputs_falls_back_when_enriched_brief_lacks_heading_structure():
     """If research_output exists but enriched_brief.heading_structure is
-    empty/missing, fall back to the original brief — never crash."""
+    empty/missing, fall back to the original brief - never crash."""
     brief = _base_brief(citation_ids_in_brief=["cit_brief"])
     research = {
         "enriched_brief": {"keyword": "x"},  # no heading_structure key

@@ -9,7 +9,7 @@ from modules.sources_cited.entries import build_sources_cited_sections
 
 def test_empty_citations_suppresses_sources_cited_sections():
     """When no citations were placed in the body, ordered_used_citations
-    is empty — building Sources Cited should return zero sections rather
+    is empty - building Sources Cited should return zero sections rather
     than emit `<ol class="sources-cited"></ol>` with no entries.
     """
     sections, flags = build_sources_cited_sections(

@@ -1,6 +1,6 @@
 """Google Cloud Natural Language API client for SIE entity extraction.
 
-Uses the REST API with an API key (GOOGLE_NLP_API_KEY) via httpx — no
+Uses the REST API with an API key (GOOGLE_NLP_API_KEY) via httpx - no
 service account JSON required.
 
 SIE v1.1 (replaces v1.0's hard salience >= 0.40 gate):
@@ -8,7 +8,7 @@ SIE v1.1 (replaces v1.0's hard salience >= 0.40 gate):
     0.10) so low-salience entities with cross-SERP recurrence aren't
     discarded at extraction time. Hybrid scoring in `entities.py`
     promotes them based on the composite signal.
-  - Type whitelist removed — every Google NLP entity type passes
+  - Type whitelist removed - every Google NLP entity type passes
     through the extractor. NUMBER / DATE / PRICE / PHONE_NUMBER
     entities are filtered downstream by the noise penalty in the
     composite score (typically low salience + low recurrence anyway).
@@ -68,7 +68,7 @@ def _truncate_to_bytes(text: str, max_bytes: int) -> str:
 def _is_navigational(name: str) -> bool:
     """True when `name` looks like menu/footer junk rather than content.
 
-    SIE v1.1 — tightened from substring match to exact-token match so
+    SIE v1.1 - tightened from substring match to exact-token match so
     legitimate entities containing a navigational word as part of their
     proper noun ("TikTok Shop", "Facebook Marketing Strategy") are NOT
     filtered. Only entities whose entire name IS one of the patterns
@@ -89,7 +89,7 @@ async def analyze_entities(url: str, text: str) -> PageNERResult:
     """Run analyzeEntities on a single page's cleaned body text."""
     api_key = settings.google_nlp_api_key.strip()
     if not api_key:
-        logger.info("Google NLP API key not configured — entity extraction disabled")
+        logger.info("Google NLP API key not configured - entity extraction disabled")
         return PageNERResult(url=url, failed=True, failure_reason="not_configured")
 
     if not text or not text.strip():
@@ -120,7 +120,7 @@ async def analyze_entities(url: str, text: str) -> PageNERResult:
     floor = settings.google_nlp_min_salience_floor
     entities: list[NEREntity] = []
     for entity in data.get("entities", []):
-        # SIE v1.1 — soft salience floor (default 0.10) replaces the
+        # SIE v1.1 - soft salience floor (default 0.10) replaces the
         # prior hard 0.40 gate. Entities surviving here are scored
         # downstream against recurrence + mentions before promotion.
         if entity.get("salience", 0) < floor:

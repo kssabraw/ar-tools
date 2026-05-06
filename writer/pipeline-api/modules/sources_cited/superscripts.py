@@ -1,4 +1,4 @@
-"""Step 2 — Superscript injection with stacked-marker ascending sort.
+"""Step 2 - Superscript injection with stacked-marker ascending sort.
 
 Per sources-cited-module-prd-v1_1.md §7 Step 2:
 - Each {{cit_N}} marker → <sup><a href="#sources-cited-{n}" id="ref-{cit_id}-{instance}">[{n}]</a></sup>
@@ -69,7 +69,7 @@ def _find_stacked_groups(body: str) -> list[tuple[int, int, list[str]]]:
 
     for m in matches[1:]:
         if m.start() == current_end:
-            # Adjacent — extend current group
+            # Adjacent - extend current group
             current_end = m.end()
             current_ids.append(m.group(1))
         else:

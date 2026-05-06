@@ -7,7 +7,7 @@
 - OpenAI text-embedding-3-small (`embed_batch`) for: legacy v1.8 brief
   pipeline, SIE filters, and Research & Citations snippet ranking.
 - OpenAI text-embedding-3-large (`embed_batch_large`) for: Brief Generator
-  v2.0 — finer-grained paraphrase discrimination and the coverage graph.
+  v2.0 - finer-grained paraphrase discrimination and the coverage graph.
 
 All Anthropic calls are wrapped in a single global semaphore (default 5
 concurrent, configurable via `anthropic_max_concurrency`) to dodge the
@@ -87,7 +87,7 @@ def _extract_json_payload(text: str) -> Any:
     1. Try parsing the full string verbatim (fast path for clean responses).
     2. Strip a markdown code fence if one wraps the payload.
     3. Walk forward through the text; at every `[` or `{` try
-       `json.JSONDecoder().raw_decode()` — that returns the first complete
+       `json.JSONDecoder().raw_decode()` - that returns the first complete
        JSON value and ignores trailing prose.
 
     Raises json.JSONDecodeError if no parseable JSON value is found.
@@ -102,7 +102,7 @@ def _extract_json_payload(text: str) -> Any:
     except json.JSONDecodeError:
         pass
 
-    # Strip a fenced block if one wraps the payload (relaxed — does not
+    # Strip a fenced block if one wraps the payload (relaxed - does not
     # require the fence to be at start/end of the entire string)
     fence = re.search(r"```(?:json)?\s*(.*?)\s*```", stripped, re.DOTALL)
     if fence:
@@ -187,7 +187,7 @@ async def claude_json(
         except json.JSONDecodeError as exc:
             last_error = exc
             logger.warning(
-                "claude_json parse failed (attempt %s/2): %s — stop_reason=%s response head=%r",
+                "claude_json parse failed (attempt %s/2): %s - stop_reason=%s response head=%r",
                 attempt + 1,
                 exc,
                 stop_reason,

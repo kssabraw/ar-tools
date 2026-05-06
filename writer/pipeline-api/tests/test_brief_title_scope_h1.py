@@ -1,7 +1,7 @@
 """Tests for the separate H1 field added to title_scope (PRD v2.0
 Step 3.5 extension).
 
-The brief now emits BOTH a `title` (SEO/meta — browser tab, SERP) AND
+The brief now emits BOTH a `title` (SEO/meta - browser tab, SERP) AND
 an `h1` (on-page main heading). They may be the same string or differ
 slightly. The H1 has a longer length cap (130 vs 100 chars) because
 on-page headings are allowed to be more descriptive than SERP titles.

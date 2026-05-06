@@ -76,7 +76,7 @@ def cluster_candidates(
     """Greedy single-link clustering at the hard threshold; collect soft pairs.
 
     Both thresholds operate on the same precomputed embeddings (from Step 5).
-    The function does not pick canonicals or merge metrics — that's done by
+    The function does not pick canonicals or merge metrics - that's done by
     the caller after `compute_priority` runs on the canonicals.
     """
     n = len(candidates)
@@ -86,7 +86,7 @@ def cluster_candidates(
     parent = _union_find_init(n)
     soft_pairs: list[SoftPair] = []
 
-    # O(n^2) — fine for the pool sizes we see (typically 30–100 candidates
+    # O(n^2) - fine for the pool sizes we see (typically 30–100 candidates
     # after Step 5 filtering). If pool sizes ever spike, swap for an
     # approximate-NN index, but keep deterministic ordering.
     for i in range(n):
@@ -125,7 +125,7 @@ def assign_cluster_ids(
     Cluster IDs are sequential starting at 0, ordered by the highest-priority
     candidate in the cluster (so cluster 0 is the most important cluster).
     The caller must have run `compute_priority` before this for stable
-    ordering — otherwise priorities are 0.0 and cluster ordering is unstable.
+    ordering - otherwise priorities are 0.0 and cluster ordering is unstable.
     """
     # Sort clusters by max priority within them, descending
     indexed = [
@@ -242,6 +242,6 @@ def _rollup_cluster_signals(
     canonical.source_urls = url_set
 
 
-# Forward-declared in scoring.py to avoid circular imports — re-imported here
+# Forward-declared in scoring.py to avoid circular imports - re-imported here
 # only for the canonical's `cluster_variants` field.
 from .scoring import ClusterVariant  # noqa: E402

@@ -1,4 +1,4 @@
-"""Unit tests for Brief Generator v2.0 Step 3.5 — title + scope generation.
+"""Unit tests for Brief Generator v2.0 Step 3.5 - title + scope generation.
 
 Mocks the LLM via injected `llm_json_fn`; no real Claude calls.
 """

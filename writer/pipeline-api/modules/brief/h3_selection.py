@@ -1,9 +1,9 @@
-"""Step 8.6 — H3 Selection (Brief Generator v2.0.x → v2.2).
+"""Step 8.6 - H3 Selection (Brief Generator v2.0.x → v2.2).
 
 Implements PRD §5 Step 8.6. Per-H2 MMR over the candidate pool that
 remains after Step 8 (the eligible pool minus the H2s themselves).
 
-Algorithm — for each selected H2:
+Algorithm - for each selected H2:
 
   1. parent_relevance = cosine(H3_candidate, H2)
   2. Filter:
@@ -13,7 +13,7 @@ Algorithm — for each selected H2:
   3. MMR with target=2, inter_h3_threshold=0.78, mmr_lambda=0.7,
      where each candidate's "priority" reuses the Step 7 formula but
      swaps title_relevance → parent_relevance for THIS parent H2.
-  4. Accept shortfalls. Per-H2 H3 count is informational only — H3s
+  4. Accept shortfalls. Per-H2 H3 count is informational only - H3s
      are never required.
 
 PRD v2.2 / Phase 2 tightening: the floor moved from 0.60 → 0.65 and the
@@ -34,7 +34,7 @@ Discard reason mapping (PRD §5 Step 12.1):
   Lost MMR → discard_reason="below_priority_threshold"
 
 A candidate's discard_reason is only stamped if it FAILS against EVERY
-selected H2 — a heading that's a great H3 for H2[2] but too close to
+selected H2 - a heading that's a great H3 for H2[2] but too close to
 H2[1]'s topic should not be tagged as a global reject.
 """
 
@@ -49,7 +49,7 @@ from .graph import Candidate, RegionInfo
 logger = logging.getLogger(__name__)
 
 
-# PRD v2.2 / Phase 2 — floor raised from 0.60 to 0.65.
+# PRD v2.2 / Phase 2 - floor raised from 0.60 to 0.65.
 PARENT_RELEVANCE_FLOOR = 0.65
 PARENT_RESTATEMENT_CEILING = 0.85
 INTER_H3_THRESHOLD = 0.78
@@ -66,7 +66,7 @@ def _cosine_unit(a: list[float], b: list[float]) -> float:
 def _h3_priority(parent_relevance: float, c: Candidate) -> float:
     """Step 7 formula with title_relevance swapped for parent_relevance.
 
-    Mirrors `priority.compute_priority` exactly — copying the formula
+    Mirrors `priority.compute_priority` exactly - copying the formula
     here rather than importing because the swap target is per-parent.
     """
     norm_freq = min((c.serp_frequency or 0) / 20.0, 1.0)
@@ -93,7 +93,7 @@ class H3SelectionResult:
     Candidates (with `parent_h2_text` and `parent_relevance` stamped).
 
     `globally_rejected` carries candidates that failed the parent-relevance
-    or restatement check against EVERY selected H2 — these get a discard
+    or restatement check against EVERY selected H2 - these get a discard
     reason and feed the `discarded_headings` list. Candidates that lost
     only the per-H2 MMR competition are stamped `below_priority_threshold`.
     """
@@ -129,7 +129,7 @@ def select_h3s_for_h2s(
         that picks it actually attaches it
       - Attached H3s have `parent_h2_text` and `parent_relevance` stamped
       - Lost-MMR candidates that were eligible for at least one H2 are
-        NOT stamped as globally rejected — they remain available to other
+        NOT stamped as globally rejected - they remain available to other
         layers (e.g., authority gap pool sees them clean)
       - Candidates that were never eligible (every H2 rejected them on
         parent_relevance bounds) get the appropriate `h3_*` discard reason
@@ -175,7 +175,7 @@ def select_h3s_for_h2s(
             if id(c) in selected_ids:
                 continue
             if id(c) in attached_ids:
-                # Already taken by an earlier H2 — counts as "eligible for
+                # Already taken by an earlier H2 - counts as "eligible for
                 # some H2" so it never lands in globally_rejected.
                 eligible_for_some_h2.add(j)
                 continue

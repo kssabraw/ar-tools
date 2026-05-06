@@ -1,4 +1,4 @@
-"""Unit tests for Brief Generator v2.0 Step 8.5 — scope verification.
+"""Unit tests for Brief Generator v2.0 Step 8.5 - scope verification.
 
 Mocks the LLM via injected llm_json_fn; no real Claude calls.
 """
@@ -59,7 +59,7 @@ _SCOPE = (
 
 
 # ----------------------------------------------------------------------
-# Routing — in_scope / borderline / out_of_scope
+# Routing - in_scope / borderline / out_of_scope
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -134,7 +134,7 @@ async def test_mixed_classification_routes_correctly():
 
 
 # ----------------------------------------------------------------------
-# Empty input — no LLM call
+# Empty input - no LLM call
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -162,7 +162,7 @@ async def test_empty_input_returns_empty_result_no_llm_call():
 
 @pytest.mark.asyncio
 async def test_missing_h2_in_response_defaults_to_in_scope():
-    """LLM only classified one of three — the other two default to in_scope.
+    """LLM only classified one of three - the other two default to in_scope.
 
     PRD: 'no classification' is treated as a pass (we keep it).
     """

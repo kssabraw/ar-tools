@@ -1,4 +1,4 @@
-"""Step 6.7 — Per-H2 Body Length Validator (Writer PRD v1.6 / Phase 3)."""
+"""Step 6.7 - Per-H2 Body Length Validator (Writer PRD v1.6 / Phase 3)."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def _heading_struct(orders_to_text: dict[int, str], h3_parents: dict[int, str] |
     """Build a synthetic heading_structure aligned with the article."""
     out = []
     for order, text in orders_to_text.items():
-        # Default H2 at this point — caller can override below.
+        # Default H2 at this point - caller can override below.
         out.append({"order": order, "text": text, "level": "H2", "type": "content"})
     return out
 
@@ -157,7 +157,7 @@ def test_collect_h2_groups_handles_empty():
 
 
 # ---------------------------------------------------------------------------
-# validate_h2_body_lengths — happy paths + retries
+# validate_h2_body_lengths - happy paths + retries
 # ---------------------------------------------------------------------------
 
 
@@ -325,14 +325,14 @@ async def test_validator_aggregates_h2_with_h3_word_counts():
         banned_regex=None,
         write_h2_group_fn=fake,
     )
-    # 3 + 100 + 100 = 203 words, well above 120 — no retry.
+    # 3 + 100 + 100 = 203 words, well above 120 - no retry.
     assert state["calls"] == 0
     assert result.retries_attempted == 0
 
 
 @pytest.mark.asyncio
 async def test_validator_retry_failure_logs_and_flags():
-    """If write_h2_group raises, the validator must not crash — it
+    """If write_h2_group raises, the validator must not crash - it
     flags the section as under-length and continues."""
     article = [_h2(1, "Topic", "short")]
 
@@ -416,13 +416,13 @@ async def test_validator_skips_when_brief_heading_missing():
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 review fix #1 — section-count mismatch guard
+# Phase 3 review fix #1 - section-count mismatch guard
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_validator_refuses_splice_when_retry_returns_fewer_sections():
-    """Phase 3 review fix #1 — if write_h2_group's retry returns FEWER
+    """Phase 3 review fix #1 - if write_h2_group's retry returns FEWER
     sections than the original group (e.g. LLM merged H3 content into
     the parent), splicing would silently drop H3 sections from the
     article. The guard refuses the splice and flags as under-length."""
@@ -432,7 +432,7 @@ async def test_validator_refuses_splice_when_retry_returns_fewer_sections():
         _h3(3, "Sub B", "child b body"),
     ]
 
-    # Retry returns ONLY the H2 — drops the two H3 children.
+    # Retry returns ONLY the H2 - drops the two H3 children.
     async def fake_drop_h3s(*, h2_item, **kwargs):
         sec = ArticleSection(
             order=h2_item["order"],
@@ -462,7 +462,7 @@ async def test_validator_refuses_splice_when_retry_returns_fewer_sections():
         write_h2_group_fn=fake_drop_h3s,
     )
 
-    # Original article preserved — H3s NOT dropped.
+    # Original article preserved - H3s NOT dropped.
     assert len(result.validated_article) == 3
     assert result.validated_article[1].heading == "Sub A"
     assert result.validated_article[2].heading == "Sub B"
@@ -524,20 +524,20 @@ async def test_validator_refuses_splice_when_retry_returns_more_sections():
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 review fix #4 — structure_by_order level-mismatch guard
+# Phase 3 review fix #4 - structure_by_order level-mismatch guard
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_validator_skips_when_h2_order_collides_with_h3_in_structure():
     """If `order` collides between an H2 and an H3 in heading_structure
-    (defensive — brief assembly assigns unique sequential orders, but
+    (defensive - brief assembly assigns unique sequential orders, but
     a regression elsewhere could break the invariant), the level guard
     refuses to use the H3-keyed dict as the H2's source of truth."""
     article = [_h2(1, "Topic", "short")]
     fake, state = _make_retry_fn("ignored")
 
-    # Heading_structure has order=1 mapped to an H3 entry — wrong level.
+    # Heading_structure has order=1 mapped to an H3 entry - wrong level.
     result = await validate_h2_body_lengths(
         article,
         min_h2_body_words=120,

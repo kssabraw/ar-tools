@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 TierLabel = Literal[1, 2, 3]
 
 
-# Tier 1 — explicit allowlist of authoritative organizations
+# Tier 1 - explicit allowlist of authoritative organizations
 TIER_1_DOMAINS: frozenset[str] = frozenset({
     "who.int", "cdc.gov", "fda.gov", "nih.gov", "nist.gov", "epa.gov",
     "ftc.gov", "sec.gov", "bls.gov", "census.gov", "energy.gov",
@@ -31,7 +31,7 @@ TIER_1_DOMAINS: frozenset[str] = frozenset({
 
 TIER_1_TLDS: tuple[str, ...] = (".gov", ".edu", ".mil")
 
-# Tier 2 — major publications, trade press, research firms
+# Tier 2 - major publications, trade press, research firms
 TIER_2_DOMAINS: frozenset[str] = frozenset({
     "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk",
     "washingtonpost.com", "nytimes.com", "wsj.com",
@@ -56,7 +56,7 @@ EXCLUDED_DOMAINS: frozenset[str] = frozenset({
     "quora.com", "medium.com",  # often UGC; can be reconsidered
 })
 
-# Content farms — poor-quality auto-generated content
+# Content farms - poor-quality auto-generated content
 CONTENT_FARMS: frozenset[str] = frozenset({
     "ehow.com", "answers.com", "wisegeek.com", "wikihow.com",
     "buzzle.com", "ezinearticles.com", "hubpages.com",

@@ -5,7 +5,7 @@ each zone of the produced article (Title, H1, Subheadings, Body) and extracts
 the most frequent quadgrams (4-word phrases) per zone for an at-a-glance
 read on what the article is "about" lexically.
 
-Pure function — no LLM calls. Output is attached to the writer response so
+Pure function - no LLM calls. Output is attached to the writer response so
 the frontend can render a usage table below the article body.
 """
 
@@ -21,7 +21,7 @@ from typing import Optional
 ZONES: tuple[str, ...] = ("title", "h1", "subheadings", "body")
 
 
-# Common English stopwords. Kept narrow on purpose — we only use them to
+# Common English stopwords. Kept narrow on purpose - we only use them to
 # filter quadgrams that are entirely "the of and to in", which carry no
 # topical signal. Anything more aggressive risks killing real phrases like
 # "in the box" that are meaningful in context.
@@ -34,13 +34,13 @@ _STOPWORDS: frozenset[str] = frozenset({
     "we", "were", "will", "with", "you", "your",
 })
 
-# Citation marker pattern — strip these from body text before quadgram
+# Citation marker pattern - strip these from body text before quadgram
 # extraction so {{cit_005}} doesn't pollute phrases. The Sources Cited
 # module replaces them with <sup><a> tags before publication, but the
 # raw writer.article body still carries the {{cit_N}} form.
 _MARKER_RE = re.compile(r"\{\{cit_\d+\}\}")
 
-# Word tokenizer — keep alphanumerics, intra-word apostrophes (don't,
+# Word tokenizer - keep alphanumerics, intra-word apostrophes (don't,
 # brand's), and intra-word hyphens (well-known). Strip everything else.
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9'\-]*")
 
@@ -201,7 +201,7 @@ def compute_term_usage_by_zone(
     are returned, sorted by count desc (then alphabetically). Entities
     are split out from plain related keywords by `is_entity=True`.
 
-    Quadgrams are derived from the zone's own text — top 8 by frequency,
+    Quadgrams are derived from the zone's own text - top 8 by frequency,
     stopword-only phrases excluded.
     """
     zones = _zone_texts(title=title, h1=h1, article=article)

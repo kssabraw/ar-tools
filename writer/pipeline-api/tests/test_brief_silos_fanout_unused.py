@@ -2,7 +2,7 @@
 
 Motivation: production runs were producing zero silos because the
 search-demand floor (0.30) is computed from SERP frequency + LLM-fanout
-consensus + PAA/autocomplete/reddit signals — and a singleton sourced
+consensus + PAA/autocomplete/reddit signals - and a singleton sourced
 purely from `llm_fanout_*` rarely clears the floor on its own. The
 fanout LLMs themselves are a demand signal, so candidates whose source
 is `llm_fanout_*` and that didn't get used as an H2 are surfaced as
@@ -61,7 +61,7 @@ def test_is_fanout_source_helper():
 def test_unrouted_fanout_candidate_becomes_silo():
     """A fanout candidate sitting in candidate_pool with no discard
     reason and not in any cluster gets surfaced as a llm_fanout_unused
-    silo — bypassing the search-demand floor that would normally drop
+    silo - bypassing the search-demand floor that would normally drop
     it (low fanout-only signal)."""
     fanout = _fanout_cand("How to set up a tiktok shop")
     silos, _ = identify_silos(
@@ -93,14 +93,14 @@ def test_non_fanout_unrouted_candidate_not_routed():
 
 def test_fanout_relevance_floor_reject_bypasses_demand():
     """Fanout candidate that fell below the relevance floor with weak
-    aux signals would normally fail the demand check (0.30) — the
+    aux signals would normally fail the demand check (0.30) - the
     fanout source bypass surfaces it via the relevance_floor_reject
     path instead of dropping it."""
     fanout_reject = _fanout_cand(
         "Adjacent fanout topic",
         discard_reason="below_relevance_floor",
         serp_frequency=0,
-        llm_fanout_consensus=1,  # 0.25 * (1/4) = 0.0625 — below 0.30 floor
+        llm_fanout_consensus=1,  # 0.25 * (1/4) = 0.0625 - below 0.30 floor
     )
     silos, _ = identify_silos(
         regions=[],
@@ -150,7 +150,7 @@ def test_fanout_already_routed_not_double_emitted():
 
 def test_non_fanout_below_relevance_floor_still_filtered_by_demand():
     """Non-fanout candidate below relevance floor with low demand AND
-    low priority is filtered. v2.4 added a strong-priority bypass — a
+    low priority is filtered. v2.4 added a strong-priority bypass - a
     non-fanout candidate with heading_priority >= 0.30 would survive,
     so this fixture sets heading_priority=0.10 to exercise the
     rejection path."""
@@ -221,7 +221,7 @@ def test_strong_priority_bypass_threshold_respected():
 
 
 def test_strong_priority_bypass_in_scope_path():
-    """The bypass works across all singleton routing paths — verify
+    """The bypass works across all singleton routing paths - verify
     scope_verification path explicitly."""
     cand = _fanout_cand(
         "Substantive scope-rejected heading",
@@ -250,7 +250,7 @@ def test_lowered_default_threshold_admits_paa_singletons():
         discard_reason="below_relevance_floor",
         serp_frequency=0,
         llm_fanout_consensus=0,
-        heading_priority=0.10,  # below bypass — must pass via demand
+        heading_priority=0.10,  # below bypass - must pass via demand
     )
     silos, _ = identify_silos(
         regions=[],

@@ -1,6 +1,6 @@
 """Sources Cited pipeline tests.
 
-No external APIs to mock — module is fully deterministic.
+No external APIs to mock - module is fully deterministic.
 """
 
 from __future__ import annotations
@@ -130,7 +130,7 @@ def test_strips_unresolvable_markers_and_continues():
 
     bad_writer = dict(WRITER_OUTPUT)
     bad_writer["article"] = [dict(s) for s in WRITER_OUTPUT["article"]]
-    # cit_042 is NOT in RESEARCH_OUTPUT.citations — simulates the writer
+    # cit_042 is NOT in RESEARCH_OUTPUT.citations - simulates the writer
     # hallucinating a sequential ID like cit_001..cit_009.
     bad_writer["article"][1]["body"] = (
         bad_writer["article"][1]["body"] + " Hallucinated.{{cit_042}}"
@@ -148,7 +148,7 @@ def test_strips_unresolvable_markers_and_continues():
 
 
 def test_logs_writer_integrity_violation_and_continues():
-    """Marker in prose with citation_id not present in citation_usage —
+    """Marker in prose with citation_id not present in citation_usage -
     logged as a structured warning + reported in metadata, run completes."""
     from modules.sources_cited.pipeline import run_sources_cited
 

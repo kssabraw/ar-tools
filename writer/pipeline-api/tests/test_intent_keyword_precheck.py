@@ -1,4 +1,4 @@
-"""Step 3.1 — Intent classifier keyword pattern pre-check (PRD v2.0.3)."""
+"""Step 3.1 - Intent classifier keyword pattern pre-check (PRD v2.0.3)."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ def test_listicle_num_pattern_requires_plural_noun():
 
 
 # ----------------------------------------------------------------------
-# Full classify_intent flow — the pre-check must short-circuit
+# Full classify_intent flow - the pre-check must short-circuit
 # ----------------------------------------------------------------------
 
 @pytest.mark.asyncio

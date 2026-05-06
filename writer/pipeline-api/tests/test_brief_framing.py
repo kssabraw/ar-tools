@@ -1,4 +1,4 @@
-"""Step 11 — H2 Framing Validator (Brief Generator PRD v2.1)."""
+"""Step 11 - H2 Framing Validator (Brief Generator PRD v2.1)."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ def _candidate(text: str) -> Candidate:
 
 
 # ---------------------------------------------------------------------------
-# passes_framing — regex-only predicates
+# passes_framing - regex-only predicates
 # ---------------------------------------------------------------------------
 
 
@@ -79,7 +79,7 @@ def test_ordinal_rejects_non_ordinal(text):
     "Has TikTok Shop Changed Recently",
 ])
 def test_verb_leading_rejects_extended_question_words(text):
-    """Fix #1 — pre-Phase-1 the verb-stem heuristic falsely passed
+    """Fix #1 - pre-Phase-1 the verb-stem heuristic falsely passed
     `Where`, `When`, `Should`, `Are`, etc. because each ends in a
     stem letter on the alternation list. After the fix, every common
     question/auxiliary leader is rejected by `_NON_VERB_LEADERS`."""
@@ -98,7 +98,7 @@ def test_verb_leading_rejects_extended_question_words(text):
     "Streamline your fulfillment",   # not in whitelist; default-accept
 ])
 def test_verb_leading_accepts_common_imperatives(text):
-    """Fix #2 — the old verb-stem heuristic falsely rejected many valid
+    """Fix #2 - the old verb-stem heuristic falsely rejected many valid
     imperative verbs (Configuring, Consider, Handle, …). After the fix,
     the predicate's default-accept policy plus the broader whitelist
     let these pass on first try."""
@@ -111,7 +111,7 @@ def test_verb_leading_accepts_common_imperatives(text):
     "#3 Optimize listings",
 ])
 def test_verb_leading_accepts_ordinal_prefix(text):
-    """Action H2s with an ordinal prefix should pass — `1. Pick a niche`
+    """Action H2s with an ordinal prefix should pass - `1. Pick a niche`
     is still action-leading even though the first lexical token is '1.'."""
     assert passes_framing(text, "verb_leading_action")
 
@@ -126,7 +126,7 @@ def test_verb_leading_accepts_ordinal_prefix(text):
 ])
 def test_verb_leading_rejects_articles_determiners_and_superlatives(text):
     """Articles, possessive determiners, and superlative AI-tells are all
-    rejected — these are noun-phrase / commercial leaders, not action."""
+    rejected - these are noun-phrase / commercial leaders, not action."""
     assert not passes_framing(text, "verb_leading_action")
 
 

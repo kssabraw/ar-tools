@@ -1,4 +1,4 @@
-"""Step 7.5 — Anchor-slot reservation (Brief Generator PRD v2.1)."""
+"""Step 7.5 - Anchor-slot reservation (Brief Generator PRD v2.1)."""
 
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def test_reserve_returns_empty_when_no_anchors():
 
 
 def test_reserve_picks_highest_cosine_per_slot():
-    """Two anchors, four candidates — each anchor should reserve the
+    """Two anchors, four candidates - each anchor should reserve the
     candidate most aligned with it, not the highest-priority one."""
     template = get_template("how-to").model_copy(deep=True)
     template.anchor_slots = ["plan", "launch"]
@@ -96,11 +96,11 @@ def test_reserve_picks_highest_cosine_per_slot():
     launch_anchor = _unit([0.0, 1.0])
 
     # cand_a aligns strongly with the plan anchor; cand_b aligns with launch.
-    cand_a = _candidate("A — Plan and prepare", embedding=[0.95, 0.1], region_id="r1", priority=0.5)
-    cand_b = _candidate("B — Launch and ship", embedding=[0.1, 0.95], region_id="r2", priority=0.5)
+    cand_a = _candidate("A - Plan and prepare", embedding=[0.95, 0.1], region_id="r1", priority=0.5)
+    cand_b = _candidate("B - Launch and ship", embedding=[0.1, 0.95], region_id="r2", priority=0.5)
     # cand_c is high-priority but topically off both anchors → must NOT
     # be reserved; goes to MMR pool.
-    cand_c = _candidate("C — Random topic", embedding=[0.6, 0.6], region_id="r3", priority=0.99)
+    cand_c = _candidate("C - Random topic", embedding=[0.6, 0.6], region_id="r3", priority=0.99)
 
     result = reserve_anchor_slots(
         [cand_a, cand_b, cand_c],
@@ -108,14 +108,14 @@ def test_reserve_picks_highest_cosine_per_slot():
         anchor_embeddings=[plan_anchor, launch_anchor],
     )
     assert [c.text for c in result.reserved] == [
-        "A — Plan and prepare", "B — Launch and ship",
+        "A - Plan and prepare", "B - Launch and ship",
     ]
     assert result.unmatched_slot_indices == []
 
 
 def test_reserve_respects_region_uniqueness():
     """Two anchors aligned with the same region should still produce at
-    most one reservation per region — the second slot should be marked
+    most one reservation per region - the second slot should be marked
     unmatched."""
     template = get_template("how-to").model_copy(deep=True)
     template.anchor_slots = ["plan", "configure"]
@@ -143,7 +143,7 @@ def test_reserve_skips_candidates_below_min_anchor_cosine():
     template = get_template("how-to").model_copy(deep=True)
     template.anchor_slots = ["plan"]
     plan_anchor = _unit([1.0, 0.0])
-    # Candidate is orthogonal to the anchor — cosine = 0, well below 0.55.
+    # Candidate is orthogonal to the anchor - cosine = 0, well below 0.55.
     weak = _candidate("Weak", embedding=[0.0, 1.0], region_id="r1")
     result = reserve_anchor_slots([weak], template, anchor_embeddings=[plan_anchor])
     assert result.reserved == []
@@ -159,7 +159,7 @@ def test_reserve_enforces_inter_heading_threshold():
     a1 = _unit([1.0, 0.0])
     a2 = _unit([0.99, 0.05])  # very similar to a1
 
-    # c1 reserves slot 0; c2 is 0.99 cosine to c1 (different region) —
+    # c1 reserves slot 0; c2 is 0.99 cosine to c1 (different region) -
     # inter-heading threshold should reject it.
     c1 = _candidate("C1", embedding=[1.0, 0.0], region_id="r1", priority=0.5)
     c2 = _candidate("C2", embedding=[0.99, 0.05], region_id="r2", priority=0.5)

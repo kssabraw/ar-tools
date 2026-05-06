@@ -1,4 +1,4 @@
-"""Modules 5 + 6 — Zone extraction + Noise filtering layers 1, 2, 4.
+"""Modules 5 + 6 - Zone extraction + Noise filtering layers 1, 2, 4.
 
 Layer 3 (cross-page fingerprinting) and Layer 5 (frequency anomaly) live in
 ngrams.py because they need cross-page state.

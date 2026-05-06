@@ -31,7 +31,7 @@ from .textrazor_client import PageTextRazorResult, TextRazorEntity
 logger = logging.getLogger(__name__)
 
 
-# Per-occurrence filter thresholds. Per user spec — TextRazor returns
+# Per-occurrence filter thresholds. Per user spec - TextRazor returns
 # relevance in [0, 1] and confidence in roughly [0, 10+]. These are
 # the floor for an individual occurrence to be counted toward the
 # aggregate; an entity that fails either threshold doesn't contribute
@@ -41,7 +41,7 @@ TEXTRAZOR_MIN_CONFIDENCE = 2.00
 
 # Aggregate filter: minimum distinct page count (after per-occurrence
 # filter) for the entity to survive. Spec is "discarded if used on 3
-# or fewer pages" — i.e. strictly > 3 (≥ 4). Aligns with the existing
+# or fewer pages" - i.e. strictly > 3 (≥ 4). Aligns with the existing
 # n-gram coverage gate (≥ 3) but slightly stricter for TextRazor since
 # free-tier accuracy on niche entities can be noisy.
 TEXTRAZOR_MIN_PAGES = 4
@@ -64,7 +64,7 @@ class AggregatedTextRazorEntity:
 
 
 def _normalize_name(name: str) -> str:
-    """Lowercase + strip — TextRazor entityIds are already canonical
+    """Lowercase + strip - TextRazor entityIds are already canonical
     (Wikipedia titles), so we don't lemmatize them. Mirrors the
     behavior of `entities._normalize_entity_name` enough to dedup
     cross-source matches downstream."""
@@ -116,7 +116,7 @@ def aggregate_textrazor_results(
     for norm, slot in by_norm.items():
         pages_found = len(slot["urls"])
         if pages_found < TEXTRAZOR_MIN_PAGES:
-            # Aggregate filter — discard low-coverage entities.
+            # Aggregate filter - discard low-coverage entities.
             continue
         # Most-common original casing wins as the canonical name.
         canonical = Counter(slot["names"]).most_common(1)[0][0]

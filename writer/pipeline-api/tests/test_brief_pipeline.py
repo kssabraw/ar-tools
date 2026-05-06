@@ -1,4 +1,4 @@
-"""LEGACY v1.8 pipeline test — skipped during the v2.0 staged rollout.
+"""LEGACY v1.8 pipeline test - skipped during the v2.0 staged rollout.
 
 The v2.0 orchestrator is built in Stage 9; the rewritten happy-path test
 will live in test_brief_v2_pipeline.py with v2.0 fixtures (Fixtures A–G
@@ -88,7 +88,7 @@ REDDIT_ITEMS = [
         "description": "Has anyone installed a heat pump in zone 5 climate?",
     },
     {
-        "title": "Trane vs Carrier — which lasts longer?",
+        "title": "Trane vs Carrier - which lasts longer?",
         "description": "I've heard mixed things about both. What's the consensus?",
     },
 ]
@@ -108,7 +108,7 @@ SUGGESTIONS = [
 
 
 def _fake_embedding(text: str, dim: int = 8) -> list[float]:
-    """Deterministic pseudo-embedding from the text — stable across calls."""
+    """Deterministic pseudo-embedding from the text - stable across calls."""
     vec = [0.0] * dim
     for i, ch in enumerate(text.lower()):
         vec[i % dim] += (ord(ch) % 17) / 17.0
@@ -155,7 +155,7 @@ async def fake_embed_batch(texts: list[str]) -> list[list[float]]:
 async def fake_claude_json(system: str, user: str, **kwargs):
     """Return safe defaults based on what the prompt looks like for."""
     if "polish" in system.lower() or "rewrite" in system.lower():
-        # Return empty list — leave headings as-is
+        # Return empty list - leave headings as-is
         return []
     if "authority" in system.lower():
         return {

@@ -1,4 +1,4 @@
-"""Step 6.7 — Per-H2 Body Length Validator (Writer PRD v1.6 / Phase 3).
+"""Step 6.7 - Per-H2 Body Length Validator (Writer PRD v1.6 / Phase 3).
 
 Catches H2 sections shipping with empty/lightweight bodies (the audited
 "two sentences and a stat before jumping to the next H2" failure mode).
@@ -36,12 +36,12 @@ Failure-mode policy (matches Step 6.6 paragraph-length convention):
     is ~zero (validator passes on most well-budgeted sections).
 
 Inputs:
-  - `article: list[ArticleSection]` — the full assembled article.
+  - `article: list[ArticleSection]` - the full assembled article.
     The validator only inspects entries with `level == "H2"` +
     `type == "content"` and walks forward to collect their child H3s
     until the next H2 (or end of article).
-  - `min_h2_body_words` — the floor from `format_directives`.
-  - `write_h2_group_fn` — injected so callers (and tests) can supply
+  - `min_h2_body_words` - the floor from `format_directives`.
+  - `write_h2_group_fn` - injected so callers (and tests) can supply
     an alternate implementation; defaults to the production
     `sections.write_h2_group`.
   - The full set of writer arguments needed to drive a section retry
@@ -116,7 +116,7 @@ def _collect_h2_groups(article: list[ArticleSection]) -> list[_H2Group]:
     next H2 (or to the FAQ block / conclusion / cta / takeaways, which
     end the group).
 
-    Only `type == "content"` H2s are tracked — FAQ headers and
+    Only `type == "content"` H2s are tracked - FAQ headers and
     conclusion H2s are left alone (they're handled by other steps).
     """
     groups: list[_H2Group] = []
@@ -145,7 +145,7 @@ def _collect_h2_groups(article: list[ArticleSection]) -> list[_H2Group]:
         if section.level == "H3" and section.type == "content":
             current.children.append((i, section))
         # Other section types (h1-enrichment, intro, etc.) are not
-        # part of an H2 group — leave them alone.
+        # part of an H2 group - leave them alone.
     if current is not None:
         groups.append(current)
     return groups
@@ -155,7 +155,7 @@ def _retry_directive(group_words: int, floor: int) -> str:
     return (
         f"Your previous attempt produced {group_words} words for this H2 "
         f"section group. The floor is {floor} words. Add "
-        f"{floor - group_words}+ words of additional SUBSTANCE — concrete "
+        f"{floor - group_words}+ words of additional SUBSTANCE - concrete "
         f"examples, evidence, or clarifying detail. Do NOT pad with filler "
         f"or repetition; if the topic genuinely doesn't support more "
         f"substantive content, prefer adding a concrete example or a brief "
@@ -170,7 +170,7 @@ def _replace_group_in_article(
 ) -> list[ArticleSection]:
     """Replace the H2 + its children in-place with `new_sections`.
 
-    `new_sections` is the SectionWriteResult.sections list — one entry
+    `new_sections` is the SectionWriteResult.sections list - one entry
     for the parent H2 and one per H3 child, in original order. We splice
     the article so the surrounding ordering (intro/FAQ/conclusion/etc.)
     stays intact.
@@ -227,7 +227,7 @@ async def validate_h2_body_lengths(
 
 
     def _lookup(order: int, expected_level: str) -> Optional[dict]:
-        """Phase 3 review fix #4 — guard against `order` collisions.
+        """Phase 3 review fix #4 - guard against `order` collisions.
         Brief assembly assigns unique sequential `order` values, but a
         defensive level check guarantees we never pair an H2 with an
         H3-keyed dict (or vice-versa) under last-wins dict semantics.
@@ -286,7 +286,7 @@ async def validate_h2_body_lengths(
             else:
                 children_lookup_failed = True
 
-        # Phase 3 review fix #1 — refusing the retry when any child
+        # Phase 3 review fix #1 - refusing the retry when any child
         # lookup failed is the safest correctness guarantee. A retry
         # with fewer h3_items than original children would produce a
         # section-count mismatch downstream and trigger our splice
@@ -344,7 +344,7 @@ async def validate_h2_body_lengths(
 
         retry_word_count = sum(_word_count(s.body) for s in retry_result.sections)
 
-        # Phase 3 review fix #1 — guard against section-count mismatch.
+        # Phase 3 review fix #1 - guard against section-count mismatch.
         # The contract is "1 H2 + N H3s in → 1 H2 + N H3s out". If the
         # retry returns a different count (LLM merged H3 content into
         # the parent body, or a defensive child-lookup miss meant we
@@ -386,7 +386,7 @@ async def validate_h2_body_lengths(
             )
             continue
 
-        # Retry still under — accept whichever attempt has more words.
+        # Retry still under - accept whichever attempt has more words.
         if retry_word_count > group_words:
             result.validated_article = _replace_group_in_article(
                 result.validated_article, group, retry_result.sections,

@@ -1,4 +1,4 @@
-"""Pydantic models for the Brief Generator module — schema v2.0.
+"""Pydantic models for the Brief Generator module - schema v2.0.
 
 Implements the output schema specified in
 docs/modules/content-brief-generator-prd-v2_0.md §6.
@@ -64,7 +64,7 @@ HeadingSource = Literal[
 
 FAQSource = Literal["paa", "reddit", "llm_extracted", "persona_gap"]
 
-# PRD v2.2 / Phase 2 — FAQ intent role assigned by Step 10.5's LLM classifier.
+# PRD v2.2 / Phase 2 - FAQ intent role assigned by Step 10.5's LLM classifier.
 # `matches_primary_intent` = FAQ aligns with the primary keyword's intent
 # cluster; `adjacent_intent` = topically related but a different stakeholder
 # question (kept only as fallback when fewer than 3 primary FAQs survive).
@@ -72,10 +72,10 @@ FAQSource = Literal["paa", "reddit", "llm_extracted", "persona_gap"]
 # the brief output, so the enum here is only the kept values.
 FAQIntentRole = Literal["matches_primary_intent", "adjacent_intent"]
 
-# PRD v2.2 / Phase 2 — H3 parent-fit classification from Step 8.7.
+# PRD v2.2 / Phase 2 - H3 parent-fit classification from Step 8.7.
 # `good` = H3 belongs under its current parent H2; default state for H3s
 # we don't surface a flag for. `marginal` = LLM signaled "could go either
-# way" — kept under current parent + flagged for review. `wrong_parent`
+# way" - kept under current parent + flagged for review. `wrong_parent`
 # and `promote_to_h2` are NOT kept on the candidate (those route to silos
 # / re-attach to a different H2), so the literal here only carries the
 # kept values that downstream renderers may surface.
@@ -93,36 +93,36 @@ DiscardReason = Literal[
     "duplicate",
     "low_cluster_coherence",
     "scope_verification_out_of_scope",
-    # Step 8.6 (H3 Selection) additions — PRD v2.0.x
+    # Step 8.6 (H3 Selection) additions - PRD v2.0.x
     "h3_below_parent_relevance_floor",
     "h3_above_parent_restatement_ceiling",
     "displaced_by_authority_gap_h3",
-    # PRD v2.2 / Phase 2 — Step 8.7 H3 Parent-Fit Verification
+    # PRD v2.2 / Phase 2 - Step 8.7 H3 Parent-Fit Verification
     "h3_wrong_parent",                # re-attached or routed to silo
     "h3_promoted_to_h2_candidate",    # routed to silo as standalone topic
-    # PRD v2.2 / Phase 2 — Step 10.5 FAQ Intent Gate
+    # PRD v2.2 / Phase 2 - Step 10.5 FAQ Intent Gate
     "faq_intent_mismatch",
 ]
 
 SiloRoutedFrom = Literal[
     "non_selected_region",
     "scope_verification",
-    # Step 8.5b — Authority Gap H3 rejected by H3 scope verification (PRD v2.0.3)
+    # Step 8.5b - Authority Gap H3 rejected by H3 scope verification (PRD v2.0.3)
     "scope_verification_h3",
-    # Step 5.1 relevance gate — heading discarded as below_relevance_floor.
+    # Step 5.1 relevance gate - heading discarded as below_relevance_floor.
     # These candidates are below the title's relevance floor (so excluded
     # from the parent article) but may still represent adjacent topics
     # worth surfacing as standalone silos (filtered by search demand + the
     # Step 12.4 viability LLM check before reaching the user).
     "relevance_floor_reject",
-    # PRD v2.2 / Phase 2 — Step 8.7 outcomes
+    # PRD v2.2 / Phase 2 - Step 8.7 outcomes
     # H3 was classified `wrong_parent` and no other selected H2 had
     # capacity (or the H3 was below all parent_relevance floors).
     "h3_parent_mismatch",
-    # H3 was classified `promote_to_h2` — represents a different topic
+    # H3 was classified `promote_to_h2` - represents a different topic
     # than its assigned parent and warrants its own article.
     "h3_promote_candidate",
-    # Unused LLM fanout query — candidate sourced from llm_fanout_*
+    # Unused LLM fanout query - candidate sourced from llm_fanout_*
     # that wasn't selected as an H2 and didn't fit any other singleton
     # routing path. Surfaced as a silo bypassing the search-demand floor
     # (the LLMs already nominated the query, which is its own demand
@@ -192,14 +192,14 @@ class HeadingItem(BaseModel):
     # the parent-relevance MMR; null for H1, H2, and authority-gap H3s.
     parent_h2_text: Optional[str] = None
     parent_relevance: float = 0.0
-    # Step 9 (v2.0.3): populated only for source='authority_gap_sme' entries —
+    # Step 9 (v2.0.3): populated only for source='authority_gap_sme' entries -
     # the agent's own justification that the H3 stays within the brief's scope.
     scope_alignment_note: Optional[str] = None
-    # PRD v2.2 / Phase 2 — Step 8.7 H3 Parent-Fit Verification.
+    # PRD v2.2 / Phase 2 - Step 8.7 H3 Parent-Fit Verification.
     # Populated only on H3 entries the LLM examined; defaults to None on
     # H1, H2, and on H3s that bypassed Step 8.7 (e.g. when the LLM call
     # failed and the fallback accepted everyone). `good` is left as None
-    # for terseness — only `marginal` is surfaced explicitly so consumers
+    # for terseness - only `marginal` is surfaced explicitly so consumers
     # can highlight reviewer-attention H3s.
     parent_fit_classification: Optional[H3ParentFitClassification] = None
     order: int = 0
@@ -213,7 +213,7 @@ class FAQItem(BaseModel):
     question: str
     source: FAQSource
     faq_score: float = 0.0
-    # PRD v2.2 / Phase 2 — Step 10.5 FAQ Intent Gate.
+    # PRD v2.2 / Phase 2 - Step 10.5 FAQ Intent Gate.
     # `matches_primary_intent` = LLM confirmed FAQ aligns with the primary
     # keyword's intent cluster (the expected case). `adjacent_intent` =
     # FAQ is on-topic but represents a different stakeholder question
@@ -248,7 +248,7 @@ class FormatDirectives(BaseModel):
     min_tables_per_article: int = 1
     preferred_paragraph_max_words: int = 80
     answer_first_paragraphs: bool = True
-    # PRD v2.3 / Phase 3 — minimum words per H2 SECTION GROUP (parent H2
+    # PRD v2.3 / Phase 3 - minimum words per H2 SECTION GROUP (parent H2
     # body + all child H3 bodies, after stripping `{{cit_N}}` markers).
     # The Writer's new Step 6.7 validator retries any H2 group falling
     # below this floor once, then warns-and-accepts. Default per intent
@@ -263,10 +263,10 @@ class FormatDirectives(BaseModel):
 # `intent_format_template` commits the brief to a per-intent heading-skeleton
 # shape so the H2 outline matches the keyword's intent (sequential steps for
 # how-to, ranked items for listicle, etc.). The template feeds:
-#   - Step 7.5: anchor-slot reservation in MMR — preferred slots are filled
+#   - Step 7.5: anchor-slot reservation in MMR - preferred slots are filled
 #     by the highest-priority candidate whose embedding aligns with the
 #     slot's semantic anchor before generic MMR fills the rest.
-#   - Step 11: framing validator — every selected H2 must satisfy the
+#   - Step 11: framing validator - every selected H2 must satisfy the
 #     template's framing regex; failures route through one LLM rewrite pass.
 
 H2Pattern = Literal[
@@ -366,17 +366,17 @@ class SiloCandidate(BaseModel):
     source_headings: list[SiloSourceHeading] = []
 
     # Step 12 refinements (PRD §5 Step 12.6)
-    # Counts of each discard_reason among the silo's member headings —
+    # Counts of each discard_reason among the silo's member headings -
     # gives consumers a quick view of why these headings were rejected.
     discard_reason_breakdown: dict[str, int] = {}
-    # Step 12.3 — five-signal demand score, hard floor 0.30 to qualify.
+    # Step 12.3 - five-signal demand score, hard floor 0.30 to qualify.
     search_demand_score: float = 0.0
-    # Step 12.4 — viability LLM verdict; defaults true under double-failure
+    # Step 12.4 - viability LLM verdict; defaults true under double-failure
     # fallback (see metadata.silo_viability_fallback_applied).
     viable_as_standalone_article: bool = True
     viability_reasoning: str = ""
     estimated_intent: IntentType = "informational"
-    # Step 12.5 — populated by v2.1 cross-brief dedup; defaults to 1 in v2.0.
+    # Step 12.5 - populated by v2.1 cross-brief dedup; defaults to 1 in v2.0.
     cross_brief_occurrence_count: int = 1
 
 
@@ -426,7 +426,7 @@ class BriefMetadata(BaseModel):
     competitors_analyzed: int = 20
     reddit_threads_analyzed: int = 0
 
-    # Shortfall tracking (PRD §5 Step 8 — accept shortfall, don't pad)
+    # Shortfall tracking (PRD §5 Step 8 - accept shortfall, don't pad)
     h2_shortfall: bool = False
     h2_shortfall_reason: Optional[str] = None
 
@@ -478,11 +478,11 @@ class BriefMetadata(BaseModel):
     reddit_unavailable: bool = False
     llm_fanout_unavailable: LLMUnavailable = LLMUnavailable()
 
-    # Root domains of all SERP results — consumed by Research & Citations
+    # Root domains of all SERP results - consumed by Research & Citations
     # to exclude competitor URLs from citation candidates.
     competitor_domains: list[str] = []
 
-    # Phase 1 / PRD v2.1 — Step 7.5 anchor-slot reservation + Step 11 framing.
+    # Phase 1 / PRD v2.1 - Step 7.5 anchor-slot reservation + Step 11 framing.
     # `anchor_slots_reserved_count` is the number of H2 slots filled by the
     # anchor-reservation pass before generic MMR ran. `anchor_slots_total`
     # is the size of the anchor list emitted by the template (so consumers
@@ -495,7 +495,7 @@ class BriefMetadata(BaseModel):
     framing_rewrites_applied: int = 0
     framing_rewrites_accepted_with_violation: int = 0
 
-    # Phase 2 / PRD v2.2 — Step 8.7 H3 Parent-Fit Verification counters.
+    # Phase 2 / PRD v2.2 - Step 8.7 H3 Parent-Fit Verification counters.
     # `marginal_count` covers H3s the LLM flagged for review; `wrong_parent_
     # count` covers H3s re-attached to a different H2 OR routed to silos;
     # `promoted_count` covers H3s the LLM said deserve their own article
@@ -506,7 +506,7 @@ class BriefMetadata(BaseModel):
     h3_parent_fit_promoted_count: int = 0
     h3_parent_fit_fallback_applied: bool = False
 
-    # Phase 2 / PRD v2.2 — Step 10.5 FAQ Intent Gate counters.
+    # Phase 2 / PRD v2.2 - Step 10.5 FAQ Intent Gate counters.
     # `floor_rejected_count` counts FAQs killed by the cosine-floor cut
     # against the intent profile; `llm_rejected_count` counts FAQs killed
     # by the `different_audience` LLM verdict. `relaxation_applied` =
@@ -515,7 +515,7 @@ class BriefMetadata(BaseModel):
     faq_intent_gate_floor_rejected_count: int = 0
     faq_intent_gate_llm_rejected_count: int = 0
     faq_intent_gate_relaxation_applied: bool = False
-    # Phase 2 review fix #4 — when the gate would otherwise produce
+    # Phase 2 review fix #4 - when the gate would otherwise produce
     # zero kept on a non-empty pool, it falls back to admitting the
     # original candidates as `adjacent_intent` so PRD §5 Step 10's
     # 3–5 FAQ guarantee is honored. True = the brief's FAQs are the
@@ -557,7 +557,7 @@ class RedditInsightsModel(BaseModel):
 class CustomerReviewInsightsModel(BaseModel):
     """Structured output of `modules/brief/customer_review_research.py`.
 
-    Mirrors RedditInsights — single Perplexity sonar-pro synthesis,
+    Mirrors RedditInsights - single Perplexity sonar-pro synthesis,
     7-section Markdown report, with citations filtered to customer
     review platforms (Trustpilot / G2 / Capterra / etc.).
     """
@@ -584,7 +584,7 @@ class ContestedTopicModel(BaseModel):
 
 
 class LLMDisagreementModel(BaseModel):
-    """Topics surfaced by some but not all of the four fan-out LLMs —
+    """Topics surfaced by some but not all of the four fan-out LLMs -
     high-signal candidates that sit on the edge of well-documented
     territory and merit strategist review."""
 
@@ -599,7 +599,7 @@ class LLMDisagreementModel(BaseModel):
 
 
 class EditorialCritiqueModel(BaseModel):
-    """Adversarial editorial review of the assembled brief — surfaces
+    """Adversarial editorial review of the assembled brief - surfaces
     stale framings, missing angles, and contrarian takes a strategist
     should consider. Side output; does NOT modify the H2/H3 outline."""
 
@@ -635,16 +635,16 @@ class BriefResponse(BaseModel):
     format_directives: FormatDirectives = FormatDirectives()
     discarded_headings: list[DiscardedHeading] = []
     silo_candidates: list[SiloCandidate] = []
-    # PRD v2.1 — per-intent heading skeleton template (Step 3 output, used
+    # PRD v2.1 - per-intent heading skeleton template (Step 3 output, used
     # by Step 7.5 + Step 11). Optional so legacy fixtures + cached v2.0
     # rows that don't carry it can still be deserialized for diagnostic
     # use; in the live pipeline this is always populated.
     intent_format_template: Optional[IntentFormatTemplate] = None
-    # PRD v2.4 — Perplexity-synthesized Reddit research (replaces the prior
+    # PRD v2.4 - Perplexity-synthesized Reddit research (replaces the prior
     # raw reddit_titles + reddit_comments path into the Authority Agent).
     # Optional so cached v2.3 rows can still be deserialized for diagnostics.
     reddit_insights: Optional[RedditInsightsModel] = None
-    # PRD v2.6 — Industry-blind-spot mitigation. All four are optional so
+    # PRD v2.6 - Industry-blind-spot mitigation. All four are optional so
     # cached v2.4/v2.5 rows can still deserialize for diagnostics; in the
     # live pipeline they are populated when their respective stages
     # succeed and `available=False` when they didn't.

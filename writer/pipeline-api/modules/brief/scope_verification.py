@@ -1,10 +1,10 @@
-"""Step 8.5 — Scope Verification (Brief Generator v2.0).
+"""Step 8.5 - Scope Verification (Brief Generator v2.0).
 
 Implements PRD §5 Step 8.5. Single Claude Sonnet 4.6 LLM call that
 catches the small percentage of H2s that pass all numerical constraints
 but answer a different reader question than the title's promise.
 
-This is the "TikTok Shop algorithm signals" failure mode from PRD §1 —
+This is the "TikTok Shop algorithm signals" failure mode from PRD §1 -
 a heading topically related to TikTok Shop but answering "how do I
 optimize" instead of "what is it".
 
@@ -33,7 +33,7 @@ Routing (PRD §5 Step 8.5):
 Failure handling (PRD §5 Step 8.5):
   - Malformed JSON → retry with stricter prompt
   - On second failure → ACCEPT ALL H2s as in_scope and log a warning.
-    Do not abort the run — selection has already produced a valid
+    Do not abort the run - selection has already produced a valid
     outline by mathematical constraints.
   - LLM classifies an H2 not in the input list → discard the rogue
     classification, log warning. (Guards against the LLM hallucinating
@@ -87,7 +87,7 @@ article it would appear in.
 Your role catches a specific failure mode: an H2 that is topically
 related to the seed but answers a different reader question than the
 title's promise. Example: a "what is TikTok Shop" article that includes
-"How to optimize for the TikTok Shop algorithm" — topically related but
+"How to optimize for the TikTok Shop algorithm" - topically related but
 out of scope.
 
 Process:
@@ -107,7 +107,7 @@ Be conservative. Default to "in_scope" or "borderline". Only mark
 than the title commits to (e.g., the scope statement's "does not cover"
 clause names the specific area).
 
-Output strict JSON only — no preamble, no markdown fences, no commentary:
+Output strict JSON only - no preamble, no markdown fences, no commentary:
 {
   "verified_h2s": [
     {
@@ -194,7 +194,7 @@ def _validate_payload(
         )
 
     # Even with rogue drops, if we got at least one valid classification
-    # we accept the payload — the orchestrator will fill missing entries
+    # we accept the payload - the orchestrator will fill missing entries
     # with the default in_scope (PRD treats no-classification as a pass).
     if not classifications:
         return False, "no_valid_classifications", None
@@ -323,7 +323,7 @@ async def verify_scope(
 
 
 # ----------------------------------------------------------------------
-# Step 8.5b — Authority Gap H3 scope verification (PRD v2.0.3)
+# Step 8.5b - Authority Gap H3 scope verification (PRD v2.0.3)
 # ----------------------------------------------------------------------
 
 H3_SYSTEM_PROMPT = """\
@@ -333,7 +333,7 @@ the article it would appear in.
 These H3s come from the Universal Authority Agent (Step 9), which
 generates content across three pillars: Human/Behavioral, Risk/Regulatory,
 and Long-Term Systems. The agent sometimes drifts outside the article's
-committed scope — for example, producing post-launch operational content
+committed scope - for example, producing post-launch operational content
 on a "how to set up X" article whose scope only covers signup-through-
 first-listing. Your role catches that drift.
 
@@ -355,7 +355,7 @@ Be conservative. Default to "in_scope" or "borderline". Only mark
 the title commits to, or when it touches an area named in the
 "does not cover" clause.
 
-Output strict JSON only — no preamble, no markdown fences:
+Output strict JSON only - no preamble, no markdown fences:
 {
   "verified_h3s": [
     {
@@ -373,7 +373,7 @@ must match the input exactly so the routing logic can pair them.
 
 @dataclass
 class H3ScopeVerificationResult:
-    """Output of Step 8.5b — Authority Gap H3 scope verification.
+    """Output of Step 8.5b - Authority Gap H3 scope verification.
 
     Mutates each surviving Candidate in place: writes
     `scope_classification` ('in_scope' or 'borderline') on kept H3s and
@@ -453,7 +453,7 @@ async def verify_h3_scope(
     h3s: list[Candidate],
     llm_json_fn: Optional[LLMJsonFn] = None,
 ) -> H3ScopeVerificationResult:
-    """Step 8.5b — Authority Gap H3 scope verification (PRD v2.0.3).
+    """Step 8.5b - Authority Gap H3 scope verification (PRD v2.0.3).
 
     Runs after Step 9 emits Authority Gap H3s. Failure handling matches
     Step 8.5: on double LLM failure, accept all as `in_scope` (never

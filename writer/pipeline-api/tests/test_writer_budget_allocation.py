@@ -1,4 +1,4 @@
-"""Step 3 — Per-H2-group fair-share word budget allocation.
+"""Step 3 - Per-H2-group fair-share word budget allocation.
 
 Regression tests for the bug where a promised H2 with no H3 children
 shipped under-length while a sibling H2 carrying authority-gap H3s ran
@@ -75,7 +75,7 @@ def test_promised_h2_not_starved_by_auth_gap_sibling():
 
 def test_auth_gap_multiplier_applies_within_group():
     """Auth-gap H3s still get more words than their parent H2 within
-    the same group — the multiplier survives, it's just scoped."""
+    the same group - the multiplier survives, it's just scoped."""
     structure = [
         _h2(1),
         _h3(2, auth_gap=True),

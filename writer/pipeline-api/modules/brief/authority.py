@@ -1,4 +1,4 @@
-"""Step 9 — Universal Authority Agent (Brief Generator v2.0.3).
+"""Step 9 - Universal Authority Agent (Brief Generator v2.0.3).
 
 Implements PRD §5 Step 9 with v2.0.3 scope-aware inputs.
 
@@ -20,7 +20,7 @@ Output:
   - exempt = True (bypasses relevance gate)
   - scope_alignment_note populated on each Candidate
   - Counts toward the per-H2 H3 limit but never gets discarded for low
-    relevance / priority — exempt from those checks per PRD §5 Step 9
+    relevance / priority - exempt from those checks per PRD §5 Step 9
   - May still be removed by the v2.0.3 Step 8.5b H3 scope-verification
     pass downstream when the agent's pillar exploration drifts off-scope
 """
@@ -45,7 +45,7 @@ AUTHORITY_SYSTEM_PROMPT = (
     "You are the Universal Authority Agent. Given a topic and the existing "
     "headings other articles cover, your job is to identify 3-5 unique "
     "subheadings that would add genuine information gain across THREE pillars:\n\n"
-    "1. HUMAN/BEHAVIORAL — psychological drivers, common errors people make, "
+    "1. HUMAN/BEHAVIORAL - psychological drivers, common errors people make, "
     "emotional decision points. Specifically surface:\n"
     "   - FEARS / CONCERNS readers carry into the topic (what they're worried "
     "will go wrong)\n"
@@ -53,13 +53,13 @@ AUTHORITY_SYSTEM_PROMPT = (
     "like to them, in their words)\n"
     "   - RECOMMENDATIONS / HEURISTICS experienced practitioners share with "
     "newcomers (what insiders tell each other)\n"
-    "2. RISK/REGULATORY — legal, safety, compliance, financial liabilities\n"
-    "3. LONG-TERM SYSTEMS — how this evolves over time, sustainability, "
+    "2. RISK/REGULATORY - legal, safety, compliance, financial liabilities\n"
+    "3. LONG-TERM SYSTEMS - how this evolves over time, sustainability, "
     "ecosystem outcomes\n\n"
     "INFORMATION GAIN DISCIPLINE: The headings you propose must add coverage "
     "the existing list does NOT already provide. Before emitting each "
     "heading, check: does any heading in the existing-coverage list already "
-    "answer this reader question, even partially? If yes, skip it — your job "
+    "answer this reader question, even partially? If yes, skip it - your job "
     "is to fill the gaps the existing coverage leaves, not to restate it. "
     "Genuine information gain typically lives in the seams between the "
     "existing topics: the unspoken assumptions, the failure modes nobody "
@@ -73,7 +73,7 @@ AUTHORITY_SYSTEM_PROMPT = (
     "fulfillment learning from restaurant supply-chain logistics. The goal "
     "is to surface angles competitors in this exact niche miss because "
     "everyone in the niche reads the same playbooks. The cross-domain "
-    "angle must still be on-scope for the article — it's a lens, not a "
+    "angle must still be on-scope for the article - it's a lens, not a "
     "tangent.\n\n"
     "Rules:\n"
     "- Output exactly 3-5 headings (not more, not less)\n"
@@ -82,13 +82,13 @@ AUTHORITY_SYSTEM_PROMPT = (
     "- Each heading should be specific and actionable, not generic\n"
     "- Distribute coverage across all three pillars when possible\n\n"
     "LEVEL ASSIGNMENT (mandatory): For each heading, decide whether it is "
-    "an H2 or an H3. Most authority-gap headings are H3s — narrow expert "
+    "an H2 or an H3. Most authority-gap headings are H3s - narrow expert "
     "perspectives that fit naturally under an existing H2. Mark a heading "
     "as H2 ONLY when it is substantial enough to be its own top-level "
     "section: a distinct angle competitors miss entirely (not just a "
     "sub-topic of an existing H2), broad enough to support its own "
     "subsections of content, and not a natural fit under any H2 in the "
-    "existing list. At most ONE H2-level gap per article — if multiple "
+    "existing list. At most ONE H2-level gap per article - if multiple "
     "headings could plausibly be H2s, pick the strongest and demote the "
     "rest to H3.\n\n"
     "SCOPE DISCIPLINE (PRD v2.0.3): Authority gap content must respect the "
@@ -99,7 +99,7 @@ AUTHORITY_SYSTEM_PROMPT = (
     "off-scope content. It is acceptable to return three headings instead "
     "of five when staying in-scope requires it.\n\n"
     "For EACH heading, write a `scope_alignment_note` (≤200 chars) that "
-    "explains how the heading stays within the scope_statement — especially "
+    "explains how the heading stays within the scope_statement - especially "
     "the `does not cover` clause. The note is for downstream scope "
     "verification; be specific about WHY the heading is in-scope.\n\n"
     "Respond with a single JSON object:\n"
@@ -114,7 +114,7 @@ AUTHORITY_SYSTEM_PROMPT = (
 
 
 # At most one H2-level authority gap per article, regardless of what the
-# LLM emits — see prompt above. The pipeline relies on this cap when
+# LLM emits - see prompt above. The pipeline relies on this cap when
 # enforcing the intent template's `max_h2_count`.
 MAX_AUTHORITY_GAP_H2_PER_ARTICLE = 1
 
@@ -152,7 +152,7 @@ def _format_user_prompt(
     )
 
     # Prefer the synthesized Reddit insights document (PRD v2.4) when
-    # available — it carries themed sections (fears, values, recommendations,
+    # available - it carries themed sections (fears, values, recommendations,
     # information gain vs competitors, E-E-A-T opportunities) the agent can
     # ground its three pillars against. Fall back to raw Reddit snippets
     # only when the synthesis was unavailable. Whitespace-only markdown is
@@ -172,8 +172,8 @@ def _format_user_prompt(
             + "\n".join(f"- {snippet[:200]}" for snippet in reddit_context[:5])
         )
 
-    # PRD v2.6 — Customer review synthesis. Reddit captures community
-    # voice; customer reviews capture POST-PURCHASE reality — frustrations
+    # PRD v2.6 - Customer review synthesis. Reddit captures community
+    # voice; customer reviews capture POST-PURCHASE reality - frustrations
     # with marketing claims, churn signals, unmet needs that don't make
     # it into SEO content. The agent should mine these specifically for
     # the Risk/Regulatory pillar (billing/trust/compliance complaints)
@@ -183,7 +183,7 @@ def _format_user_prompt(
         parts.append(
             "\nCustomer review synthesis (themed insights from review "
             "platforms like Trustpilot / G2 / Capterra; treat as ground "
-            "truth for post-purchase reality — what frustrates customers, "
+            "truth for post-purchase reality - what frustrates customers, "
             "why they switch, where marketing claims diverge from "
             "experience, and which trust/risk angles surface in negative "
             "reviews. Use especially for the Risk/Regulatory pillar.):\n"
@@ -233,7 +233,7 @@ async def authority_gap_headings(
         the LLM returns malformed JSON (default 1 = at most 2 total).
       - llm_json_fn: injectable for tests; defaults to `claude_json`.
 
-    Failure handling (PRD §5 Step 9 — never aborts):
+    Failure handling (PRD §5 Step 9 - never aborts):
       - Malformed output / fewer than 3 results → retry once
       - Second failure → return empty list, caller continues
     """
@@ -266,7 +266,7 @@ async def authority_gap_headings(
 
             # Accept both the new shape (list of dicts) and the legacy shape
             # (list of strings) so injected mocks / older callers still work.
-            # `level` defaults to "H3" when absent — preserves prior behavior
+            # `level` defaults to "H3" when absent - preserves prior behavior
             # for callers / fixtures that predate the H2/H3 split.
             cleaned: list[tuple[str, str, str]] = []  # (text, note, level)
             seen_norms = {normalize_text(h) for h in existing_headings}
@@ -299,7 +299,7 @@ async def authority_gap_headings(
             if len(cleaned) < 3:
                 if attempt < max_retries:
                     continue
-                # Accept what we got per PRD §5 Step 9 — never abort.
+                # Accept what we got per PRD §5 Step 9 - never abort.
 
             # Enforce the H2 cap: keep at most MAX_AUTHORITY_GAP_H2_PER_ARTICLE
             # H2-level gaps; demote any extras to H3. Order is preserved so

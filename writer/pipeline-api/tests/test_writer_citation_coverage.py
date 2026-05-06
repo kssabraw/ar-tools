@@ -1,4 +1,4 @@
-"""Step 4F.1 — Citable-Claim Detection + Coverage (Writer PRD §4F.1, R7 + Phase 4)."""
+"""Step 4F.1 - Citable-Claim Detection + Coverage (Writer PRD §4F.1, R7 + Phase 4)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from modules.writer.citation_coverage import (
 
 
 # ---------------------------------------------------------------------------
-# C1 — percentage / percent / pct
+# C1 - percentage / percent / pct
 # ---------------------------------------------------------------------------
 
 
@@ -31,7 +31,7 @@ def test_c1_percent_detection(body, expected_count):
 
 
 # ---------------------------------------------------------------------------
-# C2 — currency
+# C2 - currency
 # ---------------------------------------------------------------------------
 
 
@@ -48,7 +48,7 @@ def test_c2_currency_detection(body):
 
 
 # ---------------------------------------------------------------------------
-# C3 — year as date
+# C3 - year as date
 # ---------------------------------------------------------------------------
 
 
@@ -57,7 +57,7 @@ def test_c2_currency_detection(body):
     ("Since 2024 the product has shipped widely.", 1),
     ("By 2025 most sellers will adopt it.", 1),
     ("As of 2026 the program is mature.", 1),
-    # Negative cases — bare numbers without date context
+    # Negative cases - bare numbers without date context
     ("Model 2024X has updated specs.", 0),
     ("Order number 2024 is in queue.", 0),
 ])
@@ -67,7 +67,7 @@ def test_c3_year_detection(body, expected_count):
 
 
 # ---------------------------------------------------------------------------
-# C4 / C5 — source-attribution / "studies show"
+# C4 / C5 - source-attribution / "studies show"
 # ---------------------------------------------------------------------------
 
 
@@ -93,7 +93,7 @@ def test_c5_studies_show_detection(body):
 
 
 # ---------------------------------------------------------------------------
-# C6 — entity + quantitative qualifier
+# C6 - entity + quantitative qualifier
 # ---------------------------------------------------------------------------
 
 
@@ -130,7 +130,7 @@ def test_c6_no_entity_list_skips():
 
 
 # ---------------------------------------------------------------------------
-# C7 — Duration-as-recommendation (NEW in Phase 4)
+# C7 - Duration-as-recommendation (NEW in Phase 4)
 # ---------------------------------------------------------------------------
 
 
@@ -156,7 +156,7 @@ def test_c7_simple_duration_no_recommendation_does_not_match():
 
 
 # ---------------------------------------------------------------------------
-# C8 — Frequency-as-recommendation (NEW in Phase 4)
+# C8 - Frequency-as-recommendation (NEW in Phase 4)
 # ---------------------------------------------------------------------------
 
 
@@ -181,7 +181,7 @@ def test_c8_bare_frequency_word_no_match():
 
 
 # ---------------------------------------------------------------------------
-# C9 — Operational-percentage (NEW in Phase 4)
+# C9 - Operational-percentage (NEW in Phase 4)
 # ---------------------------------------------------------------------------
 
 
@@ -244,7 +244,7 @@ def test_coverage_empty_body():
 
 
 # ---------------------------------------------------------------------------
-# Auto-soften — C7/C8/C9 only
+# Auto-soften - C7/C8/C9 only
 # ---------------------------------------------------------------------------
 
 
@@ -284,7 +284,7 @@ def test_soften_operational_percentage():
 
 def test_soften_does_not_touch_c1_c6_claims():
     """C1 (percent stat), C2 (currency), C3 (year), C4 (source attribution),
-    C5 (studies show) MUST NOT be softened — they're statistics/years/
+    C5 (studies show) MUST NOT be softened - they're statistics/years/
     source-attributed facts where softening would mangle the claim more
     than help it."""
     cases = [
@@ -321,7 +321,7 @@ def test_soften_empty_body():
 
 
 # ---------------------------------------------------------------------------
-# coverage_retry_directive — prompt construction
+# coverage_retry_directive - prompt construction
 # ---------------------------------------------------------------------------
 
 
@@ -361,7 +361,7 @@ def test_coverage_retry_directive_empty_when_all_cited():
 
 def test_audit_unsourced_operational_claims_detected():
     """The audit's "4-to-6 week refresh cadence" + "60-day affiliate
-    audit window" — both stated as fact without citations — must be
+    audit window" - both stated as fact without citations - must be
     detected as citable C7 claims."""
     body = (
         "Sellers should adopt a 4-to-6 week refresh cadence for top "
@@ -377,7 +377,7 @@ def test_audit_unsourced_operational_claims_detected():
 
 def test_audit_unsourced_operational_claims_softened():
     """When the LLM retry can't add citations to those claims, the
-    auto-soften pass rewrites them to hedge phrasing — the entire
+    auto-soften pass rewrites them to hedge phrasing - the entire
     `a <duration> <noun phrase>` is replaced cleanly with `a typical
     <noun phrase>` (Phase 4 review fix #1)."""
     body = (
@@ -396,19 +396,19 @@ def test_audit_unsourced_operational_claims_softened():
 
 
 # ---------------------------------------------------------------------------
-# Phase 4 review fix #1 — N-to-N range + leading article + trailing noun chain
+# Phase 4 review fix #1 - N-to-N range + leading article + trailing noun chain
 # ---------------------------------------------------------------------------
 
 
 def test_soften_n_to_n_range_no_orphan_fragments():
-    """Phase 4 review fix #1 — `4-to-6 week refresh cadence` must
+    """Phase 4 review fix #1 - `4-to-6 week refresh cadence` must
     soften as a whole phrase. The original C7 regex's range arm
-    `(?:to|-|–|—)` couldn't match `<hyphen><to><hyphen>`, leaving
+    `(?:to|-|–|-)` couldn't match `<hyphen><to><hyphen>`, leaving
     `4-to-` orphaned in the soften output. After the fix, the entire
     phrase including the leading article is replaced cleanly."""
     body = "Schedule a 4-to-6 week refresh cadence for new listings."
     softened, replacements = apply_soften(body)
-    # Original phrase fully gone — no orphan `4-to-` or stray `cadence`
+    # Original phrase fully gone - no orphan `4-to-` or stray `cadence`
     # after the replacement.
     assert "4-to-" not in softened
     assert "4 week" not in softened
@@ -417,7 +417,7 @@ def test_soften_n_to_n_range_no_orphan_fragments():
 
 
 def test_soften_no_doubled_article():
-    """Phase 4 review fix #1 — when the matched phrase started with a
+    """Phase 4 review fix #1 - when the matched phrase started with a
     leading article (`a 4-week sprint`), soften must consume the
     article so the output doesn't read `a a typical sprint`."""
     body = "Run a 4-week sprint cooldown between releases."
@@ -427,13 +427,13 @@ def test_soften_no_doubled_article():
 
 
 def test_soften_trailing_noun_chain_consumed():
-    """Phase 4 review fix #1 — when the recommendation noun is followed
+    """Phase 4 review fix #1 - when the recommendation noun is followed
     by another recommendation noun (e.g. `refresh cadence`), the C7
     regex matches the whole chain so soften's output replaces both
     rather than leaving the trailing noun orphaned."""
     body = "Use a 30-day affiliate audit window before renewals."
     softened, replacements = apply_soften(body)
-    # `audit window` is a chained noun phrase — both consumed.
+    # `audit window` is a chained noun phrase - both consumed.
     assert "audit window" not in softened.replace("a typical audit window", "")
     assert "a typical audit window" in softened
 
@@ -455,12 +455,12 @@ def test_soften_handles_word_separator_to():
 
 
 # ---------------------------------------------------------------------------
-# Phase 4 review fix #2 — already-cited sentences NOT softened
+# Phase 4 review fix #2 - already-cited sentences NOT softened
 # ---------------------------------------------------------------------------
 
 
 def test_soften_skips_cited_sentence():
-    """Phase 4 review fix #2 — when an operational claim sentence
+    """Phase 4 review fix #2 - when an operational claim sentence
     already has a `{{cit_N}}` marker attached, soften must NOT touch
     it. The citation grounds the precise text; softening would leave
     the marker pointing at hedged phrasing that no longer matches the
@@ -498,7 +498,7 @@ def test_soften_skips_multiple_cited_sentences():
 
 def test_soften_does_not_strip_marker_when_skipping():
     """The `{{cit_N}}` marker must remain in the output exactly where
-    it was — masking + restoration roundtrips it cleanly."""
+    it was - masking + restoration roundtrips it cleanly."""
     body = "Run a quarterly review.{{cit_042}} And plan a 60-day audit window."
     softened, _ = apply_soften(body)
     assert "{{cit_042}}" in softened
@@ -507,7 +507,7 @@ def test_soften_does_not_strip_marker_when_skipping():
 
 def test_soften_restoration_handles_multiple_markers_in_order():
     """When multiple cited sentences are masked, each one is restored
-    to its original text — placeholders don't get cross-wired."""
+    to its original text - placeholders don't get cross-wired."""
     body = (
         "First a 1-week cycle.{{cit_001}} "
         "Then a 2-week cycle.{{cit_002}} "
@@ -522,7 +522,7 @@ def test_soften_restoration_handles_multiple_markers_in_order():
 
 def test_soften_marker_not_attached_to_terminator_does_not_protect():
     """A misplaced marker (not immediately after `.?!`) does NOT count
-    as a cited sentence — the surrounding region remains open to soften.
+    as a cited sentence - the surrounding region remains open to soften.
     Defensive against malformed LLM output."""
     body = "Schedule a 4-week refresh cadence{{cit_001}} for new listings."
     softened, replacements = apply_soften(body)

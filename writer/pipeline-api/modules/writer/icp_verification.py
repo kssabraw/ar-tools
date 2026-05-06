@@ -1,4 +1,4 @@
-"""Step 6.8 — ICP callout LLM judge.
+"""Step 6.8 - ICP callout LLM judge.
 
 Post-write verification that the section designated as the ICP anchor
 actually surfaced the audience callout. A regex / substring check would
@@ -9,7 +9,7 @@ orders"); a small judge prompt handles paraphrase tolerantly.
 Position in the pipeline:
   Runs LAST, alongside / after `_verify_brand_mention_landed`. The
   result lands in `WriterMetadata.icp_callout_landed` (warn-and-accept
-  signal — never aborts the run, never auto-retries the section).
+  signal - never aborts the run, never auto-retries the section).
 
 Failure handling:
   - No ICP anchor assigned (plan didn't pick one) → skip, return
@@ -24,9 +24,9 @@ Failure handling:
 
 Cost discipline:
   - One LLM call per article, only when an ICP anchor was assigned.
-  - Tight max_tokens (256) — the judge returns a small JSON object,
+  - Tight max_tokens (256) - the judge returns a small JSON object,
     not prose.
-  - Body is truncated to 4,000 chars before sending — section bodies
+  - Body is truncated to 4,000 chars before sending - section bodies
     rarely exceed this and the judge doesn't need full context to
     assess whether the audience was named.
 
@@ -56,10 +56,10 @@ _EVIDENCE_CHAR_CAP = 240
 # Punctuation we strip from the END of headings before comparing. ICP
 # callouts often land in the wrap-up of a section, and the heading SEO
 # optimizer / markdown renderer can append a colon or strip a question
-# mark from the brief's heading. Only trailing punctuation matters —
+# mark from the brief's heading. Only trailing punctuation matters -
 # leading punctuation on a heading would itself be a brief bug, not
 # an artifact of the optimizer.
-_HEADING_TRAILING_PUNCT = ".,;:!?—–-"  # em-dash, en-dash, hyphen
+_HEADING_TRAILING_PUNCT = ".,;:!?-–-"  # em-dash, en-dash, hyphen
 
 
 def _normalize_heading(text: str) -> str:
@@ -71,7 +71,7 @@ def _normalize_heading(text: str) -> str:
 
 def _truncate_body(body: str) -> str:
     """Head + tail truncation. ICP callouts can land anywhere in a
-    section — head-only truncation clipped the wrap-up paragraph in
+    section - head-only truncation clipped the wrap-up paragraph in
     long sections (5K-9K chars), causing the judge to evaluate prose
     that never contained the callout. Take the first 2,500 chars and
     the last 2,500 chars with a `[truncated middle]` marker between
@@ -167,7 +167,7 @@ async def verify_icp_callout_landed(
       - `True`  → judge says the audience callout landed.
       - `False` → judge says it didn't, or the anchor section is missing.
       - `None`  → no ICP anchor was assigned, or the judge call failed.
-        Unknown is honest — flagging False would mislead.
+        Unknown is honest - flagging False would mislead.
 
     `evidence_quote`: a short verbatim quote when `landed=True`, otherwise
       None.

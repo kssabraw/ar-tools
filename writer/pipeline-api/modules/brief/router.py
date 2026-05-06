@@ -1,4 +1,4 @@
-"""POST /brief — Brief Generator endpoint."""
+"""POST /brief - Brief Generator endpoint."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ async def generate_brief(request: BriefRequest) -> BriefResponse:
     try:
         result = await run_brief(request)
     except BriefError as exc:
-        logger.warning("brief.failed: %s — %s", exc.code, exc.message)
+        logger.warning("brief.failed: %s - %s", exc.code, exc.message)
         raise HTTPException(status_code=422, detail=exc.message)
     except Exception as exc:
         logger.exception("brief.unexpected: %s", exc)

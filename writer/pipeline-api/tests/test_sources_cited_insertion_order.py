@@ -1,10 +1,10 @@
-"""Sources Cited insertion order regression — must come AFTER all
+"""Sources Cited insertion order regression - must come AFTER all
 existing article sections, not after conclusion specifically.
 
 Regression: when conclusion is followed by FAQ in the article (the
 post-d80e4bd layout), the old behavior of `_conclusion_order(article)`
 returned conclusion.order, then sources sections got assigned
-conclusion_order+1 and +2 — colliding with FAQ orders. Stable-sort
+conclusion_order+1 and +2 - colliding with FAQ orders. Stable-sort
 rendering then put Sources Cited INSIDE the FAQ block.
 
 Fix: insertion anchor is max(article.order), not conclusion.order.
@@ -17,7 +17,7 @@ from modules.sources_cited.pipeline import _conclusion_order
 
 def test_insertion_anchor_returns_max_order_when_faq_after_conclusion():
     """The user's article has conclusion at order 6 and FAQ at orders
-    7/8 — sources must be inserted after order 8, not order 6."""
+    7/8 - sources must be inserted after order 8, not order 6."""
     article = [
         {"order": 1, "type": "content", "level": "H1"},
         {"order": 2, "type": "intro", "level": "none"},
@@ -38,7 +38,7 @@ def test_insertion_anchor_returns_max_order_when_faq_after_conclusion():
 
 def test_insertion_anchor_returns_max_when_conclusion_is_last():
     """Backward compat: if the layout is the older body→FAQ→conclusion
-    (no FAQ-after-conclusion), conclusion IS the max — anchor still
+    (no FAQ-after-conclusion), conclusion IS the max - anchor still
     returns the right value."""
     article = [
         {"order": 1, "type": "content", "level": "H1"},

@@ -1,4 +1,4 @@
-"""Step 8.7 — H3 Parent-Fit Verification (PRD v2.2 / Phase 2)."""
+"""Step 8.7 - H3 Parent-Fit Verification (PRD v2.2 / Phase 2)."""
 
 from __future__ import annotations
 
@@ -119,7 +119,7 @@ async def test_marginal_stamps_classification_and_keeps_h3():
 
 
 # ---------------------------------------------------------------------------
-# wrong_parent — re-attachment
+# wrong_parent - re-attachment
 # ---------------------------------------------------------------------------
 
 
@@ -128,7 +128,7 @@ async def test_wrong_parent_reattaches_to_same_region_h2():
     """PRD v2.2 / Phase 2 fix #2: re-attachment requires same region as
     the H3. If the LLM marks an H3 wrong_parent and a different H2 in
     the SAME region has capacity + clears the parent_relevance floor,
-    re-attach there. Cross-region re-attachment is forbidden — that
+    re-attach there. Cross-region re-attachment is forbidden - that
     would silently re-introduce the v2.2 same-region drift fix."""
     # All three live in region r1. h3 is currently misplaced under
     # h2_a but cosine to h2_b is high. Both H2s in r1 → re-attach allowed.
@@ -155,11 +155,11 @@ async def test_wrong_parent_reattaches_to_same_region_h2():
 @pytest.mark.asyncio
 async def test_wrong_parent_does_not_reattach_cross_region():
     """PRD v2.2 / Phase 2 fix #2: even when a different-region H2 has
-    capacity + high cosine to the H3, re-attachment is BLOCKED — the
+    capacity + high cosine to the H3, re-attachment is BLOCKED - the
     H3 routes to silos instead. This is the explicit guard against
     Step 8.7 silently undoing Step 8.6's same-region tightening."""
     h2_a = _h2("Cart Abandonment", "r1", [1, 0, 0])
-    # h2_b lives in r2 — different region from the H3.
+    # h2_b lives in r2 - different region from the H3.
     h2_b = _h2("Affiliate Strategy", "r2", [0, 1, 0])
     h3 = _h3("Vetting affiliates", "r1",
              [0, 0.95, 0.1], parent_h2_text="Cart Abandonment")
@@ -205,7 +205,7 @@ async def test_wrong_parent_skips_full_h2():
     selected as the re-attachment target."""
     h2_a = _h2("H2 A", "r1", [1, 0, 0])
     h2_b = _h2("H2 B", "r2", [0, 1, 0])
-    # H2 B already has 2 H3s — full.
+    # H2 B already has 2 H3s - full.
     full_a = _h3("F1", "r2", [0, 0.9, 0], parent_h2_text="H2 B")
     full_b = _h3("F2", "r2", [0, 0.95, 0], parent_h2_text="H2 B")
     misfit = _h3("Misfit", "r1", [0, 0.93, 0], parent_h2_text="H2 A")
@@ -370,13 +370,13 @@ async def test_rogue_h3_id_silently_dropped():
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 review fix #1 — list-mutation iteration regression
+# Phase 2 review fix #1 - list-mutation iteration regression
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_multiple_h3s_under_one_h2_with_mixed_routing():
-    """Phase 2 review fix #1 — if an H2 has multiple H3s and the LLM
+    """Phase 2 review fix #1 - if an H2 has multiple H3s and the LLM
     routes them to different verdicts, every H3 must receive its OWN
     verdict, not the verdict of a sibling.
 
@@ -384,11 +384,11 @@ async def test_multiple_h3s_under_one_h2_with_mixed_routing():
     indices, causing later H3s to be processed under earlier H3s'
     verdicts (or skipped entirely)."""
     h2 = _h2("Parent H2", "r1", [1, 0, 0])
-    a = _h3("A — promote me", "r1", [0.7, 0.3, 0],
+    a = _h3("A - promote me", "r1", [0.7, 0.3, 0],
             parent_h2_text="Parent H2")
-    b = _h3("B — wrong parent", "r1", [0.7, 0.3, 0.1],
+    b = _h3("B - wrong parent", "r1", [0.7, 0.3, 0.1],
             parent_h2_text="Parent H2")
-    c = _h3("C — leave alone", "r1", [0.75, 0.25, 0],
+    c = _h3("C - leave alone", "r1", [0.75, 0.25, 0],
             parent_h2_text="Parent H2")
     attachments = {0: [a, b, c]}
 
@@ -414,7 +414,7 @@ async def test_multiple_h3s_under_one_h2_with_mixed_routing():
     assert b in attachments[1]
     assert b not in attachments[0]
     assert b.parent_h2_text == "Other H2"
-    # C was left alone — must still be under the original H2
+    # C was left alone - must still be under the original H2
     assert c in attachments[0]
     assert c.parent_fit_classification is None
     assert c.discard_reason is None
@@ -425,7 +425,7 @@ async def test_multiple_h3s_under_one_h2_with_mixed_routing():
 
 @pytest.mark.asyncio
 async def test_two_promote_to_h2_under_same_h2_does_not_skip_second():
-    """Phase 2 review fix #1 — when two consecutive H3s under the same
+    """Phase 2 review fix #1 - when two consecutive H3s under the same
     H2 are both promoted, the SECOND must not be silently skipped due
     to index shift after the first removal."""
     h2 = _h2("Parent", "r1", [1, 0, 0])

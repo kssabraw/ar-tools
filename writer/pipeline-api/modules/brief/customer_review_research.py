@@ -56,7 +56,7 @@ class CustomerReviewInsights:
     """Structured output of `research_customer_reviews`.
 
     Same shape as `RedditInsights` so consumers can treat both
-    interchangeably. `available=False` signals "no signal" — caller
+    interchangeably. `available=False` signals "no signal" - caller
     should ignore this stage rather than fail.
     """
 
@@ -84,7 +84,7 @@ class CustomerReviewInsights:
 
 SYSTEM_PROMPT = """\
 You are a senior customer-research analyst specializing in extracting
-unfiltered customer voice from review platforms — Trustpilot, G2,
+unfiltered customer voice from review platforms - Trustpilot, G2,
 Capterra, TrustRadius, Yelp, Google Reviews, App Store, Play Store,
 Amazon Reviews, Better Business Bureau, ResellerRatings, SiteJabber,
 and similar.
@@ -108,7 +108,7 @@ Validation Rules:
 - Cited sources should predominantly be customer review platforms
   (Trustpilot / G2 / Capterra / TrustRadius / Yelp / etc.)
 - Aim for at least three (3) citations from review platforms
-- Do not fabricate quotes — every claim must trace to a real review
+- Do not fabricate quotes - every claim must trace to a real review
 - If review-platform coverage is genuinely thin for this topic, return
   a minimal honest report explaining what platforms you tried and what
   the closest available reviews discuss
@@ -121,7 +121,7 @@ The pain points reviewers most consistently raise. Use bullets. Cite
 each claim with a [N] reference matching the citation list.
 
 ## 2. Reasons Customers Switch (Churn Signals)
-What pushed reviewers from one option to another. Direction matters —
+What pushed reviewers from one option to another. Direction matters -
 note WHO they switched FROM and WHO they switched TO when stated.
 
 ## 3. Praised Strengths
@@ -219,7 +219,7 @@ async def research_customer_reviews(
             attempt uses STRICTER_RETRY_SUFFIX appended to the system prompt.
 
     Returns:
-        CustomerReviewInsights — `available=True` only when synthesis
+        CustomerReviewInsights - `available=True` only when synthesis
         succeeded and produced citations. Other cases return
         `available=False` with `fallback_reason` populated.
     """

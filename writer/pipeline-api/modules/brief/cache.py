@@ -1,7 +1,7 @@
-"""Brief Generator 7-day Supabase cache (PRD §2 — client-agnostic).
+"""Brief Generator 7-day Supabase cache (PRD §2 - client-agnostic).
 
 Lookup is keyed on (keyword, location_code). The freshest row inside the
-TTL window wins. Writes are append-only — historical rows survive so we
+TTL window wins. Writes are append-only - historical rows survive so we
 can compare runs across threshold-tuning iterations.
 
 Per PRD §2 the brief is client-agnostic: two clients running the same
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_keyword(keyword: str) -> str:
-    """Lowercase + strip — keeps the cache key resilient to surface variation."""
+    """Lowercase + strip - keeps the cache key resilient to surface variation."""
     return keyword.strip().lower()
 
 
@@ -34,7 +34,7 @@ async def get_cached(
     """Return cached output_payload dict if a fresh row exists, else None.
 
     "Fresh" means created_at within `settings.brief_cache_ttl_days` of now.
-    Errors during lookup degrade silently — the pipeline will simply
+    Errors during lookup degrade silently - the pipeline will simply
     regenerate the brief.
     """
     threshold = datetime.now(timezone.utc) - timedelta(days=settings.brief_cache_ttl_days)

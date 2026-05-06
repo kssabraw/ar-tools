@@ -1,4 +1,4 @@
-"""Module 14 — Usage Recommendation Engine.
+"""Module 14 - Usage Recommendation Engine.
 
 Per-zone min/target/max counts using percentile-based ranges over per-1000-words
 frequency. Supports safe (default) and aggressive outlier modes.
@@ -22,12 +22,12 @@ HARD_CAP_PER_1000_WORDS = 10
 SAFE_OUTLIER_MULT = 3.0
 ZONES = ("title", "h1", "h2", "h3", "paragraphs")
 
-# SIE v1.4 — three-bucket category aggregate, benchmarked at 50% of
+# SIE v1.4 - three-bucket category aggregate, benchmarked at 50% of
 # trimmed-max competitor distinct-item count. The 0.50 multiplier is
 # the user-spec'd "target half of the most aggressive competitor."
 # We use absolute counts (no per-1000 normalization) because category
 # coverage in title/h1/h2/h3 zones is structurally bounded by the
-# zone's natural length — competitor titles aren't longer because
+# zone's natural length - competitor titles aren't longer because
 # their articles are longer.
 ZONE_CATEGORY_TARGET_MULT = 0.50
 
@@ -122,7 +122,7 @@ def build_zone_count_map(
     matching inside longer words ("ai" inside "training" etc.).
 
     Extracted so `build_usage` and `build_zone_category_targets` can
-    share the scan — without sharing they'd each do
+    share the scan - without sharing they'd each do
     `len(terms) × len(zones) × len(pages)` substring searches against
     full lowercase joined zone text, doubling the per-SIE-run work.
     """
@@ -226,7 +226,7 @@ def _classify_term(
     Order matters: a term that's BOTH an entity and a seed fragment
     should never happen (mark_seed_keyword_fragments protects entities
     from being flagged), but if upstream invariants break we prefer
-    the entity classification — it carries more semantic weight than
+    the entity classification - it carries more semantic weight than
     the keyword-echo signal.
     """
     if entity_meta.get(term, {}).get("is_entity"):
@@ -244,7 +244,7 @@ def build_zone_category_targets(
     outlier_mode: str = "safe",
     zone_count_by_term_and_url: Optional[dict[str, dict[str, dict[str, int]]]] = None,
 ) -> dict[str, dict[str, dict[str, int]]]:
-    """SIE v1.4 — per-zone per-category aggregate distinct-item targets.
+    """SIE v1.4 - per-zone per-category aggregate distinct-item targets.
 
     For each (zone, category) pair, count distinct items present in
     each competitor page's zone, find the trimmed-max across competitor

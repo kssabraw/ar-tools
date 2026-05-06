@@ -1,4 +1,4 @@
-"""Unit tests for Brief Generator v2.0 Step 7 — heading priority scoring."""
+"""Unit tests for Brief Generator v2.0 Step 7 - heading priority scoring."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _make(text: str, source: str = "serp", **kw) -> Candidate:
     ("persona_gap", 0, 0.7),
     ("autocomplete", 0, 0.7),
 
-    # Tier 3 (0.3): SERP only (consensus irrelevant — SERP can't have
+    # Tier 3 (0.3): SERP only (consensus irrelevant - SERP can't have
     # llm_fanout_consensus by construction since it's not from fan-out)
     ("serp", 0, 0.3),
     ("serp", 5, 0.3),
@@ -46,7 +46,7 @@ def test_information_gain_tiers(source, consensus, expected):
 
 
 # ----------------------------------------------------------------------
-# compute_priority — formula correctness
+# compute_priority - formula correctness
 # ----------------------------------------------------------------------
 
 def test_priority_formula_serp_top_position():
@@ -64,7 +64,7 @@ def test_priority_formula_serp_top_position():
 
 
 def test_priority_formula_reddit_with_consensus():
-    """Reddit heading also surfaced by 2 LLMs — high info-gain tier."""
+    """Reddit heading also surfaced by 2 LLMs - high info-gain tier."""
     c = _make("x", source="reddit",
               title_relevance=0.65,
               serp_frequency=0,     # → 0
@@ -78,7 +78,7 @@ def test_priority_formula_reddit_with_consensus():
 
 
 def test_priority_formula_persona_gap_no_consensus():
-    """Persona gap heading with no other signal — tier 2 info gain (0.7)."""
+    """Persona gap heading with no other signal - tier 2 info gain (0.7)."""
     c = _make("x", source="persona_gap",
               title_relevance=0.60,
               serp_frequency=0,
@@ -91,7 +91,7 @@ def test_priority_formula_persona_gap_no_consensus():
 
 
 def test_priority_formula_serp_low_position():
-    """SERP heading at position 20 — position_weight = 1 - 19/20 = 0.05."""
+    """SERP heading at position 20 - position_weight = 1 - 19/20 = 0.05."""
     c = _make("x", source="serp",
               title_relevance=0.65,
               serp_frequency=10,     # → norm_freq = 0.5

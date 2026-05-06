@@ -1,4 +1,4 @@
-"""Step 0.5 — Heading-structure sanitizer.
+"""Step 0.5 - Heading-structure sanitizer.
 
 Regression tests for the structural drift modes observed in the user's
 TikTok Shop article:
@@ -70,7 +70,7 @@ def test_drops_duplicate_h2_with_identical_text():
 
 def test_drops_faq_like_content_h2_and_its_children():
     """The user's article also had an H2 with type='content' and text
-    'Frequently Asked Questions' — the writer rendered it BEFORE the
+    'Frequently Asked Questions' - the writer rendered it BEFORE the
     conclusion while the real faq-header block ended up AFTER."""
     structure = [
         _h2(1, "Pricing"),
@@ -122,7 +122,7 @@ def test_faq_substring_in_legitimate_heading_is_kept():
 
 def test_dedup_normalizes_case_whitespace_and_trailing_punctuation():
     """Brief drift can produce 'Reduce Returns' and 'reduce returns:'
-    as two separate H2 entries — they should collapse to one."""
+    as two separate H2 entries - they should collapse to one."""
     structure = [
         _h2(1, "Reduce Returns"),
         _h2(2, "  reduce returns:  "),
@@ -135,7 +135,7 @@ def test_dedup_normalizes_case_whitespace_and_trailing_punctuation():
 
 
 def test_kept_h2_preserves_original_casing_and_punctuation():
-    """Normalization is for *detection only* — the H2 that survives
+    """Normalization is for *detection only* - the H2 that survives
     keeps its original text so the section writer's prompt and the
     rendered article match the brief's intended phrasing."""
     structure = [
@@ -148,7 +148,7 @@ def test_kept_h2_preserves_original_casing_and_punctuation():
 
 def test_orders_are_preserved_no_renumbering():
     """Downstream code looks up section_budgets / placement plan by
-    `order`. The sanitizer must NOT renumber surviving entries — only
+    `order`. The sanitizer must NOT renumber surviving entries - only
     pipeline.py:632 does that, after assembly."""
     structure = [
         _h2(1, "A"),
@@ -184,7 +184,7 @@ def test_conclusion_resets_drop_flag():
         _h2(2, "Dropped H2"),  # duplicate → dropped
         _h3(3, "Body H3 under dropped"),  # dropped
         {"order": 4, "level": "H2", "type": "conclusion", "text": "Conclusion"},
-        _h3(5, "H3 after conclusion — not under a dropped H2"),
+        _h3(5, "H3 after conclusion - not under a dropped H2"),
     ]
     cleaned, log = sanitize_heading_structure(structure)
     # Conclusion resets flag; the H3 after conclusion isn't dropped.

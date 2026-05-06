@@ -6,7 +6,7 @@ industry insider noticing what the outline gets wrong, what
 conventional wisdom it follows uncritically, and what angles a real
 expert would miss the first time.
 
-The critique does NOT change the H2/H3 structure — it's a separate
+The critique does NOT change the H2/H3 structure - it's a separate
 output strategists see in the dashboard alongside the brief. Surfaces
 contrarian angles for human consideration without forcing the outline
 into a contrarian shape (which would be self-defeating if the
@@ -37,7 +37,7 @@ LLMJsonFn = Callable[..., Awaitable[Any]]
 class EditorialCritique:
     """Structured output of `generate_editorial_critique`.
 
-    `available=False` signals "no critique" — caller should hide the
+    `available=False` signals "no critique" - caller should hide the
     section in the dashboard rather than show a blank one.
     """
 
@@ -75,16 +75,16 @@ You will receive:
 
 Produce three short lists and a single overall-assessment paragraph:
 
-1. STALE FRAMINGS — conventional wisdom or framing the outline follows
+1. STALE FRAMINGS - conventional wisdom or framing the outline follows
    uncritically that is misleading, outdated, or oversimplified. Be
    specific. "Most articles say X, but the actual situation is Y."
 
-2. MISSING ANGLES — what an industry insider would notice this outline
-   doesn't address. Don't list "more keywords" — list specific
+2. MISSING ANGLES - what an industry insider would notice this outline
+   doesn't address. Don't list "more keywords" - list specific
    substantive angles a competitor outline ALSO misses but a
    knowledgeable reader would expect.
 
-3. CONTRARIAN TAKES — defensible opposing viewpoints worth the writer
+3. CONTRARIAN TAKES - defensible opposing viewpoints worth the writer
    considering even if they don't end up in the final article. Each
    take should be specific enough that a reader could evaluate it.
 
@@ -99,10 +99,10 @@ Be substantive, not generic. "It could be more engaging" is useless.
 Z" is useful.
 
 If the outline is genuinely strong and you have nothing meaningful to
-say in a category, return an empty list for that category — don't pad
+say in a category, return an empty list for that category - don't pad
 with weak observations.
 
-Output strict JSON only — no preamble, no markdown fences:
+Output strict JSON only - no preamble, no markdown fences:
 {
   "stale_framings": ["string", "string", ...],
   "missing_angles": ["string", "string", ...],
@@ -112,7 +112,7 @@ Output strict JSON only — no preamble, no markdown fences:
 }
 
 `confidence` is your honest read on how confident you are in this
-critique — lower it (0.3-0.5) for niche topics where you'd defer to
+critique - lower it (0.3-0.5) for niche topics where you'd defer to
 domain experts; raise it (0.7-0.9) for topics where standard editorial
 judgment applies. Don't fake confidence to seem authoritative."""
 
@@ -133,7 +133,7 @@ def _build_user_prompt(
         f"Scope statement:\n{scope_statement}\n\n"
         f"Selected H2 outline:\n"
         + "\n".join(f"  {i+1}. {t}" for i, t in enumerate(selected_h2_texts))
-        + "\n\nTop competitor titles (for reference only — your job is to "
+        + "\n\nTop competitor titles (for reference only - your job is to "
         f"critique the OUTLINE, not summarize the SERP):\n"
         + "\n".join(f"  - {t}" for t in competitor_titles[:10])
     )
@@ -167,7 +167,7 @@ def _validate_payload(payload: Any) -> Optional[EditorialCritique]:
         confidence = 0.5  # neutral default when LLM omits
 
     if not (stale or missing or contrarian or overall):
-        # Completely empty critique — treat as no useful signal
+        # Completely empty critique - treat as no useful signal
         return None
 
     return EditorialCritique(
@@ -197,7 +197,7 @@ async def generate_editorial_critique(
       - Malformed JSON response
       - Empty critique (LLM had nothing useful to add)
 
-    Never aborts the run — the critique is a side output, not a gate.
+    Never aborts the run - the critique is a side output, not a gate.
     """
     if not selected_h2_texts:
         return EditorialCritique(

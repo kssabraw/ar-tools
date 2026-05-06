@@ -41,7 +41,7 @@ from modules.sie.entities import merge_textrazor_entities_into_terms
 
 
 # ---------------------------------------------------------------------------
-# STOPWORDS expansion (regression — possessives/reflexives)
+# STOPWORDS expansion (regression - possessives/reflexives)
 # ---------------------------------------------------------------------------
 
 
@@ -60,12 +60,12 @@ def test_stopwords_includes_possessives_and_reflexives(word):
 
 
 @pytest.mark.parametrize("tokens,expected_ratio", [
-    (["your", "tiktok"], 0.5),         # 50% — at floor, dropped
-    (["how", "to"], 0.5),              # 50% — "to" is a stopword, "how" isn't
+    (["your", "tiktok"], 0.5),         # 50% - at floor, dropped
+    (["how", "to"], 0.5),              # 50% - "to" is a stopword, "how" isn't
                                        # in our list; still hits the floor
-    (["on", "tiktok", "shop"], 1 / 3), # ~33% — kept
-    (["tiktok", "shop"], 0.0),         # 0% — kept
-    (["the", "an", "a"], 1.0),         # 100% — dropped
+    (["on", "tiktok", "shop"], 1 / 3), # ~33% - kept
+    (["tiktok", "shop"], 0.0),         # 0% - kept
+    (["the", "an", "a"], 1.0),         # 100% - dropped
 ])
 def test_stopword_density_calc(tokens, expected_ratio):
     assert _stopword_density(tokens) == pytest.approx(expected_ratio)
@@ -86,7 +86,7 @@ def test_generate_ngrams_drops_high_stopword_density_bigrams():
 
 
 def test_generate_ngrams_keeps_low_stopword_density_trigrams():
-    """`on tiktok shop` (33%) still passes — only one of three is a stopword."""
+    """`on tiktok shop` (33%) still passes - only one of three is a stopword."""
     tokens = ["on", "tiktok", "shop"]
     grams = _generate_ngrams(tokens, n=3)
     assert "on tiktok shop" in grams
@@ -116,9 +116,9 @@ def _make_aggregate(term: str, pages_found: int = 5) -> TermAggregate:
 
 
 def test_seed_fragment_mark_flags_subsequences():
-    """SIE v1.3 — flag (don't strip) seed-keyword fragments. For seed
+    """SIE v1.3 - flag (don't strip) seed-keyword fragments. For seed
     'how to grow your tiktok shop', n-gram terms that are contiguous
-    subsequences of the keyword get FLAGGED — they stay in aggregates
+    subsequences of the keyword get FLAGGED - they stay in aggregates
     so the writer keeps using them, but the returned set tells the
     pipeline which terms to mark `is_seed_fragment=True` on."""
     aggregates = {
@@ -147,7 +147,7 @@ def test_seed_fragment_mark_protects_target_keyword():
 
 
 def test_seed_fragment_mark_protects_entities():
-    """Entities (per entity_meta['is_entity']) are protected — they
+    """Entities (per entity_meta['is_entity']) are protected - they
     surface in the entity bucket, not the keyword-variants bucket."""
     aggregates = {
         "tiktok shop": _make_aggregate("tiktok shop"),
@@ -159,7 +159,7 @@ def test_seed_fragment_mark_protects_entities():
     flagged = filter_seed_keyword_fragments(
         aggregates, "how to grow tiktok shop", entity_meta=entity_meta,
     )
-    # tiktok shop is an entity — NOT flagged; tiktok is plain n-gram — flagged
+    # tiktok shop is an entity - NOT flagged; tiktok is plain n-gram - flagged
     assert "tiktok" in flagged
     assert "tiktok shop" not in flagged
     # Both still in aggregates (no removal in v1.3)
@@ -175,7 +175,7 @@ def test_seed_fragment_mark_returns_empty_set_on_empty_keyword():
 
 
 def test_termrecord_carries_is_seed_fragment_flag():
-    """SIE v1.3 — TermRecord must support the new is_seed_fragment field
+    """SIE v1.3 - TermRecord must support the new is_seed_fragment field
     so the pipeline can stamp it from the flagged set."""
     from models.sie import TermRecord
 
@@ -263,7 +263,7 @@ def test_aggregate_filters_by_confidence():
 
 def test_aggregate_drops_terms_on_3_or_fewer_pages():
     """Per spec: >3 pages required (i.e. ≥4)."""
-    # Term appears on exactly 3 pages — should be DROPPED
+    # Term appears on exactly 3 pages - should be DROPPED
     pages = [
         _make_page(f"https://e.com/{i}", [_make_textrazor_entity("Term")])
         for i in range(3)
@@ -273,7 +273,7 @@ def test_aggregate_drops_terms_on_3_or_fewer_pages():
 
 
 def test_aggregate_keeps_terms_on_4_plus_pages():
-    """Term appears on 4 pages — keeps."""
+    """Term appears on 4 pages - keeps."""
     pages = [
         _make_page(f"https://e.com/{i}", [_make_textrazor_entity("TikTok Shop")])
         for i in range(4)
@@ -393,7 +393,7 @@ def test_textrazor_merge_unions_source_urls_with_existing_term():
 
 def test_scoring_boost_differentiation_constants_correct():
     """Direct sanity check that the SIE v1.2 boost constants differ
-    from v1.1 (single 1.15× for shared) — Option C uses 1.20× / 1.10×
+    from v1.1 (single 1.15× for shared) - Option C uses 1.20× / 1.10×
     / 1.0×. We assert the literal numbers in scoring.py haven't drifted.
     """
     import inspect
@@ -407,7 +407,7 @@ def test_scoring_boost_differentiation_constants_correct():
 
 
 # ---------------------------------------------------------------------------
-# Self-review fixes — source-flag preservation, constant drift, language,
+# Self-review fixes - source-flag preservation, constant drift, language,
 # httpx pooling, dead-code removal.
 # ---------------------------------------------------------------------------
 
@@ -438,7 +438,7 @@ def test_textrazor_merge_preserves_entity_only_source():
     aggregates, entity_meta = merge_textrazor_entities_into_terms(
         aggregates, entity_meta, [textrazor_entity],
     )
-    # Must STAY entity_only — TextRazor agreeing doesn't mean an
+    # Must STAY entity_only - TextRazor agreeing doesn't mean an
     # n-gram exists.
     assert entity_meta["gmv max"]["source"] == "entity_only"
     # But the TextRazor confidence flags should still be added.
@@ -447,7 +447,7 @@ def test_textrazor_merge_preserves_entity_only_source():
 
 
 def test_textrazor_merge_promotes_ngram_only_to_dual_signal():
-    """Companion to the above — when no entity_meta entry exists yet
+    """Companion to the above - when no entity_meta entry exists yet
     (n-gram-only term), TextRazor agreement DOES promote it to
     ngram_and_entity. This is the legitimate upgrade path.
     """
@@ -534,7 +534,7 @@ async def test_analyze_many_shares_single_httpx_client(monkeypatch):
 
     monkeypatch.setattr(tc.httpx.AsyncClient, "__init__", _counting_init)
     # Make analyze_entities a no-op so we don't actually hit the network
-    # — we just want to count client constructions.
+    # - we just want to count client constructions.
     async def _fake_analyze(url, text, *, http_client=None, language_code="en"):
         return PageTextRazorResult(url=url)
 
@@ -549,14 +549,14 @@ async def test_analyze_many_shares_single_httpx_client(monkeypatch):
 def test_aggregator_requires_per_occurrence_filters_pass_before_slot_creation():
     """Regression: the dead-code branch `if not slot["relevances"]:
     continue` was removed. Verify aggregation still rejects entities
-    whose every occurrence failed per-occurrence filters — by never
+    whose every occurrence failed per-occurrence filters - by never
     creating a slot for them rather than checking after-the-fact.
     """
     per_page = [
         PageTextRazorResult(
             url=f"https://t.com/{i}",
             entities=[TextRazorEntity(
-                # Below relevance threshold — must not contribute.
+                # Below relevance threshold - must not contribute.
                 name="Low Relevance",
                 matched_text="lr",
                 relevance=TEXTRAZOR_MIN_RELEVANCE - 0.05,

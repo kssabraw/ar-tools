@@ -2,7 +2,7 @@
 
 TextRazor analyzes text and returns Wikipedia/DBpedia-linked entities
 with `relevanceScore` (0-1) and `confidenceScore` (typically 0-10+).
-We use it as a parallel signal to Google NLP — different vendor,
+We use it as a parallel signal to Google NLP - different vendor,
 different training distribution, catches concepts Google NLP misses.
 
 Free tier: 500 requests/day, no concurrency cap published. We bound
@@ -39,7 +39,7 @@ TEXTRAZOR_MAX_BYTES = 200_000  # TextRazor accepts up to ~200KB per request
 # Map SIE's ISO-639-1 `language_code` (e.g. "en", "es", "fr") to
 # TextRazor's 3-letter `languageOverride` codes. TextRazor supports
 # 12+ languages but expects "eng" / "spa" / "fra" rather than ISO-1.
-# Unmapped codes fall back to "eng" (TextRazor will still succeed —
+# Unmapped codes fall back to "eng" (TextRazor will still succeed -
 # accuracy degrades gracefully on unsupported languages).
 _TEXTRAZOR_LANGUAGE_MAP = {
     "en": "eng",
@@ -108,7 +108,7 @@ async def analyze_entities(
     """Run TextRazor entity extraction on a single page's body text.
 
     Returns a `PageTextRazorResult` with `failed=True` and a reason when
-    the API call doesn't succeed — callers should aggregate the
+    the API call doesn't succeed - callers should aggregate the
     successful results and ignore the failures (matching the Google NLP
     pattern).
 
@@ -116,7 +116,7 @@ async def analyze_entities(
     translated to TextRazor's 3-letter `languageOverride`. Defaults to
     "en" so legacy callers keep working.
     """
-    # Defensive — config defines `textrazor_api_key: str = ""`, but if
+    # Defensive - config defines `textrazor_api_key: str = ""`, but if
     # the field were missing or set to None the `.strip()` would
     # AttributeError.
     api_key = (getattr(settings, "textrazor_api_key", "") or "").strip()
@@ -226,13 +226,13 @@ async def analyze_many(
     Concurrency defaults to 2 to stay under TextRazor free-tier's
     per-second concurrency cap (~3 simultaneous requests). Earlier
     runs with concurrency=5 produced a storm of 401 Unauthorized
-    responses interleaved with 200s — TextRazor's free tier returns
+    responses interleaved with 200s - TextRazor's free tier returns
     401 (rather than the documented 429) when concurrency is
     exceeded. Lowering to 2 fits comfortably under the limit at the
     cost of slightly longer total latency on a 20-page corpus.
 
     A single shared `httpx.AsyncClient` is used across all calls so we
-    benefit from connection pooling — without this, each per-page call
+    benefit from connection pooling - without this, each per-page call
     spins up its own client (N TLS handshakes for N pages).
     """
     semaphore = asyncio.Semaphore(concurrency)

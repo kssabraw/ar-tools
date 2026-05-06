@@ -1,4 +1,4 @@
-"""Article structure tests — order resequencing, intro position,
+"""Article structure tests - order resequencing, intro position,
 FAQ-after-conclusion, orphan-ordinal validator.
 
 Repros the user-reported bugs:
@@ -61,7 +61,7 @@ def test_step_1_then_step_2_then_step_3_no_warning():
 
 
 def test_step_1_only_no_warning():
-    """A single 'Step 1' is fine — no antecedent required."""
+    """A single 'Step 1' is fine - no antecedent required."""
     article = [
         _section(order=1, level="H1", type="content", heading="T"),
         _section(order=2, level="H2", type="content", heading="A",
@@ -150,7 +150,7 @@ def test_faq_after_conclusion_no_warning():
 
 
 # ---------------------------------------------------------------------------
-# Order resequencing semantics — sanity
+# Order resequencing semantics - sanity
 # ---------------------------------------------------------------------------
 
 

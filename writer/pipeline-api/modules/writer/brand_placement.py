@@ -1,9 +1,9 @@
-"""Step 3.6 — Deterministic brand & ICP placement plan.
+"""Step 3.6 - Deterministic brand & ICP placement plan.
 
 Pre-allocates which H2 sections must carry (a) a brand mention and (b)
 an ICP callout, before any section LLM runs. The section writer reads
 this plan per-H2 and stamps a hard `MUST_MENTION_BRAND` / `MUST_NOT_
-MENTION_BRAND` directive plus an `ICP_CALLOUT_HOOK` into the prompt —
+MENTION_BRAND` directive plus an `ICP_CALLOUT_HOOK` into the prompt -
 replacing the previous soft "across the article, mention 1–2 times…
 let another section carry it" guidance.
 
@@ -38,7 +38,7 @@ Selection logic:
 Tokenization:
   - Lowercased, alphanumeric tokens only.
   - Stopwords filtered (a small fixed list, no NLTK dependency).
-  - Token-set overlap (intersection size) — NOT Jaccard, because we
+  - Token-set overlap (intersection size) - NOT Jaccard, because we
     want long descriptive service names ("influencer marketing
     campaigns") to score higher than short ones ("ads") when they
     happen to share more tokens with the H2 heading.
@@ -93,7 +93,7 @@ class BrandPlacementPlan:
 
     `directives` is keyed by H2 `order`. Sections whose order is not in
     the map should treat both flags as False / None (i.e. fall back to
-    the soft default — no forced mention, no forced ICP hook).
+    the soft default - no forced mention, no forced ICP hook).
 
     `_text` fields carry the heading text for the anchor H2s so callers
     can surface an unambiguous editor-facing reference without having
@@ -139,7 +139,7 @@ def _overlap_score(heading_tokens: set[str], phrases: list[str]) -> tuple[int, O
 
 def _content_h2s(heading_structure: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Body-content H2s, sorted by `order`. FAQ/conclusion H2s are
-    excluded — those are written by their own pipeline steps."""
+    excluded - those are written by their own pipeline steps."""
     return sorted(
         [
             h for h in heading_structure
@@ -177,7 +177,7 @@ def _pick_anchor(
     scored.sort(key=lambda t: (-t[0], t[1]))
     top_score, top_order, top_phrase, _ = scored[0]
     if top_score == 0:
-        # No phrase overlap — fall back to the first H2 (already sorted
+        # No phrase overlap - fall back to the first H2 (already sorted
         # by order via _content_h2s, so candidates[0] is the lowest-
         # order non-excluded H2).
         return candidates[0].get("order"), None
@@ -221,7 +221,7 @@ def build_brand_placement_plan(
 
     if pain_points or verticals:
         # Pain points carry more semantic weight for an ICP callout
-        # than verticals — a pain point names the unmet need; a vertical
+        # than verticals - a pain point names the unmet need; a vertical
         # is a category. Score against the combined list but prefer
         # pain-point matches as the hook phrase by listing them first
         # (the scorer picks the first phrase with the best overlap).

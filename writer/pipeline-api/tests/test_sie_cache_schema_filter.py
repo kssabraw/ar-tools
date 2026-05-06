@@ -49,7 +49,7 @@ async def test_get_cached_returns_payload_when_schema_matches():
 @pytest.mark.asyncio
 async def test_get_cached_treats_schema_mismatch_as_miss():
     """A 1.3 payload returned from the DB must be rejected when the
-    caller expects 1.4 — otherwise SIEResponse.model_validate would
+    caller expects 1.4 - otherwise SIEResponse.model_validate would
     raise on the Literal mismatch."""
     rows = [{
         "output_payload": {"schema_version": "1.3", "keyword": "kw"},
@@ -64,7 +64,7 @@ async def test_get_cached_treats_schema_mismatch_as_miss():
 @pytest.mark.asyncio
 async def test_get_cached_does_not_filter_by_schema_version_column():
     """Defensive against DB drift: the query must NEVER add
-    .eq('schema_version', ...) — that would 400 on a sie_cache table
+    .eq('schema_version', ...) - that would 400 on a sie_cache table
     without that column."""
     rows: list[dict] = []
     client, table = _make_supabase_mock(rows)
@@ -94,7 +94,7 @@ async def test_get_cached_works_without_schema_version_arg():
 @pytest.mark.asyncio
 async def test_write_cache_omits_optional_columns():
     """write_cache must NOT pass schema_version / cost_usd / duration_ms
-    columns in the INSERT — they may not exist on every deploy's
+    columns in the INSERT - they may not exist on every deploy's
     sie_cache table. The schema_version is preserved inside
     output_payload."""
     client, table = _make_supabase_mock(rows=[])

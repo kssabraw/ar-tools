@@ -1,4 +1,4 @@
-"""Unit tests for Brief Generator v2.0 Step 8.6 — H3 selection."""
+"""Unit tests for Brief Generator v2.0 Step 8.6 - H3 selection."""
 
 from __future__ import annotations
 
@@ -116,7 +116,7 @@ def test_excludes_h3_from_non_adjacent_region():
 
 
 def test_excludes_h3_from_adjacent_region_v22():
-    """PRD v2.2 / Phase 2 — adjacent-region relaxation removed.
+    """PRD v2.2 / Phase 2 - adjacent-region relaxation removed.
     H3s in a different region from the parent H2 are NOT selected
     even when the regions are highly similar (centroid cos ≥ 0.65).
 
@@ -174,7 +174,7 @@ def test_max_two_h3s_per_h2_default():
 
 def test_h3_can_be_evaluated_for_multiple_h2s_but_only_attached_once():
     """Same candidate competes for both H2s; first H2 to pick it wins."""
-    # Vectors chosen so cos(h3, h2_a) = 0.7 and cos(h3, h2_b) = 0.7071 —
+    # Vectors chosen so cos(h3, h2_a) = 0.7 and cos(h3, h2_b) = 0.7071 -
     # both inside the [0.60, 0.85] parent_relevance band.
     h2_a = _cand("How TikTok Shop Works", "region_0", [1.0, 0.0, 0.0])
     h2_b = _cand("Selling on TikTok Shop", "region_1", [0.7071, 0.7071, 0.0])
@@ -186,7 +186,7 @@ def test_h3_can_be_evaluated_for_multiple_h2s_but_only_attached_once():
     res = select_h3s_for_h2s(
         selected_h2s=[h2_a, h2_b], h3_pool=[h3], regions=regions,
     )
-    # h3 is in region_0 — both H2s could pick it (region_0 same; region_1 adjacent)
+    # h3 is in region_0 - both H2s could pick it (region_0 same; region_1 adjacent)
     # but the global-attachment guard ensures only one H2 actually attaches it.
     total_attachments = sum(len(arr) for arr in res.attachments.values())
     assert total_attachments == 1
@@ -319,7 +319,7 @@ def test_logs_complete_summary(caplog):
 # ----------------------------------------------------------------------
 
 def test_thresholds_match_prd():
-    # PRD v2.2 / Phase 2 — floor raised 0.60 → 0.65 (drop adjacent-region
+    # PRD v2.2 / Phase 2 - floor raised 0.60 → 0.65 (drop adjacent-region
     # relaxation; tighter same-region only).
     assert PARENT_RELEVANCE_FLOOR == 0.65
     assert PARENT_RESTATEMENT_CEILING == 0.85

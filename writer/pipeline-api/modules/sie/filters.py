@@ -1,4 +1,4 @@
-"""Modules 9 + 10 — TF-IDF pre-filter and semantic similarity filter."""
+"""Modules 9 + 10 - TF-IDF pre-filter and semantic similarity filter."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def compute_tfidf(
 
     Returns (term -> corpus_tfidf_score, count_filtered).
     Mutates each TermAggregate's flags via passes_coverage_threshold not changed
-    here — TF-IDF is a separate filter applied during scoring.
+    here - TF-IDF is a separate filter applied during scoring.
     """
     n_pages = len(pages)
     if n_pages == 0:

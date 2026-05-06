@@ -117,7 +117,7 @@ def _all_citation_ids_in_usage(writer: dict) -> set[str]:
 
 
 def _conclusion_order(article: list[dict]) -> int:
-    """Return the highest `order` in the article — the order AFTER which
+    """Return the highest `order` in the article - the order AFTER which
     Sources Cited sections should be inserted.
 
     The historical name (`_conclusion_order`) reflected an earlier
@@ -213,7 +213,7 @@ def run_sources_cited(req: SourcesCitedRequest) -> SourcesCitedResponse:
 
     # Marker resolvability: every body marker SHOULD exist in research.citations.
     # Historically we aborted with HTTP 422 when an unresolvable marker showed
-    # up; that was too strict — a Writer that hallucinates IDs (e.g. cit_001..
+    # up; that was too strict - a Writer that hallucinates IDs (e.g. cit_001..
     # cit_009 mimicking the prompt example) now blocks every Resume of the
     # affected run. Strip unknown markers in place, log loudly, and proceed.
     unresolvable_markers_stripped: list[str] = sorted(
@@ -232,7 +232,7 @@ def run_sources_cited(req: SourcesCitedRequest) -> SourcesCitedResponse:
         body_marker_ids = all_marker_ids_in_body(article)
 
     # Integrity check: every body marker SHOULD appear in writer's citation_usage.
-    # Same reasoning — log + proceed rather than abort. The marker references a
+    # Same reasoning - log + proceed rather than abort. The marker references a
     # real citation; the writer just didn't record it in citation_usage.
     usage_ids = _all_citation_ids_in_usage(writer)
     integrity_violations = sorted(body_marker_ids - usage_ids)

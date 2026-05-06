@@ -1,4 +1,4 @@
-"""Module 7 + 8 — N-gram analysis, term aggregation, subsumption, coverage gating.
+"""Module 7 + 8 - N-gram analysis, term aggregation, subsumption, coverage gating.
 
 Also implements Layer 5 of noise filtering (frequency anomaly detection)
 since that operates on aggregated term frequencies.
@@ -34,7 +34,7 @@ STOPWORDS: frozenset[str] = frozenset({
     "what", "which", "who", "whom", "whose", "as", "than", "so", "very",
     "just", "also", "only", "any", "some", "no", "not", "all", "each",
     "every", "few", "more", "most", "such", "own", "same", "other",
-    # SIE v1.2 — possessives/reflexives that the v1.0 list missed.
+    # SIE v1.2 - possessives/reflexives that the v1.0 list missed.
     # Production output was leaking "your" / "your tiktok" / "on tiktok"
     # because none of these were filtered. The reflexives ("yourself"
     # etc.) are extremely unlikely to be a useful related-keyword on
@@ -45,9 +45,9 @@ STOPWORDS: frozenset[str] = frozenset({
 })
 
 
-# SIE v1.2 — multi-token n-grams with this fraction or more of
+# SIE v1.2 - multi-token n-grams with this fraction or more of
 # stopword tokens are dropped at extraction time. "your tiktok" (50%),
-# "how to" (100%), "on tiktok shop" (33% — kept) are the canonical
+# "how to" (100%), "on tiktok shop" (33% - kept) are the canonical
 # cases this floor was tuned against.
 STOPWORD_DENSITY_FLOOR = 0.50
 
@@ -71,7 +71,7 @@ WORD_RE = re.compile(r"[a-z][a-z'\-]*[a-z]|[a-z]")
 def lemmatize(word: str) -> str:
     """Lemmatize a single word using WordNet.
 
-    Tries verb, noun, adjective lemmas — keeps the shortest which is
+    Tries verb, noun, adjective lemmas - keeps the shortest which is
     almost always the most-reduced base form. Lowercased on return.
     """
     word = word.lower()
@@ -253,14 +253,14 @@ def mark_seed_keyword_fragments(
 ) -> set[str]:
     """Identify n-gram terms whose normalized tokens are a contiguous
     subsequence of the seed keyword's normalized tokens. Returns the
-    SET of flagged term keys — the caller stamps a flag on each
+    SET of flagged term keys - the caller stamps a flag on each
     TermRecord at scoring/build time.
 
-    SIE v1.3 — flag-not-remove (replaces v1.2's filter_seed_keyword_fragments).
+    SIE v1.3 - flag-not-remove (replaces v1.2's filter_seed_keyword_fragments).
     Background: production related-keyword output was dominated by
     fragments of the seed input ("tiktok", "tiktok shop", "roi" for
     "how to increase roi for a tiktok shop"). v1.2 stripped them
-    entirely from the aggregates dict — but that ALSO removed them
+    entirely from the aggregates dict - but that ALSO removed them
     from the writer's `terms.required` list, losing the per-zone
     target counts that previously guided the writer to use them
     appropriately for SEO.
@@ -272,7 +272,7 @@ def mark_seed_keyword_fragments(
 
     Protected (NOT flagged):
       - The seed keyword itself (it's the primary term, not a fragment)
-      - Entities (entity_meta[term]["is_entity"] truthy) — "TikTok
+      - Entities (entity_meta[term]["is_entity"] truthy) - "TikTok
         Shop" is an entity even when it overlaps the seed
     """
     if not target_keyword:
@@ -285,12 +285,12 @@ def mark_seed_keyword_fragments(
 
     flagged: set[str] = set()
     for term, agg in aggregates.items():
-        # Don't flag the target keyword itself — it's the primary term.
+        # Don't flag the target keyword itself - it's the primary term.
         if agg.coverage_exception == "target_keyword":
             continue
         if " ".join(sorted(term.split())) == target_norm:
             continue
-        # Don't flag entities — they belong in the entity bucket
+        # Don't flag entities - they belong in the entity bucket
         # regardless of whether their text overlaps the seed keyword.
         if meta.get(term, {}).get("is_entity"):
             continue
@@ -311,7 +311,7 @@ def mark_seed_keyword_fragments(
     return flagged
 
 
-# Back-compat alias — older callers (tests, imports) still using the
+# Back-compat alias - older callers (tests, imports) still using the
 # v1.2 name. The behavior is now flag-not-remove; the return type
 # changed from int to set[str] but `bool(set)` and `len(set)` give
 # equivalent truthiness/count semantics for most usage.
@@ -389,7 +389,7 @@ def flag_template_boilerplate(
     cv_threshold: float = 0.1,
     min_pages: int = 4,
 ) -> int:
-    """Layer 5 — flag terms with near-zero coefficient of variation in
+    """Layer 5 - flag terms with near-zero coefficient of variation in
     per-page frequency as template boilerplate."""
     flagged = 0
     for agg in aggregates.values():

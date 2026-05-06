@@ -1,4 +1,4 @@
-"""Step 6 — Conclusion writing.
+"""Step 6 - Conclusion writing.
 
 100-150 words. Synthesizes 2-3 sentence takeaway. Soft CTA per intent.
 The seed keyword must appear at least once.
@@ -42,10 +42,11 @@ OUTPUT FORMAT:
 WRITING RULES:
 - 100-150 words total.
 - Synthesize the article's core takeaways in 2-3 sentences.
-- End with a soft, generic call-to-action that fits the intent — never a hard sales CTA.
+- End with a soft, generic call-to-action that fits the intent - never a hard sales CTA.
 - Do not introduce new information not covered in the article.
 - The seed keyword must appear at least once.
 - Do NOT use any FORBIDDEN_TERM.
+- Do not use em dashes. Use a plain hyphen (-) instead.
 - Match the BRAND_VOICE tone."""
 
 
@@ -65,7 +66,7 @@ async def write_conclusion(
     user_parts = [
         f"KEYWORD: {keyword}",
         f"INTENT: {intent_type}",
-        f"\nSECTION_SUMMARIES (the article's main points — synthesize these):",
+        f"\nSECTION_SUMMARIES (the article's main points - synthesize these):",
         summary_block,
         f"\nSOFT_CTA_DIRECTION: {soft_cta}",
     ]
@@ -74,7 +75,7 @@ async def write_conclusion(
             user_parts.append(f"\nBRAND_NAME: {brand_voice_card.brand_name}")
             user_parts.append(
                 "  The conclusion is the right place for ONE brand mention if it fits "
-                "the closing argument — anchored to evidence or a specific service, "
+                "the closing argument - anchored to evidence or a specific service, "
                 "never as a hard sales CTA. Skip if no natural anchor exists."
             )
         if brand_voice_card.tone_adjectives:
@@ -94,7 +95,7 @@ async def write_conclusion(
             )
         if brand_voice_card.discouraged_terms:
             user_parts.append(
-                f"DISCOURAGED (avoid where possible — softer than forbidden): "
+                f"DISCOURAGED (avoid where possible - softer than forbidden): "
                 f"{', '.join(brand_voice_card.discouraged_terms[:10])}"
             )
         if brand_voice_card.audience_summary:
@@ -179,6 +180,6 @@ def _placeholder_conclusion(order: int) -> ArticleSection:
         level="H2",
         type="conclusion",
         heading="Conclusion",
-        body="[CONCLUSION GENERATION FAILED — MANUAL REVIEW REQUIRED]",
+        body="[CONCLUSION GENERATION FAILED - MANUAL REVIEW REQUIRED]",
         word_count=0,
     )

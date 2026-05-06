@@ -1,4 +1,4 @@
-"""Brief Generator pipeline orchestrator — schema v2.0.
+"""Brief Generator pipeline orchestrator - schema v2.0.
 
 Wires every step from PRD §5 in the order the spec mandates. The
 orchestration shape:
@@ -104,7 +104,7 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = "2.6"
 
 
-# PRD v2.3 / Phase 3 — per-intent-pattern minimum-words floor for H2
+# PRD v2.3 / Phase 3 - per-intent-pattern minimum-words floor for H2
 # section groups (parent H2 body + child H3 bodies). The Writer's new
 # Step 6.7 validator retries any H2 group falling below this floor once
 # and warns-and-accepts if the retry still falls short.
@@ -228,7 +228,7 @@ def _hydrate_cached(payload: dict) -> BriefResponse:
     """Rehydrate a cached payload into a BriefResponse.
 
     Pydantic v2 enforces extra='forbid' so cached rows from older schema
-    versions raise ValidationError — caller catches that and treats as
+    versions raise ValidationError - caller catches that and treats as
     cache miss.
     """
     return BriefResponse.model_validate(payload)
@@ -283,14 +283,14 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         asyncio.create_task(_safe_fanout(keyword, llm_id, model, force))
         for llm_id, model, force in FANOUT_LLMS
     ]
-    # PRD v2.4 — Perplexity-synthesized Reddit research runs in parallel
+    # PRD v2.4 - Perplexity-synthesized Reddit research runs in parallel
     # with the rest of Step 1+2. The result feeds the Authority Agent
     # (replacing the prior raw reddit_titles+reddit_comments context). On
     # failure or missing API key, the function returns
     # `RedditInsights(available=False, ...)` and the pipeline falls back
-    # to the legacy raw context — never aborts the run.
+    # to the legacy raw context - never aborts the run.
     reddit_research_task = asyncio.create_task(research_reddit(keyword))
-    # PRD v2.6 — Customer-review research runs in parallel for industry-
+    # PRD v2.6 - Customer-review research runs in parallel for industry-
     # blind-spot mitigation. Same Perplexity client, different prompt
     # targeting Trustpilot / G2 / Capterra / Yelp / etc. Surfaces
     # frustrations and unmet needs that don't make it into SEO content.
@@ -370,7 +370,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         response_by_source[src_response] = subtopics
         setattr(response_counts, llm_id, len(subtopics))
 
-    # ---- Step 3 — intent ----
+    # ---- Step 3 - intent ----
     intent, confidence, review_required = await classify_intent(
         keyword=keyword,
         signals=signals,
@@ -379,7 +379,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         override=req.intent_override,
     )
 
-    # ---- Step 3.5 — title + scope ----
+    # ---- Step 3.5 - title + scope ----
     title_scope = await generate_title_and_scope(
         seed_keyword=keyword,
         intent_type=intent,
@@ -389,7 +389,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         fanout_response_bodies=raw_fanout_bodies,
     )
 
-    # ---- Step 4 (pass 1) — aggregate without persona gap ----
+    # ---- Step 4 (pass 1) - aggregate without persona gap ----
     pass1 = aggregate_candidates(
         serp_stats=serp_stats,
         paa_questions=paa_questions,
@@ -401,7 +401,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     if not pass1:
         raise BriefError("no_candidates", "No heading candidates after aggregation.")
 
-    # ---- Step 5 — embed + gates ----
+    # ---- Step 5 - embed + gates ----
     gate_result = await embed_with_gates(
         seed=keyword,
         title=title_scope.title,
@@ -417,7 +417,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             "No candidates above relevance gate after Step 5.",
         )
 
-    # ---- Step 6 — persona generation (informational; never aborts) ----
+    # ---- Step 6 - persona generation (informational; never aborts) ----
     persona = await generate_persona(
         seed_keyword=keyword,
         intent_type=intent,
@@ -429,7 +429,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     )
     persona_questions = [g.question for g in persona.gap_questions]
 
-    # ---- Step 4 (pass 2) — re-aggregate with persona gap ----
+    # ---- Step 4 (pass 2) - re-aggregate with persona gap ----
     # We re-run aggregation so persona_gap can fuzzy-merge with existing
     # candidates (PRD §5 Step 4 ordering note). The Levenshtein dedup is
     # idempotent so this is safe.
@@ -463,7 +463,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         candidate_pool.append(c)
 
     # Embed the genuinely new (mostly persona_gap) candidates and apply
-    # gates. embed_with_gates mutates the candidates in place — the
+    # gates. embed_with_gates mutates the candidates in place - the
     # GateResult itself is unused here (the new candidates flow into
     # candidate_pool via shared object references).
     if new_candidates:
@@ -486,7 +486,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         )
     ]
 
-    # ---- Step 5.3 / 5.4 / 5.5 — graph construction + regions ----
+    # ---- Step 5.3 / 5.4 / 5.5 - graph construction + regions ----
     graph = build_coverage_graph(
         eligible_pool, edge_threshold=settings.brief_edge_threshold,
     )
@@ -508,17 +508,17 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             "Every coverage region was eliminated as off-topic or restating the title.",
         )
 
-    # ---- Step 7 — priority scoring on remaining eligible pool ----
+    # ---- Step 7 - priority scoring on remaining eligible pool ----
     compute_priority(region_kept)
 
-    # ---- Step 7.6 — LLM heading quality scoring (PRD v2.4) ----
+    # ---- Step 7.6 - LLM heading quality scoring (PRD v2.4) ----
     # Bell-curve LLM scoring on the top-K candidates by vector priority.
     # Blends a 0-1 quality score into `heading_priority` at the configured
     # `brief_llm_scoring_weight` (default 0.30). Vector signals stay
     # primary at 70% so SEO/AEO ranking dominates; the LLM adds
     # discrimination on engagement / information depth that vectors can't
     # see. Cost-bounded (one batched LLM call against top-K candidates,
-    # default K=25). Never aborts — vector priority is preserved on LLM
+    # default K=25). Never aborts - vector priority is preserved on LLM
     # failure. Set `brief_llm_scoring_weight = 0.0` to disable.
     await score_top_candidates_llm(
         region_kept,
@@ -543,7 +543,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         # template max so MMR doesn't truncate prematurely.
         target_h2 = intent_template.max_h2_count
     if intent_template.h2_pattern == "sequential_steps":
-        # how-to baseline target — favor the template max within reason.
+        # how-to baseline target - favor the template max within reason.
         target_h2 = max(target_h2, min(8, intent_template.max_h2_count))
     # Final clamp: never ask MMR for more than the template allows. A
     # template with max_h2_count below the 6-baseline (e.g. a 3-axis
@@ -551,7 +551,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     if intent_template.max_h2_count:
         target_h2 = min(target_h2, intent_template.max_h2_count)
 
-    # ---- Step 7.5 — anchor-slot reservation (PRD v2.1 / Phase 1) ----
+    # ---- Step 7.5 - anchor-slot reservation (PRD v2.1 / Phase 1) ----
     # Embed the template's anchor strings (single API call) and reserve
     # the best-fitting candidate per slot before MMR runs. Listicle /
     # news / local-seo templates carry empty anchor lists, so this is a
@@ -566,7 +566,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     reserved_ids = {id(c) for c in reservation.reserved}
     mmr_pool = [c for c in region_kept if id(c) not in reserved_ids]
 
-    # ---- Step 8 — MMR H2 selection (now slot-aware) ----
+    # ---- Step 8 - MMR H2 selection (now slot-aware) ----
     selection = select_h2s_mmr(
         mmr_pool,
         target_count=target_h2,
@@ -580,7 +580,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             "MMR selected 0 H2s; outline cannot be assembled.",
         )
 
-    # ---- Step 8.5 — scope verification ----
+    # ---- Step 8.5 - scope verification ----
     scope_result = await verify_scope(
         title=title_scope.title,
         scope_statement=title_scope.scope_statement,
@@ -590,7 +590,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
 
     if not selected_h2s:
         # If scope verification rejected every H2, accept the original
-        # selection rather than abort — this is an extreme edge case.
+        # selection rather than abort - this is an extreme edge case.
         logger.warning(
             "brief.scope.all_rejected_falling_back",
             extra={"original_count": len(selection.selected)},
@@ -611,7 +611,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     # (Step 8.6 H3 selection, authority gap attachment) operate on
     # vectors aligned with the displayed text. The framing prompt
     # constrains rewrites to preserve topic, so the embedding shift is
-    # small — but small drifts can push H3 candidates across the
+    # small - but small drifts can push H3 candidates across the
     # parent_relevance band [0.60, 0.85] in either direction. One
     # embedding API call per run, only fires when at least one rewrite
     # landed (typical case is zero).
@@ -646,7 +646,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     if intent == "how-to":
         selected_h2s = await reorder_how_to(selected_h2s, keyword)
 
-    # ---- Step 8.6 — H3 selection (NEW in v2.0.x) ----
+    # ---- Step 8.6 - H3 selection (NEW in v2.0.x) ----
     # Per-H2 MMR over the eligible pool with parent_relevance bounds.
     # Non-authority H3s come from the MMR-loser pool; the H3 pool is
     # `selection.not_selected` PLUS region_kept members that were never
@@ -666,7 +666,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             if h3.discard_reason == "below_priority_threshold":
                 h3.discard_reason = None
 
-    # ---- Step 9 — authority gap H3s (PRD v2.0.3: scope-aware) ----
+    # ---- Step 9 - authority gap H3s (PRD v2.0.3: scope-aware) ----
     existing_texts = [c.text for c in selected_h2s]
     for arr in h3_selection_result.attachments.values():
         existing_texts.extend(c.text for c in arr)
@@ -674,13 +674,13 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         keyword=keyword,
         existing_headings=existing_texts,
         reddit_context=reddit_titles + reddit_comments,
-        # PRD v2.4 — when Perplexity Reddit synthesis is available, the
+        # PRD v2.4 - when Perplexity Reddit synthesis is available, the
         # agent grounds its three pillars against the structured insights
         # document instead of raw thread snippets.
         reddit_insights_markdown=(
             reddit_insights.markdown_report if reddit_insights.available else None
         ),
-        # PRD v2.6 — customer review synthesis feeds the agent the same
+        # PRD v2.6 - customer review synthesis feeds the agent the same
         # way Reddit insights do, but captures POST-PURCHASE reality
         # (frustrations, churn signals, marketing-vs-experience gaps)
         # that the SERP+Reddit+fanout corpus shares as a blind spot.
@@ -709,15 +709,15 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
                 extra={"error": str(exc)},
             )
 
-    # ---- Step 9b — Promote H2-level authority gaps into selected_h2s ----
+    # ---- Step 9b - Promote H2-level authority gaps into selected_h2s ----
     # The Universal Authority Agent emits a `level` per heading (PRD v2.2
     # extension). H2-level gaps are substantive standalone topics that
     # competitors miss entirely; H3-level gaps continue through Step 8.5b
     # and the existing attachment flow. H2-level gaps go through scope
     # verification + framing validation here, then displace the lowest-
     # priority MMR-selected H2 if accepting them would exceed the
-    # template's `max_h2_count`. They land without H3 attachments — Step
-    # 8.6 H3 selection has already run by this point — which matches the
+    # template's `max_h2_count`. They land without H3 attachments - Step
+    # 8.6 H3 selection has already run by this point - which matches the
     # "unique angle competitors miss" framing of authority gaps.
     auth_h2_candidates = [
         c for c in auth_h3s if c.authority_gap_level == "H2"
@@ -750,7 +750,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             # Insert into selected_h2s. The intent template's max_h2_count
             # is the cap; if accepting these would exceed it, drop the
             # lowest-priority MMR-selected H2 (authority gap H2s are
-            # always retained — they're the differentiator the SME flagged).
+            # always retained - they're the differentiator the SME flagged).
             cap = intent_template.max_h2_count or len(selected_h2s) + len(auth_h2_kept)
             displaced: list[Candidate] = []
             for h2 in auth_h2_kept:
@@ -780,13 +780,13 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
                 },
             )
 
-    # ---- Step 11.5 — Intent Rewriter (PRD v2.4) ----
+    # ---- Step 11.5 - Intent Rewriter (PRD v2.4) ----
     # Archetype-driven STRUCTURAL rewriting for how-to / listicle /
     # informational intents. Distinct from Step 11 framing (shape only,
     # warn-and-accept): this stage actively rewrites Q&A-style or topic-
     # paraphrased H2s into the archetype's expected form (sequential
     # procedural steps, value-leading list items, Cost-of-Inaction
-    # opener). Other intents pass through. Never aborts on failure —
+    # opener). Other intents pass through. Never aborts on failure -
     # framing validator already ran upstream as the shape safety net.
     await rewrite_h2s_for_intent(
         h2s=selected_h2s,
@@ -795,7 +795,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         intent=intent,
     )
 
-    # ---- Step 8.5b — Authority Gap H3 scope verification (PRD v2.0.3) ----
+    # ---- Step 8.5b - Authority Gap H3 scope verification (PRD v2.0.3) ----
     # Catches H3s the agent produced that drift outside the brief's scope.
     # Out-of-scope H3s are removed from the attachment pool and routed to
     # silos with routed_from='scope_verification_h3'. Failures fall back
@@ -816,7 +816,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     )
     h3_attachments = auth_attach.attachments
 
-    # ---- Step 8.7 — H3 Parent-Fit Verification (PRD v2.2 / Phase 2) ----
+    # ---- Step 8.7 - H3 Parent-Fit Verification (PRD v2.2 / Phase 2) ----
     # Catches H3s that pass Step 8.6's [0.65, 0.85] cosine band + same-
     # region constraint but answer a different reader question than the
     # parent H2 actually commits to. Single batched LLM call. Mutates
@@ -828,7 +828,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         h2_attachments=h3_attachments,
     )
 
-    # ---- Step 10 — FAQ generation ----
+    # ---- Step 10 - FAQ generation ----
     # Persona gap questions that did NOT make it into the H2 outline feed
     # the FAQ pool (PRD §5 Step 10 Source C).
     selected_norms = {normalize_text(c.text) for c in selected_h2s}
@@ -849,7 +849,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
 
     heading_norm_set = {normalize_text(c.text) for c in selected_h2s}
 
-    # ---- Step 10.5 — FAQ Intent Gate (PRD v2.2 / Phase 2) ----
+    # ---- Step 10.5 - FAQ Intent Gate (PRD v2.2 / Phase 2) ----
     # Filters FAQs whose stakeholder/intent doesn't match the article's
     # primary intent (audited "creator monetization on a seller-ROI
     # article" case). Two-stage gate: cosine floor against an intent
@@ -867,11 +867,11 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         persona_primary_goal=persona.primary_goal,
     )
     gated_pool = faq_gate_result.kept
-    # Phase 2 review fix #6 — reuse the gate's per-candidate embeddings
+    # Phase 2 review fix #6 - reuse the gate's per-candidate embeddings
     # so score_faqs doesn't pay a second embedding API call. The gate
     # only populates kept_embeddings on the happy path; on embed
     # fallback `kept_embeddings` is empty and score_faqs re-embeds
-    # (acceptable — embed outage isn't a steady state).
+    # (acceptable - embed outage isn't a steady state).
     gated_embeddings = (
         faq_gate_result.kept_embeddings
         if len(faq_gate_result.kept_embeddings) == len(gated_pool)
@@ -885,7 +885,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     )
     faqs = select_faqs(scored_faqs)
 
-    # ---- Step 11 — structure assembly ----
+    # ---- Step 11 - structure assembly ----
     # how-to reorder ran before Step 8.6 so attachment indices already
     # match the final H2 order; assemble_structure consumes them as-is.
     heading_structure, cap_cuts = assemble_structure(
@@ -897,14 +897,14 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         title=title_scope.title,
     )
 
-    # ---- Step 12 — silos (12.1 + 12.2 + 12.3 sync, then 12.4 async) ----
+    # ---- Step 12 - silos (12.1 + 12.2 + 12.3 sync, then 12.4 async) ----
     contributing_region_ids = {
         c.region_id for c in selected_h2s if c.region_id is not None
     }
     # Relevance-gate rejects are eligible for silo singletons (PRD §5 Step
     # 12). These are headings whose cosine to the title fell below the
     # relevance floor, so they were excluded from `eligible_pool` and
-    # never reached region detection — but they often represent adjacent
+    # never reached region detection - but they often represent adjacent
     # topics that are valid silos.
     relevance_rejects = [
         c for c in candidate_pool
@@ -918,10 +918,10 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         scope_rejects=scope_result.rejected,
         h3_scope_rejects=h3_scope_result.rejected,
         relevance_rejects=relevance_rejects,
-        # PRD v2.2 / Phase 2 — Step 8.7 outcomes route to silos with
+        # PRD v2.2 / Phase 2 - Step 8.7 outcomes route to silos with
         # routed_from values "h3_parent_mismatch" / "h3_promote_candidate".
         h3_parent_fit_rejects=parent_fit_result.routed_to_silos,
-        # PRD v2.4 — singleton silo demand floor + strong-priority bypass.
+        # PRD v2.4 - singleton silo demand floor + strong-priority bypass.
         # Threshold lowered from 0.30 to 0.15 default; substantive
         # candidates (heading_priority >= 0.30) bypass the floor entirely.
         min_search_demand=settings.brief_silo_search_demand_threshold,
@@ -963,7 +963,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     discarded.extend(h3_scope_result.rejected)
     discarded.extend(h3_selection_result.globally_rejected)
     discarded.extend(auth_attach.displaced)
-    # PRD v2.2 / Phase 2 — Step 8.7 H3 parent-fit rejects (carry
+    # PRD v2.2 / Phase 2 - Step 8.7 H3 parent-fit rejects (carry
     # discard_reason="h3_wrong_parent" or "h3_promoted_to_h2_candidate").
     discarded.extend(parent_fit_result.routed_to_silos)
     discarded.extend(low_coherence)
@@ -974,7 +974,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
 
     # Build DiscardedHeading models. Dedup by id() since some candidates
     # might appear in multiple buckets (e.g., a scope-rejected H2 is in
-    # selection.selected but also scope_result.rejected — we want one row).
+    # selection.selected but also scope_result.rejected - we want one row).
     seen_ids: set[int] = set()
     discarded_models: list[DiscardedHeading] = []
     for c in discarded:
@@ -1022,7 +1022,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         h3_content_count / max(1, h2_content_count) if h2_content_count else 0.0
     )
 
-    # Phase 2 review fix #5 — h3_selection_result.h2s_with_zero_h3s is
+    # Phase 2 review fix #5 - h3_selection_result.h2s_with_zero_h3s is
     # captured pre-Step-8.7. Once Step 8.7 routes H3s to silos, more H2s
     # may end up empty. Recompute from the FINAL attachment map so the
     # metadata reflects what actually shipped.
@@ -1084,14 +1084,14 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         reddit_unavailable=reddit_unavailable,
         llm_fanout_unavailable=unavailable,
         competitor_domains=competitor_domains,
-        # PRD v2.1 — anchor reservation + framing validator counters
+        # PRD v2.1 - anchor reservation + framing validator counters
         anchor_slots_total=len(intent_template.anchor_slots),
         anchor_slots_reserved_count=len(reservation.reserved),
         framing_rewrites_applied=len(framing_result.rewritten_indices),
         framing_rewrites_accepted_with_violation=(
             len(framing_result.accepted_with_violation_indices)
         ),
-        # PRD v2.2 / Phase 2 — Step 8.7 H3 parent-fit + Step 10.5 FAQ gate.
+        # PRD v2.2 / Phase 2 - Step 8.7 H3 parent-fit + Step 10.5 FAQ gate.
         h3_parent_fit_marginal_count=parent_fit_result.marginal_count,
         h3_parent_fit_wrong_parent_count=parent_fit_result.wrong_parent_count,
         h3_parent_fit_promoted_count=parent_fit_result.promoted_count,
@@ -1102,14 +1102,14 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faq_intent_gate_full_relaxation_applied=faq_gate_result.full_relaxation_applied,
     )
 
-    # PRD v2.3 / Phase 3 — derive the per-H2 body floor from the
+    # PRD v2.3 / Phase 3 - derive the per-H2 body floor from the
     # template's pattern so the Writer's Step 6.7 validator can apply
     # an intent-appropriate minimum without re-deriving from the brief.
     format_directives = FormatDirectives(
         min_h2_body_words=_min_h2_body_words_for_template(intent_template),
     )
 
-    # ---- PRD v2.6 — Industry-blind-spot mitigation outputs ----
+    # ---- PRD v2.6 - Industry-blind-spot mitigation outputs ----
     # All three are side-channel observability layers; none gate or
     # modify the brief structure. Failures degrade gracefully into
     # `available=False` so a single LLM hiccup doesn't lose the whole

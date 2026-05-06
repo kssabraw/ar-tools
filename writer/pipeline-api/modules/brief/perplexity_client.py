@@ -2,7 +2,7 @@
 
 Used by `reddit_research.py` to query Reddit and synthesize a structured
 insights document. Sonar-pro is purpose-built for "search the web (with
-strong Reddit coverage), then synthesize" — collapsing what would
+strong Reddit coverage), then synthesize" - collapsing what would
 otherwise require separate fetch + parse + synthesis steps into one API
 call.
 
@@ -112,7 +112,7 @@ async def perplexity_chat(
 def extract_content_and_citations(payload: dict) -> tuple[str, list[str]]:
     """Pull (content, citations) from a Perplexity chat-completions response.
 
-    Returns ("", []) on missing fields rather than raising — the caller's
+    Returns ("", []) on missing fields rather than raising - the caller's
     validation step will detect empty content / thin citations and route
     to the fallback path.
     """

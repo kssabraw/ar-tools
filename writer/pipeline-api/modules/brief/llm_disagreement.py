@@ -2,7 +2,7 @@
 
 Industry-blind-spot mitigation: surface query expansions that ONE or
 TWO of the four fan-out LLMs proposed but the rest didn't. Disagreement
-is high signal — when chatgpt and gemini both surface a topic but
+is high signal - when chatgpt and gemini both surface a topic but
 claude and perplexity don't, it usually means the topic sits on the
 edge of well-documented territory and is worth flagging to a strategist
 even when MMR doesn't pick it.
@@ -94,7 +94,7 @@ def analyze_fanout_disagreement(
     """Find query expansions surfaced by < CONSENSUS_THRESHOLD LLMs.
 
     `fanout_by_source` is the same dict the brief pipeline already
-    builds — keyed by `llm_fanout_<id>`, values are query strings each
+    builds - keyed by `llm_fanout_<id>`, values are query strings each
     LLM proposed.
 
     Returns `DisagreementAnalysis(available=False, ...)` when fewer
@@ -147,7 +147,7 @@ def analyze_fanout_disagreement(
         missed = [llm for llm in all_llm_ids if llm not in surfaced]
         # Score: prefer topics surfaced by exactly 1 LLM (highest blind-
         # spot signal) over those surfaced by 2 of 4. Length and
-        # specificity also factor in — a single short word is less
+        # specificity also factor in - a single short word is less
         # interesting than a multi-word phrase.
         rarity = 1.0 - (len(surfaced) / max(total_llms, 1))
         specificity = min(len(group["text"].split()) / 5.0, 1.0)

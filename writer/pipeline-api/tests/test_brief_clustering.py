@@ -1,4 +1,4 @@
-"""LEGACY v1.8 tests — skipped during the v2.0 staged rollout.
+"""LEGACY v1.8 tests - skipped during the v2.0 staged rollout.
 
 The v2.0 pipeline replaces two-tier semantic clustering with coverage-
 graph regions detected via Louvain community detection (graph.py, built
@@ -151,7 +151,7 @@ def test_soft_pairs_collected_in_band():
     a = HeadingCandidate(text="A", source="serp")
     b = HeadingCandidate(text="B", source="serp")
     a.embedding = [1.0, 0.0, 0.0]
-    # cosine ≈ 0.78 — squarely in the soft band
+    # cosine ≈ 0.78 - squarely in the soft band
     b.embedding = [0.78, 0.625, 0.0]
     a.heading_priority = b.heading_priority = 0.5
 

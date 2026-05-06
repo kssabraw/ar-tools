@@ -1,4 +1,4 @@
-"""Step 3.6 — Brand & ICP placement plan.
+"""Step 3.6 - Brand & ICP placement plan.
 
 Regression tests for the bug where every section punted on the brand
 mention ("let another section carry it") and the article shipped with
@@ -152,7 +152,7 @@ def test_for_order_returns_empty_directive_for_unknown_order():
 
 def test_no_brand_name_but_has_audience_still_assigns_icp_only():
     """Audience-only configurations (no brand name) should still surface
-    an ICP callout — the soft signals shouldn't be silently dropped."""
+    an ICP callout - the soft signals shouldn't be silently dropped."""
     structure = [_h2(1, "Returns"), _h2(2, "Pricing")]
     card = BrandVoiceCard(audience_pain_points=["return rate"])
     plan = build_brand_placement_plan(structure, card)
@@ -170,7 +170,7 @@ def test_no_brand_name_but_has_audience_still_assigns_icp_only():
 
 def test_section_prompt_emits_must_mention_when_directive_is_anchor():
     """Section prompt must include the hard MUST-mention directive
-    when the H2 is the brand anchor — not the old soft fallback."""
+    when the H2 is the brand anchor - not the old soft fallback."""
     from modules.writer.sections import _build_section_user_prompt
 
     card = BrandVoiceCard(
@@ -195,13 +195,13 @@ def test_section_prompt_emits_must_mention_when_directive_is_anchor():
     )
     assert "REQUIRED" in prompt
     assert "MUST mention Ubiquitous EXACTLY ONCE" in prompt
-    # Soft fallback language must be absent — that's the bug we're fixing.
+    # Soft fallback language must be absent - that's the bug we're fixing.
     assert "let another carry it" not in prompt
     assert "1–2 times" not in prompt and "1-2 times" not in prompt
 
 
 def test_section_prompt_emits_do_not_mention_when_directive_is_non_anchor():
-    """Non-anchor sections must be told NOT to mention the brand —
+    """Non-anchor sections must be told NOT to mention the brand -
     the bug had every section punting under the soft 'let another carry
     it' instruction, so we have to actively suppress mentions outside
     the anchor."""
@@ -276,7 +276,7 @@ def test_section_prompt_keeps_soft_fallback_when_no_directive_passed():
         citations=[],
         brand_voice_card=card,
         is_authority_gap_section=False,
-        # placement_directive omitted — exercises the fallback branch.
+        # placement_directive omitted - exercises the fallback branch.
     )
     assert "1–2 times" in prompt or "1-2 times" in prompt
     assert "let another carry" in prompt

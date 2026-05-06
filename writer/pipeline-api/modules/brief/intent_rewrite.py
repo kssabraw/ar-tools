@@ -1,7 +1,7 @@
-"""Step 11.5 — Intent Rewriter (PRD v2.4).
+"""Step 11.5 - Intent Rewriter (PRD v2.4).
 
 Ports the n8n "Rewrite For Intent" stage. Applies archetype-specific
-**structural** rewriting to the finalized H2 set — distinct from
+**structural** rewriting to the finalized H2 set - distinct from
 `framing.py`, which only enforces shape (verb-leading, ordinal-leading,
 etc.) and silently accepts unfixable headings.
 
@@ -18,11 +18,11 @@ Universal logic across the three archetypes:
     semantically); if no H2 references the keyword at all, the first H2
     is rewritten to do so.
   - H2s containing "FAQ" or "Frequently Asked Questions" are rewritten
-    to drop that wording — FAQs are a separate section in the brief, not
+    to drop that wording - FAQs are a separate section in the brief, not
     an H2.
 
 Out-of-scope intents (`comparison`, `news`, `local-seo`, `ecom`,
-`informational-commercial`, etc.) pass through unchanged — the existing
+`informational-commercial`, etc.) pass through unchanged - the existing
 framing validator handles their shape rules.
 
 Failure handling: never aborts. On LLM call failure or malformed
@@ -85,10 +85,10 @@ class IntentRewriteResult:
 
     `rewritten_indices` records every H2 whose text changed (any change).
     `softened_indices` is the subset whose change exceeded
-    `SOFTENED_CHANGE_RATIO` — those headings are flagged for downstream
+    `SOFTENED_CHANGE_RATIO` - those headings are flagged for downstream
     awareness (UI badges, "this was significantly reframed").
     `passthrough` is True when the intent isn't in `ARCHETYPE_INTENTS`
-    or no H2s were provided — the function returned without calling the
+    or no H2s were provided - the function returned without calling the
     LLM.
     """
 
@@ -109,10 +109,10 @@ _ARCHETYPE_INSTRUCTIONS: dict[IntentType, str] = {
     "how-to": (
         "ARCHETYPE: HOW-TO\n"
         "  - The H2 set must read as a sequential procedural guide.\n"
-        "  - Each H2 must be ACTIONABLE and OUTCOME-FOCUSED — start with "
+        "  - Each H2 must be ACTIONABLE and OUTCOME-FOCUSED - start with "
         "    an action verb (Plan, Set Up, Configure, Launch, Optimize, "
         "    Measure, Validate, Fix, etc.) or with 'Step N:' format.\n"
-        "  - The FIRST H2 must be the primary action the reader takes — "
+        "  - The FIRST H2 must be the primary action the reader takes - "
         "    typically the solution / first step. Move the most "
         "    foundational action to position 1 if it isn't already there.\n"
         "  - Reject any H2 that reads as a question ('What is...?', 'How "
@@ -133,14 +133,14 @@ _ARCHETYPE_INSTRUCTIONS: dict[IntentType, str] = {
     "informational": (
         "ARCHETYPE: INFORMATIONAL\n"
         "  - The H2 set must read as a logical argument chain.\n"
-        "  - The FIRST H2 must use COST OF INACTION framing — surface "
+        "  - The FIRST H2 must use COST OF INACTION framing - surface "
         "    the high-stakes risk, missed opportunity, or hidden "
         "    consequence of ignoring or misunderstanding the topic. "
         "    Examples: 'Why Misreading X Quietly Costs You Y', "
         "    'What Happens When You Skip X', 'The Hidden Risk in X'.\n"
         "  - Subsequent H2s should each answer a distinct reader question "
         "    that builds on the first. Avoid pure 'What is...?' framing "
-        "    where possible — prefer 'How X works under the hood', 'Why "
+        "    where possible - prefer 'How X works under the hood', 'Why "
         "    X matters for Y', 'When to choose X vs alternatives'.\n"
     ),
 }
@@ -159,17 +159,17 @@ You will receive:
 Your job:
 1. For each H2, decide whether it already satisfies the archetype rules.
 2. Rewrite the H2 text when it does not. Preserve the underlying topic
-   exactly — DO NOT change what the section covers; change only how it
+   exactly - DO NOT change what the section covers; change only how it
    is framed.
 3. If an H2 cannot be saved without changing its topic, keep its
    original text (the framing validator will catch it downstream).
 
 UNIVERSAL LOGIC (applies regardless of archetype):
-- The primary keyword should appear in or anchor at least one H2 —
+- The primary keyword should appear in or anchor at least one H2 -
   ideally the first. If no H2 carries the keyword, rewrite the
   most-relevant H2 to include it without losing its topic.
 - H2s containing 'FAQ' or 'Frequently Asked Questions' must be
-  rewritten — FAQs are a separate section, not an H2 here.
+  rewritten - FAQs are a separate section, not an H2 here.
 
 OUTPUT (strict JSON only, no preamble, no markdown fences):
 {
