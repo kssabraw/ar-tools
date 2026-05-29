@@ -11,9 +11,15 @@ interface FormData {
   brand_guide_text: string
   icp_text: string
   google_drive_folder_id: string
+  logo_url: string
+  gsc_property: string
+  business_location: string
 }
 
-const empty: FormData = { name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '' }
+const empty: FormData = {
+  name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
+  logo_url: '', gsc_property: '', business_location: '',
+}
 
 export function ClientForm() {
   const navigate = useNavigate()
@@ -37,6 +43,9 @@ export function ClientForm() {
         brand_guide_text: existing.brand_guide_text ?? '',
         icp_text: existing.icp_text ?? '',
         google_drive_folder_id: existing.google_drive_folder_id ?? '',
+        logo_url: existing.logo_url ?? '',
+        gsc_property: existing.gsc_property ?? '',
+        business_location: existing.business_location ?? '',
       })
     }
   }, [existing])
@@ -66,26 +75,22 @@ export function ClientForm() {
     e.preventDefault()
     setSaving(true)
     try {
+      const payload = {
+        name: form.name,
+        website_url: form.website_url,
+        brand_guide_source_type: 'text',
+        brand_guide_text: form.brand_guide_text,
+        icp_source_type: 'text',
+        icp_text: form.icp_text,
+        google_drive_folder_id: form.google_drive_folder_id || null,
+        logo_url: form.logo_url || null,
+        gsc_property: form.gsc_property || null,
+        business_location: form.business_location || null,
+      }
       if (isEdit) {
-        await updateMutation.mutateAsync({
-          name: form.name,
-          website_url: form.website_url,
-          brand_guide_source_type: 'text',
-          brand_guide_text: form.brand_guide_text,
-          icp_source_type: 'text',
-          icp_text: form.icp_text,
-          google_drive_folder_id: form.google_drive_folder_id || null,
-        })
+        await updateMutation.mutateAsync(payload)
       } else {
-        await createMutation.mutateAsync({
-          name: form.name,
-          website_url: form.website_url,
-          brand_guide_source_type: 'text',
-          brand_guide_text: form.brand_guide_text,
-          icp_source_type: 'text',
-          icp_text: form.icp_text,
-          google_drive_folder_id: form.google_drive_folder_id || null,
-        })
+        await createMutation.mutateAsync(payload)
       }
     } finally {
       setSaving(false)
@@ -142,6 +147,17 @@ export function ClientForm() {
               </p>
             </div>
           </div>
+          <div style={{ marginTop: 16 }}>
+            <label style={labelStyle}>Logo URL</label>
+            <input
+              type="url"
+              value={form.logo_url}
+              onChange={set('logo_url')}
+              placeholder="https://acmehvac.com/logo.png"
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+            />
+            <p style={hintStyle}>Optional. Shown on this client's tile in the suite dashboard.</p>
+          </div>
         </div>
 
         <div style={sectionStyle}>
@@ -172,6 +188,35 @@ export function ClientForm() {
             placeholder={`Examples of what to include:\n• Homeowners aged 35–65, own their home for 5+ years\n• Concerned about unexpected repair costs and energy bills\n• Search when something breaks or before summer/winter\n• Trust local companies with reviews over national chains\n• Objections: "Can I trust them?" and "Is it worth the cost?"`}
             style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', resize: 'vertical', lineHeight: 1.6 }}
           />
+        </div>
+
+        <div style={sectionStyle}>
+          <h2 style={sectionTitle}>Search Console &amp; Local Rankings</h2>
+          <p style={descStyle}>
+            Optional. Connects this client to rank tracking and Search Console analytics. You can fill these in later.
+          </p>
+          <div style={{ marginBottom: 16 }}>
+            <label style={labelStyle}>Search Console Property</label>
+            <input
+              value={form.gsc_property}
+              onChange={set('gsc_property')}
+              placeholder="sc-domain:acmehvac.com  (or  https://acmehvac.com/)"
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' }}
+            />
+            <p style={hintStyle}>
+              The property exactly as it appears in Search Console. Make sure the agency service account is added as a user on that property so we can pull clicks &amp; impressions.
+            </p>
+          </div>
+          <div>
+            <label style={labelStyle}>Primary Business Location</label>
+            <input
+              value={form.business_location}
+              onChange={set('business_location')}
+              placeholder="e.g. 123 Main St, Austin, TX 78701"
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+            />
+            <p style={hintStyle}>Used to anchor the maps / local-pack rank-tracking grid for this client.</p>
+          </div>
         </div>
 
         <div style={sectionStyle}>

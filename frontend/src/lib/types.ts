@@ -16,6 +16,7 @@ export interface ClientListItem {
   website_analysis_status: 'pending' | 'complete' | 'failed'
   archived: boolean
   created_at: string
+  logo_url: string | null
 }
 
 export interface Client extends ClientListItem {
@@ -28,6 +29,8 @@ export interface Client extends ClientListItem {
   icp_text: string
   icp_original_filename: string | null
   google_drive_folder_id: string | null
+  gsc_property: string | null
+  business_location: string | null
   updated_at: string
 }
 

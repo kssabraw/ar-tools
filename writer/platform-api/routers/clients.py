@@ -58,7 +58,7 @@ async def list_clients(
     supabase = get_supabase()
     result = (
         supabase.table("clients")
-        .select("id, name, website_url, website_analysis_status, archived, created_at")
+        .select("id, name, website_url, website_analysis_status, archived, created_at, logo_url")
         .eq("archived", archived)
         .order("name")
         .execute()
@@ -127,6 +127,9 @@ async def create_client(
         "icp_file_path": icp_file_path,
         "website_analysis_status": "pending",
         "google_drive_folder_id": body.google_drive_folder_id,
+        "logo_url": body.logo_url,
+        "gsc_property": body.gsc_property,
+        "business_location": body.business_location,
         "created_by": auth["user_id"],
     }
     result = supabase.table("clients").insert(row).execute()
@@ -186,6 +189,12 @@ async def update_client(
         updates["icp_text"] = body.icp_text
     if body.google_drive_folder_id is not None:
         updates["google_drive_folder_id"] = body.google_drive_folder_id
+    if body.logo_url is not None:
+        updates["logo_url"] = body.logo_url
+    if body.gsc_property is not None:
+        updates["gsc_property"] = body.gsc_property
+    if body.business_location is not None:
+        updates["business_location"] = body.business_location
 
     result = supabase.table("clients").update(updates).eq("id", str(client_id)).execute()
     if not result.data:
