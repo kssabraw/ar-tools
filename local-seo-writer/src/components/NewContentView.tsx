@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Sparkles, ChevronDown, Building2, Loader2, FileSearch, FilePlus, PhoneCall, CheckCircle2, PlusCircle } from "lucide-react";
+import { Sparkles, ChevronDown, Building2, Loader2, FileSearch, FilePlus, CheckCircle2, PlusCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import AnalysisResultsView from "@/components/AnalysisResultsView";
@@ -1186,19 +1186,6 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
               <p className="text-sm text-foreground">
                 If this page isn't ranking, on-page reoptimization is unlikely to be the issue. There may be off-page factors, domain authority gaps, or GBP signals holding it back.
               </p>
-              <a
-                href="mailto:hello@showuplocal.com?subject=Off-page%20%2B%20GBP%20Analysis%20Request"
-                className="bg-card border border-border rounded-lg px-4 py-3 flex items-center gap-3 hover:border-accent/40 transition-colors group"
-              >
-                <PhoneCall className="w-4 h-4 text-accent shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-foreground">Contact ShowUp Experts</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Get a full off-page + GBP analysis — <span className="font-medium text-foreground">$20/page</span>
-                  </p>
-                </div>
-                <span className="text-xs text-accent font-medium shrink-0 group-hover:underline">Get in touch →</span>
-              </a>
             </div>
             {relatedPagePanel}
 
