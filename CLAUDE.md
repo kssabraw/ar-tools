@@ -1,10 +1,12 @@
 # Claude Code Context
 
-This document gives you (Claude Code) the context to continue building the Content Generation Platform after the initial setup phase. **Read this first before any other action.**
+This document gives you (Claude Code) the context to continue building **AR Tools**, an internal agency suite, after the initial setup phase. **Read this first before any other action.**
+
+> **Suite context (read alongside this file).** AR Tools is a **multi-module suite** — Blog Writer, Local SEO content, Keyword research, Organic + Maps rank trackers, a Ranking-drop agent, and a VA content scheduler — sharing one dashboard, one Supabase database, and one scheduler. For suite-level scope, the locked architectural decisions, and the phased roadmap, see **`/docs/suite-architecture-and-roadmap-v1_0.md`**. The rest of *this* file describes how to build the **Blog Writer** module specifically; it remains authoritative for that module's internals.
 
 ## What this project is
 
-An internal agency tool that generates SEO + AEO-optimized blog content for multiple SMB clients. The team enters a keyword for a configured client; the platform produces a publication-ready Markdown article through a five-module pipeline.
+An internal agency suite for SEO/content work across multiple SMB clients. The first and most-built module is a **Blog Writer** that generates SEO + AEO-optimized content: the team enters a keyword for a configured client and the platform produces a publication-ready Markdown article through a five-module pipeline. Additional modules (rank tracking, keyword research, a ranking-drop agent, a VA content scheduler) are described in the roadmap doc above.
 
 This is **not** a customer-facing SaaS. There's no billing, no customer signup, no marketing site. Internal team use only.
 
@@ -30,7 +32,7 @@ When you encounter conflicting information across docs, the engineering spec win
 | Supabase client | `supabase-py` v2 with service role key on backend | Engineering spec §13 |
 | Job queue | Supabase `async_jobs` table + asyncio worker (no Redis, no pg-boss) | Engineering spec §7 |
 | Background tasks | FastAPI `BackgroundTasks` (no Celery) | Engineering spec §6 |
-| Frontend | Lovable (React + Vite); managed in a separate Lovable project | Engineering spec §10 |
+| Frontend | React + Vite, in this repo at `/frontend`, deployed to **Netlify** (see `netlify.toml`) | `/frontend`, `netlify.toml` |
 | State management | TanStack Query (no Redux/Zustand) | Engineering spec §10.5 |
 | LLM provider | **Anthropic Claude** for module content generation | User decision |
 | Embeddings | OpenAI `text-embedding-3-small` for SIE only | User decision |
@@ -64,7 +66,7 @@ Order of build:
 9. **Platform API: orchestrator + run dispatch** — the heart of the system. `asyncio.gather` for Brief+SIE parallel; sequential for the rest.
 10. **Platform API: polling endpoint + run management** — supports the frontend's run status display.
 11. **End-to-end test from Postman** — see Engineering Spec §12 Phase 4. Do this before touching the frontend.
-12. **Lovable frontend** — built in a separate Lovable project, connects to platform-api public URL.
+12. **Frontend** — React + Vite app in `/frontend` (deployed to Netlify), connects to platform-api public URL.
 
 ## Conventions to follow
 
@@ -135,7 +137,7 @@ These decisions are not in the docs — ask the user:
 3. Whether to include observability tooling beyond stdlib logging (Sentry, Better Stack, etc.) — currently planned for v2
 4. Whether to add automated tests in CI on push, or rely on manual testing for v1
 5. Branch protection rules and PR requirements
-6. Specific Lovable component library / design system
+6. Specific frontend component library / design system (the `/frontend` app)
 
 ## Things NOT to do without asking
 
