@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunListResponse, ClientListItem, RunStatus } from '../lib/types'
-import { Plus, RefreshCw } from 'lucide-react'
+import { Plus, RefreshCw, ArrowLeft } from 'lucide-react'
 import {
   BriefCacheDecisionModal,
   type BriefCacheStatus,
@@ -37,14 +37,16 @@ function statusBadge(status: RunStatus) {
 
 export function Runs() {
   const qc = useQueryClient()
+  const [searchParams] = useSearchParams()
+  const scopedClientId = searchParams.get('client') ?? undefined
   const [showNewRun, setShowNewRun] = useState(false)
-  const [clientId, setClientId] = useState('')
+  const [clientId, setClientId] = useState(scopedClientId ?? '')
   const [keyword, setKeyword] = useState('')
   const [creating, setCreating] = useState(false)
 
   const { data: runsResp, isLoading: runsLoading, refetch } = useQuery<RunListResponse>({
-    queryKey: ['runs'],
-    queryFn: () => api.get<RunListResponse>('/runs'),
+    queryKey: ['runs', scopedClientId ?? null],
+    queryFn: () => api.get<RunListResponse>(scopedClientId ? `/runs?client_id=${scopedClientId}` : '/runs'),
     refetchInterval: (query) => {
       const runs = query.state.data?.data ?? []
       return runs.some(r => isRunning(r.status)) ? 8000 : false
@@ -129,10 +131,17 @@ export function Runs() {
     }
   }
 
+  const scopedClient = clients.find(c => c.id === scopedClientId)
+
   return (
     <div style={{ padding: 32 }}>
+      {scopedClientId && (
+        <Link to={`/clients/${scopedClientId}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#6366f1', textDecoration: 'none', fontSize: 13, marginBottom: 16 }}>
+          <ArrowLeft size={14} /> Back to {scopedClient?.name ?? 'client'}
+        </Link>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
-        <h1 style={h1Style}>Content Runs</h1>
+        <h1 style={h1Style}>{scopedClientId ? `Content Runs · ${scopedClient?.name ?? ''}` : 'Content Runs'}</h1>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={() => refetch()} style={ghostBtn}>
             <RefreshCw size={15} /> Refresh
