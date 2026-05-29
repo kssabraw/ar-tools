@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from './context/AuthContext'
-import { ProtectedRoute } from './components/ProtectedRoute'
+import { ProtectedRoute, AdminRoute } from './components/ProtectedRoute'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
 import { Runs } from './pages/Runs'
@@ -33,8 +33,8 @@ export default function App() {
                       <Route path="/" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
-                      <Route path="/clients/new" element={<ClientForm />} />
-                      <Route path="/clients/:id/edit" element={<ClientForm />} />
+                      <Route path="/clients/new" element={<AdminRoute><ClientForm /></AdminRoute>} />
+                      <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
                       <Route path="*" element={<Navigate to="/" replace />} />
