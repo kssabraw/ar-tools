@@ -2,11 +2,9 @@ import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle, AlertTriangle, XCircle, ChevronDown, ChevronUp, RotateCcw, Sparkles, Copy, Check } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { nlp, InsufficientCreditsError, purchaseCreditPack } from "@/lib/nlp-client";
-import { useCredits, useInvalidateCredits } from "@/hooks/useCredits";
+import { nlp } from "@/lib/nlp-client";
 import { useBusinessProfiles } from "@/hooks/useBusinessProfiles";
 import { LocationAutocomplete } from "@/components/LocationAutocomplete";
-import CreditPackModal from "@/components/CreditPackModal";
 import type { ScoreResult, AugmentPageResult } from "@/lib/nlp-types";
 
 const ENGINE_LABELS: Record<string, string> = {
@@ -39,8 +37,6 @@ function StatusIcon({ score }: { score: number }) {
 
 export default function ScoreMyPageView() {
   const { data: businesses = [], isLoading: loadingBusinesses } = useBusinessProfiles();
-  const { data: credits } = useCredits();
-  const invalidateCredits = useInvalidateCredits();
 
   const [selectedBusinessId, setSelectedBusinessId] = useState("");
   const [keyword, setKeyword] = useState("");
@@ -54,7 +50,6 @@ export default function ScoreMyPageView() {
   const [scoreResult, setScoreResult] = useState<ScoreResult | null>(null);
   const [scoredUrl, setScoredUrl] = useState("");
   const [expandedEngines, setExpandedEngines] = useState<Set<string>>(new Set());
-  const [showCreditModal, setShowCreditModal] = useState(false);
 
   const [augmenting, setAugmenting] = useState(false);
   const [augmentResult, setAugmentResult] = useState<AugmentPageResult | null>(null);
@@ -71,16 +66,6 @@ export default function ScoreMyPageView() {
     !!location &&
     !!pageUrl.trim() &&
     !scoring;
-
-  const handleCreditPurchase = async (pack: { id: "25" | "60" | "150" }) => {
-    const result = await purchaseCreditPack(pack.id);
-    if (result.checkout_url) {
-      window.location.href = result.checkout_url;
-    } else {
-      setShowCreditModal(false);
-      setError(result.message ?? "Payment processing is not yet available. Please check back soon.");
-    }
-  };
 
   const handleScore = async () => {
     if (!selectedBusiness) return;
@@ -103,7 +88,6 @@ export default function ScoreMyPageView() {
       );
       setScoreResult(data);
       setScoredUrl(pageUrl.trim());
-      invalidateCredits();
       await supabase.from("token_usage").insert({
         ...data.token_usage,
         business_id: selectedBusinessId,
@@ -111,7 +95,6 @@ export default function ScoreMyPageView() {
       });
     } catch (e: any) {
       if ((e as Error).name === "AbortError") return;
-      if (e instanceof InsufficientCreditsError) { setShowCreditModal(true); return; }
       setError((e as Error).message || "Scoring failed. Please try again.");
     } finally {
       setScoring(false);
@@ -152,7 +135,6 @@ export default function ScoreMyPageView() {
         abortRef.current.signal,
       );
       setAugmentResult(data);
-      invalidateCredits();
       await supabase.from("token_usage").insert({
         ...data.token_usage,
         business_id: selectedBusinessId,
@@ -160,7 +142,6 @@ export default function ScoreMyPageView() {
       });
     } catch (e: unknown) {
       if ((e as Error).name === "AbortError") return;
-      if (e instanceof InsufficientCreditsError) { setShowCreditModal(true); return; }
       setAugmentError((e as Error).message || "Augmentation failed. Please try again.");
     } finally {
       setAugmenting(false);
@@ -187,13 +168,6 @@ export default function ScoreMyPageView() {
 
   return (
     <>
-      {showCreditModal && (
-        <CreditPackModal
-          onClose={() => setShowCreditModal(false)}
-          onPurchase={handleCreditPurchase}
-        />
-      )}
-
       <div className="max-w-3xl mx-auto space-y-6">
         {/* Header */}
         <div>
@@ -284,12 +258,11 @@ export default function ScoreMyPageView() {
             <Button
               className="w-full bg-accent text-accent-foreground hover:opacity-90 font-semibold py-6"
               onClick={handleScore}
-              disabled={!canScore || (credits?.balance ?? 0) < 1}
-              title={(credits?.balance ?? 0) < 1 ? "Insufficient credits" : undefined}
+              disabled={!canScore}
             >
               {scoring
                 ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Analyzing competitors & scoring…</>
-                : <>Score Page <span className="ml-2 text-xs opacity-70 font-normal">1 credit</span></>}
+                : <>Score Page</>}
             </Button>
             {scoring && (
               <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
@@ -448,7 +421,6 @@ export default function ScoreMyPageView() {
                     <p className="text-xs text-muted-foreground mt-1">
                       Patch the missing entities, related keywords, quadgrams, and geographic
                       modifiers into the page — preserving your existing voice and structure.
-                      Costs 1 additional credit.
                     </p>
                   </div>
                   <Button

@@ -1,2 +1,0 @@
--- See applied migration: rankability_pack_purchases
--- (applied directly via MCP — contents in git for reference)

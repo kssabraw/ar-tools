@@ -129,7 +129,7 @@ showup-local/
 | `CORS_ORIGINS` | Comma-separated allowed origins (currently `*`) |
 | `SUPABASE_URL` | `https://yvdfiwabdvcpqwrmtysd.supabase.co` |
 | `SUPABASE_ANON_KEY` | Supabase publishable/anon key |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role (secret) key — for credit deduction |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role (secret) key — for usage logging |
 
 ---
 
@@ -245,7 +245,7 @@ Stores generated HTML pages. Key columns:
 - ✅ Direct Railway calls from frontend (bypasses Supabase edge function — no 150s timeout)
 - ✅ Factual accuracy enforcement — no invented claims about the business
 - ✅ Content gaps report — "How to reach 100/100" panel in GeneratedPageView
-- ✅ Credits system with deduction and refund on failure
+- ✅ Usage log (internal cost visibility) — `usage_log` table + `log_usage()`; no billing, no credits, no caps (removed when imported into the AR Tools internal suite)
 
 ## What's Next (in order)
 

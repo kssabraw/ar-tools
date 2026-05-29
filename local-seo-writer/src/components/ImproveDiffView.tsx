@@ -343,7 +343,7 @@ export default function ImproveDiffView({
                       disabled={s.regenerating}
                       onClick={() => regenerateSection(s.heading)}
                       className="ml-auto text-muted-foreground hover:text-foreground"
-                      title="Regenerate this section only (no credit charge)"
+                      title="Regenerate this section only"
                     >
                       {s.regenerating
                         ? <><Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />Regenerating…</>

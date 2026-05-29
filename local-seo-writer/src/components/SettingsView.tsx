@@ -4,7 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Lock, Users, CreditCard, X, Mail } from "lucide-react";
+import { Loader2, Lock, Users, X, Mail } from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 
 const MAX_TEAM_MEMBERS = 2;
@@ -161,16 +161,6 @@ export default function SettingsView({ session }: { session: Session }) {
   const slotsLeft = MAX_TEAM_MEMBERS - teamMembers.length;
   const canAdd = slotsLeft > 0;
 
-  // ── Billing ──────────────────────────────────────────────────────────────
-  const [pageCount, setPageCount] = useState<number | null>(null);
-
-  useEffect(() => {
-    supabase
-      .from("generated_pages")
-      .select("*", { count: "exact", head: true })
-      .then(({ count }) => setPageCount(count ?? 0));
-  }, []);
-
   return (
     <div className="max-w-2xl space-y-6">
       <div>
@@ -323,50 +313,6 @@ export default function SettingsView({ session }: { session: Session }) {
               )}
             </div>
           )}
-        </div>
-      </Section>
-
-      {/* ── Billing ── */}
-      <Section icon={CreditCard} title="Plan & Billing">
-        <div className="space-y-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-sm font-semibold text-foreground">Early Access</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Full platform access during the early access period.
-              </p>
-            </div>
-            <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-accent/15 text-accent shrink-0">
-              Active
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-muted/40 rounded-lg px-4 py-3">
-              <p className="text-2xl font-bold text-foreground">
-                {pageCount === null
-                  ? <Loader2 className="w-5 h-5 animate-spin inline" />
-                  : pageCount}
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">Pages generated</p>
-            </div>
-            <div className="bg-muted/40 rounded-lg px-4 py-3">
-              <p className="text-2xl font-bold text-foreground">∞</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Included this period</p>
-            </div>
-          </div>
-
-          <div className="border-t border-border pt-4">
-            <p className="text-xs text-muted-foreground">
-              Questions about billing or your plan?{" "}
-              <a
-                href="mailto:hello@showuplocal.com?subject=Billing question"
-                className="text-accent hover:underline"
-              >
-                Contact us →
-              </a>
-            </p>
-          </div>
         </div>
       </Section>
     </div>

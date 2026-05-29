@@ -14,7 +14,6 @@ import {
   BookMarked,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useCredits } from "@/hooks/useCredits";
 
 interface SidebarProps {
   activeItem: string;
@@ -40,14 +39,6 @@ const comingSoonItems = [
 ];
 
 const AppSidebar = ({ activeItem, onItemClick, collapsed, onToggle, isAdmin }: SidebarProps) => {
-  const { data: credits } = useCredits();
-  const balance = credits?.balance ?? null;
-  const monthly = credits?.monthlyBalance ?? null;
-  const bonus = credits?.bonusCredits ?? 0;
-  const perMonth = credits?.perMonth ?? 60;
-  const pct = monthly !== null ? Math.min(100, Math.round((monthly / perMonth) * 100)) : null;
-  const low = balance !== null && balance <= 5;
-
   return (
     <aside
       className={cn(
@@ -146,74 +137,6 @@ const AppSidebar = ({ activeItem, onItemClick, collapsed, onToggle, isAdmin }: S
           );
         })}
       </nav>
-
-      {/* Credit balance */}
-      {!collapsed && balance !== null && (
-        <div className="px-3 pb-3">
-          <div className="rounded-lg bg-sidebar-accent/40 px-3 py-2.5 space-y-2">
-            <p className="text-xs font-semibold text-sidebar-foreground/70 mb-0.5">Credits</p>
-
-            {/* Analysis / Content */}
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-sidebar-foreground/60">Analysis &amp; Content</span>
-                <span className={cn("text-xs font-semibold tabular-nums", low ? "text-red-400" : "text-sidebar-accent-foreground")}>
-                  {monthly ?? "–"} / {perMonth}
-                  {bonus > 0 && <span className="text-primary ml-1">+{bonus}</span>}
-                </span>
-              </div>
-              <div className="h-1 rounded-full bg-sidebar-border overflow-hidden">
-                <div
-                  className={cn("h-full rounded-full transition-all", low ? "bg-red-400" : "bg-sidebar-primary")}
-                  style={{ width: `${pct ?? 0}%` }}
-                />
-              </div>
-              {low && <p className="text-xs text-red-400 mt-1">Running low</p>}
-            </div>
-
-            {/* Map pack checks */}
-            {(() => {
-              const used = credits?.rankabilityUsed ?? 0;
-              const limit = credits?.rankabilityLimit ?? 50;
-              const remaining = limit - used;
-              const mapPct = Math.min(100, Math.round((remaining / limit) * 100));
-              const mapLow = remaining <= 5;
-              return (
-                <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-sidebar-foreground/60">Map Pack Checks</span>
-                    <span className={cn("text-xs font-semibold tabular-nums", mapLow ? "text-red-400" : "text-sidebar-accent-foreground")}>
-                      {remaining} / {limit}
-                    </span>
-                  </div>
-                  <div className="h-1 rounded-full bg-sidebar-border overflow-hidden">
-                    <div
-                      className={cn("h-full rounded-full transition-all", mapLow ? "bg-red-400" : "bg-sidebar-primary")}
-                      style={{ width: `${mapPct}%` }}
-                    />
-                  </div>
-                  {mapLow && <p className="text-xs text-red-400 mt-1">Running low</p>}
-                </div>
-              );
-            })()}
-
-            {/* Press releases */}
-            <div className="flex items-center justify-between">
-              <span className="text-xs text-sidebar-foreground/60">Press Releases</span>
-              <span className="text-xs font-semibold tabular-nums text-sidebar-accent-foreground">
-                {credits?.prCredits ?? 0} remaining
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-      {collapsed && balance !== null && (
-        <div className="px-3 pb-3 flex justify-center">
-          <div className={cn("text-xs font-bold tabular-nums", low ? "text-red-400" : "text-sidebar-foreground/60")}>
-            {balance}
-          </div>
-        </div>
-      )}
 
       {/* Collapse toggle */}
       <div className="px-3 pb-4">

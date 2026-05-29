@@ -10,10 +10,7 @@ import { SavedPagesList } from "@/components/SavedPagesList";
 import { StepIndicator } from "@/components/StepIndicator";
 import { useBusinessProfiles } from "@/hooks/useBusinessProfiles";
 import { useInvalidateSavedPages } from "@/hooks/useSavedPages";
-import { useCredits, useInvalidateCredits } from "@/hooks/useCredits";
-import { nlp, nlpStream, nlpStreamDirect, InsufficientCreditsError, RankabilityLimitError, purchaseRankabilityPack, purchaseCreditPack } from "@/lib/nlp-client";
-import RankabilityPackModal from "@/components/RankabilityPackModal";
-import CreditPackModal from "@/components/CreditPackModal";
+import { nlp, nlpStream, nlpStreamDirect } from "@/lib/nlp-client";
 import type { AnalysisResult, RankabilityResult } from "@/lib/nlp-types";
 import type { SavedPage } from "@/hooks/useSavedPages";
 
@@ -134,8 +131,6 @@ function analyzePageOptimization(
 const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialLocation, initialBusinessId, isOnboarding = false }: { onBack: () => void; defaultLocation?: string; initialKeyword?: string; initialLocation?: string; initialBusinessId?: string; isOnboarding?: boolean }) => {
   const { data: businesses = [], isLoading: loadingBusinesses } = useBusinessProfiles();
   const invalidateSavedPages = useInvalidateSavedPages();
-  const { data: credits } = useCredits();
-  const invalidateCredits = useInvalidateCredits();
 
   const [selectedBusinessId, setSelectedBusinessId] = useState("");
   const [keyword, setKeyword] = useState(initialKeyword ?? "");
@@ -158,8 +153,6 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
   const [rankability, setRankability] = useState<RankabilityResult | null>(null);
   const [rankabilityLoading, setRankabilityLoading] = useState(false);
   const [sabCity, setSabCity] = useState("");
-  const [showPackModal, setShowPackModal] = useState(false);
-  const [showCreditModal, setShowCreditModal] = useState(false);
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [selectedForCreate, setSelectedForCreate] = useState<Set<string>>(new Set());
   const [bulkCreating, setBulkCreating] = useState(false);
@@ -305,21 +298,16 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
         gbp_place_id: b.gbp_place_id ?? undefined,
       });
       setRankability(data);
-      invalidateCredits();
     } catch (e: any) {
-      if (e instanceof RankabilityLimitError) {
-        setShowPackModal(true);
-      } else {
-        setRankability({
-          score: 0, verdict: "unknown", score_breakdown: {},
-          has_map_pack: false, competitors: [], ranking_categories: [],
-          category_match: "none", distance_ok: true,
-          keyword_in_competitor_names: 0, competitor_name_examples: [],
-          in_maps_results: false, maps_position: undefined, is_sab: false, sab_pack_mismatch: false,
-          physical_competitors_in_pack: 0,
-          message: "Could not retrieve map pack data.", match_count: 0, total_results: 0,
-        });
-      }
+      setRankability({
+        score: 0, verdict: "unknown", score_breakdown: {},
+        has_map_pack: false, competitors: [], ranking_categories: [],
+        category_match: "none", distance_ok: true,
+        keyword_in_competitor_names: 0, competitor_name_examples: [],
+        in_maps_results: false, maps_position: undefined, is_sab: false, sab_pack_mismatch: false,
+        physical_competitors_in_pack: 0,
+        message: "Could not retrieve map pack data.", match_count: 0, total_results: 0,
+      });
     } finally {
       setRankabilityLoading(false);
     }
@@ -447,12 +435,8 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
             );
           }
           if (!genData.content_html) {
-            setError("Generation returned empty content. Your credits have been refunded. Please try again.");
+            setError("Generation returned empty content. Please try again.");
             setCheckState({ status: "not_found" });
-            await supabase.rpc("refund_failed_generation", {
-              p_amount: 2, p_endpoint: "/generate-page", p_business_id: selectedBusinessId,
-            });
-            invalidateCredits();
             setView({ kind: "form" });
             return;
           }
@@ -498,21 +482,12 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
           return;
         }
       }
-      // Stream ended without done event — refund and show error
-      await supabase.rpc("refund_failed_generation", {
-        p_amount: 2, p_endpoint: "/generate-page", p_business_id: selectedBusinessId,
-      });
-      invalidateCredits();
-      setError("Generation failed — the service may be temporarily unavailable. Your credits have been refunded. Please try again.");
+      // Stream ended without done event — show error
+      setError("Generation failed — the service may be temporarily unavailable. Please try again.");
       setCheckState({ status: "not_found" });
       setView({ kind: "form" });
     } catch (e: any) {
       if ((e as Error).name === "AbortError") { setView({ kind: "form" }); setCheckState({ status: "idle" }); return; }
-      if (e instanceof InsufficientCreditsError) { setShowCreditModal(true); setCheckState({ status: "idle" }); setView({ kind: "form" }); return; }
-      await supabase.rpc("refund_failed_generation", {
-        p_amount: 2, p_endpoint: "/generate-page", p_business_id: selectedBusinessId,
-      });
-      invalidateCredits();
       setError((e as Error).message || "Something went wrong");
       setCheckState({ status: "not_found" });
       setView({ kind: "form" });
@@ -550,9 +525,6 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
         if (evt.progress !== undefined && onProgress) onProgress(evt.progress, evt.message ?? "");
         if ("step" in evt && evt.step === "error") {
           console.error(`[createAndSavePage] stream error event for "${kw}":`, evt);
-          await supabase.rpc("refund_failed_generation", {
-            p_amount: 2, p_endpoint: "/generate-page", p_business_id: selectedBusinessId,
-          });
           return false;
         }
         if ("step" in evt && evt.step === "done" && evt.result) {
@@ -575,9 +547,6 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
             .single();
           if (saveError) {
             console.error("bulk create: failed to save page for keyword", kw, saveError);
-            await supabase.rpc("refund_failed_generation", {
-              p_amount: 2, p_endpoint: "/generate-page", p_business_id: selectedBusinessId,
-            });
             return false;
           }
           // If Railway didn't return a score (transient failure), score now and update
@@ -611,17 +580,11 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
           return true;
         }
       }
-      // Stream ended without a done event — refund
+      // Stream ended without a done event
       console.error(`[createAndSavePage] stream ended without done event for "${kw}"`);
-      await supabase.rpc("refund_failed_generation", {
-        p_amount: 2, p_endpoint: "/generate-page", p_business_id: selectedBusinessId,
-      });
       return false;
     } catch (err) {
       console.error(`[createAndSavePage] caught exception for "${kw}":`, err);
-      await supabase.rpc("refund_failed_generation", {
-        p_amount: 2, p_endpoint: "/generate-page", p_business_id: selectedBusinessId,
-      });
       return false;
     }
   };
@@ -992,40 +955,8 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
   const isChecking = checkState.status === "scanning" || checkState.status === "found";
 
   // ── Main form ──────────────────────────────────────────────────────────────
-  const handleCreditPurchase = async (pack: { id: "25" | "60" | "150" }) => {
-    const result = await purchaseCreditPack(pack.id);
-    if (result.checkout_url) {
-      window.location.href = result.checkout_url;
-    } else {
-      setShowCreditModal(false);
-      setError(result.message ?? "Payment processing is not yet available. Please check back soon.");
-    }
-  };
-
-  const handlePurchase = async (pack: { id: "5" | "10" | "20"; checks: number }) => {
-    const result = await purchaseRankabilityPack(pack.id);
-    if (result.checkout_url) {
-      window.location.href = result.checkout_url;
-    } else {
-      setShowPackModal(false);
-      setError(result.message ?? "Payment processing is not yet available. Please check back soon.");
-    }
-  };
-
   return (
     <>
-    {showCreditModal && (
-      <CreditPackModal
-        onClose={() => setShowCreditModal(false)}
-        onPurchase={handleCreditPurchase}
-      />
-    )}
-    {showPackModal && (
-      <RankabilityPackModal
-        onClose={() => setShowPackModal(false)}
-        onPurchase={handlePurchase}
-      />
-    )}
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
         <button onClick={onBack} className="text-sm text-muted-foreground hover:text-foreground mb-2 transition-colors">
@@ -1238,7 +1169,6 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
                   className="flex-1 text-sm px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-accent" />
                 <Button size="sm" onClick={handleScoreManualUrl} disabled={!manualUrl.trim()}>Score</Button>
               </div>
-              <p className="text-xs text-muted-foreground">Scoring costs 1 credit</p>
             </div>
             {checkState.page.isBlogPost && (
               <div className="flex items-center gap-2 px-3 py-2 bg-orange-500/10 border border-orange-500/20 rounded-lg text-xs text-orange-600">
@@ -1306,11 +1236,8 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
             <Button
               className="w-full bg-accent text-accent-foreground hover:opacity-90 font-semibold py-6"
               onClick={handleCreateNewPage}
-              disabled={(credits?.balance ?? 0) < 2}
-              title={(credits?.balance ?? 0) < 2 ? "Insufficient credits" : undefined}
             >
               <Sparkles className="w-4 h-4 mr-2" /> Create New Page
-              <span className="ml-2 text-xs opacity-70 font-normal">2 credits</span>
             </Button>
 
             <div className="space-y-1">
@@ -1321,7 +1248,6 @@ const NewContentView = ({ onBack, defaultLocation = "", initialKeyword, initialL
                   className="flex-1 text-sm px-3 py-2 rounded-lg border border-border bg-background focus:outline-none focus:ring-1 focus:ring-accent" />
                 <Button size="sm" onClick={handleScoreManualUrl} disabled={!manualUrl.trim()}>Score</Button>
               </div>
-              <p className="text-xs text-muted-foreground">Scoring costs 1 credit</p>
             </div>
 
             {relatedPagePanel}

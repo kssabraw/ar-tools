@@ -13,19 +13,15 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Credits charged per endpoint (0 = free)
-const ENDPOINT_CREDITS: Record<string, number> = {
-  "/analyze":         2,
-  "/score-page":      1,
-  "/generate-page":   2,
-  "/reoptimize-page": 2,
-};
-
+// Internal tool: no billing, no credits, no caps. We only record usage for
+// internal cost visibility. Map each endpoint to a human-readable description.
 const ENDPOINT_DESCRIPTIONS: Record<string, string> = {
-  "/analyze":         "Competitor analysis",
-  "/score-page":      "Page scoring",
-  "/generate-page":   "New page creation",
-  "/reoptimize-page": "Page reoptimization",
+  "/analyze":                "Competitor analysis",
+  "/score-page":             "Page scoring",
+  "/generate-page":          "New page creation",
+  "/reoptimize-page":        "Page reoptimization",
+  "/check-rankability":      "Map pack check",
+  "/generate-press-release": "Press release generation",
 };
 
 serve(async (req: Request) => {
@@ -75,99 +71,16 @@ serve(async (req: Request) => {
     });
   }
 
-  // Service role client — reused for both credit deduction and rankability limit
-  const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-  // ── Credit check + deduction ─────────────────────────────────────────────────
-  const creditsRequired = ENDPOINT_CREDITS[endpoint] ?? 0;
-  if (creditsRequired > 0) {
-    const { data: ok, error: deductError } = await adminClient.rpc("deduct_credits", {
-      p_user_id:    user.id,
-      p_amount:     creditsRequired,
-      p_endpoint:   endpoint,
-      p_description: ENDPOINT_DESCRIPTIONS[endpoint] ?? endpoint,
-    });
-
-    if (deductError) {
-      console.error("Credit deduction error:", deductError);
-      return new Response(JSON.stringify({ error: "Could not process credits" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+  // ── Usage logging (fire-and-forget, never blocks) ────────────────────────────
+  // No credits/limits — internal tool. We just record who ran what.
+  const description = ENDPOINT_DESCRIPTIONS[endpoint];
+  if (description) {
+    const adminClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    adminClient
+      .rpc("log_usage", { p_user_id: user.id, p_endpoint: endpoint, p_description: description })
+      .then(({ error }: { error: unknown }) => {
+        if (error) console.error("log_usage error:", error);
       });
-    }
-
-    if (!ok) {
-      return new Response(
-        JSON.stringify({
-          error: "Insufficient credits",
-          credits_required: creditsRequired,
-          code: "INSUFFICIENT_CREDITS",
-        }),
-        {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
-      );
-    }
-  }
-
-  // ── Press release credit check ────────────────────────────────────────────────
-  // PR credits are purchased separately ($60 / $159 pack) — not subscription credits.
-  if (endpoint === "/generate-press-release") {
-    const { data: ok, error: prErr } = await adminClient.rpc("deduct_pr_credit", {
-      p_user_id: user.id,
-    });
-
-    if (prErr) {
-      console.error("PR credit deduction error:", prErr);
-      return new Response(JSON.stringify({ error: "Could not process press release credit" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    if (!ok) {
-      return new Response(
-        JSON.stringify({
-          error: "No press release credits remaining. Purchase a pack to continue.",
-          code: "INSUFFICIENT_PR_CREDITS",
-        }),
-        {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
-    }
-  }
-
-  // ── Rankability monthly cap (50 checks/month, separate from credits) ─────────
-  if (endpoint === "/check-rankability") {
-    const { data: allowed, error: limitError } = await adminClient.rpc(
-      "check_rankability_limit",
-      { p_user_id: user.id },
-    );
-
-    if (limitError) {
-      console.error("Rankability limit check error:", limitError);
-      return new Response(JSON.stringify({ error: "Could not verify usage limit" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    if (!allowed) {
-      return new Response(
-        JSON.stringify({
-          error: "Monthly map pack check limit reached",
-          code: "RANKABILITY_LIMIT_REACHED",
-          limit: 50,
-        }),
-        {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        },
-      );
-    }
   }
 
   // ── Forward request to NLP service ───────────────────────────────────────────
@@ -183,19 +96,6 @@ serve(async (req: Request) => {
       // @ts-ignore - Deno supports duplex streaming
       duplex: "half",
     });
-
-    // Refund credits if the NLP service returned a server error
-    if (nlpResponse.status >= 500 && creditsRequired > 0) {
-      await adminClient.rpc("refund_credits", {
-        p_user_id: user.id,
-        p_amount:  creditsRequired,
-        p_endpoint: endpoint,
-      }).then(() => {
-        console.log(`Refunded ${creditsRequired} credits to ${user.id} after ${nlpResponse.status} on ${endpoint}`);
-      }).catch((err: unknown) => {
-        console.error("Credit refund failed:", err);
-      });
-    }
 
     // Forward the response (including streaming SSE responses)
     const responseHeaders = new Headers(corsHeaders);

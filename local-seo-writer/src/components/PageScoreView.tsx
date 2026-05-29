@@ -2,10 +2,8 @@ import { useState, useRef, ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle, AlertTriangle, XCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { nlp, nlpStreamDirect, InsufficientCreditsError, purchaseCreditPack } from "@/lib/nlp-client";
-import { useCredits, useInvalidateCredits } from "@/hooks/useCredits";
+import { nlp, nlpStreamDirect } from "@/lib/nlp-client";
 import type { ScoreResult, ReoptimizeResult, AnalysisResult, EngineScore } from "@/lib/nlp-types";
-import CreditPackModal from "@/components/CreditPackModal";
 import ImproveDiffView from "@/components/ImproveDiffView";
 
 // Re-export for backward compat with callers that destructure the prop shape
@@ -76,23 +74,10 @@ export default function PageScoreView({
   const [scoring, setScoring] = useState(false);
   const [reoptimizing, setReoptimizing] = useState(false);
   const [error, setError] = useState("");
-  const [showCreditModal, setShowCreditModal] = useState(false);
   const [expandedEngines, setExpandedEngines] = useState<Set<string>>(new Set());
   const [selectedEngineKeys, setSelectedEngineKeys] = useState<Set<string>>(new Set());
   const [diffData, setDiffData] = useState<{ result: ReoptimizeResult; originalHtml: string } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const { data: credits } = useCredits();
-  const invalidateCredits = useInvalidateCredits();
-
-  const handleCreditPurchase = async (pack: { id: "25" | "60" | "150" }) => {
-    const result = await purchaseCreditPack(pack.id);
-    if (result.checkout_url) {
-      window.location.href = result.checkout_url;
-    } else {
-      setShowCreditModal(false);
-      setError(result.message ?? "Payment processing is not yet available. Please check back soon.");
-    }
-  };
 
   const saveTokenUsage = async (record: Record<string, any>) => {
     await supabase.from("token_usage").insert({
@@ -130,13 +115,11 @@ export default function PageScoreView({
       setScoreResult(data);
       setSelectedEngineKeys(new Set(data.deficiencies.map(d => d.engine_key)));
       await saveTokenUsage(data.token_usage);
-      invalidateCredits();
       if (data.serp_analysis && onSerpAnalysis) {
         onSerpAnalysis(data.serp_analysis);
       }
     } catch (e: any) {
       if ((e as Error).name === "AbortError") return;
-      if (e instanceof InsufficientCreditsError) { setShowCreditModal(true); return; }
       setError((e as Error).message || "Scoring failed");
     } finally {
       setScoring(false);
@@ -170,7 +153,6 @@ export default function PageScoreView({
         if ("step" in evt && evt.step === "error") throw new Error(evt.message || "Reoptimize failed");
         if ("step" in evt && evt.step === "done" && evt.result) {
           await saveTokenUsage(evt.result.token_usage);
-          invalidateCredits();
           // Transition to section diff view instead of navigating away immediately
           setDiffData({
             result: evt.result,
@@ -179,16 +161,8 @@ export default function PageScoreView({
           return;
         }
       }
-      // Stream ended without done event
-      await supabase.rpc("refund_failed_generation", {
-        p_amount: 2, p_endpoint: "/reoptimize-page", p_business_id: businessId,
-      });
     } catch (e: any) {
       if ((e as Error).name === "AbortError") return;
-      if (e instanceof InsufficientCreditsError) { setShowCreditModal(true); return; }
-      await supabase.rpc("refund_failed_generation", {
-        p_amount: 2, p_endpoint: "/reoptimize-page", p_business_id: businessId,
-      });
       setError((e as Error).message || "Reoptimize failed");
     } finally {
       setReoptimizing(false);
@@ -231,12 +205,6 @@ export default function PageScoreView({
 
   return (
     <>
-    {showCreditModal && (
-      <CreditPackModal
-        onClose={() => setShowCreditModal(false)}
-        onPurchase={handleCreditPurchase}
-      />
-    )}
     <div className="max-w-3xl mx-auto space-y-6">
       <div>
         <button onClick={onBack} className="text-sm text-muted-foreground hover:text-foreground mb-2 transition-colors">
@@ -260,12 +228,11 @@ export default function PageScoreView({
           <Button
             className="w-full bg-accent text-accent-foreground hover:opacity-90 font-semibold py-6"
             onClick={runScore}
-            disabled={scoring || (credits !== undefined && (credits?.balance ?? 0) < 1)}
-            title={(credits?.balance ?? 0) < 1 ? "Insufficient credits" : undefined}
+            disabled={scoring}
           >
             {scoring
               ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />{serp_analysis ? "Scoring page…" : "Analyzing competitors…"}</>
-              : <>Score This Page <span className="ml-2 text-xs opacity-70 font-normal">1 credit</span></>}
+              : <>Score This Page</>}
           </Button>
           {scoring && (
             <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
@@ -392,21 +359,20 @@ export default function PageScoreView({
                 <Button
                   className="w-full bg-accent text-accent-foreground hover:opacity-90 font-semibold py-6"
                   onClick={() => runReoptimize(scoreResult.deficiencies)}
-                  disabled={reoptimizing || (credits !== undefined && (credits?.balance ?? 0) < 2)}
-                  title={(credits?.balance ?? 0) < 2 ? "Insufficient credits" : undefined}
+                  disabled={reoptimizing}
                 >
                   {reoptimizing
                     ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Rewriting page…</>
-                    : <>Fix All Issues <span className="ml-2 text-xs opacity-70 font-normal">2 credits</span></>}
+                    : <>Fix All Issues</>}
                 </Button>
                 {selectedEngineKeys.size > 0 && selectedEngineKeys.size < scoreResult.deficiencies.length && (
                   <Button
                     variant="outline"
                     className="w-full font-semibold py-6"
                     onClick={() => runReoptimize(scoreResult.deficiencies.filter(d => selectedEngineKeys.has(d.engine_key)))}
-                    disabled={reoptimizing || (credits !== undefined && (credits?.balance ?? 0) < 2)}
+                    disabled={reoptimizing}
                   >
-                    Fix Selected ({selectedEngineKeys.size}) <span className="ml-2 text-xs opacity-70 font-normal">2 credits</span>
+                    Fix Selected ({selectedEngineKeys.size})
                   </Button>
                 )}
                 {reoptimizing && (
@@ -421,7 +387,7 @@ export default function PageScoreView({
                   onClick={onCreateNew}
                   disabled={reoptimizing}
                 >
-                  Create New Page Instead <span className="ml-2 text-xs opacity-70 font-normal">2 credits</span>
+                  Create New Page Instead
                 </Button>
               </>
             ) : (

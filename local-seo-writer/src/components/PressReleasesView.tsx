@@ -2,10 +2,9 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Loader2, FileText, CheckCircle, RotateCcw, Download, Send } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { nlp, purchasePressReleasePack, InsufficientPRCreditsError } from "@/lib/nlp-client";
+import { nlp } from "@/lib/nlp-client";
 import { useBusinessProfiles } from "@/hooks/useBusinessProfiles";
 import { useGeneratedPages } from "@/hooks/useGeneratedPages";
-import { useCredits } from "@/hooks/useCredits";
 import {
   usePressReleases,
   usePressReleaseReports,
@@ -15,7 +14,6 @@ import {
   type PressRelease,
 } from "@/hooks/usePressReleases";
 import PressReleaseFormModal, { type PressReleaseFormValues } from "@/components/PressReleaseFormModal";
-import PressReleasePackModal, { type PRPackId, PR_PACKS } from "@/components/PressReleasePackModal";
 import DOMPurify from "dompurify";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -293,14 +291,12 @@ export default function PressReleasesView() {
   const [selectedBusinessId, setSelectedBusinessId] = useState<string | null>(null);
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
   const [reviewingPR, setReviewingPR] = useState<PressRelease | null>(null);
-  const [showPackModal, setShowPackModal] = useState(false);
   const [showFormModal, setShowFormModal] = useState(false);
-  const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [generationError, setGenerationError] = useState<string | null>(null);
 
   const { data: businesses = [], isLoading: businessesLoading } = useBusinessProfiles();
   const { data: pages = [], isLoading: pagesLoading } = useGeneratedPages(selectedBusinessId);
   const { data: pressReleases = [], isLoading: prsLoading } = usePressReleases(selectedBusinessId);
-  const { data: credits } = useCredits();
   const createPR = useCreatePressRelease();
 
   const selectedBusiness = businesses.find((b) => b.id === selectedBusinessId);
@@ -310,22 +306,6 @@ export default function PressReleasesView() {
   if (!selectedBusinessId && businesses.length === 1 && !businessesLoading) {
     setSelectedBusinessId(businesses[0].id);
   }
-
-  const handlePackPurchase = async (pack: typeof PR_PACKS[number]) => {
-    setPurchaseError(null);
-    try {
-      const result = await purchasePressReleasePack(pack.id);
-      if (result.checkout_url) {
-        window.location.href = result.checkout_url;
-        return;
-      }
-      // Stripe not yet configured — proceed to generation
-      setShowPackModal(false);
-      setShowFormModal(true);
-    } catch (err) {
-      setPurchaseError(err instanceof Error ? err.message : "Purchase failed");
-    }
-  };
 
   const handleGenerate = async (values: PressReleaseFormValues) => {
     if (!selectedPageId || !selectedBusinessId || !selectedPage || !selectedBusiness) return;
@@ -379,15 +359,7 @@ export default function PressReleasesView() {
     setShowFormModal(false);
     setReviewingPR(pr);
     } catch (err) {
-      if (err instanceof InsufficientPRCreditsError) {
-        // Credit was already deducted server-side before the error surfaced here
-        // (shouldn't happen — the proxy rejects before generation). Re-open pack modal.
-        setShowFormModal(false);
-        setPurchaseError("You have no press release credits. Purchase a pack to continue.");
-        setShowPackModal(true);
-      } else {
-        setPurchaseError(err instanceof Error ? err.message : "Generation failed");
-      }
+      setGenerationError(err instanceof Error ? err.message : "Generation failed");
     }
   };
 
@@ -405,19 +377,11 @@ export default function PressReleasesView() {
   return (
     <>
       <div className="max-w-3xl space-y-6">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-display font-bold text-foreground">Press Releases</h1>
-            <p className="text-sm text-muted-foreground mt-1">
-              Generate a press release from any page and we'll syndicate it across news outlets.
-            </p>
-          </div>
-          <div className="shrink-0 text-right">
-            <p className="text-xs text-muted-foreground">Press release credits</p>
-            <p className={`text-lg font-bold ${(credits?.prCredits ?? 0) === 0 ? "text-destructive" : "text-foreground"}`}>
-              {credits?.prCredits ?? 0}
-            </p>
-          </div>
+        <div>
+          <h1 className="text-2xl font-display font-bold text-foreground">Press Releases</h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Generate a press release from any page and we'll syndicate it across news outlets.
+          </p>
         </div>
 
         {/* Business selector */}
@@ -496,7 +460,7 @@ export default function PressReleasesView() {
                 <div className="px-6 py-4 border-t border-border bg-muted/20">
                   <Button
                     className="w-full bg-accent text-accent-foreground hover:opacity-90 font-semibold py-5"
-                    onClick={() => { setPurchaseError(null); setShowPackModal(true); }}
+                    onClick={() => { setGenerationError(null); setShowFormModal(true); }}
                   >
                     <Send className="w-4 h-4 mr-2" /> Generate Press Release
                   </Button>
@@ -538,18 +502,10 @@ export default function PressReleasesView() {
         )}
       </div>
 
-      {/* Pack purchase modal */}
-      {showPackModal && (
-        <PressReleasePackModal
-          onClose={() => setShowPackModal(false)}
-          onPurchase={handlePackPurchase}
-        />
-      )}
-
       {/* Error toast */}
-      {purchaseError && (
+      {generationError && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-destructive text-destructive-foreground text-sm px-4 py-2 rounded-lg shadow-lg">
-          {purchaseError}
+          {generationError}
         </div>
       )}
 

@@ -128,7 +128,7 @@ SCRAPEOWL_API_KEY    = os.environ.get("SCRAPEOWL_API_KEY", "")
 ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
 NLP_API_KEY          = os.environ.get("NLP_API_KEY", "")
 
-# ── Supabase (for direct JWT auth + credit management, bypassing edge function) ──
+# ── Supabase (for direct JWT auth + usage logging, bypassing edge function) ──
 SUPABASE_URL              = os.environ.get("SUPABASE_URL", "")
 SUPABASE_ANON_KEY         = os.environ.get("SUPABASE_ANON_KEY", "")
 SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -161,39 +161,22 @@ async def _verify_jwt_get_user(authorization: str) -> str:
         raise HTTPException(status_code=401, detail="Unauthorized")
     return r.json()["id"]
 
-async def _deduct_credits_direct(user_id: str, amount: int, endpoint: str, description: str) -> bool:
-    """Deduct credits via Supabase service role. Returns False if insufficient credits."""
-    async with httpx.AsyncClient(timeout=10) as hx:
-        r = await hx.post(
-            f"{SUPABASE_URL}/rest/v1/rpc/deduct_credits",
-            headers={
-                "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-                "Content-Type": "application/json",
-            },
-            json={"p_user_id": user_id, "p_amount": amount, "p_endpoint": endpoint, "p_description": description},
-        )
-    if r.status_code != 200:
-        logger.error(f"_deduct_credits_direct: {r.status_code} {r.text}")
-        return False
-    return r.json() is True
-
-
-async def _refund_credits_direct(user_id: str, amount: int, endpoint: str) -> None:
-    """Refund credits via Supabase service role. Fire-and-forget on failure."""
+async def _log_usage_direct(user_id: str, endpoint: str, description: str) -> None:
+    """Record a usage row via Supabase service role. Internal tool: no billing,
+    no credits, no limits — this is fire-and-forget and never blocks an action."""
     try:
         async with httpx.AsyncClient(timeout=10) as hx:
             await hx.post(
-                f"{SUPABASE_URL}/rest/v1/rpc/refund_credits",
+                f"{SUPABASE_URL}/rest/v1/rpc/log_usage",
                 headers={
                     "apikey": SUPABASE_SERVICE_ROLE_KEY,
                     "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
                     "Content-Type": "application/json",
                 },
-                json={"p_user_id": user_id, "p_amount": amount, "p_endpoint": endpoint},
+                json={"p_user_id": user_id, "p_endpoint": endpoint, "p_description": description},
             )
     except Exception as exc:
-        logger.warning(f"_refund_credits_direct failed: {exc}")
+        logger.warning(f"_log_usage_direct failed: {exc}")
 
 GOOGLE_NLP_ENDPOINT  = "https://language.googleapis.com/v1/documents:analyzeEntities"
 DATAFORSEO_ENDPOINT  = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
@@ -4212,12 +4195,7 @@ async def score_page(request: Request, body: ScorePageRequest):
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
     else:
         user_id = await _verify_jwt_get_user(request.headers.get("Authorization", ""))
-        ok = await _deduct_credits_direct(user_id, 1, "/score-page", "Page scoring")
-        if not ok:
-            raise HTTPException(
-                status_code=402,
-                detail=json.dumps({"error": "Insufficient credits", "credits_required": 1, "code": "INSUFFICIENT_CREDITS"}),
-            )
+        await _log_usage_direct(user_id, "/score-page", "Page scoring")
 
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
@@ -4632,12 +4610,7 @@ async def augment_page(request: Request, body: AugmentPageRequest):
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
     else:
         user_id = await _verify_jwt_get_user(request.headers.get("Authorization", ""))
-        ok = await _deduct_credits_direct(user_id, 1, "/augment-page", "Page augmentation")
-        if not ok:
-            raise HTTPException(
-                status_code=402,
-                detail=json.dumps({"error": "Insufficient credits", "credits_required": 1, "code": "INSUFFICIENT_CREDITS"}),
-            )
+        await _log_usage_direct(user_id, "/augment-page", "Page augmentation")
 
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
@@ -4810,20 +4783,15 @@ async def generate_page(request: Request, body: GeneratePageRequest):
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
-    # Auth: X-API-Key = proxied call (credits already deducted by edge function)
-    #       Authorization Bearer = direct call (deduct credits here)
+    # Auth: X-API-Key = proxied call (usage logged by edge function)
+    #       Authorization Bearer = direct call (log usage here)
     api_key = request.headers.get("X-API-Key")
     if api_key:
         if not NLP_API_KEY or api_key != NLP_API_KEY:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
     else:
         user_id = await _verify_jwt_get_user(request.headers.get("Authorization", ""))
-        ok = await _deduct_credits_direct(user_id, 2, "/generate-page", "New page creation")
-        if not ok:
-            raise HTTPException(
-                status_code=402,
-                detail=json.dumps({"error": "Insufficient credits", "credits_required": 2, "code": "INSUFFICIENT_CREDITS"}),
-            )
+        await _log_usage_direct(user_id, "/generate-page", "New page creation")
 
     import anthropic as _anthropic
 
@@ -5157,20 +5125,15 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
-    # Auth: X-API-Key = proxied call (credits already deducted by edge function)
-    #       Authorization Bearer = direct call (deduct credits here)
+    # Auth: X-API-Key = proxied call (usage logged by edge function)
+    #       Authorization Bearer = direct call (log usage here)
     api_key = request.headers.get("X-API-Key")
     if api_key:
         if not NLP_API_KEY or api_key != NLP_API_KEY:
             raise HTTPException(status_code=401, detail="Invalid or missing API key")
     else:
         user_id = await _verify_jwt_get_user(request.headers.get("Authorization", ""))
-        ok = await _deduct_credits_direct(user_id, 2, "/reoptimize-page", "Page reoptimization")
-        if not ok:
-            raise HTTPException(
-                status_code=402,
-                detail=json.dumps({"error": "Insufficient credits", "credits_required": 2, "code": "INSUFFICIENT_CREDITS"}),
-            )
+        await _log_usage_direct(user_id, "/reoptimize-page", "Page reoptimization")
 
     import anthropic as _anthropic
 
@@ -5398,11 +5361,11 @@ _SECTION_ENGINE_LABELS = {
 @app.post('/reoptimize-section', response_model=ReoptimizeSectionResponse)
 @limiter.limit("20/minute")
 async def reoptimize_section(request: Request, body: ReoptimizeSectionRequest):
-    """Rewrite a single HTML section to fix a specific SEO deficiency. No credits deducted."""
+    """Rewrite a single HTML section to fix a specific SEO deficiency."""
     if not ANTHROPIC_API_KEY:
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
-    # Auth: X-API-Key (proxied) OR JWT (direct) — no credits charged either way
+    # Auth: X-API-Key (proxied) OR JWT (direct) — no usage logged for section rewrites
     api_key = request.headers.get("X-API-Key")
     if api_key:
         if not NLP_API_KEY or api_key != NLP_API_KEY:

@@ -1,14 +1,4 @@
--- ── Fix 1: user_profiles UPDATE policy allows self-crediting ──────────────────
--- Drop the permissive policy that lets users update credits_balance, plan, etc.
--- All legitimate credit mutations go through deduct_credits() (service_role only).
-DROP POLICY IF EXISTS "Users update own profile" ON public.user_profiles;
-
--- Users should never directly mutate user_profiles via the client.
--- If a future feature needs it (e.g., display preferences), add a
--- SECURITY DEFINER function that updates only the safe columns.
-
-
--- ── Fix 5: Storage read policy — scope to press release owner ─────────────────
+-- ── Storage read policy — scope to press release owner ───────────────────────
 -- Old policy allowed ANY authenticated user to read ANY file in the bucket.
 -- New policy restricts reads to: the owner of the press release OR an admin.
 -- The storage path format is {press_release_id}/{timestamp}-{filename},
