@@ -20,7 +20,7 @@ const modules: ModuleTile[] = [
     label: 'Blog Writer',
     description: 'Generate SEO + AEO-optimized blog content through the five-module pipeline.',
     icon: <PenLine size={22} />,
-    to: () => '/runs',
+    to: (id) => `/runs?client=${id}`,
     status: 'active',
   },
   {
