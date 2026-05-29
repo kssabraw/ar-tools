@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Users, UserPlus, LogOut, FileText, BookOpen, Layers } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -9,12 +9,17 @@ interface NavItem {
 }
 
 const nav: NavItem[] = [
-  { label: 'Runs', to: '/', icon: <LayoutDashboard size={18} /> },
+  { label: 'Home', to: '/', icon: <Home size={18} /> },
+  { label: 'Runs', to: '/runs', icon: <LayoutDashboard size={18} /> },
   { label: 'Articles', to: '/articles', icon: <BookOpen size={18} /> },
   { label: 'Silos', to: '/silos', icon: <Layers size={18} /> },
   { label: 'Clients', to: '/clients', icon: <Users size={18} /> },
-  { label: 'New Client', to: '/clients/new', icon: <UserPlus size={18} /> },
 ]
+
+function isActive(pathname: string, to: string): boolean {
+  if (to === '/') return pathname === '/'
+  return pathname === to || pathname.startsWith(to + '/')
+}
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, signOut } = useAuth()
@@ -44,27 +49,30 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>{user?.email}</div>
         </div>
         <nav style={{ flex: 1, padding: '16px 0' }}>
-          {nav.map(item => (
-            <Link
-              key={item.to}
-              to={item.to}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                padding: '10px 20px',
-                color: location.pathname === item.to ? '#a5b4fc' : '#94a3b8',
-                background: location.pathname === item.to ? '#1e293b' : 'transparent',
-                textDecoration: 'none',
-                fontSize: 14,
-                fontWeight: location.pathname === item.to ? 600 : 400,
-                transition: 'background 0.15s',
-              }}
-            >
-              {item.icon}
-              {item.label}
-            </Link>
-          ))}
+          {nav.map(item => {
+            const active = isActive(location.pathname, item.to)
+            return (
+              <Link
+                key={item.to}
+                to={item.to}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '10px 20px',
+                  color: active ? '#a5b4fc' : '#94a3b8',
+                  background: active ? '#1e293b' : 'transparent',
+                  textDecoration: 'none',
+                  fontSize: 14,
+                  fontWeight: active ? 600 : 400,
+                  transition: 'background 0.15s',
+                }}
+              >
+                {item.icon}
+                {item.label}
+              </Link>
+            )
+          })}
         </nav>
         <div style={{ padding: '16px 20px', borderTop: '1px solid #1e293b' }}>
           <button

@@ -367,7 +367,7 @@ export function RunDetail() {
     <div style={{ padding: 32, maxWidth: 900 }}>
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
 
-      <Link to="/" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#6366f1', textDecoration: 'none', fontSize: 13, marginBottom: 20 }}>
+      <Link to="/runs" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#6366f1', textDecoration: 'none', fontSize: 13, marginBottom: 20 }}>
         <ArrowLeft size={14} /> Back to Runs
       </Link>
 
