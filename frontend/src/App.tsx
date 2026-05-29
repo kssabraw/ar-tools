@@ -1,13 +1,15 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from './context/AuthContext'
-import { ProtectedRoute } from './components/ProtectedRoute'
+import { ProtectedRoute, AdminRoute } from './components/ProtectedRoute'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
+import { Home } from './pages/Home'
 import { Runs } from './pages/Runs'
 import { RunDetail } from './pages/RunDetail'
 import { Clients } from './pages/Clients'
 import { ClientForm } from './pages/ClientForm'
+import { ClientWorkspace } from './pages/ClientWorkspace'
 import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
 
@@ -30,11 +32,13 @@ export default function App() {
                 <ProtectedRoute>
                   <Layout>
                     <Routes>
-                      <Route path="/" element={<Runs />} />
+                      <Route path="/" element={<Home />} />
+                      <Route path="/runs" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
-                      <Route path="/clients/new" element={<ClientForm />} />
-                      <Route path="/clients/:id/edit" element={<ClientForm />} />
+                      <Route path="/clients/new" element={<AdminRoute><ClientForm /></AdminRoute>} />
+                      <Route path="/clients/:id" element={<ClientWorkspace />} />
+                      <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
                       <Route path="*" element={<Navigate to="/" replace />} />

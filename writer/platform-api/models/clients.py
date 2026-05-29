@@ -15,6 +15,7 @@ class ClientListItem(BaseModel):
     website_analysis_status: str
     archived: bool
     created_at: str
+    logo_url: Optional[str] = None
 
 
 class WebsiteAnalysis(BaseModel):
@@ -40,6 +41,9 @@ class ClientDetail(BaseModel):
     created_at: str
     updated_at: str
     google_drive_folder_id: Optional[str] = None
+    logo_url: Optional[str] = None
+    gsc_property: Optional[str] = None
+    business_location: Optional[str] = None
 
 
 class ClientCreateRequest(BaseModel):
@@ -52,6 +56,9 @@ class ClientCreateRequest(BaseModel):
     icp_text: str = ""
     icp_file_id: Optional[UUID] = None
     google_drive_folder_id: Optional[str] = None
+    logo_url: Optional[str] = None
+    gsc_property: Optional[str] = None
+    business_location: Optional[str] = None
 
 
 class ClientUpdateRequest(BaseModel):
@@ -64,3 +71,6 @@ class ClientUpdateRequest(BaseModel):
     icp_text: Optional[str] = None
     icp_file_id: Optional[UUID] = None
     google_drive_folder_id: Optional[str] = None
+    logo_url: Optional[str] = None
+    gsc_property: Optional[str] = None
+    business_location: Optional[str] = None

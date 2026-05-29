@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import type { ClientListItem } from '../lib/types'
 import { Plus, X, Check, Globe, AlertCircle, Clock, Pencil } from 'lucide-react'
 
@@ -13,6 +14,7 @@ function AnalysisStatus({ status }: { status: ClientListItem['website_analysis_s
 
 export function Clients() {
   const qc = useQueryClient()
+  const { isAdmin } = useAuth()
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
   const { data: clients = [], isLoading } = useQuery<ClientListItem[]>({
@@ -33,20 +35,26 @@ export function Clients() {
     <div style={{ padding: 32 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Clients</h1>
-        <Link to="/clients/new" style={primaryBtn}>
-          <Plus size={15} /> Add Client
-        </Link>
+        {isAdmin && (
+          <Link to="/clients/new" style={primaryBtn}>
+            <Plus size={15} /> Add Client
+          </Link>
+        )}
       </div>
 
       {isLoading ? (
         <div style={{ color: '#64748b', fontSize: 14 }}>Loading clients…</div>
       ) : clients.length === 0 ? (
         <div style={{ ...cardStyle, textAlign: 'center', color: '#64748b', padding: 48 }}>
-          No clients yet.{' '}
-          <Link to="/clients/new" style={{ color: '#6366f1', textDecoration: 'none', fontWeight: 500 }}>
-            Add your first client
-          </Link>{' '}
-          to get started.
+          No clients yet.{isAdmin ? (
+            <>
+              {' '}
+              <Link to="/clients/new" style={{ color: '#6366f1', textDecoration: 'none', fontWeight: 500 }}>
+                Add your first client
+              </Link>{' '}
+              to get started.
+            </>
+          ) : null}
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 14 }}>
@@ -62,25 +70,27 @@ export function Clients() {
                   <AnalysisStatus status={c.website_analysis_status} />
                 </div>
               </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <Link to={`/clients/${c.id}/edit`} style={iconBtn} title="Edit">
-                  <Pencil size={14} />
-                </Link>
-                {deleteId === c.id ? (
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <span style={{ fontSize: 12, color: '#dc2626' }}>Archive?</span>
-                    <button onClick={() => { archiveMutation.mutate(c.id); setDeleteId(null) }}
-                      style={{ ...iconBtn, color: '#dc2626', borderColor: '#fca5a5' }}>
-                      <Check size={14} />
+              {isAdmin && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Link to={`/clients/${c.id}/edit`} style={iconBtn} title="Edit">
+                    <Pencil size={14} />
+                  </Link>
+                  {deleteId === c.id ? (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <span style={{ fontSize: 12, color: '#dc2626' }}>Archive?</span>
+                      <button onClick={() => { archiveMutation.mutate(c.id); setDeleteId(null) }}
+                        style={{ ...iconBtn, color: '#dc2626', borderColor: '#fca5a5' }}>
+                        <Check size={14} />
+                      </button>
+                      <button onClick={() => setDeleteId(null)} style={iconBtn}><X size={14} /></button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setDeleteId(c.id)} style={{ ...iconBtn, color: '#dc2626' }} title="Archive">
+                      <X size={14} />
                     </button>
-                    <button onClick={() => setDeleteId(null)} style={iconBtn}><X size={14} /></button>
-                  </div>
-                ) : (
-                  <button onClick={() => setDeleteId(c.id)} style={{ ...iconBtn, color: '#dc2626' }} title="Archive">
-                    <X size={14} />
-                  </button>
-                )}
-              </div>
+                  )}
+                </div>
+              )}
             </div>
           ))}
         </div>
