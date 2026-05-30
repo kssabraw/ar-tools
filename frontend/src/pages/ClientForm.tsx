@@ -2,8 +2,9 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { Client } from '../lib/types'
+import type { Client, GbpProfile } from '../lib/types'
 import { ArrowLeft, Check } from 'lucide-react'
+import { GbpPicker } from '../components/GbpPicker'
 
 interface FormData {
   name: string
@@ -14,11 +15,13 @@ interface FormData {
   logo_url: string
   gsc_property: string
   business_location: string
+  gbp_place_id: string | null
+  gbp: GbpProfile | null
 }
 
 const empty: FormData = {
   name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
-  logo_url: '', gsc_property: '', business_location: '',
+  logo_url: '', gsc_property: '', business_location: '', gbp_place_id: null, gbp: null,
 }
 
 export function ClientForm() {
@@ -46,6 +49,8 @@ export function ClientForm() {
         logo_url: existing.logo_url ?? '',
         gsc_property: existing.gsc_property ?? '',
         business_location: existing.business_location ?? '',
+        gbp_place_id: existing.gbp_place_id,
+        gbp: existing.gbp,
       })
     }
   }, [existing])
@@ -86,6 +91,8 @@ export function ClientForm() {
         logo_url: form.logo_url || null,
         gsc_property: form.gsc_property || null,
         business_location: form.business_location || null,
+        gbp_place_id: form.gbp_place_id,
+        gbp: form.gbp,
       }
       if (isEdit) {
         await updateMutation.mutateAsync(payload)
@@ -158,6 +165,18 @@ export function ClientForm() {
             />
             <p style={hintStyle}>Optional. Shown on this client's tile in the suite dashboard.</p>
           </div>
+        </div>
+
+        <div style={sectionStyle}>
+          <h2 style={sectionTitle}>Google Business Profile</h2>
+          <p style={descStyle}>
+            Optional. Search Google to attach this client's business listing — pulls in address, category, rating, and top reviews to anchor local SEO and content.
+          </p>
+          <GbpPicker
+            placeId={form.gbp_place_id}
+            profile={form.gbp}
+            onChange={(gbp_place_id, gbp) => setForm(f => ({ ...f, gbp_place_id, gbp }))}
+          />
         </div>
 
         <div style={sectionStyle}>
