@@ -17,7 +17,7 @@ Not customer-facing. No billing, no signup. Internal team only. (Unchanged from 
 | # | Module | Type | Status | Primary data source |
 |---|---|---|---|---|
 | 1 | Blog Writer | On-demand content | Exists (`/writer`) — re-home as a tab | DataForSEO + Claude |
-| 2 | Local SEO content | On-demand content | Migrate from existing repo | (TBD on repo review) |
+| 2 | Local SEO content | On-demand content | Imported (`/local-seo-writer`) — integration deferred, see Appendix A | Google NLP + competitor SERP + Claude |
 | 3 | Keyword research | On-demand research | Migrate from existing repo | Existing tool + **GSC** opportunity data |
 | 4 | Organic rank tracker | Scheduled time-series | Build on shared spine | **DataForSEO** (rank-of-record) + GSC context |
 | 5 | Maps / local-pack ranker | Scheduled time-series + geo | Build on shared spine | **DataForSEO** geo-grid |
@@ -96,13 +96,13 @@ All via migrations in `writer/supabase/migrations/` (existing convention), servi
 - **Content scheduler** (#7): monthly plans → auto-generate (#1/#2) → publish to Drive. CMS-ready seam, no approval gate.
 
 ### Parallel track — Migrations (any time)
-- **Local SEO content** (#2) and **Keyword research** (#3) migrate in whenever their repos are provided. The KW tool gains GSC opportunity data once Phase 1 lands.
+- **Local SEO content** (#2) is **imported** at `/local-seo-writer` (raw, unmodified). Integration depth is **deferred** — pick A, B, or C from **Appendix A** before adapting it. **Keyword research** (#3) migrates in whenever its repo is provided. The KW tool gains GSC opportunity data once Phase 1 lands.
 
 ## 8. Open items (settle at build time, not blocking the plan)
 
 1. **Scheduler mechanism** — pg_cron vs Railway cron vs an asyncio worker loop. CLAUDE.md requires confirming before adding any queue/scheduler-like infra. **Must decide before Phase 1.**
 2. **Maps geo-grid density** — points per location; primary driver of DataForSEO cost.
-3. **Migration repos** — stack/data-model fit for #2 and #3 unknown until the repos are shared; each needs a fit assessment (stack, mapping onto shared `clients`, UI fold-in).
+3. **Migration repos** — #2 (Local SEO) is now imported and assessed — **see Appendix A** for its stack, data-model overlap, and the A/B/C integration options (decision deferred). #3 (Keyword research) stack/data-model fit remains unknown until its repo is shared.
 4. **Notification channels** — confirm email provider and Slack workspace/webhook details.
 
 ## 9. Known doc discrepancies to reconcile
@@ -113,3 +113,54 @@ All via migrations in `writer/supabase/migrations/` (existing convention), servi
 ## 10. Next step
 
 On approval of this roadmap: update CLAUDE.md + README to reflect the multi-module suite, then begin **Phase 0**. The scheduler-mechanism decision (Open Item #1) is the first thing to resolve before Phase 1.
+
+---
+
+## Appendix A — Local SEO module (#2): import & integration assessment
+
+**Authored:** 2026-05-29 · **Status:** imported, integration **deferred** (no path chosen yet)
+
+### A.1 What was done
+
+The existing **ShowUP Local** app (`kssabraw/showup-local`) was imported into this repo at **`/local-seo-writer`** as a **raw, unmodified copy** (commit `7f3fe05`). Per decision, git history was **not** preserved (squashed into a single import commit). Excluded from the copy: `.git/`, `node_modules/`, `dist/`, and the app's `.env` / `.env.production` (they held only public `VITE_*` values, to be reconfigured for the suite at integration time). 174 files / ~37.7k lines.
+
+No suite adaptation has been applied. The next diff against this import will cleanly show whatever changes are made to fit AR Tools.
+
+### A.2 What the app is
+
+A **local SEO content generator**: enter a keyword + location → it analyzes top-ranking competitor pages, extracts SEO signals (related keywords, key phrases, Google **NLP** entities), and generates optimized local-SEO pages tied to a Google Business Profile. This is exactly suite module #2.
+
+### A.3 Stack — overlap and divergence vs. the suite
+
+| Layer | AR Tools (suite) | ShowUP Local (imported) | Fit |
+|---|---|---|---|
+| Frontend base | React + Vite | React + Vite | ✅ same |
+| UI system | Plain inline styles | **Tailwind + shadcn/ui** (`components.json`, `tailwind.config.ts`) | ⚠️ different design system |
+| Routing | React Router | **React Router** (`react-router-dom` ^6.30) | ✅ same |
+| Backend | **FastAPI** (platform-api / pipeline-api on Railway) | **Supabase Edge Functions** (Deno/TS) **+** a Python **FastAPI NLP microservice** (`services/nlp`) | ⚠️ different backend model |
+| Database | Supabase (AR-Internal-Tools) | **Separate** Supabase project (29 migrations) | ⚠️ two databases |
+
+**Reusable as-is in any path:** the **NLP microservice** (`services/nlp/main.py`, `url_filter.py`) — a standalone Python/FastAPI service that fits the suite's Railway model directly.
+
+### A.4 Data-model overlap (similar, not matching)
+
+ShowUP has its own `business_profiles`, `keyword_analyses`, `generated_pages`, plus a `User` carrying `password_hash` and `credit_balance`. Mapping onto the suite:
+
+- `business_profiles` ≈ suite **`clients`** (overlapping concept, different columns).
+- ShowUP `User` + credits **conflicts** with the suite model (Supabase **Auth** for identity; **no billing**).
+
+### A.5 The core mismatch — it's built as a customer-facing SaaS
+
+The app carries a **billing/credits** model the suite explicitly does not have: edge functions `purchase-credit-pack`, `purchase-press-release-pack`, `purchase-rankability-pack` (all **Stripe**-backed), plus `credit_balance` / credit-transaction logic. AR Tools is **internal-only, no billing** (CLAUDE.md §"What this project is"). **These billing parts should be dropped regardless of which integration path is chosen.**
+
+### A.6 Integration options (decision deferred)
+
+| Path | What it means | Effort | Trade-off |
+|---|---|---|---|
+| **A — Standalone in monorepo** | Keep ShowUP on its own stack (its Supabase + edge functions + NLP service); house it in `/local-seo-writer` and link from the dashboard as a module tile. | Lowest | Two databases, two client rosters; least integrated. |
+| **B — Share data, keep backend** | Point it at the shared `clients` table + shared Supabase Auth; strip billing/credits; keep its edge functions + NLP service. | Medium | One client roster; still a second backend paradigm (edge functions) alongside FastAPI. |
+| **C — Full port** | Rebuild its UI in the suite frontend style and move its backend logic into FastAPI (platform-api/pipeline-api). | Highest | Most consistent with the rest of the suite; largest rewrite. |
+
+**Cross-cutting regardless of path:** (1) drop the Stripe/credits billing surface; (2) the NLP microservice can be lifted into the suite's Railway services unchanged; (3) reconcile `business_profiles` → `clients`.
+
+**No path is chosen yet.** The raw import stays as-is until A/B/C is selected.

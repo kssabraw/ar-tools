@@ -39,7 +39,7 @@ export function Runs() {
   const qc = useQueryClient()
   const [searchParams] = useSearchParams()
   const scopedClientId = searchParams.get('client') ?? undefined
-  const [showNewRun, setShowNewRun] = useState(false)
+  const [showNewRun, setShowNewRun] = useState(searchParams.get('new') === '1')
   const [clientId, setClientId] = useState(scopedClientId ?? '')
   const [keyword, setKeyword] = useState('')
   const [creating, setCreating] = useState(false)
