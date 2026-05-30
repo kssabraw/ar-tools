@@ -24,6 +24,24 @@ class WebsiteAnalysis(BaseModel):
     contact_info: dict[str, str] = {}
 
 
+class GbpProfile(BaseModel):
+    business_name: Optional[str] = None
+    description: Optional[str] = None
+    address: Optional[str] = None
+    phone: Optional[str] = None
+    website: Optional[str] = None
+    logo: Optional[str] = None
+    photo: Optional[str] = None
+    gbp_category: Optional[str] = None
+    gbp_categories: list[str] = Field(default_factory=list)
+    gbp_rating: Optional[float] = None
+    gbp_review_count: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    hours: Optional[dict[str, Any]] = None
+    google_maps_uri: Optional[str] = None
+
+
 class ClientDetail(BaseModel):
     id: UUID
     name: str
@@ -44,6 +62,8 @@ class ClientDetail(BaseModel):
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None
+    gbp_place_id: Optional[str] = None
+    gbp: Optional[GbpProfile] = None
 
 
 class ClientCreateRequest(BaseModel):
@@ -59,6 +79,8 @@ class ClientCreateRequest(BaseModel):
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None
+    gbp_place_id: Optional[str] = None
+    gbp: Optional[GbpProfile] = None
 
 
 class ClientUpdateRequest(BaseModel):

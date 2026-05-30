@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    outscraper_api_key: str = ""
     max_concurrent_runs: int = 5
     job_worker_poll_interval_seconds: int = 10
     allowed_origins: List[str] = ["*"]
