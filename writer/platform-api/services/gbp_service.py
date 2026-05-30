@@ -14,7 +14,13 @@ logger = logging.getLogger(__name__)
 
 _OUTSCRAPER_BASE_URL = "https://api.app.outscraper.com"
 _SEARCH_ENDPOINT = f"{_OUTSCRAPER_BASE_URL}/maps/search-v3"
+_DATAFORSEO_REVIEWS_ENDPOINT = (
+    "https://api.dataforseo.com/v3/business_data/google/reviews/live"
+)
 _TIMEOUT = 45
+# Only surface strong reviews with actual text, capped to a handful.
+_REVIEW_MIN_RATING = 4
+_REVIEW_LIMIT = 5
 
 
 def _headers() -> dict[str, str]:
@@ -46,6 +52,105 @@ def _to_int(value: Any) -> Optional[int]:
         return int(float(value))
     except (TypeError, ValueError):
         return None
+
+
+def _reviews_from_dataforseo(data: dict[str, Any]) -> list[dict]:
+    """Map a DataForSEO reviews/live response to our review shape."""
+    tasks = data.get("tasks") or []
+    if not tasks:
+        return []
+    result = (tasks[0] or {}).get("result") or []
+    if not result:
+        return []
+    items = (result[0] or {}).get("items") or []
+
+    reviews: list[dict] = []
+    for r in items:
+        if not isinstance(r, dict):
+            continue
+        text = r.get("review_text")
+        rating_raw = r.get("review_rating")
+        rating = None
+        if isinstance(rating_raw, dict):
+            rating = _to_float(rating_raw.get("value"))
+        if rating is None:
+            rating = _to_float(r.get("rating"))
+        if not text or (rating or 0) < _REVIEW_MIN_RATING:
+            continue
+        timestamp = r.get("timestamp") or ""
+        datetime_utc = r.get("review_datetime_utc") or ""
+        if timestamp:
+            date = timestamp.split("T")[0]
+        elif datetime_utc:
+            date = datetime_utc.split(" ")[0]
+        else:
+            date = ""
+        reviews.append(
+            {
+                "reviewer": r.get("profile_name") or r.get("author_title") or "Anonymous",
+                "rating": rating if rating is not None else 5.0,
+                "text": text,
+                "date": date,
+            }
+        )
+        if len(reviews) >= _REVIEW_LIMIT:
+            break
+    return reviews
+
+
+def _reviews_from_outscraper(place: dict[str, Any]) -> list[dict]:
+    """Fallback: map Outscraper's inline reviews_data to our review shape."""
+    raw = place.get("reviews_data")
+    if not isinstance(raw, list):
+        return []
+
+    reviews: list[dict] = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        text = r.get("review_text")
+        rating = _to_float(r.get("review_rating"))
+        if not text or (rating or 0) < _REVIEW_MIN_RATING:
+            continue
+        datetime_utc = r.get("review_datetime_utc") or ""
+        reviews.append(
+            {
+                "reviewer": r.get("author_title") or "Anonymous",
+                "rating": rating,
+                "text": text,
+                "date": datetime_utc.split(" ")[0] if datetime_utc else "",
+            }
+        )
+        if len(reviews) >= _REVIEW_LIMIT:
+            break
+    return reviews
+
+
+async def _fetch_reviews(place_id: str) -> list[dict]:
+    """Fetch top reviews for a place via DataForSEO. Best-effort: any failure
+    or missing credentials returns [] so it never breaks the details call."""
+    if not place_id or not settings.dataforseo_login or not settings.dataforseo_password:
+        return []
+    body = [
+        {
+            "place_id": place_id,
+            "depth": 10,
+            "sort_by": "most_relevant",
+            "language_name": "English",
+        }
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            response = await client.post(
+                _DATAFORSEO_REVIEWS_ENDPOINT,
+                json=body,
+                auth=(settings.dataforseo_login, settings.dataforseo_password),
+            )
+            response.raise_for_status()
+            return _reviews_from_dataforseo(response.json())
+    except httpx.HTTPError:
+        logger.warning("gbp_service.reviews_fetch_failed", extra={"place_id": place_id})
+        return []
 
 
 async def search_businesses(query: str) -> list[dict]:
@@ -158,7 +263,16 @@ async def get_business_details(place_id: str) -> dict:
         "google_maps_uri": p.get("location_link") or p.get("google_maps_url") or "",
     }
 
+    resolved_place_id = p.get("place_id") or p.get("google_id") or place_id
+
+    # Review enrichment: DataForSEO is preferred; fall back to whatever
+    # Outscraper returned inline. Both are best-effort — never fatal.
+    reviews = await _fetch_reviews(resolved_place_id)
+    if not reviews:
+        reviews = _reviews_from_outscraper(p)
+    gbp["reviews"] = reviews
+
     return {
-        "place_id": p.get("place_id") or p.get("google_id") or place_id,
+        "place_id": resolved_place_id,
         "gbp": gbp,
     }

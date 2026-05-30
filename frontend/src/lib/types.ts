@@ -19,6 +19,12 @@ export interface ClientListItem {
   logo_url: string | null
 }
 
+export interface GbpReview {
+  reviewer: string
+  rating: number | null
+  text: string
+  date: string
+}
 export interface GbpProfile {
   business_name: string | null
   description: string | null
@@ -35,6 +41,7 @@ export interface GbpProfile {
   longitude: number | null
   hours: Record<string, unknown> | null
   google_maps_uri: string | null
+  reviews: GbpReview[]
 }
 
 export interface Client extends ClientListItem {

@@ -24,6 +24,13 @@ class WebsiteAnalysis(BaseModel):
     contact_info: dict[str, str] = {}
 
 
+class GbpReview(BaseModel):
+    reviewer: str = "Anonymous"
+    rating: Optional[float] = None
+    text: str = ""
+    date: str = ""
+
+
 class GbpProfile(BaseModel):
     business_name: Optional[str] = None
     description: Optional[str] = None
@@ -40,6 +47,7 @@ class GbpProfile(BaseModel):
     longitude: Optional[float] = None
     hours: Optional[dict[str, Any]] = None
     google_maps_uri: Optional[str] = None
+    reviews: list[GbpReview] = Field(default_factory=list)
 
 
 class ClientDetail(BaseModel):

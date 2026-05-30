@@ -11,12 +11,15 @@ class Settings(BaseSettings):
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
-    outscraper_api_key: str = ""
     max_concurrent_runs: int = 5
     job_worker_poll_interval_seconds: int = 10
     allowed_origins: List[str] = ["*"]
     log_level: str = "INFO"
     google_apps_script_url: str = ""
+    outscraper_api_key: str = ""
+    # DataForSEO — GBP review enrichment (shared with pipeline-api modules)
+    dataforseo_login: str = ""
+    dataforseo_password: str = ""
 
     # Silo candidate management (Platform PRD v1.4 §7.7 / §8.5)
     silo_dedup_cosine_threshold: float = 0.85
