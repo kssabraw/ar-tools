@@ -96,3 +96,5 @@ class ClientUpdateRequest(BaseModel):
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None
+    gbp_place_id: Optional[str] = None
+    gbp: Optional[GbpProfile] = None
