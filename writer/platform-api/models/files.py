@@ -13,3 +13,7 @@ class FileUploadResponse(BaseModel):
     parsed_text: str
     truncated: bool
     format: str  # "json" | "markdown" | "text"
+
+
+class LogoUploadResponse(BaseModel):
+    logo_url: str
