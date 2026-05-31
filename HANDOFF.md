@@ -95,4 +95,4 @@ Per `docs/suite-architecture-and-roadmap-v1_0.md` §7:
 
 - Writer-module PRD's *canonical header version* wasn't verified during the CLAUDE.md refresh — the doc list says "check the header." Worth pinning exact versions across `docs/modules/` in a future pass.
 - `README.md` lists a `/kw-research` location that doesn't exist yet (aspirational). Reconcile when #3 lands.
-- Two migrations share the `20260531120000_` timestamp prefix (`client_logos_bucket` and `fix_profiles_rls_recursion`). Harmless, but note it if migration ordering ever matters.
+- Local migration filenames use hand-authored `YYYYMMDD120000`-style timestamps that don't match the auto-generated versions recorded in `supabase_migrations.schema_migrations` when applied via the Supabase MCP (e.g. `client_logos_bucket` is `20260531200317` live). Ordering is consistent, but the local/remote version strings diverge — worth a convention decision if this ever matters.
