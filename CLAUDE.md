@@ -1,26 +1,49 @@
 # Claude Code Context
 
-This document gives you (Claude Code) the context to continue building **AR Tools**, an internal agency suite, after the initial setup phase. **Read this first before any other action.**
+This document gives you (Claude Code) the context to keep building **AR Tools**, an internal agency suite. **Read this first before any other action.**
 
-> **Suite context (read alongside this file).** AR Tools is a **multi-module suite** — Blog Writer, Local SEO content, Keyword research, Organic + Maps rank trackers, a Ranking-drop agent, and a VA content scheduler — sharing one dashboard, one Supabase database, and one scheduler. For suite-level scope, the locked architectural decisions, and the phased roadmap, see **`/docs/suite-architecture-and-roadmap-v1_0.md`**. The rest of *this* file describes how to build the **Blog Writer** module specifically; it remains authoritative for that module's internals.
+> **Suite context (read alongside this file).** AR Tools is a **multi-module suite** — Blog Writer, Local SEO content, Keyword research, Organic + Maps rank trackers, a Ranking-drop agent, and a VA content scheduler — sharing one dashboard, one Supabase database, and one scheduler. For suite-level scope, the locked architectural decisions, and the phased roadmap, see **`docs/suite-architecture-and-roadmap-v1_0.md`** (this is the product/architecture authority for "how many tools is this"). The Blog Writer's engineering spec and module PRDs remain authoritative for that module's *internals*.
 
 ## What this project is
 
-An internal agency suite for SEO/content work across multiple SMB clients. The first and most-built module is a **Blog Writer** that generates SEO + AEO-optimized content: the team enters a keyword for a configured client and the platform produces a publication-ready Markdown article through a five-module pipeline. Additional modules (rank tracking, keyword research, a ranking-drop agent, a VA content scheduler) are described in the roadmap doc above.
+An internal agency suite for SEO/content work across multiple SMB clients. The team picks a client, then works across SEO modules from one dashboard. The first and most-built module is the **Blog Writer**, which generates SEO + AEO-optimized content through a five-module pipeline: enter a keyword for a configured client and the platform produces a publication-ready Markdown article (and can publish it as a Google Doc in the client's Drive folder).
 
 This is **not** a customer-facing SaaS. There's no billing, no customer signup, no marketing site. Internal team use only.
 
-## The five reference documents
+## Current state (what's built vs. what's ahead)
 
-Before writing code, read these in this order:
+Most of the original Blog Writer build is **done**. Don't treat this repo as greenfield — read the code before assuming something is unbuilt.
 
-1. **`/docs/engineering-spec-v1_1.md`** — Your primary implementation reference. Covers service topology, schema, API routes, orchestration patterns, file parsing, frontend architecture, deployment sequence.
-2. **`/docs/platform-prd-v1_3.md`** — Product spec (canonical version is v1.4 per the doc header). Read for overall context, business rules, role permissions, brand-vs-SIE precedence rules.
-3. **`/docs/content-quality-prd-v1_0.md`** — Cross-cutting content quality requirements (R1–R7) authored 2026-05-01. Encodes semantic heading dedup, SERP sanitization, topic adherence, required structural elements (Key Takeaways / APP intro / CTA), brand context injection, paragraph length cap, and external citation coverage. **Brief PRD v1.8 and Writer PRD v1.6 implement this; read here first for the *what*.**
-4. **`/docs/writer-module-v1_5-change-spec.md`** — Writer Module v1.5 update. Adds `client_context` input, brand voice distillation, brand-SIE reconciliation. Still authoritative for those features.
-5. **`/docs/modules/`** — Individual module PRDs. Read each before implementing that module. Note: the brief PRD's filename ends `-v1.7.md` but its canonical version is **v1.8**; the writer PRD's filename ends `-v1.3.md` but its canonical version is **v1.6**.
+**Built and working:**
 
-When you encounter conflicting information across docs, the engineering spec wins for "how to build it" and the product PRD wins for "what should it do." Within product PRDs, the **content quality PRD overrides the module PRDs on R1–R7 acceptance criteria**.
+- **Pipeline API** (`writer/pipeline-api/`) — all five modules: `brief`, `sie`, `research`, `writer`, `sources_cited`.
+- **Platform API** (`writer/platform-api/`) — JWT auth middleware; clients CRUD; file upload + parsing; website scraper async worker (`services/job_worker.py` + `services/website_scraper.py` polling `async_jobs`); orchestrator + run dispatch (`services/orchestrator.py`); run polling; briefs; silos (`services/silo_dedup.py`, `services/silo_promotion.py`); publish to Google Drive (`routers/publish.py` via Apps Script webhook); users.
+- **Suite features added since the original spec:** Google Business Profile (GBP) auto-fetch + review enrichment via DataForSEO (`services/gbp_service.py`); content silos (semantic dedup / auto-promotion); client workspace with content + rank-tracker sections; suite dashboard with per-client tiles, including **logo branding** (`clients.logo_url`, public `client-logos` storage bucket).
+- **Frontend** (`frontend/`) — shared React + Vite app: `Login`, `Home` (suite dashboard tiles), `Clients`, `ClientForm`, `ClientWorkspace`, `Runs`, `RunDetail`, `Silos`, `Articles`.
+
+**Imported but not yet integrated:**
+
+- **Local SEO content** module lives at `/local-seo-writer` (imported raw from an existing app). Integration into the suite is **deferred** — see Appendix A of the suite roadmap before touching it.
+
+**Not yet built (suite roadmap, in rough order):** Keyword research (migrate from existing repo), Organic rank tracker, Maps / local-pack ranker, Ranking-drop agent, VA content scheduler, the cross-cutting **GSC analytics layer**, the **shared scheduler**, the **SOP store**, and the **notifications service**. The roadmap doc has the full module table, groupings, and locked decisions.
+
+## The reference documents
+
+Before writing code, read the ones relevant to your task. Note the exact filenames — several differ from older references.
+
+1. **`docs/suite-architecture-and-roadmap-v1_0.md`** — Suite-level scope, the locked decision log (rank sources, GSC service-account auth, publish destination, etc.), shared infrastructure, and the proposed data model for unbuilt modules. The product/architecture authority for the suite.
+2. **`docs/engineering-implementation-spec-v1_1.md`** — Primary implementation reference for the Blog Writer. Service topology, schema, API routes, orchestration patterns, file parsing, frontend architecture, deployment sequence.
+3. **`docs/content-platform-prd-v1_4.md`** — Current product spec (supersedes `content-platform-prd-v1_3.md`, which is retained). Overall context, business rules, role permissions, brand-vs-SIE precedence rules.
+4. **`docs/content-quality-prd-v1_0.md`** — Cross-cutting content quality requirements (R1–R7): semantic heading dedup, SERP sanitization, topic adherence, required structural elements (Key Takeaways / APP intro / CTA), brand context injection, paragraph length cap, external citation coverage.
+5. **`docs/writer-module-v1_5-change-spec_2.md`** — Writer Module v1.5 update. Adds `client_context` input, brand voice distillation, brand-SIE reconciliation. Authoritative for those features.
+6. **`docs/modules/`** — Individual module PRDs:
+   - `content-brief-generator-prd-v2_0.md` (Brief Generator — now v2.0)
+   - `SIE_PRD_Term_Entity_Module.md`
+   - `research-citations-module-prd-v1_1_1.md`
+   - `content-writer-module-prd-v1.3.md` (check the header for its canonical version)
+   - `sources-cited-module-prd-v1_1.md`
+
+When docs conflict: the engineering spec wins for "how to build it," the product PRD wins for "what should it do," and the **content quality PRD overrides the module PRDs on R1–R7 acceptance criteria**. Where the suite roadmap and the older single-tool framing disagree on "how many tools is this," the roadmap wins.
 
 ## Stack decisions already made — do not change without asking
 
@@ -36,55 +59,54 @@ When you encounter conflicting information across docs, the engineering spec win
 | State management | TanStack Query (no Redux/Zustand) | Engineering spec §10.5 |
 | LLM provider | **Anthropic Claude** for module content generation | User decision |
 | Embeddings | OpenAI `text-embedding-3-small` for SIE only | User decision |
+| Rank / SERP data | **DataForSEO** for organic SERP and maps/local-pack (also GBP enrichment) | Suite roadmap decision log |
+| GSC analytics | Google Search Console via **service account** (no interactive OAuth) | Suite roadmap decision log |
+| Publish destination | Google Doc in client's Drive folder via Apps Script webhook (CMS-ready later) | Suite roadmap decision log |
 | Hosting | Railway with two services + private networking | Engineering spec §2 |
 
-## What's already done before you start
+## Infrastructure already provisioned
 
-- Supabase project created
-- Database schema applied via migrations in `/supabase/migrations/`
-- Storage buckets `files` (active) and `article-assets` (placeholder for v2) created
-- First admin user exists in `auth.users` with `role = 'admin'` in `profiles`
-- GitHub repo created and cloned
-- Railway project created with two empty services configured (`platform-api`, `pipeline-api`)
-- Environment variables set in both Railway services
-- Reference docs in `/docs/`
+- Supabase project (`AR-Internal-Tools`, ref `wvcthtmmcmhkybcesirb`) with schema applied via migrations in `writer/supabase/migrations/`.
+- Storage buckets: `files` (active), `article-assets` (v2 placeholder), `csv-snapshots`, `wordpress_images` (public), `client-logos` (public — client tile/workspace logos).
+- First admin user in `auth.users` with `role = 'admin'` in `profiles`.
+- GitHub repo cloned. Railway project with two services (`platform-api`, `pipeline-api`) and env vars set.
 
-You should NOT need to do dashboard-level setup. If you do, stop and ask.
+You should NOT need dashboard-level setup. If you think you do, stop and ask.
 
-## What you build
-
-Order of build:
-
-1. **Pipeline API skeleton + Brief Generator endpoint** — start here. No upstream dependencies. Test with Postman against Railway after deploy.
-2. **Pipeline API: SIE module** — second-easiest. Has 7-day cache logic.
-3. **Pipeline API: Research & Citations module** — depends on Brief output structure.
-4. **Pipeline API: Content Writer module v1.5** — most complex. Implements brand voice distillation, brand-SIE reconciliation, regex-based banned-term enforcement. Read `/docs/writer-module-v1_5-change-spec.md` thoroughly before starting.
-5. **Pipeline API: Sources Cited module** — small, runs after Writer.
-6. **Platform API: skeleton + auth middleware** — JWT verification using Supabase JWT secret.
-7. **Platform API: clients CRUD + file upload + parsing** — admin-gated routes.
-8. **Platform API: website scraper async worker** — polls `async_jobs` table, calls ScrapeOwl + Anthropic for extraction.
-9. **Platform API: orchestrator + run dispatch** — the heart of the system. `asyncio.gather` for Brief+SIE parallel; sequential for the rest.
-10. **Platform API: polling endpoint + run management** — supports the frontend's run status display.
-11. **End-to-end test from Postman** — see Engineering Spec §12 Phase 4. Do this before touching the frontend.
-12. **Frontend** — React + Vite app in `/frontend` (deployed to Netlify), connects to platform-api public URL.
-
-## Conventions to follow
-
-### Code structure
+## Repository layout
 
 ```
-platform-api/
+/                            ← suite root
+├── writer/                  ← Blog Writer module
+│   ├── platform-api/        ← public-facing API (auth, clients, runs, publish, …)
+│   ├── pipeline-api/        ← private API (the five generation modules)
+│   └── supabase/migrations/ ← all suite migrations live here
+├── frontend/                ← shared React + Vite app (Netlify) for the whole suite
+├── local-seo-writer/        ← imported Local SEO app (integration deferred)
+└── docs/                    ← PRDs, specs, suite roadmap, module PRDs
+```
+
+### Backend code structure (per API)
+
+```
+writer/platform-api/
 ├── main.py                    ← FastAPI app, route registration, startup
 ├── config.py                  ← env var loading via pydantic-settings
-├── routers/                   ← one file per resource (clients.py, runs.py, etc.)
-├── services/                  ← business logic (orchestrator.py, file_parser.py, etc.)
+├── routers/                   ← one file per resource
+│     (clients, runs, briefs, silos, files, publish, users)
+├── services/                  ← business logic
+│     (orchestrator, file_parser, job_worker, website_scraper,
+│      gbp_service, silo_dedup, silo_promotion)
 ├── models/                    ← Pydantic request/response schemas
-├── middleware/auth.py         ← JWT verification dependency
-├── db/supabase_client.py      ← supabase-py setup
-└── tests/                     ← pytest tests
+├── middleware/auth.py         ← JWT verification dependency (require_auth / require_admin)
+├── db/supabase_client.py      ← supabase-py setup (service role key)
+└── tests/                     ← pytest tests (service-logic units, mocked)
+
+writer/pipeline-api/
+└── modules/                   ← brief, sie, research, writer, sources_cited
 ```
 
-Mirror this structure in `pipeline-api/`.
+## Conventions to follow
 
 ### Naming
 
@@ -108,36 +130,41 @@ Mirror this structure in `pipeline-api/`.
 
 ### Database access
 
-- All Supabase calls from the backend use the **service role key** (not anon key)
-- Never use the anon key on the backend — RLS would block service operations
+- All Supabase calls from the backend use the **service role key** (not anon key) — RLS would block service operations
 - Always wrap Supabase calls in try/except; map errors to user-friendly responses
+- Schema changes go through migrations in `writer/supabase/migrations/` (apply to the live project via the Supabase MCP when working web-only)
 
 ### Module schema versions
 
-- The orchestrator validates `schema_version` from every pipeline API response against `EXPECTED_MODULE_VERSIONS` (Engineering Spec §6.5)
-- When you implement each module, return the correct `schema_version` in its output:
-  - Brief Generator: `"1.7"`
-  - SIE: `"1.0"`
-  - Research & Citations: `"1.1"`
-  - Writer: `"1.5"` (or `"1.5-no-context"` / `"1.5-degraded"` per fallback rules)
-  - Sources Cited: `"1.1"`
+The orchestrator validates `schema_version` from every pipeline response against `EXPECTED_MODULE_VERSIONS` (`writer/platform-api/services/orchestrator.py`). When you change a module, keep these in sync. Current values:
+
+| Module | `schema_version` |
+|---|---|
+| Brief Generator | `2.6` |
+| SIE | `1.4` |
+| Research & Citations | `1.1` |
+| Writer | `1.7` (also accepts `1.7-no-context` / `1.7-degraded`) |
+| Sources Cited | `1.1` |
+
+> These drift over time — treat `orchestrator.py` (`EXPECTED_MODULE_VERSIONS` / `WRITER_ACCEPTED_VERSIONS`) and each module's `SCHEMA_VERSION` constant as the source of truth, and update this table when you change them.
 
 ### Testing
 
-- Write at least one happy-path test per module endpoint
+- Write at least one happy-path test per module's core logic
 - Mock external API calls (DataForSEO, ScrapeOwl, Anthropic, OpenAI, Google NLP) — never hit them in tests
-- For the Writer's brand-SIE reconciliation logic, build the seven test fixtures from Writer v1.5 spec §9.2
+- Existing tests are pure service-logic units mocked with `unittest.mock` (see `writer/platform-api/tests/`); there is no FastAPI `TestClient` harness yet
+- For the Writer's brand-SIE reconciliation logic, build the test fixtures from the Writer v1.5 spec
 
 ## Things to ask before doing
 
 These decisions are not in the docs — ask the user:
 
-1. Specific Anthropic model selection per module (Sonnet vs Opus per task)
-2. Specific prompt copy for distillation, reconciliation, website extraction (the docs describe behavior, not exact prompts)
-3. Whether to include observability tooling beyond stdlib logging (Sentry, Better Stack, etc.) — currently planned for v2
-4. Whether to add automated tests in CI on push, or rely on manual testing for v1
+1. Specific Anthropic model selection per module (Sonnet vs Opus per task), where not already chosen in code
+2. Specific prompt copy for distillation, reconciliation, website/GBP extraction (the docs describe behavior, not exact prompts)
+3. Observability tooling beyond stdlib logging (Sentry, Better Stack, etc.) — planned for v2
+4. Whether to add automated tests in CI on push, or rely on manual testing
 5. Branch protection rules and PR requirements
-6. Specific frontend component library / design system (the `/frontend` app)
+6. The **shared scheduler** mechanism (still unchosen — see suite roadmap Open Items) before building any scheduled tracker
 
 ## Things NOT to do without asking
 
@@ -146,8 +173,10 @@ These decisions are not in the docs — ask the user:
 - Don't introduce new external dependencies (Redis, Celery, RabbitMQ, etc.)
 - Don't add a caching layer in front of Supabase
 - Don't change the brand-vs-SIE precedence rules
+- Don't reverse a locked decision in the suite roadmap's decision log
 - Don't expose the pipeline-api publicly — it must remain on Railway's private network
-- Don't implement features marked "out of scope for v1" in the PRDs
+- Don't implement features marked "out of scope for v1" in the PRDs (e.g., live-to-CMS publishing)
+- Don't wire `/local-seo-writer` into the suite until its deferred integration path is agreed
 
 ## When you're stuck
 
@@ -155,4 +184,4 @@ If something seems underspecified or contradictory, stop and ask. The user has b
 
 ## How to communicate progress
 
-After completing each numbered build step above, summarize what you did, what you tested, and any open questions. Don't wait until the entire system is built to report status.
+After completing a meaningful chunk of work, summarize what you did, what you tested, and any open questions. Don't wait until everything is built to report status.
