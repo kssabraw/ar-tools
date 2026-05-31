@@ -14,7 +14,7 @@ Four commits, oldest → newest:
 
 | Commit | Type | Summary |
 |---|---|---|
-| `9c9db32` | fix(db) | **Profiles RLS infinite recursion (42P17).** New migration `writer/supabase/migrations/20260531120000_fix_profiles_rls_recursion.sql` rewrites the recursive policy so admin-role checks on `profiles` no longer self-reference. Applied to the live Supabase project. |
+| `9c9db32` | fix(db) | **Profiles RLS infinite recursion (42P17).** New migration `writer/supabase/migrations/20260531181719_fix_profiles_rls_recursion.sql` rewrites the recursive policy so admin-role checks on `profiles` no longer self-reference. Applied to the live Supabase project. |
 | `4d9fbaa` | feat(frontend) | **"Roadmap" affordance in the client form.** `ClientForm.tsx` now visually marks client fields that exist in the schema but aren't yet consumed by any module, so the team isn't misled into thinking they do something today. |
 | `17544e3` | feat(clients) | **Client logo upload.** Replaced the logo-URL text box with a real file uploader (see §2). |
 | `35cdb54` | docs(claude) | **Full CLAUDE.md refresh** to reflect the multi-module suite as it actually stands (paths, doc filenames/versions, schema-version table, current-state vs. greenfield build order). |
@@ -29,7 +29,7 @@ Goal: make a client's logo a real uploaded image (shown on the dashboard tile + 
 
 **Decisions taken (with the user):** Supabase Storage + URL in DB · upload-only field · store now, wire into published content later.
 
-- **Storage:** new **public** bucket `client-logos` — restricted to `image/jpeg` + `image/png`, 2 MB cap. Public so the tile's `<img src>` renders without auth. Created live **and** committed as migration `20260531120000_client_logos_bucket.sql`.
+- **Storage:** new **public** bucket `client-logos` — restricted to `image/jpeg` + `image/png`, 2 MB cap. Public so the tile's `<img src>` renders without auth. Created live **and** committed as migration `20260531200317_client_logos_bucket.sql`.
 - **Backend:** `POST /files/logo` (`writer/platform-api/routers/files.py`), **admin-gated**. Validates content-type (`422` otherwise) and size (`413` over 2 MB), uploads bytes to the bucket under a `{uuid}.{ext}` key via the service-role key, returns the public URL. New `LogoUploadResponse` model.
 - **Frontend:** `api.ts` gained a multipart `upload()` helper (the existing one was JSON-only). `ClientForm.tsx` now has a file picker with live preview, Replace/Remove, client-side type+size validation, and inline errors. The returned URL flows through the existing `clients.logo_url` field on save.
 - **Tile/workspace:** no change needed — `Home.tsx` and `ClientWorkspace.tsx` already render `logo_url`.
@@ -95,4 +95,4 @@ Per `docs/suite-architecture-and-roadmap-v1_0.md` §7:
 
 - Writer-module PRD's *canonical header version* wasn't verified during the CLAUDE.md refresh — the doc list says "check the header." Worth pinning exact versions across `docs/modules/` in a future pass.
 - `README.md` lists a `/kw-research` location that doesn't exist yet (aspirational). Reconcile when #3 lands.
-- Local migration filenames use hand-authored `YYYYMMDD120000`-style timestamps that don't match the auto-generated versions recorded in `supabase_migrations.schema_migrations` when applied via the Supabase MCP (e.g. `client_logos_bucket` is `20260531200317` live). Ordering is consistent, but the local/remote version strings diverge — worth a convention decision if this ever matters.
+- **Migration version reconciliation (partly done).** This branch's two migrations are now named to exactly match their live `supabase_migrations.schema_migrations` versions (`20260531181719_fix_profiles_rls_recursion`, `20260531200317_client_logos_bucket`), so the Supabase CLI sees them as already-applied. **Still divergent (pre-existing, not touched here):** older local migrations on `main` use hand-authored `YYYYMMDD120000`-style timestamps that don't match their live versions (e.g. `clients_gbp` is `20260530003510` live vs `20260530120000` local), and the live DB has migrations with **no local file** (`keyword_metrics`, `session_cost_breakdown`, `csv_exports`, `session_archive`) from other branches/sessions. A full repo↔remote migration reconciliation is a separate task — decide on a convention (real UTC timestamps at author time) before doing it.
