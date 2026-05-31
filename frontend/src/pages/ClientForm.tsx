@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { Client, GbpProfile } from '../lib/types'
-import { ArrowLeft, Check } from 'lucide-react'
+import { ArrowLeft, Check, Image as ImageIcon } from 'lucide-react'
 import { GbpPicker } from '../components/GbpPicker'
 
 interface FormData {
@@ -32,6 +32,34 @@ export function ClientForm() {
   const qc = useQueryClient()
   const [form, setForm] = useState<FormData>(empty)
   const [saving, setSaving] = useState(false)
+  const [logoUploading, setLogoUploading] = useState(false)
+  const [logoError, setLogoError] = useState<string | null>(null)
+
+  async function handleLogoSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting the same file after an error
+    if (!file) return
+    if (file.type !== 'image/jpeg' && file.type !== 'image/png') {
+      setLogoError('Logo must be a JPG or PNG image.')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setLogoError('Logo must be under 2 MB.')
+      return
+    }
+    setLogoError(null)
+    setLogoUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await api.upload<{ logo_url: string }>('/files/logo', fd)
+      setForm(f => ({ ...f, logo_url: res.logo_url }))
+    } catch (err) {
+      setLogoError((err as Error).message || 'Upload failed.')
+    } finally {
+      setLogoUploading(false)
+    }
+  }
 
   const { data: existing, isLoading } = useQuery<Client>({
     queryKey: ['client', id],
@@ -128,10 +156,13 @@ export function ClientForm() {
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 8px' }}>
         {isEdit ? `Edit ${existing?.name ?? 'Client'}` : 'New Client'}
       </h1>
-      <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 32px' }}>
+      <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 10px' }}>
         {isEdit
           ? "Update the client's details. Changes apply to future runs — existing runs keep the snapshot that was taken when they started."
           : "Fill in the client's details. The brand guide and ICP are used by the AI to match the client's voice and audience on every content run."}
+      </p>
+      <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 32px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <ParkedBadge /> Saved now and ready to use, but no module reads it yet — it activates when that feature ships.
       </p>
 
       <form onSubmit={handleSubmit}>
@@ -165,22 +196,55 @@ export function ClientForm() {
             </div>
           </div>
           <div style={{ marginTop: 16 }}>
-            <label style={labelStyle}>Logo URL</label>
-            <input
-              type="url"
-              value={form.logo_url}
-              onChange={set('logo_url')}
-              placeholder="https://acmehvac.com/logo.png"
-              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
-            />
-            <p style={hintStyle}>Optional. Shown on this client's tile in the suite dashboard.</p>
+            <label style={labelStyle}>Logo</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              {form.logo_url ? (
+                <img
+                  src={form.logo_url}
+                  alt="Logo preview"
+                  style={{ width: 56, height: 56, borderRadius: 10, objectFit: 'contain', background: '#f8fafc', border: '1px solid #e2e8f0', flexShrink: 0 }}
+                />
+              ) : (
+                <div style={logoPlaceholder}>
+                  <ImageIcon size={20} />
+                </div>
+              )}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <label style={{ ...uploadBtnStyle, ...(logoUploading ? { opacity: 0.6, cursor: 'default' } : {}) }}>
+                    {logoUploading ? 'Uploading…' : form.logo_url ? 'Replace' : 'Upload logo'}
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png"
+                      onChange={handleLogoSelect}
+                      disabled={logoUploading}
+                      style={{ display: 'none' }}
+                    />
+                  </label>
+                  {form.logo_url && !logoUploading && (
+                    <button
+                      type="button"
+                      onClick={() => { setForm(f => ({ ...f, logo_url: '' })); setLogoError(null) }}
+                      style={removeBtnStyle}
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <p style={hintStyle}>Optional. JPG or PNG, up to 2 MB. Shown on this client's tile and workspace.</p>
+              </div>
+            </div>
+            {logoError && <p style={{ ...hintStyle, color: '#dc2626' }}>{logoError}</p>}
           </div>
         </div>
 
         <div id="gbp" style={sectionStyle}>
-          <h2 style={sectionTitle}>Google Business Profile</h2>
+          <div style={titleRow}>
+            <h2 style={{ ...sectionTitle, margin: 0 }}>Google Business Profile</h2>
+            <ParkedBadge />
+          </div>
           <p style={descStyle}>
-            Optional. Search Google to attach this client's business listing — pulls in address, category, rating, and top reviews to anchor local SEO and content.
+            Optional. Search Google to attach this client's business listing — address, category, rating, and top reviews. Shown on the client's workspace today; it will feed local-SEO content and Maps rank tracking once those modules ship.
           </p>
           <GbpPicker
             placeId={form.gbp_place_id}
@@ -220,9 +284,12 @@ export function ClientForm() {
         </div>
 
         <div style={sectionStyle}>
-          <h2 style={sectionTitle}>Search Console &amp; Local Rankings</h2>
+          <div style={titleRow}>
+            <h2 style={{ ...sectionTitle, margin: 0 }}>Search Console &amp; Local Rankings</h2>
+            <ParkedBadge />
+          </div>
           <p style={descStyle}>
-            Optional. Connects this client to rank tracking and Search Console analytics. You can fill these in later.
+            Optional. Saved now and used automatically once the rank-tracking &amp; Search Console module ships — nothing reads these yet, so it's safe to fill them in early.
           </p>
           <div style={{ marginBottom: 16 }}>
             <label style={labelStyle}>Search Console Property</label>
@@ -283,11 +350,27 @@ export function ClientForm() {
   )
 }
 
+function ParkedBadge() {
+  return (
+    <span
+      style={parkedBadge}
+      title="Saved now — activated when the module that uses it ships."
+    >
+      Roadmap
+    </span>
+  )
+}
+
 const sectionStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 24, marginBottom: 20 }
+const titleRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }
+const parkedBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
 const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#0f172a', margin: '0 0 4px' }
 const descStyle: React.CSSProperties = { fontSize: 13, color: '#64748b', margin: '0 0 16px', lineHeight: 1.6 }
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 6 }
 const hintStyle: React.CSSProperties = { fontSize: 12, color: '#94a3b8', margin: '6px 0 0' }
 const inputStyle: React.CSSProperties = { padding: '9px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, color: '#0f172a', fontFamily: 'inherit' }
+const logoPlaceholder: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'center', width: 56, height: 56, borderRadius: 10, background: '#f1f5f9', border: '1px dashed #cbd5e1', color: '#94a3b8', flexShrink: 0 }
+const uploadBtnStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 14px', background: '#fff', color: '#374151', border: '1px solid #d1d5db', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
+const removeBtnStyle: React.CSSProperties = { padding: '7px 12px', background: '#fff', color: '#dc2626', border: '1px solid #fecaca', borderRadius: 8, fontWeight: 500, fontSize: 13, cursor: 'pointer' }
 const primaryBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '9px 18px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 14, cursor: 'pointer' }
 const ghostBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', padding: '9px 18px', background: '#fff', color: '#374151', border: '1px solid #e2e8f0', borderRadius: 8, fontWeight: 500, fontSize: 14, textDecoration: 'none' }
