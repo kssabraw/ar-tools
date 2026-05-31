@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useParams, Link } from 'react-router-dom'
+import { useNavigate, useParams, Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { Client, GbpProfile } from '../lib/types'
@@ -27,6 +27,7 @@ const empty: FormData = {
 export function ClientForm() {
   const navigate = useNavigate()
   const { id } = useParams<{ id?: string }>()
+  const { hash } = useLocation()
   const isEdit = Boolean(id)
   const qc = useQueryClient()
   const [form, setForm] = useState<FormData>(empty)
@@ -37,6 +38,15 @@ export function ClientForm() {
     queryFn: () => api.get<Client>(`/clients/${id}`),
     enabled: isEdit,
   })
+
+  // Deep-link support (e.g. /clients/:id/edit#gbp from the workspace) —
+  // scroll the targeted section into view once it has rendered.
+  useEffect(() => {
+    if (!hash) return
+    if (isEdit && isLoading) return
+    const el = document.getElementById(hash.slice(1))
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }, [hash, isEdit, isLoading])
 
   useEffect(() => {
     if (existing) {
@@ -167,7 +177,7 @@ export function ClientForm() {
           </div>
         </div>
 
-        <div style={sectionStyle}>
+        <div id="gbp" style={sectionStyle}>
           <h2 style={sectionTitle}>Google Business Profile</h2>
           <p style={descStyle}>
             Optional. Search Google to attach this client's business listing — pulls in address, category, rating, and top reviews to anchor local SEO and content.

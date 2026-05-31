@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe,
+  ArrowLeft, ArrowRight, Globe, Building2,
 } from 'lucide-react'
 
 export function ClientWorkspace() {
@@ -41,6 +41,25 @@ export function ClientWorkspace() {
           )}
         </div>
       </div>
+
+      {/* ── Client setup ─────────────────────────────────────────────── */}
+      <Section
+        title="Client setup"
+        subtitle="The business context the content & ranking tools draw on."
+      >
+        <ActionCard
+          icon={<Building2 size={22} />}
+          label="Business Profile"
+          description={
+            client?.gbp?.business_name
+              ? `Linked: ${client.gbp.business_name}${client.gbp.address ? ` · ${client.gbp.address}` : ''}`
+              : 'Attach this client’s Google Business Profile — address, category, rating, and top reviews.'
+          }
+          to={id ? `/clients/${id}/edit#gbp` : undefined}
+          cta={client?.gbp?.business_name ? 'Edit' : 'Set up'}
+          highlight={!client?.gbp?.business_name}
+        />
+      </Section>
 
       {/* ── Content ──────────────────────────────────────────────────── */}
       <Section
@@ -138,9 +157,10 @@ interface ActionCardProps {
   cta?: string
   badge?: string
   compact?: boolean
+  highlight?: boolean
 }
 
-function ActionCard({ icon, label, description, to, cta, badge, compact }: ActionCardProps) {
+function ActionCard({ icon, label, description, to, cta, badge, compact, highlight }: ActionCardProps) {
   const active = Boolean(to)
   const inner = (
     <>
@@ -170,7 +190,14 @@ function ActionCard({ icon, label, description, to, cta, badge, compact }: Actio
 
   if (active && to) {
     return (
-      <Link to={to} style={{ ...tileStyle, cursor: 'pointer' }}>
+      <Link
+        to={to}
+        style={{
+          ...tileStyle,
+          cursor: 'pointer',
+          ...(highlight ? { borderColor: '#c7d2fe', background: '#f8faff' } : {}),
+        }}
+      >
         {inner}
       </Link>
     )
