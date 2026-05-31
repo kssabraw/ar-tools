@@ -1,9 +1,20 @@
 # Local SEO Module (#2) — Plan C (Full Port) Integration Plan
 
-**Status:** DRAFT for review · **Authored:** 2026-05-31 · **Branch:** `claude/youthful-clarke-Pzz3O`
+**Status:** DECISIONS LOCKED — ready for C1 · **Authored:** 2026-05-31 · **Branch:** `claude/youthful-clarke-Pzz3O`
 **Decision targeted:** Appendix A **Path C — Full Port** (rebuild UI in suite style; move backend logic into FastAPI; one Supabase DB; drop edge functions + billing surface).
 
 > This is a **plan only**. No code has been written. It supersedes the high-level Appendix A sketch with a file-by-file scope based on a full read of the source (`/local-seo-writer`) and the target suite conventions.
+
+### Decision log (resolved 2026-05-31)
+
+| # | Question | Resolution |
+|---|---|---|
+| 1 | SSE vs async-job polling (§3.3) | **C-poll** — convert generation/reoptimize to `async_jobs` + polling (reuse existing worker). No SSE. |
+| 2 | v1 scope (§4, §6) | **Core only** — analyze / generate / score / reoptimize + saved pages. Defer press releases, planning, social posts, brand voice, team/settings. |
+| 3 | Extend `clients` table (§5.1) | **No.** Do **not** add `detected_icp`, `brand_voice`, `existing_pages` (or `differentiators` / analysis-status) to `clients`. These business-analysis fields are added later by a different method. v1 generation runs on existing GBP data + SERP analysis only. |
+| 4 | Output format (§9 Q4) | **Default:** keep HTML + JSON-LD as the deliverable; do not force into the Google-Docs/Markdown publish path. |
+| 5 | Generation model (§9 Q5) | **Default:** keep source pin `claude-sonnet-4-6`. |
+| 6 | Test harness (§9 Q6) | **Default:** keep existing mocked service-logic unit style; do not stand up the FastAPI `TestClient` harness as part of this port. |
 
 ---
 
@@ -90,10 +101,10 @@ The pure-Python analysis core has **no edge-function or Supabase coupling** and 
 - **Config:** All needed keys already exist in `pipeline-api/config.py` (`dataforseo_login/password`, `scrapeowl_api_key`, `google_nlp_api_key`, `anthropic_api_key`). **No new pipeline-api config keys required.**
 - **Model pin:** Source uses `claude-sonnet-4-6`. Keep that (consistent with other modules) unless you want to revisit per CLAUDE.md "ask before model selection."
 
-### 3.3 SSE streaming decision (needs your call — see §9 Q1)
-`/generate-page` and `/reoptimize-page` stream Server-Sent Events for progress. The suite has **no SSE precedent** — the blog pipeline uses async-job polling instead. Two options:
-- **C-stream:** Keep SSE end-to-end (pipeline-api streams → platform-api passes through → frontend `EventSource`). Closest to source UX; introduces a new pattern.
-- **C-poll:** Drop SSE; make generation a platform-api async job (reuse `async_jobs` + `job_worker` infra) and poll like runs do. More consistent with the suite; loses live progress granularity but the UX is the same family as the existing Runs progress bar. **Recommended** for architectural consistency.
+### 3.3 SSE streaming — RESOLVED: C-poll
+`/generate-page` and `/reoptimize-page` stream Server-Sent Events for progress in the source. The suite has **no SSE precedent** — the blog pipeline uses async-job polling instead.
+
+**Decision: C-poll.** Drop SSE. Generation and reoptimize become platform-api **async jobs** (reuse the existing `async_jobs` table + `job_worker`) and the frontend polls for status like the Runs view does. The pipeline-api Local SEO endpoints run synchronously (request → full result) behind the worker; the worker writes the finished page to `generated_pages` and flips job status. This honors the locked "no new queue / no new pattern" decisions and matches the existing progress-bar UX family. The source's internal progress percentages are discarded (we surface coarse job states: queued → running → complete/failed).
 
 ### 3.4 `schema_version` registration
 Add Local SEO endpoints' response metadata with `schema_version: Literal["1.0"]`. Register in `orchestrator.py` **only if** we route any call through the orchestrator's validation helper; since Local SEO is not an `orchestrate_run` stage, we instead validate the version in the new platform-api router. Document the version in CLAUDE.md's module-version table.
@@ -124,12 +135,12 @@ Conventions followed: `HTTPException` + string error codes, Pydantic models in `
 
 ## 5. Data model — fold into shared Supabase
 
-### 5.1 Reconciliation: `business_profiles` → `clients`
-The suite already has a rich `clients` table (with GBP fields added in `20260530003510_clients_gbp.sql`). `business_profiles` overlaps heavily (GBP place_id, category, rating, reviews, hours, lat/lng). **Plan: do not create a parallel `business_profiles` table.** Map its columns onto `clients`:
-- Already on `clients` (from GBP work): place_id, categories, rating, review_count, reviews, hours, lat/lng, description.
-- **May need to add** to `clients`: `detected_icp jsonb`, `differentiators jsonb`, `brand_voice jsonb`, `existing_pages jsonb`, `local_seo_analysis_status text`. (One migration.)
+### 5.1 Reconciliation: `business_profiles` → `clients` — RESOLVED: no `clients` changes
+The suite already has a rich `clients` table (with GBP fields added in `20260530003510_clients_gbp.sql`). `business_profiles` overlaps heavily (GBP place_id, category, rating, reviews, hours, lat/lng). **Plan: do not create a parallel `business_profiles` table, and do not extend `clients`.**
 
-This is the single biggest data-design task and the main source of risk — the two apps modeled "a business" differently (ShowUP: per-user rows with `user_id`/legacy nulls; suite: shared internal `clients`). RLS differs too (suite uses service-role + app-level role gating, not per-user RLS).
+**Decision (Q3): the `clients` schema is NOT modified in this port.** The business-analysis-derived fields (`detected_icp`, `brand_voice`, `existing_pages`, `differentiators`, analysis status) are **explicitly out of scope** here — they will be added later by a different method. v1 Local SEO generation therefore uses **only** the business context already on `clients` (GBP place_id, categories, rating, review_count, reviews, hours, lat/lng, description) plus the per-keyword competitor SERP analysis. The source's FACTUAL-ACCURACY rules already degrade gracefully when ICP/brand-voice/differentiator context is absent, so no enrichment fields are required for a working core.
+
+This removes what was previously the highest-risk data-design step. The only schema additions are the two new satellite tables below, both keyed to `client_id`.
 
 ### 5.2 New tables (ported, de-billed)
 - `keyword_analyses` — analysis cache, **rekeyed** from `business_id` → `client_id`. Unique `(client_id, keyword, location)`.
@@ -189,21 +200,16 @@ Recommendation: land **C1–C3** as the first reviewable milestone (a working, i
 
 ---
 
-## 9. Open questions for you (before C1 starts)
+## 9. Open questions — ALL RESOLVED
 
-1. **SSE vs async-job polling** (§3.3) — keep live SSE streaming (C-stream) or convert to the suite's async-job + poll pattern (C-poll, recommended for consistency)?
-2. **v1 scope** — confirm C1–C3 core only (analyze/generate/score/reoptimize + saved pages), deferring Planning, Press Releases, Social, Brand Voice, Team/Settings?
-3. **`clients` extension** (§5.1) — OK to add `detected_icp`, `differentiators`, `brand_voice`, `existing_pages`, `local_seo_analysis_status` columns to the shared `clients` table? Or keep Local-SEO-specific business data in a separate satellite table keyed to `client_id`?
-4. **Output format** — Local SEO produces HTML + JSON-LD (for direct web publishing). Keep as HTML, or also wire into the existing Google-Docs publish path? (Blog Writer publishes Markdown→Doc; HTML pages are a different deliverable.)
-5. **Model selection** — keep `claude-sonnet-4-6` for generation/scoring (source default), or revisit per CLAUDE.md's "ask before model choice"?
-6. **Tests/CI** — this is a big port; do you want the FastAPI `TestClient` harness stood up now (also a pending open item from the handoff) so the ported endpoints get real route tests, or keep to the existing mocked service-logic unit style?
+See the **Decision log** at the top of this document. Q1→C-poll, Q2→core only, Q3→no `clients` changes, Q4→keep HTML/JSON-LD, Q5→keep `claude-sonnet-4-6`, Q6→keep mocked unit-test style. No open blockers remain for C1.
 
 ---
 
 ## 10. Risks & notes
 
 - **Size:** the NLP service is ~6,600 lines — the largest single thing in the suite. Splitting it into the module files in §2 (rather than one mega-file) is part of the port, adding effort but paying off in maintainability.
-- **`clients` reconciliation** is the highest-risk design step; getting the column mapping wrong is expensive to undo. Recommend reviewing the migration before applying to live.
+- ~~**`clients` reconciliation** is the highest-risk design step~~ — **removed by Q3 decision.** The `clients` schema is untouched; the two new tables are additive only, lowering migration risk substantially.
 - **Two test-double surfaces** (DataForSEO, ScrapeOwl, Google NLP, Anthropic) must all stay mocked in tests per CLAUDE.md.
 - **No new external dependencies of the forbidden kind** (Redis/Celery/queues) — C-poll reuses the existing `async_jobs` table, honoring the locked decisions.
 - **Locked-decision compliance:** single FastAPI backend ✅, one Supabase DB ✅, no edge functions ✅, inline-style frontend ✅, DataForSEO for SERP ✅ — Plan C is the path most aligned with CLAUDE.md's locked decisions.
