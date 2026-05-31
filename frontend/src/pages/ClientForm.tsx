@@ -128,10 +128,13 @@ export function ClientForm() {
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 8px' }}>
         {isEdit ? `Edit ${existing?.name ?? 'Client'}` : 'New Client'}
       </h1>
-      <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 32px' }}>
+      <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 10px' }}>
         {isEdit
           ? "Update the client's details. Changes apply to future runs — existing runs keep the snapshot that was taken when they started."
           : "Fill in the client's details. The brand guide and ICP are used by the AI to match the client's voice and audience on every content run."}
+      </p>
+      <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 32px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <ParkedBadge /> Saved now and ready to use, but no module reads it yet — it activates when that feature ships.
       </p>
 
       <form onSubmit={handleSubmit}>
@@ -178,9 +181,12 @@ export function ClientForm() {
         </div>
 
         <div id="gbp" style={sectionStyle}>
-          <h2 style={sectionTitle}>Google Business Profile</h2>
+          <div style={titleRow}>
+            <h2 style={{ ...sectionTitle, margin: 0 }}>Google Business Profile</h2>
+            <ParkedBadge />
+          </div>
           <p style={descStyle}>
-            Optional. Search Google to attach this client's business listing — pulls in address, category, rating, and top reviews to anchor local SEO and content.
+            Optional. Search Google to attach this client's business listing — address, category, rating, and top reviews. Shown on the client's workspace today; it will feed local-SEO content and Maps rank tracking once those modules ship.
           </p>
           <GbpPicker
             placeId={form.gbp_place_id}
@@ -220,9 +226,12 @@ export function ClientForm() {
         </div>
 
         <div style={sectionStyle}>
-          <h2 style={sectionTitle}>Search Console &amp; Local Rankings</h2>
+          <div style={titleRow}>
+            <h2 style={{ ...sectionTitle, margin: 0 }}>Search Console &amp; Local Rankings</h2>
+            <ParkedBadge />
+          </div>
           <p style={descStyle}>
-            Optional. Connects this client to rank tracking and Search Console analytics. You can fill these in later.
+            Optional. Saved now and used automatically once the rank-tracking &amp; Search Console module ships — nothing reads these yet, so it's safe to fill them in early.
           </p>
           <div style={{ marginBottom: 16 }}>
             <label style={labelStyle}>Search Console Property</label>
@@ -283,7 +292,20 @@ export function ClientForm() {
   )
 }
 
+function ParkedBadge() {
+  return (
+    <span
+      style={parkedBadge}
+      title="Saved now — activated when the module that uses it ships."
+    >
+      Roadmap
+    </span>
+  )
+}
+
 const sectionStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 24, marginBottom: 20 }
+const titleRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }
+const parkedBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
 const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#0f172a', margin: '0 0 4px' }
 const descStyle: React.CSSProperties = { fontSize: 13, color: '#64748b', margin: '0 0 16px', lineHeight: 1.6 }
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 6 }
