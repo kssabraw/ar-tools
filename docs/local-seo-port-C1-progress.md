@@ -1,18 +1,33 @@
 # Local SEO Port — C1 Backend Progress & Seam-Edit Checklist
 
-**Branch:** `claude/youthful-clarke-Pzz3O` · **Phase:** C1 (backend core) · **Status:** IN PROGRESS
+**Branch:** `claude/youthful-clarke-Pzz3O` · **Phase:** C1 (backend core) · **Status:** ENGINE PORT DONE (unwired, awaiting runtime verification)
 
-## Done in this pass
+## Done
 
 - Created `writer/pipeline-api/modules/local_seo/`.
-- **Vendored the engine verbatim** as the baseline to diff against (mirrors Appendix A.1's "raw import, then diff" approach):
-  - `_service.py` ← `local-seo-writer/services/nlp/main.py` (6,378 lines, UNMODIFIED)
-  - `url_filter.py` ← `local-seo-writer/services/nlp/url_filter.py` (249 lines, UNMODIFIED)
-  - `__init__.py` (empty — module is NOT yet wired into `main.py`, so it is inert and cannot affect the running pipeline-api).
+- **Vendored + ported the NLP engine** (`_service.py`, from `local-seo-writer/services/nlp/main.py`):
+  - Dropped `FastAPI` / CORS / `slowapi` imports; replaced the FastAPI `app` and the `Limiter` with inert `_RouteShim` / `_LimiterShim` so the original `@app.post(...)` / `@limiter.limit(...)` decorators stay in place (clean diff vs upstream) but become no-ops and leave the handler functions directly callable.
+  - Repointed all credentials from `os.environ` to the shared `config.settings` (`google_nlp_api_key`, `dataforseo_login/password`, `scrapeowl_api_key`, `anthropic_api_key`) — **no new config keys needed**.
+  - Neutralized auth/usage (`verify_api_key`, `_verify_jwt_get_user`, `_log_usage_direct`) to no-ops — pipeline-api is private-network; platform-api authenticates at the edge.
+  - Made NLTK corpus download best-effort (non-fatal on import).
+  - **C-poll conversion:** added `_drain_to_result(worker)` and switched both long-running handlers (`generate_page`, `reoptimize_page`) from `return await _sse_stream(_worker)` to `return await _drain_to_result(_worker)` — they now return plain dicts instead of SSE streams. (0 SSE returns remain; 2 drainer returns.)
+  - Normalized line endings CRLF → LF.
+- `url_filter.py` — vendored as-is.
+- `router.py` — real `APIRouter(prefix="/local-seo", tags=["local_seo"])` exposing the **5 core endpoints** (`/analyze`, `/score-page`, `/generate-page`, `/reoptimize-page`, `/reoptimize-section`) with suite-style error handling; `SCHEMA_VERSION = "1.0"`. Deferred endpoints (business/brand-voice/find-page/augment/related-pages/social/rankability/press-release) are left inert in `_service.py`, **not** exposed.
+- `__init__.py` — `from .router import router`.
+- `requirements.txt` — added `scikit-learn==1.5.2` (numpy, beautifulsoup4, lxml, nltk, anthropic, httpx already present).
 
-## Why the surgery wasn't completed in this pass
+## Verification done (static only)
 
-The faithful, low-risk port strategy is **shim the app-level seams, keep the engine code verbatim**. Executing that safely requires reading exact byte regions of `_service.py` and ideally running an import smoke-test. In the current web session: (a) large file-content reads are being suppressed to protect context, and (b) no Python deps are installed, so nothing can be import-checked. Rather than make ~30 unverifiable edits to a 6.4k-line file, the engine is vendored as-is and the exact edit list is recorded below for the next pass (ideally in an env with deps, or done in small verifiable chunks).
+- `python -m py_compile` passes for `_service.py`, `url_filter.py`, `router.py`, `__init__.py`.
+- AST check: all 10 request/response models and all 5 handler functions + `_drain_to_result` referenced by `router.py` exist in `_service.py`.
+
+## NOT yet verified / deliberately deferred
+
+- ⚠️ **No runtime/import test** — this container has no Python deps installed (`sklearn`, `nltk`, `anthropic`, …), so the module cannot be imported or exercised here. Must be smoke-tested in an env with deps (local `pip install -r requirements.txt`, or Railway).
+- ⚠️ **Module is intentionally NOT wired into `main.py`** — pipeline-api does not import `modules.local_seo` yet, so it is inert and cannot break the running service. Wire it in (`app.include_router(local_seo_router)`) only after an import smoke-test passes.
+- ⚠️ **NLTK corpora** must be pre-baked into the pipeline-api Docker image (add `python -m nltk.downloader stopwords punkt punkt_tab` to the Dockerfile) before deploy.
+- **C1.1 follow-up:** route the engine's ~10 `anthropic.AsyncAnthropic(...)` call sites through the suite's shared `get_anthropic()` + `anthropic_max_concurrency` semaphore (pattern in `modules/brief/llm.py`) for shared 429 protection. Left as-is for C1 (behavior-identical to source).
 
 ## C1 seam-edit checklist (line numbers are in `_service.py`)
 

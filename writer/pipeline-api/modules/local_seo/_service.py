@@ -15,22 +15,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-logger.info("NLP service starting...")
-logger.info(f"PORT={os.environ.get('PORT', 'not set')}")
-logger.info(f"Python version: {sys.version}")
-logger.info(f"Working directory: {os.getcwd()}")
-logger.info(f"Files in cwd: {os.listdir('.')}")
+logger.info("local_seo engine module loading...")
 
 try:
-    from fastapi import FastAPI, HTTPException, Depends, Security, Request
+    # Suite port: this file is imported as an engine library by router.py, not
+    # run as its own FastAPI app. We drop `FastAPI`, CORS, and the `slowapi`
+    # rate limiter (not a suite dependency); the app/limiter are shimmed below.
+    from fastapi import HTTPException, Request, Depends, Security
     from fastapi.responses import StreamingResponse
-    from fastapi.middleware.cors import CORSMiddleware
     from fastapi.security import APIKeyHeader
     from pydantic import BaseModel
     from typing import List, Dict, Optional
-    from slowapi import Limiter, _rate_limit_exceeded_handler
-    from slowapi.util import get_remote_address
-    from slowapi.errors import RateLimitExceeded
     import re
     from collections import defaultdict
     logger.info("Basic imports done")
@@ -55,128 +50,86 @@ except Exception as e:
     logger.error(f"Import failed: {e}")
     raise
 
-# Download required NLTK data on startup
+# Ensure required NLTK corpora are present. In the suite these are pre-baked
+# into the pipeline-api image at build time (see Dockerfile), so this is a
+# best-effort fallback and must NOT be fatal on import (the private worker may
+# have no outbound network at import time).
 try:
     nltk.download('stopwords', quiet=True)
     nltk.download('punkt', quiet=True)
     nltk.download('punkt_tab', quiet=True)
-    logger.info("NLTK data downloaded")
+    logger.info("NLTK data ensured")
 except Exception as e:
-    logger.error(f"NLTK download failed: {e}")
-    raise
+    logger.warning(f"NLTK download skipped/failed (expecting pre-baked corpora): {e}")
 
-app = FastAPI()
+# ── Suite port shims ────────────────────────────────────────────────────────
+# Upstream this file *was* the FastAPI app. In the suite it is an engine library
+# imported by `router.py`, which owns the real `APIRouter`. The original handler
+# functions keep their `@app.post(...)` / `@limiter.limit(...)` decorators for a
+# clean diff against the upstream source, so we provide inert shims that make
+# those decorators no-ops while leaving the decorated functions directly
+# callable. Rate limiting, CORS, and the 2 MB body cap are handled at the
+# platform-api edge (public boundary); pipeline-api is private-network only.
+class _RouteShim:
+    def post(self, *args, **kwargs):
+        def _decorator(fn):
+            return fn
+        return _decorator
 
-# ── Rate limiting ──────────────────────────────────────────────────────────────
-# All requests arrive via the Supabase nlp-proxy edge function, so X-Forwarded-For
-# is the Supabase server IP — useless for per-client limiting. The proxy sets
-# X-User-ID to the authenticated Supabase user ID, which we use as the rate limit
-# key so each user gets their own independent bucket.
-def _real_client_ip(request: Request) -> str:
-    user_id = request.headers.get("X-User-ID", "")
-    if user_id:
-        return user_id
-    xff = request.headers.get("X-Forwarded-For", "")
-    if xff:
-        return xff.split(",")[0].strip()
-    real_ip = request.headers.get("X-Real-IP", "")
-    if real_ip:
-        return real_ip.strip()
-    return get_remote_address(request)
+    get = post
 
-limiter = Limiter(key_func=_real_client_ip)
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    def add_exception_handler(self, *args, **kwargs):
+        pass
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
-# Reads allowed origins from CORS_ORIGINS env var (comma-separated).
-# Falls back to * in development. Tighten to your Railway/Vercel frontend
-# URL in production via the Railway dashboard.
-_cors_raw = os.environ.get("CORS_ORIGINS", "*")
-CORS_ORIGINS = [o.strip() for o in _cors_raw.split(",") if o.strip()]
-_cors_wildcard = CORS_ORIGINS == ["*"]
+    def add_middleware(self, *args, **kwargs):
+        pass
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=CORS_ORIGINS,
-    allow_credentials=not _cors_wildcard,  # Never allow credentials with *
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-logger.info(f"CORS origins: {CORS_ORIGINS}")
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request as StarletteRequest
+class _LimiterShim:
+    def limit(self, *args, **kwargs):
+        def _decorator(fn):
+            return fn
+        return _decorator
 
-class LimitRequestSizeMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: StarletteRequest, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > 2_000_000:  # 2MB limit
-            from starlette.responses import JSONResponse
-            return JSONResponse({"detail": "Request body too large"}, status_code=413)
-        return await call_next(request)
 
-app.add_middleware(LimitRequestSizeMiddleware)
+app = _RouteShim()
+limiter = _LimiterShim()
 
 STOP_WORDS = set(stopwords.words('english'))
 
-# ── API credentials (set all in Railway environment variables) ────────────────
-GOOGLE_NLP_API_KEY   = os.environ.get("GOOGLE_NLP_API_KEY", "")
-DATAFORSEO_LOGIN     = os.environ.get("DATAFORSEO_LOGIN", "")
-DATAFORSEO_PASSWORD  = os.environ.get("DATAFORSEO_PASSWORD", "")
-SCRAPEOWL_API_KEY    = os.environ.get("SCRAPEOWL_API_KEY", "")
-ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
-NLP_API_KEY          = os.environ.get("NLP_API_KEY", "")
+# ── API credentials ───────────────────────────────────────────────────────────
+# Suite port: credentials come from the shared pipeline-api settings
+# (pydantic-settings / .env), not raw os.environ. All four keys already exist
+# in `config.Settings` and are shared with the other pipeline modules.
+from config import settings
 
-# ── Supabase (for direct JWT auth + usage logging, bypassing edge function) ──
-SUPABASE_URL              = os.environ.get("SUPABASE_URL", "")
-SUPABASE_ANON_KEY         = os.environ.get("SUPABASE_ANON_KEY", "")
-SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+GOOGLE_NLP_API_KEY   = settings.google_nlp_api_key
+DATAFORSEO_LOGIN     = settings.dataforseo_login
+DATAFORSEO_PASSWORD  = settings.dataforseo_password
+SCRAPEOWL_API_KEY    = settings.scrapeowl_api_key
+ANTHROPIC_API_KEY    = settings.anthropic_api_key
 
-# ── API key auth dependency ───────────────────────────────────────────────────
+# ── Auth / usage shims ─────────────────────────────────────────────────────────
+# Upstream this service authenticated each request (X-API-Key or Supabase JWT)
+# and logged usage, because the frontend called it directly. In the suite,
+# pipeline-api runs on Railway's private network and is only ever called by
+# platform-api, which performs user auth once at its public edge. So these
+# helpers are neutralized: the handler functions still reference them (kept for
+# a clean diff), but they are no-ops here. Cost is tracked the suite way — each
+# endpoint returns `cost_usd`, persisted by platform-api.
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 async def verify_api_key(api_key: str = Security(_api_key_header)):
-    """Validates X-API-Key header. Fails closed — rejects all requests if NLP_API_KEY is unset."""
-    if not NLP_API_KEY:
-        raise HTTPException(status_code=503, detail="Service authentication not configured")
-    if api_key != NLP_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    return api_key
+    """No-op in the suite: auth happens at the platform-api edge."""
+    return None
 
-# ── Direct JWT auth helpers (used when frontend calls Railway without the proxy) ─
 async def _verify_jwt_get_user(authorization: str) -> str:
-    """Verify a Supabase JWT and return the user_id, or raise 401."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        raise HTTPException(status_code=503, detail="Supabase not configured on this service")
-    token = authorization[7:]
-    async with httpx.AsyncClient(timeout=10) as hx:
-        r = await hx.get(
-            f"{SUPABASE_URL}/auth/v1/user",
-            headers={"Authorization": f"Bearer {token}", "apikey": SUPABASE_ANON_KEY},
-        )
-    if r.status_code != 200:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return r.json()["id"]
+    """No-op in the suite: returns a constant internal principal."""
+    return "internal"
 
 async def _log_usage_direct(user_id: str, endpoint: str, description: str) -> None:
-    """Record a usage row via Supabase service role. Internal tool: no billing,
-    no credits, no limits — this is fire-and-forget and never blocks an action."""
-    try:
-        async with httpx.AsyncClient(timeout=10) as hx:
-            await hx.post(
-                f"{SUPABASE_URL}/rest/v1/rpc/log_usage",
-                headers={
-                    "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={"p_user_id": user_id, "p_endpoint": endpoint, "p_description": description},
-            )
-    except Exception as exc:
-        logger.warning(f"_log_usage_direct failed: {exc}")
+    """No-op in the suite: cost is tracked via per-endpoint cost_usd."""
+    return None
 
 GOOGLE_NLP_ENDPOINT  = "https://language.googleapis.com/v1/documents:analyzeEntities"
 DATAFORSEO_ENDPOINT  = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
@@ -5095,7 +5048,7 @@ Full location: {body.location}
             },
         })
 
-    return await _sse_stream(_worker)
+    return await _drain_to_result(_worker)
 
 
 # ── /reoptimize-page ──────────────────────────────────────────────────────────
@@ -5324,7 +5277,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             },
         })
 
-    return await _sse_stream(_worker)
+    return await _drain_to_result(_worker)
 
 
 # ── /reoptimize-section ────────────────────────────────────────────────────────
