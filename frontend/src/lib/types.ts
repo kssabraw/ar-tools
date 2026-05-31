@@ -120,7 +120,6 @@ export interface RunDetail {
 
 export interface Profile {
   id: string
-  email: string
   role: 'admin' | 'team_member'
   full_name: string | null
 }
