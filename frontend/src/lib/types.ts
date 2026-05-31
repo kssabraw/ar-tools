@@ -19,6 +19,31 @@ export interface ClientListItem {
   logo_url: string | null
 }
 
+export interface GbpReview {
+  reviewer: string
+  rating: number | null
+  text: string
+  date: string
+}
+export interface GbpProfile {
+  business_name: string | null
+  description: string | null
+  address: string | null
+  phone: string | null
+  website: string | null
+  logo: string | null
+  photo: string | null
+  gbp_category: string | null
+  gbp_categories: string[]
+  gbp_rating: number | null
+  gbp_review_count: number | null
+  latitude: number | null
+  longitude: number | null
+  hours: Record<string, unknown> | null
+  google_maps_uri: string | null
+  reviews: GbpReview[]
+}
+
 export interface Client extends ClientListItem {
   website_analysis: Record<string, unknown> | null
   website_analysis_error: string | null
@@ -31,6 +56,8 @@ export interface Client extends ClientListItem {
   google_drive_folder_id: string | null
   gsc_property: string | null
   business_location: string | null
+  gbp_place_id: string | null
+  gbp: GbpProfile | null
   updated_at: string
 }
 
@@ -93,7 +120,6 @@ export interface RunDetail {
 
 export interface Profile {
   id: string
-  email: string
   role: 'admin' | 'team_member'
   full_name: string | null
 }

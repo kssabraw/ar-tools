@@ -12,6 +12,7 @@ from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.clients import ClientCreateRequest, ClientDetail, ClientListItem, ClientUpdateRequest
 from services.file_parser import detect_format
+from services.gbp_service import get_business_details, search_businesses
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,23 @@ async def list_clients(
         .execute()
     )
     return [ClientListItem(**row) for row in (result.data or [])]
+
+
+@router.get("/clients/gbp/search")
+async def gbp_search(
+    q: str = Query(...),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    suggestions = await search_businesses(q)
+    return {"suggestions": suggestions}
+
+
+@router.get("/clients/gbp/details")
+async def gbp_details(
+    place_id: str = Query(...),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    return await get_business_details(place_id)
 
 
 @router.get("/clients/{client_id}", response_model=ClientDetail)
@@ -132,6 +150,10 @@ async def create_client(
         "business_location": body.business_location,
         "created_by": auth["user_id"],
     }
+    if body.gbp_place_id is not None:
+        row["gbp_place_id"] = body.gbp_place_id
+    if body.gbp is not None:
+        row["gbp"] = body.gbp.model_dump()
     result = supabase.table("clients").insert(row).execute()
     client = result.data[0]
 
@@ -195,6 +217,10 @@ async def update_client(
         updates["gsc_property"] = body.gsc_property
     if body.business_location is not None:
         updates["business_location"] = body.business_location
+    if body.gbp_place_id is not None:
+        updates["gbp_place_id"] = body.gbp_place_id
+    if body.gbp is not None:
+        updates["gbp"] = body.gbp.model_dump()
 
     result = supabase.table("clients").update(updates).eq("id", str(client_id)).execute()
     if not result.data:
