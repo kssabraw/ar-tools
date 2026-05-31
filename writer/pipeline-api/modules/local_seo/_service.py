@@ -2994,6 +2994,54 @@ def _sse(data: dict) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
+async def _drain_to_result(worker_coro) -> dict:
+    """Suite C-poll drainer (replaces SSE for the long-running handlers).
+
+    The two long-running handlers (`generate_page`, `reoptimize_page`) drive an
+    inner `_worker(queue)` coroutine that emits progress events and a terminal
+    {"step": "done", "result": {...}} (or {"step": "error", "message": ...}).
+    Upstream those were streamed to the client as SSE. In the suite we use
+    async-job polling, so this runs the same worker to completion and returns the
+    final `result` dict, discarding intermediate progress events. Coarse progress
+    (queued -> running -> complete/failed) is surfaced by the platform-api
+    async_jobs row instead.
+    """
+    queue: asyncio.Queue = asyncio.Queue()
+    result: Optional[dict] = None
+    error: Optional[str] = None
+
+    async def _runner():
+        try:
+            await worker_coro(queue)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("local_seo worker crashed")
+            await queue.put({"step": "error", "message": str(exc)})
+        finally:
+            await queue.put(None)  # sentinel
+
+    task = asyncio.create_task(_runner())
+    try:
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            step = event.get("step")
+            if step == "done":
+                result = event.get("result")
+            elif step == "error":
+                error = event.get("message", "generation failed")
+        await task
+    finally:
+        if not task.done():
+            task.cancel()
+
+    if error is not None:
+        raise HTTPException(status_code=502, detail=error)
+    if result is None:
+        raise HTTPException(status_code=502, detail="no result produced")
+    return result
+
+
 async def _sse_stream(worker_coro) -> StreamingResponse:
     """
     Wraps an async worker coroutine in an SSE StreamingResponse.
