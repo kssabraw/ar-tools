@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import type { GbpProfile } from '../lib/types'
-import { Search, MapPin, Star, Loader2, X, Check } from 'lucide-react'
+import { Search, MapPin, Star, Loader2, X, Check, Link2 } from 'lucide-react'
 
 interface GbpSuggestion {
   place_id: string
@@ -26,6 +26,9 @@ export function GbpPicker({ placeId, profile, onChange }: GbpPickerProps) {
   const [searching, setSearching] = useState(false)
   const [loadingDetails, setLoadingDetails] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Paste-a-link flow (URL / share link / place ID / CID).
+  const [pasteInput, setPasteInput] = useState('')
+  const [resolving, setResolving] = useState(false)
   // Each keystroke bumps this; stale responses are dropped.
   const reqSeq = useRef(0)
 
@@ -73,6 +76,28 @@ export function GbpPicker({ placeId, profile, onChange }: GbpPickerProps) {
       setError((e as Error).message)
     } finally {
       setLoadingDetails(false)
+    }
+  }
+
+  async function resolvePasted() {
+    const value = pasteInput.trim()
+    if (!value) return
+    setError(null)
+    setResolving(true)
+    // Drop any in-flight search results.
+    reqSeq.current++
+    setSuggestions([])
+    try {
+      const res = await api.get<GbpDetailsResponse>(
+        `/clients/gbp/resolve?input=${encodeURIComponent(value)}`,
+      )
+      onChange(res.place_id, res.gbp)
+      setPasteInput('')
+      setQuery('')
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      setResolving(false)
     }
   }
 
@@ -142,6 +167,41 @@ export function GbpPicker({ placeId, profile, onChange }: GbpPickerProps) {
         {(searching || loadingDetails) && (
           <Loader2 size={15} style={spinnerIcon} className="gbp-spin" />
         )}
+      </div>
+
+      <div style={dividerRow}>
+        <span style={dividerLine} />
+        <span style={dividerText}>or paste a link</span>
+        <span style={dividerLine} />
+      </div>
+
+      <div style={{ position: 'relative', display: 'flex', gap: 8 }}>
+        <div style={{ position: 'relative', flex: 1 }}>
+          <Link2 size={15} style={searchIcon} />
+          <input
+            value={pasteInput}
+            onChange={e => {
+              setPasteInput(e.target.value)
+              setError(null)
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                resolvePasted()
+              }
+            }}
+            placeholder="Google Maps URL, share link, or place ID…"
+            style={searchInput}
+          />
+        </div>
+        <button
+          type="button"
+          onClick={resolvePasted}
+          disabled={resolving || pasteInput.trim().length === 0}
+          style={resolveBtn}
+        >
+          {resolving ? <Loader2 size={14} className="gbp-spin" /> : 'Fetch'}
+        </button>
       </div>
 
       {suggestions.length > 0 && (
@@ -217,3 +277,13 @@ const removeBtn: React.CSSProperties = {
   border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', flexShrink: 0,
 }
 const errStyle: React.CSSProperties = { color: '#dc2626', fontSize: 12, marginTop: 8 }
+const dividerRow: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 10, margin: '12px 0',
+}
+const dividerLine: React.CSSProperties = { flex: 1, height: 1, background: '#e2e8f0' }
+const dividerText: React.CSSProperties = { fontSize: 11, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4 }
+const resolveBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 64,
+  padding: '0 14px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8,
+  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+}

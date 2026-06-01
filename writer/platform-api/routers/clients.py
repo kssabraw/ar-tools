@@ -12,7 +12,7 @@ from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.clients import ClientCreateRequest, ClientDetail, ClientListItem, ClientUpdateRequest
 from services.file_parser import detect_format
-from services.gbp_service import get_business_details, search_businesses
+from services.gbp_service import get_business_details, resolve_business, search_businesses
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,16 @@ async def gbp_details(
     auth: dict = Depends(require_auth),
 ) -> dict:
     return await get_business_details(place_id)
+
+
+@router.get("/clients/gbp/resolve")
+async def gbp_resolve(
+    input: str = Query(..., min_length=1),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Resolve a pasted GBP URL, share link, place_id, CID, or free-text
+    query into a full profile."""
+    return await resolve_business(input)
 
 
 @router.get("/clients/{client_id}", response_model=ClientDetail)
