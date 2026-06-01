@@ -108,6 +108,46 @@ async def test_score_page_requires_a_source():
 
 
 @pytest.mark.asyncio
+async def test_reoptimize_uses_surfaced_score_and_skips_rescore():
+    inserted = {"id": "page-2", "client_id": "client-1", "keyword": "plumber"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    reopt_result = {
+        "content_html": "<article/>", "schema_json": "{}",
+        "composite_score": 91.0, "composite_status": "excellent",
+    }
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=reopt_result)), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock()) as post:
+        await local_seo_service.reoptimize_page(
+            "client-1", "plumber", "Anaheim, CA", "<article/>", None, [], {"serp": 1}, "user-1",
+        )
+
+    post.assert_not_awaited()  # surfaced score → no redundant /score-page call
+    persisted = supabase.table.return_value.insert.call_args[0][0]
+    assert persisted["mode"] == "reoptimize"
+    assert persisted["composite_score"] == 91.0
+
+
+@pytest.mark.asyncio
+async def test_reoptimize_falls_back_to_rescore_when_score_absent():
+    inserted = {"id": "page-3", "client_id": "client-1", "keyword": "plumber"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    reopt_result = {"content_html": "<article/>", "schema_json": "{}"}  # older nlp: no score
+    score = {"composite_score": 84.0, "composite_status": "good"}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=reopt_result)), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=score)) as post:
+        await local_seo_service.reoptimize_page(
+            "client-1", "plumber", "Anaheim, CA", "<article/>", None, [], None, "user-1",
+        )
+
+    post.assert_awaited_once()
+    assert post.await_args[0][0] == "/score-page"
+    persisted = supabase.table.return_value.insert.call_args[0][0]
+    assert persisted["composite_score"] == 84.0
+
+
+@pytest.mark.asyncio
 async def test_related_pages_proxies_business_fields():
     supabase = _supabase_for_client(_client_row())
     with patch.object(local_seo_service, "get_supabase", return_value=supabase), \

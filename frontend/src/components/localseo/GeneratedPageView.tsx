@@ -344,7 +344,7 @@ export function GeneratedPageView({
                                 {item.deficiencies && item.deficiencies.length > 0 && (
                                   <ul style={{ margin: '6px 0 0', paddingLeft: 0, listStyle: 'none' }}>
                                     {item.deficiencies.slice(0, 3).map((d, i) => (
-                                      <li key={i} style={{ fontSize: 12, color: '#64748b' }}><b style={{ color: '#0f172a' }}>{d.engine}:</b> {d.issue}</li>
+                                      <li key={i} style={{ fontSize: 12, color: '#64748b' }}><b style={{ color: '#0f172a' }}>{d.engine}:</b> {(d.issues ?? []).join('; ')}</li>
                                     ))}
                                   </ul>
                                 )}

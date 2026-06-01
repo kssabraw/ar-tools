@@ -276,25 +276,27 @@ async def reoptimize_page(
         "serp_analysis": serp_analysis,
     })
 
-    # The reoptimize SSE result carries no composite_score — re-score the new
-    # HTML so the persisted page reflects the lifted score (matches ShowUP UX).
-    try:
-        score = await _post_nlp("/score-page", {
-            "keyword": keyword,
-            "location": location,
-            "page_content": result.get("content_html"),
-            "business_name": fields["business_name"],
-            "gbp_category": fields["gbp_category"],
-            "address": fields["address"],
-            "serp_analysis": serp_analysis,
-        })
-        result["composite_score"] = score.get("composite_score")
-        result["composite_status"] = score.get("composite_status")
-    except Exception:
-        # Non-fatal — the expensive rewrite already succeeded, so persist the
-        # reoptimized page without a fresh score rather than losing the work.
-        # (Catches HTTPException from the proxy AND any decode/unexpected error.)
-        logger.warning("local_seo.reoptimize_rescore_failed", extra={"client_id": client_id})
+    # Newer nlp builds surface the score the reoptimize loop already computed.
+    # Only re-score when it's absent (older nlp) so the persisted page still
+    # reflects the lifted score — avoids a redundant second scoring LLM call.
+    if result.get("composite_score") is None:
+        try:
+            score = await _post_nlp("/score-page", {
+                "keyword": keyword,
+                "location": location,
+                "page_content": result.get("content_html"),
+                "business_name": fields["business_name"],
+                "gbp_category": fields["gbp_category"],
+                "address": fields["address"],
+                "serp_analysis": serp_analysis,
+            })
+            result["composite_score"] = score.get("composite_score")
+            result["composite_status"] = score.get("composite_status")
+        except Exception:
+            # Non-fatal — the expensive rewrite already succeeded, so persist the
+            # reoptimized page without a fresh score rather than losing the work.
+            # (Catches HTTPException from the proxy AND any decode/unexpected error.)
+            logger.warning("local_seo.reoptimize_rescore_failed", extra={"client_id": client_id})
 
     return _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id)
 

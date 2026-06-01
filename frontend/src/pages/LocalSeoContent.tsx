@@ -74,12 +74,13 @@ export function LocalSeoContent() {
     setError('')
   }
 
-  const startTicker = () => {
-    setElapsed(0)
-    tickRef.current = setInterval(() => setElapsed(s => s + 1), 1000)
-  }
   const stopTicker = () => {
     if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null }
+  }
+  const startTicker = () => {
+    stopTicker() // clear any prior interval so a rapid re-submit can't leak one
+    setElapsed(0)
+    tickRef.current = setInterval(() => setElapsed(s => s + 1), 1000)
   }
   useEffect(() => () => stopTicker(), [])
 

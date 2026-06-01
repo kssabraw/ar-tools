@@ -2274,6 +2274,15 @@ def _composite_from_scores(scores: dict) -> tuple[float, str]:
     else:                 status = "fail"
     return round(composite, 1), status
 
+def _status_for_score(score: float) -> str:
+    """Map a composite score to its status band (same thresholds as
+    `_composite_from_scores`). Used where only the score is in hand."""
+    if score >= 90:   return "excellent"
+    if score >= 80:   return "good"
+    if score >= 70:   return "needs_improvement"
+    if score >= 60:   return "below_standard"
+    return "fail"
+
 def _build_deficiencies(scores: dict) -> List[dict]:
     out = []
     for key, label in _ENGINE_LABELS.items():
@@ -4460,6 +4469,7 @@ Full location: {body.location}
                 "schema_json": schema_json,
                 "page_title": page_title,
                 "composite_score": inline_score,
+                "composite_status": _status_for_score(inline_score) if inline_score is not None else None,
                 "token_usage": token_rec,
                 "cost_breakdown": cost_breakdown,
                 "serp_analysis": serp_analysis_dict,
@@ -4610,6 +4620,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
         current_title  = page_title
         MAX_AUTO_PASSES = 2
 
+        inline_score = None  # final composite after the auto-retry loop (surfaced below)
         await q.put({"step": "progress", "progress": 78, "message": "Scoring your page…"})
         try:
             inline_score, inline_defs, _, score_tok = await _score_html_inline(
@@ -4680,6 +4691,10 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 "content_html": content_html,
                 "schema_json": schema_json,
                 "page_title": page_title,
+                # Surface the score the auto-retry loop already computed so the
+                # caller doesn't have to re-score the page (avoids a 2nd LLM call).
+                "composite_score": inline_score,
+                "composite_status": _status_for_score(inline_score) if inline_score is not None else None,
                 "token_usage": token_rec,
                 "html_css_notes": [],
                 "original_html": original_content_html,

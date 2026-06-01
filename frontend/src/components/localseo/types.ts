@@ -39,11 +39,14 @@ export interface EngineScore {
   icp_detected?: string
 }
 
+// Mirrors the nlp `_build_deficiencies` output (engine/engine_key/score/
+// issues/recommendations) — note there is no singular `issue`.
 export interface Deficiency {
   engine: string
   engine_key: string
-  issue: string
+  score?: number
   issues?: string[]
+  recommendations?: string[]
 }
 
 export interface ScoreResult {
@@ -69,7 +72,7 @@ export interface RelatedPageItem {
   page_title?: string | null
   composite_score?: number | null
   composite_status?: string | null
-  deficiencies?: Array<{ engine: string; issue: string }> | null
+  deficiencies?: Deficiency[] | null
 }
 
 export interface RelatedPagesResult {
