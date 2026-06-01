@@ -10,6 +10,7 @@ import { RunDetail } from './pages/RunDetail'
 import { Clients } from './pages/Clients'
 import { ClientForm } from './pages/ClientForm'
 import { ClientWorkspace } from './pages/ClientWorkspace'
+import { LocalSeoContent } from './pages/LocalSeoContent'
 import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
 
@@ -38,6 +39,7 @@ export default function App() {
                       <Route path="/clients" element={<Clients />} />
                       <Route path="/clients/new" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/clients/:id" element={<ClientWorkspace />} />
+                      <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
                       <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
