@@ -249,7 +249,18 @@ export function ClientForm() {
           <GbpPicker
             placeId={form.gbp_place_id}
             profile={form.gbp}
-            onChange={(gbp_place_id, gbp) => setForm(f => ({ ...f, gbp_place_id, gbp }))}
+            onChange={(gbp_place_id, gbp) =>
+              setForm(f => ({
+                ...f,
+                gbp_place_id,
+                gbp,
+                // Auto-fill from the GBP, but only into empty fields so we
+                // never overwrite something the user already typed.
+                name: f.name.trim() === '' && gbp?.business_name ? gbp.business_name : f.name,
+                website_url:
+                  f.website_url.trim() === '' && gbp?.website ? gbp.website : f.website_url,
+              }))
+            }
           />
         </div>
 
