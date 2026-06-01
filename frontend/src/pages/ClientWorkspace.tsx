@@ -77,7 +77,8 @@ export function ClientWorkspace() {
           icon={<MapPin size={22} />}
           label="Create Local SEO Content"
           description="Location-specific service pages and local content."
-          badge="Setup in progress"
+          to={id ? `/clients/${id}/local-seo` : undefined}
+          cta="Create"
         />
       </Section>
 

@@ -21,6 +21,63 @@ class LocalSeoGenerateRequest(BaseModel):
     run_analysis: bool
 
 
+class LocalSeoAnalyzeRequest(BaseModel):
+    """Run competitor SERP analysis for a keyword + location (standalone)."""
+
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    location_code: Optional[int] = None
+
+
+class LocalSeoFindPageRequest(BaseModel):
+    """Scan the client's website for an existing page targeting the keyword."""
+
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+
+
+class LocalSeoScoreRequest(BaseModel):
+    """Score an existing page (by URL or raw HTML) against the 8 engines."""
+
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    location_code: Optional[int] = None
+    page_url: Optional[str] = None
+    page_content: Optional[str] = None
+    serp_analysis: Optional[dict[str, Any]] = None
+
+
+class LocalSeoRelatedPagesRequest(BaseModel):
+    """Discover parent/sibling/child page opportunities for a keyword."""
+
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+
+
+class LocalSeoReoptimizeRequest(BaseModel):
+    """Reoptimize an existing page to lift its score, then persist the result.
+
+    Provide either the raw HTML (`existing_page_html`) or a URL to fetch
+    (`existing_page_url`). `deficiencies` come from a prior `/score` call.
+    """
+
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    existing_page_html: Optional[str] = None
+    existing_page_url: Optional[str] = None
+    deficiencies: list[dict[str, Any]] = Field(default_factory=list)
+    serp_analysis: Optional[dict[str, Any]] = None
+
+
+class LocalSeoSocialPostsRequest(BaseModel):
+    """Generate GBP social posts from a generated page's text."""
+
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    page_content: str = Field(..., min_length=1)
+    serp_analysis: Optional[dict[str, Any]] = None
+
+
 class LocalSeoPageDetail(BaseModel):
     id: UUID
     client_id: UUID
