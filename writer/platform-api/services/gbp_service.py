@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional
 
 import httpx
@@ -21,6 +22,17 @@ _TIMEOUT = 45
 # Only surface strong reviews with actual text, capped to a handful.
 _REVIEW_MIN_RATING = 4
 _REVIEW_LIMIT = 5
+
+# Hosts used by Google Maps "share" / short links that 302-redirect to the
+# full place URL. We expand these server-side before querying Outscraper,
+# because the provider does not reliably follow shorteners.
+_SHORT_LINK_HOSTS = ("maps.app.goo.gl", "goo.gl", "g.co")
+# A bare place_id (Google "ChIJ…" style) or feature/Google ID ("0x…:0x…").
+_PLACE_ID_RE = re.compile(r"^ChI[\w-]+$")
+_FEATURE_ID_RE = re.compile(r"^0x[0-9a-fA-F]+:0x[0-9a-fA-F]+$")
+# Identifiers embedded in a full Maps URL.
+_URL_PLACE_ID_RE = re.compile(r"!1s(0x[0-9a-fA-F]+:0x[0-9a-fA-F]+)")
+_URL_CID_RE = re.compile(r"[?&]cid=(\d+)")
 
 
 def _headers() -> dict[str, str]:
@@ -200,10 +212,77 @@ async def search_businesses(query: str) -> list[dict]:
     return suggestions
 
 
-async def get_business_details(place_id: str) -> dict:
-    """Fetch a full GBP profile for a place_id and map it to our GbpProfile shape."""
+def _is_url(value: str) -> bool:
+    return value.startswith("http://") or value.startswith("https://")
+
+
+def _is_short_link(value: str) -> bool:
+    return _is_url(value) and any(host in value for host in _SHORT_LINK_HOSTS)
+
+
+def _identifier_from_url(url: str) -> Optional[str]:
+    """Extract a queryable identifier from a full Google Maps URL.
+
+    Prefers the embedded feature/Google ID (`!1s0x…:0x…`), then a `cid=`
+    param. Returns None if neither is present, in which case the caller
+    passes the full URL to Outscraper as-is (it accepts Maps URLs).
+    """
+    m = _URL_PLACE_ID_RE.search(url)
+    if m:
+        return m.group(1)
+    m = _URL_CID_RE.search(url)
+    if m:
+        return m.group(1)
+    return None
+
+
+async def _expand_short_link(url: str) -> str:
+    """Follow a Maps short link to its canonical URL. Best-effort: on any
+    failure we return the original input so the caller can still try it."""
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT, follow_redirects=True) as client:
+            response = await client.get(url)
+            return str(response.url) or url
+    except httpx.HTTPError:
+        logger.warning("gbp_service.short_link_expand_failed")
+        return url
+
+
+async def resolve_query(raw: str) -> str:
+    """Normalize whatever the user pasted (free text, place_id, feature/Google
+    ID, full Maps URL, or short share link) into a single string suitable for
+    Outscraper's `query` parameter."""
+    value = (raw or "").strip()
+    if not value:
+        raise HTTPException(status_code=422, detail="gbp_input_required")
+
+    # Bare identifiers — pass straight through.
+    if _PLACE_ID_RE.match(value) or _FEATURE_ID_RE.match(value):
+        return value
+
+    if _is_url(value):
+        if _is_short_link(value):
+            value = await _expand_short_link(value)
+        # If we can pull a clean identifier from the (expanded) URL, prefer it;
+        # otherwise hand Outscraper the URL itself.
+        return _identifier_from_url(value) or value
+
+    # Free text (business name + city, etc.) — pass through unchanged.
+    return value
+
+
+async def resolve_business(raw_input: str) -> dict:
+    """Resolve any supported GBP input (URL / share link / place_id / CID /
+    free text) to a full profile. Thin wrapper over get_business_details."""
+    query = await resolve_query(raw_input)
+    return await get_business_details(query)
+
+
+async def get_business_details(query: str) -> dict:
+    """Fetch a full GBP profile for an Outscraper query (place_id, CID,
+    feature/Google ID, Maps URL, or free text) and map it to our shape."""
     params = {
-        "query": place_id,
+        "query": query,
         "organizationsPerQueryLimit": 1,
         "language": "en",
         "async": "false",
@@ -263,7 +342,7 @@ async def get_business_details(place_id: str) -> dict:
         "google_maps_uri": p.get("location_link") or p.get("google_maps_url") or "",
     }
 
-    resolved_place_id = p.get("place_id") or p.get("google_id") or place_id
+    resolved_place_id = p.get("place_id") or p.get("google_id") or query
 
     # Review enrichment: DataForSEO is preferred; fall back to whatever
     # Outscraper returned inline. Both are best-effort — never fatal.
