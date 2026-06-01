@@ -19,6 +19,7 @@ import {
 type View =
   | { kind: 'form' }
   | { kind: 'creating' }
+  | { kind: 'loading' }
   | { kind: 'generated'; page: LocalSeoPageDetail; isNew: boolean; prevScore: number | null }
   | { kind: 'score'; pageUrl?: string; pageHtml?: string; serpAnalysis?: AnalysisResult | null }
   | { kind: 'analysis'; result: AnalysisResult }
@@ -143,7 +144,7 @@ export function LocalSeoContent() {
   }
 
   const openSaved = async (pageId: string) => {
-    setView({ kind: 'creating' }) // brief loading state while we fetch the detail
+    setView({ kind: 'loading' }) // quick GET — not the multi-minute generate flow
     try {
       const page = await localSeoApi.getPage(pageId)
       setKeyword(page.keyword)
@@ -158,6 +159,14 @@ export function LocalSeoContent() {
   // ── Sub-view routing ─────────────────────────────────────────────────────
 
   if (view.kind === 'creating') return <CreatingView elapsed={elapsed} runAnalysis={runAnalysis ?? false} />
+
+  if (view.kind === 'loading') {
+    return (
+      <div style={{ padding: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, color: '#64748b', minHeight: 240 }}>
+        <Spinner size={20} /> <span style={{ fontSize: 14 }}>Loading page…</span>
+      </div>
+    )
+  }
 
   if (view.kind === 'generated') {
     return (

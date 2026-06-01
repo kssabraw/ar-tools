@@ -47,7 +47,6 @@ export function GeneratedPageView({
   const [relatedLoading, setRelatedLoading] = useState(false)
   const [relatedError, setRelatedError] = useState('')
   const relatedRequested = useRef(false)
-  const [selections, setSelections] = useState<Record<string, 'reoptimize' | 'new' | null>>({})
 
   const fetchSocial = async () => {
     setSocialLoading(true)
@@ -113,19 +112,6 @@ export function GeneratedPageView({
     if (!social) return
     const text = `GBP POSTS\n${'-'.repeat(40)}\n${social.gbp.map((p, i) => `${i + 1}. ${p}`).join('\n\n')}`
     downloadFile(text, `${keyword.replace(/\s+/g, '-')}-gbp-posts.txt`, 'text/plain')
-  }
-
-  const toggleSelection = (kw: string, value: 'reoptimize' | 'new') =>
-    setSelections(prev => ({ ...prev, [kw]: prev[kw] === value ? null : value }))
-  const selectedCount = Object.values(selections).filter(Boolean).length
-  const actOnSelected = () => {
-    if (!related) return
-    for (const item of related) {
-      const sel = selections[item.keyword]
-      if (!sel) continue
-      onRelatedAction({ mode: sel, keyword: item.keyword, existingUrl: item.status === 'found' ? item.url ?? undefined : undefined })
-      break // one at a time
-    }
   }
 
   const groups: Array<RelatedPageItem['group']> = ['parents', 'siblings', 'children']
@@ -334,7 +320,6 @@ export function GeneratedPageView({
                     <h3 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94a3b8', margin: 0 }}>{groupLabel[group]}</h3>
                     <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
                       {items.map((item, idx) => {
-                        const sel = selections[item.keyword]
                         return (
                           <div key={item.keyword} style={{ padding: '12px 16px', background: '#fff', borderTop: idx ? '1px solid #f1f5f9' : 'none' }}>
                             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
@@ -364,14 +349,16 @@ export function GeneratedPageView({
                                   </ul>
                                 )}
                               </div>
-                              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>
-                                <input
-                                  type="checkbox"
-                                  checked={item.status === 'found' ? sel === 'reoptimize' : sel === 'new'}
-                                  onChange={() => toggleSelection(item.keyword, item.status === 'found' ? 'reoptimize' : 'new')}
-                                />
-                                <span style={{ fontSize: 12, color: '#64748b' }}>{item.status === 'found' ? 'Reoptimize' : 'Create new'}</span>
-                              </label>
+                              <button
+                                style={{ ...outlineBtn, flexShrink: 0, padding: '6px 12px', fontSize: 12 }}
+                                onClick={() => onRelatedAction(
+                                  item.status === 'found'
+                                    ? { mode: 'reoptimize', keyword: item.keyword, existingUrl: item.url ?? undefined }
+                                    : { mode: 'new', keyword: item.keyword },
+                                )}
+                              >
+                                {item.status === 'found' ? 'Reoptimize' : 'Create new'} <ArrowRight size={13} />
+                              </button>
                             </div>
                           </div>
                         )
@@ -380,13 +367,9 @@ export function GeneratedPageView({
                   </div>
                 )
               })}
-              <button
-                style={{ ...primaryBtn, width: '100%', opacity: selectedCount === 0 ? 0.5 : 1, cursor: selectedCount === 0 ? 'not-allowed' : 'pointer' }}
-                disabled={selectedCount === 0}
-                onClick={actOnSelected}
-              >
-                {selectedCount === 0 ? 'Select pages to act on' : `Act on ${selectedCount} selected page${selectedCount > 1 ? 's' : ''}`}
-              </button>
+              <p style={{ fontSize: 12, color: '#94a3b8', margin: 0, textAlign: 'center' }}>
+                Acting on a page opens it — you'll come back here to pick the next one.
+              </p>
             </>
           )}
         </div>
