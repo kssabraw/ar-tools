@@ -1,98 +1,92 @@
 # AR Tools — Handoff
 
-**Branch:** `claude/gracious-bell-BbkY5`
-**Date:** 2026-05-31
-**Scope of this handoff:** work done on this branch (4 commits ahead of `origin/main`), the current state of the suite, and prioritized next steps.
+**Branch:** `claude/intelligent-knuth-3Qb01`
+**Date:** 2026-06-01
+**Scope of this handoff:** this session's work — GBP input improvements, pytest setup, and the **Local SEO module integration (Phases 0–1)** — plus current state and next steps. All work below is merged to `main` (PRs #12–#18).
 
-> Read `CLAUDE.md` first for project conventions and the authoritative current-state summary, and `docs/suite-architecture-and-roadmap-v1_0.md` for suite scope, the locked decision log, and the phased plan. This file is the working handoff that ties those together.
+> Read `CLAUDE.md` first for project conventions and the authoritative current-state summary, `docs/suite-architecture-and-roadmap-v1_0.md` for suite scope/decisions, and `docs/modules/local-seo-module-integration-plan-v1_0.md` for the Local SEO plan. This file ties them to the in-flight work.
 
 ---
 
-## 1. What this branch contains
+## 1. What shipped this session (all merged to `main`)
 
-Four commits, oldest → newest:
-
-| Commit | Type | Summary |
+| PR | Type | Summary |
 |---|---|---|
-| `9c9db32` | fix(db) | **Profiles RLS infinite recursion (42P17).** New migration `writer/supabase/migrations/20260531181719_fix_profiles_rls_recursion.sql` rewrites the recursive policy so admin-role checks on `profiles` no longer self-reference. Applied to the live Supabase project. |
-| `4d9fbaa` | feat(frontend) | **"Roadmap" affordance in the client form.** `ClientForm.tsx` now visually marks client fields that exist in the schema but aren't yet consumed by any module, so the team isn't misled into thinking they do something today. |
-| `17544e3` | feat(clients) | **Client logo upload.** Replaced the logo-URL text box with a real file uploader (see §2). |
-| `35cdb54` | docs(claude) | **Full CLAUDE.md refresh** to reflect the multi-module suite as it actually stands (paths, doc filenames/versions, schema-version table, current-state vs. greenfield build order). |
-
-All four are pushed to `origin/claude/gracious-bell-BbkY5`. **No PR has been opened** (none requested).
-
----
-
-## 2. Logo upload — feature detail
-
-Goal: make a client's logo a real uploaded image (shown on the dashboard tile + client workspace), instead of a pasted URL.
-
-**Decisions taken (with the user):** Supabase Storage + URL in DB · upload-only field · store now, wire into published content later.
-
-- **Storage:** new **public** bucket `client-logos` — restricted to `image/jpeg` + `image/png`, 2 MB cap. Public so the tile's `<img src>` renders without auth. Created live **and** committed as migration `20260531200317_client_logos_bucket.sql`.
-- **Backend:** `POST /files/logo` (`writer/platform-api/routers/files.py`), **admin-gated**. Validates content-type (`422` otherwise) and size (`413` over 2 MB), uploads bytes to the bucket under a `{uuid}.{ext}` key via the service-role key, returns the public URL. New `LogoUploadResponse` model.
-- **Frontend:** `api.ts` gained a multipart `upload()` helper (the existing one was JSON-only). `ClientForm.tsx` now has a file picker with live preview, Replace/Remove, client-side type+size validation, and inline errors. The returned URL flows through the existing `clients.logo_url` field on save.
-- **Tile/workspace:** no change needed — `Home.tsx` and `ClientWorkspace.tsx` already render `logo_url`.
-
-**Verified:** bucket config confirmed live; frontend `tsc --noEmit` clean; backend syntax-checked; storage calls match pinned `supabase==2.9.1` (storage3 0.8.x).
-
-**Not done / caveats (carry forward):**
-- ⚠️ **Not runtime-tested end-to-end** — container has no installed deps and can't drive a real upload. Smoke-test the first real upload in a deployed env.
-- ⚠️ **No automated test added.** The repo's tests are pure service-logic units (`unittest.mock`); there's no FastAPI `TestClient` harness, and `/files/upload` has no test either. Starting that harness is a deliberate open choice, not an oversight.
-- ⚠️ **Logo is stored, not yet consumed in content creation** (e.g. inserted into the published Google Doc). This was an explicit "later" per the product decision — see §4.
+| #12 | feat(gbp) | **GBP URL / share-link / place-ID input.** `/clients/gbp/resolve` resolves a full Maps URL, `maps.app.goo.gl`/`goo.gl` short link (expanded server-side), bare place_id, feature/Google ID, CID, or free text → the existing Outscraper details path. New "or paste a link" field in `GbpPicker.tsx`. |
+| #13 | test | **pytest setup.** `platform-api/pyproject.toml` (`asyncio_mode=auto`) + `requirements-dev.txt` for both APIs (pytest, pytest-asyncio). The suite could not run tests before. Verified `test_gbp_resolve.py` 9/9 green. |
+| #14 | feat(gbp) | **Auto-fill from GBP.** Attaching a GBP fills the client Name + Website fields — only when empty (never overwrites typed input). |
+| #15 | feat(local-seo) | **Phase 0 — NLP service rehomed** into the suite at `writer/nlp-api/` (see §2). |
+| #16 | fix(local-seo) | Dropped the deploy healthcheck from the nlp service (see §3 — deploy gotcha). |
+| #17 | feat(local-seo) | **Phase 1 — platform-api backend** for local SEO pages (see §2). |
+| #18 | docs(claude) | CLAUDE.md refreshed for the nlp service + Local SEO integration. |
 
 ---
 
-## 3. Current state of the suite (big picture)
+## 2. Local SEO module (#2) — integration status
 
-**Built and working** (mostly already on `origin/main`):
-- **Pipeline API** (`writer/pipeline-api/`): all five modules — `brief`, `sie`, `research`, `writer`, `sources_cited`.
-- **Platform API** (`writer/platform-api/`): JWT auth; clients CRUD; file upload + parsing; website-scraper async worker (`job_worker` + `website_scraper` over `async_jobs`); orchestrator + run dispatch; run polling; briefs; silos (`silo_dedup`, `silo_promotion`); publish to Google Drive (`routers/publish.py`); users; **GBP** auto-fetch + review enrichment (`gbp_service`).
-- **Frontend** (`frontend/`): `Login`, `Home` (suite tiles), `Clients`, `ClientForm`, `ClientWorkspace`, `Runs`, `RunDetail`, `Silos`, `Articles`.
+**Chosen path: C (full port) into the suite.** Plan + scope authority: `docs/modules/local-seo-module-integration-plan-v1_0.md`.
 
-**Imported, integration deferred:** `local-seo-writer/` (Local SEO content module, #2) — pick integration option A/B/C from roadmap **Appendix A** before adapting it.
+**v1 scope (agreed):**
+- ✅ Keep: competitor SERP + client-page scraping (analysis), full page scoring + auto-reoptimization.
+- ❌ Cut: client-site **brand-voice** scraping, client-site **ICP** detection, the keyword-worthiness **"rankability"** check, all **billing/credits**.
+- Analysis is an **explicit per-page opt-in** — `/generate-page` and the suite API take a **required `run_analysis` bool** (no default).
+- ➕ Deferred to Phase 3: a **page-template** field the writer must follow.
 
-**Not yet built:** Keyword research (#3, migrate), Organic rank tracker (#4), Maps/local-pack ranker (#5), Ranking-drop agent (#6), VA content scheduler (#7), plus the cross-cutting **GSC analytics layer**, the **shared scheduler**, the **SOP store**, and the **notifications service**.
+**Phase 0 — NLP service rehomed (DONE).** `writer/nlp-api/` (ported from `/local-seo-writer/services/nlp`). Auth layer removed (private network only, like pipeline-api); the 3 cut endpoints removed; analysis gated behind `run_analysis`. Deployed as the Railway **`nlp`** service, **private-only** (no public domain), reachable at `http://nlp.railway.internal:8080`. Dead helper fns from the removed endpoints remain unreferenced — flagged for a later cleanup pass.
 
-Module `schema_version` source of truth is `writer/platform-api/services/orchestrator.py` (`EXPECTED_MODULE_VERSIONS`): brief `2.6`, sie `1.4`, research `1.1`, writer `1.7` (+ `-no-context`/`-degraded`), sources_cited `1.1`.
+**Phase 1 — platform-api backend (DONE).** 
+- Migration `local_seo_pages` (FK `clients.id`; RLS enabled to match sibling tables) — **applied live**.
+- `config.nlp_api_url`, `services/local_seo_service.py` (builds the NLP payload from the client's GBP data, streams the `/generate-page` SSE, persists), `routers/local_seo.py`:
+  - `POST /clients/{id}/local-seo/generate`
+  - `GET /clients/{id}/local-seo/pages`
+  - `GET /local-seo/pages/{page_id}`
+- Live on PLATFORM (clean startup confirmed).
+
+**Phase 2 — frontend (NOT STARTED).** Wire the existing **"Create Local SEO Content"** workspace card (currently the dead "Setup in progress" stub at `frontend/src/pages/ClientWorkspace.tsx:76`) → a generate form (keyword + location + the **required** analysis choice) → a generated-page view (HTML + content-gaps panel + score). Rebuild in the suite's inline-style system (not Tailwind).
+
+**Phase 3 — page-template field (NOT STARTED).** Add `page_template` to the NLP `GeneratePageRequest` + inject into the generation prompt/checklist; add the form field; optionally persist a per-client default.
 
 ---
 
-## 4. Immediate follow-ups (from this branch)
+## 3. Deploy gotchas worth remembering (Railway `nlp` service)
 
-Small, well-scoped, do-next items:
-
-1. **Smoke-test logo upload in a deployed env** — upload a JPG and a PNG via the client form; confirm the tile + workspace render it and the URL persists on the `clients` row. Confirm the `422`/`413` paths.
-2. **Wire the logo into published content** (the deferred half) — insert `clients.logo_url` at the top of the generated Google Doc in `routers/publish.py` / the Apps Script webhook. Keep it optional (skip cleanly when `logo_url` is null).
-3. **Decide on a `TestClient` test harness** — if yes, add happy-path + validation tests for `/files/logo` (mock storage + auth dependency) and backfill `/files/upload`. If no, note that endpoints are manually verified.
-4. **Open a PR** when ready (not yet requested). If/when opened, consider subscribing the session to PR activity to auto-handle CI/review.
+- **No deploy-time healthcheck.** A private-only service can't pass Railway's `/health` probe, so the deploy hangs forever in DEPLOYING. The fix was to **clear the service-level `healthcheckPath`** (it persisted from the original import's railway.json even after the file was changed — a removed JSON key doesn't clear a saved setting). Committing it required `accept-deploy` (the staged change wasn't taking). **Keep `healthcheckPath` empty.**
+- **Private bind.** The Dockerfile binds `::` (IPv6) so Railway private networking can reach it. Don't change to `0.0.0.0`.
+- **Don't double-trigger deploys.** Merging to `main` auto-deploys all main-tracking services; a simultaneous manual redeploy caused a multi-deploy deadlock that needed manual cancellation in the dashboard. Merge, then let the single auto-deploy run.
+- The `nlp` service's 4 API keys (`DATAFORSEO_LOGIN/PASSWORD`, `SCRAPEOWL_API_KEY`, `GOOGLE_NLP_API_KEY`, `ANTHROPIC_API_KEY`) are **reference variables** from the `pipeline` service — they stay in sync.
 
 ---
 
-## 5. Bigger next steps (suite roadmap)
+## 4. Current infra state
 
-Per `docs/suite-architecture-and-roadmap-v1_0.md` §7:
+- **Railway (`ar-tools` project): 3 services, all SUCCESS/online** — `PLATFORM`, `pipeline`, `nlp` (private-only).
+- **Supabase** (`wvcthtmmcmhkybcesirb`): `local_seo_pages` table live with RLS; `OUTSCRAPER_API_KEY` + `DATAFORSEO_*` set on PLATFORM (added this session) so GBP search/details/reviews work.
+- **Frontend** (Netlify): GBP paste-a-link + auto-fill shipped; no Local SEO UI yet.
 
-- **Phase 0 — Foundation** (largely in place): dashboard shell + tiles, Blog Writer re-homed as a tab, `clients.logo_url` branding ✅. Remaining Phase 0 polish, if any, rides on the current dashboard.
-- **Phase 1 — Data spine:** shared scheduler → rankings data model + DataForSEO organic tracker (#4) → GSC ingestion (`gsc_metrics`) + per-client performance view → Maps ranker (#5).
-- **Phase 2 — Intelligence & automation:** Ranking-drop agent (#6) over SOP store + Phase 1 data; VA content scheduler (#7) driving auto-generate → publish-to-Drive.
-- **Parallel migrations (any time):** Local SEO (#2) integration depth; Keyword research (#3) when its repo is provided.
+---
+
+## 5. Immediate next steps
+
+1. **Phase 2 — Local SEO frontend** (the obvious next build).
+2. **Phase 3 — page-template field** (the original request that started this thread).
+3. **Runtime smoke-test the Local SEO backend end-to-end** — generate a page via the deployed PLATFORM → nlp path (needs an authenticated request; can't be done from the build sandbox). Confirms the SSE wiring + GBP→payload mapping + persistence for real.
+4. **nlp dead-code cleanup** — remove the now-unreferenced helpers from the 3 cut endpoints (`_crawl_pages_for_brand_voice`, `analyze_brand_voice_with_anthropic`, `_rankability_score`, `_haversine_miles`, and their orphaned request models). Deferred to avoid risky deep deletions mid-port.
 
 ---
 
 ## 6. Open decisions / blockers (need the user)
 
-1. **Scheduler mechanism** (roadmap Open Item #1) — pg_cron vs Railway cron vs asyncio worker loop. **Must be decided before Phase 1**, and CLAUDE.md requires confirming before adding any queue/scheduler-like infra.
-2. **Maps geo-grid density** — points per location; primary DataForSEO cost driver.
-3. **Notification channels** — email provider + Slack workspace/webhook details (for the alerts service).
-4. **Local SEO integration option** — A/B/C from Appendix A.
-5. **Keyword research repo** — stack/data-model fit unknown until shared.
-6. **CI/tests policy** — automated tests on push vs. manual (also gates whether to build the `TestClient` harness).
+1. **Page-scoring model** — nlp currently uses `claude-sonnet-4-6`; per CLAUDE.md, per-module model choice is an "ask first" item. Confirm before relying on it in production.
+2. **Scheduler mechanism** (roadmap Open Item #1) — still unchosen; gates any scheduled tracker (Phase 1 of the broader roadmap).
+3. **Maps geo-grid density**, **notification channels**, **Keyword-research repo** — still open from the prior handoff.
+4. **CI/tests policy** — pytest now runs locally, but nothing runs it on push. Decide whether to add CI.
 
 ---
 
-## 7. Minor known debt / loose ends
+## 7. Known debt / loose ends
 
-- Writer-module PRD's *canonical header version* wasn't verified during the CLAUDE.md refresh — the doc list says "check the header." Worth pinning exact versions across `docs/modules/` in a future pass.
-- `README.md` lists a `/kw-research` location that doesn't exist yet (aspirational). Reconcile when #3 lands.
-- **Migration version reconciliation (partly done).** This branch's two migrations are now named to exactly match their live `supabase_migrations.schema_migrations` versions (`20260531181719_fix_profiles_rls_recursion`, `20260531200317_client_logos_bucket`), so the Supabase CLI sees them as already-applied. **Still divergent (pre-existing, not touched here):** older local migrations on `main` use hand-authored `YYYYMMDD120000`-style timestamps that don't match their live versions (e.g. `clients_gbp` is `20260530003510` live vs `20260530120000` local), and the live DB has migrations with **no local file** (`keyword_metrics`, `session_cost_breakdown`, `csv_exports`, `session_archive`) from other branches/sessions. A full repo↔remote migration reconciliation is a separate task — decide on a convention (real UTC timestamps at author time) before doing it.
+- **nlp dead code** (see §5.4).
+- **Local SEO backend not runtime-tested** end-to-end (see §5.3).
+- **Migration timestamp convention** — this session used a real UTC timestamp (`20260601022754_local_seo_pages.sql`); older `main` migrations still use hand-authored `YYYYMMDD120000` style. Full repo↔remote reconciliation remains a separate task (noted in prior handoffs).
+- **Writer-module PRD canonical version** still unpinned across `docs/modules/`.
+- `README.md` still references a `/kw-research` path that doesn't exist.
