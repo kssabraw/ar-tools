@@ -17,6 +17,7 @@ from config import settings
 from routers.briefs import router as briefs_router
 from routers.clients import router as clients_router
 from routers.files import router as files_router
+from routers.local_seo import router as local_seo_router
 from routers.publish import router as publish_router
 from routers.runs import router as runs_router
 from routers.silos import router as silos_router
@@ -93,6 +94,7 @@ app.add_middleware(
 app.include_router(briefs_router)
 app.include_router(clients_router)
 app.include_router(files_router)
+app.include_router(local_seo_router)
 app.include_router(runs_router)
 app.include_router(silos_router)
 app.include_router(users_router)
