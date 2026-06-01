@@ -89,7 +89,16 @@ async def _post_nlp(path: str, payload: dict, timeout: int = _JSON_TIMEOUT) -> d
                     extra={"path": path, "status_code": response.status_code, "body": response.text[:500]},
                 )
                 raise HTTPException(status_code=502, detail="local_seo_provider_error")
-            return response.json()
+            try:
+                return response.json()
+            except ValueError as exc:
+                # 200 with a non-JSON / truncated body (e.g. a proxy error page).
+                # Map to a provider error rather than letting it surface as 500.
+                logger.warning(
+                    "local_seo.nlp_decode_error",
+                    extra={"path": path, "body": response.text[:500]},
+                )
+                raise HTTPException(status_code=502, detail="local_seo_provider_error") from exc
     except httpx.HTTPError as exc:
         logger.warning("local_seo.nlp_request_error", extra={"path": path, "error": str(exc)})
         raise HTTPException(status_code=502, detail="local_seo_provider_error") from exc
@@ -281,8 +290,10 @@ async def reoptimize_page(
         })
         result["composite_score"] = score.get("composite_score")
         result["composite_status"] = score.get("composite_status")
-    except HTTPException:
-        # Non-fatal — persist the reoptimized page without a fresh score.
+    except Exception:
+        # Non-fatal — the expensive rewrite already succeeded, so persist the
+        # reoptimized page without a fresh score rather than losing the work.
+        # (Catches HTTPException from the proxy AND any decode/unexpected error.)
         logger.warning("local_seo.reoptimize_rescore_failed", extra={"client_id": client_id})
 
     return _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id)

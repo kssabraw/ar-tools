@@ -12,15 +12,18 @@ import type {
 // All Local SEO calls go through platform-api, which proxies to the private
 // nlp service and owns persistence. The frontend never reaches nlp directly.
 
+// The action endpoints are heartbeat-SSE streams (see lib/api `stream`) so a
+// multi-minute generate/score/reoptimize isn't dropped by a proxy idle timeout.
+// They still resolve to the same typed payload as a plain POST would.
 export const localSeoApi = {
   generate: (clientId: string, body: { keyword: string; location: string; run_analysis: boolean }) =>
-    api.post<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body),
+    api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body),
 
   analyze: (clientId: string, body: { keyword: string; location: string; location_code?: number | null }) =>
-    api.post<AnalysisResult>(`/clients/${clientId}/local-seo/analyze`, body),
+    api.stream<AnalysisResult>(`/clients/${clientId}/local-seo/analyze`, body),
 
   findPage: (clientId: string, body: { keyword: string; location: string }) =>
-    api.post<FindPageResult>(`/clients/${clientId}/local-seo/find-page`, body),
+    api.stream<FindPageResult>(`/clients/${clientId}/local-seo/find-page`, body),
 
   score: (
     clientId: string,
@@ -31,10 +34,10 @@ export const localSeoApi = {
       page_content?: string | null
       serp_analysis?: AnalysisResult | null
     },
-  ) => api.post<ScoreResult>(`/clients/${clientId}/local-seo/score`, body),
+  ) => api.stream<ScoreResult>(`/clients/${clientId}/local-seo/score`, body),
 
   relatedPages: (clientId: string, body: { keyword: string; location: string }) =>
-    api.post<RelatedPagesResult>(`/clients/${clientId}/local-seo/related-pages`, body),
+    api.stream<RelatedPagesResult>(`/clients/${clientId}/local-seo/related-pages`, body),
 
   reoptimize: (
     clientId: string,
@@ -46,12 +49,12 @@ export const localSeoApi = {
       deficiencies: Array<Record<string, unknown>>
       serp_analysis?: AnalysisResult | null
     },
-  ) => api.post<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/reoptimize`, body),
+  ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/reoptimize`, body),
 
   socialPosts: (
     clientId: string,
     body: { keyword: string; location: string; page_content: string; serp_analysis?: AnalysisResult | null },
-  ) => api.post<SocialPostsResult>(`/clients/${clientId}/local-seo/social-posts`, body),
+  ) => api.stream<SocialPostsResult>(`/clients/${clientId}/local-seo/social-posts`, body),
 
   listPages: (clientId: string) =>
     api.get<LocalSeoPageListItem[]>(`/clients/${clientId}/local-seo/pages`),
