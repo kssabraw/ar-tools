@@ -17,15 +17,16 @@ Most of the original Blog Writer build is **done**. Don't treat this repo as gre
 **Built and working:**
 
 - **Pipeline API** (`writer/pipeline-api/`) — all five modules: `brief`, `sie`, `research`, `writer`, `sources_cited`.
-- **Platform API** (`writer/platform-api/`) — JWT auth middleware; clients CRUD; file upload + parsing; website scraper async worker (`services/job_worker.py` + `services/website_scraper.py` polling `async_jobs`); orchestrator + run dispatch (`services/orchestrator.py`); run polling; briefs; silos (`services/silo_dedup.py`, `services/silo_promotion.py`); publish to Google Drive (`routers/publish.py` via Apps Script webhook); users.
-- **Suite features added since the original spec:** Google Business Profile (GBP) auto-fetch + review enrichment via DataForSEO (`services/gbp_service.py`); content silos (semantic dedup / auto-promotion); client workspace with content + rank-tracker sections; suite dashboard with per-client tiles, including **logo branding** (`clients.logo_url`, public `client-logos` storage bucket).
+- **Platform API** (`writer/platform-api/`) — JWT auth middleware; clients CRUD; file upload + parsing; website scraper async worker (`services/job_worker.py` + `services/website_scraper.py` polling `async_jobs`); orchestrator + run dispatch (`services/orchestrator.py`); run polling; briefs; silos (`services/silo_dedup.py`, `services/silo_promotion.py`); publish to Google Drive (`routers/publish.py` via Apps Script webhook); users; **Local SEO** backend (`routers/local_seo.py` + `services/local_seo_service.py`, calling the private `nlp-api`).
+- **NLP API** (`writer/nlp-api/`) — private Railway service powering the Local SEO module: competitor SERP analysis (DataForSEO → ScrapeOwl → Google NLP entities) and Claude page generation + 8-engine page scoring/auto-reoptimization. Ported from the imported ShowUP Local app; auth-less (private network only, like pipeline-api). See its `README.md` for what was stripped.
+- **Suite features added since the original spec:** Google Business Profile (GBP) auto-fetch + review enrichment via DataForSEO/Outscraper (`services/gbp_service.py`), incl. paste-a-link/share-link resolution (`/clients/gbp/resolve`) and auto-fill of client name/website from a selected GBP; content silos (semantic dedup / auto-promotion); client workspace with content + rank-tracker sections; suite dashboard with per-client tiles, including **logo branding** (`clients.logo_url`, public `client-logos` storage bucket).
 - **Frontend** (`frontend/`) — shared React + Vite app: `Login`, `Home` (suite dashboard tiles), `Clients`, `ClientForm`, `ClientWorkspace`, `Runs`, `RunDetail`, `Silos`, `Articles`.
 
-**Imported but not yet integrated:**
+**In active integration (not finished):**
 
-- **Local SEO content** module lives at `/local-seo-writer` (imported raw from an existing app). Integration into the suite is **deferred** — see Appendix A of the suite roadmap before touching it.
+- **Local SEO content** module (#2). **Phases 0–1 done:** the NLP service is rehomed into the suite (`writer/nlp-api/`, deployed private on Railway) and platform-api has the backend (`local_seo_pages` table, generate/list/get routes). **Phase 2 (frontend) and Phase 3 (page-template field) remain.** The raw import still lives at `/local-seo-writer` as the reference copy. Scope/decisions and phasing are in **`docs/modules/local-seo-module-integration-plan-v1_0.md`** (chosen path: C — full port; cut from v1: client-site brand-voice/ICP scraping, the keyword-worthiness "rankability" check, and billing; competitor SERP analysis is an explicit per-page opt-in via a required `run_analysis` flag).
 
-**Not yet built (suite roadmap, in rough order):** Keyword research (migrate from existing repo), Organic rank tracker, Maps / local-pack ranker, Ranking-drop agent, VA content scheduler, the cross-cutting **GSC analytics layer**, the **shared scheduler**, the **SOP store**, and the **notifications service**. The roadmap doc has the full module table, groupings, and locked decisions.
+**Not yet built (suite roadmap, in rough order):** Keyword research (migrate from existing repo), Organic rank tracker, Maps / local-pack ranker, Ranking-drop agent, VA content scheduler, the cross-cutting **GSC analytics layer**, the **shared scheduler**, the **SOP store**, and the **notifications service**. The roadmap doc has the full module table, groupings, and locked decisions. (Local SEO content #2 is mid-integration — see above.)
 
 ## The reference documents
 
@@ -42,6 +43,7 @@ Before writing code, read the ones relevant to your task. Note the exact filenam
    - `research-citations-module-prd-v1_1_1.md`
    - `content-writer-module-prd-v1.3.md` (check the header for its canonical version)
    - `sources-cited-module-prd-v1_1.md`
+   - `local-seo-module-integration-plan-v1_0.md` (Local SEO module #2 — scope, cut list, and Path-C phasing; authoritative for that integration)
 
 When docs conflict: the engineering spec wins for "how to build it," the product PRD wins for "what should it do," and the **content quality PRD overrides the module PRDs on R1–R7 acceptance criteria**. Where the suite roadmap and the older single-tool framing disagree on "how many tools is this," the roadmap wins.
 
@@ -59,17 +61,17 @@ When docs conflict: the engineering spec wins for "how to build it," the product
 | State management | TanStack Query (no Redux/Zustand) | Engineering spec §10.5 |
 | LLM provider | **Anthropic Claude** for module content generation | User decision |
 | Embeddings | OpenAI `text-embedding-3-small` for SIE only | User decision |
-| Rank / SERP data | **DataForSEO** for organic SERP and maps/local-pack (also GBP enrichment) | Suite roadmap decision log |
+| Rank / SERP data | **DataForSEO** for organic SERP and maps/local-pack; **Outscraper** for GBP search/details; DataForSEO for GBP review enrichment | Suite roadmap decision log |
 | GSC analytics | Google Search Console via **service account** (no interactive OAuth) | Suite roadmap decision log |
 | Publish destination | Google Doc in client's Drive folder via Apps Script webhook (CMS-ready later) | Suite roadmap decision log |
-| Hosting | Railway with two services + private networking | Engineering spec §2 |
+| Hosting | Railway with **three** services + private networking (`PLATFORM`, `pipeline`, `nlp`) | Engineering spec §2 |
 
 ## Infrastructure already provisioned
 
 - Supabase project (`AR-Internal-Tools`, ref `wvcthtmmcmhkybcesirb`) with schema applied via migrations in `writer/supabase/migrations/`.
 - Storage buckets: `files` (active), `article-assets` (v2 placeholder), `csv-snapshots`, `wordpress_images` (public), `client-logos` (public — client tile/workspace logos).
 - First admin user in `auth.users` with `role = 'admin'` in `profiles`.
-- GitHub repo cloned. Railway project with two services (`platform-api`, `pipeline-api`) and env vars set.
+- GitHub repo cloned. Railway project (`ar-tools`) with **three** services and env vars set: `PLATFORM` (platform-api), `pipeline` (pipeline-api), and `nlp` (nlp-api, private-only — no public domain; reachable at `http://nlp.railway.internal:8080`). Note: the `nlp` service has **no deploy-time healthcheck** (a private service can't pass Railway's probe — see `writer/nlp-api/README.md`); `healthcheckPath` must stay empty.
 
 You should NOT need dashboard-level setup. If you think you do, stop and ask.
 
@@ -77,12 +79,13 @@ You should NOT need dashboard-level setup. If you think you do, stop and ask.
 
 ```
 /                            ← suite root
-├── writer/                  ← Blog Writer module
-│   ├── platform-api/        ← public-facing API (auth, clients, runs, publish, …)
-│   ├── pipeline-api/        ← private API (the five generation modules)
+├── writer/                  ← backend services
+│   ├── platform-api/        ← public-facing API (auth, clients, runs, publish, local-seo, …)
+│   ├── pipeline-api/        ← private API (the five Blog Writer generation modules)
+│   ├── nlp-api/             ← private API (Local SEO analysis + page generation/scoring)
 │   └── supabase/migrations/ ← all suite migrations live here
 ├── frontend/                ← shared React + Vite app (Netlify) for the whole suite
-├── local-seo-writer/        ← imported Local SEO app (integration deferred)
+├── local-seo-writer/        ← imported Local SEO app (raw reference copy; being ported into nlp-api)
 └── docs/                    ← PRDs, specs, suite roadmap, module PRDs
 ```
 
@@ -174,9 +177,10 @@ These decisions are not in the docs — ask the user:
 - Don't add a caching layer in front of Supabase
 - Don't change the brand-vs-SIE precedence rules
 - Don't reverse a locked decision in the suite roadmap's decision log
-- Don't expose the pipeline-api publicly — it must remain on Railway's private network
+- Don't expose the pipeline-api or nlp-api publicly — they must remain on Railway's private network (the `nlp` service is intentionally private + auth-less)
 - Don't implement features marked "out of scope for v1" in the PRDs (e.g., live-to-CMS publishing)
-- Don't wire `/local-seo-writer` into the suite until its deferred integration path is agreed
+- Don't re-add the Local SEO features cut from v1 (client-site brand-voice/ICP scraping, the keyword-worthiness "rankability" check, billing/credits) without agreement — see the integration plan
+- Don't edit `/local-seo-writer` expecting it to ship — it's the raw reference copy; active Local SEO work goes in `writer/nlp-api/` plus the suite frontend/backend
 
 ## When you're stuck
 
