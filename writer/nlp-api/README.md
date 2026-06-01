@@ -46,5 +46,9 @@ No `NLP_API_KEY` / `SUPABASE_*` needed (auth removed).
 
 ## Deploy
 
-Railway service, Dockerfile builder, private networking, `/health` healthcheck.
-**Not yet provisioned** — see the integration plan for the deploy step.
+Railway service, Dockerfile builder, private networking. Matches the
+`pipeline` service pattern: **no deploy-time healthcheck** (Railway's
+healthcheck probe can't reach a private-only service, which fails the
+deploy even when the app is healthy), `restartPolicyType = ALWAYS`. The
+app logs `Application startup complete` + `Uvicorn running on [::]:8080`
+on boot.
