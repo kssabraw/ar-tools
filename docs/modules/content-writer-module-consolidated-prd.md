@@ -30,16 +30,93 @@ The Content Writer converts the upstream brief, term intelligence, verified cita
 
 ### 1.3 Out of Scope (v1)
 
-- Keyword research / brief generation (upstream)
+- Keyword research / brief generation (upstream — see §1.4)
 - Internal linking suggestions
 - Image selection / alt-text generation
 - Meta description generation
 - Schema markup injection (JSON-LD)
-- CMS publishing or API push (Sources Cited + platform Publish module handle delivery)
+- CMS publishing or API push (Sources Cited + platform Publish module handle delivery — see §1.4)
 - Multi-locale support
 - Rank tracking, citation link-rot monitoring
 - Human review workflows / editorial routing
 - Rewriting prior runs — each run is independent
+
+### 1.4 Pipeline Position & Sibling Modules
+
+The Writer is one of five generation modules in the Blog Writer pipeline. All five are **sibling Python modules in the same private pipeline-api service**, invoked sequentially by the platform-api orchestrator (which validates each module's returned `schema_version` against an `EXPECTED_MODULE_VERSIONS` map and persists outputs to the platform database). The Writer does not call upstream or downstream modules directly — the orchestrator does.
+
+```
+Brief Generator                  ← upstream (Input A)
+        │  emits: title, scope_statement, heading_structure[] with
+        │         per-heading citation_ids, FAQs, format_directives,
+        │         intent_format_template, word_budget
+        ▼
+SIE Term & Entity Module         ← upstream (Input C)
+        │  emits: required/avoid terms, per-zone usage recommendations,
+        │         target keyword floors, entities with categories
+        ▼
+Research & Citations Module      ← upstream (Input B)
+        │  emits: verified citation pool with claims, relevance scores,
+        │         extraction_method flags, mapped to brief headings
+        ▼
+[Client Context from platform-api]   ← upstream (Input D)
+        │  emits: brand_guide_text, icp_text, website_analysis
+        ▼
+┌───────────────────────────────┐
+│        Content Writer         │  ← THIS MODULE
+│   (modules/writer/)           │     emits: article[] with {{cit_N}}
+└───────────────┬───────────────┘            markers + article_markdown
+                │                            + article_html + metadata
+                ▼
+Sources Cited Module             ← downstream
+        │  consumes Writer output + Research output
+        │  resolves {{cit_N}} markers → numbered <sup><a> superscripts,
+        │  builds MLA-style "## Sources Cited" section, applies
+        │  rel="nofollow" to external URLs
+        ▼
+Content Editor / Platform Publish module (Google Doc via Apps Script webhook)
+```
+
+#### 1.4.1 Upstream: Brief Generator
+
+The article outline does NOT come from this module. It comes from the **Content Brief Generator** (sibling module at `modules/brief/`, PRD `docs/modules/content-brief-generator-prd-v2_0.md`, canonical version 2.3). The Writer does not reinterpret the brief — it executes it. Every field the Writer consumes as Input A (§2.1) is produced by the brief generator's pipeline:
+
+| Brief generator step | Produces field used by Writer |
+|---|---|
+| Step 3 — Title + scope statement generation | `brief.title` (H1 verbatim — §5.2), `brief.scope_statement` (intro Promise anchor — §5.3) |
+| Step 3 — `intent_format_template` | `format_directives.min_h2_body_words` floors (§5.10 H2 body length validator), `h2_pattern` family |
+| Steps 4–6 — Coverage graph + MMR scoring | `heading_structure[]` with H2 embeddings used by §5.4.2 topic-adherence filter |
+| Step 7.5 — Anchor-slot reservation | Template-required H2 slots (e.g., comparison's parallel evaluative axes) |
+| Step 8.5 — Scope verification | Out-of-scope H2s already discarded before Writer sees the brief |
+| Steps 8.6 + 8.7 — H3 selection + parent-fit verification | H3 attachment with the 0.65 cosine floor |
+| Step 9 — Authority gap H3s | `heading_structure[].source: "authority_gap_sme"` (triggers §5.4.1 1.2× budget multiplier and §5.8.5 substantive register bar) |
+| Step 10 + 10.5 — FAQ generation + intent gate | `faqs[]` (3–5 questions consumed by §5.9) |
+| Step 11 — Heading framing + title-case normalization | Pre-normalized H2/H3 text. The Writer's defense-in-depth title-case pass (§5.18) uses the same pinned `titlecase==2.4.1` library, so the round-trip is a no-op for already-cased input. |
+| Step 12 — Silo identification | H2s the Writer drops via §5.4.2 topic-adherence filter are forwarded back to this routing for future-brief seeding |
+
+The Writer enforces a strict `brief_schema_version` floor of `2.0+` because the H1-from-brief contract (§5.2.1) requires `brief.title`, which was introduced in Brief PRD v2.0 Step 3.
+
+#### 1.4.2 Downstream: Sources Cited Module
+
+The Writer does NOT produce final reader-facing citations. It produces **citation marker tokens** (`{{cit_N}}`) in `article[].body`. The **Sources Cited module** (sibling at `modules/sources_cited/`, PRD `docs/modules/sources-cited-module-prd-v1_1.md`, canonical version 1.1) consumes Writer output and renders the final form.
+
+What Sources Cited does that the Writer deliberately does not:
+
+| Sources Cited step | Action |
+|---|---|
+| 1 — Marker discovery | Scans every `article[].body` for `{{cit_N}}` tokens (regex `\{\{cit_[0-9]+\}\}`) in document order |
+| 2 — Number assignment | Assigns sequential numbers `[1]`, `[2]`, `[3]`… by **order of first appearance**. The Writer's citation *ids* (`cit_001`, `cit_007`) are NOT the user-facing numbers; the numbers are assigned here. |
+| 3 — Superscript substitution | Replaces `{{cit_N}}` with `<sup><a href="#cite-1">1</a></sup>` jumplinks. Stacked markers in one sentence sort ascending. |
+| 4 — `used: true` filtering | Only citations the Writer marked as placed in prose (via `citation_usage.usage[]`) appear in the bibliography |
+| 5 — MLA-derived rendering | Builds the `## Sources Cited` section appended to the article. v1 format: `Title. Publication. URL.` (author/date deferred to v2 because the Research module's author/published_date fields are not yet reliable enough) |
+| 6 — `rel="nofollow"` | Applied to every external URL in the bibliography |
+
+The handoff contract:
+
+- **Writer produces** `{{cit_N}}` plain-text tokens inside Markdown `body` fields, placed immediately after the closing punctuation of the cited sentence. Marker ids match regex `^cit_[0-9]+$`. Markers are forbidden in headings — match in any heading → abort `marker_in_heading` (§5.8.7 / D9).
+- **Writer does NOT produce** inline Markdown hyperlinks (`[anchor text](url)`) in prose; numbered citation references; a `## Sources Cited` bibliography; `rel="nofollow"` decoration. All of these are downstream.
+- **Writer DOES produce** the flat `article_markdown` (`[^N]` GitHub-footnote form) and `article_html` (`<sup><a href="#cite-N">` form) serializations as an *additional* convenience for consumers that bypass Sources Cited entirely (e.g., the platform Publish module's Google Docs / WordPress paste flow). When the Sources Cited module runs, its numbered MLA-rendered output is the canonical form that goes to the Content Editor and Publish modules next.
+- **Schema floor:** Sources Cited rejects Writer output below `schema_version` 1.4 because the `{{cit_N}}` marker contract did not exist before that version.
 
 ---
 
