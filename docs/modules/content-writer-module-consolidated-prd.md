@@ -1385,3 +1385,1054 @@ These are guidance for the build team but not part of the contract:
 - The defense-in-depth title-case pass (§5.18) is the last operation that mutates `article[]` content. The serializers (§5.19) must run AFTER this pass and must NOT mutate `article[]`.
 - The output `article_markdown` is what the platform's Publish module ships to the Google Docs Apps Script webhook. Validate the Markdown renders cleanly in Google Docs preview before declaring the run complete.
 - The `article_html` field is consumed by direct paste into WordPress / Google Docs visual editor. Validate against the WordPress code block + visual editor flow specifically — both must produce readable rich text.
+
+---
+
+## 16. Companion Documents (bundle alongside this PRD)
+
+If the implementing team is building the full Blog Writer pipeline (not just the Writer), hand over these sibling PRDs alongside this document. They are required to implement Inputs A/B/C/D and to integrate the downstream renderer.
+
+| Module | File | Canonical version | Why bundle |
+|---|---|---|---|
+| Content Brief Generator | `docs/modules/content-brief-generator-prd-v2_0.md` | 2.3 | Produces Input A. The Writer's H1 verbatim contract, `intent_format_template`-driven body-length floors, H2 embeddings, authority-gap H3 tagging, FAQ generation, and title-case normalization all originate here. |
+| SIE Term & Entity Module | `docs/modules/SIE_PRD_Term_Entity_Module.md` | latest | Produces Input C. Required/avoid term lists, per-zone usage recommendations, target-keyword floors, entity categorization with `is_entity` flag and `recommendation_score`. |
+| Research & Citations | `docs/modules/research-citations-module-prd-v1_1_1.md` | 1.1.1 | Produces Input B. Verified citation pool, `extraction_method` semantics (`verbatim_extraction` vs `fallback_stub`), `citation_id` regex contract, `relevance_score`. |
+| Sources Cited | `docs/modules/sources-cited-module-prd-v1_1.md` | 1.1 | Consumes Writer output. Defines the `{{cit_N}}` marker discovery, first-appearance numbering, `<sup><a>` substitution, MLA-derived bibliography, `rel="nofollow"` rules. |
+| Content Quality PRD | `docs/content-quality-prd-v1_0.md` | 1.0 | Cross-cutting requirements R1–R7 (topic adherence, paragraph length, citable-claim coverage, brand mention budget, required structural elements). The Writer encodes these. |
+| Suite Architecture & Roadmap | `docs/suite-architecture-and-roadmap-v1_0.md` | 1.0 | The locked decision log (LLM provider, embeddings provider, SERP source, GSC auth, publish destination). Resolves ambiguity when this PRD references a "platform-level choice." |
+| Engineering Implementation Spec | `docs/engineering-implementation-spec-v1_1.md` | 1.1 | Service topology (Railway private network), Supabase schema, `async_jobs` queueing pattern, logging conventions, error envelope, authentication boundary. The infrastructure substrate this module runs on. |
+
+The Writer PRD intentionally does not duplicate content from those documents. Where this PRD says "see Brief PRD" or "consumed by Sources Cited," the implementing team needs the actual sibling document open.
+
+---
+
+## 17. LLM Call Inventory (Anthropic Claude)
+
+Provider: **Anthropic Claude** (locked per suite roadmap). All structured-output calls use **tool use** for guaranteed-valid JSON; prose calls use plain text output. Model IDs assume the Claude 4.X family; substitute newer IDs if available, keeping the size tier (Opus / Sonnet / Haiku).
+
+| # | Call | Model | Output mode | Max tokens (output) | Temperature | Retries on malformed |
+|---|---|---|---|---|---|---|
+| 1 | Title generation (3 candidates) | `claude-haiku-4-5` | tool use (JSON) | 512 | 0.7 | 1 (then fallback `"{keyword} — A Complete Guide"`) |
+| 2 | Brand voice distillation | `claude-sonnet-4-6` | tool use (JSON) | 2,048 | 0.2 | 1 (then abort `brand_distillation_failed`) |
+| 3 | Brand–SIE term reconciliation | `claude-sonnet-4-6` | tool use (JSON) | 2,048 | 0.2 | 1 (then abort `brand_reconciliation_failed`) |
+| 4 | Intro construction (Agree/Promise/Preview) | `claude-sonnet-4-6` | tool use (JSON, 3 string blocks) | 512 | 0.5 | 1 (then deterministic truncate/collapse, never abort) |
+| 5 | Section writing (per H2 group) | `claude-sonnet-4-6` | plain text (Markdown) | 1,500 (group-budget-scaled) | 0.6 | 1 on retry directives (coverage, length, banned-term, paragraph) |
+| 6 | FAQ writing | `claude-sonnet-4-6` | tool use (JSON: `[{question, answer}]`) | 2,048 | 0.5 | 1 |
+| 7 | Conclusion writing | `claude-sonnet-4-6` | plain text (Markdown) | 512 | 0.5 | 1 |
+| 8 | CTA writing | `claude-haiku-4-5` | tool use (JSON: `{cta}`) | 128 | 0.4 | 1 (then truncate, flag `cta_truncated`) |
+| 9 | Key Takeaways | `claude-sonnet-4-6` | tool use (JSON: `{takeaways: [...]}`) | 768 | 0.4 | 1 (then accept 3–5 bounds or abort if <3) |
+| 10 | ICP callout judge | `claude-haiku-4-5` | tool use (JSON: `{landed, evidence, reasoning}`) | 256 | 0.0 | 0 (failure → `icp_callout_landed = None`) |
+
+**Why these tiers:**
+- **Haiku** for short / deterministic / classification calls (title candidates, CTA, judge). Cheap, fast, accurate enough for these shapes.
+- **Sonnet** for everything that writes substantive prose (sections, intro, FAQ, conclusion, takeaways) and for structured categorization with reasoning (distillation, reconciliation). The Writer's quality bar requires Sonnet-class output for prose.
+- **Opus** is **not** used in v1 because Sonnet quality is sufficient and the article-level budget ceiling ($0.75) doesn't accommodate Opus on the 6-section-writing critical path.
+
+**Tool use contract for JSON calls:** Define a single tool per call with a strict schema. Request `tool_choice: {type: "tool", name: "..."}` so Claude is forced to invoke it. This eliminates the malformed-JSON failure mode in steady state — retries are reserved for content-validity failures (over word count, banned term match, etc.), not parse failures.
+
+**Streaming:** Not required. Section writing benefits from streaming if the platform surfaces progressive UI, but the Writer's metadata-construction passes need the full body before they run, so streaming is consumer-facing only.
+
+**Rate limiting + retries on transient errors:** Outside this PRD's scope — handled by the platform-api HTTP client layer (`httpx` with retry policy on 429 / 5xx).
+
+---
+
+## 18. Prompt Scaffolds
+
+These are skeletons, not production prompts. They lock in the structural contract — what each call receives and what it must return — leaving phrasing details to implementation. Production prompts will be longer (system prompt boilerplate, output-shape examples, tone guidance) but must preserve these contracts.
+
+### 18.1 Title generation (Call #1)
+
+**System:** You are a content strategist producing SEO-optimized blog post titles.
+
+**User:**
+```
+Generate 3 candidate titles for a blog post.
+
+Seed keyword: {brief.keyword}
+Intent type: {brief.intent_type}
+Required SIE terms (top 10 by recommendation_score): {sie.terms.required[:10]}
+High-salience entities: {sie.entities[:5]}
+
+Rules:
+- Every title MUST contain the seed keyword verbatim.
+- Title tone by intent: how-to → "How to …" / "How [Audience] Can …"; listicle → leads with a number; comparison → includes "vs." or "or"; everything else → declarative, value-led.
+- Incorporate as many high-scoring Required terms / entities as fit naturally. Keyword + entity coverage takes priority over brevity.
+- Avoid clickbait, superlatives ("best", "ultimate"), and questions.
+
+Return via the `submit_titles` tool with three candidates.
+```
+
+**Tool schema:**
+```json
+{
+  "name": "submit_titles",
+  "input_schema": {
+    "type": "object",
+    "required": ["candidates"],
+    "properties": {
+      "candidates": {
+        "type": "array",
+        "minItems": 3,
+        "maxItems": 3,
+        "items": {"type": "string", "maxLength": 120}
+      }
+    }
+  }
+}
+```
+
+Selection: deterministic post-LLM. Score each candidate by `(keyword_present ? 1 : 0) + count(required_terms ∩ title) + count(entities ∩ title)`. Highest score wins; tie-break shortest.
+
+### 18.2 Brand voice distillation (Call #2)
+
+**System:** You categorize and summarize brand guidance. You do not invent brand preferences not present in the source text.
+
+**User:**
+```
+Extract a structured brand voice card from the following inputs.
+
+Brand guide text:
+"""
+{brand_guide_text}
+"""
+
+ICP text:
+"""
+{icp_text}
+"""
+
+Website analysis (factual reference only):
+- Services: {website_analysis.services}
+- Locations: {website_analysis.locations}
+- Contact: {website_analysis.contact_info}
+
+Rules:
+- Tone adjectives come ONLY from the brand guide text. Do not supplement from website data.
+- A term is `banned` only when the brand guide explicitly prohibits it. `discouraged` if expressed against without explicit prohibition. `preferred` if explicitly named as preferred phrasing.
+- All term lists must be terms or phrases that appear in or are explicitly named by the source text. Return [] if the brand guide doesn't address term-level guidance.
+- Audience pain points, goals, and verticals come from the ICP text.
+- Website services/locations/contact carry verbatim into the card.
+
+Return via `submit_brand_voice_card`.
+```
+
+Tool schema mirrors §5.5 output exactly. Field limits (e.g., `max_items: 30` on banned_terms) are enforced in the schema.
+
+### 18.3 Brand–SIE reconciliation (Call #3)
+
+**System:** You classify SIE term recommendations against a brand guide. Every non-`keep` classification must cite specific brand-guide text.
+
+**User:**
+```
+Brand guide:
+"""
+{brand_guide_text}
+"""
+
+SIE Required terms (must classify each):
+{sie.terms.required}
+
+SIE Avoid terms (must classify each):
+{sie.terms.avoid}
+
+For each Required term, classify as:
+- `keep` (no brand conflict)
+- `exclude_due_to_brand_conflict` (brand explicitly bans)
+- `reduce_due_to_brand_preference` (brand discourages without explicit ban)
+
+For each Avoid term, classify as:
+- `keep_avoiding` (no brand preference)
+- `use_due_to_brand_preference` (brand explicitly prefers)
+
+Brand always wins. Every non-`keep` and non-`keep_avoiding` classification MUST include `brand_guide_reasoning` quoting the specific brand-guide text (≤300 chars).
+
+Return via `submit_reconciliation`.
+```
+
+### 18.4 Intro construction (Call #4)
+
+**System:** You write blog post introductions in a strict three-beat structure.
+
+**User:**
+```
+Write the article's introduction as a single paragraph (60–150 words) in three beats:
+
+1. Agree (≤50 words) — name the reader's situation in their own language. Anchor in the ICP when provided. Do not name the brand. Do not begin with the seed keyword.
+2. Promise (≤50 words) — state what this article will deliver, anchored in the title and scope. May reference the seed keyword once. No CTA.
+3. Preview (≤50 words) — name 2–4 of the H2 sections in order. Plain language. No bullets. No verbatim heading list.
+
+Inputs:
+- Title: {output.title}
+- Scope: {brief.scope_statement}
+- Intent: {brief.intent_type}
+- ICP summary: {brand_voice_card.audience_summary}
+- H2 list (post-adherence filter, in order): {[h.text for h in kept_h2s]}
+- Brand voice block: {brand_voice_card.tone_adjectives + voice_directives}
+- Banned terms (must not appear): {brand_voice_card.banned_terms + filtered_sie_excluded}
+
+Return the three blocks via `submit_intro`.
+```
+
+**Tool schema:**
+```json
+{
+  "name": "submit_intro",
+  "input_schema": {
+    "type": "object",
+    "required": ["agree", "promise", "preview"],
+    "properties": {
+      "agree":   {"type": "string", "maxLength": 350},
+      "promise": {"type": "string", "maxLength": 350},
+      "preview": {"type": "string", "maxLength": 350}
+    }
+  }
+}
+```
+
+Post-LLM, the three blocks are joined into a single paragraph with a single space between them and validated per §5.3.
+
+### 18.5 Section writing (Call #5, runs N times)
+
+**System:** You are a senior content writer producing SEO-optimized prose for a specific brand voice and audience.
+
+**User (per H2 group):**
+```
+Write the following H2 group in Markdown. Output ONLY the section content — no preamble, no postamble, no commentary.
+
+H2 heading: {h2.text}
+H3 children (write each in order if present): {[h3.text for h3 in h2.children]}
+Word budget for this group: {section_budget}
+Intent type: {brief.intent_type}
+Intent pattern: {intent_format_template.h2_pattern}
+
+--- Brand & Audience ---
+Tone: {brand_voice_card.tone_adjectives}
+Voice directives:
+{brand_voice_card.voice_directives}
+Audience: {brand_voice_card.audience_summary}
+Pain points to acknowledge where natural: {brand_voice_card.audience_pain_points}
+
+--- Client context (use only where natural) ---
+Services: {brand_voice_card.client_services}
+Locations: {brand_voice_card.client_locations}
+{must_mention_brand directive if anchor}
+{must_not_mention_brand directive if non-anchor}
+{icp_callout_hook directive if ICP anchor}
+
+--- Citations available for this section ---
+{for cit in resolved_citations:}
+  - {{cit.citation_id}} — extraction_method: {cit.extraction_method}
+    Verified claims:
+      {for claim in cit.claims if claim.relevance_score >= 0.5:}
+        - "{claim.claim_text}"
+{end}
+
+Citation rules:
+- For each specific factual assertion sourced from a citation, place its marker immediately after the closing punctuation: `Demand climbed 18% in Q3.{{cit_007}}`
+- Multiple citations in one sentence: stack with no spaces: `{{cit_001}}{{cit_004}}`
+- Markers ONLY in body, NEVER in headings.
+- `fallback_stub` citations: do not assert specific figures from the stub claim. You may reference the publication as supporting context ("according to [publication]…"), but no statistics, prices, or specific facts from the stub.
+
+--- Format rules ---
+- First sentence of the H2 body MUST directly answer the heading in ≤25 words.
+- Maximum 4 sentences per paragraph; 3 preferred.
+- {if format_directives.require_bulleted_lists: "Include at least one bulleted or numbered list across the H2 group."}
+- {if format_directives.require_tables: "Include at least one Markdown table across the H2 group."}
+
+--- Term targets ---
+Required terms (with per-zone usage targets):
+{for term in filtered_sie_terms.required scoped to this section:}
+  - "{term.term}" — h2: {term.effective_target}, h3: {term.effective_target}, paragraph: {term.effective_target} (max {term.effective_max})
+{end}
+
+Excluded terms (do not use — brand or SIE conflict):
+{filtered_sie_terms.excluded + brand_voice_card.banned_terms + filtered_sie_terms.avoid}
+
+Output format:
+```
+## {h2.text}
+{H2 body, with H3 subsections as needed:}
+### {h3.text}
+{H3 body}
+```
+```
+
+For retry directives:
+- **Coverage retry** (§5.8.8): prepend `COVERAGE_RETRY: The following sentences contain claims requiring citation but were emitted without markers: [list sentences]. Either append a {{cit_N}} marker from the available pool above, OR rewrite the sentence to remove the specific statistic / year / brand attribution.`
+- **Length retry** (§5.10): prepend `LENGTH_RETRY: This H2 group came in at {current_word_count} words but the minimum substance floor for this intent is {floor} words. Add additional substance — facts, examples, evidence — NOT padding or filler. Re-emit the entire H2 group.`
+- **Paragraph retry** (§5.9): prepend `PARAGRAPH_RETRY: Paragraph {n} contains {sentence_count} sentences; the cap is {max_sentences}. Split it on a logical break. Re-emit the entire section.`
+- **Banned-term retry** (§5.17): prepend `BANNED_TERM_RETRY: The output contained "{term}" which is banned by client brand guidance. Rewrite the section without using "{term}" or any variant. Substitutions are at your discretion; preserve meaning.`
+
+### 18.6 FAQ writing (Call #6)
+
+**System:** You write self-contained FAQ answers optimized for LLM citation extraction.
+
+**User:**
+```
+Write answers to the following FAQ questions. Each answer must be 40–80 words, answer-first, self-contained (a reader must understand the answer without reading the rest of the article).
+
+Questions (in order):
+{for faq in brief.faqs:}
+  {faq.order}. {faq.question}
+{end}
+
+Rules:
+- Answer-first: first sentence directly addresses the question.
+- Self-contained: NO "as mentioned above" or other cross-references.
+- The seed keyword "{brief.keyword}" (or its primary sub-phrase) must appear in at least 2 answers across the set.
+- Respect brand voice ({brand_voice_card.tone_adjectives}) and banned terms ({brand_voice_card.banned_terms + filtered_sie_excluded}).
+- ICP framing: questions and answers should reflect how {brand_voice_card.audience_summary} would actually ask, not generic SEO phrasing.
+
+Return via `submit_faqs`.
+```
+
+### 18.7 Conclusion (Call #7)
+
+```
+Write the article's conclusion in 100–150 words.
+
+Rules:
+- 2–3 sentences synthesizing the article's core takeaways.
+- The seed keyword "{brief.keyword}" must appear at least once.
+- Do NOT include a CTA — the CTA is rendered as a separate element after this paragraph.
+- Do NOT introduce new information not covered in the article body.
+- {if brand_voice_card.client_services exists: "May include a natural closing sentence referencing the client's services where contextually relevant. Never a hard sales pitch."}
+- Brand voice: {tone_adjectives + voice_directives}.
+- Banned terms: {banned_terms + filtered_sie_excluded}.
+
+Output plain prose (no Markdown headers).
+```
+
+### 18.8 CTA (Call #8)
+
+```
+Write a single-sentence call-to-action, ≤30 words.
+
+Rules:
+- Must name a specific next action (read, download, contact, evaluate, compare, sign up, request, schedule, audit, review).
+- {if icp_text provided: "Draw the next-step verb from the audience's stated goals: " + audience_goals}
+- {else: use the intent-appropriate template:}
+  - how-to: "Try these steps in your next [task] and measure the result."
+  - informational: "Explore [related sub-topic] next."
+  - comparison: "Run this comparison against your current [solution category] to see where the trade-offs land for your team."
+  - local-seo / ecom / informational-commercial: "When you're ready to evaluate options, look for [criterion drawn from article]."
+  - news: "Watch for follow-on coverage as the situation develops."
+- Hard-sales phrases BANNED: "buy now", "purchase now", "limited time", "act today".
+
+Article title (for context): {output.title}
+
+Return via `submit_cta`.
+```
+
+### 18.9 Key Takeaways (Call #9)
+
+```
+Produce 3–5 key takeaways summarizing the assembled article below.
+
+Rules:
+- Each takeaway is a single standalone sentence, ≤25 words.
+- Each takeaway must be self-contained — readable without the surrounding article.
+- Facts or actionable claims only. No opinion, no marketing language, no rhetorical questions.
+- Takeaways must not repeat each other.
+- Brand mentions count against the brand-mention budget.
+
+Article title: {output.title}
+
+Assembled article body:
+"""
+{full_article_body_excluding_intro_and_h1}
+"""
+
+Return via `submit_takeaways`.
+```
+
+Post-LLM: cosine pairwise check (≥0.85 → regenerate offending pair); per-takeaway word count check (>25 → retry once with limit named).
+
+### 18.10 ICP callout judge (Call #10)
+
+```
+Did the following article section land an audience-specific callout for the named ICP hook?
+
+Hook to look for: "{icp_hook_phrase}"
+Audience pain points (for synonym recognition): {audience_pain_points}
+Audience verticals: {audience_verticals}
+
+Section body (truncated to 4,000 chars):
+"""
+{anchor_section.body[:4000]}
+"""
+
+Rules:
+- Paraphrases of the hook count as landed ("margin erosion from refunds" ≈ "shrinking unit economics on returned orders").
+- A generic acknowledgment of "the audience" does not count — the callout must name the specific pain point or vertical.
+- When landed, return a verbatim quote (≤200 chars) as evidence.
+
+Return via `submit_judgment`.
+```
+
+Tool schema:
+```json
+{
+  "name": "submit_judgment",
+  "input_schema": {
+    "type": "object",
+    "required": ["landed", "reasoning"],
+    "properties": {
+      "landed":    {"type": "boolean"},
+      "evidence":  {"type": "string", "maxLength": 200},
+      "reasoning": {"type": "string", "maxLength": 280}
+    }
+  }
+}
+```
+
+---
+
+## 19. Closures (the loose ends the contract depends on)
+
+### 19.1 Embeddings
+
+| Use site | Model | Dimensionality | Threshold |
+|---|---|---|---|
+| Title topic anchor (§5.4.2 H2 adherence filter) | `text-embedding-3-small` | 1,536 | cosine ≥ 0.62 to keep |
+| Brand-aligned vs brand-agnostic determination | `text-embedding-3-small` | 1,536 | cosine ≥ 0.55 to title = `brand_aligned` |
+| Key Takeaways pair similarity (§5.12) | `text-embedding-3-small` | 1,536 | cosine ≥ 0.85 → regenerate pair |
+
+Calibrated against `text-embedding-3-small`'s vector space. A different embedding model requires recalibration of these thresholds (the values are not portable across providers).
+
+### 19.2 Tech stack assumptions baked into this spec
+
+| Layer | Choice | Why it matters |
+|---|---|---|
+| Language | Python 3.11+ | Regex semantics (`re.IGNORECASE`, `\b` Unicode handling), `titlecase` library availability |
+| Web framework | FastAPI | Pydantic models for input/output validation; `BackgroundTasks` for async work without Celery |
+| HTTP client | `httpx` (async) | Anthropic SDK is async-friendly; concurrent embedding batches |
+| Title-case library | `titlecase==2.4.1` | Pinned to match Brief Generator's exact behavior. Different versions produce different casing on edge cases ("vs." vs "Vs.", "iPhone" preservation). |
+| Anthropic SDK | `anthropic>=0.40` | Tool use, claude-4.x model support |
+| OpenAI SDK | `openai>=1.0` | For embeddings only |
+
+If the other app uses Node/TypeScript: the title-case library equivalent is [`titlecase-js`](https://www.npmjs.com/package/titlecase) (validate behavior parity on the heading test corpus before declaring equivalent). Regex `\b` semantics are equivalent. The embedding and Anthropic SDKs have first-party JS clients.
+
+### 19.3 Complete enum lists
+
+**`intent_type`** (8 values, from Brief PRD):
+`informational`, `listicle`, `how-to`, `comparison`, `ecom`, `local-seo`, `news`, `informational-commercial`
+
+**`heading_structure[].level`** (4 values):
+`H1`, `H2`, `H3`, `none`
+
+**`heading_structure[].type`** (4 values):
+`content`, `faq-header`, `faq-question`, `conclusion`
+
+**`heading_structure[].source`** (3 values):
+`serp_derived`, `authority_gap_sme`, `editorial_added`
+
+**`article[].type`** (9 values):
+`title`, `content`, `faq-header`, `faq-question`, `conclusion`, `h1-enrichment`, `key-takeaways`, `intro`, `cta`
+
+**`entity_category`** (open-ended; common values): `services`, `equipment`, `problems`, `methods`, `brands`, `tools`, `audiences`, `locations`, `concepts`, `regulations`
+
+**`citations[].extraction_method`** (2 values): `verbatim_extraction`, `fallback_stub`
+
+**`citations[].verification_method`** (3 values): `claim_in_extracted_text`, `entity_overlap`, `stub_acknowledgment`
+
+**Reconciliation actions** (Required terms): `keep`, `exclude_due_to_brand_conflict`, `reduce_due_to_brand_preference`
+**Reconciliation actions** (Avoid terms): `keep_avoiding`, `use_due_to_brand_preference`
+
+**`brand_conflict_log[].resolution`** (3 values): `exclude_due_to_brand_conflict`, `reduce_due_to_brand_preference`, `brand_preference_overrides_sie_avoid`
+
+**`brand_mention_flags`** (3 values): `zero_brand_mentions_on_brand_aligned_topic`, `brand_mentions_exceed_target`, `brand_mentions_exceed_hard_cap`
+
+**`topic_brand_alignment`** (2 values): `brand_aligned`, `brand_agnostic`
+
+**`icp_callout_judge_status`** (5 values): `ok`, `anchor_not_in_article`, `empty_body`, `llm_failure`, `not_assigned`
+
+**`schema_version`** valid values: `1.7`, `1.7-no-context`, `1.7-degraded`, `1.7-legacy-h1`
+
+### 19.4 SIE field `is_entity`
+
+`sie.terms.required[*].is_entity` is a boolean indicating whether the term is a Named Entity Recognition (NER)-recognized entity (organization, product, person, location) as opposed to a generic noun phrase. Pattern C6 (§5.8.8) requires this field: a sentence is citable under C6 if it contains an entity name where `is_entity == true` AND a quantitative or temporal qualifier from C1–C3. The SIE module produces this flag during entity merge.
+
+### 19.5 First-party domain extraction (§5.8.8)
+
+When multiple citation candidates exist for a single claim, prefer the citation whose URL domain matches the entity named in the claim sentence:
+
+```python
+from urllib.parse import urlparse
+
+def extract_domain(url: str) -> str:
+    netloc = urlparse(url).netloc.lower()
+    # Strip "www." prefix
+    return netloc[4:] if netloc.startswith("www.") else netloc
+
+# Match: entity "Shopify" → prefer citation where extract_domain(cit.url) contains "shopify"
+def is_first_party(citation_url: str, entity_name: str) -> bool:
+    domain = extract_domain(citation_url)
+    entity_normalized = entity_name.lower().replace(" ", "")
+    return entity_normalized in domain.replace(".", "").replace("-", "")
+```
+
+### 19.6 Error envelope (wire format)
+
+All structured errors returned by the Writer conform to:
+
+```json
+{
+  "error": {
+    "code": "string (snake_case, from the failure-mode table §7)",
+    "message": "human-readable summary",
+    "details": {
+      "stage": "step name (e.g., 'step_3_5a_distillation', 'step_4_section_writing')",
+      "h2_order": 4,
+      "field": "article[4].body",
+      "snippet": "≤200-char excerpt of offending content",
+      "expected": "string or object describing what was expected",
+      "actual": "string or object describing what was received"
+    },
+    "schema_version": "1.7",
+    "trace_id": "uuid"
+  }
+}
+```
+
+HTTP status: `400` for input-validation errors (`keyword_mismatch`, `brief_missing_title`, `client_context_validation_error`, schema validation failures, `missing_required_structure`, `key_takeaways_count_invalid`). `422` for content-policy aborts (`banned_term_leakage`, `marker_in_heading`). `500` for upstream LLM exhaustion (`brand_distillation_failed`, `brand_reconciliation_failed`, `intro_generation_failed`). `504` for `generation_timeout`.
+
+### 19.7 Logging payload
+
+All log lines are structured JSON. Required fields on every log line:
+
+```json
+{
+  "ts": "2026-06-06T18:23:14.482Z",
+  "level": "INFO | WARN | ERROR",
+  "event": "writer.coverage.retry",
+  "run_id": "uuid",
+  "request_id": "uuid",
+  "module": "writer",
+  "schema_version": "1.7"
+}
+```
+
+Event-specific payloads add fields. For the events named in this PRD:
+
+| Event | Additional fields |
+|---|---|
+| `writer.coverage.complete` | `groups_inspected`, `retries_attempted`, `retries_succeeded`, `sections_softened`, `under_cited_remaining` |
+| `writer.coverage.retry` | `section_order`, `h2_order`, `citable_claims`, `cited_claims`, `ratio` |
+| `writer.coverage.retry_succeeded` | `section_order`, `before_ratio`, `after_ratio` |
+| `writer.coverage.under_cited_after_retry` | `section_order`, `final_ratio`, `softened_count` |
+| `writer.h2_length.retry` | `section_order`, `word_count`, `floor` |
+| `writer.h2_length.retry_succeeded` | `section_order`, `before_words`, `after_words`, `floor` |
+| `writer.h2_length.retry_still_under` | `section_order`, `final_words`, `floor` |
+| `banned_term_leakage` (when retry succeeds, logged but not surfaced) | `term`, `field`, `snippet`, `recovered_via_retry: true` |
+| `title_case_round_trip_failed` (rare safety-net failure) | `level`, `text`, `expected` |
+| `serializer_unknown_citation` | `citation_id`, `position` |
+
+Never log: JWTs, full brand guide text, API keys, user passwords. Log brand-guide *snippets* (≤200 chars) only when explicitly required for an error envelope.
+
+### 19.8 Determinism and seeding
+
+The Writer is **not** required to be bit-exact reproducible across runs (LLM stochasticity). It IS required to be deterministic in:
+
+- Title selection (post-LLM scoring + tie-break).
+- Word budget allocation.
+- Topic-adherence filter (embedding cosine + 0.62 threshold).
+- Brand & ICP placement plan (token-set scoring + lowest-order tie-break).
+- Citable-claim detection regex passes (C1–C9).
+- Auto-soften lookups.
+- Title-case pass (idempotent).
+- Markdown / HTML serialization.
+
+Two runs with identical inputs and identical Anthropic + OpenAI seeds (when set) MUST produce identical metadata fields, identical placement decisions, and identical serializer output. Prose body content may differ.
+
+---
+
+## 20. Golden Example (end-to-end walkthrough)
+
+A minimal but shape-complete example. Article topic: **"How to Pick Project Management Software for Small Teams"** (intent: `informational-commercial`). Hypothetical client: **Tessera Studios**, a 12-person operations consulting firm.
+
+Truncated to fit: 3 content H2s + conclusion, 3 FAQs, 5 citations. Body prose elided with `[...]` for length. The shape of every required field is shown.
+
+### 20.1 Input A — Brief
+
+```json
+{
+  "schema_version": "2.3",
+  "keyword": "project management software for small teams",
+  "title": "How to Pick Project Management Software for Small Teams",
+  "scope_statement": "A buyer's-education guide for ops leaders at 10–50-person teams choosing their first project management tool. Covers selection criteria, common pitfalls, and migration steps. Excludes feature-by-feature competitive matrices and enterprise / 500+ seat tooling.",
+  "intent_type": "informational-commercial",
+  "intent_format_template": {
+    "h2_pattern": "buyer_education_axes",
+    "h2_framing_rule": "evaluation_criterion_or_decision_factor",
+    "ordering": "natural_decision_sequence",
+    "min_h2_count": 4,
+    "max_h2_count": 7,
+    "anchor_slots": ["selection_criteria", "common_pitfalls", "migration_steps"]
+  },
+  "heading_structure": [
+    {"order": 0, "level": "H1", "type": "content", "text": "How to Pick Project Management Software for Small Teams", "citation_ids": []},
+    {"order": 1, "level": "H2", "type": "content", "text": "What to Evaluate Before You Compare Tools", "source": "serp_derived", "citation_ids": ["cit_001", "cit_002"], "embedding": [0.0123, -0.0456, "..."]},
+    {"order": 2, "level": "H3", "type": "content", "text": "How to Tell If You Actually Need One Yet", "source": "authority_gap_sme", "citation_ids": ["cit_003"]},
+    {"order": 3, "level": "H2", "type": "content", "text": "Common Mistakes Small Teams Make When Choosing PM Software", "source": "serp_derived", "citation_ids": ["cit_002", "cit_004"], "embedding": [0.0234, -0.0345, "..."]},
+    {"order": 4, "level": "H2", "type": "content", "text": "How to Migrate Your Team to a New PM Tool", "source": "serp_derived", "citation_ids": ["cit_005"], "embedding": [0.0345, -0.0234, "..."]},
+    {"order": 5, "level": "H2", "type": "faq-header", "text": "Frequently Asked Questions", "citation_ids": []},
+    {"order": 6, "level": "H3", "type": "faq-question", "text": "How much should a small team spend on project management software?", "citation_ids": []},
+    {"order": 7, "level": "H3", "type": "faq-question", "text": "Is free project management software good enough for a startup?", "citation_ids": []},
+    {"order": 8, "level": "H3", "type": "faq-question", "text": "How long does it take to roll out PM software to a 20-person team?", "citation_ids": []},
+    {"order": 9, "level": "H2", "type": "conclusion", "text": "", "citation_ids": []}
+  ],
+  "faqs": [
+    {"order": 0, "question": "How much should a small team spend on project management software?", "faq_score": 0.84, "intent_role": "matches_primary_intent"},
+    {"order": 1, "question": "Is free project management software good enough for a startup?", "faq_score": 0.79, "intent_role": "matches_primary_intent"},
+    {"order": 2, "question": "How long does it take to roll out PM software to a 20-person team?", "faq_score": 0.71, "intent_role": "adjacent_intent"}
+  ],
+  "format_directives": {
+    "require_bulleted_lists": true,
+    "require_tables": true,
+    "min_lists_per_article": 1,
+    "min_tables_per_article": 1,
+    "answer_first_paragraphs": true,
+    "max_sentences_per_paragraph": 4,
+    "min_h2_body_words": 180
+  },
+  "metadata": {
+    "word_budget": 2500,
+    "h2_count": 4,
+    "h3_count": 1,
+    "schema_version": "2.3"
+  }
+}
+```
+
+### 20.2 Input B — Research & Citations
+
+```json
+{
+  "schema_version": "1.1",
+  "keyword": "project management software for small teams",
+  "citations": [
+    {
+      "citation_id": "cit_001",
+      "url": "https://www.gartner.com/en/articles/picking-pm-software-2024",
+      "title": "Picking PM Software in 2024: A Buyer's Guide",
+      "publication": "Gartner",
+      "author": "Gartner Research",
+      "published_date": "2024-03-12",
+      "extraction_method": "verbatim_extraction",
+      "verification_method": "claim_in_extracted_text",
+      "claims": [
+        {"claim_text": "62% of teams under 50 employees report dissatisfaction with their first PM tool within 18 months.", "relevance_score": 0.91, "extraction_method": "verbatim_extraction", "verification_method": "claim_in_extracted_text"},
+        {"claim_text": "The top three evaluation criteria cited by small teams are price, learning curve, and integration with existing tools.", "relevance_score": 0.87, "extraction_method": "verbatim_extraction", "verification_method": "claim_in_extracted_text"}
+      ]
+    },
+    {
+      "citation_id": "cit_002",
+      "url": "https://hbr.org/2023/09/the-real-cost-of-tool-sprawl",
+      "title": "The Real Cost of Tool Sprawl",
+      "publication": "Harvard Business Review",
+      "author": "Jane Doe",
+      "published_date": "2023-09-04",
+      "extraction_method": "verbatim_extraction",
+      "verification_method": "claim_in_extracted_text",
+      "claims": [
+        {"claim_text": "Small companies adopting more than 4 SaaS productivity tools see a 23% drop in task-completion velocity within 6 months.", "relevance_score": 0.78, "extraction_method": "verbatim_extraction", "verification_method": "claim_in_extracted_text"}
+      ]
+    },
+    {
+      "citation_id": "cit_003",
+      "url": "https://www.atlassian.com/blog/teamwork/when-to-adopt-pm-tools",
+      "title": "When Does a Small Team Actually Need PM Software?",
+      "publication": "Atlassian",
+      "author": "Atlassian Work Futures Team",
+      "published_date": "2024-01-22",
+      "extraction_method": "verbatim_extraction",
+      "verification_method": "claim_in_extracted_text",
+      "claims": [
+        {"claim_text": "Teams smaller than 5 people typically outgrow shared spreadsheets when they hit 3 concurrent multi-week projects.", "relevance_score": 0.82, "extraction_method": "verbatim_extraction", "verification_method": "entity_overlap"}
+      ]
+    },
+    {
+      "citation_id": "cit_004",
+      "url": "https://www.forrester.com/report/the-pm-software-adoption-trap",
+      "title": "The PM Software Adoption Trap",
+      "publication": "Forrester",
+      "author": "Forrester Analytics",
+      "published_date": "2023-11-30",
+      "extraction_method": "fallback_stub",
+      "verification_method": "stub_acknowledgment",
+      "claims": [
+        {"claim_text": "[stub: original page returned 403; URL preserved as source acknowledgment only]", "relevance_score": 0.55, "extraction_method": "fallback_stub", "verification_method": "stub_acknowledgment"}
+      ]
+    },
+    {
+      "citation_id": "cit_005",
+      "url": "https://www.shopify.com/research/team-tool-migration-playbook",
+      "title": "Team Tool Migration Playbook",
+      "publication": "Shopify Research",
+      "author": "Shopify Operations Team",
+      "published_date": "2024-02-14",
+      "extraction_method": "verbatim_extraction",
+      "verification_method": "claim_in_extracted_text",
+      "claims": [
+        {"claim_text": "A staged migration over 4–6 weeks reduces tool-abandonment risk by 41% compared to a single-day cutover.", "relevance_score": 0.89, "extraction_method": "verbatim_extraction", "verification_method": "claim_in_extracted_text"}
+      ]
+    }
+  ]
+}
+```
+
+### 20.3 Input C — SIE
+
+```json
+{
+  "schema_version": "1.4",
+  "keyword": "project management software for small teams",
+  "word_count": {"target": 2400, "min": 2000, "max": 2800},
+  "target_keyword": {
+    "term": "project management software",
+    "minimum_usage": {"h2": 0, "h3": 0, "paragraphs": 6}
+  },
+  "terms": {
+    "required": [
+      {"term": "project management software", "recommendation_score": 0.98, "is_entity": false, "entity_category": null},
+      {"term": "small teams", "recommendation_score": 0.92, "is_entity": false, "entity_category": null},
+      {"term": "task management", "recommendation_score": 0.78, "is_entity": false, "entity_category": "methods"},
+      {"term": "integrations", "recommendation_score": 0.74, "is_entity": false, "entity_category": "methods"},
+      {"term": "Asana", "recommendation_score": 0.71, "is_entity": true, "entity_category": "brands"},
+      {"term": "Trello", "recommendation_score": 0.68, "is_entity": true, "entity_category": "brands"},
+      {"term": "ClickUp", "recommendation_score": 0.66, "is_entity": true, "entity_category": "brands"},
+      {"term": "user adoption", "recommendation_score": 0.63, "is_entity": false, "entity_category": "problems"}
+    ],
+    "avoid": ["best-in-class", "synergy"]
+  },
+  "usage_recommendations": [
+    {"term": "project management software", "h2": {"min": 0, "target": 1, "max": 2}, "h3": {"min": 0, "target": 0, "max": 1}, "paragraphs": {"min": 6, "target": 8, "max": 12}},
+    {"term": "small teams", "h2": {"min": 0, "target": 1, "max": 2}, "h3": {"min": 0, "target": 0, "max": 1}, "paragraphs": {"min": 3, "target": 5, "max": 8}},
+    {"term": "task management", "h2": {"min": 0, "target": 0, "max": 1}, "h3": {"min": 0, "target": 0, "max": 1}, "paragraphs": {"min": 1, "target": 2, "max": 4}},
+    {"term": "integrations", "h2": {"min": 0, "target": 0, "max": 1}, "h3": {"min": 0, "target": 0, "max": 1}, "paragraphs": {"min": 1, "target": 2, "max": 4}},
+    {"term": "Asana", "h2": {"min": 0, "target": 0, "max": 1}, "h3": {"min": 0, "target": 0, "max": 0}, "paragraphs": {"min": 0, "target": 1, "max": 2}},
+    {"term": "Trello", "h2": {"min": 0, "target": 0, "max": 1}, "h3": {"min": 0, "target": 0, "max": 0}, "paragraphs": {"min": 0, "target": 1, "max": 2}},
+    {"term": "ClickUp", "h2": {"min": 0, "target": 0, "max": 1}, "h3": {"min": 0, "target": 0, "max": 0}, "paragraphs": {"min": 0, "target": 1, "max": 2}},
+    {"term": "user adoption", "h2": {"min": 0, "target": 0, "max": 1}, "h3": {"min": 0, "target": 0, "max": 0}, "paragraphs": {"min": 0, "target": 1, "max": 3}}
+  ],
+  "entities": [
+    {"term": "Asana", "entity_category": "brands", "example_context": "task and project management tool from Asana, Inc.", "ner_variants": ["Asana"], "recommendation_score": 0.71},
+    {"term": "Trello", "entity_category": "brands", "example_context": "Kanban-style PM tool acquired by Atlassian", "ner_variants": ["Trello"], "recommendation_score": 0.68},
+    {"term": "ClickUp", "entity_category": "brands", "example_context": "all-in-one PM platform", "ner_variants": ["ClickUp"], "recommendation_score": 0.66}
+  ]
+}
+```
+
+### 20.4 Input D — Client Context (Tessera Studios)
+
+```json
+{
+  "client_context": {
+    "brand_guide_text": "Tessera Studios is an operations consulting firm. Voice: plainspoken, confident, anti-jargon. We refuse marketing-speak. BANNED TERMS: synergy, leverage (as a verb), best-in-class, robust, seamless, world-class. PREFERRED PHRASING: 'clear', 'concrete', 'outcomes', 'in practice'. We address readers as peers, not as students. We never use 'imagine if', 'picture this', or 'in today's fast-paced world'. We open every piece by naming the problem, not by setting a scene.",
+    "icp_text": "Our readers are operations leaders at 10-50 person teams — founders, ops managers, head-of-ops, COO at companies past PMF but before Series B. They're under-resourced, allergic to fluff, and have to defend every tool purchase to a skeptical founder or board. They've already tried at least one PM tool and abandoned it. Pain points: tool fatigue, team adoption failures, hidden migration costs, and the gap between vendor demos and daily reality. Goals: pick something that survives 18 months, doesn't require a dedicated admin, and integrates with their existing Slack + GSuite stack.",
+    "website_analysis": {
+      "services": ["operations consulting", "tool stack audits", "team workflow design"],
+      "locations": ["Brooklyn, NY"],
+      "tone": [],
+      "positioning": ""
+    },
+    "website_analysis_unavailable": false
+  }
+}
+```
+
+### 20.5 Output (Writer JSON)
+
+```json
+{
+  "keyword": "project management software for small teams",
+  "intent_type": "informational-commercial",
+  "title": "How to Pick Project Management Software for Small Teams",
+
+  "article": [
+    {
+      "order": 0,
+      "level": "H1",
+      "type": "title",
+      "heading": "How to Pick Project Management Software for Small Teams",
+      "body": null,
+      "word_count": 0,
+      "section_budget": 0,
+      "citations_referenced": []
+    },
+    {
+      "order": 1,
+      "level": "none",
+      "type": "h1-enrichment",
+      "heading": null,
+      "body": "A practical guide to evaluation criteria, common pitfalls, and migration for teams of 10–50 already past the spreadsheet stage.",
+      "word_count": 22,
+      "section_budget": 25,
+      "citations_referenced": []
+    },
+    {
+      "order": 2,
+      "level": "none",
+      "type": "key-takeaways",
+      "heading": "Key Takeaways",
+      "body": "- Most small teams pick PM software on features and regret it within 18 months.{{cit_001}}\n- Price, learning curve, and integration depth are the three criteria that actually predict retention.{{cit_001}}\n- Adopting more than four overlapping SaaS tools cuts task velocity by nearly a quarter.{{cit_002}}\n- A staged 4–6 week migration cuts abandonment risk by 41% versus a single-day cutover.{{cit_005}}\n- The right test for needing a tool is three concurrent multi-week projects, not headcount.{{cit_003}}",
+      "word_count": 78,
+      "section_budget": 100,
+      "citations_referenced": ["cit_001", "cit_002", "cit_003", "cit_005"]
+    },
+    {
+      "order": 3,
+      "level": "none",
+      "type": "intro",
+      "heading": null,
+      "body": "If your team has already tried a project management tool and quietly abandoned it, you're not alone — 62% of small teams report dissatisfaction with their first PM tool within 18 months. This guide gives you the three evaluation criteria that actually predict whether a tool will stick, the mistakes that sink most small-team rollouts, and a staged migration plan that survives contact with daily work. You'll see how to evaluate before you compare tools, the common mistakes small teams make when choosing PM software, and how to migrate your team to a new tool without losing the first month.",
+      "word_count": 108,
+      "section_budget": 150,
+      "citations_referenced": []
+    },
+    {
+      "order": 4,
+      "level": "H2",
+      "type": "content",
+      "heading": "What to Evaluate Before You Compare Tools",
+      "body": "Price, learning curve, and integration depth predict whether a project management software pick survives 18 months — features barely matter. According to Gartner, those are the top three evaluation criteria cited by small teams.{{cit_001}} Most buyers invert this and start with feature checklists; that's how they end up with a tool no one logs into by month six. [... ~150 more words covering the three criteria with concrete examples ...]\n\n### How to Tell If You Actually Need One Yet\n\nThe honest test is concurrent project load, not headcount. Atlassian's research found that teams under five people typically outgrow shared spreadsheets when they hit three concurrent multi-week projects.{{cit_003}} If you're running one or two projects at a time, a shared doc and a recurring Friday review will outperform any tool you adopt. [... ~80 more words ...]",
+      "word_count": 312,
+      "section_budget": 360,
+      "citations_referenced": ["cit_001", "cit_003"]
+    },
+    {
+      "order": 5,
+      "level": "H2",
+      "type": "content",
+      "heading": "Common Mistakes Small Teams Make When Choosing PM Software",
+      "body": "The most expensive mistake is stacking tools instead of replacing them. Harvard Business Review found that small companies adopting more than four SaaS productivity tools see a 23% drop in task-completion velocity within six months.{{cit_002}} Forrester has covered the same adoption trap in its research on PM tooling.{{cit_004}} [... ~250 words covering: picking on demo polish, ignoring integration depth, skipping the trial team, not naming an admin. Includes a Markdown table of the four mistakes with symptoms and corrections. Mentions Asana, Trello, and ClickUp as examples of feature-rich tools that get over-adopted ...]\n\nFor Tessera Studios clients we've audited, the pattern is consistent: the team picks a tool, two people set it up, three weeks later only one person is logging in, and the tool quietly joins the graveyard of abandoned subscriptions. The fix is naming the admin BEFORE the trial, not after — a concrete person whose job includes onboarding and quarterly cleanup.",
+      "word_count": 308,
+      "section_budget": 360,
+      "citations_referenced": ["cit_002", "cit_004"]
+    },
+    {
+      "order": 6,
+      "level": "H2",
+      "type": "content",
+      "heading": "How to Migrate Your Team to a New PM Tool",
+      "body": "Stage the migration over four to six weeks, not in a single weekend. Shopify's operations research found a staged migration cuts tool-abandonment risk by 41% compared to a single-day cutover.{{cit_005}} The cutover-on-Friday plan fails because it asks people to learn new workflows under deadline pressure; the staged plan asks them to learn it during low-stakes work. [... ~220 words covering: pilot team selection, dual-running existing projects, integration setup with Slack and GSuite, training cadence, and the post-cutover cleanup. Includes a bulleted list of week-by-week milestones ...]",
+      "word_count": 296,
+      "section_budget": 360,
+      "citations_referenced": ["cit_005"]
+    },
+    {
+      "order": 7,
+      "level": "H2",
+      "type": "faq-header",
+      "heading": "Frequently Asked Questions",
+      "body": null,
+      "word_count": 0,
+      "section_budget": 0,
+      "citations_referenced": []
+    },
+    {
+      "order": 8,
+      "level": "H3",
+      "type": "faq-question",
+      "heading": "How much should a small team spend on project management software?",
+      "body": "Small teams should expect to spend $10–$20 per user per month for project management software that handles their workflow without forcing upgrades. Cheaper tools cover task management but often miss the integrations small teams need with Slack, calendar, and document storage. Spending more than $25 per user usually buys enterprise features your team won't use for at least a year.",
+      "word_count": 61,
+      "section_budget": 0,
+      "citations_referenced": []
+    },
+    {
+      "order": 9,
+      "level": "H3",
+      "type": "faq-question",
+      "heading": "Is free project management software good enough for a startup?",
+      "body": "Free project management software works for teams under five people running one or two concurrent projects, but breaks down when integrations, permissions, or reporting matter. Most free tiers cap users or projects exactly where small teams start to feel friction. If you're past three concurrent multi-week projects, the time you lose to workarounds usually costs more than the paid tier.",
+      "word_count": 62,
+      "section_budget": 0,
+      "citations_referenced": []
+    },
+    {
+      "order": 10,
+      "level": "H3",
+      "type": "faq-question",
+      "heading": "How long does it take to roll out PM software to a 20-person team?",
+      "body": "A 20-person team can roll out project management software in four to six weeks if you stage it properly. Plan one week of admin setup and integrations, two weeks of pilot use with a single team, then a phased rollout to the remaining people over two to three weeks. Single-weekend cutovers technically work but produce a 41% higher abandonment rate.",
+      "word_count": 60,
+      "section_budget": 0,
+      "citations_referenced": []
+    },
+    {
+      "order": 11,
+      "level": "H2",
+      "type": "conclusion",
+      "heading": "",
+      "body": "Picking project management software for small teams is a question of fit, not features. Evaluate on price, learning curve, and integration depth before you compare tools; avoid the four mistakes that sink most rollouts; and stage your migration so people learn the new workflow during low-stakes work. Tessera Studios runs tool stack audits with operations teams in exactly this situation — the audit is usually faster than a vendor demo cycle and produces a tool list your team will actually use.",
+      "word_count": 84,
+      "section_budget": 125,
+      "citations_referenced": []
+    },
+    {
+      "order": 12,
+      "level": "none",
+      "type": "cta",
+      "heading": null,
+      "body": "Audit your current tool stack against the three criteria before you start any new PM software trial.",
+      "word_count": 17,
+      "section_budget": 30,
+      "citations_referenced": []
+    }
+  ],
+
+  "article_markdown": "# How to Pick Project Management Software for Small Teams\n\nA practical guide to evaluation criteria, common pitfalls, and migration for teams of 10–50 already past the spreadsheet stage.\n\n## Key Takeaways\n\n- Most small teams pick PM software on features and regret it within 18 months.[^1]\n- Price, learning curve, and integration depth are the three criteria that actually predict retention.[^1]\n- Adopting more than four overlapping SaaS tools cuts task velocity by nearly a quarter.[^2]\n- A staged 4–6 week migration cuts abandonment risk by 41% versus a single-day cutover.[^3]\n- The right test for needing a tool is three concurrent multi-week projects, not headcount.[^4]\n\nIf your team has already tried a project management tool and quietly abandoned it, you're not alone — 62% of small teams report dissatisfaction with their first PM tool within 18 months. [... full intro paragraph ...]\n\n## What to Evaluate Before You Compare Tools\n\nPrice, learning curve, and integration depth predict whether a project management software pick survives 18 months — features barely matter. According to Gartner, those are the top three evaluation criteria cited by small teams.[^1] [... section body ...]\n\n### How to Tell If You Actually Need One Yet\n\nThe honest test is concurrent project load, not headcount. [... H3 body ...]\n\n## Common Mistakes Small Teams Make When Choosing PM Software\n\n[... section ...]\n\n## How to Migrate Your Team to a New PM Tool\n\n[... section ...]\n\n## Frequently Asked Questions\n\n### How much should a small team spend on project management software?\n\nSmall teams should expect to spend $10–$20 per user per month [... answer ...]\n\n### Is free project management software good enough for a startup?\n\n[... answer ...]\n\n### How long does it take to roll out PM software to a 20-person team?\n\n[... answer ...]\n\n## Conclusion\n\nPicking project management software for small teams is a question of fit, not features. [... conclusion ...]\n\nAudit your current tool stack against the three criteria before you start any new PM software trial.\n\n## Sources\n\n[^1]: Picking PM Software in 2024: A Buyer's Guide — https://www.gartner.com/en/articles/picking-pm-software-2024\n[^2]: The Real Cost of Tool Sprawl — https://hbr.org/2023/09/the-real-cost-of-tool-sprawl\n[^3]: Team Tool Migration Playbook — https://www.shopify.com/research/team-tool-migration-playbook\n[^4]: When Does a Small Team Actually Need PM Software? — https://www.atlassian.com/blog/teamwork/when-to-adopt-pm-tools\n",
+
+  "article_html": "<h1>How to Pick Project Management Software for Small Teams</h1>\n<p>A practical guide to evaluation criteria, common pitfalls, and migration for teams of 10–50 already past the spreadsheet stage.</p>\n<h2>Key Takeaways</h2>\n<p>[... bulleted body with &lt;sup&gt;&lt;a href=&quot;#cite-1&quot;&gt;1&lt;/a&gt;&lt;/sup&gt; superscripts ...]</p>\n[... more elements ...]\n<h2>Sources</h2>\n<ol>\n<li id=\"cite-1\"><a href=\"https://www.gartner.com/en/articles/picking-pm-software-2024\">Picking PM Software in 2024: A Buyer's Guide</a></li>\n<li id=\"cite-2\"><a href=\"https://hbr.org/2023/09/the-real-cost-of-tool-sprawl\">The Real Cost of Tool Sprawl</a></li>\n<li id=\"cite-3\"><a href=\"https://www.shopify.com/research/team-tool-migration-playbook\">Team Tool Migration Playbook</a></li>\n<li id=\"cite-4\"><a href=\"https://www.atlassian.com/blog/teamwork/when-to-adopt-pm-tools\">When Does a Small Team Actually Need PM Software?</a></li>\n</ol>\n",
+
+  "key_takeaways": [
+    "Most small teams pick PM software on features and regret it within 18 months.",
+    "Price, learning curve, and integration depth are the three criteria that actually predict retention.",
+    "Adopting more than four overlapping SaaS tools cuts task velocity by nearly a quarter.",
+    "A staged 4–6 week migration cuts abandonment risk by 41% versus a single-day cutover.",
+    "The right test for needing a tool is three concurrent multi-week projects, not headcount."
+  ],
+
+  "intro": {
+    "agree": "If your team has already tried a project management tool and quietly abandoned it, you're not alone — 62% of small teams report dissatisfaction with their first PM tool within 18 months.",
+    "promise": "This guide gives you the three evaluation criteria that actually predict whether a tool will stick, the mistakes that sink most small-team rollouts, and a staged migration plan that survives contact with daily work.",
+    "preview": "You'll see how to evaluate before you compare tools, the common mistakes small teams make when choosing PM software, and how to migrate your team to a new tool without losing the first month."
+  },
+
+  "cta": "Audit your current tool stack against the three criteria before you start any new PM software trial.",
+
+  "citation_usage": {
+    "total_citations_available": 5,
+    "citations_used": 5,
+    "citations_unused": 0,
+    "usage": [
+      {"citation_id": "cit_001", "used": true, "sections_used_in": [2, 4], "marker_placed": true},
+      {"citation_id": "cit_002", "used": true, "sections_used_in": [2, 5], "marker_placed": true},
+      {"citation_id": "cit_003", "used": true, "sections_used_in": [2, 4], "marker_placed": true},
+      {"citation_id": "cit_004", "used": true, "sections_used_in": [5], "marker_placed": true},
+      {"citation_id": "cit_005", "used": true, "sections_used_in": [2, 6], "marker_placed": true}
+    ]
+  },
+
+  "format_compliance": {
+    "lists_present": 2,
+    "tables_present": 1,
+    "lists_required": 1,
+    "tables_required": 1,
+    "answer_first_applied": true,
+    "directives_satisfied": true
+  },
+
+  "brand_voice_card_used": {
+    "tone_adjectives": ["plainspoken", "confident", "anti-jargon", "peer-to-peer"],
+    "voice_directives": [
+      "Open by naming the problem; do not set a scene.",
+      "Address readers as peers, never as students.",
+      "Refuse marketing-speak.",
+      "Use concrete examples over abstractions.",
+      "Prefer 'in practice' framing to 'imagine if'."
+    ],
+    "audience_summary": "Operations leaders at 10–50-person teams (founders, ops managers, COOs) past PMF but pre-Series B, under-resourced, allergic to fluff, defending tool purchases to skeptical founders.",
+    "audience_pain_points": [
+      "tool fatigue from already-abandoned tools",
+      "team adoption failures",
+      "hidden migration costs",
+      "gap between vendor demos and daily reality"
+    ],
+    "audience_goals": [
+      "pick something that survives 18 months",
+      "avoid needing a dedicated admin",
+      "integrate with existing Slack + GSuite stack"
+    ],
+    "audience_verticals": ["B2B SaaS", "operations consulting", "early-stage startups"],
+    "preferred_terms": ["clear", "concrete", "outcomes", "in practice"],
+    "banned_terms": ["synergy", "leverage", "best-in-class", "robust", "seamless", "world-class", "imagine if", "picture this", "in today's fast-paced world"],
+    "discouraged_terms": [],
+    "brand_name": "Tessera Studios",
+    "client_services": ["operations consulting", "tool stack audits", "team workflow design"],
+    "client_locations": ["Brooklyn, NY"],
+    "client_contact_info": {"phone": null, "email": null, "address": null, "hours": null}
+  },
+
+  "brand_conflict_log": [],
+
+  "client_context_summary": {
+    "brand_guide_provided": true,
+    "icp_provided": true,
+    "website_analysis_used": true,
+    "schema_version_effective": "1.7"
+  },
+
+  "metadata": {
+    "total_word_count": 2218,
+    "word_budget": 2500,
+    "faq_word_count": 183,
+    "budget_utilization_pct": 88.7,
+    "word_count_conflict": false,
+    "no_required_terms": false,
+    "section_count": 4,
+    "faq_count": 3,
+    "citations_used": 5,
+    "citations_unused": 0,
+    "no_citations": false,
+    "retry_count": 1,
+
+    "dropped_for_low_topic_adherence": [],
+    "low_h2_count_after_adherence_drop": false,
+
+    "paragraph_length_violations": [],
+
+    "under_cited_sections": [],
+    "operational_claims_softened": [],
+    "citation_coverage_retries_attempted": 0,
+    "citation_coverage_retries_succeeded": 0,
+
+    "under_length_h2_sections": [],
+    "h2_body_length_retries_attempted": 1,
+    "h2_body_length_retries_succeeded": 1,
+
+    "topic_brand_alignment": "brand_aligned",
+    "brand_mention_count": 2,
+    "brand_mention_flags": [],
+    "brand_anchor_h2_order": 5,
+    "icp_anchor_h2_order": 4,
+    "icp_hook_phrase": "tool fatigue from already-abandoned tools",
+    "icp_callout_landed": true,
+    "icp_callout_evidence": "If your team has already tried a project management tool and quietly abandoned it, you're not alone",
+    "icp_callout_judge_status": "ok",
+
+    "max_sentences_per_paragraph_default_applied": false,
+    "cta_truncated": false,
+
+    "schema_version": "1.7",
+    "brief_schema_version": "2.3",
+    "generation_time_ms": 71240
+  }
+}
+```
+
+### 20.6 What this example exercises
+
+| Behavior | Where it shows up |
+|---|---|
+| H1 verbatim from brief | `article[0].heading == brief.title` |
+| Enrichment lede ≤25 words | `article[1].word_count == 22` |
+| Key Takeaways with markers | `article[2].body` has `{{cit_001}}` etc. |
+| Intro 60–150 words, single paragraph | `article[3].body` joined; `word_count: 108` |
+| Authority-gap H3 | `article[4].body` contains the `### How to Tell If You Actually Need One Yet` subsection |
+| Fallback stub used as context only | `cit_004` referenced as "Forrester has covered the same adoption trap" — no specific stat from the stub |
+| Brand anchor H2 mentions Tessera Studios | `metadata.brand_anchor_h2_order: 5` matches the H2 containing the Tessera mention |
+| ICP anchor H2 surfaces pain point | `metadata.icp_anchor_h2_order: 4`, judge landed: true with paraphrase evidence |
+| Brand mention count within budget | `brand_mention_count: 2` (target 2–3) |
+| Brand-aligned topic | `topic_brand_alignment: "brand_aligned"` because client services overlap with article topic |
+| Markdown footnotes | `article_markdown` uses `[^1]` and `## Sources` |
+| HTML superscripts + Sources `<ol>` | `article_html` uses `<sup><a href="#cite-1">` and `<li id="cite-1">` |
+| H2 body length retry succeeded | `h2_body_length_retries_attempted: 1`, `_succeeded: 1` |
+| Zero brand conflicts | `brand_conflict_log: []` (no SIE-vs-brand term overlap on this input) |
+| No coverage retries needed | `citation_coverage_retries_attempted: 0` (claims were well-cited on first pass) |
+| `schema_version_effective: "1.7"` | Full v1.7 path, client context present and well-formed |
+
+A test fixture can replay these payloads end-to-end and assert each row of this table.
+
