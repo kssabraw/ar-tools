@@ -1,11 +1,13 @@
 # PRD: Content Writer Module
-**Version:** 1.7
+**Version:** 1.8
 **Status:** Draft
-**Last Updated:** 2026-05-03
+**Last Updated:** 2026-06-14
 **Part of:** ShowUP Local — Content Generation Platform
 **Upstream Dependencies:** SIE Term & Entity Module · Research & Citations Module (v1.1) · Content Brief Generator Module (v2.3)
 **Downstream Dependency:** Sources Cited Module (v1.1)
 
+> **v1.8 changes (2026-06-14):** Adds **Step 4G — Extractable Snippets** under Section Writing. Each target query / fan-out sub-question must carry at least one verbatim-liftable answer sentence — written in third person about the entity (not the brand), with no deferral and no cross-sentence references — to maximize the page's odds of being lifted into an AI Overview. Every extractable snippet is also a self-contained claim (the reverse is not required). PREFER co-locating the snippet with its matching subheading and embedding the main entity so one sentence satisfies both this requirement and §4A (Answer-First Paragraphs). Adds a corresponding AEO requirement (§9) and business rules (§12). **No output schema change** — output `schema_version` stays `1.7`; this is a writing-requirement addition, not a payload change, so the orchestrator's `EXPECTED_MODULE_VERSIONS` / `WRITER_ACCEPTED_VERSIONS` are unaffected.
+>
 > **v1.7 changes (2026-05-03):** Phase 4 of the article-quality defect fixes — addresses Defect 5 (unsourced operational claims) from the 2026-05-03 audit ("4-to-6 week refresh cadence" and "60-day affiliate audit window" stated as fact without adjacent citations).
 >
 > 1. **Step 4F.1 — Citable-Claim Detection** is implemented. Base patterns C1–C6 from the writer PRD (R7) plus three new operational-claim patterns:
@@ -538,6 +540,28 @@ The soften table is intentionally small in v1; entries are added as production d
 
 **FAQ rule:** FAQ answers are exempt from the 50% threshold. However, the same claim-detection pass runs on FAQ answers; any FAQ answer with a numeric statistic without a citation is **rewritten** to remove the statistic in favor of a qualitative phrasing (one-shot retry with explicit instruction). *(FAQ-specific path is specced but not yet wired in v1.7 — current implementation runs the validator over content H2 groups only; FAQ extension is a v1.x candidate.)*
 
+#### 4G — Extractable Snippets (added per AI Overview / AEO optimization, v1.8)
+
+**Purpose.** Maximize the page's odds of being lifted into the AI Overview (AIO) by ensuring at least one sentence per target query is a verbatim-liftable answer.
+
+**Definition.** An *extractable snippet* is a single sentence that fully answers a target query and can be quoted into the AIO with zero surrounding context. It is the successor to the featured-snippet pattern. Every extractable snippet is also a self-contained claim (stands alone, no back-references); the reverse is **not** required.
+
+**Writer requirements:**
+
+- For each target query / fan-out sub-question, the writer **MUST** produce at least one extractable snippet that directly answers it.
+- Snippets **MUST** be written in third person, stating the fact about the *entity*, not the brand (e.g., "Red apples taste sweetest in fall," not "Our red apples taste great").
+- Snippets **MUST NOT** defer ("it depends — see below," "let me explain"). The answer is in the sentence itself.
+- Snippets **MUST** contain no reference failures: no pronouns, possessives, or connectors that point to other sentences ("this," "as mentioned," "our," "they").
+- **No fixed length.** Target one clean declarative sentence (~5–30 words); correctness and self-containment override length.
+- **PREFER** co-locating the snippet with its matching subheading and embedding the main entity, so one sentence satisfies both this requirement and §4A (Answer-First Paragraphs) — e.g., "For charging crystals, leave them in direct moonlight overnight for six to eight hours." In practice the answer-first sentence of each H2/H3 (§4A) is the natural carrier for that section's extractable snippet.
+
+**Relationship to other requirements:**
+
+- The self-containment and no-back-reference rules mirror the FAQ answer rules (§5) and the Key Takeaways self-containment rule (§6.5); a sentence that satisfies §4G for an H2 also satisfies those constraints if reused as an FAQ answer or takeaway.
+- "Third person, about the entity not the brand" complements the brand-mention budget (R5) and the §3.6 brand/ICP placement plan: snippets are not the place to spend a brand mention.
+- The "no deferral / hedge-free" rule is the sentence-level expression of the §9 AEO "hedge-free substance" requirement and the §4E prohibition on hedge language as a substitute for substance.
+
+**Source of target queries / fan-out sub-questions:** the H2/H3 headings of `brief.heading_structure` (each content heading is a target query, and question-framed headings especially) plus the `brief.faqs` set (each FAQ question is a fan-out sub-question). No new upstream input is introduced; §4G is a constraint on how existing sections are written.
 
 ---
 
@@ -865,6 +889,7 @@ Answer Engine Optimization governs how content is structured for LLM citation su
 | Requirement | Implementation |
 |---|---|
 | Answer-first paragraphs | Every H2 section opens with a ≤25-word direct answer sentence before elaboration |
+| Extractable snippets (§4G) | At least one verbatim-liftable answer sentence per target query / fan-out sub-question: third person about the entity (not the brand), no deferral, no cross-sentence references. Preferably the §4A answer-first sentence with the main entity embedded |
 | Self-contained FAQ answers | FAQ answers must be standalone; no cross-references to article sections |
 | Clean section boundaries | Each section's content must not bleed topically into adjacent sections |
 | Factual density | Sections must contain verifiable facts, not filler padding |
@@ -921,6 +946,10 @@ Combined with upstream costs — Brief Generator ($0.19–$0.53), Research & Cit
 | FAQ answer word range | 40–80 words |
 | FAQ answers may cross-reference article sections | No |
 | Answer-first paragraphs | Required for all H2 sections |
+| Extractable snippet per target query (§4G) | Required — ≥ 1 verbatim-liftable answer sentence per H2/H3 target query and per FAQ fan-out sub-question |
+| Extractable snippet voice (§4G) | Third person, about the entity; must not name/promote the brand |
+| Extractable snippet deferral / back-references (§4G) | Forbidden — no "it depends / see below", no pronouns/possessives/connectors pointing to other sentences |
+| Extractable snippet length (§4G) | No fixed length; target ~5–30 words; correctness and self-containment override length |
 | Avoid terms enforcement | Hard block; flagged for downstream quality module |
 | Sections trimmed when over budget | Lowest `heading_priority` H3s trimmed first |
 | FAQ excluded from word budget | Yes |
@@ -974,6 +1003,7 @@ To be addressed in the engineering implementation spec:
 | 1.4 | 2026-04-30 | Added downstream Sources Cited Module as a new dependency; restructured citation output to support it. Replaced inline Markdown hyperlink placement with `{{citation_id}}` inline marker placement at the point of citation use (markers conform to regex `\{\{cit_[0-9]+\}\}` and are placed immediately after closing punctuation of the cited sentence). Removed all inline hyperlink logic from Step 4F; citation formatting and external linking are now sole responsibility of the downstream Sources Cited Module. Renamed `inline_link_placed` to `marker_placed` in `citation_usage` output. Declared `article[].body` field format as Markdown (GFM/CommonMark) with embedded marker tokens. Removed `citations[].url`, `title`, `author`, `publication`, and `published_date` from Writer's consumed fields list (they pass through downstream to the Sources Cited Module). Added explicit guardrail: markers are forbidden in heading fields. Added stacked-marker rule for multiple citations in a single sentence. Bumped output `schema_version` to `1.4`. |
 | 1.5 | 2026-04-30 | See `/docs/writer-module-v1_5-change-spec_2.md`. Added `client_context` Input D, brand voice distillation (Step 3.5a), brand–SIE term reconciliation (Step 3.5b), brand voice injection into Steps 4–6, post-hoc regex-based banned-term scan (§4.4), `brand_voice_card_used`, `brand_conflict_log[]`, and `client_context_summary` outputs. |
 | 1.6 | 2026-05-01 | Encoded Content Quality PRD v1.0 R3, R4, R5, R6, R7. Added: topic-adherence anchor after Step 1 (drops H2s with `cosine ≤ 0.62` to title and routes them to brief spin-offs); intro construction in Step 2.5 with discrete Agree/Promise/Preview blocks; paragraph-length directive in Step 4E.1; citable-claim detection and 50% coverage threshold with one-shot remediation in Step 4F.1; explicit CTA in Step 6.4 (now a separate structural element, removed from conclusion prose); Key Takeaways generation in Step 6.5 (3–5 items, ≤ 25 words each); paragraph-length validation pass in Step 6.6 (default 4 sentences); brand-mention budget enforcement (2–3 target, 0 on brand-aligned topic flagged, ≥ 6 retry-then-accept); new `article[]` types `key-takeaways`, `intro`, `cta`; new metadata fields `dropped_for_low_topic_adherence`, `paragraph_length_violations`, `under_cited_sections`, `topic_brand_alignment`, `brand_mention_count`, `brand_mention_flags`, `cta_truncated`. Bumped `schema_version` to `1.6`; consumed `brief_schema_version` to `1.8`. |
+| 1.8 | 2026-06-14 | Added **Step 4G — Extractable Snippets** under Section Writing (AI Overview / AEO optimization). Each target query / fan-out sub-question must carry at least one verbatim-liftable answer sentence: third person about the entity (not the brand), no deferral, no cross-sentence reference failures, no fixed length (~5–30 words; correctness/self-containment override length). Every extractable snippet is also a self-contained claim (reverse not required); PREFER co-locating it with its matching subheading and embedding the main entity so one sentence satisfies both §4G and §4A. Added the corresponding AEO requirement (§9) and business rules (§12). No output schema change — output `schema_version` stays `1.7`; orchestrator `EXPECTED_MODULE_VERSIONS` / `WRITER_ACCEPTED_VERSIONS` unaffected. |
 | **1.7** | **2026-05-03** | **Phase 4 of the article-quality defect fixes (proposal accepted 2026-05-03). Addresses Defect 5 — unsourced operational claims. Step 4F.1 citable-claim detection is implemented with base patterns C1-C6 plus three NEW operational-claim patterns: **C7** (duration-as-recommendation: `<numeric duration> + <cadence/window/cycle/review/audit/refresh/sprint/cooldown/lookback/horizon/grace period/onboarding>`), **C8** (frequency-as-recommendation: `every <N> <unit>` and `(weekly\|monthly\|quarterly\|biweekly\|annually) + <action>`), **C9** (operational-percentage: `<N>% rule/threshold/target/cap/floor/ceiling` and `aim for <N>%` and `keep [...]<N>%`). Per-H2 citation-coverage validator runs after Step 6.7 and before Step 7. Coverage = cited_claims / citable_claims. Below 50% triggers ONE retry with a `COVERAGE_RETRY:` directive. After retry, any unresolved C7/C8/C9 claim is deterministically softened via a small lookup table ("4-to-6 week refresh cadence" → "a typical refresh cadence (every few weeks)", "60-day affiliate audit window" → "a typical audit window", "weekly audit" → "a regular audit", "5% rule" → "a small percentage rule", "aim for 30%" → "aim for a moderate share"). C1-C6 claims are NEVER softened. Sections still under threshold are accepted and surfaced in `metadata.under_cited_sections`. Run never aborts. New metadata fields: `under_cited_sections`, `operational_claims_softened`, `citation_coverage_retries_attempted`, `citation_coverage_retries_succeeded`. Schema bump `1.6` → `1.7` (with accepted variants `1.7-no-context`, `1.7-degraded`). Orchestrator `EXPECTED_MODULE_VERSIONS["writer"]` and `WRITER_ACCEPTED_VERSIONS` bumped in lockstep. Cost impact: 0–N additional LLM calls for coverage retries (~$0.01-0.03 each, only fires when coverage < 50%). Steady-state expected ≤ 1/run.** |
 
 ---
