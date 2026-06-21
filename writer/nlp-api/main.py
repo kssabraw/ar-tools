@@ -5067,6 +5067,23 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             token_rec["output_tokens"] += score_tok["output_tokens"]
             token_rec["cost_usd"]       = round(token_rec["cost_usd"] + score_tok["cost_usd"], 6)
 
+            # Build the SEO checklist for the reoptimize pass(es), mirroring
+            # generate-page's invocation. Only built when a pass will actually
+            # run (score < 90), so a passing page costs no extra LLM call. This
+            # repairs a long-standing gap: _reoptimize_html_inline requires
+            # seo_checklist but the worker never produced it (NameError).
+            seo_checklist = ""
+            if inline_score < 90:
+                seo_checklist = await _build_seo_checklist(
+                    keyword=body.keyword,
+                    location=body.location,
+                    address=body.address,
+                    phone=body.phone,
+                    gbp_category=body.gbp_category,
+                    serp_analysis=body.serp_analysis,
+                    client=client,
+                )
+
             for pass_num in range(2, MAX_AUTO_PASSES + 1):
                 if inline_score >= 90:
                     break
