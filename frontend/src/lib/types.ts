@@ -58,7 +58,81 @@ export interface Client extends ClientListItem {
   business_location: string | null
   gbp_place_id: string | null
   gbp: GbpProfile | null
+  brand_voice: BrandVoice | null
+  detected_icp: DetectedIcp | null
+  differentiators: Differentiator[] | null
   updated_at: string
+}
+
+// ── ICP + differentiators (converged client-level assets, Option A) ──────────
+
+export interface IcpSegment {
+  label?: string
+  confidence?: number
+  primary?: boolean
+  demographics?: { description?: string; situation?: string }
+  psychographics?: {
+    trigger?: string
+    fears?: string[]
+    motivations?: string[]
+    buying_behavior?: string
+  }
+  messaging?: { tone?: string; hooks?: string[]; trust_signals?: string[] }
+}
+
+export interface DetectedIcp {
+  source: 'user' | 'app' | null
+  raw_text: string | null
+  segments: IcpSegment[] | null
+  reasoning: string | null
+  generated_at: string | null
+  edited_at: string | null
+}
+
+export interface Differentiator {
+  claim?: string
+  mechanism?: string
+  type?: string
+}
+
+export interface IcpResponse {
+  detected_icp: DetectedIcp | null
+  differentiators: Differentiator[] | null
+  pages_crawled?: number | null
+  analysis_status?: string | null
+}
+
+// ── Brand Voice (converged client-level asset, Option A) ─────────────────────
+
+export interface VoiceProfile {
+  personality?: string[]
+  tone?: string
+  writing_style?: {
+    sentence_length?: string
+    person?: string
+    jargon_level?: string
+    formality?: string
+  }
+  vocabulary?: { use?: string[]; avoid?: string[] }
+  messaging_themes?: string[]
+  sample_phrases?: string[]
+  content_generation_instructions?: string
+}
+
+export interface BrandVoice {
+  source: 'user' | 'app' | null
+  raw_text: string | null
+  current_voice: VoiceProfile | null
+  recommended_voice: VoiceProfile | null
+  recommended_accepted: boolean | null
+  writer_execution_guide: Record<string, unknown> | null
+  generated_at: string | null
+  edited_at: string | null
+}
+
+export interface BrandVoiceResponse {
+  brand_voice: BrandVoice | null
+  pages_sampled?: number | null
 }
 
 export interface ModuleOutput {

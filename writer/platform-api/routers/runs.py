@@ -24,6 +24,7 @@ from models.runs import (
 )
 from services.orchestrator import NON_TERMINAL_STATUSES, orchestrate_run
 from services.file_parser import detect_format
+from services import brand_voice_service, icp_service
 
 logger = logging.getLogger(__name__)
 
@@ -268,9 +269,11 @@ async def create_run(
     run = run_result.data[0]
     run_id = run["id"]
 
-    # Determine brand_guide format and icp_format from text content + source type
-    brand_text = client.get("brand_guide_text") or ""
-    icp_text = client.get("icp_text") or ""
+    # Determine brand_guide format and icp_format from text content + source type.
+    # brand_text comes from the converged brand_voice (Option A), falling back to
+    # the legacy free-text column when brand_voice is unset.
+    brand_text = brand_voice_service.resolve_brand_guide_text(client)
+    icp_text = icp_service.resolve_icp_text(client)
     website_analysis = client.get("website_analysis")
     website_unavailable = website_analysis is None or client.get("website_analysis_status") != "complete"
 
@@ -470,8 +473,8 @@ async def rerun(
         supabase.table("clients").select("*").eq("id", original["client_id"]).single().execute()
     )
     client = client_result.data or {}
-    brand_text = client.get("brand_guide_text") or ""
-    icp_text = client.get("icp_text") or ""
+    brand_text = brand_voice_service.resolve_brand_guide_text(client)
+    icp_text = icp_service.resolve_icp_text(client)
     website_analysis = client.get("website_analysis")
     website_unavailable = website_analysis is None or client.get("website_analysis_status") != "complete"
 

@@ -1821,6 +1821,21 @@ async def _discover_via_nav(base_url: str, client: httpx.AsyncClient) -> List[st
         return []
 
 
+def _loads_lenient(text: str) -> dict:
+    """Parse JSON from an LLM response, tolerating leading/trailing prose.
+    Tries a direct parse first; on failure, extracts the outermost {...} object
+    and retries. Re-raises if neither parses, so callers keep their existing
+    degrade path (analyze → 502; URL classify → rule-based). Never changes the
+    result of an already-valid parse."""
+    try:
+        return json.loads(text)
+    except Exception:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
+
+
 async def _classify_urls_with_ai(urls: List[str]) -> Dict[str, str]:
     """
     Use Claude Haiku to classify a batch of ambiguous URLs by page type.
@@ -1869,7 +1884,7 @@ JSON only: {{"url1": "type1", "url2": "type2"}}"""
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
 
-        result = json_lib.loads(raw)
+        result = _loads_lenient(raw)
         logger.info(f"Haiku classified {len(result)} ambiguous URLs")
         return result
 
@@ -2068,7 +2083,7 @@ Return only valid JSON, no markdown or explanation."""
         if text.startswith("```"):
             text = re.sub(r'^```(?:json)?\s*', '', text)
             text = re.sub(r'\s*```$', '', text.strip())
-        result = json_lib.loads(text)
+        result = _loads_lenient(text)
         return result
 
     except Exception as e:
@@ -2402,6 +2417,13 @@ def _build_brand_voice_text(brand_voice: Optional[dict]) -> str:
     if not brand_voice:
         return ""
     bv = brand_voice
+    # A user-authored freeform brand guide (raw_text) supersedes the structured
+    # fields — render it verbatim and stop. This makes a raw_text-only voice
+    # (e.g. seeded from the legacy brand_guide_text) reach Local SEO generation,
+    # not just the Blog Writer (suite convergence, Option A).
+    raw_text = (bv.get("raw_text") or "").strip()
+    if raw_text:
+        return "BRAND VOICE (verbatim brand guide — match this exactly):\n" + raw_text
     if bv.get("recommended_accepted") is True:
         voice = bv.get("recommended_voice") or bv.get("current_voice") or {}
     else:
@@ -2458,6 +2480,129 @@ def _build_brand_voice_text(brand_voice: Optional[dict]) -> str:
     return "\n".join(lines)
 
 
+def _extract_text_from_html(html: str) -> List[str]:
+    """Extract clean paragraph text from HTML. Falls back to block lines for
+    builder sites (Wix/Squarespace/Duda) that use <div>/<span> instead of <p>."""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "aside"]):
+        tag.decompose()
+    paragraphs = [el.get_text(" ", strip=True) for el in soup.find_all("p")]
+    paragraphs = [t for t in paragraphs if len(t) > 40]
+    if not paragraphs:
+        lines = soup.get_text("\n", strip=True).splitlines()
+        seen = set()
+        for line in lines:
+            line = line.strip()
+            if len(line) > 40 and line not in seen:
+                paragraphs.append(line)
+                seen.add(line)
+            if len(paragraphs) >= 30:
+                break
+    return paragraphs[:30]
+
+
+async def run_brand_voice_analysis(body: BrandVoiceRequest) -> BrandVoiceResponse:
+    """Full brand-voice pipeline: probe → crawl → scrape (2 tiers) → 3 LLM calls.
+
+    Website path: crawl up to 25 voice-representative pages, scrape, analyze.
+    No-website path (no URL, or all scraping fails): category inference only.
+    GBP-independent — works for any client with a name (+ optional website).
+    """
+    if body.website_url and body.website_url.strip():
+        _block_ssrf(body.website_url)
+    page_contents: List[str] = []
+    pages_sampled = 0
+
+    has_site = bool(body.website_url and body.website_url.strip())
+    if has_site and not SCRAPEOWL_API_KEY:
+        # Without ScrapeOwl the scraper can't fetch content (no plain-HTTP
+        # fallback here), so skip probe/crawl/scrape and infer from category
+        # rather than firing ~25 doomed ScrapeOwl POSTs with an empty key.
+        logger.info("Brand voice: SCRAPEOWL_API_KEY unset — skipping site scrape; using category inference")
+
+    if has_site and SCRAPEOWL_API_KEY:
+        url = body.website_url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0, headers=CRAWL_HEADERS) as client:
+            # Probe first to catch dead links / 4xx errors with a friendly message.
+            try:
+                probe = await client.get(url, timeout=10.0)
+                if probe.status_code >= 400:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Your website returned a {probe.status_code} error. Check that the URL is correct and the site is live.",
+                    )
+            except httpx.RequestError as e:
+                logger.warning(f"Brand voice website probe failed for {url}: {type(e).__name__}: {e}")
+                raise HTTPException(
+                    status_code=422,
+                    detail="Your website couldn't be reached. Check that the URL is correct and your site is live.",
+                )
+            selected = await _crawl_pages_for_brand_voice(url, client, max_pages=25)
+
+        async def _scrapeowl_extract(pages: List[dict], render_js: bool) -> List[str]:
+            sem = asyncio.Semaphore(8)
+
+            async def _bounded(p: dict, sc_client: httpx.AsyncClient) -> Optional[str]:
+                async with sem:
+                    return await _scrape_one(p["url"], sc_client, render_js=render_js)
+
+            async with httpx.AsyncClient() as sc:
+                htmls = await asyncio.gather(*[_bounded(p, sc) for p in pages], return_exceptions=True)
+            results = []
+            for p, html in zip(pages, htmls):
+                if not html or isinstance(html, Exception):
+                    continue
+                paragraphs = _extract_text_from_html(html)
+                text = " ".join(paragraphs)
+                if text.strip():
+                    results.append(f"[{p.get('page_type', 'page')}] {p['url']}\n{text[:600]}")
+            return results
+
+        # Tier 1: no JS
+        logger.info(f"Brand voice: scraping {len(selected)} pages for {url}")
+        page_contents = await _scrapeowl_extract(selected, render_js=False)
+        pages_sampled = len(page_contents)
+
+        # Tier 2: JS render fallback for the top 5 pages
+        if not page_contents and selected:
+            logger.info("Brand voice: no text from tier 1 — retrying top 5 pages with JS render")
+            page_contents = await _scrapeowl_extract(selected[:5], render_js=True)
+            pages_sampled = len(page_contents)
+            if not page_contents:
+                logger.warning("Brand voice: all scraping tiers failed — falling back to category inference")
+    elif not has_site:
+        logger.info(f"Brand voice: no website for {body.business_name} — using category inference")
+
+    try:
+        brand_voice = await analyze_brand_voice_with_anthropic(
+            page_contents, body.business_name, gbp_category=body.gbp_category,
+        )
+    except Exception as e:
+        identifier = body.website_url or body.business_name
+        logger.error(f"Brand voice Anthropic error for {identifier}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Our AI analysis service encountered an error. Please try again.",
+        )
+
+    return BrandVoiceResponse(brand_voice=brand_voice, pages_sampled=pages_sampled)
+
+
+@app.post('/analyze-brand-voice', response_model=BrandVoiceResponse)
+@limiter.limit("5/minute")
+async def analyze_brand_voice(request: Request, body: BrandVoiceRequest):
+    """Brand voice pipeline (private; platform-api proxies + persists).
+
+    With a website: crawl up to 25 pages, extract text, run the 3 LLM calls.
+    Without a website (or when scraping yields nothing): category inference.
+    Returns the stored brand_voice shape + how many pages produced usable text.
+    """
+    return await run_brand_voice_analysis(body)
+
+
 def _build_icp_text(detected_icp: Optional[dict], max_segments: int = 3) -> str:
     """Render the detected ICP as a plain-text block for the system prompt.
 
@@ -2469,6 +2614,12 @@ def _build_icp_text(detected_icp: Optional[dict], max_segments: int = 3) -> str:
     """
     if not detected_icp:
         return ""
+    # A user-authored freeform ICP (raw_text) supersedes structured segments —
+    # render it verbatim so a seeded raw_text-only ICP reaches Local SEO too
+    # (suite convergence, Option A). Mirrors the brand voice renderer.
+    raw_text = (detected_icp.get("raw_text") or "").strip()
+    if raw_text:
+        return "TARGET CUSTOMER PROFILES (write to these pain points and motivations):\n" + raw_text
     segments = detected_icp.get("segments") or []
     if not segments:
         return ""
@@ -2498,6 +2649,102 @@ def _build_icp_text(detected_icp: Optional[dict], max_segments: int = 3) -> str:
         if msg.get("trust_signals"):  lines.append(f"    Trust signals: {'; '.join(msg['trust_signals'])}")
 
     return "\n".join(lines)
+
+
+async def _enrich_pages_with_titles(
+    pages: List[dict], limit: int = 25, timeout: float = 75.0
+) -> List[dict]:
+    """Best-effort upgrade (ICP PRD §1.3b): fetch each top page's real
+    <title>/<h1> before the ICP call — materially improves differentiator
+    quality. Falls back to URL-only (blank title/h1) when ScrapeOwl is
+    unavailable or a fetch fails. Only the top `limit` pages (the ones rendered
+    into the ICP prompt) are fetched, and the whole pass is time-bounded so a
+    slow/bot-protected site degrades to partial enrichment instead of blowing
+    the platform request budget (mutations are applied in place, so whatever
+    finished before the deadline is kept)."""
+    if not SCRAPEOWL_API_KEY or not pages:
+        return pages
+    targets = pages[:limit]
+    sem = asyncio.Semaphore(8)
+
+    async def _one(p: dict, sc: httpx.AsyncClient) -> None:
+        async with sem:
+            html = await _scrape_one(p["url"], sc, render_js=False)
+            if not html:
+                html = await _scrape_one(p["url"], sc, render_js=True)
+        if not html:
+            return
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            if soup.title:
+                p["title"] = soup.title.get_text(strip=True)[:200]
+            h1 = soup.find("h1")
+            if h1:
+                p["h1"] = h1.get_text(" ", strip=True)[:200]
+        except Exception as e:
+            logger.warning(f"ICP enrich parse error for {p.get('url')}: {e}")
+
+    try:
+        async with httpx.AsyncClient() as sc:
+            await asyncio.wait_for(
+                asyncio.gather(*[_one(p, sc) for p in targets], return_exceptions=True),
+                timeout=timeout,
+            )
+    except asyncio.TimeoutError:
+        logger.warning(f"ICP enrichment timed out after {timeout}s — proceeding with partial title/h1")
+    enriched = sum(1 for p in targets if p.get("title") or p.get("h1"))
+    logger.info(f"ICP enrichment: populated title/h1 for {enriched}/{len(targets)} pages")
+    return pages
+
+
+async def run_business_analysis(body: BusinessAnalysisRequest) -> BusinessAnalysisResponse:
+    """Full ICP pipeline: discover pages → enrich title/h1 → one ICP +
+    differentiators LLM call. GBP-independent; degrades to category inference
+    when there's no website or discovery times out (90s)."""
+    if body.website_url and body.website_url.strip():
+        _block_ssrf(body.website_url)
+
+    pages: List[dict] = []
+    if body.website_url and body.website_url.strip():
+        url = body.website_url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+        try:
+            pages = await asyncio.wait_for(crawl_website(url), timeout=90.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"ICP page discovery timed out for {url}")
+            pages = []
+        if pages:
+            pages = await _enrich_pages_with_titles(pages)
+
+    try:
+        llm_result = await analyze_business_with_anthropic(
+            pages, body.business_name, body.gbp_category, body.gbp_categories,
+        )
+    except Exception:
+        logger.exception("ICP Anthropic analysis failed")
+        raise HTTPException(status_code=502, detail="Analysis service temporarily unavailable")
+
+    status = "complete" if pages else "partial"
+    return BusinessAnalysisResponse(
+        existing_pages=pages,
+        detected_icp=llm_result.get("detected_icp"),
+        differentiators=llm_result.get("differentiators", []),
+        pages_crawled=len(pages),
+        analysis_status=status,
+    )
+
+
+@app.post('/analyze-business', response_model=BusinessAnalysisResponse)
+@limiter.limit("5/minute")
+async def analyze_business(request: Request, body: BusinessAnalysisRequest):
+    """ICP + differentiators (private; platform-api proxies + persists).
+
+    Discover pages (sitemap → nav), enrich each top page's title/h1, then one
+    LLM call detecting 1-3 customer segments + differentiators. With no website
+    (or on discovery timeout) it infers segments from name + GBP categories.
+    """
+    return await run_business_analysis(body)
 
 
 def _calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:

@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users,
 } from 'lucide-react'
 
 export function ClientWorkspace() {
@@ -58,6 +58,22 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/edit#gbp` : undefined}
           cta={client?.gbp?.business_name ? 'Edit' : 'Set up'}
           highlight={!client?.gbp?.business_name}
+        />
+        <ActionCard
+          icon={<Sparkles size={22} />}
+          label="Brand Voice"
+          description={brandVoiceCopy(client)}
+          to={id ? `/clients/${id}/brand-voice` : undefined}
+          cta={brandVoiceHasContent(client) ? 'Edit' : 'Set up'}
+          highlight={!brandVoiceHasContent(client)}
+        />
+        <ActionCard
+          icon={<Users size={22} />}
+          label="ICP & Differentiators"
+          description={icpCopy(client)}
+          to={id ? `/clients/${id}/icp` : undefined}
+          cta={icpHasContent(client) ? 'Edit' : 'Set up'}
+          highlight={!icpHasContent(client)}
         />
       </Section>
 
@@ -116,6 +132,36 @@ export function ClientWorkspace() {
       </Section>
     </div>
   )
+}
+
+function brandVoiceHasContent(client?: Client): boolean {
+  const bv = client?.brand_voice
+  return Boolean(bv && (bv.raw_text || bv.current_voice || bv.recommended_voice))
+}
+
+function brandVoiceCopy(client?: Client): string {
+  const bv = client?.brand_voice
+  if (!brandVoiceHasContent(client)) {
+    return 'Set the tone, personality, and wording — used by both the Blog Writer and Local SEO. Add your own or let the app draft one.'
+  }
+  return (bv?.source === 'user' || Boolean(bv?.raw_text))
+    ? 'Set by you — your voice supersedes the app-generated one across both tools.'
+    : 'AI-generated — review, edit, or replace it with your own.'
+}
+
+function icpHasContent(client?: Client): boolean {
+  const icp = client?.detected_icp
+  return Boolean((icp && (icp.raw_text || icp.segments?.length)) || client?.differentiators?.length)
+}
+
+function icpCopy(client?: Client): string {
+  const icp = client?.detected_icp
+  if (!icpHasContent(client)) {
+    return 'Define who this client serves and what sets them apart — fed into both the Blog Writer and Local SEO. Add your own or let the app detect it.'
+  }
+  return (icp?.source === 'user' || Boolean(icp?.raw_text))
+    ? 'Set by you — your profile supersedes the app-detected one across both tools.'
+    : 'AI-detected — review, edit, or replace it with your own.'
 }
 
 const moreTools = [

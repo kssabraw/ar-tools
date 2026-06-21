@@ -55,8 +55,9 @@ def _business_fields(client: dict) -> dict:
 
 def _gbp_to_generate_payload(client: dict, keyword: str, location: str, run_analysis: bool) -> dict:
     """Map a suite client row (with its `gbp` JSONB) to the nlp service's
-    GeneratePageRequest. Brand-voice / ICP fields are intentionally omitted
-    (cut from this version), so the nlp service handles their absence."""
+    GeneratePageRequest. The converged brand_voice / detected_icp /
+    differentiators assets are passed through so the generator targets the
+    client's voice and customers; the nlp service handles their absence."""
     gbp = client.get("gbp") or {}
     hours = gbp.get("hours")
     fields = _business_fields(client)
@@ -72,17 +73,28 @@ def _gbp_to_generate_payload(client: dict, keyword: str, location: str, run_anal
         "gbp_description": gbp.get("description"),
         "reviews": gbp.get("reviews") or None,
         "run_analysis": run_analysis,
+        "brand_voice": client.get("brand_voice"),
+        "detected_icp": client.get("detected_icp"),
+        "differentiators": client.get("differentiators") or [],
     }
 
 
 # ── nlp transport ───────────────────────────────────────────────────────────
 
-async def _post_nlp(path: str, payload: dict, timeout: int = _JSON_TIMEOUT) -> dict:
-    """POST to a plain-JSON nlp endpoint and return the parsed body."""
+async def _post_nlp(
+    path: str, payload: dict, timeout: int = _JSON_TIMEOUT, user_id: Optional[str] = None
+) -> dict:
+    """POST to a plain-JSON nlp endpoint and return the parsed body.
+
+    When `user_id` is supplied it's forwarded as `X-User-ID` so the nlp
+    rate limiter keys per end user instead of per (single) platform-api caller
+    IP — see `_real_client_ip` in nlp-api/main.py.
+    """
     url = f"{settings.nlp_api_url}{path}"
+    headers = {"X-User-ID": user_id} if user_id else None
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers=headers)
             if response.status_code != 200:
                 logger.warning(
                     "local_seo.nlp_http_error",
@@ -320,6 +332,9 @@ async def social_posts(
         "phone": fields["phone"],
         "page_content": page_content,
         "serp_analysis": serp_analysis,
+        "brand_voice": client.get("brand_voice"),
+        "detected_icp": client.get("detected_icp"),
+        "differentiators": client.get("differentiators") or [],
     })
 
 

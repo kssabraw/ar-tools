@@ -11,6 +11,7 @@ import logging
 from typing import Optional
 
 from db.supabase_client import get_supabase
+from services import brand_voice_service, icp_service
 from services.file_parser import detect_format
 from services.orchestrator import NON_TERMINAL_STATUSES, orchestrate_run
 
@@ -53,8 +54,8 @@ def _client_with_context(client_id: str) -> dict:
 
 def _create_snapshot(run_id: str, client: dict) -> None:
     supabase = get_supabase()
-    brand_text = client.get("brand_guide_text") or ""
-    icp_text = client.get("icp_text") or ""
+    brand_text = brand_voice_service.resolve_brand_guide_text(client)
+    icp_text = icp_service.resolve_icp_text(client)
     website_analysis = client.get("website_analysis")
     website_unavailable = (
         website_analysis is None
