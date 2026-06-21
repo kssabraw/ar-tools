@@ -2007,6 +2007,13 @@ def _build_brand_voice_text(brand_voice: Optional[dict]) -> str:
     if not brand_voice:
         return ""
     bv = brand_voice
+    # A user-authored freeform brand guide (raw_text) supersedes the structured
+    # fields — render it verbatim and stop. This makes a raw_text-only voice
+    # (e.g. seeded from the legacy brand_guide_text) reach Local SEO generation,
+    # not just the Blog Writer (suite convergence, Option A).
+    raw_text = (bv.get("raw_text") or "").strip()
+    if raw_text:
+        return "BRAND VOICE (verbatim brand guide — match this exactly):\n" + raw_text
     if bv.get("recommended_accepted") is True:
         voice = bv.get("recommended_voice") or bv.get("current_voice") or {}
     else:
@@ -2096,7 +2103,14 @@ async def run_brand_voice_analysis(body: BrandVoiceRequest) -> BrandVoiceRespons
     page_contents: List[str] = []
     pages_sampled = 0
 
-    if body.website_url and body.website_url.strip():
+    has_site = bool(body.website_url and body.website_url.strip())
+    if has_site and not SCRAPEOWL_API_KEY:
+        # Without ScrapeOwl the scraper can't fetch content (no plain-HTTP
+        # fallback here), so skip probe/crawl/scrape and infer from category
+        # rather than firing ~25 doomed ScrapeOwl POSTs with an empty key.
+        logger.info("Brand voice: SCRAPEOWL_API_KEY unset — skipping site scrape; using category inference")
+
+    if has_site and SCRAPEOWL_API_KEY:
         url = body.website_url.strip()
         if not url.startswith(("http://", "https://")):
             url = f"https://{url}"
@@ -2149,7 +2163,7 @@ async def run_brand_voice_analysis(body: BrandVoiceRequest) -> BrandVoiceRespons
             pages_sampled = len(page_contents)
             if not page_contents:
                 logger.warning("Brand voice: all scraping tiers failed — falling back to category inference")
-    else:
+    elif not has_site:
         logger.info(f"Brand voice: no website for {body.business_name} — using category inference")
 
     try:

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.clients import ClientCreateRequest, ClientDetail, ClientListItem, ClientUpdateRequest
+from services import brand_voice_service
 from services.file_parser import detect_format
 from services.gbp_service import get_business_details, resolve_business, search_businesses
 
@@ -164,6 +165,11 @@ async def create_client(
         row["gbp_place_id"] = body.gbp_place_id
     if body.gbp is not None:
         row["gbp"] = body.gbp.model_dump()
+    # Converge the legacy free-text brand guide into the canonical brand_voice
+    # (Option A) so a brand-new client's guide is usable by both consumers.
+    brand_voice = brand_voice_service.merge_raw_text(None, brand_text)
+    if brand_voice is not None:
+        row["brand_voice"] = brand_voice
     result = supabase.table("clients").insert(row).execute()
     client = result.data[0]
 
@@ -215,6 +221,12 @@ async def update_client(
         updates["brand_guide_source_type"] = body.brand_guide_source_type
     if body.brand_guide_text is not None:
         updates["brand_guide_text"] = body.brand_guide_text
+        # Keep the canonical brand_voice in sync only when the guide actually
+        # changed, so unrelated client edits don't flip an app voice to 'user'.
+        if body.brand_guide_text != existing.get("brand_guide_text"):
+            updates["brand_voice"] = brand_voice_service.merge_raw_text(
+                existing.get("brand_voice"), body.brand_guide_text
+            )
     if body.icp_source_type is not None:
         updates["icp_source_type"] = body.icp_source_type
     if body.icp_text is not None:

@@ -42,6 +42,9 @@ async def scan_brand_voice(
     body: BrandVoiceScanRequest,
     auth: dict = Depends(require_auth),
 ) -> StreamingResponse:
+    # Surface the supersede guard as a real 409 before the SSE stream opens.
+    brand_voice_service.ensure_scannable(str(client_id), body.force)
+
     async def _run() -> dict:
         result = await brand_voice_service.scan(
             client_id=str(client_id),

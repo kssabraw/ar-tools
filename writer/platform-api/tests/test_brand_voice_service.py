@@ -66,7 +66,7 @@ def test_scan_payload_falls_back_to_client_row_without_gbp():
     """GBP-independent: a client with no gbp still scans using name + website_url."""
     captured = {}
 
-    async def _fake_post(path, payload):
+    async def _fake_post(path, payload, user_id=None):
         captured["path"] = path
         captured["payload"] = payload
         return {"brand_voice": {}, "pages_sampled": 0}
@@ -86,8 +86,9 @@ def test_scan_payload_falls_back_to_client_row_without_gbp():
 
 # ── supersede guard: user-authored voice is not clobbered ────────────────────
 
-def test_scan_refuses_to_overwrite_user_voice_without_force():
-    row = _client_row(brand_voice={"source": "user", "raw_text": "we are bold"})
+def test_scan_refuses_to_overwrite_user_structured_voice_without_force():
+    # A user who filled the structured form (current_voice) is protected.
+    row = _client_row(brand_voice={"source": "user", "current_voice": {"tone": "bold"}})
     with patch.object(brand_voice_service, "_get_client", return_value=row), \
          patch.object(brand_voice_service, "_post_nlp", new=AsyncMock()) as post, \
          patch.object(brand_voice_service, "get_supabase", return_value=_supabase()):
@@ -99,8 +100,26 @@ def test_scan_refuses_to_overwrite_user_voice_without_force():
     post.assert_not_called()
 
 
-def test_scan_force_overwrites_user_voice():
-    row = _client_row(brand_voice={"source": "user", "raw_text": "we are bold"})
+def test_scan_allows_raw_text_only_voice_and_preserves_it():
+    # A user with only a freeform guide (raw_text) is NOT blocked — the scan
+    # enriches structured fields while preserving their raw_text.
+    row = _client_row(brand_voice={"source": "user", "raw_text": "fast & friendly"})
+    with patch.object(brand_voice_service, "_get_client", return_value=row), \
+         patch.object(brand_voice_service, "_post_nlp",
+                      new=AsyncMock(return_value={"brand_voice": {"current_voice": {"tone": "x"}},
+                                                  "pages_sampled": 2})), \
+         patch.object(brand_voice_service, "get_supabase", return_value=_supabase()):
+        import asyncio
+        result = asyncio.run(brand_voice_service.scan("client-1", force=False, user_id="u1"))
+    blob = result["brand_voice"]
+    assert blob["source"] == "app"
+    assert blob["raw_text"] == "fast & friendly"   # preserved
+    assert blob["current_voice"] == {"tone": "x"}  # enriched
+
+
+def test_scan_force_overwrites_user_voice_but_keeps_raw_text():
+    row = _client_row(brand_voice={"source": "user", "current_voice": {"tone": "b"},
+                                   "raw_text": "we are bold"})
     with patch.object(brand_voice_service, "_get_client", return_value=row), \
          patch.object(brand_voice_service, "_post_nlp",
                       new=AsyncMock(return_value={"brand_voice": {"current_voice": {"tone": "x"}},
@@ -109,6 +128,61 @@ def test_scan_force_overwrites_user_voice():
         import asyncio
         result = asyncio.run(brand_voice_service.scan("client-1", force=True, user_id="u1"))
     assert result["brand_voice"]["source"] == "app"
+    assert result["brand_voice"]["raw_text"] == "we are bold"
+
+
+def test_scan_forwards_user_id_for_rate_limiting():
+    captured = {}
+
+    async def _fake_post(path, payload, user_id=None):
+        captured["user_id"] = user_id
+        return {"brand_voice": {}, "pages_sampled": 0}
+
+    with patch.object(brand_voice_service, "_get_client", return_value=_client_row()), \
+         patch.object(brand_voice_service, "_post_nlp", new=_fake_post), \
+         patch.object(brand_voice_service, "get_supabase", return_value=_supabase()):
+        import asyncio
+        asyncio.run(brand_voice_service.scan("client-1", force=False, user_id="user-42"))
+    assert captured["user_id"] == "user-42"
+
+
+# ── ensure_scannable (router pre-flight → real HTTP 409) ─────────────────────
+
+def test_ensure_scannable_blocks_user_structured_voice():
+    row = _client_row(brand_voice={"source": "user", "current_voice": {"tone": "b"}})
+    with patch.object(brand_voice_service, "_get_client", return_value=row):
+        with pytest.raises(HTTPException) as exc:
+            brand_voice_service.ensure_scannable("client-1", force=False)
+    assert exc.value.status_code == 409
+
+
+def test_ensure_scannable_allows_raw_text_only_and_force():
+    row = _client_row(brand_voice={"source": "user", "raw_text": "hi"})
+    with patch.object(brand_voice_service, "_get_client", return_value=row):
+        brand_voice_service.ensure_scannable("client-1", force=False)  # no raise
+    structured = _client_row(brand_voice={"source": "user", "current_voice": {"tone": "b"}})
+    with patch.object(brand_voice_service, "_get_client", return_value=structured):
+        brand_voice_service.ensure_scannable("client-1", force=True)  # force overrides
+
+
+# ── merge_raw_text (clients-router convergence helper) ───────────────────────
+
+def test_merge_raw_text_seeds_user_voice():
+    blob = brand_voice_service.merge_raw_text(None, "we fix pipes fast")
+    assert blob["source"] == "user"
+    assert blob["raw_text"] == "we fix pipes fast"
+    assert blob["current_voice"] is None
+    assert blob["edited_at"] is not None
+
+
+def test_merge_raw_text_preserves_structured_and_collapses_empty():
+    existing = {"source": "app", "current_voice": {"tone": "x"}}
+    blob = brand_voice_service.merge_raw_text(existing, "")
+    assert blob["current_voice"] == {"tone": "x"}  # structured kept
+    assert blob["raw_text"] is None
+    assert blob["source"] == "app"                 # not flipped on empty text
+    # nothing meaningful → collapses to NULL
+    assert brand_voice_service.merge_raw_text(None, "   ") is None
 
 
 # ── manual update: marks source 'user' (supersede) ───────────────────────────

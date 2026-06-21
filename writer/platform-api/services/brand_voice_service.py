@@ -42,6 +42,36 @@ def _empty_blob() -> dict:
     }
 
 
+def _scan_blocked(existing: dict, force: bool) -> bool:
+    """An auto-scan is blocked only when the user has authored *structured*
+    voice that the scan would overwrite. A user with only `raw_text` (a freeform
+    brand guide) can still be enriched — the scan preserves their raw_text — so
+    those clients are not blocked. `force` overrides the guard entirely."""
+    if force:
+        return False
+    return existing.get("source") == "user" and existing.get("current_voice") is not None
+
+
+def merge_raw_text(existing: dict | None, raw_text: str | None) -> dict | None:
+    """Keep brand_voice in sync with the legacy free-text brand guide so newly
+    created / edited clients converge (Option A). The guide is user input, so a
+    non-empty value is marked source:'user' (supersede). Structured fields on an
+    existing blob are preserved. Returns None when nothing meaningful remains,
+    collapsing an empty voice back to SQL NULL."""
+    text = (raw_text or "").strip()
+    blob = {**_empty_blob(), **(existing or {})}
+    blob["raw_text"] = text or None
+    if text:
+        blob["source"] = "user"
+        blob["edited_at"] = _now_iso()
+    if not any(
+        blob.get(k)
+        for k in ("raw_text", "current_voice", "recommended_voice", "writer_execution_guide")
+    ):
+        return None
+    return blob
+
+
 def _persist(client_id: str, blob: dict) -> None:
     supabase = get_supabase()
     result = (
@@ -60,6 +90,15 @@ def get_brand_voice(client_id: str) -> dict:
     return {"brand_voice": client.get("brand_voice")}
 
 
+def ensure_scannable(client_id: str, force: bool) -> None:
+    """Pre-flight the supersede guard so the router can return a real HTTP 409
+    *before* opening the SSE stream (otherwise the guard would surface as a
+    200 + in-stream error event)."""
+    existing = _get_client(client_id).get("brand_voice") or {}
+    if _scan_blocked(existing, force):
+        raise HTTPException(status_code=409, detail="brand_voice_user_authored")
+
+
 async def scan(client_id: str, force: bool, user_id: str) -> dict:
     """Run the app brand-voice analysis and persist it as source:'app'.
 
@@ -69,8 +108,8 @@ async def scan(client_id: str, force: bool, user_id: str) -> dict:
     client = _get_client(client_id)
     existing = client.get("brand_voice") or {}
 
-    if existing.get("source") == "user" and not force:
-        # Manual content supersedes — don't silently clobber it.
+    if _scan_blocked(existing, force):
+        # User-authored structured voice supersedes — don't silently clobber it.
         raise HTTPException(status_code=409, detail="brand_voice_user_authored")
 
     fields = _business_fields(client)
@@ -80,20 +119,25 @@ async def scan(client_id: str, force: bool, user_id: str) -> dict:
         "gbp_category": fields.get("gbp_category") or "",
     }
 
-    result = await _post_nlp("/analyze-brand-voice", payload)
+    result = await _post_nlp("/analyze-brand-voice", payload, user_id=user_id)
     engine = result.get("brand_voice") or {}
 
+    # Preserve any user freeform brand guide (raw_text) — it still supersedes in
+    # rendering — while the scan fills in the structured voice around it.
+    preserved_raw = existing.get("raw_text")
     blob = _empty_blob()
     blob.update(
         {
             "source": "app",
-            "raw_text": None,  # app voice is structured; no freeform passthrough
+            "raw_text": preserved_raw,
             "current_voice": engine.get("current_voice"),
             "recommended_voice": engine.get("recommended_voice"),
             "recommended_accepted": engine.get("recommended_accepted"),
             "writer_execution_guide": engine.get("writer_execution_guide"),
             "generated_at": _now_iso(),
-            "edited_at": existing.get("edited_at"),
+            # edited_at tracks user authorship of raw_text; only meaningful when
+            # preserved (avoids a stale user-edit timestamp on a pure app voice).
+            "edited_at": existing.get("edited_at") if preserved_raw else None,
         }
     )
     _persist(client_id, blob)

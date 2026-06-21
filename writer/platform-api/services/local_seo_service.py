@@ -77,12 +77,20 @@ def _gbp_to_generate_payload(client: dict, keyword: str, location: str, run_anal
 
 # ── nlp transport ───────────────────────────────────────────────────────────
 
-async def _post_nlp(path: str, payload: dict, timeout: int = _JSON_TIMEOUT) -> dict:
-    """POST to a plain-JSON nlp endpoint and return the parsed body."""
+async def _post_nlp(
+    path: str, payload: dict, timeout: int = _JSON_TIMEOUT, user_id: Optional[str] = None
+) -> dict:
+    """POST to a plain-JSON nlp endpoint and return the parsed body.
+
+    When `user_id` is supplied it's forwarded as `X-User-ID` so the nlp
+    rate limiter keys per end user instead of per (single) platform-api caller
+    IP — see `_real_client_ip` in nlp-api/main.py.
+    """
     url = f"{settings.nlp_api_url}{path}"
+    headers = {"X-User-ID": user_id} if user_id else None
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload)
+            response = await client.post(url, json=payload, headers=headers)
             if response.status_code != 200:
                 logger.warning(
                     "local_seo.nlp_http_error",
