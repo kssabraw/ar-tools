@@ -1199,12 +1199,25 @@ async def get_textrazor_entities(
             if not d["etype"] and g["etype"]:
                 d["etype"] = g["etype"]
 
-    results = []
+    # Entities that clear the (provider-agnostic) page-spread filter, BEFORE the
+    # relevance cutoff — collected so the relevance distribution is logged. That
+    # distribution is how TEXTRAZOR_MIN_RELEVANCE gets calibrated from prod logs.
+    candidates = []
     for eid_l, data in entity_data.items():
         page_count = len(data["pages"])
         if page_count < min_pages_required:
             continue
-        mean_relevance = float(np.mean(data["relevances"]))
+        candidates.append((eid_l, data, page_count, float(np.mean(data["relevances"]))))
+    candidates.sort(key=lambda c: c[3], reverse=True)
+    if candidates:
+        dist = ", ".join(f"{c[3]:.2f}" for c in candidates[:30])
+        logger.info(
+            f"TextRazor calibration: {len(candidates)} page-spread-qualifying entities; "
+            f"mean relevance (desc): [{dist}]"
+        )
+
+    results = []
+    for eid_l, data, page_count, mean_relevance in candidates:
         if mean_relevance < min_relevance:
             continue
         recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
@@ -1225,7 +1238,7 @@ async def get_textrazor_entities(
 
     results.sort(key=lambda x: x["mean_salience"], reverse=True)
     logger.info(
-        f"TextRazor entities: {len(results)} kept "
+        f"TextRazor entities: {len(results)}/{len(candidates)} kept "
         f"(relevance>={min_relevance}, page_spread>={min_pages_required}/{total_pages})"
     )
     return results
