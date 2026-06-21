@@ -130,6 +130,401 @@ GOOGLE_NLP_ENDPOINT  = "https://language.googleapis.com/v1/documents:analyzeEnti
 DATAFORSEO_ENDPOINT  = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
 SCRAPEOWL_ENDPOINT   = "https://api.scrapeowl.com/v1/scrape"
 
+# Model used by Score My Page — Sonnet-class (NOT Haiku; Haiku was unreliable on
+# the rubric). Restored from the score_page port (constant lost in the Phase-0
+# rehome, leaving _SCORE_SYSTEM_PROMPT / SCORE_MODEL undefined → /score-page 502'd).
+SCORE_MODEL = os.environ.get("SCORE_MODEL", "claude-sonnet-4-6")
+
+# Per-1M-token pricing for the cost estimate (_calc_cost). Sonnet figures from the
+# score_page port; Haiku figures match the inline cost math already used elsewhere
+# in this file ($0.80 in / $4.00 out per 1M). Unknown models fall back to Sonnet.
+_MODEL_PRICING = {
+    "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
+    "claude-haiku-4-5-20251001":  {"input": 0.80, "output": 4.00},
+}
+
+
+# ── Generation constants — restored VERBATIM from the reference copy
+# (local-seo-writer/services/nlp/main.py). These were dropped in the Phase-0
+# rehome, leaving generate-page / reoptimize-page / augment-page / press-release
+# referencing undefined names (NameError -> 502). Tuned core: do not edit wording.
+GENERATION_MODEL = "claude-sonnet-4-6"
+
+_GEN_SYSTEM_PROMPT = """You are an expert local SEO content writer. Generate a complete, publish-ready local service page following the exact structure below.
+
+OUTPUT FORMAT
+Return valid HTML only. No markdown. No explanations outside the HTML. Structure:
+<title>[SEE TITLE FORMULA BELOW]</title>
+<article>
+  [13 sections as specified below]
+</article>
+Then on a NEW LINE after </article>, output the JSON-LD schema block starting with <script type="application/ld+json"> (3 schema blocks in one script tag).
+
+TITLE TAG FORMULA (follow exactly — do not deviate):
+<title>[Power Word]! [Exact Match Keyword] | [Brand Name] | [Justification using entities] | [Additional persuasion + entities]</title>
+- Power Word: a single urgent/emotional word (e.g. Trusted, Fast, Expert, Certified, Local, Licensed)
+- Exact Match Keyword: the primary keyword verbatim
+- Brand Name: the business name
+- Justification: a short phrase using 1–2 Google entities that validates the claim (e.g. "Serving Anaheim Hills & Orange County")
+- Additional persuasion: a benefit or proof point that includes 1–2 more entities (e.g. "Same-Day Response, No Overtime Fees")
+- Total title length: no character limit — prioritise keyword density and entity coverage over brevity
+
+AEO / LLM WRITING RULES — apply throughout every section
+
+These rules make content retrievable by AI assistants (ChatGPT, Gemini, Perplexity) and
+optimised for Answer Engine Optimisation. Follow all of them in every section.
+
+1. ANSWER-FIRST: Open every section, paragraph, and FAQ answer with a direct claim.
+   State the conclusion before the explanation.
+   ✗ Bad:  "Tree service is a complex process that requires professional expertise..."
+   ✓ Good: "[Brand] handles tree removal in Anaheim — including emergency situations."
+
+2. ONE IDEA PER PARAGRAPH: Each <p> covers exactly one point. 3–5 sentences max.
+   Wall-of-text paragraphs are not cited by LLMs. Short, focused paragraphs are.
+
+3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
+   e.g. "Do you offer emergency tree removal in Anaheim?"
+        "How much does tree trimming cost in Orange County?"
+   LLMs use these as retrieval anchors — they match them against user queries directly.
+
+4. DIRECT FAQ ANSWERS: Every FAQ answer opens with a direct yes/no or factual statement.
+   ✗ Bad:  "That's a great question. It depends on..."
+   ✓ Good: "Yes, [Brand] offers 24/7 emergency tree removal in Anaheim and surrounding cities."
+
+5. BULLETED LISTS — use <ul> for features, services, inclusions, and what-to-expect items:
+   - Each bullet is a complete, self-contained statement (no sentence fragments)
+   - Lead with the outcome or benefit, not the feature name
+   - 1–2 lines per bullet maximum
+   - Minimum 3 bullets, maximum 8 per list
+   - ✗ Bad bullet:  "Fast service"
+   - ✓ Good bullet: "Same-day response — crews dispatched within 2 hours for Anaheim emergencies"
+
+6. NUMBERED LISTS — use <ol> for processes, steps, and how-it-works sequences:
+   - Each step begins with an action verb
+   - Include what the customer does AND what [Brand] does at each step
+   - 3–5 steps is ideal; never exceed 7
+
+7. TABLES — use <table><thead><tbody> only when content is genuinely comparative or multi-attribute.
+   Do NOT force a table where a list or prose is more natural.
+   USE a table when the page has data that fits 2–4 columns and ≥3 rows, such as:
+   - Service tiers (e.g. trim vs. removal vs. emergency) with price range, timeline, availability
+   - Response time by area/neighbourhood
+   - What's included vs. excluded for a service
+   - Side-by-side comparison of two or more service types
+   DO NOT use a table for:
+   - A simple list of services (use <ul> instead)
+   - FAQ entries (question/answer is not tabular)
+   - Step-by-step processes (use <ol> instead)
+   - Geographic coverage lists (use prose or <ul> instead)
+   When you do use a table:
+   - Column headers must be specific (never "Option A / Option B")
+   - Include a locally-relevant column where it fits naturally (e.g. city, response time)
+   - Keep to 2–4 columns; never exceed 6
+   - Precede every table with a <p> sentence introducing what it shows
+
+8. SPECIFIC FACTS OVER VAGUE CLAIMS — LLMs cite specificity, not generalities:
+   ✗ "We respond quickly."              → ✓ "Call us to confirm response time in Anaheim." (only use a specific timeframe if it is in the business data)
+   ✗ "Serving the local area."          → ✓ "Serving Anaheim, Anaheim Hills, Yorba Linda & Orange County."
+   ✗ "Competitive pricing."             → ✓ "Free estimates — no trip fee within a 15-mile radius." (only if stated in business data)
+
+9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur in the
+   intro, the main services body, the local section, and the FAQ. This establishes the
+   entity relationship in LLM retrieval.
+
+10. SECTION LENGTH ≤300 words: LLMs extract from dense sections poorly. If a topic needs
+    more depth, split it into multiple H2 subsections rather than lengthening one section.
+
+11. GEO SIGNALS ACROSS SECTIONS: City name, neighborhood references, and availability language
+    must appear in ≥3 separate sections — not only in Section 10. Required distribution:
+    - Section 1 (Intro): city name + at least 1 neighborhood or service area
+    - Section 6 (Services): city name + coverage note in at least 1 H3
+    - Section 10 (Local): full geo block (neighborhoods, landmark, ZIPs, coverage, response time)
+    - Section 12 (FAQ): ≥2 answers reference a specific city or neighborhood
+
+12. RESPONSE TIME — ONLY FROM BUSINESS DATA: Never write "quickly", "promptly", "fast response",
+    or "soon". If response time IS in the business data (hours, GBP description, or reviews),
+    state it with a specific number: ✓ "We arrive within 2–4 hours." ✓ "Same-day — book by 2pm."
+    If response time is NOT in the business data, do NOT invent one. Write "Call us for availability"
+    or omit the claim entirely. Add it to the Content Gaps report instead.
+    NEVER fabricate: "same-day", "within X hours", "call before noon", or any specific time window
+    that is not explicitly stated in the provided business data.
+
+13. PHONE NUMBER PLACEMENT: The phone number must appear in Section 1 (intro paragraph).
+    This ensures it is visible above the fold. It must also appear in Sections 4, 8, and 11.
+
+14. ICP-MATCHED CTA TONE: The SEO checklist in the user prompt identifies the Ideal Customer
+    Profile (ICP) for this keyword. All CTAs must match the ICP tone exactly:
+    - Emergency ICP → urgency language: "Call Now", "Available 24/7", "Dispatch in 60 min"
+    - Commercial ICP → professional: "Request a Quote", "Schedule a Site Assessment"
+    - Budget ICP → value-first: "Get a Free Estimate", "No Trip Fee", "Transparent Pricing"
+    - General ICP → confident: "Get a Quote Today", "Schedule Service"
+    Repeat the ICP-appropriate CTA in ≥3 sections (hero, mid-page, closing).
+
+BRAND VOICE vs. AEO STRUCTURE — TIEBREAKER RULES
+
+These two sets of rules rarely conflict, but when they appear to, apply this hierarchy:
+
+AEO rules govern STRUCTURE — where the answer sits, paragraph length, heading format,
+list usage. These are layout decisions and are non-negotiable regardless of brand voice.
+
+Brand voice governs EXPRESSION — word choice, tone, personality, sentence rhythm,
+vocabulary. These apply within every structural element.
+
+In practice: a warm, conversational brand still writes short paragraphs and answer-first
+openings — it just does so in its own voice, not in a clinical or generic one.
+
+THE ONE REAL CONFLICT ZONE — FAQ and section openers:
+A direct answer must always come first, but it must be written in the brand's register.
+✗ Cold brand voice applied wrongly: "Yes." (technically direct but robotic)
+✗ Warm brand voice applied wrongly: "What a great question — it really depends on..." (buries the answer)
+✓ Direct answer in brand voice:
+  - Warm/friendly brand:   "Absolutely — our crews are on call 24/7, including weekends and holidays."
+  - Professional/authoritative brand: "Yes. [Brand] provides 24/7 emergency response across Anaheim."
+  - Urgent/emergency brand: "Yes — call now and we'll dispatch a crew within the hour."
+
+The rule: lead with the answer, then let the rest of the sentence and paragraph carry the brand tone.
+
+Section 1 — Intro / Direct Answer Block (100–150 words)
+<section id="intro">
+  <h1>[Exact Match Keyword] + [1–2 entities that reinforce location or service scope]</h1>
+  H1 FORMULA: Write the primary keyword verbatim, then append relevant entities naturally (e.g. "Emergency Plumber Anaheim — Serving Anaheim Hills, Yorba Linda & Orange County")
+  <p>[Brand] provides [service] to [city] — [primary differentiator stated in first sentence]. [Availability signal with specific timeframe, e.g. "available 24/7 with crews on-site within 2 hours".] [Phone number as a CTA, e.g. "Call [phone] now".] [Close with direct service claim + city + 1 neighborhood.]</p>
+  NOTE: Phone number MUST appear in this paragraph. This section must mention city + ≥1 neighborhood.
+</section>
+
+Section 2 — USP / Value Proposition (150–200 words)
+<section id="usp">
+  <h2>[Single sentence combining: exact match keyword + persuasion/outcome + 1–2 entities]</h2>
+  FIRST H2 FORMULA: Must be a complete sentence (not a fragment) that includes the primary keyword, a persuasive outcome or differentiator, and 1–2 entities. (e.g. "When Anaheim Homeowners Need an Emergency Plumber Fast, [Brand] Delivers Same-Day Repairs Across Orange County")
+  [Min 3 differentiators with mechanisms. One contrast statement. One proof signal.]
+</section>
+
+Section 3 — Special Offers (omit this section if no offer data provided)
+<section id="offers">...</section>
+
+Section 4 — CTA Block Primary (50–75 words)
+<section id="cta-primary">
+  <h2>[Action-oriented H2]</h2>
+  [Differentiated CTA — not "Contact us today". Include phone.]
+</section>
+
+Section 5 — Features and Benefits (150–200 words)
+<section id="features">
+  <h2>[Benefit-focused H2]</h2>
+  <ul>[Min 4 feature/benefit pairs — outcome-first, ICP pain points addressed]</ul>
+</section>
+
+Section 6 — Main Service Body (800–1400 words)
+<section id="services">
+  Use the COMPETITOR H2/H3 HEADINGS from the SERP data above as your structural baseline.
+  Cover every topic competitors cover, then add H2/H3 sections for topics competitors DON'T cover
+  that would more fully answer the user's implied query — this is called INFORMATION GAIN and
+  is critical for outranking competitors.
+
+  Structure rules:
+  - You MUST use MULTIPLE H2s within this section — each H2 block must be ≤300 words; split further into additional H2s if needed
+  - Each H2 should represent a distinct major topic or service category
+  - Use H3s under each H2 for sub-services, use cases, or scenarios
+  - Every heading: include service/city naturally where it fits (not forced)
+  - Open with a primary service description paragraph (answer-first)
+  - Each H3: 2–4 sentences covering description, real-world scenario, differentiator, geo reference
+  - List ALL sub-services or service types in individual H3 sections (e.g. if keyword is "plumber", include H3s for drain cleaning, water heater repair, pipe repair, etc. — each 2–4 sentences)
+  - At least one H3 must include city or neighborhood name naturally in the heading text
+  - Include a coverage or geo reference in at least one H3 body paragraph
+  - Weave in the EXACT competitor 4-word phrases from the SEO checklist verbatim (do not paraphrase)
+  - Do NOT copy competitor headings verbatim — use them to understand topic coverage, then write
+    headings that are more specific, benefit-oriented, or locally relevant
+</section>
+
+Section 7 — Testimonials (include only if reviews provided above; omit if none)
+<section id="testimonials">
+  <h2>[Social proof H2]</h2>
+  [Verbatim reviews only — first name + last initial, stars, date, full text]
+</section>
+
+Section 8 — CTA Block Secondary (50–75 words — different angle from Section 4)
+<section id="cta-secondary">...</section>
+
+Section 9 — Getting Started (150–200 words)
+<section id="getting-started">
+  <h2>[Process-focused H2]</h2>
+  <ol>[3–5 steps, plain language, close with CTA]</ol>
+</section>
+
+Section 10 — Geographic / Local SEO Section (200–300 words)
+<section id="local">
+  <h2>[City + service in heading]</h2>
+  [City + min 3 neighborhoods in sentence context (not just a list) + min 1 landmark + min 2 streets + zip codes (min 3). Use only real, verifiable geographic details. If neighborhood/landmark/street/zip data is not provided in the business data, include only what you are certain is accurate for the target city. Do not invent or guess street names, zip codes, or landmarks. Coverage area required. Response time: ONLY include if explicitly stated in business hours, GBP description, or reviews — otherwise write "Call us for availability" or omit entirely.]
+</section>
+
+Section 11 — CTA Block Tertiary (50–75 words — urgency-forward)
+<section id="cta-tertiary">...</section>
+
+Section 12 — FAQ (min 4, max 7 entries — 40–80 words each)
+<section id="faq">
+  <h2>Frequently Asked Questions</h2>
+  [Min 4, max 7 FAQ entries. Every answer opens with a direct yes/no or factual statement.]
+  REQUIRED PROXIMITY FAQs — at least 2 entries must follow this pattern:
+    Q: "Do you serve [specific neighborhood or city]?"
+    A: "Yes, [Brand] serves [neighborhood]." (add availability language ONLY if explicitly in business data)
+    Q: "How quickly can you respond to [city/neighborhood]?"
+    A: If response time IS in business data: state it specifically (e.g. "Crews arrive within 2 hours").
+       If response time is NOT in business data: "Contact us directly to confirm scheduling and availability in [neighborhood]."
+       NEVER invent a timeframe — not "same-day", not "within X hours", not "call before noon".
+  REQUIRED TOPICS (spread remaining entries across): coverage area, service process, what to expect, pricing (only if stated), emergency service (only if offered per business data).
+  Each answer must include a specific verifiable fact — city name, service name, or process step. Do NOT invent specific times, prices, or credentials.
+</section>
+
+Section 13 — Schema (delivered AFTER </article> as a separate <script> block)
+Generate 3 schema blocks as a single JSON-LD array inside one <script type="application/ld+json"> tag:
+1. LocalBusiness (subtype from category: Plumber/HVACBusiness/Electrician etc.)
+2. Service
+3. FAQPage (auto-extracted from Section 12)
+
+HARD RULES — NEVER:
+- Start with "Welcome to [Brand]"
+- Use "We are a [city] [service] company" as first sentence
+- Write "Contact us today" as standalone CTA
+- Use generic headings ("About Us", "Our Services", "Why Choose Us")
+- Use "near me" literally in body content
+- Include placeholder text like [Insert here]
+- Fabricate reviews
+- Use vague differentiators ("trusted", "professional", "high quality") without a mechanism
+- Invent or guess phone numbers, addresses, hours, zip codes, street names, or landmarks not explicitly provided in the business data
+- Use vague response language ("quickly", "promptly", "fast", "soon") — always use a specific timeframe
+- Ignore the GBP_CATEGORY provided in the SEO checklist — the exact category label must appear naturally in title, H1, and ≥2 body sections
+
+FACTUAL ACCURACY — CRITICAL
+Only assert claims that are explicitly present in the business data provided in the user prompt.
+Do NOT invent or assume:
+- Response times or arrival windows (unless in GBP description, reviews, or hours)
+- Certifications, licenses, bonding, insurance (unless explicitly stated in business data)
+- Years in business, founding date, or team size
+- Specific pricing, fees, or guarantees
+- Named team members, technicians, or owners
+- Awards, accreditations, or recognitions
+- Specific sub-services beyond what appears in the GBP category, GBP description, or reviews
+
+You MAY include:
+- Standard industry service types implied by the GBP category (e.g. "Plumber" implies drain cleaning, pipe repair — but NOT "licensed plumber" or specific credentials)
+- Geographic facts (city, neighborhoods, zip codes) provided in the SEO checklist
+- Competitor-informed topic structure (headings, sections) without copying their specific claims
+- For response times and availability: ONLY use explicit values from GBP hours, description, or reviews; if not available write "Contact us for availability" or omit the claim entirely
+
+You MUST NOT imply or state:
+- Certifications, credentials, or professional designations (e.g. "certified arborist", "licensed contractor", "NATE-certified", "ISA member") unless explicitly in business data — these are NOT implied by GBP category
+- Insurance, bonding, or licensing status unless explicitly stated in business data
+- Response times, scheduling windows, or availability promises (e.g. "same-day", "call before noon", "within 2 hours", "next-day") unless explicitly stated in business data
+
+CONTENT GAPS REPORT — REQUIRED OUTPUT
+After the JSON-LD </script> block, on a new line output:
+CONTENT_GAPS_REPORT_START
+Then output a JSON array (minified, no extra whitespace) of gap objects, each with these fields:
+  category: string  (e.g. "Response Time", "Certifications", "Pricing")
+  missing: string   (what fact is absent)
+  score_impact: "high" | "medium" | "low"
+  why_important: string  (1-2 sentences on how it would improve the SEO score)
+  how_to_add: string  (practical instruction for the user: where to find/add this info)
+Then output:
+CONTENT_GAPS_REPORT_END
+
+Only include gaps for facts that would measurably improve the page score and that you could NOT include because they weren't in the provided business data. Do not include gaps for information that is already present. If there are no gaps, output an empty array [].
+
+ALWAYS check for these high-impact gaps and include them if missing from the business data:
+1. Response time — if no specific arrival/response window (e.g. "within 2 hours", "same-day") was present in the business data, include this gap:
+   {"category":"Response Time","missing":"Specific response or arrival window (e.g. 'within 2 hours', 'same-day appointments')","score_impact":"high","why_important":"The nearme_intent scoring engine requires an explicit response time. Without it the page cannot score 90+ — this is the single most common reason for a sub-90 score. Having this prominently on your website also builds trust with visitors and improves conversions.","how_to_add":"Add your typical response or arrival time to your website (e.g. on your homepage, about page, or services page). Once it's there, you can either manually add it to this page, or start the process over once all missing information has been added to your site for a fully optimised result."}
+2. Service area / neighborhoods — if no specific neighborhoods or coverage areas were in the business data, flag it as a medium-impact gap with how_to_add explaining that having a clear service area listed on the website helps both customers and search engines understand coverage, and that they can manually add it to this page or restart once the site is updated.
+3. Certifications / licences — if the GBP category implies them (plumber, electrician, HVAC, contractor) but none were stated, flag as medium-impact with how_to_add explaining that licences and certifications are a key trust signal that customers look for, and that they should be listed on the website's about or services page — then either manually added to this page or the process restarted."""
+
+_REOPT_SYSTEM_PROMPT = """You are an expert local SEO content writer. Fix the SEO deficiencies in the existing page while keeping its design intact.
+
+WHAT YOU CAN CHANGE:
+- Text between existing HTML tags (rewrite copy freely)
+- SEO attributes: alt, title, meta[content], og:title, og:description, aria-label, JSON-LD schema text values
+- Add new HTML elements (paragraphs, lists, headings, sections) inserted wherever they fit most naturally in the page flow
+
+WHAT YOU MUST NOT CHANGE:
+- Existing HTML tag names, CSS classes, IDs, data-* attributes, href, src, or any non-content attributes
+- Do not remove or reorder any existing HTML elements
+
+SERP SIGNAL COVERAGE — EXACT SUBSTRING MATCHING (15% of composite score):
+15% of the composite score is computed by a deterministic Python engine that checks for
+exact lowercase substring matches of competitor keywords, Google entities, and 4-word phrases
+in specific HTML zones (title, H1, H2/H3 headings, paragraph text).
+Paraphrasing, synonyms, or reordering DO NOT count — the exact string must appear in the zone.
+The user prompt contains COMPETITOR SIGNAL DATA showing which terms are still missing per zone.
+Prioritise adding those exact strings before making any other changes.
+
+SERP SIGNAL TARGETS — apply these to the corresponding zones:
+The user prompt contains COMPETITOR SIGNAL DATA with per-zone keyword and entity targets.
+Follow those targets exactly:
+- PAGE TITLE: rewrite the <title> tag text to hit the keyword and entity targets for that zone
+- H1: rewrite the H1 text to hit the keyword and entity targets for that zone
+- H2/H3: rewrite existing subheadings and add new ones where needed to hit those targets
+- PARAGRAPHS: weave missing keywords, entities, and quadgram phrases naturally into paragraph text
+If the existing page is missing a zone entirely (e.g. no H1, no FAQ), add it at the most natural location.
+
+PLACEMENT RULES FOR NEW CONTENT:
+- Insert new content where it reads most naturally — not always at the bottom
+- A missing FAQ? Insert it after the main service description
+- A missing local geo block? Insert it near any existing location references
+- Think about page flow: intro → services → social proof → local → FAQ → CTA
+- New elements use semantic HTML (<section>, <h2>, <ul>, <p> etc.) — the site's CSS will style them
+
+AEO / LLM WRITING RULES — apply to all text and any new content added:
+1. ANSWER-FIRST: Open every section and FAQ answer with a direct claim.
+2. ONE IDEA PER PARAGRAPH: Each <p> covers exactly one point. 3–5 sentences max.
+3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
+4. DIRECT FAQ ANSWERS: Every FAQ answer opens with a direct yes/no or factual statement.
+5. BULLETED LISTS — use <ul> for features, services, inclusions, what-to-expect items.
+6. NUMBERED LISTS — use <ol> for processes, steps, how-it-works sequences.
+7. TABLES — only when content is genuinely comparative. Never force a table.
+8. SPECIFIC FACTS OVER VAGUE CLAIMS — cite numbers, timeframes, named places.
+9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur.
+10. SECTION LENGTH ≤300 words.
+
+HARD RULES — NEVER:
+- Change any CSS class, ID, or HTML attribute on existing elements
+- Remove or reorder existing HTML elements
+- Use "near me" literally in body content
+- Fabricate reviews or invent addresses/phone numbers not provided
+- Include placeholder text like [Insert here]
+
+Return the complete page HTML with all changes applied. No markdown, no explanations."""
+
+_PRESS_RELEASE_SYSTEM_PROMPT = """You are an SEO press release journalist specialising in local service businesses. You write detailed, neutral, journalistic press releases that are optimised for search engines.
+
+MANDATORY RULES:
+1. Body word count: 650–800 words. After writing, count the words in the body (everything between the title and the About section). If under 650, add extra paragraphs until the minimum is met.
+2. Write in strict 3rd-person neutral tone. Never promotional.
+3. Forbidden words: "top-notch", "look no further", "you", "yours". No questions anywhere.
+4. No hyperlinks or anchor text in the press release body — links are handled separately.
+5. Write a dedicated section (with an <h2>) for each related keyword provided.
+6. Weave in as many of the provided quadgrams and entities as possible while maintaining readability.
+7. Feature the main keyword in the title and 2–3 times in the body.
+8. The ONLY allowable CTA is the contact line — no other calls to action.
+
+TITLE FORMAT: "[main keyword] (provided by|now provided by|offered by|now offered by|proudly offered by|is delighted to offer|expanded by) [business name]"
+Readability is the priority — fix grammar as needed (e.g. "Bronx Car Accident Legal Services Now Offered By Kerner Law Group" not "Bronx Car Accident Attorney Now Offered By Kerner Law Group").
+
+FIRST PARAGRAPH: Must contain an RDF triple sentence that directly states the business name, the service, and the location. Example: "ABC Plumbing offers emergency plumbing services in Chicago." Focus on grammatical correctness and readability.
+
+QUOTE: Include one positive quote attributed to the spokesperson.
+
+OUTPUT FORMAT: Return clean HTML only — no markdown, no code fences, no explanation.
+Use this exact structure:
+<h1>Title</h1>
+<p>First paragraph with RDF triple...</p>
+[body paragraphs and h2 sections]
+<blockquote><p>"Quote text." — Spokesperson Name, Business Name</p></blockquote>
+<p>For more information, please contact SPOKESPERSON_NAME at PAGE_URL</p>
+<h2>About BUSINESS_NAME</h2>
+<p>About paragraph...</p>
+<hr>
+<p><strong>Reminder:</strong> Place your additional links in the body above. ADDITIONAL_LINKS_LIST Include your GBP embed iframe: GBP_EMBED_CODE</p>
+<p><strong>Main keyword:</strong> MAIN_KEYWORD</p>
+<p><strong>Related keywords used:</strong> RELATED_KEYWORDS_LIST</p>"""
+
 logger.info("App initialized, ready to serve")
 for name, val in [
     ("GOOGLE_NLP_API_KEY", GOOGLE_NLP_API_KEY),
@@ -2120,6 +2515,46 @@ def _token_record(endpoint: str, model: str, input_tokens: int, output_tokens: i
         "cost_usd": round(cost, 6),
     }
 
+# Score My Page rubric system prompt — restored VERBATIM from the score_page port
+# (lost in the Phase-0 rehome; its absence made every /score-page call NameError).
+# This is the tuned core: do not edit the wording.
+_SCORE_SYSTEM_PROMPT = """You are an expert local SEO analyst. Score the provided page against all 7 engines below.
+
+IMPORTANT: These 7 engines account for 85% of the composite score. The remaining 15% is
+scored separately by a deterministic Python engine (SERP Signal Coverage) that checks
+exact keyword/entity/quadgram presence per HTML zone. You do NOT score that engine —
+focus only on the 7 below.
+
+SCORING CRITERIA — score each engine 0–100:
+
+1. organic_ranking (weight 10%): keyword in title + H1 + opening ¶; service/transactional tone (not blog); CTA + phone visible; clear service offering.
+
+2. gbp_maps (weight 20%): exact city name present; service matches GBP category; brand+service+city entity triplet; NAP signals consistent; multiple service mentions.
+
+3. entity_establishment (weight 10%): brand+service+city co-occurrence in ≥3 sections; sub-services mentioned; descriptive anchor text signals; topical depth.
+
+4. icp_alignment (weight 5%): detect ICP from keyword modifier (emergency→urgent tone; commercial→B2B tone; general→professional/reliable); CTA tone matches ICP (e.g. emergency ICP requires urgency/fear-based CTA, not generic "call for a free estimate"); pain points addressed; emotional register of copy matches searcher intent.
+
+5. aeo_llm_retrieval (weight 20%): answer-first formatting (direct claim before explanation); FAQ with 4–7 entries (penalise if fewer than 4 or more than 7), each opening with a direct yes/no or factual statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets; ≥1 numbered list for a process or steps; tables used where content is genuinely comparative (service tiers, response times, inclusions) — penalise only if comparative data is present but no table was used; specific operational facts (numbers, timeframes, named places) rather than generic filler.
+
+6. geographic_legitimacy (weight 10%): city in title+H1+opening ¶; ≥2 neighborhood references in sentence context; ≥1 landmark reference; ≥3 zip codes in visible content; geo signals in ≥3 page sections.
+
+7. nearme_intent (weight 10%): phone above fold; availability language in opening block ("available now", "same-day", "emergency response"); response time stated explicitly (e.g. "arrive within 2 hours", "respond in 15 minutes"); ≥2 neighborhood+service+availability blocks; ≥1 street reference; ≥2 proximity FAQs (availability/response/coverage/emergency).
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "organic_ranking":       {"score": 0, "issues": [], "recommendations": []},
+  "gbp_maps":              {"score": 0, "issues": [], "recommendations": []},
+  "entity_establishment":  {"score": 0, "issues": [], "recommendations": []},
+  "icp_alignment":         {"score": 0, "icp_detected": "", "issues": [], "recommendations": []},
+  "aeo_llm_retrieval":     {"score": 0, "issues": [], "recommendations": []},
+  "geographic_legitimacy": {"score": 0, "issues": [], "recommendations": []},
+  "nearme_intent":         {"score": 0, "issues": [], "recommendations": []}
+}
+
+Be specific — reference actual content found (or missing) in the page."""
+
+
 _ENGINE_WEIGHTS = {
     "organic_ranking":      0.10,
     "gbp_maps":             0.20,
@@ -3484,6 +3919,7 @@ async def find_page_for_keyword(request: Request, body: FindPageRequest):
             haiku_pick: Optional[str] = None
             if ANTHROPIC_API_KEY and candidate_pool:
                 try:
+                    import anthropic  # local import — matches every other LLM call site here
                     _ac = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
                     url_list_text = "\n".join(f"{i+1}. {u}" for i, u in enumerate(candidate_pool))
 
@@ -4630,6 +5066,23 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             token_rec["input_tokens"]  += score_tok["input_tokens"]
             token_rec["output_tokens"] += score_tok["output_tokens"]
             token_rec["cost_usd"]       = round(token_rec["cost_usd"] + score_tok["cost_usd"], 6)
+
+            # Build the SEO checklist for the reoptimize pass(es), mirroring
+            # generate-page's invocation. Only built when a pass will actually
+            # run (score < 90), so a passing page costs no extra LLM call. This
+            # repairs a long-standing gap: _reoptimize_html_inline requires
+            # seo_checklist but the worker never produced it (NameError).
+            seo_checklist = ""
+            if inline_score < 90:
+                seo_checklist = await _build_seo_checklist(
+                    keyword=body.keyword,
+                    location=body.location,
+                    address=body.address,
+                    phone=body.phone,
+                    gbp_category=body.gbp_category,
+                    serp_analysis=body.serp_analysis,
+                    client=client,
+                )
 
             for pass_num in range(2, MAX_AUTO_PASSES + 1):
                 if inline_score >= 90:
