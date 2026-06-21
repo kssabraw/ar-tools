@@ -130,6 +130,19 @@ GOOGLE_NLP_ENDPOINT  = "https://language.googleapis.com/v1/documents:analyzeEnti
 DATAFORSEO_ENDPOINT  = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
 SCRAPEOWL_ENDPOINT   = "https://api.scrapeowl.com/v1/scrape"
 
+# Model used by Score My Page — Sonnet-class (NOT Haiku; Haiku was unreliable on
+# the rubric). Restored from the score_page port (constant lost in the Phase-0
+# rehome, leaving _SCORE_SYSTEM_PROMPT / SCORE_MODEL undefined → /score-page 502'd).
+SCORE_MODEL = os.environ.get("SCORE_MODEL", "claude-sonnet-4-6")
+
+# Per-1M-token pricing for the cost estimate (_calc_cost). Sonnet figures from the
+# score_page port; Haiku figures match the inline cost math already used elsewhere
+# in this file ($0.80 in / $4.00 out per 1M). Unknown models fall back to Sonnet.
+_MODEL_PRICING = {
+    "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
+    "claude-haiku-4-5-20251001":  {"input": 0.80, "output": 4.00},
+}
+
 logger.info("App initialized, ready to serve")
 for name, val in [
     ("GOOGLE_NLP_API_KEY", GOOGLE_NLP_API_KEY),
@@ -2119,6 +2132,46 @@ def _token_record(endpoint: str, model: str, input_tokens: int, output_tokens: i
         "output_tokens": output_tokens,
         "cost_usd": round(cost, 6),
     }
+
+# Score My Page rubric system prompt — restored VERBATIM from the score_page port
+# (lost in the Phase-0 rehome; its absence made every /score-page call NameError).
+# This is the tuned core: do not edit the wording.
+_SCORE_SYSTEM_PROMPT = """You are an expert local SEO analyst. Score the provided page against all 7 engines below.
+
+IMPORTANT: These 7 engines account for 85% of the composite score. The remaining 15% is
+scored separately by a deterministic Python engine (SERP Signal Coverage) that checks
+exact keyword/entity/quadgram presence per HTML zone. You do NOT score that engine —
+focus only on the 7 below.
+
+SCORING CRITERIA — score each engine 0–100:
+
+1. organic_ranking (weight 10%): keyword in title + H1 + opening ¶; service/transactional tone (not blog); CTA + phone visible; clear service offering.
+
+2. gbp_maps (weight 20%): exact city name present; service matches GBP category; brand+service+city entity triplet; NAP signals consistent; multiple service mentions.
+
+3. entity_establishment (weight 10%): brand+service+city co-occurrence in ≥3 sections; sub-services mentioned; descriptive anchor text signals; topical depth.
+
+4. icp_alignment (weight 5%): detect ICP from keyword modifier (emergency→urgent tone; commercial→B2B tone; general→professional/reliable); CTA tone matches ICP (e.g. emergency ICP requires urgency/fear-based CTA, not generic "call for a free estimate"); pain points addressed; emotional register of copy matches searcher intent.
+
+5. aeo_llm_retrieval (weight 20%): answer-first formatting (direct claim before explanation); FAQ with 4–7 entries (penalise if fewer than 4 or more than 7), each opening with a direct yes/no or factual statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets; ≥1 numbered list for a process or steps; tables used where content is genuinely comparative (service tiers, response times, inclusions) — penalise only if comparative data is present but no table was used; specific operational facts (numbers, timeframes, named places) rather than generic filler.
+
+6. geographic_legitimacy (weight 10%): city in title+H1+opening ¶; ≥2 neighborhood references in sentence context; ≥1 landmark reference; ≥3 zip codes in visible content; geo signals in ≥3 page sections.
+
+7. nearme_intent (weight 10%): phone above fold; availability language in opening block ("available now", "same-day", "emergency response"); response time stated explicitly (e.g. "arrive within 2 hours", "respond in 15 minutes"); ≥2 neighborhood+service+availability blocks; ≥1 street reference; ≥2 proximity FAQs (availability/response/coverage/emergency).
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "organic_ranking":       {"score": 0, "issues": [], "recommendations": []},
+  "gbp_maps":              {"score": 0, "issues": [], "recommendations": []},
+  "entity_establishment":  {"score": 0, "issues": [], "recommendations": []},
+  "icp_alignment":         {"score": 0, "icp_detected": "", "issues": [], "recommendations": []},
+  "aeo_llm_retrieval":     {"score": 0, "issues": [], "recommendations": []},
+  "geographic_legitimacy": {"score": 0, "issues": [], "recommendations": []},
+  "nearme_intent":         {"score": 0, "issues": [], "recommendations": []}
+}
+
+Be specific — reference actual content found (or missing) in the page."""
+
 
 _ENGINE_WEIGHTS = {
     "organic_ranking":      0.10,
