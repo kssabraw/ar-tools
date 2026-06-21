@@ -39,7 +39,9 @@ Python/FastAPI microservice powering the suite's **Local SEO Content** module
 |---|---|
 | `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` | SERP fetch |
 | `SCRAPEOWL_API_KEY` | competitor/client page scraping |
-| `GOOGLE_NLP_API_KEY` | entity analysis |
+| `TEXTRAZOR_API_KEY` | entity analysis (replaced Google Cloud NLP) |
+| `TEXTRAZOR_MIN_RELEVANCE` | optional — entity relevance cutoff (default `0.1`; calibrate on live keywords) |
+| `TEXTRAZOR_MIN_CONFIDENCE` | optional — disambiguation-confidence floor (default `0` = off) |
 | `ANTHROPIC_API_KEY` | generation + page scoring |
 
 No `NLP_API_KEY` / `SUPABASE_*` needed (auth removed).

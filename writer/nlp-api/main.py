@@ -120,13 +120,15 @@ app.add_middleware(LimitRequestSizeMiddleware)
 STOP_WORDS = set(stopwords.words('english'))
 
 # ── API credentials (set all in Railway environment variables) ────────────────
-GOOGLE_NLP_API_KEY   = os.environ.get("GOOGLE_NLP_API_KEY", "")
+TEXTRAZOR_API_KEY    = os.environ.get("TEXTRAZOR_API_KEY", "")
 DATAFORSEO_LOGIN     = os.environ.get("DATAFORSEO_LOGIN", "")
 DATAFORSEO_PASSWORD  = os.environ.get("DATAFORSEO_PASSWORD", "")
 SCRAPEOWL_API_KEY    = os.environ.get("SCRAPEOWL_API_KEY", "")
 ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
 
-GOOGLE_NLP_ENDPOINT  = "https://language.googleapis.com/v1/documents:analyzeEntities"
+# Entity analysis: TextRazor (replaced Google Cloud NLP — cheaper + Wikipedia/
+# Wikidata linking). Single endpoint; key passed via the X-TextRazor-Key header.
+TEXTRAZOR_ENDPOINT   = "https://api.textrazor.com/"
 DATAFORSEO_ENDPOINT  = "https://api.dataforseo.com/v3/serp/google/organic/live/advanced"
 SCRAPEOWL_ENDPOINT   = "https://api.scrapeowl.com/v1/scrape"
 
@@ -527,7 +529,7 @@ Use this exact structure:
 
 logger.info("App initialized, ready to serve")
 for name, val in [
-    ("GOOGLE_NLP_API_KEY", GOOGLE_NLP_API_KEY),
+    ("TEXTRAZOR_API_KEY",  TEXTRAZOR_API_KEY),
     ("DATAFORSEO_LOGIN",   DATAFORSEO_LOGIN),
     ("SCRAPEOWL_API_KEY",  SCRAPEOWL_API_KEY),
     ("ANTHROPIC_API_KEY",  ANTHROPIC_API_KEY),
@@ -545,8 +547,15 @@ RELATED_MIN_SIMILARITY   = 0.1
 QUADGRAM_MIN_PAGE_SPREAD = 0.49
 QUADGRAM_MIN_SIMILARITY  = 0.1
 ENTITY_MIN_PAGE_SPREAD   = 0.49
-ENTITY_MIN_SALIENCE      = 0.40
-GOOGLE_NLP_MAX_BYTES     = 100_000
+# Entity relevance cutoff for the TextRazor path. TextRazor's relevanceScore
+# (0–1) is a DIFFERENT scale/meaning than Google NLP's old salience, so the
+# prior 0.40 salience cutoff does NOT carry over. Env-tunable, and should be
+# calibrated on live keywords — default is lenient because the page-spread
+# filter (below) already does most of the work.
+ENTITY_MIN_RELEVANCE     = float(os.environ.get("TEXTRAZOR_MIN_RELEVANCE", "0.1"))
+# Optional disambiguation-confidence floor (TextRazor confidenceScore). 0 = off.
+ENTITY_MIN_CONFIDENCE    = float(os.environ.get("TEXTRAZOR_MIN_CONFIDENCE", "0"))
+TEXTRAZOR_MAX_BYTES      = 200_000   # TextRazor per-request size limit
 
 # DataForSEO: how many organic results to request
 SERP_RESULT_COUNT = 20
@@ -557,8 +566,10 @@ COST_DATAFORSEO_PER_ANALYSIS  = 0.0025
 # ScrapeOwl without JS: ~$0.0075/page; with JS render: ~$0.015/page
 COST_SCRAPEOWL_PER_PAGE       = 0.0075
 COST_SCRAPEOWL_PER_PAGE_JS    = 0.0150
-# Google Natural Language API entity analysis: $0.001 per 1,000 chars
-COST_GOOGLE_NLP_PER_1K_CHARS  = 0.001
+# TextRazor entity analysis: priced per request on a plan/quota (not per char),
+# so the marginal per-request cost is effectively flat. Set an estimate here if
+# you want it reflected in the cost breakdown; defaults to 0.
+COST_TEXTRAZOR_PER_REQUEST    = float(os.environ.get("COST_TEXTRAZOR_PER_REQUEST", "0"))
 
 # Domains to skip — directories, aggregators, social, video
 # Intentionally whitelisted: reddit.com, linkedin.com, facebook.com, quora.com
@@ -1087,31 +1098,49 @@ def get_top_quadgrams(
 
 # ── NLP: Google entity analysis ───────────────────────────────────────────────
 
-async def fetch_google_entities(text: str, client: httpx.AsyncClient) -> List[dict]:
-    if not GOOGLE_NLP_API_KEY or not text.strip():
+async def fetch_textrazor_entities(text: str, client: httpx.AsyncClient) -> List[dict]:
+    """Call TextRazor's entity extractor for one document. Returns the raw
+    `response.entities` list (TextRazor emits one item per mention occurrence)."""
+    if not TEXTRAZOR_API_KEY or not text.strip():
         return []
-    encoded = text.encode("utf-8")[:GOOGLE_NLP_MAX_BYTES]
+    encoded = text.encode("utf-8")[:TEXTRAZOR_MAX_BYTES]
     safe_text = encoded.decode("utf-8", errors="ignore")
     try:
         response = await client.post(
-            GOOGLE_NLP_ENDPOINT,
-            params={"key": GOOGLE_NLP_API_KEY},
-            json={"document": {"type": "PLAIN_TEXT", "content": safe_text}, "encodingType": "UTF8"},
+            TEXTRAZOR_ENDPOINT,
+            headers={
+                "X-TextRazor-Key": TEXTRAZOR_API_KEY,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            data={"extractors": "entities", "text": safe_text},
             timeout=15.0,
         )
         response.raise_for_status()
-        return response.json().get("entities", [])
+        return response.json().get("response", {}).get("entities", [])
     except Exception as e:
-        logger.warning(f"Google NLP API error: {e}")
+        logger.warning(f"TextRazor API error: {e}")
         return []
 
 
-async def get_google_entities(
+async def get_textrazor_entities(
     paragraph_docs: List[str],
     min_page_spread: float = ENTITY_MIN_PAGE_SPREAD,
-    min_salience: float = ENTITY_MIN_SALIENCE,
+    min_relevance: float = ENTITY_MIN_RELEVANCE,
+    min_confidence: float = ENTITY_MIN_CONFIDENCE,
 ) -> List[dict]:
-    if not GOOGLE_NLP_API_KEY:
+    """Aggregate TextRazor entities across competitor pages. Mirrors the prior
+    Google-NLP aggregation (per-page de-dup → page-spread + relevance filter),
+    mapping TextRazor fields onto the same output shape:
+      relevanceScore (0–1) → `mean_salience` slot   (field name kept for compat)
+      confidenceScore      → optional disambiguation floor
+      entityId             → grouping key across pages
+      matchedText          → `name` (surface form, matchable in page text)
+      wikidataId/wikiLink  → Knowledge-Graph linking (wikidataId → `mid` slot)
+    Output shape and the downstream `google_entities` field name are unchanged,
+    so zone targets / rubric / deterministic engine / ICP are untouched."""
+    from collections import Counter
+
+    if not TEXTRAZOR_API_KEY:
         return []
 
     total_pages = len(paragraph_docs)
@@ -1119,55 +1148,99 @@ async def get_google_entities(
 
     async with httpx.AsyncClient() as client:
         per_page_entities = await asyncio.gather(
-            *[fetch_google_entities(doc, client) for doc in paragraph_docs]
+            *[fetch_textrazor_entities(doc, client) for doc in paragraph_docs]
         )
 
-    entity_data: Dict[tuple, Dict] = defaultdict(lambda: {
-        "saliences": [], "mention_counts": [], "pages": set(),
+    entity_data: Dict[str, Dict] = defaultdict(lambda: {
+        "relevances": [], "mention_counts": [], "pages": set(),
+        "surface": Counter(), "wikidata": "", "wiki_link": "", "etype": "",
     })
 
     for page_idx, entities in enumerate(per_page_entities):
-        seen_this_page = set()
-        for entity in entities:
-            name = entity.get("name", "").strip()
-            etype = entity.get("type", "UNKNOWN")
-            salience = entity.get("salience", 0.0)
-            mention_count = len(entity.get("mentions", []))
-            mid = entity.get("metadata", {}).get("mid", "")
-            if not name:
+        # TextRazor returns one item per mention — group this page's mentions by
+        # the disambiguated entityId so a page counts an entity at most once.
+        page_groups: Dict[str, Dict] = defaultdict(lambda: {
+            "relevances": [], "confidences": [], "surface": Counter(), "count": 0,
+            "wikidata": "", "wiki_link": "", "etype": "",
+        })
+        for ent in entities:
+            eid = (ent.get("entityId") or ent.get("matchedText") or "").strip()
+            if not eid:
                 continue
-            key = (name.lower(), etype)
-            if key not in seen_this_page:
-                entity_data[key]["saliences"].append(salience)
-                entity_data[key]["mention_counts"].append(mention_count)
-                entity_data[key]["pages"].add(page_idx)
-                entity_data[key]["name"] = name
-                entity_data[key]["entity_type"] = etype
-                if mid and not entity_data[key].get("mid"):
-                    entity_data[key]["mid"] = mid
-                seen_this_page.add(key)
+            g = page_groups[eid.lower()]
+            g["relevances"].append(float(ent.get("relevanceScore", 0.0) or 0.0))
+            g["confidences"].append(float(ent.get("confidenceScore", 0.0) or 0.0))
+            surface = (ent.get("matchedText") or "").strip()
+            if surface:
+                g["surface"][surface] += 1
+            g["count"] += 1
+            if not g["wikidata"] and ent.get("wikidataId"):
+                g["wikidata"] = ent["wikidataId"]
+            if not g["wiki_link"] and ent.get("wikiLink"):
+                g["wiki_link"] = ent["wikiLink"]
+            if not g["etype"] and ent.get("type"):
+                types = ent["type"]
+                g["etype"] = types[0] if isinstance(types, list) and types else str(types)
 
-    results = []
-    for key, data in entity_data.items():
+        for eid_l, g in page_groups.items():
+            # Drop low-confidence disambiguations when a floor is configured.
+            page_confidence = max(g["confidences"]) if g["confidences"] else 0.0
+            if min_confidence and page_confidence < min_confidence:
+                continue
+            d = entity_data[eid_l]
+            d["relevances"].append(max(g["relevances"]) if g["relevances"] else 0.0)
+            d["mention_counts"].append(g["count"])
+            d["pages"].add(page_idx)
+            d["surface"].update(g["surface"])
+            if not d["wikidata"] and g["wikidata"]:
+                d["wikidata"] = g["wikidata"]
+            if not d["wiki_link"] and g["wiki_link"]:
+                d["wiki_link"] = g["wiki_link"]
+            if not d["etype"] and g["etype"]:
+                d["etype"] = g["etype"]
+
+    # Entities that clear the (provider-agnostic) page-spread filter, BEFORE the
+    # relevance cutoff — collected so the relevance distribution is logged. That
+    # distribution is how TEXTRAZOR_MIN_RELEVANCE gets calibrated from prod logs.
+    candidates = []
+    for eid_l, data in entity_data.items():
         page_count = len(data["pages"])
         if page_count < min_pages_required:
             continue
-        mean_salience = float(np.mean(data["saliences"]))
-        if mean_salience < min_salience:
+        candidates.append((eid_l, data, page_count, float(np.mean(data["relevances"]))))
+    candidates.sort(key=lambda c: c[3], reverse=True)
+    if candidates:
+        dist = ", ".join(f"{c[3]:.2f}" for c in candidates[:30])
+        logger.info(
+            f"TextRazor calibration: {len(candidates)} page-spread-qualifying entities; "
+            f"mean relevance (desc): [{dist}]"
+        )
+
+    results = []
+    for eid_l, data, page_count, mean_relevance in candidates:
+        if mean_relevance < min_relevance:
             continue
         recommended_mentions = int(round(float(np.mean(data["mention_counts"]))))
+        # Most common surface form, so `name` matches page text in the
+        # deterministic coverage engine; fall back to the entity id.
+        name = data["surface"].most_common(1)[0][0] if data["surface"] else eid_l
         results.append({
-            "name": data["name"],
-            "entity_type": data["entity_type"],
-            "mid": data.get("mid", ""),
-            "mean_salience": round(mean_salience, 4),
+            "name": name,
+            "entity_type": data["etype"] or "UNKNOWN",
+            "mid": data.get("wikidata", ""),        # Wikidata ID (was Google KG MID)
+            "wiki_link": data.get("wiki_link", ""),
+            "mean_salience": round(mean_relevance, 4),  # relevanceScore (field name kept)
             "page_spread": page_count,
             "page_spread_pct": round(page_count / total_pages, 2),
             "recommended_mentions": max(1, recommended_mentions),
-            "type": "google_entity",
+            "type": "textrazor_entity",
         })
 
     results.sort(key=lambda x: x["mean_salience"], reverse=True)
+    logger.info(
+        f"TextRazor entities: {len(results)}/{len(candidates)} kept "
+        f"(relevance>={min_relevance}, page_spread>={min_pages_required}/{total_pages})"
+    )
     return results
 
 
@@ -1230,18 +1303,20 @@ async def _run_serp_analysis(
     )
     quadgrams = get_top_quadgrams(zone_buckets["paragraphs"], keyword)
 
-    # Step 5: Google NLP entity analysis — use paragraph text already in memory
+    # Step 5: TextRazor entity analysis — use paragraph text already in memory.
+    # `google_entities` keeps its name for serp_analysis / frontend compatibility,
+    # but is now TextRazor-sourced (Wikidata/Wikipedia-linked).
     google_entities: List[dict] = []
-    nlp_chars = 0
-    if GOOGLE_NLP_API_KEY:
+    nlp_requests = 0
+    if TEXTRAZOR_API_KEY:
         para_texts = [t for t in zone_buckets["paragraphs"] if len(t) > 100]
         if para_texts:
             try:
-                google_entities = await get_google_entities(para_texts)
-                nlp_chars = sum(min(len(t), GOOGLE_NLP_MAX_BYTES) for t in para_texts)
-                logger.info(f"Google NLP: {len(google_entities)} entities from {len(para_texts)} pages")
+                google_entities = await get_textrazor_entities(para_texts)
+                nlp_requests = len(para_texts)
+                logger.info(f"TextRazor: {len(google_entities)} entities from {len(para_texts)} pages")
             except Exception as _nlp_err:
-                logger.warning(f"Google NLP failed (non-fatal): {_nlp_err}")
+                logger.warning(f"TextRazor failed (non-fatal): {_nlp_err}")
 
     # Step 6: SERP bold keyword analysis — count usage across competitor pages
     serp_bold_keywords: List[dict] = []
@@ -1308,15 +1383,15 @@ async def _run_serp_analysis(
     scrapeowl_cost = round(
         no_js_pages * COST_SCRAPEOWL_PER_PAGE + js_pages * COST_SCRAPEOWL_PER_PAGE_JS, 6
     )
-    nlp_cost = round(nlp_chars / 1000 * COST_GOOGLE_NLP_PER_1K_CHARS, 6)
+    nlp_cost = round(nlp_requests * COST_TEXTRAZOR_PER_REQUEST, 6)
     analysis_cost = {
         "dataforseo": round(COST_DATAFORSEO_PER_ANALYSIS, 6),
         "scrapeowl_pages": len(scraped_urls),
         "scrapeowl_no_js_pages": no_js_pages,
         "scrapeowl_js_pages": js_pages,
         "scrapeowl": scrapeowl_cost,
-        "google_nlp_chars": nlp_chars,
-        "google_nlp": nlp_cost,
+        "textrazor_requests": nlp_requests,
+        "textrazor": nlp_cost,
         "subtotal": round(COST_DATAFORSEO_PER_ANALYSIS + scrapeowl_cost + nlp_cost, 6),
     }
 
@@ -5135,8 +5210,8 @@ Full location: {body.location}
             "dataforseo":           ac.get("dataforseo", 0),
             "scrapeowl_pages":      ac.get("scrapeowl_pages", 0),
             "scrapeowl":            ac.get("scrapeowl", 0),
-            "google_nlp_chars":     ac.get("google_nlp_chars", 0),
-            "google_nlp":           ac.get("google_nlp", 0),
+            "textrazor_requests":   ac.get("textrazor_requests", 0),
+            "textrazor":            ac.get("textrazor", 0),
             "claude_model":         token_rec["model"],
             "claude_input_tokens":  token_rec["input_tokens"],
             "claude_output_tokens": token_rec["output_tokens"],
