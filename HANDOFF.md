@@ -1,123 +1,97 @@
 # AR Tools — Handoff
 
-**Branch:** `claude/compassionate-mccarthy-dvnrw` (pushed; **not merged**, no PR opened yet)
-**Date:** 2026-06-01
-**Scope of this handoff:** this session's work — **Local SEO module Phase 2** (frontend + full platform-api passthrough, the full ShowUP flow minus rankability) plus the adversarial-review hardening that followed (all HIGH/MEDIUM/LOW issues). Builds directly on the prior session's Phases 0–1 (now merged to `main`, PRs #12–#18).
+**Date:** 2026-06-21
+**State:** everything below is **merged to `main` and deployed** (PRs #20, #21, #22). No feature branch is left in flight; the only open work is the TextRazor *activation/calibration* and the standing items in §6–§8.
+**Scope of this handoff:** this session shipped four things — (1) **Brand Voice** + (2) **ICP/Differentiators** as converged client-level assets, (3) repaired a set of **nlp constants dropped in the Phase-0 rehome** that were silently 502'ing score/generate/reoptimize/press-release, and (4) swapped the entity provider **Google Cloud NLP → TextRazor**.
 
-> Read `CLAUDE.md` first for project conventions and the authoritative current-state summary, `docs/suite-architecture-and-roadmap-v1_0.md` for suite scope/decisions, and `docs/modules/local-seo-module-integration-plan-v1_0.md` for the Local SEO plan. This file ties them to the in-flight work.
+> Read `CLAUDE.md` first for conventions + current-state summary, `docs/suite-architecture-and-roadmap-v1_0.md` for suite scope/decisions, and `docs/modules/local-seo-module-integration-plan-v1_0.md` for the Local SEO plan. This file ties them to the latest state.
 
 ---
 
-## 1. What this session shipped (commits on `claude/compassionate-mccarthy-dvnrw`)
+## 1. What this session shipped (all merged to `main`)
 
-| Commit | Type | Summary |
+| PR | Title | What |
 |---|---|---|
-| `9cb6dd1` | feat(local-seo) | **Phase 2** — full Local SEO frontend + platform-api passthrough routes (see §2). |
-| `7ac9b67` | fix(local-seo) | **HIGH** review fixes — nlp error mapping + heartbeat-SSE for long ops (see §4). |
-| `c1cbc29` | fix(local-seo) | **MEDIUM** review fixes — related-pages per-row actions; open-saved loading view. |
-| `b50ef16` | fix(local-seo) | **LOW** review fixes — ticker leak guard; Deficiency type; removed reoptimize double-scoring. |
+| **#20** | `Fix nlp-api: restore constants dropped in the Phase-0 rehome` | Restored `SCORE_MODEL`, `_SCORE_SYSTEM_PROMPT`, `_MODEL_PRICING`, `GENERATION_MODEL`, `_GEN_SYSTEM_PROMPT`, `_REOPT_SYSTEM_PROMPT`, `_PRESS_RELEASE_SYSTEM_PROMPT` (verbatim from `local-seo-writer/services/nlp/main.py`); added the missing `import anthropic` in `/find-page-for-keyword`; built `seo_checklist` in the reoptimize loop. **F821 in nlp-api → 0.** |
+| **#21** | `Brand Voice + ICP/Differentiators — converged client-level assets` | Two new client-knowledge modules, end-to-end (store + generation + convergence bridge + UI). |
+| **#22** | `Swap entity provider: Google Cloud NLP → TextRazor` | Full replacement of the entity pipeline. |
 
-**Not merged.** Everything is on the feature branch awaiting review/merge. No PR was opened (per the "don't open a PR unless asked" rule). When merging: see the deploy notes in §5 — **the `nlp` service must be redeployed** for the §4-#8 change.
-
----
-
-## 2. Local SEO module (#2) — integration status
-
-**Chosen path: C (full port) into the suite.** Plan + scope authority: `docs/modules/local-seo-module-integration-plan-v1_0.md`.
-
-**v1 scope (agreed):**
-- ✅ Keep: competitor SERP + client-page scraping (analysis), full page scoring + auto-reoptimization.
-- ❌ Cut: client-site **brand-voice** scraping, client-site **ICP** detection, the keyword-worthiness **"rankability"** check, all **billing/credits**.
-- Analysis is an **explicit per-page opt-in** — generate takes a **required `run_analysis` bool** (no default).
-- ➕ Deferred to Phase 3: a **page-template** field the writer must follow.
-
-**Phase 0 — NLP service rehomed (DONE, prior session).** `writer/nlp-api/`, private-only on Railway at `http://nlp.railway.internal:8080`. Every endpoint the suite needs already exists there (`/analyze`, `/find-page-for-keyword`, `/score-page`, `/related-pages`, `/generate-page`, `/reoptimize-page`, `/generate-social-posts`); `/check-rankability` was stripped.
-
-**Phase 1 — platform-api backend (DONE, prior session).** `local_seo_pages` table (live, RLS); `config.nlp_api_url`; original generate/list/get.
-
-**Phase 2 — frontend + full passthrough (DONE this session, on branch).**
-- **platform-api** (`routers/local_seo.py`, `services/local_seo_service.py`, `models/local_seo.py`) — auth-gated proxies to the private nlp service; owns persistence. The 7 POST **action** routes are **heartbeat-SSE** (see §4-#3); GET/DELETE are plain JSON:
-  - `POST /clients/{id}/local-seo/generate` · `/analyze` · `/find-page` · `/score` · `/related-pages` · `/reoptimize` · `/social-posts`
-  - `GET /clients/{id}/local-seo/pages` · `GET /local-seo/pages/{id}` · `DELETE /local-seo/pages/{id}`
-  - `reoptimize` persists a `mode='reoptimize'` row; uses the nlp-surfaced score (no redundant re-score — §4-#8).
-- **frontend** (suite inline-style system, not Tailwind): new page `pages/LocalSeoContent.tsx` (New Page form with service + area + **required** analysis choice; optional site-scan & analysis-preview; Saved Pages tab with view/delete) and `components/localseo/` (`GeneratedPageView`, `PageScoreView`, `AnalysisResultsView`, `Spinner`, `types`, `shared`, `api`). Route `/clients/:id/local-seo` added in `App.tsx`; the **"Create Local SEO Content"** workspace card now links to it (was the dead "Setup in progress" stub). `lib/api.ts` gained a `stream()` SSE consumer.
-- **nlp** (`writer/nlp-api/main.py`): no new endpoints. `/reoptimize-page` and `/generate-page` now **surface `composite_score`/`composite_status`** in their `done` events (added `_status_for_score`).
-
-**Adaptations from ShowUP Local (intentional):**
-- The business selector collapses to **the client** (GBP lives on the client row).
-- **Location is a plain text field** — the suite has no DataForSEO `location` table (confirmed via Supabase), so `location_code` is omitted and DataForSEO falls back to `location_name`.
-- **Rankability removed** entirely.
-- No `keyword_analyses` cache table in the suite → analysis isn't cached between calls (every `analyze` / `run_analysis:true` generate re-scrapes; recurring DataForSEO/ScrapeOwl cost — noted debt).
-
-**Phase 3 — page-template field (NOT STARTED).** Add `page_template` to the nlp `GeneratePageRequest` + inject into the generation prompt/checklist; add the form field; optionally persist a per-client default.
+**The nlp repairs (#20) are the most important takeaway.** The Phase-0 rehome (`00ae38e`) carried the *functions* but dropped a block of module-level constants, so `/score-page`, `/generate-page`, `/reoptimize-page`, `/augment-page`, and `/press-release` raised `NameError → HTTP 502` on every call. This was latent because nlp-api has no test harness. Proven via AST (no assignment), `ruff F821`, and `git log -S` (never in the file's history). **If anyone reports "Local SEO scoring/generation was broken before 2026-06-21," this is why.**
 
 ---
 
-## 3. Tests / checks (this session)
+## 2. Brand Voice + ICP — the convergence model (Option A)
 
-- **platform-api: 57 passing.** New `tests/test_local_seo_service.py` (payload mapping, business-field fallbacks, generate persistence, find/score guards, related passthrough, reoptimize surfaced-score vs fallback) and `tests/test_sse.py` (done / HTTPException→error / masked internal_error).
-- **frontend:** `tsc` clean, `eslint` clean, `vite build` OK.
-- Install note: the sandbox needed `pip install --ignore-installed cffi PyJWT` before `pip install -r requirements.txt -r requirements-dev.txt` would import (broken system `_cffi_backend`).
+These two re-add capabilities the Local SEO v1 plan had **cut** (`brand-voice`/`ICP` scraping) — done deliberately, per the user, and **converged** so one client-level asset feeds **both** the Blog Writer and Local SEO.
 
----
+**Decision (Option A):** the structured JSON is the single source of truth; the legacy free-text columns become a *rendered view*.
+- `clients.brand_voice` JSONB — `{ source, raw_text, current_voice, recommended_voice, recommended_accepted, writer_execution_guide, generated_at, edited_at }`.
+- `clients.detected_icp` JSONB — `{ source, raw_text, segments, reasoning, generated_at, edited_at }`; `clients.differentiators` JSONB (array). One `detected_icp.source` governs supersede for both.
+- **Provenance/supersede:** `source: "user" | "app"`. A user-authored *structured* voice/ICP blocks an auto-scan unless `force=true`; a `raw_text`-only entry can still be enriched (the scan preserves it). The UI badge treats any `raw_text` as user-authored.
+- **Migrations (live + verified):** `20260621120000_clients_brand_voice.sql`, `20260621130000_clients_icp_differentiators.sql` — both applied to `wvcthtmmcmhkybcesirb` and seeded from existing `brand_guide_text` / `icp_text`.
 
-## 4. Review hardening — what the fixes were (for reviewers)
-
-The Phase-2 build was reviewed adversarially; all findings are fixed on-branch.
-
-- **#1/#2 (HIGH)** — `_post_nlp` now wraps `response.json()`: a `200` with a non-JSON/truncated body is mapped to `502 local_seo_provider_error` instead of leaking a 500. `reoptimize_page`'s re-score guard widened to `except Exception` so a failed (non-essential) re-score never discards the successful rewrite.
-- **#3 (HIGH)** — long POSTs (generate/score/reoptimize/analyze can run 1–5 min sending no bytes) could be dropped by a load-balancer idle timeout. New `sse.py` `sse_response` runs the op as a background task, emits a heartbeat every 10s, then a final `done`/`error` SSE event; the 7 action routes use it. Frontend `lib/api.stream()` reads the stream, ignores heartbeats, resolves with the final result — so component call sites are unchanged. On client disconnect the task is left running so persistence still completes.
-- **#4 (MEDIUM)** — related-pages "Act on N selected" only ever processed one item before the view unmounted; replaced with honest per-row action buttons.
-- **#5 (MEDIUM)** — opening a saved page reused the multi-minute "Creating…" UI; added a distinct lightweight `loading` view.
-- **#6 (LOW)** — `startTicker` now clears any prior interval (no leak on rapid re-submit).
-- **#7 (LOW)** — `Deficiency` type corrected to match nlp (`issues`/`score`/`recommendations`, no singular `issue`); related list renders `issues`.
-- **#8 (LOW)** — reoptimize no longer makes a second `/score-page` LLM call; it consumes the score the nlp loop already computed (surfaced in §2), falling back to a re-score only for older nlp builds (rollout-safe).
+**Wiring:**
+- nlp-api: `POST /analyze-brand-voice` + `POST /analyze-business` (these *engines* already existed but were orphaned — no endpoint/persistence/UI). ICP scan includes opt-in **title/H1 enrichment** (`_enrich_pages_with_titles`, time-bounded). `_build_brand_voice_text` / `_build_icp_text` now also render `raw_text`.
+- platform-api: `services/brand_voice_service.py` + `routers/brand_voice.py`; `services/icp_service.py` + `routers/icp.py`. Routes: `GET` / `POST …/scan` (heartbeat-SSE) / `PUT`, all behind `require_auth`, per-user rate-limited via a forwarded `X-User-ID` (added to `_post_nlp`).
+- **Convergence bridge:** `resolve_brand_guide_text` / `resolve_icp_text` render the structured asset into the Blog Writer's run-snapshot `brand_guide_text` / `icp_text` (differentiators folded into the ICP text), at all three snapshot sites (`runs.py` dispatch + rerun, `silo_promotion.py`). **No Writer-internals change.** The clients router keeps the structured asset in sync when the legacy free-text fields change.
+- **Local SEO generate/social payloads** now pass `brand_voice` / `detected_icp` / `differentiators` to the generator (they were previously omitted — this completes the Local-SEO side of convergence).
+- Frontend: `pages/BrandVoice.tsx`, `pages/Icp.tsx`, `components/{brandvoice,icp}/api.ts`, ClientWorkspace "Client setup" cards, routes `/clients/:id/brand-voice` and `/clients/:id/icp`.
 
 ---
 
-## 5. Deploy gotchas worth remembering (Railway `nlp` service)
+## 3. TextRazor swap (entity analysis) — **NOT FULLY LIVE YET**
 
-- **nlp redeploy required for §4-#8.** The surfaced `composite_score`/`composite_status` (and the skipped reoptimize re-score) only take effect once `writer/nlp-api/main.py` is redeployed. It's **deploy-order-safe** (platform falls back when the fields are absent), but generated/reoptimized pages won't show the status band, and reoptimize will keep double-scoring, until nlp is updated.
-- **SSE buffering.** The 7 action routes return `text/event-stream` with `X-Accel-Buffering: no` + `Cache-Control: no-cache`. If a future proxy buffers responses, the heartbeat keepalive is defeated — keep buffering off on that path.
-- **No deploy-time healthcheck.** A private-only service can't pass Railway's `/health` probe → **keep `healthcheckPath` empty** (it persists as a saved setting; clearing it needed `accept-deploy`).
-- **Private bind.** The Dockerfile binds `::` (IPv6) for Railway private networking. Don't change to `0.0.0.0`.
-- **Don't double-trigger deploys.** Merge to `main`, then let the single auto-deploy run (a simultaneous manual redeploy caused a multi-deploy deadlock).
-- The `nlp` service's 4 API keys (`DATAFORSEO_LOGIN/PASSWORD`, `SCRAPEOWL_API_KEY`, `GOOGLE_NLP_API_KEY`, `ANTHROPIC_API_KEY`) are **reference variables** from the `pipeline` service.
+Replaced Google Cloud NLP with TextRazor in the SERP pipeline (cost + Wikipedia/Wikidata linking). **Structure preserved** — per-page de-dup → page-spread + relevance filter — only the source/field mapping changed, and the downstream `google_entities` field name is **kept** so zone targets / rubric / deterministic engine / ICP are untouched.
+
+- Mapping: `relevanceScore` → the `mean_salience` slot; `entityId` = grouping key; `matchedText` (most common) = `name`; `wikidataId` → `mid` (+ new `wiki_link`); mentions grouped by `entityId`.
+- Thresholds: `ENTITY_MIN_PAGE_SPREAD` unchanged (the dominant, provider-agnostic filter). The old `0.40` salience cutoff **does not transfer** → replaced by `ENTITY_MIN_RELEVANCE` (env `TEXTRAZOR_MIN_RELEVANCE`, default lenient **`0.1`**) + optional `ENTITY_MIN_CONFIDENCE`. `get_textrazor_entities` **logs the relevance distribution** of page-spread-qualifying entities for calibration.
+
+### ⚠️ Two things are NOT done — pick these up next
+1. **The key is staged, not applied.** `TEXTRAZOR_API_KEY` was set on the `nlp` service via the Railway agent but only *staged* — the post-merge deploy log still shows `WARNING - TEXTRAZOR_API_KEY not set`. **Until it's committed (via `accept-deploy`, or re-set + redeploy), TextRazor is inert: `get_textrazor_entities` returns `[]`, so the entity signal is missing entirely** (graceful — scoring/generation still run, entity coverage defaults to its neutral value, no crash). **This was awaiting user go-ahead to redeploy when the session ended.**
+2. **Threshold not calibrated.** `0.1` is a placeholder. Once the key is live, run one real Local SEO `/analyze` (or score), read the `nlp` log line `TextRazor calibration: N page-spread-qualifying entities; mean relevance (desc): [...]`, and set a tuned `TEXTRAZOR_MIN_RELEVANCE`.
 
 ---
 
-## 6. Current infra state
+## 4. Verification status (read this before trusting anything live)
 
-- **Railway (`ar-tools`): 3 services online** — `PLATFORM`, `pipeline`, `nlp` (private-only). **`nlp` and `PLATFORM` need a redeploy** to pick up this branch once merged.
-- **Supabase** (`wvcthtmmcmhkybcesirb`): `local_seo_pages` live with RLS; `OUTSCRAPER_API_KEY` + `DATAFORSEO_*` set on PLATFORM. ⚠️ Advisory (pre-existing, not from this work): `public.sie_cache` has **RLS disabled** — surfaced for the user to decide on (needs policies before enabling).
-- **Frontend** (Netlify): Local SEO UI is built on this branch (not yet deployed/merged).
+- **All checks were static/offline:** `py_compile`, `ruff` (F821=0 in nlp-api), `mypy`/`eslint` on new code, the platform-api pytest suite (**83 passing**), `tsc -b` + `vite build`, and AST byte-identity checks on the restored nlp constants. New aggregation logic (TextRazor) was exercised against a **mocked** response.
+- **Nothing was live-tested.** The build sandbox has **no `ANTHROPIC_API_KEY` and an egress allowlist** (e.g. `api.textrazor.com` is blocked, returns `403 Host not in allowlist`). Real provider calls only happen on Railway. So: the nlp repairs, the brand-voice/ICP scans, and the TextRazor swap have **not** been exercised against live providers from here.
+- **Sandbox dep gaps** (not bugs): `openai`, `supabase`, `python-multipart` aren't installed in the build env, so some imports/tests fail here but pass with `pip install -r requirements.txt`. `pip install --ignore-installed PyJWT supabase` was needed for the platform tests.
+
+---
+
+## 5. Infra / deploy state
+
+- **Railway (`ar-tools`): 4 services** — `nlp`, `PLATFORM`, `pipeline`, `info-site-kw-research-cluster` (the separate keyword-research app), env `production` (`7bd2e88e-…`), project `2c718e53-…`.
+- **All three suite services redeployed** off the merges and reported **SUCCESS** (latest `nlp` deploy = `6025459`, the #22 merge). The TextRazor *code* is live; the *key* is not (see §3).
+- **`nlp` keys present:** `ANTHROPIC_API_KEY`, `SCRAPEOWL_API_KEY`, `DATAFORSEO_LOGIN/PASSWORD`, `GOOGLE_NLP_API_KEY` (now unused — removable after TextRazor is confirmed), `TEXTRAZOR_API_KEY` (**staged, not applied**). `SCORE_MODEL`/`GENERATION_MODEL` are **not** env vars (code constants → sonnet default); their absence is expected.
+- Railway gotchas still apply (from the prior handoff): private-only `nlp` ⇒ **keep `healthcheckPath` empty**; Dockerfile binds `::`; don't double-trigger deploys; SSE routes need buffering off.
+
+---
+
+## 6. ⚠️ Open security / cost items (flagged, not yet actioned)
+
+1. **`nlp` has a PUBLIC domain** — `nlp-production-0e3c.up.railway.app:8080` — but the service is **auth-less by design** ("private network only" per CLAUDE.md). If that domain is internet-reachable, anyone who finds it can hit `/generate-page`, `/score-page`, `/analyze`, etc. and **burn Anthropic + DataForSEO + ScrapeOwl + TextRazor credits**. The #20 repairs made those endpoints *more* functional, so this matters more now. **Verify reachability and remove the public domain (or add auth) — highest-priority loose end.**
+2. **Rotate the TextRazor key** — it was pasted into the chat transcript this session. The working value is in Railway; rotate once cutover is confirmed.
+3. After TextRazor is confirmed working, **remove `GOOGLE_NLP_API_KEY`** from `nlp` (no longer read).
 
 ---
 
 ## 7. Immediate next steps
 
-1. **Review & merge** `claude/compassionate-mccarthy-dvnrw` (open a PR when ready). Remember the nlp redeploy (§5).
-2. **Runtime smoke-test the full Local SEO flow end-to-end** — still not done. Exercise generate / find-page / score / reoptimize / related / social against the deployed PLATFORM→nlp path with an authenticated request (can't be done from the build sandbox). Confirms the SSE plumbing (both platform↔nlp and browser↔platform), GBP→payload mapping, scoring, and persistence for real.
-3. **Phase 3 — page-template field** (the original request that started this thread).
-4. **nlp dead-code cleanup** — remove the now-unreferenced helpers from the 3 cut endpoints (`_crawl_pages_for_brand_voice`, `analyze_brand_voice_with_anthropic`, `_rankability_score`, `_haversine_miles`, orphaned request models).
+1. **Finish TextRazor (§3):** apply the staged `TEXTRAZOR_API_KEY` (redeploy `nlp`), run one real `/analyze`, read the calibration log line, set a tuned `TEXTRAZOR_MIN_RELEVANCE`, confirm entity counts are sane. Then rotate the key + drop `GOOGLE_NLP_API_KEY`.
+2. **Close the `nlp` public-domain exposure (§6.1).**
+3. **Live smoke-test the repaired nlp endpoints** — `/score-page` + `/generate-page` against the deployed PLATFORM→nlp path with an authenticated request. These were 502'ing before #20; a real call is the only true proof they're fixed (couldn't be done from the sandbox).
+4. **Click-test Brand Voice + ICP** end-to-end (scan → review → accept → generate) — built/typed-clean but not exercised live.
 
 ---
 
-## 8. Open decisions / blockers (need the user)
+## 8. Open decisions / standing debt (carried forward)
 
-1. **Page-scoring model** — nlp uses `claude-sonnet-4-6`; per CLAUDE.md, per-module model choice is an "ask first" item. Confirm before relying on it in production.
-2. **Scheduler mechanism** (roadmap Open Item #1) — still unchosen; gates any scheduled tracker.
-3. **Maps geo-grid density**, **notification channels**, **Keyword-research repo** — still open from prior handoffs.
-4. **CI/tests policy** — pytest runs locally (57 green), but nothing runs it on push. Decide whether to add CI.
-
----
-
-## 9. Known debt / loose ends
-
-- **Local SEO not runtime-tested** end-to-end (see §7.2).
-- **No analysis caching** in the suite — every `analyze` / `run_analysis:true` generate re-scrapes competitors (no `keyword_analyses` table). Real recurring API cost.
-- **Generated HTML is rendered via `dangerouslySetInnerHTML`** without DOMPurify (first-party content from our own nlp pipeline, same trust level as the blog writer's output; no dep added).
-- **nlp dead code** (see §7.4).
-- **Migration timestamp convention** — `20260601022754_local_seo_pages.sql` uses a real UTC timestamp; older `main` migrations use `YYYYMMDD120000`. Full repo↔remote reconciliation is a separate task.
-- **Writer-module PRD canonical version** still unpinned across `docs/modules/`.
-- `README.md` still references a `/kw-research` path that doesn't exist.
+- **SERP analysis cache (`keyword_analyses`) still does not exist.** Every `/analyze` and `run_analysis:true` generate re-runs the full DataForSEO→ScrapeOwl→(now TextRazor) pipeline (2–4 min, recurring cost). SYSTEM_OVERVIEW/Foundation calls for caching `AnalysisResponse` by `(keyword, location)`; this is the highest-value infra still unbuilt and would speed up Score My Page + generation.
+- **Vertical wording** — the brand-voice/ICP/score prompts say "local service business" verbatim. Fine for local clients, slightly off for non-local Blog-Writer clients; left verbatim per the "keep prompts exact" rule. Parameterizable later.
+- **Manual editing is freeform `raw_text`** for both brand voice + ICP; per-field structured editing is a future enhancement.
+- **`seo_checklist` in `/reoptimize-page`** was a latent bug present in the reference copy too; fixed by mirroring generate-page's `_build_seo_checklist(...)` call — worth a sanity check on a live reoptimize run.
+- **Scheduler mechanism**, **Maps geo-grid density**, **notification channels**, **Keyword-research repo migration**, **CI on push** — all still open from prior handoffs.
+- **Local SEO Phase 3 — page-template field** — still not started (the original request from the prior session).
+- Pre-existing: `public.sie_cache` has RLS disabled (advisory); migration-timestamp convention mismatch; `README.md` references a non-existent `/kw-research` path.
