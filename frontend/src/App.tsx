@@ -11,6 +11,7 @@ import { Clients } from './pages/Clients'
 import { ClientForm } from './pages/ClientForm'
 import { ClientWorkspace } from './pages/ClientWorkspace'
 import { BrandVoice } from './pages/BrandVoice'
+import { Icp } from './pages/Icp'
 import { LocalSeoContent } from './pages/LocalSeoContent'
 import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
@@ -41,6 +42,7 @@ export default function App() {
                       <Route path="/clients/new" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/clients/:id" element={<ClientWorkspace />} />
                       <Route path="/clients/:id/brand-voice" element={<BrandVoice />} />
+                      <Route path="/clients/:id/icp" element={<Icp />} />
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
                       <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />

@@ -59,7 +59,47 @@ export interface Client extends ClientListItem {
   gbp_place_id: string | null
   gbp: GbpProfile | null
   brand_voice: BrandVoice | null
+  detected_icp: DetectedIcp | null
+  differentiators: Differentiator[] | null
   updated_at: string
+}
+
+// ── ICP + differentiators (converged client-level assets, Option A) ──────────
+
+export interface IcpSegment {
+  label?: string
+  confidence?: number
+  primary?: boolean
+  demographics?: { description?: string; situation?: string }
+  psychographics?: {
+    trigger?: string
+    fears?: string[]
+    motivations?: string[]
+    buying_behavior?: string
+  }
+  messaging?: { tone?: string; hooks?: string[]; trust_signals?: string[] }
+}
+
+export interface DetectedIcp {
+  source: 'user' | 'app' | null
+  raw_text: string | null
+  segments: IcpSegment[] | null
+  reasoning: string | null
+  generated_at: string | null
+  edited_at: string | null
+}
+
+export interface Differentiator {
+  claim?: string
+  mechanism?: string
+  type?: string
+}
+
+export interface IcpResponse {
+  detected_icp: DetectedIcp | null
+  differentiators: Differentiator[] | null
+  pages_crawled?: number | null
+  analysis_status?: string | null
 }
 
 // ── Brand Voice (converged client-level asset, Option A) ─────────────────────

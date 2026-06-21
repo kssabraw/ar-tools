@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2, Sparkles,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users,
 } from 'lucide-react'
 
 export function ClientWorkspace() {
@@ -66,6 +66,14 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/brand-voice` : undefined}
           cta={brandVoiceHasContent(client) ? 'Edit' : 'Set up'}
           highlight={!brandVoiceHasContent(client)}
+        />
+        <ActionCard
+          icon={<Users size={22} />}
+          label="ICP & Differentiators"
+          description={icpCopy(client)}
+          to={id ? `/clients/${id}/icp` : undefined}
+          cta={icpHasContent(client) ? 'Edit' : 'Set up'}
+          highlight={!icpHasContent(client)}
         />
       </Section>
 
@@ -139,6 +147,21 @@ function brandVoiceCopy(client?: Client): string {
   return bv?.source === 'user'
     ? 'Set by you — your voice supersedes the app-generated one across both tools.'
     : 'AI-generated — review, edit, or replace it with your own.'
+}
+
+function icpHasContent(client?: Client): boolean {
+  const icp = client?.detected_icp
+  return Boolean((icp && (icp.raw_text || icp.segments?.length)) || client?.differentiators?.length)
+}
+
+function icpCopy(client?: Client): string {
+  const icp = client?.detected_icp
+  if (!icpHasContent(client)) {
+    return 'Define who this client serves and what sets them apart — fed into both the Blog Writer and Local SEO. Add your own or let the app detect it.'
+  }
+  return icp?.source === 'user'
+    ? 'Set by you — your profile supersedes the app-detected one across both tools.'
+    : 'AI-detected — review, edit, or replace it with your own.'
 }
 
 const moreTools = [
