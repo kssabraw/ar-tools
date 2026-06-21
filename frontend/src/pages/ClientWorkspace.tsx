@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles,
 } from 'lucide-react'
 
 export function ClientWorkspace() {
@@ -58,6 +58,14 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/edit#gbp` : undefined}
           cta={client?.gbp?.business_name ? 'Edit' : 'Set up'}
           highlight={!client?.gbp?.business_name}
+        />
+        <ActionCard
+          icon={<Sparkles size={22} />}
+          label="Brand Voice"
+          description={brandVoiceCopy(client)}
+          to={id ? `/clients/${id}/brand-voice` : undefined}
+          cta={brandVoiceHasContent(client) ? 'Edit' : 'Set up'}
+          highlight={!brandVoiceHasContent(client)}
         />
       </Section>
 
@@ -116,6 +124,21 @@ export function ClientWorkspace() {
       </Section>
     </div>
   )
+}
+
+function brandVoiceHasContent(client?: Client): boolean {
+  const bv = client?.brand_voice
+  return Boolean(bv && (bv.raw_text || bv.current_voice || bv.recommended_voice))
+}
+
+function brandVoiceCopy(client?: Client): string {
+  const bv = client?.brand_voice
+  if (!brandVoiceHasContent(client)) {
+    return 'Set the tone, personality, and wording — used by both the Blog Writer and Local SEO. Add your own or let the app draft one.'
+  }
+  return bv?.source === 'user'
+    ? 'Set by you — your voice supersedes the app-generated one across both tools.'
+    : 'AI-generated — review, edit, or replace it with your own.'
 }
 
 const moreTools = [

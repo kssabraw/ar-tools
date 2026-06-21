@@ -58,7 +58,41 @@ export interface Client extends ClientListItem {
   business_location: string | null
   gbp_place_id: string | null
   gbp: GbpProfile | null
+  brand_voice: BrandVoice | null
   updated_at: string
+}
+
+// ── Brand Voice (converged client-level asset, Option A) ─────────────────────
+
+export interface VoiceProfile {
+  personality?: string[]
+  tone?: string
+  writing_style?: {
+    sentence_length?: string
+    person?: string
+    jargon_level?: string
+    formality?: string
+  }
+  vocabulary?: { use?: string[]; avoid?: string[] }
+  messaging_themes?: string[]
+  sample_phrases?: string[]
+  content_generation_instructions?: string
+}
+
+export interface BrandVoice {
+  source: 'user' | 'app' | null
+  raw_text: string | null
+  current_voice: VoiceProfile | null
+  recommended_voice: VoiceProfile | null
+  recommended_accepted: boolean | null
+  writer_execution_guide: Record<string, unknown> | null
+  generated_at: string | null
+  edited_at: string | null
+}
+
+export interface BrandVoiceResponse {
+  brand_voice: BrandVoice | null
+  pages_sampled?: number | null
 }
 
 export interface ModuleOutput {
