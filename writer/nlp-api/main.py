@@ -2204,6 +2204,12 @@ def _build_icp_text(detected_icp: Optional[dict], max_segments: int = 3) -> str:
     """
     if not detected_icp:
         return ""
+    # A user-authored freeform ICP (raw_text) supersedes structured segments —
+    # render it verbatim so a seeded raw_text-only ICP reaches Local SEO too
+    # (suite convergence, Option A). Mirrors the brand voice renderer.
+    raw_text = (detected_icp.get("raw_text") or "").strip()
+    if raw_text:
+        return "TARGET CUSTOMER PROFILES (write to these pain points and motivations):\n" + raw_text
     segments = detected_icp.get("segments") or []
     if not segments:
         return ""
@@ -2233,6 +2239,91 @@ def _build_icp_text(detected_icp: Optional[dict], max_segments: int = 3) -> str:
         if msg.get("trust_signals"):  lines.append(f"    Trust signals: {'; '.join(msg['trust_signals'])}")
 
     return "\n".join(lines)
+
+
+async def _enrich_pages_with_titles(pages: List[dict], limit: int = 25) -> List[dict]:
+    """Best-effort upgrade (ICP PRD §1.3b): fetch each top page's real
+    <title>/<h1> before the ICP call — materially improves differentiator
+    quality. Falls back to URL-only (blank title/h1) when ScrapeOwl is
+    unavailable or a fetch fails. Only the top `limit` pages (the ones rendered
+    into the ICP prompt) are fetched, so cost stays bounded."""
+    if not SCRAPEOWL_API_KEY or not pages:
+        return pages
+    targets = pages[:limit]
+    sem = asyncio.Semaphore(8)
+
+    async def _one(p: dict, sc: httpx.AsyncClient) -> None:
+        async with sem:
+            html = await _scrape_one(p["url"], sc, render_js=False)
+            if not html:
+                html = await _scrape_one(p["url"], sc, render_js=True)
+        if not html:
+            return
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            if soup.title:
+                p["title"] = soup.title.get_text(strip=True)[:200]
+            h1 = soup.find("h1")
+            if h1:
+                p["h1"] = h1.get_text(" ", strip=True)[:200]
+        except Exception as e:
+            logger.warning(f"ICP enrich parse error for {p.get('url')}: {e}")
+
+    async with httpx.AsyncClient() as sc:
+        await asyncio.gather(*[_one(p, sc) for p in targets], return_exceptions=True)
+    enriched = sum(1 for p in targets if p.get("title") or p.get("h1"))
+    logger.info(f"ICP enrichment: populated title/h1 for {enriched}/{len(targets)} pages")
+    return pages
+
+
+async def run_business_analysis(body: BusinessAnalysisRequest) -> BusinessAnalysisResponse:
+    """Full ICP pipeline: discover pages → enrich title/h1 → one ICP +
+    differentiators LLM call. GBP-independent; degrades to category inference
+    when there's no website or discovery times out (90s)."""
+    if body.website_url and body.website_url.strip():
+        _block_ssrf(body.website_url)
+
+    pages: List[dict] = []
+    if body.website_url and body.website_url.strip():
+        url = body.website_url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+        try:
+            pages = await asyncio.wait_for(crawl_website(url), timeout=90.0)
+        except asyncio.TimeoutError:
+            logger.warning(f"ICP page discovery timed out for {url}")
+            pages = []
+        if pages:
+            pages = await _enrich_pages_with_titles(pages)
+
+    try:
+        llm_result = await analyze_business_with_anthropic(
+            pages, body.business_name, body.gbp_category, body.gbp_categories,
+        )
+    except Exception:
+        logger.exception("ICP Anthropic analysis failed")
+        raise HTTPException(status_code=502, detail="Analysis service temporarily unavailable")
+
+    status = "complete" if pages else "partial"
+    return BusinessAnalysisResponse(
+        existing_pages=pages,
+        detected_icp=llm_result.get("detected_icp"),
+        differentiators=llm_result.get("differentiators", []),
+        pages_crawled=len(pages),
+        analysis_status=status,
+    )
+
+
+@app.post('/analyze-business', response_model=BusinessAnalysisResponse)
+@limiter.limit("5/minute")
+async def analyze_business(request: Request, body: BusinessAnalysisRequest):
+    """ICP + differentiators (private; platform-api proxies + persists).
+
+    Discover pages (sitemap → nav), enrich each top page's title/h1, then one
+    LLM call detecting 1-3 customer segments + differentiators. With no website
+    (or on discovery timeout) it infers segments from name + GBP categories.
+    """
+    return await run_business_analysis(body)
 
 
 def _calc_cost(model: str, input_tokens: int, output_tokens: int) -> float:

@@ -18,6 +18,7 @@ from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
 from routers.clients import router as clients_router
 from routers.files import router as files_router
+from routers.icp import router as icp_router
 from routers.local_seo import router as local_seo_router
 from routers.publish import router as publish_router
 from routers.runs import router as runs_router
@@ -96,6 +97,7 @@ app.include_router(brand_voice_router)
 app.include_router(briefs_router)
 app.include_router(clients_router)
 app.include_router(files_router)
+app.include_router(icp_router)
 app.include_router(local_seo_router)
 app.include_router(runs_router)
 app.include_router(silos_router)

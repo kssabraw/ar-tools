@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.clients import ClientCreateRequest, ClientDetail, ClientListItem, ClientUpdateRequest
-from services import brand_voice_service
+from services import brand_voice_service, icp_service
 from services.file_parser import detect_format
 from services.gbp_service import get_business_details, resolve_business, search_businesses
 
@@ -170,6 +170,9 @@ async def create_client(
     brand_voice = brand_voice_service.merge_raw_text(None, brand_text)
     if brand_voice is not None:
         row["brand_voice"] = brand_voice
+    detected_icp = icp_service.merge_raw_text(None, icp_text)
+    if detected_icp is not None:
+        row["detected_icp"] = detected_icp
     result = supabase.table("clients").insert(row).execute()
     client = result.data[0]
 
@@ -231,6 +234,11 @@ async def update_client(
         updates["icp_source_type"] = body.icp_source_type
     if body.icp_text is not None:
         updates["icp_text"] = body.icp_text
+        # Keep the canonical detected_icp in sync only when the write-up changed.
+        if body.icp_text != existing.get("icp_text"):
+            updates["detected_icp"] = icp_service.merge_raw_text(
+                existing.get("detected_icp"), body.icp_text
+            )
     if body.google_drive_folder_id is not None:
         updates["google_drive_folder_id"] = body.google_drive_folder_id
     if body.logo_url is not None:

@@ -55,8 +55,9 @@ def _business_fields(client: dict) -> dict:
 
 def _gbp_to_generate_payload(client: dict, keyword: str, location: str, run_analysis: bool) -> dict:
     """Map a suite client row (with its `gbp` JSONB) to the nlp service's
-    GeneratePageRequest. Brand-voice / ICP fields are intentionally omitted
-    (cut from this version), so the nlp service handles their absence."""
+    GeneratePageRequest. The converged brand_voice / detected_icp /
+    differentiators assets are passed through so the generator targets the
+    client's voice and customers; the nlp service handles their absence."""
     gbp = client.get("gbp") or {}
     hours = gbp.get("hours")
     fields = _business_fields(client)
@@ -72,6 +73,9 @@ def _gbp_to_generate_payload(client: dict, keyword: str, location: str, run_anal
         "gbp_description": gbp.get("description"),
         "reviews": gbp.get("reviews") or None,
         "run_analysis": run_analysis,
+        "brand_voice": client.get("brand_voice"),
+        "detected_icp": client.get("detected_icp"),
+        "differentiators": client.get("differentiators") or [],
     }
 
 
@@ -328,6 +332,9 @@ async def social_posts(
         "phone": fields["phone"],
         "page_content": page_content,
         "serp_analysis": serp_analysis,
+        "brand_voice": client.get("brand_voice"),
+        "detected_icp": client.get("detected_icp"),
+        "differentiators": client.get("differentiators") or [],
     })
 
 
