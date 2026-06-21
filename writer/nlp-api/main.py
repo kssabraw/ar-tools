@@ -2063,6 +2063,122 @@ def _build_brand_voice_text(brand_voice: Optional[dict]) -> str:
     return "\n".join(lines)
 
 
+def _extract_text_from_html(html: str) -> List[str]:
+    """Extract clean paragraph text from HTML. Falls back to block lines for
+    builder sites (Wix/Squarespace/Duda) that use <div>/<span> instead of <p>."""
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "nav", "footer", "header", "noscript", "aside"]):
+        tag.decompose()
+    paragraphs = [el.get_text(" ", strip=True) for el in soup.find_all("p")]
+    paragraphs = [t for t in paragraphs if len(t) > 40]
+    if not paragraphs:
+        lines = soup.get_text("\n", strip=True).splitlines()
+        seen = set()
+        for line in lines:
+            line = line.strip()
+            if len(line) > 40 and line not in seen:
+                paragraphs.append(line)
+                seen.add(line)
+            if len(paragraphs) >= 30:
+                break
+    return paragraphs[:30]
+
+
+async def run_brand_voice_analysis(body: BrandVoiceRequest) -> BrandVoiceResponse:
+    """Full brand-voice pipeline: probe → crawl → scrape (2 tiers) → 3 LLM calls.
+
+    Website path: crawl up to 25 voice-representative pages, scrape, analyze.
+    No-website path (no URL, or all scraping fails): category inference only.
+    GBP-independent — works for any client with a name (+ optional website).
+    """
+    if body.website_url and body.website_url.strip():
+        _block_ssrf(body.website_url)
+    page_contents: List[str] = []
+    pages_sampled = 0
+
+    if body.website_url and body.website_url.strip():
+        url = body.website_url.strip()
+        if not url.startswith(("http://", "https://")):
+            url = f"https://{url}"
+
+        async with httpx.AsyncClient(follow_redirects=True, timeout=15.0, headers=CRAWL_HEADERS) as client:
+            # Probe first to catch dead links / 4xx errors with a friendly message.
+            try:
+                probe = await client.get(url, timeout=10.0)
+                if probe.status_code >= 400:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Your website returned a {probe.status_code} error. Check that the URL is correct and the site is live.",
+                    )
+            except httpx.RequestError as e:
+                logger.warning(f"Brand voice website probe failed for {url}: {type(e).__name__}: {e}")
+                raise HTTPException(
+                    status_code=422,
+                    detail="Your website couldn't be reached. Check that the URL is correct and your site is live.",
+                )
+            selected = await _crawl_pages_for_brand_voice(url, client, max_pages=25)
+
+        async def _scrapeowl_extract(pages: List[dict], render_js: bool) -> List[str]:
+            sem = asyncio.Semaphore(8)
+
+            async def _bounded(p: dict, sc_client: httpx.AsyncClient) -> Optional[str]:
+                async with sem:
+                    return await _scrape_one(p["url"], sc_client, render_js=render_js)
+
+            async with httpx.AsyncClient() as sc:
+                htmls = await asyncio.gather(*[_bounded(p, sc) for p in pages], return_exceptions=True)
+            results = []
+            for p, html in zip(pages, htmls):
+                if not html or isinstance(html, Exception):
+                    continue
+                paragraphs = _extract_text_from_html(html)
+                text = " ".join(paragraphs)
+                if text.strip():
+                    results.append(f"[{p.get('page_type', 'page')}] {p['url']}\n{text[:600]}")
+            return results
+
+        # Tier 1: no JS
+        logger.info(f"Brand voice: scraping {len(selected)} pages for {url}")
+        page_contents = await _scrapeowl_extract(selected, render_js=False)
+        pages_sampled = len(page_contents)
+
+        # Tier 2: JS render fallback for the top 5 pages
+        if not page_contents and selected:
+            logger.info("Brand voice: no text from tier 1 — retrying top 5 pages with JS render")
+            page_contents = await _scrapeowl_extract(selected[:5], render_js=True)
+            pages_sampled = len(page_contents)
+            if not page_contents:
+                logger.warning("Brand voice: all scraping tiers failed — falling back to category inference")
+    else:
+        logger.info(f"Brand voice: no website for {body.business_name} — using category inference")
+
+    try:
+        brand_voice = await analyze_brand_voice_with_anthropic(
+            page_contents, body.business_name, gbp_category=body.gbp_category,
+        )
+    except Exception as e:
+        identifier = body.website_url or body.business_name
+        logger.error(f"Brand voice Anthropic error for {identifier}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail="Our AI analysis service encountered an error. Please try again.",
+        )
+
+    return BrandVoiceResponse(brand_voice=brand_voice, pages_sampled=pages_sampled)
+
+
+@app.post('/analyze-brand-voice', response_model=BrandVoiceResponse)
+@limiter.limit("5/minute")
+async def analyze_brand_voice(request: Request, body: BrandVoiceRequest):
+    """Brand voice pipeline (private; platform-api proxies + persists).
+
+    With a website: crawl up to 25 pages, extract text, run the 3 LLM calls.
+    Without a website (or when scraping yields nothing): category inference.
+    Returns the stored brand_voice shape + how many pages produced usable text.
+    """
+    return await run_brand_voice_analysis(body)
+
+
 def _build_icp_text(detected_icp: Optional[dict], max_segments: int = 3) -> str:
     """Render the detected ICP as a plain-text block for the system prompt.
 
