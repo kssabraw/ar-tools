@@ -1426,6 +1426,21 @@ async def _discover_via_nav(base_url: str, client: httpx.AsyncClient) -> List[st
         return []
 
 
+def _loads_lenient(text: str) -> dict:
+    """Parse JSON from an LLM response, tolerating leading/trailing prose.
+    Tries a direct parse first; on failure, extracts the outermost {...} object
+    and retries. Re-raises if neither parses, so callers keep their existing
+    degrade path (analyze → 502; URL classify → rule-based). Never changes the
+    result of an already-valid parse."""
+    try:
+        return json.loads(text)
+    except Exception:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            return json.loads(match.group(0))
+        raise
+
+
 async def _classify_urls_with_ai(urls: List[str]) -> Dict[str, str]:
     """
     Use Claude Haiku to classify a batch of ambiguous URLs by page type.
@@ -1474,7 +1489,7 @@ JSON only: {{"url1": "type1", "url2": "type2"}}"""
             raw = re.sub(r"^```[a-z]*\n?", "", raw)
             raw = re.sub(r"\n?```$", "", raw)
 
-        result = json_lib.loads(raw)
+        result = _loads_lenient(raw)
         logger.info(f"Haiku classified {len(result)} ambiguous URLs")
         return result
 
@@ -1673,7 +1688,7 @@ Return only valid JSON, no markdown or explanation."""
         if text.startswith("```"):
             text = re.sub(r'^```(?:json)?\s*', '', text)
             text = re.sub(r'\s*```$', '', text.strip())
-        result = json_lib.loads(text)
+        result = _loads_lenient(text)
         return result
 
     except Exception as e:
@@ -2241,12 +2256,17 @@ def _build_icp_text(detected_icp: Optional[dict], max_segments: int = 3) -> str:
     return "\n".join(lines)
 
 
-async def _enrich_pages_with_titles(pages: List[dict], limit: int = 25) -> List[dict]:
+async def _enrich_pages_with_titles(
+    pages: List[dict], limit: int = 25, timeout: float = 75.0
+) -> List[dict]:
     """Best-effort upgrade (ICP PRD §1.3b): fetch each top page's real
     <title>/<h1> before the ICP call — materially improves differentiator
     quality. Falls back to URL-only (blank title/h1) when ScrapeOwl is
     unavailable or a fetch fails. Only the top `limit` pages (the ones rendered
-    into the ICP prompt) are fetched, so cost stays bounded."""
+    into the ICP prompt) are fetched, and the whole pass is time-bounded so a
+    slow/bot-protected site degrades to partial enrichment instead of blowing
+    the platform request budget (mutations are applied in place, so whatever
+    finished before the deadline is kept)."""
     if not SCRAPEOWL_API_KEY or not pages:
         return pages
     targets = pages[:limit]
@@ -2269,8 +2289,14 @@ async def _enrich_pages_with_titles(pages: List[dict], limit: int = 25) -> List[
         except Exception as e:
             logger.warning(f"ICP enrich parse error for {p.get('url')}: {e}")
 
-    async with httpx.AsyncClient() as sc:
-        await asyncio.gather(*[_one(p, sc) for p in targets], return_exceptions=True)
+    try:
+        async with httpx.AsyncClient() as sc:
+            await asyncio.wait_for(
+                asyncio.gather(*[_one(p, sc) for p in targets], return_exceptions=True),
+                timeout=timeout,
+            )
+    except asyncio.TimeoutError:
+        logger.warning(f"ICP enrichment timed out after {timeout}s — proceeding with partial title/h1")
     enriched = sum(1 for p in targets if p.get("title") or p.get("h1"))
     logger.info(f"ICP enrichment: populated title/h1 for {enriched}/{len(targets)} pages")
     return pages

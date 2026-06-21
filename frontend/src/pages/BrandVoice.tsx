@@ -201,7 +201,10 @@ function VoiceDisplay({ bv, onEdit, onRescan, onAccept, onReject, recPending }: 
   onReject: () => void
   recPending: boolean
 }) {
-  const isUser = bv.source === 'user'
+  // raw_text is only ever user-authored (manual entry / seed) and is what's
+  // displayed when present — so its presence means the active voice is the
+  // user's, even if a later app scan enriched structured fields around it.
+  const isUser = Boolean(bv.raw_text) || bv.source === 'user'
   const ts = bv.edited_at || bv.generated_at
   const showRecommended = Boolean(bv.recommended_voice) && bv.recommended_accepted !== true
 

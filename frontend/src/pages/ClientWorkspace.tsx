@@ -144,7 +144,7 @@ function brandVoiceCopy(client?: Client): string {
   if (!brandVoiceHasContent(client)) {
     return 'Set the tone, personality, and wording — used by both the Blog Writer and Local SEO. Add your own or let the app draft one.'
   }
-  return bv?.source === 'user'
+  return (bv?.source === 'user' || Boolean(bv?.raw_text))
     ? 'Set by you — your voice supersedes the app-generated one across both tools.'
     : 'AI-generated — review, edit, or replace it with your own.'
 }
@@ -159,7 +159,7 @@ function icpCopy(client?: Client): string {
   if (!icpHasContent(client)) {
     return 'Define who this client serves and what sets them apart — fed into both the Blog Writer and Local SEO. Add your own or let the app detect it.'
   }
-  return icp?.source === 'user'
+  return (icp?.source === 'user' || Boolean(icp?.raw_text))
     ? 'Set by you — your profile supersedes the app-detected one across both tools.'
     : 'AI-detected — review, edit, or replace it with your own.'
 }

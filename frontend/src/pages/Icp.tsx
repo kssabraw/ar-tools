@@ -161,7 +161,10 @@ function Editor({ draft, setDraft, saving, onSave, onCancel }: {
 function IcpDisplay({ icp, diffs, onEdit, onRescan }: {
   icp: DetectedIcp | null; diffs: Differentiator[] | null; onEdit: () => void; onRescan: () => void
 }) {
-  const isUser = icp?.source === 'user'
+  // raw_text is only ever user-authored (manual entry / seed), and it's what's
+  // displayed when present — so its presence means the active ICP is the user's,
+  // even if a later app scan enriched structured segments around it.
+  const isUser = Boolean(icp?.raw_text) || icp?.source === 'user'
   const ts = icp?.edited_at || icp?.generated_at
   const segments = icp?.segments ?? []
   const ordered = [...segments].sort((a, b) => (a.primary ? 0 : 1) - (b.primary ? 0 : 1))
