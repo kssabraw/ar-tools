@@ -175,6 +175,50 @@ def test_merge_raw_text_seeds_user_voice():
     assert blob["edited_at"] is not None
 
 
+# ── render_brand_voice_text / resolve_brand_guide_text (Slice 2 bridge) ──────
+
+def test_render_returns_raw_text_unwrapped():
+    # Free-text clients must get byte-identical text to the legacy column.
+    bv = {"source": "user", "raw_text": "We fix pipes fast and clean up after."}
+    assert brand_voice_service.render_brand_voice_text(bv) == "We fix pipes fast and clean up after."
+
+
+def test_render_structured_block_when_no_raw_text():
+    bv = {
+        "source": "app",
+        "current_voice": {"tone": "Warm and direct", "personality": ["honest", "local"]},
+        "writer_execution_guide": {"quick_cheat_sheet": ["Lead with the answer"]},
+    }
+    out = brand_voice_service.render_brand_voice_text(bv)
+    assert out.startswith("BRAND VOICE (match this exactly):")
+    assert "Tone: Warm and direct" in out
+    assert "Quick cheat sheet:" in out and "- Lead with the answer" in out
+
+
+def test_render_recommended_only_used_when_accepted():
+    bv = {"current_voice": {"tone": "old"}, "recommended_voice": {"tone": "new"}}
+    assert "old" in brand_voice_service.render_brand_voice_text(bv)
+    bv["recommended_accepted"] = True
+    assert "new" in brand_voice_service.render_brand_voice_text(bv)
+
+
+def test_render_empty_for_none_or_blank():
+    assert brand_voice_service.render_brand_voice_text(None) == ""
+    assert brand_voice_service.render_brand_voice_text({"source": "app"}) == ""
+
+
+def test_resolve_prefers_brand_voice_then_falls_back():
+    # brand_voice present → wins
+    client = {"brand_voice": {"raw_text": "voice wins"}, "brand_guide_text": "legacy"}
+    assert brand_voice_service.resolve_brand_guide_text(client) == "voice wins"
+    # brand_voice unset → legacy column
+    assert brand_voice_service.resolve_brand_guide_text(
+        {"brand_voice": None, "brand_guide_text": "legacy"}
+    ) == "legacy"
+    # neither → empty string (never None, matches snapshot contract)
+    assert brand_voice_service.resolve_brand_guide_text({}) == ""
+
+
 def test_merge_raw_text_preserves_structured_and_collapses_empty():
     existing = {"source": "app", "current_voice": {"tone": "x"}}
     blob = brand_voice_service.merge_raw_text(existing, "")

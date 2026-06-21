@@ -90,6 +90,91 @@ def get_brand_voice(client_id: str) -> dict:
     return {"brand_voice": client.get("brand_voice")}
 
 
+def render_brand_voice_text(brand_voice: dict | None) -> str:
+    """Render a client's brand_voice into plain text for the Blog Writer run
+    snapshot (Option A convergence). Platform-side mirror of nlp-api's
+    `_build_brand_voice_text`, with one deliberate difference: a user's freeform
+    guide (`raw_text`) is returned **unwrapped** so free-text clients get
+    byte-identical text to the legacy brand_guide_text path.
+
+    Precedence: raw_text (user's verbatim guide) → structured voice → "".
+    """
+    if not brand_voice:
+        return ""
+
+    raw = (brand_voice.get("raw_text") or "").strip()
+    if raw:
+        return raw  # unwrapped — identical to the legacy brand_guide_text value
+
+    # Structured voice: default to current, switch to recommended only when the
+    # user explicitly accepted it (mirrors nlp-api selection).
+    if brand_voice.get("recommended_accepted") is True:
+        voice = brand_voice.get("recommended_voice") or brand_voice.get("current_voice") or {}
+    else:
+        voice = brand_voice.get("current_voice") or brand_voice.get("recommended_voice") or {}
+    guide = brand_voice.get("writer_execution_guide") or {}
+    if not voice and not guide:
+        return ""
+
+    lines = ["BRAND VOICE (match this exactly):"]
+    if voice.get("tone"):
+        lines.append(f"  Tone: {voice['tone']}")
+    if voice.get("personality"):
+        lines.append(f"  Personality: {', '.join(voice['personality'])}")
+
+    ws = voice.get("writing_style") or {}
+    style_parts: list[str] = []
+    if ws.get("sentence_length"):
+        style_parts.append(f"{ws['sentence_length']} sentences")
+    if ws.get("person"):
+        style_parts.append(str(ws["person"]))
+    if ws.get("formality"):
+        style_parts.append(f"{ws['formality']} formality")
+    if ws.get("jargon_level"):
+        style_parts.append(f"jargon: {ws['jargon_level']}")
+    if style_parts:
+        lines.append(f"  Writing style: {', '.join(style_parts)}")
+
+    vocab = voice.get("vocabulary") or {}
+    if vocab.get("use"):
+        lines.append(f"  Words/phrases to use: {', '.join(vocab['use'])}")
+    if vocab.get("avoid"):
+        lines.append(f"  Words/phrases to avoid: {', '.join(vocab['avoid'])}")
+    if voice.get("messaging_themes"):
+        lines.append(f"  Messaging themes: {'; '.join(voice['messaging_themes'])}")
+    if voice.get("sample_phrases"):
+        lines.append(f"  Sample phrases (mirror this style): {'; '.join(voice['sample_phrases'])}")
+    if voice.get("content_generation_instructions"):
+        lines.append(f"  Writer instructions: {voice['content_generation_instructions']}")
+
+    if isinstance(guide, dict) and guide:
+        if guide.get("default_writing_formula"):
+            lines.append(f"  Default writing formula: {guide['default_writing_formula']}")
+        for key, label in (
+            ("non_negotiable_rules", "Non-negotiable rules"),
+            ("sentence_style_do", "Sentence style — DO"),
+            ("sentence_style_dont", "Sentence style — DON'T"),
+            ("quick_cheat_sheet", "Quick cheat sheet"),
+        ):
+            items = guide.get(key) or []
+            if items:
+                lines.append(f"  {label}:")
+                for item in items:
+                    lines.append(f"    - {item}")
+
+    return "\n".join(lines)
+
+
+def resolve_brand_guide_text(client: dict) -> str:
+    """Canonical brand-guide text for a run snapshot. Prefers the converged
+    brand_voice (Option A); falls back to the legacy free-text column for any
+    client whose brand_voice is unset (e.g. created before the migration)."""
+    rendered = render_brand_voice_text(client.get("brand_voice"))
+    if rendered:
+        return rendered
+    return client.get("brand_guide_text") or ""
+
+
 def ensure_scannable(client_id: str, force: bool) -> None:
     """Pre-flight the supersede guard so the router can return a real HTTP 409
     *before* opening the SSE stream (otherwise the guard would surface as a
