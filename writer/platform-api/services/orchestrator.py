@@ -27,11 +27,11 @@ EXPECTED_MODULE_VERSIONS: dict[str, str] = {
     "brief": "2.7",
     "sie": "1.4",
     "research": "1.1",
-    "writer": "1.7",
+    "writer": "1.8",
     "sources_cited": "1.1",
 }
 
-WRITER_ACCEPTED_VERSIONS = {"1.7", "1.7-no-context", "1.7-degraded"}
+WRITER_ACCEPTED_VERSIONS = {"1.8", "1.8-no-context", "1.8-degraded"}
 
 # Per-module HTTP timeouts in seconds
 MODULE_TIMEOUTS: dict[str, int] = {

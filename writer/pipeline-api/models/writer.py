@@ -13,7 +13,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-SchemaVersion = Literal["1.7", "1.7-no-context", "1.7-degraded"]
+SchemaVersion = Literal["1.8", "1.8-no-context", "1.8-degraded"]
 ArticleLevel = Literal["H1", "H2", "H3", "none"]
 ArticleType = Literal[
     "content", "faq-header", "faq-question", "conclusion", "h1-enrichment", "title", "intro", "key-takeaways",
@@ -90,7 +90,7 @@ class ClientContextSummary(BaseModel):
     brand_guide_provided: bool = False
     icp_provided: bool = False
     website_analysis_used: bool = False
-    schema_version_effective: SchemaVersion = "1.7"
+    schema_version_effective: SchemaVersion = "1.8"
 
 
 # ---- Article output ----
@@ -214,7 +214,19 @@ class WriterMetadata(BaseModel):
     duplicate_h2_headings_dropped: list[dict] = []
     faq_like_h2_content_dropped: list[dict] = []
     h3_children_dropped_under_h2: list[dict] = []
-    schema_version: SchemaVersion = "1.7"
+    # Step 6.6 - AIO heading main-entity enforcement (§X.4). Runs after the
+    # Heading SEO Optimizer; ensures every content H2 carries the brief's
+    # main_entity (canonical/variant). Entity-presence only - the "one
+    # point per heading" rule is deliberately not enforced. Warn-and-accept:
+    # `headings_entity_violation_count` H2s could not be fixed and were kept
+    # as-is for editor review. All zero / None when the brief carries no
+    # main_entity (schema < 2.7).
+    main_entity_used: Optional[str] = None
+    headings_entity_enforced_count: int = 0
+    headings_entity_rewrites_applied: int = 0
+    headings_entity_violation_count: int = 0
+    headings_entity_violations: list[dict] = []
+    schema_version: SchemaVersion = "1.8"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0
 
