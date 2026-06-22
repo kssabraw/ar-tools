@@ -317,10 +317,10 @@ export function LocalSeoContent() {
           {/* Optional pre-checks */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button style={outlineBtn} onClick={handleCheckSite} disabled={scanning || !keyword.trim() || !location.trim()}>
-              {scanning ? <Spinner size={14} /> : <FileSearch size={14} />} Check site for existing page
+              {scanning ? <Spinner size={14} /> : <FileSearch size={14} />} {scanning ? 'Checking site…' : 'Check site for existing page'}
             </button>
             <button style={outlineBtn} onClick={handlePreviewAnalysis} disabled={analyzing || !keyword.trim() || !location.trim()}>
-              {analyzing ? <Spinner size={14} /> : <Search size={14} />} Preview competitor analysis
+              {analyzing ? <Spinner size={14} /> : <Search size={14} />} {analyzing ? 'Analyzing competitors…' : 'Preview competitor analysis'}
             </button>
           </div>
 
