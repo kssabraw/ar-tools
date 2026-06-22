@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, ArrowRight, Building2, CheckCircle2, FilePlus, FileSearch, Search, Sparkles, Trash2,
@@ -34,6 +34,7 @@ type CheckState =
 export function LocalSeoContent() {
   const { id } = useParams<{ id: string }>()
   const clientId = id as string
+  const [searchParams] = useSearchParams()
   const queryClient = useQueryClient()
 
   const { data: client } = useQuery<Client>({
@@ -48,7 +49,10 @@ export function LocalSeoContent() {
     enabled: Boolean(clientId),
   })
 
-  const [tab, setTab] = useState<'new' | 'saved'>('new')
+  const [tab, setTab] = useState<'new' | 'saved'>(
+    // Deep-link support: /clients/:id/local-seo?tab=saved opens the Saved tab.
+    searchParams.get('tab') === 'saved' ? 'saved' : 'new',
+  )
   const [view, setView] = useState<View>({ kind: 'form' })
   const [keyword, setKeyword] = useState('')
   const [location, setLocation] = useState('')

@@ -16,6 +16,15 @@ export function ClientWorkspace() {
     enabled: Boolean(id),
   })
 
+  // Surface how many Local SEO pages this client already has (otherwise saved
+  // pages are only reachable via the New-Page flow's "Saved" tab — easy to miss).
+  const { data: localSeoPages } = useQuery<Array<{ id: string }>>({
+    queryKey: ['local-seo-pages', id],
+    queryFn: () => api.get<Array<{ id: string }>>(`/clients/${id}/local-seo/pages`),
+    enabled: Boolean(id),
+  })
+  const savedLocalSeoCount = localSeoPages?.length ?? 0
+
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
       <Link to="/" style={backLinkStyle}>
@@ -92,9 +101,20 @@ export function ClientWorkspace() {
         <ActionCard
           icon={<MapPin size={22} />}
           label="Create Local SEO Content"
-          description="Location-specific service pages and local content."
+          description={
+            savedLocalSeoCount > 0
+              ? `Location-specific service pages. ${savedLocalSeoCount} saved page${savedLocalSeoCount === 1 ? '' : 's'} for this client.`
+              : 'Location-specific service pages and local content.'
+          }
           to={id ? `/clients/${id}/local-seo` : undefined}
           cta="Create"
+          footer={
+            savedLocalSeoCount > 0 && id ? (
+              <Link to={`/clients/${id}/local-seo?tab=saved`} style={footerLinkStyle}>
+                View {savedLocalSeoCount} saved page{savedLocalSeoCount === 1 ? '' : 's'} <ArrowRight size={13} />
+              </Link>
+            ) : undefined
+          }
         />
       </Section>
 
@@ -205,9 +225,10 @@ interface ActionCardProps {
   badge?: string
   compact?: boolean
   highlight?: boolean
+  footer?: React.ReactNode
 }
 
-function ActionCard({ icon, label, description, to, cta, badge, compact, highlight }: ActionCardProps) {
+function ActionCard({ icon, label, description, to, cta, badge, compact, highlight, footer }: ActionCardProps) {
   const active = Boolean(to)
   const inner = (
     <>
@@ -236,7 +257,7 @@ function ActionCard({ icon, label, description, to, cta, badge, compact, highlig
   )
 
   if (active && to) {
-    return (
+    const tile = (
       <Link
         to={to}
         style={{
@@ -247,6 +268,14 @@ function ActionCard({ icon, label, description, to, cta, badge, compact, highlig
       >
         {inner}
       </Link>
+    )
+    // footer is a separate link rendered as a sibling (can't nest <a> in <a>).
+    if (!footer) return tile
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {tile}
+        {footer}
+      </div>
     )
   }
   return (
@@ -272,6 +301,10 @@ const ctaStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4,
   fontSize: 12, fontWeight: 600, color: '#6366f1',
   background: '#eef2ff', borderRadius: 999, padding: '4px 10px',
+}
+const footerLinkStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4,
+  fontSize: 12, fontWeight: 600, color: '#6366f1', textDecoration: 'none', padding: '2px 4px',
 }
 const badgeStyle: React.CSSProperties = {
   fontSize: 11, fontWeight: 600, color: '#64748b',
