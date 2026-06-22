@@ -25,13 +25,18 @@ def _supabase_returning(rows):
     return supabase
 
 
-def test_get_returns_fresh_entry():
+def test_get_returns_fresh_entry_marked_from_cache():
     fresh = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
-    supabase = _supabase_returning([{"analysis": {"keyword": "x"}, "created_at": fresh}])
+    supabase = _supabase_returning([
+        {"analysis": {"keyword": "x", "analysis_cost": {"subtotal": 0.07}}, "created_at": fresh},
+    ])
     with patch.object(analysis_cache, "get_supabase", return_value=supabase):
         with patch.object(analysis_cache.settings, "analysis_cache_ttl_days", 14):
             out = analysis_cache.get("roof restoration", 1000567, "Melbourne")
-    assert out == {"keyword": "x"}
+    assert out["keyword"] == "x"
+    # served from cache → flagged + cost zeroed so it isn't double-counted
+    assert out["from_cache"] is True
+    assert out["analysis_cost"] == {"cached": True, "subtotal": 0.0}
 
 
 def test_get_treats_stale_entry_as_miss():

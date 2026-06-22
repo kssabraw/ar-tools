@@ -1,3 +1,4 @@
+import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -215,4 +216,83 @@ async def test_analyze_force_refresh_bypasses_cache():
         )
     assert out == fresh
     cache_get.assert_not_called()  # force_refresh skips the cache read
+    post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_degrades_when_analysis_unavailable():
+    # analysis can't be computed (thin SERP / provider outage) → generate should
+    # still produce a page, with run_analysis flipped off so nlp doesn't re-scrape.
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=None)), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, True, "user-1"
+        )
+    payload = stream.await_args[0][1]
+    assert payload["run_analysis"] is False     # degraded → nlp won't re-attempt the scrape
+    assert "serp_analysis" not in payload
+    persisted = supabase.table.return_value.insert.call_args[0][0]
+    assert persisted["run_analysis"] is True    # provenance: the user DID request analysis
+
+
+@pytest.mark.asyncio
+async def test_score_degrades_when_analysis_unavailable():
+    # Score-My-Page contract: serp_analysis is optional. If it can't be computed,
+    # scoring proceeds (nlp's deterministic engine falls back to neutral).
+    supabase = _supabase_for_client(_client_row())
+    score = {"composite_score": 70.0, "composite_status": "ok"}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=None)), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=score)) as post:
+        out = await local_seo_service.score_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567,
+            "https://x.com/p", None, None, user_id="user-1",
+        )
+    assert out == score
+    path, payload = post.await_args[0]
+    assert path == "/score-page"
+    assert payload["serp_analysis"] is None
+
+
+@pytest.mark.asyncio
+async def test_analyze_propagates_provider_failure():
+    # analyze() requires the analysis (it's the deliverable) → provider error propagates.
+    supabase = _supabase_for_client(_client_row())
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.analysis_cache, "get", return_value=None), \
+         patch.object(local_seo_service.analysis_cache, "store"), \
+         patch.object(local_seo_service, "_post_nlp",
+                      new=AsyncMock(side_effect=HTTPException(status_code=502, detail="local_seo_provider_error"))):
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service.analyze("client-1", "k", "Melbourne,Victoria,Australia", 1000567)
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_get_or_compute_single_flight_collapses_concurrent_misses():
+    # 5 concurrent misses for the same key → exactly ONE nlp compute (single-flight).
+    cache: dict = {}
+
+    def fake_get(kw, code, loc):
+        return cache.get(local_seo_service.analysis_cache.cache_key(kw, code, loc))
+
+    def fake_store(kw, code, loc, analysis):
+        cache[local_seo_service.analysis_cache.cache_key(kw, code, loc)] = analysis
+
+    async def slow_analyze(path, payload, **kwargs):
+        await asyncio.sleep(0.05)
+        return {"serp_urls": []}
+
+    with patch.object(local_seo_service, "_post_nlp", new=AsyncMock(side_effect=slow_analyze)) as post, \
+         patch.object(local_seo_service.analysis_cache, "get", side_effect=fake_get), \
+         patch.object(local_seo_service.analysis_cache, "store", side_effect=fake_store):
+        results = await asyncio.gather(*[
+            local_seo_service._get_or_compute_analysis("kw", "loc-x", 7, False) for _ in range(5)
+        ])
+
+    assert all(r == {"serp_urls": []} for r in results)
     post.assert_awaited_once()

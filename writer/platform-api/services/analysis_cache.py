@@ -60,7 +60,13 @@ def get(keyword: str, location_code: Optional[int], location_name: str) -> Optio
         logger.info("analysis_cache.stale", extra={"cache_key": key, "age_days": age.days})
         return None
     logger.info("analysis_cache.hit", extra={"cache_key": key, "age_days": age.days})
-    return rows[0].get("analysis")
+    analysis = rows[0].get("analysis")
+    if isinstance(analysis, dict):
+        # Served from cache → this request incurred no provider cost. Mark it and
+        # zero the cost subtotal so the UI/cost tracking doesn't double-count the
+        # original (already-paid) scrape.
+        analysis = {**analysis, "from_cache": True, "analysis_cost": {"cached": True, "subtotal": 0.0}}
+    return analysis
 
 
 def store(keyword: str, location_code: Optional[int], location_name: str, analysis: dict) -> None:
