@@ -5,6 +5,7 @@ import { api } from '../lib/api'
 import type { RunListResponse } from '../lib/types'
 import { Download, Copy, FileText, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 import { sectionsToMarkdown } from '../lib/sectionsToMarkdown'
+import { sectionsToHtml } from '../lib/sectionsToHtml'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -20,6 +21,7 @@ function ArticleCard({ run }: { run: any }) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
 
   const publishMutation = useMutation({
     mutationFn: () => api.post<{ doc_url: string }>(`/runs/${run.id}/publish`, {}),
@@ -43,6 +45,7 @@ function ArticleCard({ run }: { run: any }) {
   const articleTitle: string | undefined =
     writerPayload?.title || briefPayload?.title || undefined
   const markdown = articleSections ? sectionsToMarkdown(articleSections, articleTitle) : null
+  const html = articleSections ? sectionsToHtml(articleSections, articleTitle) : null
   // The card header above already shows the article title (line ~94).
   // Stripping the leading H1 from the preview keeps the user from
   // reading the headline twice; copy / download / publish still use
@@ -53,8 +56,9 @@ function ArticleCard({ run }: { run: any }) {
   const slug = run.keyword.replace(/\s+/g, '-').toLowerCase()
 
   function handleCopy() {
-    if (!markdown) return
-    navigator.clipboard.writeText(markdown)
+    const content = fmt === 'html' ? html : markdown
+    if (!content) return
+    navigator.clipboard.writeText(content)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -79,15 +83,33 @@ function ArticleCard({ run }: { run: any }) {
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
           {markdown && (
             <>
+              <div style={{ display: 'inline-flex', border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+                {(['markdown', 'html'] as const).map(f => (
+                  <button key={f} onClick={() => setFmt(f)} style={{
+                    padding: '5px 10px', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer',
+                    background: fmt === f ? '#6366f1' : '#fff', color: fmt === f ? '#fff' : '#64748b',
+                  }}>
+                    {f === 'markdown' ? 'MD' : 'HTML'}
+                  </button>
+                ))}
+              </div>
               <button onClick={handleCopy} style={ghostBtn}>
-                <Copy size={13} /> {copied ? 'Copied!' : 'Copy'}
+                <Copy size={13} /> {copied ? 'Copied!' : `Copy ${fmt === 'html' ? 'HTML' : 'MD'}`}
               </button>
-              <button onClick={() => downloadFile(markdown, `${slug}.md`, 'text/markdown')} style={ghostBtn}>
-                <Download size={13} /> .md
-              </button>
-              <button onClick={() => downloadFile(markdown, `${slug}.txt`, 'text/plain')} style={ghostBtn}>
-                <Download size={13} /> .txt
-              </button>
+              {fmt === 'html' ? (
+                <button onClick={() => downloadFile(html ?? '', `${slug}.html`, 'text/html')} style={ghostBtn}>
+                  <Download size={13} /> .html
+                </button>
+              ) : (
+                <>
+                  <button onClick={() => downloadFile(markdown, `${slug}.md`, 'text/markdown')} style={ghostBtn}>
+                    <Download size={13} /> .md
+                  </button>
+                  <button onClick={() => downloadFile(markdown, `${slug}.txt`, 'text/plain')} style={ghostBtn}>
+                    <Download size={13} /> .txt
+                  </button>
+                </>
+              )}
               {publishedUrl ? (
                 <a href={publishedUrl} target="_blank" rel="noreferrer"
                   style={{ ...ghostBtn, textDecoration: 'none', color: '#16a34a', borderColor: '#bbf7d0' }}>
@@ -139,7 +161,7 @@ function ArticleCard({ run }: { run: any }) {
               overflowY: 'auto',
               margin: 0,
             }}>
-              {markdownPreview}
+              {fmt === 'html' ? html : markdownPreview}
             </pre>
           )}
         </div>

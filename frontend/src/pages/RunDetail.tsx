@@ -9,6 +9,7 @@ import {
   type BriefCacheStatus,
 } from '../components/BriefCacheDecisionModal'
 import { sectionsToMarkdown } from '../lib/sectionsToMarkdown'
+import { sectionsToHtml } from '../lib/sectionsToHtml'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -288,6 +289,7 @@ export function RunDetail() {
   })
 
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
   const publishMutation = useMutation({
     mutationFn: () => api.post<{ doc_url: string }>(`/runs/${id}/publish`, {}),
     onSuccess: (data) => {
@@ -351,6 +353,7 @@ export function RunDetail() {
   const articleSections = enrichedArticle?.article as unknown[] | undefined
   const articleTitle = typeof enrichedArticle?.title === 'string' ? enrichedArticle.title : undefined
   const articleMarkdown = articleSections ? sectionsToMarkdown(articleSections, articleTitle) : null
+  const articleHtml = articleSections ? sectionsToHtml(articleSections, articleTitle) : null
   // The page chrome already renders the article title as an <h1> above
   // (line ~444). Showing the same `# title` line at the top of the
   // markdown preview made readers see the headline twice. Strip the
@@ -508,18 +511,38 @@ export function RunDetail() {
       {/* Article output */}
       {articleMarkdown && (
         <div style={cardStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
-            <h2 style={sectionTitle}>Generated Article</h2>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button onClick={() => navigator.clipboard.writeText(articleMarkdown)} style={ghostBtn}>
-                <Copy size={13} /> Copy
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <h2 style={sectionTitle}>Generated Article</h2>
+              <div style={{ display: 'inline-flex', border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+                {(['markdown', 'html'] as const).map(f => (
+                  <button key={f} onClick={() => setFmt(f)} style={{
+                    padding: '5px 12px', fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer',
+                    background: fmt === f ? '#6366f1' : '#fff', color: fmt === f ? '#fff' : '#64748b',
+                  }}>
+                    {f === 'markdown' ? 'Markdown' : 'HTML'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => navigator.clipboard.writeText(fmt === 'html' ? (articleHtml ?? '') : articleMarkdown)} style={ghostBtn}>
+                <Copy size={13} /> Copy {fmt === 'html' ? 'HTML' : 'Markdown'}
               </button>
-              <button onClick={() => downloadFile(articleMarkdown, `${run.keyword.replace(/\s+/g, '-')}.md`, 'text/markdown')} style={ghostBtn}>
-                <Download size={13} /> Download .md
-              </button>
-              <button onClick={() => downloadFile(articleMarkdown, `${run.keyword.replace(/\s+/g, '-')}.txt`, 'text/plain')} style={ghostBtn}>
-                <Download size={13} /> .txt
-              </button>
+              {fmt === 'html' ? (
+                <button onClick={() => downloadFile(articleHtml ?? '', `${run.keyword.replace(/\s+/g, '-')}.html`, 'text/html')} style={ghostBtn}>
+                  <Download size={13} /> Download .html
+                </button>
+              ) : (
+                <>
+                  <button onClick={() => downloadFile(articleMarkdown, `${run.keyword.replace(/\s+/g, '-')}.md`, 'text/markdown')} style={ghostBtn}>
+                    <Download size={13} /> Download .md
+                  </button>
+                  <button onClick={() => downloadFile(articleMarkdown, `${run.keyword.replace(/\s+/g, '-')}.txt`, 'text/plain')} style={ghostBtn}>
+                    <Download size={13} /> .txt
+                  </button>
+                </>
+              )}
               {publishedUrl ? (
                 <a href={publishedUrl} target="_blank" rel="noreferrer"
                   style={{ ...ghostBtn, textDecoration: 'none', color: '#16a34a', borderColor: '#bbf7d0' }}>
@@ -543,7 +566,7 @@ export function RunDetail() {
             </div>
           )}
           <pre style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, overflowX: 'auto', fontSize: 13, lineHeight: 1.7, color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 600, overflowY: 'auto' }}>
-            {articleMarkdownPreview}
+            {fmt === 'html' ? articleHtml : articleMarkdownPreview}
           </pre>
         </div>
       )}
