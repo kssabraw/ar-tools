@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowRight, Building2, CheckCircle2, FilePlus, FileSearch, MapPin, Search, Sparkles, Trash2,
+  ArrowLeft, ArrowRight, Building2, CheckCircle2, ChevronDown, ChevronRight, FilePlus, FileSearch, MapPin, Search, Sparkles, Trash2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
@@ -12,7 +12,6 @@ import type { AnalysisResult, LocalSeoPageDetail, LocalSeoPageListItem, Rankabil
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
 import { PageScoreView } from '../components/localseo/PageScoreView'
-import { AnalysisResultsView } from '../components/localseo/AnalysisResultsView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
 import {
@@ -25,7 +24,6 @@ type View =
   | { kind: 'loading' }
   | { kind: 'generated'; page: LocalSeoPageDetail; isNew: boolean; prevScore: number | null }
   | { kind: 'score'; pageUrl?: string; pageHtml?: string; serpAnalysis?: AnalysisResult | null }
-  | { kind: 'analysis'; result: AnalysisResult }
 
 type CheckState =
   | { status: 'idle' }
@@ -70,7 +68,8 @@ export function LocalSeoContent() {
   const [error, setError] = useState('')
   const [check, setCheck] = useState<CheckState>({ status: 'idle' })
   const [scanning, setScanning] = useState(false)
-  const [analyzing, setAnalyzing] = useState(false)
+  // Advanced options (page template + cache refresh) collapse, hidden by default.
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [manualUrl, setManualUrl] = useState('')
 
   // Map-pack rankability check (single point-in-time report).
@@ -297,20 +296,6 @@ export function LocalSeoContent() {
     if (bulkTickRef.current) { clearInterval(bulkTickRef.current); bulkTickRef.current = null }
   }
 
-  const handlePreviewAnalysis = async () => {
-    if (!keyword.trim() || !location.trim()) return
-    setError('')
-    setAnalyzing(true)
-    try {
-      const result = await localSeoApi.analyze(clientId, { keyword: keyword.trim(), location: location.trim(), location_code: locationCode, force_refresh: forceRefresh })
-      setView({ kind: 'analysis', result })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Analysis failed')
-    } finally {
-      setAnalyzing(false)
-    }
-  }
-
   const handleSaveTemplateDefault = async () => {
     setSavingTemplateDefault(true)
     setError('')
@@ -385,14 +370,6 @@ export function LocalSeoContent() {
           onReoptimized={(page, prevScore) => { refreshSaved(); setView({ kind: 'generated', page, isNew: true, prevScore }) }}
           onCreateNew={() => handleGenerate()}
         />
-      </div>
-    )
-  }
-
-  if (view.kind === 'analysis') {
-    return (
-      <div style={{ padding: 32 }}>
-        <AnalysisResultsView result={view.result} onBack={() => setView({ kind: 'form' })} />
       </div>
     )
   }
@@ -631,43 +608,51 @@ export function LocalSeoContent() {
             </p>
           </div>
 
-          {/* Page template (Phase 3) — mirror an existing page's structure */}
+          {/* Advanced options (optional) — page template + cache refresh. Competitor
+              SERP analysis always runs at generation, so there's no choice to make here. */}
           <div>
-            <label style={label}>Mirror an existing page’s structure (optional)</label>
-            <input
-              style={input}
-              value={pageTemplateUrl}
-              onChange={e => setPageTemplateUrl(e.target.value)}
-              placeholder={client?.local_seo_page_template_url || 'https://example.com/a-page-to-mirror'}
-            />
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 12, color: '#94a3b8' }}>
-                {client?.local_seo_page_template_url
-                  ? <>Client default: {client.local_seo_page_template_url} — leave blank to use it.</>
-                  : 'The new page will follow this page’s section layout. Leave blank for the standard structure.'}
-              </span>
-              <button
-                type="button"
-                onClick={handleSaveTemplateDefault}
-                disabled={savingTemplateDefault}
-                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#6366f1' }}
-              >
-                {savingTemplateDefault ? 'Saving…' : 'Save as client default'}
-              </button>
-            </div>
-          </div>
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(v => !v)}
+              style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 13, fontWeight: 600, color: '#6366f1', display: 'flex', alignItems: 'center', gap: 4 }}
+            >
+              {showAdvanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />} Advanced options
+            </button>
+            {showAdvanced && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginTop: 12 }}>
+                {/* Page template (Phase 3) — mirror an existing page's structure */}
+                <div>
+                  <label style={label}>Mirror an existing page’s structure (optional)</label>
+                  <input
+                    style={input}
+                    value={pageTemplateUrl}
+                    onChange={e => setPageTemplateUrl(e.target.value)}
+                    placeholder={client?.local_seo_page_template_url || 'https://example.com/a-page-to-mirror'}
+                  />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                      {client?.local_seo_page_template_url
+                        ? <>Client default: {client.local_seo_page_template_url} — leave blank to use it.</>
+                        : 'The new page will follow this page’s section layout. Leave blank for the standard structure.'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleSaveTemplateDefault}
+                      disabled={savingTemplateDefault}
+                      style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#6366f1' }}
+                    >
+                      {savingTemplateDefault ? 'Saving…' : 'Save as client default'}
+                    </button>
+                  </div>
+                </div>
 
-          {/* Competitor SERP analysis always runs first */}
-          <div>
-            <label style={label}>Competitor SERP analysis</label>
-            <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 8px' }}>
-              Top-ranking competitor pages are analyzed for every page so the generator targets the right terms,
-              entities, and phrases. This runs automatically.
-            </p>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#64748b', cursor: 'pointer' }}>
-              <input type="checkbox" checked={forceRefresh} onChange={e => setForceRefresh(e.target.checked)} />
-              Refresh competitor data (ignore the 14-day cache — slower, re-scrapes)
-            </label>
+                {/* Competitor analysis runs automatically; this only bypasses the cache. */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#64748b', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={forceRefresh} onChange={e => setForceRefresh(e.target.checked)} />
+                  Refresh competitor data (ignore the 14-day cache — slower, re-scrapes)
+                </label>
+              </div>
+            )}
           </div>
 
           {error && <div style={errorBox}>{error}</div>}
@@ -696,9 +681,6 @@ export function LocalSeoContent() {
             </button>
             <button style={outlineBtn} onClick={handleCheckRankability} disabled={rankabilityLoading || !keyword.trim() || !location.trim()}>
               {rankabilityLoading ? <Spinner size={14} /> : <MapPin size={14} />} {rankabilityLoading ? 'Checking map pack…' : 'Check map pack'}
-            </button>
-            <button style={outlineBtn} onClick={handlePreviewAnalysis} disabled={analyzing || !keyword.trim() || !location.trim()}>
-              {analyzing ? <Spinner size={14} /> : <Search size={14} />} {analyzing ? 'Analyzing competitors…' : 'Preview competitor analysis'}
             </button>
           </div>
 
@@ -759,7 +741,7 @@ export function LocalSeoContent() {
           </button>
           {!canGenerate && (
             <p style={{ fontSize: 12, color: '#94a3b8', margin: '-8px 0 0', textAlign: 'center' }}>
-              Enter a service, an area, and choose whether to run analysis.
+              Enter a service and an area to continue.
             </p>
           )}
         </div>
