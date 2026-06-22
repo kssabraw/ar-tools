@@ -123,6 +123,10 @@ export interface KeywordSummary {
   impressions_30d: number
   ctr_30d: number
   today_rank: number | null
+  cpc: number | null
+  search_volume: number | null
+  competition: string | null
+  est_monthly_value: number | null
   sparkline: (number | null)[]
   direction: 'up' | 'down' | 'flat' | null
 }

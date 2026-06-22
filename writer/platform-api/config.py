@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     dataforseo_serp_depth: int = 100  # find rank within the top 100, else "not ranking"
     dataforseo_default_location_code: int = 2840  # United States
     dataforseo_default_language_code: str = "en"
+    # Keyword market data (CPC / volume / competition): Google Ads numbers
+    # refresh monthly, so re-fetch only when a keyword's cached row is older
+    # than this many days (or missing).
+    keyword_market_refresh_days: int = 30
     # DataForSEO — GBP review enrichment (shared with pipeline-api modules)
     dataforseo_login: str = ""
     dataforseo_password: str = ""

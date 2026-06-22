@@ -42,8 +42,13 @@ class KeywordSummary(BaseModel):
     clicks_30d: int = 0
     impressions_30d: int = 0
     ctr_30d: float = 0.0
-    # DataForSEO live integer rank (M4) — None until then.
+    # DataForSEO live integer rank.
     today_rank: Optional[int] = None
+    # Keyword market data (DataForSEO Google Ads) + derived ROI estimate.
+    cpc: Optional[float] = None
+    search_volume: Optional[int] = None
+    competition: Optional[str] = None
+    est_monthly_value: Optional[float] = None
     # Recent positions (None entries are gaps) for the row sparkline.
     sparkline: list[Optional[float]] = Field(default_factory=list)
     direction: Optional[Literal["up", "down", "flat"]] = None

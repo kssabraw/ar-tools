@@ -123,6 +123,9 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
                 <th style={th}>Trend</th>
                 <th style={th}>Status</th>
                 <th style={th} title="Live rank (DataForSEO)">Today</th>
+                <th style={th} title="Cost per click (DataForSEO)">CPC</th>
+                <th style={th} title="Monthly search volume (DataForSEO)">Vol.</th>
+                <th style={th} title="Est. monthly value = volume × CTR-at-position × CPC">Est. value</th>
                 {showGsc && <><th style={th}>7d</th><th style={th}>30d</th><th style={th}>60d</th><th style={th}>90d</th>
                   <th style={th}>Clicks</th><th style={th}>Impr.</th><th style={th}>CTR</th></>}
                 {isAdmin && <th style={th}></th>}
@@ -162,7 +165,7 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
     },
   })
 
-  const colSpan = 4 + (showGsc ? 7 : 0) + (isAdmin ? 1 : 0)
+  const colSpan = 7 + (showGsc ? 7 : 0) + (isAdmin ? 1 : 0)
   // DataForSEO keywords plot tracked_rank; GSC keywords plot gsc_position.
   const trendValues = (trend?.points ?? []).map(p => ({
     date: p.date, value: isDf ? (p.tracked_rank ?? null) : p.gsc_position,
@@ -190,6 +193,11 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
         <td style={td}><Sparkline values={k.sparkline} color={meta.color} /></td>
         <td style={td}><span style={{ ...badge, color: meta.color, background: meta.bg }}>{meta.label}</span></td>
         <td style={td}>{k.today_rank != null ? <span style={todayBox}>{k.today_rank}</span> : <Dash />}</td>
+        <td style={td}>{k.cpc != null ? `$${k.cpc.toFixed(2)}` : <Dash />}</td>
+        <td style={td}>{k.search_volume != null ? k.search_volume.toLocaleString() : <Dash />}</td>
+        <td style={td}>{k.est_monthly_value != null
+          ? <span style={{ color: '#15803d', fontWeight: 600 }}>${Math.round(k.est_monthly_value).toLocaleString()}</span>
+          : <Dash />}</td>
         {showGsc && <>
           <td style={td}><PosCell value={k.avg_7} direction={k.direction} /></td>
           <td style={td}><Pos value={k.avg_30} /></td>

@@ -31,7 +31,7 @@ from models.rank import (
     TrackedKeywordUpdateRequest,
     TrendPoint,
 )
-from services import dataforseo_rank, rank_materialize, rank_status
+from services import dataforseo_rank, keyword_market, rank_materialize, rank_status
 
 logger = logging.getLogger(__name__)
 
@@ -71,20 +71,46 @@ def _gsc_connected(supabase, client_id: str) -> bool:
     )
 
 
-def _summary(k: dict, metrics: dict[str, list[dict]], today: date) -> KeywordSummary:
-    s = rank_status.compute_keyword_summary(
-        metrics.get(k["id"], []), today, settings.rank_gsc_coverage_days
+def _client_location_code(supabase, client_id: str) -> int:
+    res = supabase.table("clients").select("id, website_url, gbp").eq("id", client_id).limit(1).execute()
+    return dataforseo_rank.location_code_for(res.data[0]) if res.data else settings.dataforseo_default_location_code
+
+
+def _build_summaries(supabase, client_id: str, keyword_rows: list[dict], today: date) -> list[KeywordSummary]:
+    metrics = _fetch_metrics(supabase, [k["id"] for k in keyword_rows])
+    location_code = _client_location_code(supabase, client_id)
+    market = keyword_market.fetch_cached_market(
+        supabase, [k["keyword"] for k in keyword_rows], location_code
     )
-    return KeywordSummary(
-        id=k["id"],
-        keyword=k["keyword"],
-        source=k["source"],
-        canonical_url=k.get("canonical_url"),
-        canonical_url_locked=k["canonical_url_locked"],
-        status=k["status"],
-        status_updated_at=k.get("status_updated_at"),
-        **s,
-    )
+
+    out: list[KeywordSummary] = []
+    for k in keyword_rows:
+        s = rank_status.compute_keyword_summary(
+            metrics.get(k["id"], []), today, settings.rank_gsc_coverage_days
+        )
+        m = market.get(k["keyword"].lower(), {})
+        # Best current-position estimate for the ROI figure: live rank for a
+        # DataForSEO keyword, else the 30d GSC average.
+        position = s["today_rank"] if s["primary_source"] == "dataforseo" else s["avg_30"]
+        out.append(
+            KeywordSummary(
+                id=k["id"],
+                keyword=k["keyword"],
+                source=k["source"],
+                canonical_url=k.get("canonical_url"),
+                canonical_url_locked=k["canonical_url_locked"],
+                status=k["status"],
+                status_updated_at=k.get("status_updated_at"),
+                cpc=m.get("cpc"),
+                search_volume=m.get("search_volume"),
+                competition=m.get("competition"),
+                est_monthly_value=keyword_market.estimate_monthly_value(
+                    m.get("search_volume"), position, m.get("cpc")
+                ),
+                **s,
+            )
+        )
+    return out
 
 
 @router.get("/clients/{client_id}/rank/keywords", response_model=list[KeywordSummary])
@@ -99,9 +125,7 @@ async def list_keywords(client_id: UUID, auth: dict = Depends(require_auth)) -> 
         .execute()
     )
     rows = kws.data or []
-    metrics = _fetch_metrics(supabase, [k["id"] for k in rows])
-    today = date.today()
-    return [_summary(k, metrics, today) for k in rows]
+    return _build_summaries(supabase, str(client_id), rows, date.today())
 
 
 def _split_keywords(raw: list[str]) -> list[str]:
@@ -135,8 +159,9 @@ async def add_keywords(
     ).execute()
 
     # Backfill GSC axis + status now; the weekly job (or manual refresh) fills in
-    # DataForSEO for any keyword GSC doesn't cover.
+    # DataForSEO for any keyword GSC doesn't cover; market data for CPC/volume.
     rank_materialize.enqueue_materialize(str(client_id))
+    keyword_market.enqueue_keyword_market(str(client_id))
     return await list_keywords(client_id, auth)
 
 
@@ -156,8 +181,7 @@ async def update_keyword(
     if not result.data:
         raise HTTPException(status_code=404, detail="not_found")
     k = result.data[0]
-    metrics = _fetch_metrics(supabase, [k["id"]])
-    return _summary(k, metrics, date.today())
+    return _build_summaries(supabase, k["client_id"], [k], date.today())[0]
 
 
 @router.delete("/tracked-keywords/{keyword_id}", status_code=204)

@@ -95,6 +95,20 @@ def enqueue_due_dataforseo() -> int:
     return len(client_ids)
 
 
+def enqueue_due_market() -> int:
+    """Daily-triggered, monthly-effective: enqueue a market refresh per client
+    with active keywords. The job only re-fetches keywords whose cached market
+    data is missing or older than the refresh window, so this is cheap."""
+    from services.keyword_market import enqueue_keyword_market
+
+    supabase = get_supabase()
+    rows = supabase.table("tracked_keywords").select("client_id").eq("active", True).execute()
+    client_ids = {r["client_id"] for r in (rows.data or [])}
+    for client_id in client_ids:
+        enqueue_keyword_market(client_id)
+    return len(client_ids)
+
+
 async def gsc_scheduler() -> None:
     """Background loop: daily GSC ingest enqueue + weekly DataForSEO rank enqueue."""
     interval = settings.gsc_scheduler_poll_interval_seconds
@@ -109,6 +123,7 @@ async def gsc_scheduler() -> None:
             now = datetime.now(timezone.utc)
             if should_run(now, last_run_date, hour):
                 enqueue_due_ingests()
+                enqueue_due_market()
                 last_run_date = now.date()
             # Weekly DataForSEO fallback, same daily-hour guard but only on the
             # configured weekday.
