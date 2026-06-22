@@ -196,6 +196,7 @@ export interface ReportSchedule {
   day_of_week: number | null
   day_of_month: number | null
   interval_days: number | null
+  deliver_google_doc: boolean
   last_generated_at: string | null
 }
 
@@ -203,6 +204,7 @@ export interface ReportListItem {
   id: string
   title: string
   created_at: string
+  doc_url: string | null
 }
 
 export interface ReportSnapshot {

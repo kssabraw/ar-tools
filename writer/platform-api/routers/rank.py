@@ -33,6 +33,7 @@ from models.rank import (
     PagesResponse,
     RankLocation,
     ReportListItem,
+    ReportPublishResponse,
     ReportSchedule,
     StrikingDistanceResponse,
     TrackedKeywordCreateRequest,
@@ -461,7 +462,8 @@ async def get_report_schedule(client_id: UUID, auth: dict = Depends(require_auth
     r = res.data[0]
     return ReportSchedule(
         mode=r["mode"], day_of_week=r.get("day_of_week"), day_of_month=r.get("day_of_month"),
-        interval_days=r.get("interval_days"), last_generated_at=r.get("last_generated_at"),
+        interval_days=r.get("interval_days"), deliver_google_doc=r.get("deliver_google_doc", False),
+        last_generated_at=r.get("last_generated_at"),
     )
 
 
@@ -477,6 +479,7 @@ async def set_report_schedule(
         "day_of_week": body.day_of_week if body.mode == "weekly" else None,
         "day_of_month": body.day_of_month if body.mode == "monthly" else None,
         "interval_days": body.interval_days if body.mode == "interval" else None,
+        "deliver_google_doc": body.deliver_google_doc,
         "updated_at": "now()",
     }
     supabase.table("rank_report_config").upsert(row, on_conflict="client_id").execute()
@@ -486,7 +489,7 @@ async def set_report_schedule(
 @router.get("/clients/{client_id}/rank/reports", response_model=list[ReportListItem])
 async def list_reports(client_id: UUID, auth: dict = Depends(require_auth)) -> list[ReportListItem]:
     res = (
-        get_supabase().table("rank_reports").select("id, title, created_at")
+        get_supabase().table("rank_reports").select("id, title, created_at, doc_url")
         .eq("client_id", str(client_id)).order("created_at", desc=True).limit(60).execute()
     )
     return [ReportListItem(**r) for r in (res.data or [])]
@@ -494,11 +497,35 @@ async def list_reports(client_id: UUID, auth: dict = Depends(require_auth)) -> l
 
 @router.post("/clients/{client_id}/rank/reports", response_model=GeneratedReport)
 async def generate_report(client_id: UUID, auth: dict = Depends(require_auth)) -> GeneratedReport:
-    """Generate a report now (the 'as needed' path) and store it in the archive."""
-    report = rank_report.generate_and_store(get_supabase(), str(client_id), created_by=auth["user_id"])
+    """Generate a report now (the 'as needed' path) and store it in the archive.
+    Also delivers a Google Doc if the client has opted into delivery."""
+    supabase = get_supabase()
+    report = rank_report.generate_and_store(supabase, str(client_id), created_by=auth["user_id"])
     if report is None:
         raise HTTPException(status_code=404, detail="client_not_found")
+    if rank_report.deliver_enabled(supabase, str(client_id)):
+        try:
+            result = await rank_report.publish_report_doc(supabase, report)
+            report["doc_url"] = result.get("doc_url")
+        except Exception as exc:
+            logger.warning("report_delivery_failed", extra={"client_id": str(client_id), "error": str(exc)})
     return GeneratedReport(**report)
+
+
+@router.post("/rank-reports/{report_id}/publish", response_model=ReportPublishResponse)
+async def publish_report(report_id: UUID, auth: dict = Depends(require_auth)) -> ReportPublishResponse:
+    """Publish an archived report to a Google Doc in the client's Drive folder."""
+    supabase = get_supabase()
+    res = supabase.table("rank_reports").select("*").eq("id", str(report_id)).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    try:
+        result = await rank_report.publish_report_doc(supabase, res.data[0])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"publish_failed: {exc}")
+    return ReportPublishResponse(**result)
 
 
 @router.get("/rank-reports/{report_id}", response_model=GeneratedReport)
