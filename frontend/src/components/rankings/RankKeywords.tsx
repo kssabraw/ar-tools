@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Download, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { ChevronDown, ChevronRight, Download, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, Upload, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse } from '../../lib/types'
-import { toCsv, downloadCsv } from '../../lib/csv'
+import { toCsv, downloadCsv, parseKeywordsFromCsv } from '../../lib/csv'
 import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
 import { STATUS_META, statusRank } from './status'
 import { Sparkline } from './Sparkline'
@@ -24,6 +24,7 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
   const [filter, setFilter] = useState<KeywordStatus | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['rank-keywords', clientId] })
@@ -31,10 +32,18 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
   }
 
   const addMut = useMutation({
-    mutationFn: (text: string) =>
-      api.post<KeywordSummary[]>(`/clients/${clientId}/rank/keywords`, { keywords: [text] }),
+    mutationFn: (keywords: string[]) =>
+      api.post<KeywordSummary[]>(`/clients/${clientId}/rank/keywords`, { keywords }),
     onSuccess: () => { invalidate(); setDraft(''); setAdding(false) },
   })
+
+  const onCsvSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // allow re-selecting the same file
+    if (!file) return
+    const keywords = parseKeywordsFromCsv(await file.text())
+    if (keywords.length) addMut.mutate(keywords)
+  }
   const refreshMut = useMutation({
     mutationFn: () => api.post(`/clients/${clientId}/rank/refresh-dataforseo`, {}),
     onSuccess: invalidate,
@@ -84,7 +93,7 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
             {addMut.error && <div style={errorBox}>{(addMut.error as Error).message}</div>}
             <div style={{ display: 'flex', gap: 8 }}>
               <button style={primaryBtn} disabled={!draft.trim() || addMut.isPending}
-                onClick={() => addMut.mutate(draft.trim())}>
+                onClick={() => addMut.mutate([draft.trim()])}>
                 {addMut.isPending ? 'Adding…' : 'Add keywords'}
               </button>
               <button style={outlineBtn} onClick={() => { setAdding(false); setDraft('') }}>Cancel</button>
@@ -92,9 +101,14 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
           </div>
         ) : (
           <>
-            <button style={primaryBtn} onClick={() => setAdding(true)} disabled={!isAdmin}>
+            <button style={primaryBtn} onClick={() => setAdding(true)}>
               <Plus size={14} /> Track keywords
             </button>
+            <button style={outlineBtn} onClick={() => fileRef.current?.click()} disabled={addMut.isPending}
+              title="Import keywords from a CSV (first column)">
+              <Upload size={14} /> {addMut.isPending ? 'Importing…' : 'Import CSV'}
+            </button>
+            <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={onCsvSelected} />
             {isAdmin && (keywords?.length ?? 0) > 0 && (
               <button style={outlineBtn} onClick={() => refreshMut.mutate()} disabled={refreshMut.isPending}
                 title="Fetch DataForSEO ranks now for keywords GSC doesn't cover">

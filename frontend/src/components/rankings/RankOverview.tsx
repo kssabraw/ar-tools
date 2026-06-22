@@ -9,7 +9,7 @@ import { Sparkline } from './Sparkline'
 import { PositionChart } from './PositionChart'
 import { MetricsChart } from './MetricsChart'
 
-export function RankOverview({ clientId, isAdmin }: { clientId: string; isAdmin: boolean }) {
+export function RankOverview({ clientId }: { clientId: string }) {
   const { data: ov } = useQuery<Overview>({
     queryKey: ['rank-overview', clientId],
     queryFn: () => api.get<Overview>(`/clients/${clientId}/rank/overview`),
@@ -86,7 +86,7 @@ export function RankOverview({ clientId, isAdmin }: { clientId: string; isAdmin:
       </>}
 
       {/* Striking distance — page-2 opportunities (GSC only) */}
-      {gsc && <StrikingDistance clientId={clientId} isAdmin={isAdmin} />}
+      {gsc && <StrikingDistance clientId={clientId} />}
 
       {/* Triage list */}
       <h3 style={{ ...chartTitle, marginBottom: 10 }}>Needs attention</h3>
@@ -112,7 +112,7 @@ export function RankOverview({ clientId, isAdmin }: { clientId: string; isAdmin:
 }
 
 // Untracked queries already ranking on page 2 — quick wins to start tracking.
-function StrikingDistance({ clientId, isAdmin }: { clientId: string; isAdmin: boolean }) {
+function StrikingDistance({ clientId }: { clientId: string }) {
   const queryClient = useQueryClient()
   const { data } = useQuery<StrikingDistanceResponse>({
     queryKey: ['rank-striking', clientId],
@@ -140,12 +140,10 @@ function StrikingDistance({ clientId, isAdmin }: { clientId: string; isAdmin: bo
             <span style={{ flex: 1, fontSize: 13, color: '#0f172a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.query}</span>
             <span style={{ fontSize: 12, color: '#64748b', width: 52, textAlign: 'right' }}>pos {k.avg_position.toFixed(1)}</span>
             <span style={{ fontSize: 12, color: '#94a3b8', width: 72, textAlign: 'right' }}>{k.impressions.toLocaleString()} impr</span>
-            {isAdmin && (
-              <button style={{ ...outlineBtn, padding: '4px 10px', fontSize: 12 }}
-                onClick={() => trackMut.mutate(k.query)} disabled={trackMut.isPending}>
-                <Plus size={12} /> Track
-              </button>
-            )}
+            <button style={{ ...outlineBtn, padding: '4px 10px', fontSize: 12 }}
+              onClick={() => trackMut.mutate(k.query)} disabled={trackMut.isPending}>
+              <Plus size={12} /> Track
+            </button>
           </div>
         ))}
       </div>

@@ -169,7 +169,7 @@ def _split_keywords(raw: list[str]) -> list[str]:
 async def add_keywords(
     client_id: UUID,
     body: TrackedKeywordCreateRequest,
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_auth),  # adding keywords is open to any team member
 ) -> list[KeywordSummary]:
     keywords = _split_keywords(body.keywords)
     if not keywords:

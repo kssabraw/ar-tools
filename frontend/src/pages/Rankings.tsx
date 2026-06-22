@@ -67,7 +67,7 @@ export function Rankings() {
       {tab === 'settings' ? (
         <RankSettings clientId={clientId} isAdmin={isAdmin} />
       ) : tab === 'overview' ? (
-        <RankOverview clientId={clientId} isAdmin={isAdmin} />
+        <RankOverview clientId={clientId} />
       ) : tab === 'pages' ? (
         <RankPages clientId={clientId} />
       ) : (
