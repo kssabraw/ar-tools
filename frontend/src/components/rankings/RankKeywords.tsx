@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { ChevronDown, ChevronRight, Download, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse } from '../../lib/types'
+import { toCsv, downloadCsv } from '../../lib/csv'
 import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
 import { STATUS_META, statusRank } from './status'
 import { Sparkline } from './Sparkline'
@@ -50,6 +51,22 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
     return [...list].sort((a, b) => statusRank(a.status) - statusRank(b.status) || a.keyword.localeCompare(b.keyword))
   }, [keywords, filter])
 
+  const exportCsv = () => {
+    const headers = [
+      'Keyword', 'Status', 'Source', 'Today (live rank)', 'CPC', 'Volume', 'Est. monthly value',
+      'Avg 7d', 'Avg 30d', 'Avg 60d', 'Avg 90d', 'Clicks 30d', 'Impr 30d', 'CTR 30d',
+      'Canonical URL', 'Pages', 'Index status',
+    ]
+    const data = rows.map(k => [
+      k.keyword, STATUS_META[k.status].label, k.primary_source, k.today_rank,
+      k.cpc, k.search_volume, k.est_monthly_value,
+      k.avg_7, k.avg_30, k.avg_60, k.avg_90,
+      k.clicks_30d, k.impressions_30d, k.ctr_30d,
+      k.canonical_url, k.page_count, k.index_status,
+    ])
+    downloadCsv(`rankings-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(headers, data))
+  }
+
   if (isLoading) return <p style={{ color: '#94a3b8', fontSize: 14 }}>Loading keywords…</p>
 
   const showGsc = gscConnected
@@ -82,6 +99,11 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
               <button style={outlineBtn} onClick={() => refreshMut.mutate()} disabled={refreshMut.isPending}
                 title="Fetch DataForSEO ranks now for keywords GSC doesn't cover">
                 <RefreshCw size={14} /> {refreshMut.isPending ? 'Fetching…' : 'Refresh live ranks'}
+              </button>
+            )}
+            {(keywords?.length ?? 0) > 0 && (
+              <button style={outlineBtn} onClick={exportCsv} title="Export the current view to CSV">
+                <Download size={14} /> Export CSV
               </button>
             )}
           </>
