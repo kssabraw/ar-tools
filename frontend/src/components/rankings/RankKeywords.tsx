@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { ChevronDown, ChevronRight, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse } from '../../lib/types'
 import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
@@ -173,6 +173,14 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
     mutationFn: () => api.post(`/tracked-keywords/${k.id}/check-index`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rank-keywords', clientId] }),
   })
+  const pinMut = useMutation({
+    mutationFn: (vars: { canonical_url?: string; canonical_url_locked: boolean }) =>
+      api.patch(`/tracked-keywords/${k.id}`, vars),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rank-keywords', clientId] })
+      queryClient.invalidateQueries({ queryKey: ['rank-kw-pages', k.id] })
+    },
+  })
 
   const colSpan = 7 + (showGsc ? 7 : 0) + (isAdmin ? 1 : 0)
   // DataForSEO keywords plot tracked_rank; GSC keywords plot gsc_position.
@@ -194,8 +202,9 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
               {(k.canonical_url || k.page_count > 1) && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, maxWidth: 320 }}>
                   {k.canonical_url && (
-                    <span style={{ fontSize: 11, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {k.canonical_url}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 11, color: '#94a3b8', overflow: 'hidden', minWidth: 0 }}>
+                      {k.canonical_url_locked && <Pin size={10} color="#7c3aed" />}
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.canonical_url}</span>
                     </span>
                   )}
                   {k.page_count > 1 && (
@@ -243,7 +252,16 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
                 : 'GSC average position — full tracked range (gaps = days the keyword returned no data)'}
             </div>
             <PositionChart points={trendValues} />
-            {pages && pages.pages.length > 1 && <PageBreakdown pages={pages.pages} />}
+            {pages && pages.pages.length > 0 && (
+              <PageBreakdown
+                pages={pages.pages}
+                locked={k.canonical_url_locked}
+                isAdmin={isAdmin}
+                pinning={pinMut.isPending}
+                onPin={(page) => pinMut.mutate({ canonical_url: page, canonical_url_locked: true })}
+                onUnpin={() => pinMut.mutate({ canonical_url_locked: false })}
+              />
+            )}
           </td>
         </tr>
       )}
@@ -251,25 +269,50 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
   )
 }
 
-// Which landing pages a keyword surfaces for — flags the canonical page and
-// surfaces "split across pages" conflicts (PRD §8.5).
-function PageBreakdown({ pages }: { pages: KeywordPagesResponse['pages'] }) {
+// Which landing pages a keyword surfaces for — flags the canonical page,
+// surfaces "split across pages" conflicts (PRD §8.5), and lets an admin pin the
+// canonical page so the most-clicks heuristic can't reassign it (§5).
+function PageBreakdown({ pages, locked, isAdmin, pinning, onPin, onUnpin }: {
+  pages: KeywordPagesResponse['pages']
+  locked: boolean
+  isAdmin: boolean
+  pinning: boolean
+  onPin: (page: string) => void
+  onUnpin: () => void
+}) {
   return (
     <div style={{ marginTop: 16 }}>
-      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>
-        Landing pages this keyword surfaces for
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <span style={{ fontSize: 12, color: '#64748b' }}>Landing pages this keyword surfaces for</span>
+        {locked && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7c3aed' }}>
+            <Pin size={11} /> canonical pinned
+            {isAdmin && (
+              <button style={{ ...outlineBtn, padding: '2px 8px', fontSize: 11, marginLeft: 6 }}
+                onClick={onUnpin} disabled={pinning}>
+                <PinOff size={11} /> Unpin
+              </button>
+            )}
+          </span>
+        )}
       </div>
       <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
         {pages.map((p, i) => (
           <div key={p.page} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#fff', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
             <a href={p.page} target="_blank" rel="noreferrer"
-              style={{ flex: 1, color: '#6366f1', textDecoration: 'none', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              style={{ flex: 1, color: '#6366f1', textDecoration: 'none', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
               {p.page}
             </a>
-            {p.is_canonical && <span style={canonChip}>canonical</span>}
-            <span style={{ fontSize: 12, color: '#64748b', width: 64, textAlign: 'right' }}>{p.clicks.toLocaleString()} clk</span>
-            <span style={{ fontSize: 12, color: '#94a3b8', width: 72, textAlign: 'right' }}>{p.impressions.toLocaleString()} impr</span>
-            <span style={{ fontSize: 12, color: '#64748b', width: 48, textAlign: 'right' }}>{p.avg_position != null ? p.avg_position.toFixed(1) : '—'}</span>
+            {p.is_canonical && <span style={canonChip}>{locked ? 'pinned' : 'canonical'}</span>}
+            <span style={{ fontSize: 12, color: '#64748b', width: 60, textAlign: 'right' }}>{p.clicks.toLocaleString()} clk</span>
+            <span style={{ fontSize: 12, color: '#94a3b8', width: 70, textAlign: 'right' }}>{p.impressions.toLocaleString()} impr</span>
+            <span style={{ fontSize: 12, color: '#64748b', width: 40, textAlign: 'right' }}>{p.avg_position != null ? p.avg_position.toFixed(1) : '—'}</span>
+            {isAdmin && !(p.is_canonical && locked) && (
+              <button style={{ ...outlineBtn, padding: '3px 8px', fontSize: 11 }}
+                onClick={() => onPin(p.page)} disabled={pinning} title="Pin this page as the canonical landing page">
+                <Pin size={11} /> Pin
+              </button>
+            )}
           </div>
         ))}
       </div>
