@@ -1,4 +1,4 @@
--- Migration: 20260622190000_keywords_client_anchor.sql
+-- Migration: 20260622185307_keywords_client_anchor.sql
 -- Purpose: Organic Rank Tracker (Module #4) — DataForSEO fallback.
 --          Re-anchor tracked keywords to the CLIENT (not a GSC property) so the
 --          tracker works without GSC: when GSC can't be accessed for the site,

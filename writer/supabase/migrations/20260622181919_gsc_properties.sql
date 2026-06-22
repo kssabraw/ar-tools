@@ -1,4 +1,4 @@
--- Migration: 20260622160000_gsc_properties.sql
+-- Migration: 20260622181919_gsc_properties.sql
 -- Purpose: Organic Rank Tracker (Module #4) — M1 "Connection (service account)".
 --          Promote GSC property mapping from the single clients.gsc_property
 --          column into its own table so a client can have BOTH a url-prefix and

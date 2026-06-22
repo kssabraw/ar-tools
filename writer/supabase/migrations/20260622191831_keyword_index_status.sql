@@ -1,4 +1,4 @@
--- Migration: 20260622220000_keyword_index_status.sql
+-- Migration: 20260622191831_keyword_index_status.sql
 -- Purpose: Organic Rank Tracker (Module #4) — deindex confirmation.
 --          Store the GSC URL Inspection result for a keyword's canonical page,
 --          so a `deindex_risk` status can be confirmed as "this page is

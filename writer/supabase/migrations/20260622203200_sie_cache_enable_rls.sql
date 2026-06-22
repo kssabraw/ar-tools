@@ -1,0 +1,12 @@
+-- Migration: 20260622203200_sie_cache_enable_rls.sql
+-- Purpose: Reconcile schema drift flagged by the Supabase security advisor —
+--          public.sie_cache had RLS DISABLED on the live project (exposed to the
+--          anon/authenticated roles), even though 20260501120000_sie_cache.sql
+--          enabled it at creation.
+--
+-- sie_cache is written/read only by the backend via the service-role key (which
+-- bypasses RLS), and nothing reads it with the anon key (the frontend only uses
+-- the `sie_cache_hit` boolean on `runs`). So enable RLS with NO policies —
+-- denying direct anon/authenticated access — matching the async_jobs and
+-- rank-tracker tables.
+alter table public.sie_cache enable row level security;

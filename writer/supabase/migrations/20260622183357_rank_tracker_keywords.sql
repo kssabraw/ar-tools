@@ -1,4 +1,4 @@
--- Migration: 20260622180000_rank_tracker_keywords.sql
+-- Migration: 20260622183357_rank_tracker_keywords.sql
 -- Purpose: Organic Rank Tracker (Module #4) — M3 "Materialize + status + UI".
 --          Tracked keywords + the materialized per-keyword-per-day date axis.
 -- See: docs/modules/organic-rank-tracker-prd-v1_0.md §5, §7.

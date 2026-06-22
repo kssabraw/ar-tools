@@ -1,4 +1,4 @@
--- Migration: 20260622170000_gsc_ingest_storage.sql
+-- Migration: 20260622181933_gsc_ingest_storage.sql
 -- Purpose: Organic Rank Tracker (Module #4) — M2 "Sync + storage".
 --          Raw GSC query×date dump + per-run ingestion observability, and
 --          widen async_jobs.job_type so the scheduler can enqueue ingest jobs.

@@ -1,4 +1,4 @@
--- Migration: 20260622210000_gsc_query_page_daily.sql
+-- Migration: 20260622191240_gsc_query_page_daily.sql
 -- Purpose: Organic Rank Tracker (Module #4) — query×page grain.
 --          Powers canonical-URL resolution, the Pages view, and the per-keyword
 --          page breakdown. Refreshed WEEKLY (the page dimension multiplies rows

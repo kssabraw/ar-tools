@@ -1,4 +1,4 @@
--- Migration: 20260622200000_keyword_market.sql
+-- Migration: 20260622185948_keyword_market.sql
 -- Purpose: Organic Rank Tracker (Module #4) — keyword market data.
 --          CPC / search volume / competition from DataForSEO (Google Ads),
 --          cached cross-client by (keyword, location) and refreshed monthly.
