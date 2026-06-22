@@ -61,6 +61,7 @@ export interface Client extends ClientListItem {
   brand_voice: BrandVoice | null
   detected_icp: DetectedIcp | null
   differentiators: Differentiator[] | null
+  local_seo_page_template_url: string | null
   updated_at: string
 }
 

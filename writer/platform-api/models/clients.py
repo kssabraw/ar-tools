@@ -72,6 +72,7 @@ class ClientDetail(BaseModel):
     business_location: Optional[str] = None
     gbp_place_id: Optional[str] = None
     gbp: Optional[GbpProfile] = None
+    local_seo_page_template_url: Optional[str] = None
 
 
 class ClientCreateRequest(BaseModel):

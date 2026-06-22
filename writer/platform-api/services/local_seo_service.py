@@ -261,9 +261,26 @@ async def _get_or_compute_analysis(
         return await _compute_and_store(keyword, location, location_code, user_id, required)
 
 
+def set_page_template_default(client_id: str, page_template_url: Optional[str]) -> dict:
+    """Persist the client's default Local SEO page-template URL (Phase 3)."""
+    url = (page_template_url or "").strip() or None
+    supabase = get_supabase()
+    res = (
+        supabase.table("clients")
+        .update({"local_seo_page_template_url": url, "updated_at": "now()"})
+        .eq("id", client_id)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    logger.info("local_seo.page_template_default_set", extra={"client_id": client_id, "set": bool(url)})
+    return {"local_seo_page_template_url": url}
+
+
 async def generate_page(
     client_id: str, keyword: str, location: str, location_code: Optional[int],
     run_analysis: bool, user_id: str, force_refresh: bool = False,
+    page_template_url: Optional[str] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
@@ -277,6 +294,10 @@ async def generate_page(
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
     payload = _gbp_to_generate_payload(client, keyword, location, run_analysis, location_code)
+    # Page template: per-page value wins; otherwise the client's saved default.
+    template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
+    if template_url:
+        payload["page_template_url"] = template_url
     if run_analysis:
         serp = await _get_or_compute_analysis(
             keyword, location, location_code, force_refresh, user_id, required=False

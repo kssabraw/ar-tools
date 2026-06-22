@@ -296,3 +296,63 @@ async def test_get_or_compute_single_flight_collapses_concurrent_misses():
 
     assert all(r == {"serp_urls": []} for r in results)
     post.assert_awaited_once()
+
+
+_GEN_NLP_RESULT = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_per_page_template_over_client_default():
+    supabase = _supabase_for_client(
+        _client_row(local_seo_page_template_url="https://default.example/x"),
+        insert_row={"id": "p", "client_id": "client-1", "keyword": "k"},
+    )
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.analysis_cache, "get", return_value={"serp_urls": []}), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=_GEN_NLP_RESULT)) as stream:
+        await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, True, "user-1",
+            page_template_url="https://override.example/y",
+        )
+    assert stream.await_args[0][1]["page_template_url"] == "https://override.example/y"
+
+
+@pytest.mark.asyncio
+async def test_generate_falls_back_to_client_template_default():
+    supabase = _supabase_for_client(
+        _client_row(local_seo_page_template_url="https://default.example/x"),
+        insert_row={"id": "p", "client_id": "client-1", "keyword": "k"},
+    )
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.analysis_cache, "get", return_value={"serp_urls": []}), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=_GEN_NLP_RESULT)) as stream:
+        await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, True, "user-1",
+        )
+    assert stream.await_args[0][1]["page_template_url"] == "https://default.example/x"
+
+
+def test_set_page_template_default_trims_and_updates():
+    supabase = MagicMock()
+    table = MagicMock()
+    supabase.table.return_value = table
+    for m in ("update", "eq"):
+        getattr(table, m).return_value = table
+    table.execute.return_value = MagicMock(data=[{"id": "client-1"}])
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        out = local_seo_service.set_page_template_default("client-1", "  https://x.example/p  ")
+    assert out == {"local_seo_page_template_url": "https://x.example/p"}
+    assert table.update.call_args[0][0]["local_seo_page_template_url"] == "https://x.example/p"
+
+
+def test_set_page_template_default_clears_with_blank():
+    supabase = MagicMock()
+    table = MagicMock()
+    supabase.table.return_value = table
+    for m in ("update", "eq"):
+        getattr(table, m).return_value = table
+    table.execute.return_value = MagicMock(data=[{"id": "client-1"}])
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        out = local_seo_service.set_page_template_default("client-1", "   ")
+    assert out == {"local_seo_page_template_url": None}
+    assert table.update.call_args[0][0]["local_seo_page_template_url"] is None
