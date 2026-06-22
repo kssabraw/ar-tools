@@ -25,8 +25,16 @@ export const localSeoApi = {
       location_code?: number | null
       run_analysis: boolean
       force_refresh?: boolean
+      page_template_url?: string | null
     },
   ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body),
+
+  // Phase 3 — save (or clear) the client's default page-template URL.
+  setPageTemplateDefault: (clientId: string, page_template_url: string | null) =>
+    api.put<{ local_seo_page_template_url: string | null }>(
+      `/clients/${clientId}/local-seo/page-template-default`,
+      { page_template_url },
+    ),
 
   // Area-field typeahead — DataForSEO location suggestions scoped to the client's country.
   searchLocations: (clientId: string, query: string, country?: string) =>
@@ -82,4 +90,11 @@ export const localSeoApi = {
 
   deletePage: (pageId: string) =>
     api.delete<void>(`/local-seo/pages/${pageId}`),
+
+  // Publish a saved page to a Google Doc in the client's Drive folder.
+  publishPage: (pageId: string) =>
+    api.post<{ success: boolean; doc_id: string | null; doc_url: string | null }>(
+      `/local-seo/pages/${pageId}/publish`,
+      {},
+    ),
 }

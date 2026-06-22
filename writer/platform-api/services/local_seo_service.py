@@ -22,6 +22,7 @@ from fastapi import HTTPException
 from config import settings
 from db.supabase_client import get_supabase
 from services import analysis_cache, locations_service
+from services.html_to_markdown import html_to_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -261,9 +262,26 @@ async def _get_or_compute_analysis(
         return await _compute_and_store(keyword, location, location_code, user_id, required)
 
 
+def set_page_template_default(client_id: str, page_template_url: Optional[str]) -> dict:
+    """Persist the client's default Local SEO page-template URL (Phase 3)."""
+    url = (page_template_url or "").strip() or None
+    supabase = get_supabase()
+    res = (
+        supabase.table("clients")
+        .update({"local_seo_page_template_url": url, "updated_at": "now()"})
+        .eq("id", client_id)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    logger.info("local_seo.page_template_default_set", extra={"client_id": client_id, "set": bool(url)})
+    return {"local_seo_page_template_url": url}
+
+
 async def generate_page(
     client_id: str, keyword: str, location: str, location_code: Optional[int],
     run_analysis: bool, user_id: str, force_refresh: bool = False,
+    page_template_url: Optional[str] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
@@ -277,6 +295,10 @@ async def generate_page(
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
     payload = _gbp_to_generate_payload(client, keyword, location, run_analysis, location_code)
+    # Page template: per-page value wins; otherwise the client's saved default.
+    template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
+    if template_url:
+        payload["page_template_url"] = template_url
     if run_analysis:
         serp = await _get_or_compute_analysis(
             keyword, location, location_code, force_refresh, user_id, required=False
@@ -476,3 +498,61 @@ def delete_page(page_id: str) -> None:
     if not res.data:
         raise HTTPException(status_code=404, detail="local_seo_page_not_found")
     logger.info("local_seo.page_deleted", extra={"page_id": page_id})
+
+
+async def publish_page(page_id: str, user_id: str) -> dict:
+    """Publish a saved Local SEO page to a Google Doc in the client's Drive folder
+    via the Apps Script webhook (same path as the blog writer). The page's HTML is
+    converted to Markdown (the webhook's expected `content` format), and the Doc
+    id/url are persisted on the row."""
+    if not settings.google_apps_script_url:
+        raise HTTPException(status_code=503, detail="publish_not_configured")
+
+    supabase = get_supabase()
+    page = get_page(page_id)  # 404s if missing
+
+    client_res = (
+        supabase.table("clients")
+        .select("name, google_drive_folder_id")
+        .eq("id", page["client_id"])
+        .single()
+        .execute()
+    )
+    if not client_res.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    folder_id = client_res.data.get("google_drive_folder_id")
+    if not folder_id:
+        raise HTTPException(status_code=422, detail="missing_google_drive_folder_id")
+
+    markdown = html_to_markdown(page.get("content_html") or "")
+    if not markdown.strip():
+        raise HTTPException(status_code=422, detail="page_is_empty")
+
+    title = page.get("page_title") or f"{page.get('keyword', '')} — {client_res.data['name']}"
+    body = {"folder_id": folder_id, "title": title, "content": markdown}
+
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
+            response = await http.post(settings.google_apps_script_url, json=body)
+            response.raise_for_status()
+            result = response.json()
+    except httpx.HTTPStatusError as exc:
+        logger.error("local_seo.apps_script_http_error",
+                     extra={"status": exc.response.status_code, "body": exc.response.text[:300]})
+        raise HTTPException(status_code=502, detail="apps_script_http_error") from exc
+    except Exception as exc:
+        logger.error("local_seo.apps_script_call_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=502, detail="apps_script_call_failed") from exc
+
+    if not result.get("success"):
+        raise HTTPException(status_code=502, detail=f"apps_script_returned_error: {result.get('error', 'unknown')}")
+
+    doc_id, doc_url = result.get("doc_id"), result.get("doc_url")
+    supabase.table("local_seo_pages").update({
+        "published_doc_id": doc_id,
+        "published_doc_url": doc_url,
+        "published_at": "now()",
+    }).eq("id", page_id).execute()
+    logger.info("local_seo.page_published", extra={"page_id": page_id, "doc_id": doc_id, "user_id": user_id})
+
+    return {"success": True, "doc_id": doc_id, "doc_url": doc_url}

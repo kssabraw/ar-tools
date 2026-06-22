@@ -57,6 +57,9 @@ export function LocalSeoContent() {
   const [runAnalysis, setRunAnalysis] = useState<boolean | null>(null)
   // Bypass the 14-day shared SERP-analysis cache and re-scrape competitors.
   const [forceRefresh, setForceRefresh] = useState(false)
+  // Phase 3 — mirror an existing page's structure. Blank → the client's saved default.
+  const [pageTemplateUrl, setPageTemplateUrl] = useState('')
+  const [savingTemplateDefault, setSavingTemplateDefault] = useState(false)
   const [error, setError] = useState('')
   const [check, setCheck] = useState<CheckState>({ status: 'idle' })
   const [scanning, setScanning] = useState(false)
@@ -100,7 +103,7 @@ export function LocalSeoContent() {
     setView({ kind: 'creating' })
     startTicker()
     try {
-      const page = await localSeoApi.generate(clientId, { keyword: kw, location: location.trim(), location_code: locationCode, run_analysis: runAnalysis, force_refresh: forceRefresh })
+      const page = await localSeoApi.generate(clientId, { keyword: kw, location: location.trim(), location_code: locationCode, run_analysis: runAnalysis, force_refresh: forceRefresh, page_template_url: pageTemplateUrl.trim() || null })
       refreshSaved()
       setView({ kind: 'generated', page, isNew: true, prevScore: null })
     } catch (e) {
@@ -146,6 +149,19 @@ export function LocalSeoContent() {
       setError(e instanceof Error ? e.message : 'Analysis failed')
     } finally {
       setAnalyzing(false)
+    }
+  }
+
+  const handleSaveTemplateDefault = async () => {
+    setSavingTemplateDefault(true)
+    setError('')
+    try {
+      await localSeoApi.setPageTemplateDefault(clientId, pageTemplateUrl.trim() || null)
+      await queryClient.invalidateQueries({ queryKey: ['client', clientId] })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save default')
+    } finally {
+      setSavingTemplateDefault(false)
     }
   }
 
@@ -289,6 +305,32 @@ export function LocalSeoContent() {
             <p style={{ fontSize: 12, color: '#94a3b8', margin: '6px 0 0' }}>
               Pick a suggestion so the location is recognized — free-typed areas that don’t match will be rejected.
             </p>
+          </div>
+
+          {/* Page template (Phase 3) — mirror an existing page's structure */}
+          <div>
+            <label style={label}>Mirror an existing page’s structure (optional)</label>
+            <input
+              style={input}
+              value={pageTemplateUrl}
+              onChange={e => setPageTemplateUrl(e.target.value)}
+              placeholder={client?.local_seo_page_template_url || 'https://example.com/a-page-to-mirror'}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 6, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                {client?.local_seo_page_template_url
+                  ? <>Client default: {client.local_seo_page_template_url} — leave blank to use it.</>
+                  : 'The new page will follow this page’s section layout. Leave blank for the standard structure.'}
+              </span>
+              <button
+                type="button"
+                onClick={handleSaveTemplateDefault}
+                disabled={savingTemplateDefault}
+                style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#6366f1' }}
+              >
+                {savingTemplateDefault ? 'Saving…' : 'Save as client default'}
+              </button>
+            </div>
           </div>
 
           {/* Required analysis choice */}

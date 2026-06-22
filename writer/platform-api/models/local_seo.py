@@ -22,6 +22,15 @@ class LocalSeoGenerateRequest(BaseModel):
     run_analysis: bool
     # Bypass the shared SERP-analysis cache and re-scrape competitors.
     force_refresh: bool = False
+    # Phase 3 — mirror this reference page's structure. Falls back to the
+    # client's saved default when omitted.
+    page_template_url: Optional[str] = None
+
+
+class PageTemplateDefaultRequest(BaseModel):
+    """Set/clear the client's default Local SEO page-template URL."""
+
+    page_template_url: Optional[str] = None
 
 
 class LocationSuggestion(BaseModel):
@@ -109,6 +118,9 @@ class LocalSeoPageDetail(BaseModel):
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None
+    published_doc_url: Optional[str] = None
+    published_doc_id: Optional[str] = None
+    published_at: Optional[str] = None
     created_at: str
     updated_at: str
 
