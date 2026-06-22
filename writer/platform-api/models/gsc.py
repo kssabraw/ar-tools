@@ -39,6 +39,13 @@ class ServiceAccountInfo(BaseModel):
     email: str
 
 
+class BackfillResponse(BaseModel):
+    property_id: UUID
+    status: str
+    start_date: str
+    end_date: str
+
+
 class SyncRun(BaseModel):
     id: UUID
     property_id: UUID

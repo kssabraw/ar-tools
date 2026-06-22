@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     gsc_repull_days: int = 3
     gsc_ingest_hour_utc: int = 8
     gsc_scheduler_poll_interval_seconds: int = 300
+    # One-time historical backfill window. GSC retains ~16 months; pull it all so
+    # the Supabase store keeps it forever (the core value-add — PRD §10).
+    gsc_backfill_days: int = 480
     # Weekly query×page ingest window (canonical-URL resolution + Pages view).
     gsc_page_window_days: int = 30
     # Striking-distance discovery: queries averaging in this position band (and

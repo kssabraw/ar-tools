@@ -11,14 +11,17 @@ manage (mirrors clients). All DB access uses the service-role client.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from uuid import UUID
+
+from config import settings
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.gsc import (
+    BackfillResponse,
     GscProperty,
     GscPropertyCreateRequest,
     IngestResponse,
@@ -168,6 +171,51 @@ async def trigger_ingest(
         status=result.status,
         rows=result.rows,
         error=result.error,
+    )
+
+
+@router.post("/gsc-properties/{property_id}/backfill", response_model=BackfillResponse)
+async def trigger_backfill(
+    property_id: UUID, auth: dict = Depends(require_admin)
+) -> BackfillResponse:
+    """Queue a one-time historical pull (~16 months) so the store keeps GSC data
+    forever. Runs in the background via the job worker (admin)."""
+    supabase = get_supabase()
+    found = (
+        supabase.table("gsc_properties").select("id, access_status").eq("id", str(property_id)).limit(1).execute()
+    )
+    if not found.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    if found.data[0]["access_status"] != "ok":
+        raise HTTPException(status_code=422, detail="property_not_verified")
+
+    end = date.today()
+    start = end - timedelta(days=settings.gsc_backfill_days)
+    # Dedupe: don't stack backfills if one is already queued/running.
+    pending = (
+        supabase.table("async_jobs")
+        .select("id")
+        .eq("job_type", "gsc_ingest")
+        .eq("entity_id", str(property_id))
+        .in_("status", ["pending", "running"])
+        .limit(1)
+        .execute()
+    )
+    if not pending.data:
+        supabase.table("async_jobs").insert(
+            {
+                "job_type": "gsc_ingest",
+                "entity_id": str(property_id),
+                "payload": {
+                    "property_id": str(property_id),
+                    "start_date": start.isoformat(),
+                    "end_date": end.isoformat(),
+                },
+            }
+        ).execute()
+    return BackfillResponse(
+        property_id=property_id, status="queued",
+        start_date=start.isoformat(), end_date=end.isoformat(),
     )
 
 

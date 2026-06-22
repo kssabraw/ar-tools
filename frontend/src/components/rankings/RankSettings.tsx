@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Clock, Copy, Globe, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Check, Clock, Copy, Globe, History, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import type {
   GscProperty, IngestResponse, SyncRun, VerifyAccessResponse,
@@ -197,6 +197,10 @@ function SyncStatus({ propertyId, isAdmin }: { propertyId: string; isAdmin: bool
     mutationFn: () => api.post<IngestResponse>(`/gsc-properties/${propertyId}/ingest`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] }),
   })
+  const backfillMut = useMutation({
+    mutationFn: () => api.post(`/gsc-properties/${propertyId}/backfill`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] }),
+  })
   const latest = runs?.[0]
   return (
     <div style={syncStrip}>
@@ -215,10 +219,21 @@ function SyncStatus({ propertyId, isAdmin }: { propertyId: string; isAdmin: bool
         )}
       </div>
       {isAdmin && (
-        <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
-          onClick={() => ingestMut.mutate()} disabled={ingestMut.isPending}>
-          <RefreshCw size={13} /> {ingestMut.isPending ? 'Syncing…' : 'Sync now'}
-        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
+            onClick={() => ingestMut.mutate()} disabled={ingestMut.isPending}>
+            <RefreshCw size={13} /> {ingestMut.isPending ? 'Syncing…' : 'Sync now'}
+          </button>
+          <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
+            title="Pull ~16 months of history in the background"
+            onClick={() => {
+              if (confirm('Backfill ~16 months of Search Console history? This runs in the background and may take a few minutes.'))
+                backfillMut.mutate()
+            }}
+            disabled={backfillMut.isPending || backfillMut.isSuccess}>
+            <History size={13} /> {backfillMut.isSuccess ? 'Backfill queued' : 'Backfill history'}
+          </button>
+        </div>
       )}
     </div>
   )
