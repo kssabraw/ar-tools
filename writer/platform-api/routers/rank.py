@@ -28,11 +28,12 @@ from models.rank import (
     MaterializeResponse,
     OverviewResponse,
     PagesResponse,
+    StrikingDistanceResponse,
     TrackedKeywordCreateRequest,
     TrackedKeywordUpdateRequest,
     TrendPoint,
 )
-from services import dataforseo_rank, keyword_market, rank_materialize, rank_status
+from services import dataforseo_rank, gsc_service, keyword_market, rank_materialize, rank_status
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,8 @@ def _build_summaries(supabase, client_id: str, keyword_rows: list[dict], today: 
                 est_monthly_value=keyword_market.estimate_monthly_value(
                     m.get("search_volume"), position, m.get("cpc")
                 ),
+                index_status=k.get("index_status"),
+                index_checked_at=k.get("index_checked_at"),
                 **s,
             )
         )
@@ -259,6 +262,59 @@ async def get_overview(client_id: UUID, auth: dict = Depends(require_auth)) -> O
         at_risk=at_risk,
         hero=hero,
     )
+
+
+@router.get("/clients/{client_id}/rank/striking-distance", response_model=StrikingDistanceResponse)
+async def get_striking_distance(client_id: UUID, auth: dict = Depends(require_auth)) -> StrikingDistanceResponse:
+    """Untracked GSC queries in the page-2 position band (opportunities)."""
+    supabase = get_supabase()
+    property_id = rank_materialize._verified_property_id(supabase, str(client_id))
+    if not property_id:
+        return StrikingDistanceResponse(gsc_connected=False, keywords=[])
+
+    tracked = (
+        supabase.table("tracked_keywords").select("keyword").eq("client_id", str(client_id)).execute()
+    ).data or []
+    tracked_lower = {t["keyword"].lower() for t in tracked}
+
+    cutoff = date.fromordinal(date.today().toordinal() - settings.gsc_page_window_days).isoformat()
+    rows = (
+        supabase.table("gsc_query_daily")
+        .select("query, clicks, impressions, position")
+        .eq("property_id", property_id)
+        .gte("date", cutoff)
+        .execute()
+    )
+    opportunities = rank_status.aggregate_striking_distance(
+        rows.data or [], tracked_lower, settings.striking_distance_min, settings.striking_distance_max
+    )[:50]
+    return StrikingDistanceResponse(gsc_connected=True, keywords=opportunities)
+
+
+@router.post("/tracked-keywords/{keyword_id}/check-index", response_model=KeywordSummary)
+async def check_index(keyword_id: UUID, auth: dict = Depends(require_admin)) -> KeywordSummary:
+    """Run URL Inspection now on a keyword's canonical page (admin)."""
+    supabase = get_supabase()
+    found = supabase.table("tracked_keywords").select("*").eq("id", str(keyword_id)).limit(1).execute()
+    if not found.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    k = found.data[0]
+    prop = rank_materialize._verified_property(supabase, k["client_id"])
+    if not prop or not k.get("canonical_url"):
+        raise HTTPException(status_code=422, detail="needs_gsc_property_and_canonical_url")
+    try:
+        site_url = gsc_service.normalize_site_url(prop["site_url"], prop["property_type"])
+        result = gsc_service.inspect_url(site_url, k["canonical_url"])
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"url_inspection_failed: {exc}")
+    updated = supabase.table("tracked_keywords").update(
+        {
+            "index_status": result["index_status"],
+            "index_coverage": result.get("coverage_state"),
+            "index_checked_at": "now()",
+        }
+    ).eq("id", str(keyword_id)).execute()
+    return _build_summaries(supabase, k["client_id"], [updated.data[0]], date.today())[0]
 
 
 @router.get("/clients/{client_id}/rank/pages", response_model=PagesResponse)

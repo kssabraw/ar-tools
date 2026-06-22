@@ -201,6 +201,37 @@ def fetch_search_analytics(
     return rows
 
 
+def classify_index_status(verdict: Optional[str]) -> str:
+    """Map a URL Inspection verdict to our index_status enum."""
+    if verdict == "PASS":
+        return "indexed"
+    if verdict in ("FAIL", "NEUTRAL"):
+        return "not_indexed"
+    return "unknown"
+
+
+def inspect_url(site_url: str, inspection_url: str) -> dict:
+    """Run GSC URL Inspection for a page; return index status + coverage state.
+
+    `site_url` must be the property the page belongs to (same format rules as
+    elsewhere). Raises on API error so the caller can skip/record it.
+    """
+    client = build_search_console_client()
+    resp = (
+        client.urlInspection()
+        .index()
+        .inspect(body={"inspectionUrl": inspection_url, "siteUrl": site_url})
+        .execute()
+    )
+    result = (resp.get("inspectionResult") or {}).get("indexStatusResult") or {}
+    verdict = result.get("verdict")
+    return {
+        "index_status": classify_index_status(verdict),
+        "coverage_state": result.get("coverageState"),
+        "verdict": verdict,
+    }
+
+
 def verify_property_access(site_url: str, property_type: PropertyType) -> VerifyResult:
     """Run a test query against a property and classify the result.
 

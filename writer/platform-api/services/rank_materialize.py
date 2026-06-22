@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from config import settings
@@ -102,6 +102,19 @@ def resolve_canonical_pages(page_rows: list[dict]) -> dict[str, str]:
     return out
 
 
+def needs_index_check(
+    status: str, canonical_url: Optional[str], last_checked: Optional[str], today: date, recheck_days: int
+) -> bool:
+    """Only inspect a keyword's page when it's flagged deindex_risk, has a
+    canonical URL, and hasn't been checked within the recheck window (quota)."""
+    if status != "deindex_risk" or not canonical_url:
+        return False
+    if not last_checked:
+        return True
+    checked = date.fromisoformat(last_checked[:10])
+    return (today.toordinal() - checked.toordinal()) >= recheck_days
+
+
 def classify_source(merged_rows: list[dict]) -> str:
     """tracked_keywords.source from what data the keyword actually has."""
     has_gsc = any(r.get("gsc_position") is not None for r in merged_rows)
@@ -116,17 +129,22 @@ def classify_source(merged_rows: list[dict]) -> str:
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
-def _verified_property_id(supabase, client_id: str) -> Optional[str]:
+def _verified_property(supabase, client_id: str) -> Optional[dict]:
     res = (
         supabase.table("gsc_properties")
-        .select("id")
+        .select("id, site_url, property_type")
         .eq("client_id", client_id)
         .eq("access_status", "ok")
         .order("created_at")
         .limit(1)
         .execute()
     )
-    return res.data[0]["id"] if res.data else None
+    return res.data[0] if res.data else None
+
+
+def _verified_property_id(supabase, client_id: str) -> Optional[str]:
+    prop = _verified_property(supabase, client_id)
+    return prop["id"] if prop else None
 
 
 def materialize_client(client_id: str, today: Optional[date] = None) -> MaterializeResult:
@@ -139,7 +157,7 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
 
     keywords = (
         supabase.table("tracked_keywords")
-        .select("id, keyword, canonical_url, canonical_url_locked")
+        .select("id, keyword, canonical_url, canonical_url_locked, index_checked_at")
         .eq("client_id", client_id)
         .eq("active", True)
         .execute()
@@ -149,9 +167,11 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
     keyword_ids = [k["id"] for k in keywords.data]
 
     # GSC data (only if the client has a verified property).
-    property_id = _verified_property_id(supabase, client_id)
+    prop_row = _verified_property(supabase, client_id)
+    property_id = prop_row["id"] if prop_row else None
     gsc_index: dict[tuple[str, str], dict] = {}
     canonical_by_query: dict[str, str] = {}
+    to_inspect: list[tuple[str, str]] = []  # (keyword_id, canonical_url)
     if property_id:
         raw = (
             supabase.table("gsc_query_daily")
@@ -211,21 +231,59 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
                 "status_updated_at": now_iso, "updated_at": now_iso,
             }
             # Resolve canonical URL unless the client pinned it.
+            canonical = kw.get("canonical_url")
             if not kw.get("canonical_url_locked"):
                 resolved = canonical_by_query.get(kw["keyword"].lower())
                 if resolved and resolved != kw.get("canonical_url"):
                     update["canonical_url"] = resolved
+                    canonical = resolved
 
             supabase.table("tracked_keywords").update(update).eq("id", kw["id"]).execute()
+
+            # Queue a URL-Inspection confirmation for newly/again deindex-risk pages.
+            if property_id and needs_index_check(
+                status, canonical, kw.get("index_checked_at"), today, settings.url_inspection_recheck_days
+            ):
+                to_inspect.append((kw["id"], canonical))
     except Exception as exc:
         logger.error("rank_materialize_failed", extra={"client_id": client_id, "error": str(exc)})
         return MaterializeResult(status="failed", keywords=len(keywords.data), rows=total_rows, error=str(exc))
+
+    if to_inspect and prop_row:
+        _confirm_deindex(supabase, prop_row, to_inspect)
 
     logger.info(
         "rank_materialize_complete",
         extra={"client_id": client_id, "keywords": len(keywords.data), "rows": total_rows},
     )
     return MaterializeResult(status="ok", keywords=len(keywords.data), rows=total_rows)
+
+
+_MAX_INSPECTIONS_PER_RUN = 10  # stay well under the daily per-property quota
+
+
+def _confirm_deindex(supabase, prop_row: dict, to_inspect: list[tuple[str, str]]) -> None:
+    """Run URL Inspection on flagged keywords' canonical pages and store results."""
+    from services import gsc_service
+
+    try:
+        site_url = gsc_service.normalize_site_url(prop_row["site_url"], prop_row["property_type"])
+    except ValueError:
+        return
+    now_iso = datetime.now(timezone.utc).isoformat()
+    for keyword_id, url in to_inspect[:_MAX_INSPECTIONS_PER_RUN]:
+        try:
+            result = gsc_service.inspect_url(site_url, url)
+        except Exception as exc:
+            logger.warning("url_inspection_failed", extra={"keyword_id": keyword_id, "error": str(exc)})
+            continue
+        supabase.table("tracked_keywords").update(
+            {
+                "index_status": result["index_status"],
+                "index_coverage": result.get("coverage_state"),
+                "index_checked_at": now_iso,
+            }
+        ).eq("id", keyword_id).execute()
 
 
 def enqueue_materialize(client_id: str) -> None:

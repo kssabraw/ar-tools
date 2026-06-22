@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus } from 'lucide-react'
+import { ChevronDown, ChevronRight, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { KeywordStatus, KeywordSummary, KeywordTrendline } from '../../lib/types'
 import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
@@ -164,6 +164,10 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
       queryClient.invalidateQueries({ queryKey: ['rank-overview', clientId] })
     },
   })
+  const checkIndexMut = useMutation({
+    mutationFn: () => api.post(`/tracked-keywords/${k.id}/check-index`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rank-keywords', clientId] }),
+  })
 
   const colSpan = 7 + (showGsc ? 7 : 0) + (isAdmin ? 1 : 0)
   // DataForSEO keywords plot tracked_rank; GSC keywords plot gsc_position.
@@ -217,6 +221,8 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
       {open && (
         <tr>
           <td colSpan={colSpan} style={{ padding: 16, background: '#fafbfc', borderBottom: '1px solid #f1f5f9' }}>
+            {k.status === 'deindex_risk' && <DeindexBanner k={k} isAdmin={isAdmin}
+              checking={checkIndexMut.isPending} onCheck={() => checkIndexMut.mutate()} />}
             <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>
               {isDf
                 ? 'DataForSEO live SERP rank — weekly checks (lower is better; inverted axis)'
@@ -227,6 +233,35 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
         </tr>
       )}
     </>
+  )
+}
+
+// For a deindex_risk keyword, surface the URL-Inspection verdict so the message
+// becomes "this page is deindexed" rather than just "rankings look low".
+function DeindexBanner({ k, isAdmin, checking, onCheck }: {
+  k: KeywordSummary; isAdmin: boolean; checking: boolean; onCheck: () => void
+}) {
+  const confirmed = k.index_status === 'not_indexed'
+  const indexed = k.index_status === 'indexed'
+  const bg = confirmed ? '#fef2f2' : indexed ? '#f0fdf4' : '#fffbeb'
+  const border = confirmed ? '#fecaca' : indexed ? '#bbf7d0' : '#fde68a'
+  const color = confirmed ? '#b91c1c' : indexed ? '#15803d' : '#b45309'
+  return (
+    <div style={{ background: bg, border: `1px solid ${border}`, borderRadius: 8, padding: '10px 12px', marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+      {confirmed ? <ShieldAlert size={16} color={color} /> : indexed ? <ShieldCheck size={16} color={color} /> : <ShieldAlert size={16} color={color} />}
+      <div style={{ flex: 1, fontSize: 12, color, lineHeight: 1.5 }}>
+        {confirmed
+          ? <>Confirmed: Google reports this page is <strong>not indexed</strong>{k.index_checked_at ? ` (checked ${new Date(k.index_checked_at).toLocaleDateString()})` : ''}. This is a deindexing, not just a ranking dip.</>
+          : indexed
+            ? <>URL Inspection says the page is <strong>indexed</strong> — the disappearance is a ranking drop, not deindexing.</>
+            : <>Sustained disappearance after an established baseline — possible deindexing. Run a URL Inspection to confirm.</>}
+      </div>
+      {isAdmin && k.canonical_url && (
+        <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }} onClick={onCheck} disabled={checking}>
+          {checking ? 'Checking…' : 'Check index'}
+        </button>
+      )}
+    </div>
   )
 }
 

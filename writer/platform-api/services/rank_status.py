@@ -175,6 +175,48 @@ def compute_keyword_summary(rows: Sequence[dict], today: date, coverage_days: in
     return base
 
 
+def aggregate_striking_distance(
+    query_rows: Sequence[dict],
+    tracked_lower: set,
+    min_pos: float,
+    max_pos: float,
+) -> list[dict]:
+    """Page-2 opportunities: untracked queries averaging in [min_pos, max_pos].
+
+    `query_rows` are gsc_query_daily records (query, clicks, impressions,
+    position). Aggregates per query (impression-weighted average position),
+    excludes already-tracked keywords, and returns those in the striking-distance
+    band, ordered by impressions desc.
+    """
+    by_query: dict[str, dict] = {}
+    for row in query_rows:
+        q = str(row["query"])
+        b = by_query.setdefault(q, {"clicks": 0, "impressions": 0, "pos_num": 0.0, "pos_den": 0})
+        clicks = int(row.get("clicks", 0) or 0)
+        impressions = int(row.get("impressions", 0) or 0)
+        b["clicks"] += clicks
+        b["impressions"] += impressions
+        pos = row.get("position")
+        if pos is not None and impressions:
+            b["pos_num"] += pos * impressions
+            b["pos_den"] += impressions
+
+    out = []
+    for q, b in by_query.items():
+        if q.lower() in tracked_lower or not b["pos_den"]:
+            continue
+        avg_pos = b["pos_num"] / b["pos_den"]
+        if min_pos <= avg_pos <= max_pos:
+            out.append({
+                "query": q,
+                "avg_position": round(avg_pos, 1),
+                "clicks": b["clicks"],
+                "impressions": b["impressions"],
+            })
+    out.sort(key=lambda r: r["impressions"], reverse=True)
+    return out
+
+
 def aggregate_pages(page_rows: Sequence[dict]) -> list[dict]:
     """Pivot gsc_query_page_daily by page for the Pages view.
 

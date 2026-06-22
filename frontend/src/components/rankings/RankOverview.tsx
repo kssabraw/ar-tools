@@ -1,15 +1,15 @@
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { AlertTriangle, MousePointerClick, Eye, BarChart3, Hash } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, MousePointerClick, Eye, BarChart3, Hash, Plus, Target } from 'lucide-react'
 import { api } from '../../lib/api'
-import type { KeywordSummary, RankOverview as Overview } from '../../lib/types'
-import { card } from '../localseo/shared'
+import type { KeywordSummary, RankOverview as Overview, StrikingDistanceResponse } from '../../lib/types'
+import { card, outlineBtn } from '../localseo/shared'
 import { STATUS_META, statusRank } from './status'
 import { Sparkline } from './Sparkline'
 import { PositionChart } from './PositionChart'
 import { MetricsChart } from './MetricsChart'
 
-export function RankOverview({ clientId }: { clientId: string }) {
+export function RankOverview({ clientId, isAdmin }: { clientId: string; isAdmin: boolean }) {
   const { data: ov } = useQuery<Overview>({
     queryKey: ['rank-overview', clientId],
     queryFn: () => api.get<Overview>(`/clients/${clientId}/rank/overview`),
@@ -85,6 +85,9 @@ export function RankOverview({ clientId }: { clientId: string }) {
         </div>
       </>}
 
+      {/* Striking distance — page-2 opportunities (GSC only) */}
+      {gsc && <StrikingDistance clientId={clientId} isAdmin={isAdmin} />}
+
       {/* Triage list */}
       <h3 style={{ ...chartTitle, marginBottom: 10 }}>Needs attention</h3>
       <div style={{ ...card, padding: 0 }}>
@@ -103,6 +106,48 @@ export function RankOverview({ clientId }: { clientId: string }) {
             </div>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+// Untracked queries already ranking on page 2 — quick wins to start tracking.
+function StrikingDistance({ clientId, isAdmin }: { clientId: string; isAdmin: boolean }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<StrikingDistanceResponse>({
+    queryKey: ['rank-striking', clientId],
+    queryFn: () => api.get<StrikingDistanceResponse>(`/clients/${clientId}/rank/striking-distance`),
+  })
+  const trackMut = useMutation({
+    mutationFn: (q: string) => api.post(`/clients/${clientId}/rank/keywords`, { keywords: [q] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rank-keywords', clientId] })
+      queryClient.invalidateQueries({ queryKey: ['rank-striking', clientId] })
+      queryClient.invalidateQueries({ queryKey: ['rank-overview', clientId] })
+    },
+  })
+  if (!data?.keywords.length) return null
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <h3 style={{ ...chartTitle, marginBottom: 2, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Target size={14} color="#6366f1" /> Striking distance
+      </h3>
+      <p style={chartHint}>Queries already ranking on page 2 (positions 8–20) you’re not tracking yet — quick wins.</p>
+      <div style={{ ...card, padding: 0 }}>
+        {data.keywords.slice(0, 8).map((k, i) => (
+          <div key={k.query} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 14px', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+            <span style={{ flex: 1, fontSize: 13, color: '#0f172a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.query}</span>
+            <span style={{ fontSize: 12, color: '#64748b', width: 52, textAlign: 'right' }}>pos {k.avg_position.toFixed(1)}</span>
+            <span style={{ fontSize: 12, color: '#94a3b8', width: 72, textAlign: 'right' }}>{k.impressions.toLocaleString()} impr</span>
+            {isAdmin && (
+              <button style={{ ...outlineBtn, padding: '4px 10px', fontSize: 12 }}
+                onClick={() => trackMut.mutate(k.query)} disabled={trackMut.isPending}>
+                <Plus size={12} /> Track
+              </button>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   )

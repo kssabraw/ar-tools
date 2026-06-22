@@ -127,8 +127,22 @@ export interface KeywordSummary {
   search_volume: number | null
   competition: string | null
   est_monthly_value: number | null
+  index_status: 'indexed' | 'not_indexed' | 'unknown' | null
+  index_checked_at: string | null
   sparkline: (number | null)[]
   direction: 'up' | 'down' | 'flat' | null
+}
+
+export interface StrikingKeyword {
+  query: string
+  avg_position: number
+  clicks: number
+  impressions: number
+}
+
+export interface StrikingDistanceResponse {
+  gsc_connected: boolean
+  keywords: StrikingKeyword[]
 }
 
 export interface TrendPoint {

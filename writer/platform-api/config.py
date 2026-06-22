@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # not already tracked) are page-2 opportunities.
     striking_distance_min: float = 8.0
     striking_distance_max: float = 20.0
+    # URL Inspection (deindex confirmation) has a daily per-property quota, so
+    # re-check a flagged keyword's canonical page at most this often.
+    url_inspection_recheck_days: int = 3
     # M3 materialize: the trailing window (days) of the per-keyword-per-day axis.
     # Covers all rolling windows (max 90d) + margin; the full 16-month history
     # stays in gsc_query_daily.

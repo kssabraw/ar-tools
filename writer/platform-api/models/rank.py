@@ -49,6 +49,9 @@ class KeywordSummary(BaseModel):
     search_volume: Optional[int] = None
     competition: Optional[str] = None
     est_monthly_value: Optional[float] = None
+    # URL Inspection confirmation for deindex_risk keywords.
+    index_status: Optional[Literal["indexed", "not_indexed", "unknown"]] = None
+    index_checked_at: Optional[str] = None
     # Recent positions (None entries are gaps) for the row sparkline.
     sparkline: list[Optional[float]] = Field(default_factory=list)
     direction: Optional[Literal["up", "down", "flat"]] = None
@@ -89,6 +92,18 @@ class OverviewResponse(BaseModel):
     avg_position_30d: Optional[float] = None
     at_risk: int
     hero: list[HeroPoint] = Field(default_factory=list)
+
+
+class StrikingKeyword(BaseModel):
+    query: str
+    avg_position: float
+    clicks: int
+    impressions: int
+
+
+class StrikingDistanceResponse(BaseModel):
+    gsc_connected: bool
+    keywords: list[StrikingKeyword] = Field(default_factory=list)
 
 
 class PageRow(BaseModel):
