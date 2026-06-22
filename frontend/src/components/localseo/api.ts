@@ -19,7 +19,13 @@ import type {
 export const localSeoApi = {
   generate: (
     clientId: string,
-    body: { keyword: string; location: string; location_code?: number | null; run_analysis: boolean },
+    body: {
+      keyword: string
+      location: string
+      location_code?: number | null
+      run_analysis: boolean
+      force_refresh?: boolean
+    },
   ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body),
 
   // Area-field typeahead — DataForSEO location suggestions scoped to the client's country.
@@ -29,8 +35,10 @@ export const localSeoApi = {
         (country ? `&country=${encodeURIComponent(country)}` : ''),
     ),
 
-  analyze: (clientId: string, body: { keyword: string; location: string; location_code?: number | null }) =>
-    api.stream<AnalysisResult>(`/clients/${clientId}/local-seo/analyze`, body),
+  analyze: (
+    clientId: string,
+    body: { keyword: string; location: string; location_code?: number | null; force_refresh?: boolean },
+  ) => api.stream<AnalysisResult>(`/clients/${clientId}/local-seo/analyze`, body),
 
   findPage: (clientId: string, body: { keyword: string; location: string }) =>
     api.stream<FindPageResult>(`/clients/${clientId}/local-seo/find-page`, body),

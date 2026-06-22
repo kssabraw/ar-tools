@@ -75,7 +75,9 @@ async def test_generate_page_persists_row():
         "composite_score": 88.0,
         "content_gaps": [],
     }
+    cached_analysis = {"serp_urls": ["https://a.com"], "google_entities": []}
     with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.analysis_cache, "get", return_value=cached_analysis) as cache_get, \
          patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
         # location_code supplied → resolve_location short-circuits (no network).
         page = await local_seo_service.generate_page(
@@ -87,6 +89,9 @@ async def test_generate_page_persists_row():
     assert stream.await_args[0][0] == "/generate-page"
     # the resolved location_code is forwarded to the nlp generate payload
     assert stream.await_args[0][1]["location_code"] == 1013962
+    # run_analysis=True → the cached analysis is fetched and passed to nlp
+    cache_get.assert_called_once()
+    assert stream.await_args[0][1]["serp_analysis"] == cached_analysis
     persisted = supabase.table.return_value.insert.call_args[0][0]
     assert persisted["mode"] == "generate"
     assert persisted["composite_score"] == 88.0
@@ -164,3 +169,50 @@ async def test_related_pages_proxies_business_fields():
     assert path == "/related-pages"
     assert payload["business_name"] == "Joe's Plumbing Co"
     assert payload["website"] == "https://joesplumbing.com"
+
+
+@pytest.mark.asyncio
+async def test_analyze_returns_cache_hit_without_calling_nlp():
+    supabase = _supabase_for_client(_client_row())
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.analysis_cache, "get", return_value={"cached": True}) as cache_get, \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock()) as post:
+        out = await local_seo_service.analyze(
+            "client-1", "roof restoration", "Melbourne,Victoria,Australia", 1000567
+        )
+    assert out == {"cached": True}
+    cache_get.assert_called_once()
+    post.assert_not_awaited()  # cache hit → no nlp scrape
+
+
+@pytest.mark.asyncio
+async def test_analyze_miss_calls_nlp_and_stores():
+    supabase = _supabase_for_client(_client_row())
+    fresh = {"serp_urls": [], "google_entities": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.analysis_cache, "get", return_value=None), \
+         patch.object(local_seo_service.analysis_cache, "store") as store, \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=fresh)) as post:
+        out = await local_seo_service.analyze(
+            "client-1", "roof restoration", "Melbourne,Victoria,Australia", 1000567
+        )
+    assert out == fresh
+    post.assert_awaited_once()
+    assert post.await_args[0][0] == "/analyze"
+    store.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_analyze_force_refresh_bypasses_cache():
+    supabase = _supabase_for_client(_client_row())
+    fresh = {"serp_urls": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.analysis_cache, "get") as cache_get, \
+         patch.object(local_seo_service.analysis_cache, "store"), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=fresh)) as post:
+        out = await local_seo_service.analyze(
+            "client-1", "roof restoration", "Melbourne,Victoria,Australia", 1000567, force_refresh=True
+        )
+    assert out == fresh
+    cache_get.assert_not_called()  # force_refresh skips the cache read
+    post.assert_awaited_once()
