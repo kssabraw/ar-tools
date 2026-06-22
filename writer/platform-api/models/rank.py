@@ -52,6 +52,9 @@ class KeywordSummary(BaseModel):
     # URL Inspection confirmation for deindex_risk keywords.
     index_status: Optional[Literal["indexed", "not_indexed", "unknown"]] = None
     index_checked_at: Optional[str] = None
+    # How many distinct landing pages the keyword surfaces for (the "+N pages"
+    # chip); >1 means the keyword is split across pages.
+    page_count: int = 0
     # Recent positions (None entries are gaps) for the row sparkline.
     sparkline: list[Optional[float]] = Field(default_factory=list)
     direction: Optional[Literal["up", "down", "flat"]] = None
@@ -117,6 +120,20 @@ class PageRow(BaseModel):
 class PagesResponse(BaseModel):
     gsc_connected: bool
     pages: list[PageRow] = Field(default_factory=list)
+
+
+class KeywordPageRow(BaseModel):
+    page: str
+    clicks: int
+    impressions: int
+    avg_position: Optional[float] = None
+    is_canonical: bool = False
+
+
+class KeywordPagesResponse(BaseModel):
+    keyword: str
+    canonical_url: Optional[str] = None
+    pages: list[KeywordPageRow] = Field(default_factory=list)
 
 
 class MaterializeResponse(BaseModel):

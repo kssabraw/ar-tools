@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
-import type { KeywordStatus, KeywordSummary, KeywordTrendline } from '../../lib/types'
+import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse } from '../../lib/types'
 import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
 import { STATUS_META, statusRank } from './status'
 import { Sparkline } from './Sparkline'
@@ -156,6 +156,11 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
     queryFn: () => api.get<KeywordTrendline>(`/tracked-keywords/${k.id}/trendline`),
     enabled: open,
   })
+  const { data: pages } = useQuery<KeywordPagesResponse>({
+    queryKey: ['rank-kw-pages', k.id],
+    queryFn: () => api.get<KeywordPagesResponse>(`/tracked-keywords/${k.id}/pages`),
+    enabled: open && !isDf,
+  })
 
   const deleteMut = useMutation({
     mutationFn: () => api.delete<void>(`/tracked-keywords/${k.id}`),
@@ -186,9 +191,18 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
                 <span style={{ fontWeight: 600, color: '#0f172a' }}>{k.keyword}</span>
                 {isDf && <span style={srcBadge}>DataForSEO</span>}
               </div>
-              {k.canonical_url && (
-                <div style={{ fontSize: 11, color: '#94a3b8', maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {k.canonical_url}
+              {(k.canonical_url || k.page_count > 1) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, maxWidth: 320 }}>
+                  {k.canonical_url && (
+                    <span style={{ fontSize: 11, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {k.canonical_url}
+                    </span>
+                  )}
+                  {k.page_count > 1 && (
+                    <span style={pagesChip} title="Surfaces across multiple pages — expand for the breakdown">
+                      +{k.page_count - 1} {k.page_count - 1 === 1 ? 'page' : 'pages'}
+                    </span>
+                  )}
                 </div>
               )}
             </div>
@@ -229,10 +243,37 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
                 : 'GSC average position — full tracked range (gaps = days the keyword returned no data)'}
             </div>
             <PositionChart points={trendValues} />
+            {pages && pages.pages.length > 1 && <PageBreakdown pages={pages.pages} />}
           </td>
         </tr>
       )}
     </>
+  )
+}
+
+// Which landing pages a keyword surfaces for — flags the canonical page and
+// surfaces "split across pages" conflicts (PRD §8.5).
+function PageBreakdown({ pages }: { pages: KeywordPagesResponse['pages'] }) {
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 6 }}>
+        Landing pages this keyword surfaces for
+      </div>
+      <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+        {pages.map((p, i) => (
+          <div key={p.page} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: '#fff', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+            <a href={p.page} target="_blank" rel="noreferrer"
+              style={{ flex: 1, color: '#6366f1', textDecoration: 'none', fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {p.page}
+            </a>
+            {p.is_canonical && <span style={canonChip}>canonical</span>}
+            <span style={{ fontSize: 12, color: '#64748b', width: 64, textAlign: 'right' }}>{p.clicks.toLocaleString()} clk</span>
+            <span style={{ fontSize: 12, color: '#94a3b8', width: 72, textAlign: 'right' }}>{p.impressions.toLocaleString()} impr</span>
+            <span style={{ fontSize: 12, color: '#64748b', width: 48, textAlign: 'right' }}>{p.avg_position != null ? p.avg_position.toFixed(1) : '—'}</span>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -286,6 +327,8 @@ const td: React.CSSProperties = { padding: '10px 12px', textAlign: 'right', whit
 const tdLeft: React.CSSProperties = { ...td, textAlign: 'left' }
 const badge: React.CSSProperties = { borderRadius: 999, padding: '2px 9px', fontSize: 11, fontWeight: 600 }
 const srcBadge: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '#0369a1', background: '#e0f2fe', borderRadius: 4, padding: '1px 5px' }
+const pagesChip: React.CSSProperties = { flexShrink: 0, fontSize: 10, fontWeight: 600, color: '#7c3aed', background: '#f3e8ff', borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap' }
+const canonChip: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '#15803d', background: '#dcfce7', borderRadius: 4, padding: '1px 6px' }
 const todayBox: React.CSSProperties = { display: 'inline-block', minWidth: 22, border: '1px solid #e2e8f0', borderRadius: 5, padding: '1px 6px', fontWeight: 700, color: '#0f172a' }
 const emptyCard: React.CSSProperties = { ...card, color: '#64748b', fontSize: 13, lineHeight: 1.6 }
 const dfBanner: React.CSSProperties = { background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#0369a1', marginBottom: 14, lineHeight: 1.5 }

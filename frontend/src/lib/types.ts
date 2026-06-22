@@ -129,8 +129,23 @@ export interface KeywordSummary {
   est_monthly_value: number | null
   index_status: 'indexed' | 'not_indexed' | 'unknown' | null
   index_checked_at: string | null
+  page_count: number
   sparkline: (number | null)[]
   direction: 'up' | 'down' | 'flat' | null
+}
+
+export interface KeywordPageRow {
+  page: string
+  clicks: number
+  impressions: number
+  avg_position: number | null
+  is_canonical: boolean
+}
+
+export interface KeywordPagesResponse {
+  keyword: string
+  canonical_url: string | null
+  pages: KeywordPageRow[]
 }
 
 export interface StrikingKeyword {

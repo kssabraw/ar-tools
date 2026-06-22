@@ -25,6 +25,8 @@ from models.rank import (
     DataForSeoRefreshResponse,
     KeywordSummary,
     KeywordTrendline,
+    KeywordPagesResponse,
+    KeywordPageRow,
     MaterializeResponse,
     OverviewResponse,
     PagesResponse,
@@ -78,12 +80,31 @@ def _client_location_code(supabase, client_id: str) -> int:
     return dataforseo_rank.location_code_for(res.data[0]) if res.data else settings.dataforseo_default_location_code
 
 
+def _page_counts(supabase, client_id: str, keywords: list[str]) -> dict[str, int]:
+    """Distinct landing-page count per keyword (lowercased), from query×page data."""
+    property_id = rank_materialize._verified_property_id(supabase, client_id)
+    if not property_id or not keywords:
+        return {}
+    rows = (
+        supabase.table("gsc_query_page_daily")
+        .select("query, page")
+        .eq("property_id", property_id)
+        .in_("query", [k.lower() for k in keywords])
+        .execute()
+    ).data or []
+    pages_by_query: dict[str, set] = {}
+    for r in rows:
+        pages_by_query.setdefault(str(r["query"]).lower(), set()).add(r["page"])
+    return {q: len(pages) for q, pages in pages_by_query.items()}
+
+
 def _build_summaries(supabase, client_id: str, keyword_rows: list[dict], today: date) -> list[KeywordSummary]:
     metrics = _fetch_metrics(supabase, [k["id"] for k in keyword_rows])
     location_code = _client_location_code(supabase, client_id)
     market = keyword_market.fetch_cached_market(
         supabase, [k["keyword"] for k in keyword_rows], location_code
     )
+    page_counts = _page_counts(supabase, client_id, [k["keyword"] for k in keyword_rows])
 
     out: list[KeywordSummary] = []
     for k in keyword_rows:
@@ -111,6 +132,7 @@ def _build_summaries(supabase, client_id: str, keyword_rows: list[dict], today: 
                 ),
                 index_status=k.get("index_status"),
                 index_checked_at=k.get("index_checked_at"),
+                page_count=page_counts.get(k["keyword"].lower(), 0),
                 **s,
             )
         )
@@ -223,6 +245,39 @@ async def get_trendline(keyword_id: UUID, auth: dict = Depends(require_auth)) ->
         id=k["id"], keyword=k["keyword"], status=k["status"],
         canonical_url=k.get("canonical_url"), points=points,
     )
+
+
+@router.get("/tracked-keywords/{keyword_id}/pages", response_model=KeywordPagesResponse)
+async def get_keyword_pages(keyword_id: UUID, auth: dict = Depends(require_auth)) -> KeywordPagesResponse:
+    """The landing pages a keyword surfaces for (query×page breakdown)."""
+    supabase = get_supabase()
+    found = (
+        supabase.table("tracked_keywords")
+        .select("keyword, client_id, canonical_url")
+        .eq("id", str(keyword_id)).limit(1).execute()
+    )
+    if not found.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    k = found.data[0]
+    property_id = rank_materialize._verified_property_id(supabase, k["client_id"])
+    if not property_id:
+        return KeywordPagesResponse(keyword=k["keyword"], canonical_url=k.get("canonical_url"), pages=[])
+
+    rows = (
+        supabase.table("gsc_query_page_daily")
+        .select("query, page, clicks, impressions, position")
+        .eq("property_id", property_id)
+        .ilike("query", k["keyword"])
+        .execute()
+    )
+    pages = [
+        KeywordPageRow(
+            page=p["page"], clicks=p["clicks"], impressions=p["impressions"],
+            avg_position=p["avg_position"], is_canonical=(p["page"] == k.get("canonical_url")),
+        )
+        for p in rank_status.aggregate_pages(rows.data or [])
+    ]
+    return KeywordPagesResponse(keyword=k["keyword"], canonical_url=k.get("canonical_url"), pages=pages)
 
 
 @router.get("/clients/{client_id}/rank/overview", response_model=OverviewResponse)
