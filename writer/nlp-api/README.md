@@ -15,8 +15,8 @@ Python/FastAPI microservice powering the suite's **Local SEO Content** module
   `_log_usage_direct`, the `NLP_API_KEY` / `SUPABASE_*` env reads, and the
   `X-API-Key`/`Security`/`APIKeyHeader` imports.
 - **Cut endpoints** (per the v1 scope): `/analyze-business` (site-scrape ICP),
-  `/analyze-brand-voice` (site-scrape brand voice), `/check-rankability`
-  (keyword-worthiness advisory).
+  `/analyze-brand-voice` (site-scrape brand voice). _(The `/check-rankability`
+  map-pack report was later re-added — see below.)_
 - **Analysis is opt-in.** `/generate-page` now takes a required `run_analysis`
   bool. When no cached `serp_analysis` is supplied AND `run_analysis` is false,
   generation runs with **no competitor scrape**. When true, it runs the inline
@@ -27,7 +27,17 @@ Python/FastAPI microservice powering the suite's **Local SEO Content** module
 
 `/analyze`, `/health`, `/find-page-for-keyword`, `/score-page`,
 `/augment-page`, `/generate-page`, `/reoptimize-page`, `/reoptimize-section`,
-`/related-pages`, `/generate-social-posts`, `/generate-press-release`.
+`/related-pages`, `/generate-social-posts`, `/generate-press-release`,
+`/check-rankability`.
+
+> **`/check-rankability`** — deterministic 0–100 map-pack rankability report
+> (DataForSEO organic + Maps + Nominatim geocode; no LLM). Given a keyword +
+> area + the client's GBP, it answers "can this business realistically rank in
+> the Google Maps pack?" with a score, verdict, points breakdown, the live
+> competitor pack, and plain-English barriers. platform-api builds the payload
+> from the client's stored GBP and proxies via `/clients/{id}/local-seo/rankability`.
+> The per-user monthly cap from the source app is intentionally **not** ported —
+> the suite is internal-only with no billing (the `slowapi` 10/min limit stays).
 
 > Note: page scoring + auto-reoptimization (`/score-page`, `/reoptimize-*`)
 > are **kept** — they judge page quality. Only the upfront rankability /

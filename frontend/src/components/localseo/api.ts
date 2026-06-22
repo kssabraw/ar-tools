@@ -5,6 +5,7 @@ import type {
   LocalSeoPageDetail,
   LocalSeoPageListItem,
   LocationSuggestion,
+  RankabilityResult,
   RelatedPagesResult,
   ScoreResult,
   SocialPostsResult,
@@ -48,6 +49,14 @@ export const localSeoApi = {
     clientId: string,
     body: { keyword: string; location: string; location_code?: number | null; force_refresh?: boolean },
   ) => api.stream<AnalysisResult>(`/clients/${clientId}/local-seo/analyze`, body),
+
+  // Map-pack rankability report — a single point-in-time, non-streaming check
+  // (no LLM). The business identity is sourced server-side from the client's GBP;
+  // the caller only supplies the keyword/area (+ sab_city for a service-area biz).
+  checkRankability: (
+    clientId: string,
+    body: { keyword: string; location: string; location_code?: number | null; sab_city?: string | null },
+  ) => api.post<RankabilityResult>(`/clients/${clientId}/local-seo/rankability`, body),
 
   findPage: (clientId: string, body: { keyword: string; location: string }) =>
     api.stream<FindPageResult>(`/clients/${clientId}/local-seo/find-page`, body),

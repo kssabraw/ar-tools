@@ -6184,6 +6184,262 @@ async def _fetch_maps_top10(
     return False, 0, []
 
 
+@app.post('/check-rankability', response_model=RankabilityResponse)
+@limiter.limit("10/minute")
+async def check_rankability(request: Request, body: RankabilityRequest):
+    """Map-pack rankability report: can this business realistically rank in the
+    Google Maps pack for this keyword? Deterministic 0–100 score (no LLM).
+
+    Private + auth-less like the rest of this service — platform-api verifies the
+    user JWT and builds the payload from the client's stored GBP before calling.
+    """
+    if not DATAFORSEO_LOGIN or not DATAFORSEO_PASSWORD:
+        raise HTTPException(status_code=503, detail="DataForSEO credentials not configured")
+
+    credentials = base64.b64encode(
+        f"{DATAFORSEO_LOGIN}:{DATAFORSEO_PASSWORD}".encode()
+    ).decode()
+    loc_field = {"location_code": body.location_code} if body.location_code else {"location_name": body.location}
+
+    # Run SERP (organic + local_pack) and Google Maps top-10 in parallel
+    serp_payload = [{
+        "keyword": body.keyword,
+        **loc_field,
+        "language_name": "English",
+        "depth": 10,
+        "se_domain": "google.com",
+    }]
+
+    async def _fetch_serp() -> dict:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                DATAFORSEO_ENDPOINT,
+                headers={"Authorization": f"Basic {credentials}", "Content-Type": "application/json"},
+                json=serp_payload,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    maps_task = _fetch_maps_top10(body.keyword, loc_field, body.business_name or "", credentials, place_id=body.gbp_place_id)
+    serp_data, (in_maps_results, maps_position, maps_items) = await asyncio.gather(
+        _fetch_serp(), maps_task
+    )
+
+    # Parse organic SERP — only used to determine if a local pack appears in search results
+    local_pack_items: List[dict] = []
+    for task in (serp_data.get("tasks") or []):
+        for result in (task.get("result") or []):
+            for item in (result.get("items") or []):
+                if item.get("type") == "local_pack":
+                    local_pack_items.append(item)
+
+    # has_map_pack is determined solely by organic SERP (honest signal)
+    has_map_pack = len(local_pack_items) > 0
+
+    # ── Competitor & category analysis from Maps top-10 ────────────────────────
+    competitors: List[CompetitorInfo] = []
+    category_counts: Dict[str, int] = {}
+    keyword_name_count = 0
+    competitor_name_examples: List[str] = []
+    physical_competitor_count = 0
+
+    for item in maps_items[:10]:
+        name = item.get("title", "")
+        rating_obj = item.get("rating") or {}
+        rating = rating_obj.get("value") if isinstance(rating_obj, dict) else rating_obj
+        review_count = rating_obj.get("votes_count") if isinstance(rating_obj, dict) else None
+
+        address_val = item.get("address", "") or ""
+        is_physical = bool(address_val)
+        if is_physical:
+            physical_competitor_count += 1
+
+        has_kw = _keyword_in_name(body.keyword, name)
+        if has_kw:
+            keyword_name_count += 1
+            competitor_name_examples.append(name)
+
+        cat = item.get("category", "")
+        if cat:
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+
+        competitors.append(CompetitorInfo(
+            name=name,
+            rating=float(rating) if rating else None,
+            review_count=int(review_count) if review_count else None,
+            has_keyword_in_name=has_kw,
+        ))
+
+    ranking_categories = [{"category": k, "count": v}
+                          for k, v in sorted(category_counts.items(), key=lambda x: -x[1])]
+
+    # ── Category match ─────────────────────────────────────────────────────────
+    gbp_cat_lower = body.gbp_category.lower()
+    cat_tokens = set(re.sub(r'[^a-z0-9\s]', '', gbp_cat_lower).split())
+    match_count = sum(1 for rc in ranking_categories
+                      if gbp_cat_lower in rc["category"].lower()
+                      or rc["category"].lower() in gbp_cat_lower)
+    partial_count = sum(1 for rc in ranking_categories
+                        for t in cat_tokens
+                        if len(t) > 3 and t in rc["category"].lower())
+    if match_count > 0:
+        category_match = "exact"
+    elif partial_count > 0:
+        category_match = "partial"
+    else:
+        category_match = "none"
+
+    # ── Category mismatch — hard fail ─────────────────────────────────────────
+    if category_match == "none":
+        return RankabilityResponse(
+            score=0,
+            verdict="very_difficult",
+            score_breakdown={"category_match": 0},
+            has_map_pack=has_map_pack,
+            competitors=competitors[:3],
+            ranking_categories=ranking_categories,
+            category_match="none",
+            keyword_in_competitor_names=keyword_name_count,
+            competitor_name_examples=competitor_name_examples,
+            in_maps_results=in_maps_results,
+            maps_position=maps_position if in_maps_results else None,
+            is_sab=_infer_is_sab(body.business_address),
+            sab_pack_mismatch=False,
+            physical_competitors_in_pack=physical_competitor_count,
+            message=(
+                "Your GBP category doesn't match any category in the Maps results — "
+                "you will not rank in Maps for this keyword. "
+                "The businesses ranking here are in a different category. "
+                "Target a different keyword, or create content for organic search instead."
+            ),
+            match_count=0,
+            total_results=len(maps_items),
+        )
+
+    # ── Review metrics (top 3 only — mirrors the visible 3-pack) ───────────────
+    top3 = competitors[:3]
+    review_counts = [c.review_count for c in top3 if c.review_count is not None]
+    ratings = [c.rating for c in top3 if c.rating is not None]
+    min_reviews = min(review_counts) if review_counts else None
+    max_reviews = max(review_counts) if review_counts else None
+    avg_reviews = round(sum(review_counts) / len(review_counts), 1) if review_counts else None
+    avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else None
+
+    is_sab = _infer_is_sab(body.business_address)
+
+    # ── Distance ───────────────────────────────────────────────────────────────
+    distance_miles = None
+    distance_ok = True
+    target_coords = await _geocode_location(body.location)
+    if target_coords:
+        if is_sab and body.sab_city:
+            origin_coords = await _geocode_location(body.sab_city)
+            if origin_coords:
+                distance_miles = round(_haversine_miles(
+                    origin_coords[0], origin_coords[1],
+                    target_coords[0], target_coords[1]
+                ), 1)
+                distance_ok = distance_miles <= 10.0
+        elif not is_sab and body.business_lat and body.business_lng:
+            distance_miles = round(_haversine_miles(
+                body.business_lat, body.business_lng,
+                target_coords[0], target_coords[1]
+            ), 1)
+            distance_ok = distance_miles <= 10.0
+
+    # ── Distance hard fail ─────────────────────────────────────────────────────
+    if distance_miles is not None and distance_miles > 10.0:
+        return RankabilityResponse(
+            score=0,
+            verdict="very_difficult",
+            score_breakdown={"distance": 0},
+            has_map_pack=has_map_pack,
+            competitors=competitors[:3],
+            ranking_categories=ranking_categories,
+            category_match=category_match,
+            keyword_in_competitor_names=keyword_name_count,
+            competitor_name_examples=competitor_name_examples,
+            in_maps_results=in_maps_results,
+            maps_position=maps_position if in_maps_results else None,
+            is_sab=is_sab,
+            sab_pack_mismatch=False,
+            physical_competitors_in_pack=physical_competitor_count,
+            distance_miles=distance_miles,
+            distance_ok=False,
+            message=(
+                f"Your business is {distance_miles} miles from {body.location} — "
+                "Google Maps heavily favors businesses within 5 miles of the search location. "
+                "You are unlikely to rank in Maps for this keyword. "
+                "Target a city closer to your location or target organic rankings instead."
+            ),
+            match_count=match_count,
+            total_results=len(maps_items),
+        )
+
+    # ── Score ──────────────────────────────────────────────────────────────────
+    score_data = _rankability_score(
+        category_match=category_match,
+        client_reviews=body.business_review_count,
+        max_reviews=max_reviews,
+        min_reviews=min_reviews,
+        distance_miles=distance_miles,
+        keyword_name_count=keyword_name_count,
+        in_maps_results=in_maps_results,
+        is_sab=is_sab,
+        physical_competitor_count=physical_competitor_count,
+        total_pack_count=len(maps_items[:10]),
+    )
+
+    # ── Review gap — reviews needed to match weakest competitor ───────────────
+    review_gap = None
+    if body.business_review_count is not None and min_reviews is not None:
+        review_gap = max(0, min_reviews - body.business_review_count)
+
+    # ── Human-readable message ─────────────────────────────────────────────────
+    verdict_labels = {
+        "strong": "Strong map pack rankability",
+        "moderate": "Moderate — achievable with work",
+        "difficult": "Difficult — real barriers present",
+        "very_difficult": "Very difficult — consider a different keyword or location",
+    }
+    message = verdict_labels.get(score_data["verdict"], "")
+    if not has_map_pack:
+        no_pack_note = " (no local pack in organic SERP for this query)" if maps_items else ""
+        if not maps_items:
+            message = "No map pack found for this keyword — may be a low local-intent query"
+        else:
+            message = verdict_labels.get(score_data["verdict"], "") + no_pack_note
+    elif score_data.get("sab_pack_mismatch"):
+        message += f". Your service area business faces a pack dominated by {physical_competitor_count} physical location(s) — Google heavily favors proximity for this keyword"
+
+    return RankabilityResponse(
+        score=score_data["total"],
+        verdict=score_data["verdict"],
+        score_breakdown=score_data["breakdown"],
+        has_map_pack=has_map_pack,
+        competitors=competitors,
+        ranking_categories=ranking_categories,
+        min_reviews_in_pack=min_reviews,
+        max_reviews_in_pack=max_reviews,
+        avg_reviews_in_pack=avg_reviews,
+        avg_rating_in_pack=avg_rating,
+        review_gap=review_gap,
+        category_match=category_match,
+        distance_miles=distance_miles,
+        distance_ok=distance_ok,
+        keyword_in_competitor_names=keyword_name_count,
+        competitor_name_examples=competitor_name_examples,
+        in_maps_results=in_maps_results,
+        maps_position=maps_position if in_maps_results else None,
+        is_sab=is_sab,
+        sab_pack_mismatch=score_data.get("sab_pack_mismatch", False),
+        physical_competitors_in_pack=physical_competitor_count,
+        message=message,
+        match_count=match_count,
+        total_results=len(local_pack_items),
+    )
+
+
 class AdditionalLink(BaseModel):
     url: str
     anchor_text: str

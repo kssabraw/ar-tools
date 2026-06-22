@@ -95,6 +95,40 @@ export interface SocialPostsResult {
   token_usage: Record<string, unknown>
 }
 
+export interface RankabilityCompetitor {
+  name: string
+  rating?: number
+  review_count?: number
+  has_keyword_in_name: boolean
+}
+
+export interface RankabilityResult {
+  score: number
+  verdict: string // "strong" | "moderate" | "difficult" | "very_difficult" | "unknown"
+  score_breakdown: Record<string, number>
+  has_map_pack: boolean
+  competitors: RankabilityCompetitor[]
+  ranking_categories: Array<{ category: string; count: number }>
+  min_reviews_in_pack?: number
+  max_reviews_in_pack?: number
+  avg_reviews_in_pack?: number
+  avg_rating_in_pack?: number
+  review_gap?: number
+  category_match: string // "exact" | "partial" | "none"
+  distance_miles?: number
+  distance_ok: boolean
+  keyword_in_competitor_names: number
+  competitor_name_examples: string[]
+  in_maps_results: boolean
+  maps_position?: number
+  is_sab: boolean
+  sab_pack_mismatch: boolean
+  physical_competitors_in_pack: number
+  message: string
+  match_count: number
+  total_results: number
+}
+
 export interface AnalysisResult {
   keyword: string
   location: string

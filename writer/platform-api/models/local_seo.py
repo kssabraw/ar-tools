@@ -103,6 +103,58 @@ class LocalSeoSocialPostsRequest(BaseModel):
     serp_analysis: Optional[dict[str, Any]] = None
 
 
+class LocalSeoRankabilityRequest(BaseModel):
+    """Map-pack rankability check for a keyword + location.
+
+    The business identity (category, address, review count, lat/lng, place_id)
+    is sourced server-side from the client's stored GBP — the frontend only
+    supplies the keyword/area and, for a service-area business, the city where
+    it's physically located (`sab_city`) so distance can be measured.
+    """
+
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    location_code: Optional[int] = None
+    # SAB only: the city the GBP is physically located in (SABs hide their address).
+    sab_city: Optional[str] = None
+
+
+class RankabilityCompetitor(BaseModel):
+    name: str
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
+    has_keyword_in_name: bool = False
+
+
+class LocalSeoRankabilityResponse(BaseModel):
+    """Passthrough of the nlp service's RankabilityResponse."""
+
+    score: int
+    verdict: str
+    score_breakdown: dict[str, Any]
+    has_map_pack: bool
+    competitors: list[RankabilityCompetitor] = Field(default_factory=list)
+    ranking_categories: list[dict[str, Any]] = Field(default_factory=list)
+    min_reviews_in_pack: Optional[int] = None
+    max_reviews_in_pack: Optional[int] = None
+    avg_reviews_in_pack: Optional[float] = None
+    avg_rating_in_pack: Optional[float] = None
+    review_gap: Optional[int] = None
+    category_match: str
+    distance_miles: Optional[float] = None
+    distance_ok: bool = True
+    keyword_in_competitor_names: int = 0
+    competitor_name_examples: list[str] = Field(default_factory=list)
+    in_maps_results: bool = False
+    maps_position: Optional[int] = None
+    is_sab: bool = False
+    sab_pack_mismatch: bool = False
+    physical_competitors_in_pack: int = 0
+    message: str = ""
+    match_count: int = 0
+    total_results: int = 0
+
+
 class LocalSeoPageDetail(BaseModel):
     id: UUID
     client_id: UUID

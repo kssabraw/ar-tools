@@ -2,17 +2,18 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowRight, Building2, CheckCircle2, FilePlus, FileSearch, Search, Sparkles, Trash2,
+  ArrowLeft, ArrowRight, Building2, CheckCircle2, FilePlus, FileSearch, MapPin, Search, Sparkles, Trash2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import { localSeoApi } from '../components/localseo/api'
 import { LocationAutocomplete } from '../components/localseo/LocationAutocomplete'
-import type { AnalysisResult, LocalSeoPageDetail, LocalSeoPageListItem, RelatedPageItem } from '../components/localseo/types'
+import type { AnalysisResult, LocalSeoPageDetail, LocalSeoPageListItem, RankabilityResult, RelatedPageItem } from '../components/localseo/types'
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { AnalysisResultsView } from '../components/localseo/AnalysisResultsView'
+import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
 import {
   backLink, card, errorBox, input, label, outlineBtn, primaryBtn, relativeTime, scoreColor,
@@ -73,6 +74,13 @@ export function LocalSeoContent() {
   const [analyzing, setAnalyzing] = useState(false)
   const [manualUrl, setManualUrl] = useState('')
 
+  // Map-pack rankability check (single point-in-time report).
+  const [rankability, setRankability] = useState<RankabilityResult | null>(null)
+  const [rankabilityLoading, setRankabilityLoading] = useState(false)
+  // For a service-area business (no GBP address) the user supplies the city the
+  // business is physically in, so distance to the target area can be measured.
+  const [sabCity, setSabCity] = useState('')
+
   // Plan Silo tab — research a topic's parent/sibling/neighbourhood silo up front.
   const [planScanning, setPlanScanning] = useState(false)
   const [planResults, setPlanResults] = useState<RelatedPageItem[] | null>(null)
@@ -98,6 +106,8 @@ export function LocalSeoContent() {
   const hasGbp = Boolean(client?.gbp?.business_name)
   const hasWebsite = Boolean(client?.website_url || client?.gbp?.website)
   const canGenerate = Boolean(keyword.trim() && location.trim() && runAnalysis !== null)
+  // A GBP with no street address is a service-area business — it hides its address.
+  const isSab = hasGbp && !client?.gbp?.address?.trim()
 
   // Reset transient form state when the service/area inputs change (called from
   // the input handlers — avoids a setState-in-effect cascade).
@@ -105,6 +115,7 @@ export function LocalSeoContent() {
     setCheck({ status: 'idle' })
     setManualUrl('')
     setError('')
+    setRankability(null)
   }
 
   const stopTicker = () => {
@@ -165,6 +176,40 @@ export function LocalSeoContent() {
       setCheck({ status: 'idle' })
     } finally {
       setScanning(false)
+    }
+  }
+
+  const handleCheckRankability = async () => {
+    if (!keyword.trim() || !location.trim()) return
+    if (!hasGbp) {
+      setError('Attach a Google Business Profile to this client to run a map-pack check.')
+      return
+    }
+    setError('')
+    setRankabilityLoading(true)
+    setRankability(null)
+    try {
+      const data = await localSeoApi.checkRankability(clientId, {
+        keyword: keyword.trim(),
+        location: location.trim(),
+        location_code: locationCode,
+        sab_city: isSab && sabCity.trim() ? sabCity.trim() : null,
+      })
+      setRankability(data)
+    } catch (e) {
+      // Graceful fallback — render just the error message in the report card.
+      setRankability({
+        score: 0, verdict: 'unknown', score_breakdown: {},
+        has_map_pack: false, competitors: [], ranking_categories: [],
+        category_match: 'none', distance_ok: true,
+        keyword_in_competitor_names: 0, competitor_name_examples: [],
+        in_maps_results: false, is_sab: false, sab_pack_mismatch: false,
+        physical_competitors_in_pack: 0,
+        message: e instanceof Error ? e.message : 'Could not retrieve map pack data.',
+        match_count: 0, total_results: 0,
+      })
+    } finally {
+      setRankabilityLoading(false)
     }
   }
 
@@ -644,15 +689,43 @@ export function LocalSeoContent() {
 
           {error && <div style={errorBox}>{error}</div>}
 
+          {/* SAB city — service-area businesses hide their address, so the user
+              supplies the city they're physically in for the map-pack distance check. */}
+          {isSab && (
+            <div>
+              <label style={label}>Your business's home city (for the map-pack check)</label>
+              <input
+                style={input}
+                value={sabCity}
+                onChange={e => setSabCity(e.target.value)}
+                placeholder="e.g. Anaheim, CA"
+              />
+              <p style={{ fontSize: 12, color: '#94a3b8', margin: '6px 0 0' }}>
+                This is a service-area business with no public address. We use this to measure distance to the target area.
+              </p>
+            </div>
+          )}
+
           {/* Optional pre-checks */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button style={outlineBtn} onClick={handleCheckSite} disabled={scanning || !keyword.trim() || !location.trim()}>
               {scanning ? <Spinner size={14} /> : <FileSearch size={14} />} {scanning ? 'Checking site…' : 'Check site for existing page'}
             </button>
+            <button style={outlineBtn} onClick={handleCheckRankability} disabled={rankabilityLoading || !keyword.trim() || !location.trim()}>
+              {rankabilityLoading ? <Spinner size={14} /> : <MapPin size={14} />} {rankabilityLoading ? 'Checking map pack…' : 'Check map pack'}
+            </button>
             <button style={outlineBtn} onClick={handlePreviewAnalysis} disabled={analyzing || !keyword.trim() || !location.trim()}>
               {analyzing ? <Spinner size={14} /> : <Search size={14} />} {analyzing ? 'Analyzing competitors…' : 'Preview competitor analysis'}
             </button>
           </div>
+
+          {/* Map-pack rankability report */}
+          {rankabilityLoading && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#f8fafc', borderRadius: 8, fontSize: 13, color: '#64748b' }}>
+              <Spinner size={14} /> Checking the Maps pack for "{keyword}"…
+            </div>
+          )}
+          {!rankabilityLoading && rankability && <RankabilityReport result={rankability} />}
 
           {/* Site-scan results */}
           {check.status === 'scanning' && (

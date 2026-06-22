@@ -26,6 +26,8 @@ from models.local_seo import (
     LocalSeoGenerateRequest,
     LocalSeoPageDetail,
     LocalSeoPageListItem,
+    LocalSeoRankabilityRequest,
+    LocalSeoRankabilityResponse,
     LocalSeoRelatedPagesRequest,
     LocalSeoReoptimizeRequest,
     LocalSeoScoreRequest,
@@ -168,6 +170,25 @@ async def social_posts_local_seo(
         page_content=body.page_content,
         serp_analysis=body.serp_analysis,
     ))
+
+
+@router.post("/clients/{client_id}/local-seo/rankability", response_model=LocalSeoRankabilityResponse)
+async def check_local_seo_rankability(
+    client_id: UUID,
+    body: LocalSeoRankabilityRequest,
+    auth: dict = Depends(require_auth),
+) -> LocalSeoRankabilityResponse:
+    """Map-pack rankability report — can this client rank in the Maps pack for
+    this keyword? Single point-in-time, deterministic, non-streaming (no LLM)."""
+    result = await local_seo_service.check_rankability(
+        client_id=str(client_id),
+        keyword=body.keyword,
+        location=body.location,
+        location_code=body.location_code,
+        sab_city=body.sab_city,
+        user_id=auth["user_id"],
+    )
+    return LocalSeoRankabilityResponse(**result)
 
 
 @router.get("/clients/{client_id}/local-seo/locations", response_model=list[LocationSuggestion])
