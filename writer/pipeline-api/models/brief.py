@@ -102,6 +102,9 @@ DiscardReason = Literal[
     "h3_promoted_to_h2_candidate",    # routed to silo as standalone topic
     # PRD v2.2 / Phase 2 - Step 10.5 FAQ Intent Gate
     "faq_intent_mismatch",
+    # AIO Heading Optimization §X.3 - candidate is a bare restatement of the
+    # main entity (empty residual after stripping the entity).
+    "bare_entity_restatement",
 ]
 
 SiloRoutedFrom = Literal[
@@ -575,6 +578,8 @@ class BriefMetadata(BaseModel):
     multi_entity_flag: bool = False
     entity_match_fuzz_ratio: float = 0.0
     entity_keyword_sanity_floor: float = 0.45
+    # §X.3 - candidates discarded as bare restatements of the main entity.
+    bare_entity_restatement_count: int = 0
 
     schema_version: Literal["2.7"] = "2.7"
 

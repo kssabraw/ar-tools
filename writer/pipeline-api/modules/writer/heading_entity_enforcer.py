@@ -16,44 +16,17 @@ as a violation - the run never aborts. No-op when `main_entity` is absent
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
+
+# Shared entity-presence logic lives with entity derivation (brief module)
+# so the gate (§X.3) and this enforcer (§X.4) can't drift. Re-exported under
+# the local name for existing callers/tests.
+from modules.brief.entity import entity_present as is_entity_present
 
 logger = logging.getLogger(__name__)
 
 RewriteFn = Callable[[str, str, list[str]], Awaitable[str]]
-
-_PUNCT_RE = re.compile(r"[^\w\s]")
-_WS_RE = re.compile(r"\s+")
-
-
-def _normalize(text: str) -> str:
-    text = _PUNCT_RE.sub(" ", (text or "").lower())
-    return _WS_RE.sub(" ", text).strip()
-
-
-def _tokens(text: str) -> set[str]:
-    return set(_normalize(text).split())
-
-
-def is_entity_present(heading: str, canonical: str, variants: list[str]) -> bool:
-    """True when the heading carries the entity. Deterministic match:
-    normalized substring OR entity-token-set ⊆ heading-token-set (handles
-    word-order variants like '327 angel number' vs 'angel number 327')."""
-    norm_heading = _normalize(heading)
-    heading_tokens = set(norm_heading.split())
-    forms = [canonical, *variants]
-    for form in forms:
-        nf = _normalize(form)
-        if not nf:
-            continue
-        if nf in norm_heading:
-            return True
-        form_tokens = set(nf.split())
-        if form_tokens and form_tokens <= heading_tokens:
-            return True
-    return False
 
 
 @dataclass

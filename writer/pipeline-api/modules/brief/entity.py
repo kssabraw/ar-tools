@@ -43,6 +43,52 @@ _DETERMINERS = {
 
 EmbedFn = Callable[[list[str]], Awaitable[list[list[float]]]]
 
+# Small stopword set used only to decide whether an entity-stripped residual
+# is "meaningful" (§X.3). Deliberately tiny - not general NLP stopwords.
+_RESIDUAL_STOPWORDS = {
+    "a", "an", "the", "and", "or", "of", "for", "to", "in", "on", "with",
+    "is", "are", "what", "how", "why", "your", "you",
+}
+
+_NORM_PUNCT_RE = re.compile(r"[^\w\s]")
+_NORM_WS_RE = re.compile(r"\s+")
+
+
+def _norm(text: str) -> str:
+    return _NORM_WS_RE.sub(" ", _NORM_PUNCT_RE.sub(" ", (text or "").lower())).strip()
+
+
+def entity_present(text: str, canonical: str, variants: list[str]) -> bool:
+    """True when `text` carries the entity. Deterministic: normalized
+    substring OR entity-token-set subset of the text tokens (handles
+    word-order variants like '327 angel number' vs 'angel number 327')."""
+    norm_text = _norm(text)
+    text_tokens = set(norm_text.split())
+    for form in (canonical, *variants):
+        nf = _norm(form)
+        if not nf:
+            continue
+        if nf in norm_text:
+            return True
+        ftoks = set(nf.split())
+        if ftoks and ftoks <= text_tokens:
+            return True
+    return False
+
+
+def strip_entity(text: str, canonical: str, variants: list[str]) -> str:
+    """Return the entity-stripped residual of `text`: its tokens minus the
+    entity's tokens. Empty string when nothing meaningful remains (all
+    residual tokens are stopwords) - the caller treats that as a bare
+    entity restatement."""
+    entity_tokens: set[str] = set()
+    for form in (canonical, *variants):
+        entity_tokens |= set(_norm(form).split())
+    residual = [t for t in _norm(text).split() if t not in entity_tokens]
+    if not residual or all(t in _RESIDUAL_STOPWORDS for t in residual):
+        return ""
+    return " ".join(residual)
+
 
 # ---------------------------------------------------------------------------
 # spaCy loading (lazy singleton)

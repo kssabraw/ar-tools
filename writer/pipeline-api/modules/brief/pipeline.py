@@ -418,6 +418,16 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         raise BriefError("no_candidates", "No heading candidates after aggregation.")
 
     # ---- Step 5 - embed + gates ----
+    # §X.3 residual gate only fires for a GENUINE, specific AIO-derived
+    # entity. With a title-fallback entity (AIO absent) the entity is
+    # keyword-ish, so nearly every candidate "contains" it and stripping it
+    # would nuke the pool; same for emq_identical (entity == keyword). In
+    # those cases we pass None and Step 5 behaves exactly as pre-X.3.
+    residual_entity = (
+        main_entity.model_dump()
+        if main_entity.source == "aio" and not main_entity.emq_identical
+        else None
+    )
     gate_result = await embed_with_gates(
         seed=keyword,
         title=title_scope.title,
@@ -425,8 +435,10 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         candidates=pass1,
         relevance_floor=settings.brief_relevance_floor,
         restatement_ceiling=settings.brief_restatement_ceiling,
+        main_entity=residual_entity,
     )
     title_embedding = gate_result.title_embedding
+    bare_entity_restatement_count = gate_result.bare_entity_discarded
     if not gate_result.eligible:
         raise BriefError(
             "all_below_threshold",
@@ -483,14 +495,16 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     # GateResult itself is unused here (the new candidates flow into
     # candidate_pool via shared object references).
     if new_candidates:
-        await embed_with_gates(
+        pass2_gate = await embed_with_gates(
             seed=keyword,
             title=title_scope.title,
             scope_statement=title_scope.scope_statement,
             candidates=new_candidates,
             relevance_floor=settings.brief_relevance_floor,
             restatement_ceiling=settings.brief_restatement_ceiling,
+            main_entity=residual_entity,
         )
+        bare_entity_restatement_count += pass2_gate.bare_entity_discarded
 
     # Eligible pool for graph construction = pool members with embeddings
     # that survived the relevance/restatement gates.
@@ -1125,6 +1139,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             else 0.0
         ),
         multi_entity_flag=main_entity.multi_entity_flag,
+        bare_entity_restatement_count=bare_entity_restatement_count,
     )
 
     # PRD v2.3 / Phase 3 - derive the per-H2 body floor from the

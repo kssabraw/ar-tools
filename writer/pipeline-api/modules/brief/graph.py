@@ -34,6 +34,7 @@ from networkx.algorithms.community import louvain_communities
 
 from models.brief import DiscardReason, HeadingSource, ScopeClassification
 
+from .entity import entity_present, strip_entity
 from .llm import embed_batch_large
 
 logger = logging.getLogger(__name__)
@@ -176,6 +177,7 @@ class GateResult:
     scope_embedding: list[float]
     eligible: list[Candidate]
     discarded: list[Candidate]
+    bare_entity_discarded: int = 0
 
 
 # Type alias for the embed function so tests can inject deterministic vectors.
@@ -190,6 +192,7 @@ async def embed_with_gates(
     candidates: list[Candidate],
     relevance_floor: float,
     restatement_ceiling: float,
+    main_entity: Optional[dict] = None,
     embed_fn: Optional[EmbedFn] = None,
 ) -> GateResult:
     """Embed inputs + candidates and apply the title-relevance gates.
@@ -225,10 +228,33 @@ async def embed_with_gates(
     seed_vec, title_vec, scope_vec = all_vectors[:3]
     candidate_vectors = all_vectors[3:]
 
+    # §X.3 - residual restatement gate. For candidates that already contain
+    # main_entity, the restatement ceiling is applied to the entity-stripped
+    # RESIDUAL (the entity inflates similarity to the title, which also names
+    # it). An empty residual means the candidate is a bare entity restatement
+    # and is discarded. When main_entity is absent (or no candidate contains
+    # it) no extra embedding happens and every candidate gates on its full
+    # relevance exactly as before - Step 5 output is byte-identical.
+    me = main_entity or {}
+    canonical = (me.get("canonical") or "").strip()
+    variants = [v for v in (me.get("variants") or []) if v]
+    residual_text_by_idx: dict[int, str] = {}
+    if canonical:
+        for i, cand in enumerate(candidates):
+            if entity_present(cand.text, canonical, variants):
+                residual_text_by_idx[i] = strip_entity(cand.text, canonical, variants)
+    residual_vec_by_idx: dict[int, list[float]] = {}
+    _nonempty = [(i, t) for i, t in residual_text_by_idx.items() if t]
+    if _nonempty:
+        _rvecs = await embed([t for _, t in _nonempty])
+        for (i, _), v in zip(_nonempty, _rvecs):
+            residual_vec_by_idx[i] = v
+
     eligible: list[Candidate] = []
     discarded: list[Candidate] = []
+    bare_entity_discarded = 0
 
-    for cand, vec in zip(candidates, candidate_vectors):
+    for idx, (cand, vec) in enumerate(zip(candidates, candidate_vectors)):
         cand.embedding = vec
         # Embeddings are unit-normalized → cosine == dot product.
         relevance = sum(a * b for a, b in zip(vec, title_vec))
@@ -248,7 +274,25 @@ async def embed_with_gates(
             )
             continue
 
-        if relevance > restatement_ceiling:
+        # §X.3 - entity-bearing candidates: gate the ceiling on the residual.
+        if idx in residual_text_by_idx:
+            if residual_text_by_idx[idx] == "":
+                cand.discard_reason = "bare_entity_restatement"
+                discarded.append(cand)
+                bare_entity_discarded += 1
+                logger.info(
+                    "brief.gate.bare_entity_restatement.discard",
+                    extra={"heading": cand.text, "entity": canonical,
+                           "source": cand.source},
+                )
+                continue
+            ceiling_score = sum(
+                a * b for a, b in zip(residual_vec_by_idx[idx], title_vec)
+            )
+        else:
+            ceiling_score = relevance
+
+        if ceiling_score > restatement_ceiling:
             cand.discard_reason = "above_restatement_ceiling"
             discarded.append(cand)
             # Restatement ceiling is the most consequential threshold per
@@ -258,7 +302,8 @@ async def embed_with_gates(
                 "brief.gate.restatement_ceiling.discard",
                 extra={
                     "heading": cand.text,
-                    "score": round(relevance, 4),
+                    "score": round(ceiling_score, 4),
+                    "residual_gated": idx in residual_text_by_idx,
                     "threshold": restatement_ceiling,
                     "source": cand.source,
                 },
@@ -286,6 +331,7 @@ async def embed_with_gates(
             "above_ceiling_count": sum(
                 1 for c in discarded if c.discard_reason == "above_restatement_ceiling"
             ),
+            "bare_entity_count": bare_entity_discarded,
             "relevance_floor": relevance_floor,
             "restatement_ceiling": restatement_ceiling,
         },
@@ -297,6 +343,7 @@ async def embed_with_gates(
         scope_embedding=scope_vec,
         eligible=eligible,
         discarded=discarded,
+        bare_entity_discarded=bare_entity_discarded,
     )
 
 
