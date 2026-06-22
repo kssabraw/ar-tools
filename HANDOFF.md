@@ -5,8 +5,11 @@
 A diagnostic **SERP snapshot** store for the rank tracker — captured **weekly**
 alongside the DataForSEO rank refresh so a pre-drop baseline always exists when
 investigating a ranking drop later. **Backend-only** (no viewer UI by design —
-retrieved on request via the API). On branch `claude/serp-snapshot`, **draft PR
-open**; migration **applied** to `wvcthtmmcmhkybcesirb`; **awaiting merge confirm**.
+retrieved on request via the API). **Merged to `main` and deployed** (PR **#53**,
+squash) — PLATFORM redeploy **runtime startup verified clean** via Railway logs
+(`job_worker.started` + `gsc_scheduler.started` + `Application startup complete`,
+no Traceback); migration **applied** to `wvcthtmmcmhkybcesirb`. Runs on the
+DataForSEO paths whose creds are already on PLATFORM, so it's **operational today**.
 
 **What it captures**, per tracked keyword per capture: the **AI Overview**
 (presence, text, cited sources); the **SERP feature inventory** ("enhancements":
