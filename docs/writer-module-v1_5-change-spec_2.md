@@ -44,7 +44,7 @@ Writer v1.5 introduces a fourth input — `client_context` — and the logic to 
 | Update business rules for brand precedence | Rule change | Section 11 |
 | Update failure modes for client context handling | Rule addition | Section 12 |
 | **v1.6:** H1 sourced verbatim from `brief.title` (no LLM regeneration) | Behavioral change | Section 4.5 |
-| Intro: free-form brand-voice opener (80–120 words; replaced the Agree/Promise/Preview "APP" structure) | Behavioral change | Section 4.3.1–4.3.2 |
+| Intro: leads with a direct liftable answer sentence (~15–30 words), then a brand-voice opener (80–120 words total; replaced the Agree/Promise/Preview "APP" structure) | Behavioral change | Section 4.3.1–4.3.2 |
 | **v1.6:** Defense-in-depth `titlecase` pass on all H1/H2/H3 text | Behavioral change | Section 4.6 |
 | **v1.6:** Multi-format output serialization — `article_markdown` and `article_html` | Schema addition + behavioral change | Section 4.7 / Output contract |
 | Bump output `schema_version` to `1.6` | Schema metadata | Output contract |
@@ -319,7 +319,8 @@ Intros and conclusions get the heaviest brand shaping because they set the artic
 
 **Required shape:**
 
-- Written entirely in the brand voice (`brand_voice_card.tone_adjectives` + `voice_directives`), grounded in the ICP/audience pain points and goals when available.
+- **Opens with one direct, liftable answer sentence** (~15–30 words) that answers the seed keyword/query: a confident declarative statement, self-contained (no "this article", no outward-pointing pronouns), snippet/AI-Overview ready. It is grounded in `ANSWER_CONTEXT` (a digest of the finalized article's section summaries, passed in by the pipeline) and `SUPPORTING_DATA`, and must not contradict the article's scope or invent facts.
+- The rest is written entirely in the brand voice (`brand_voice_card.tone_adjectives` + `voice_directives`), grounded in the ICP/audience pain points and goals when available.
 - 1–2 short paragraphs, **80 ≤ words ≤ 120** (inclusive). Word count is `len(text.split())` after stripping whitespace.
 - Lives between the Key Takeaways block and the first content H2. Not preceded by its own heading.
 - MUST NOT contain heading markers (`#`, `##`, `###`) or bulleted/numbered list markers.

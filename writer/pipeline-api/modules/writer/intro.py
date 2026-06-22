@@ -48,11 +48,12 @@ OUTPUT FORMAT:
 {"intro": "<text>"}
 
 WHAT THE INTRO DOES:
-- Open in the article's topic and pull the reader forward. Meet the reader where they are, then signal why the rest of the piece is worth their time.
-- Write entirely in the BRAND_VOICE. The tone adjectives and voice directives are not optional - every sentence should sound like the brand.
-- When AUDIENCE context is provided, ground the intro in the audience's specific situation, pain points, and language. Do not write generically when ICP context is available.
+- START with ONE sentence that directly and completely answers the query (the KEYWORD), written so it can be lifted verbatim into a search snippet / AI Overview: a confident declarative statement, self-contained (no "this article", no pronouns pointing outside the sentence), roughly 15-30 words. Ground this answer in ANSWER_CONTEXT and SUPPORTING_DATA when provided - never invent facts or contradict the article's scope.
+- THEN continue with a short brand-voice opener (1 short paragraph) that meets the reader where they are and pulls them forward.
+- Write entirely in the BRAND_VOICE. The tone adjectives and voice directives are not optional - every sentence should sound like the brand (the answer sentence included; it should be direct AND on-voice).
+- When AUDIENCE context is provided, ground the opener in the audience's specific situation, pain points, and language. Do not write generically when ICP context is available.
 
-LENGTH: 80-120 words total. Write it as 1-2 short paragraphs.
+LENGTH: 80-120 words total. Write it as 1-2 short paragraphs, the first of which opens with the direct answer sentence.
 
 HARD CONSTRAINTS:
 - No heading markers (#, ##, etc.), no bullets, no numbered lists.
@@ -74,6 +75,7 @@ def _build_intro_user_prompt(
     brand_voice_card: Optional[BrandVoiceCard],
     forbidden_terms: list[str],
     supporting_data: Optional[str],
+    answer_context: Optional[str],
     retry_directive: Optional[str],
 ) -> str:
     parts: list[str] = [
@@ -83,6 +85,16 @@ def _build_intro_user_prompt(
     ]
     if scope_statement:
         parts.append(f"SCOPE_STATEMENT: {scope_statement}")
+
+    # Grounding for the opening direct-answer sentence: a digest of what the
+    # article actually says (section summaries), so the liftable answer can't
+    # drift from the body. The intro is generated after the body exists.
+    if answer_context:
+        parts.append(
+            "\nANSWER_CONTEXT (what the article establishes - base the opening "
+            "answer sentence on this; do not contradict it):"
+        )
+        parts.append(answer_context)
 
     # ICP / audience context - grounds the intro in the audience's
     # situation. Pulled from the distilled brand voice card, which encodes
@@ -204,6 +216,7 @@ async def write_intro(
     banned_regex,
     intro_order: int,
     supporting_data: Optional[str] = None,
+    answer_context: Optional[str] = None,
 ) -> ArticleSection:
     """One LLM call + at most one validation retry. Banned-term hits get
     their own retry per Section 4.4.3. Validation failures after the retry
@@ -223,6 +236,7 @@ async def write_intro(
             brand_voice_card=brand_voice_card,
             forbidden_terms=forbidden_terms,
             supporting_data=supporting_data,
+            answer_context=answer_context,
             retry_directive=retry_directive,
         )
         try:
