@@ -108,56 +108,71 @@ def _window_sum(series_full: Sequence[dict], days: int, today: date, field: str)
     )
 
 
-def compute_keyword_summary(rows: Sequence[dict], today: date) -> dict:
-    """Build the read-side summary for one keyword from its materialized rows.
+def determine_primary_source(rows: Sequence[dict], today: date, coverage_days: int) -> str:
+    """Which source represents this keyword: GSC if the site ranks for it
+    recently, else DataForSEO if we have a live rank, else none (awaiting data)."""
+    cutoff = today.toordinal() - coverage_days + 1
+    has_recent_gsc = any(
+        r.get("gsc_position") is not None and _to_date(r["date"]).toordinal() >= cutoff
+        for r in rows
+    )
+    if has_recent_gsc:
+        return "gsc"
+    if any(r.get("tracked_rank") is not None for r in rows):
+        return "dataforseo"
+    return "none"
 
-    `rows` are rank_keyword_metrics records (date, clicks, impressions, ctr,
-    gsc_position, tracked_rank). Returns the values the Keywords table + Overview
-    triage render: rolling average positions, recent GSC totals, a sparkline
-    (positions with None gaps preserved), and the 7d-vs-90d direction.
-    """
-    series = [(row["date"], row.get("gsc_position")) for row in rows]
 
-    avg_7 = rolling_average(series, 7, today)
-    avg_30 = rolling_average(series, 30, today)
-    avg_60 = rolling_average(series, 60, today)
-    avg_90 = rolling_average(series, 90, today)
-
-    clicks_30 = _window_sum(rows, 30, today, "clicks")
-    impressions_30 = _window_sum(rows, 30, today, "impressions")
-    ctr_30 = round(clicks_30 / impressions_30, 4) if impressions_30 else 0.0
-
-    # Sparkline: positions over the last 30 days, gaps preserved as None.
-    cutoff = today.toordinal() - 30 + 1
-    sparkline = [
-        p for d, p in _sorted_points(series) if _to_date(d).toordinal() >= cutoff
-    ]
-
-    # Net direction: 7d vs 90d (negative delta = improved). None if either absent.
-    direction = None
-    if avg_7 is not None and avg_90 is not None:
-        diff = avg_7 - avg_90
-        direction = "up" if diff < -0.1 else "down" if diff > 0.1 else "flat"
-
-    # Latest DataForSEO live rank, if any (M4 fills this).
-    today_rank = None
+def _latest_tracked_rank(rows: Sequence[dict]) -> Optional[int]:
     for row in sorted(rows, key=lambda r: r["date"], reverse=True):
         if row.get("tracked_rank") is not None:
-            today_rank = row["tracked_rank"]
-            break
+            return row["tracked_rank"]
+    return None
 
-    return {
-        "avg_7": avg_7,
-        "avg_30": avg_30,
-        "avg_60": avg_60,
-        "avg_90": avg_90,
-        "clicks_30d": clicks_30,
-        "impressions_30d": impressions_30,
-        "ctr_30d": ctr_30,
-        "sparkline": sparkline,
-        "direction": direction,
-        "today_rank": today_rank,
+
+def compute_keyword_summary(rows: Sequence[dict], today: date, coverage_days: int = 14) -> dict:
+    """Build the read-side summary for one keyword, source-aware.
+
+    GSC-covered keywords show GSC rolling averages + clicks/impressions/sparkline.
+    DataForSEO-fallback keywords (no recent GSC) drop those and show the live
+    rank ("Today") + a rank sparkline — never reconciling the two sources.
+    """
+    source = determine_primary_source(rows, today, coverage_days)
+    today_rank = _latest_tracked_rank(rows)
+    base = {
+        "primary_source": source,
+        "avg_7": None, "avg_30": None, "avg_60": None, "avg_90": None,
+        "clicks_30d": 0, "impressions_30d": 0, "ctr_30d": 0.0,
+        "sparkline": [], "direction": None, "today_rank": today_rank,
     }
+
+    if source == "gsc":
+        series = [(row["date"], row.get("gsc_position")) for row in rows]
+        base["avg_7"] = rolling_average(series, 7, today)
+        base["avg_30"] = rolling_average(series, 30, today)
+        base["avg_60"] = rolling_average(series, 60, today)
+        base["avg_90"] = rolling_average(series, 90, today)
+        base["clicks_30d"] = _window_sum(rows, 30, today, "clicks")
+        base["impressions_30d"] = _window_sum(rows, 30, today, "impressions")
+        base["ctr_30d"] = round(base["clicks_30d"] / base["impressions_30d"], 4) if base["impressions_30d"] else 0.0
+        cutoff = today.toordinal() - 30 + 1
+        base["sparkline"] = [p for d, p in _sorted_points(series) if _to_date(d).toordinal() >= cutoff]
+        if base["avg_7"] is not None and base["avg_90"] is not None:
+            diff = base["avg_7"] - base["avg_90"]
+            base["direction"] = "up" if diff < -0.1 else "down" if diff > 0.1 else "flat"
+
+    elif source == "dataforseo":
+        # Sparse weekly rank series; sparkline = the live-rank points over 90 days.
+        series = [(row["date"], row.get("tracked_rank")) for row in rows]
+        cutoff = today.toordinal() - 90 + 1
+        vals = [(d, v) for d, v in _sorted_points(series) if _to_date(d).toordinal() >= cutoff]
+        base["sparkline"] = [v for _, v in vals]
+        non_null = [v for _, v in vals if v is not None]
+        if len(non_null) >= 2:
+            diff = non_null[-1] - non_null[0]  # later − earlier; negative = improved
+            base["direction"] = "up" if diff < -0.5 else "down" if diff > 0.5 else "flat"
+
+    return base
 
 
 def aggregate_hero(rows: Sequence[dict], today: date, days: int) -> list[dict]:

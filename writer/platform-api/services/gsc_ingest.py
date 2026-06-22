@@ -177,7 +177,12 @@ async def run_gsc_ingest_job(job: dict) -> None:
     ).eq("id", job_id).execute()
 
     # Chain the date-axis materialize + status recompute after fresh data lands.
+    # Keywords are client-anchored, so materialize the property's client.
     if result.status == "ok":
         from services.rank_materialize import enqueue_materialize
 
-        enqueue_materialize(property_id)
+        prop = (
+            supabase.table("gsc_properties").select("client_id").eq("id", property_id).limit(1).execute()
+        )
+        if prop.data:
+            enqueue_materialize(prop.data[0]["client_id"])

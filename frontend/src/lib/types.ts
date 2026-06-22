@@ -110,6 +110,7 @@ export interface KeywordSummary {
   id: string
   keyword: string
   source: string
+  primary_source: 'gsc' | 'dataforseo' | 'none'
   canonical_url: string | null
   canonical_url_locked: boolean
   status: KeywordStatus
@@ -152,6 +153,7 @@ export interface HeroPoint {
 
 export interface RankOverview {
   keyword_count: number
+  gsc_connected: boolean
   status_counts: Record<string, number>
   clicks_30d: number
   impressions_30d: number

@@ -1,9 +1,12 @@
-"""Organic Rank Tracker keyword + metrics router (M3).
+"""Organic Rank Tracker keyword + metrics router.
 
-Keyword CRUD over tracked_keywords, the merged Keywords table read (rolling GSC
-averages + sparkline + computed status), the per-keyword trendline, and the
-account-level Overview. Authorization follows the suite model (any authenticated
-user reads; admins manage); all DB access uses the service-role client.
+Keywords are CLIENT-anchored (a GSC property is optional). When the client has
+a verified GSC property the views show GSC clicks/impressions/average-position;
+otherwise — or for keywords the site doesn't rank for — they fall back to the
+weekly DataForSEO live rank, dropping the GSC-only metrics.
+
+Authorization follows the suite model (any authenticated user reads; admins
+manage); all DB access uses the service-role client.
 """
 
 from __future__ import annotations
@@ -15,9 +18,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.rank import (
+    DataForSeoRefreshResponse,
     KeywordSummary,
     KeywordTrendline,
     MaterializeResponse,
@@ -26,7 +31,7 @@ from models.rank import (
     TrackedKeywordUpdateRequest,
     TrendPoint,
 )
-from services import rank_materialize, rank_status
+from services import dataforseo_rank, rank_materialize, rank_status
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +43,6 @@ _READ_DAYS = 95
 
 
 def _fetch_metrics(supabase, keyword_ids: list[str]) -> dict[str, list[dict]]:
-    """Fetch recent rank_keyword_metrics for the given keywords, grouped by id."""
     if not keyword_ids:
         return {}
     cutoff = date.fromordinal(date.today().toordinal() - _READ_DAYS).isoformat()
@@ -55,15 +59,41 @@ def _fetch_metrics(supabase, keyword_ids: list[str]) -> dict[str, list[dict]]:
     return grouped
 
 
-@router.get("/gsc-properties/{property_id}/keywords", response_model=list[KeywordSummary])
-async def list_keywords(
-    property_id: UUID, auth: dict = Depends(require_auth)
-) -> list[KeywordSummary]:
+def _gsc_connected(supabase, client_id: str) -> bool:
+    return bool(
+        supabase.table("gsc_properties")
+        .select("id")
+        .eq("client_id", client_id)
+        .eq("access_status", "ok")
+        .limit(1)
+        .execute()
+        .data
+    )
+
+
+def _summary(k: dict, metrics: dict[str, list[dict]], today: date) -> KeywordSummary:
+    s = rank_status.compute_keyword_summary(
+        metrics.get(k["id"], []), today, settings.rank_gsc_coverage_days
+    )
+    return KeywordSummary(
+        id=k["id"],
+        keyword=k["keyword"],
+        source=k["source"],
+        canonical_url=k.get("canonical_url"),
+        canonical_url_locked=k["canonical_url_locked"],
+        status=k["status"],
+        status_updated_at=k.get("status_updated_at"),
+        **s,
+    )
+
+
+@router.get("/clients/{client_id}/rank/keywords", response_model=list[KeywordSummary])
+async def list_keywords(client_id: UUID, auth: dict = Depends(require_auth)) -> list[KeywordSummary]:
     supabase = get_supabase()
     kws = (
         supabase.table("tracked_keywords")
         .select("*")
-        .eq("property_id", str(property_id))
+        .eq("client_id", str(client_id))
         .eq("active", True)
         .order("keyword")
         .execute()
@@ -71,23 +101,7 @@ async def list_keywords(
     rows = kws.data or []
     metrics = _fetch_metrics(supabase, [k["id"] for k in rows])
     today = date.today()
-
-    out: list[KeywordSummary] = []
-    for k in rows:
-        summary = rank_status.compute_keyword_summary(metrics.get(k["id"], []), today)
-        out.append(
-            KeywordSummary(
-                id=k["id"],
-                keyword=k["keyword"],
-                source=k["source"],
-                canonical_url=k.get("canonical_url"),
-                canonical_url_locked=k["canonical_url_locked"],
-                status=k["status"],
-                status_updated_at=k.get("status_updated_at"),
-                **summary,
-            )
-        )
-    return out
+    return [_summary(k, metrics, today) for k in rows]
 
 
 def _split_keywords(raw: list[str]) -> list[str]:
@@ -101,9 +115,9 @@ def _split_keywords(raw: list[str]) -> list[str]:
     return list(seen)
 
 
-@router.post("/gsc-properties/{property_id}/keywords", response_model=list[KeywordSummary])
+@router.post("/clients/{client_id}/rank/keywords", response_model=list[KeywordSummary])
 async def add_keywords(
-    property_id: UUID,
+    client_id: UUID,
     body: TrackedKeywordCreateRequest,
     auth: dict = Depends(require_admin),
 ) -> list[KeywordSummary]:
@@ -113,23 +127,17 @@ async def add_keywords(
 
     supabase = get_supabase()
     payload = [
-        {
-            "property_id": str(property_id),
-            "keyword": kw,
-            "source": "gsc",
-            "created_by": auth["user_id"],
-        }
+        {"client_id": str(client_id), "keyword": kw, "source": "gsc", "created_by": auth["user_id"]}
         for kw in keywords
     ]
-    # Idempotent: ignore keywords already tracked for this property.
     supabase.table("tracked_keywords").upsert(
-        payload, on_conflict="property_id,keyword", ignore_duplicates=True
+        payload, on_conflict="client_id,keyword", ignore_duplicates=True
     ).execute()
 
-    # Backfill metrics + status for the new keywords right away.
-    rank_materialize.enqueue_materialize(str(property_id))
-
-    return await list_keywords(property_id, auth)
+    # Backfill GSC axis + status now; the weekly job (or manual refresh) fills in
+    # DataForSEO for any keyword GSC doesn't cover.
+    rank_materialize.enqueue_materialize(str(client_id))
+    return await list_keywords(client_id, auth)
 
 
 @router.patch("/tracked-keywords/{keyword_id}", response_model=KeywordSummary)
@@ -138,33 +146,18 @@ async def update_keyword(
     body: TrackedKeywordUpdateRequest,
     auth: dict = Depends(require_admin),
 ) -> KeywordSummary:
-    updates = {k: v for k, v in body.model_dump(exclude_unset=True).items()}
+    updates = body.model_dump(exclude_unset=True)
     if not updates:
         raise HTTPException(status_code=422, detail="validation_error: no fields to update")
     updates["updated_at"] = "now()"
 
     supabase = get_supabase()
-    result = (
-        supabase.table("tracked_keywords")
-        .update(updates)
-        .eq("id", str(keyword_id))
-        .execute()
-    )
+    result = supabase.table("tracked_keywords").update(updates).eq("id", str(keyword_id)).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="not_found")
     k = result.data[0]
     metrics = _fetch_metrics(supabase, [k["id"]])
-    summary = rank_status.compute_keyword_summary(metrics.get(k["id"], []), date.today())
-    return KeywordSummary(
-        id=k["id"],
-        keyword=k["keyword"],
-        source=k["source"],
-        canonical_url=k.get("canonical_url"),
-        canonical_url_locked=k["canonical_url_locked"],
-        status=k["status"],
-        status_updated_at=k.get("status_updated_at"),
-        **summary,
-    )
+    return _summary(k, metrics, date.today())
 
 
 @router.delete("/tracked-keywords/{keyword_id}", status_code=204)
@@ -173,13 +166,9 @@ async def delete_keyword(keyword_id: UUID, auth: dict = Depends(require_admin)) 
 
 
 @router.get("/tracked-keywords/{keyword_id}/trendline", response_model=KeywordTrendline)
-async def get_trendline(
-    keyword_id: UUID, auth: dict = Depends(require_auth)
-) -> KeywordTrendline:
+async def get_trendline(keyword_id: UUID, auth: dict = Depends(require_auth)) -> KeywordTrendline:
     supabase = get_supabase()
-    found = (
-        supabase.table("tracked_keywords").select("*").eq("id", str(keyword_id)).limit(1).execute()
-    )
+    found = supabase.table("tracked_keywords").select("*").eq("id", str(keyword_id)).limit(1).execute()
     if not found.data:
         raise HTTPException(status_code=404, detail="not_found")
     k = found.data[0]
@@ -203,23 +192,18 @@ async def get_trendline(
         for r in (metrics.data or [])
     ]
     return KeywordTrendline(
-        id=k["id"],
-        keyword=k["keyword"],
-        status=k["status"],
-        canonical_url=k.get("canonical_url"),
-        points=points,
+        id=k["id"], keyword=k["keyword"], status=k["status"],
+        canonical_url=k.get("canonical_url"), points=points,
     )
 
 
-@router.get("/gsc-properties/{property_id}/overview", response_model=OverviewResponse)
-async def get_overview(
-    property_id: UUID, auth: dict = Depends(require_auth)
-) -> OverviewResponse:
+@router.get("/clients/{client_id}/rank/overview", response_model=OverviewResponse)
+async def get_overview(client_id: UUID, auth: dict = Depends(require_auth)) -> OverviewResponse:
     supabase = get_supabase()
     kws = (
         supabase.table("tracked_keywords")
         .select("id, status")
-        .eq("property_id", str(property_id))
+        .eq("client_id", str(client_id))
         .eq("active", True)
         .execute()
     )
@@ -242,6 +226,7 @@ async def get_overview(
 
     return OverviewResponse(
         keyword_count=len(rows),
+        gsc_connected=_gsc_connected(supabase, str(client_id)),
         status_counts=status_counts,
         clicks_30d=clicks_30,
         impressions_30d=impressions_30,
@@ -251,15 +236,19 @@ async def get_overview(
     )
 
 
-@router.post("/gsc-properties/{property_id}/materialize", response_model=MaterializeResponse)
-async def trigger_materialize(
-    property_id: UUID, auth: dict = Depends(require_admin)
-) -> MaterializeResponse:
-    result = rank_materialize.materialize_property(str(property_id))
+@router.post("/clients/{client_id}/rank/materialize", response_model=MaterializeResponse)
+async def trigger_materialize(client_id: UUID, auth: dict = Depends(require_admin)) -> MaterializeResponse:
+    result = rank_materialize.materialize_client(str(client_id))
     return MaterializeResponse(
-        property_id=property_id,
-        status=result.status,
-        keywords=result.keywords,
-        rows=result.rows,
-        error=result.error,
+        client_id=client_id, status=result.status, keywords=result.keywords,
+        rows=result.rows, error=result.error,
     )
+
+
+@router.post("/clients/{client_id}/rank/refresh-dataforseo", response_model=DataForSeoRefreshResponse)
+async def trigger_dataforseo(client_id: UUID, auth: dict = Depends(require_admin)) -> DataForSeoRefreshResponse:
+    """Fetch DataForSEO ranks now for keywords GSC can't cover (admin)."""
+    result = await dataforseo_rank.refresh_client_ranks(str(client_id))
+    if result.get("status") == "ok" and result.get("fetched"):
+        rank_materialize.materialize_client(str(client_id))
+    return DataForSeoRefreshResponse(client_id=client_id, **result)

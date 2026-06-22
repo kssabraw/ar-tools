@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, TrendingUp } from 'lucide-react'
@@ -32,21 +32,8 @@ export function Rankings() {
     enabled: Boolean(clientId),
   })
 
-  const connected = (properties ?? []).filter(p => p.access_status === 'ok')
+  const gscConnected = (properties ?? []).some(p => p.access_status === 'ok')
   const [tab, setTab] = useState<Tab>('overview')
-  const [activeProp, setActiveProp] = useState<string | null>(null)
-
-  // Default the active property to the first connected one; fall back to
-  // Settings when nothing is connected yet.
-  useEffect(() => {
-    if (connected.length && !connected.some(p => p.id === activeProp)) {
-      setActiveProp(connected[0].id)
-    }
-    if (properties && connected.length === 0) setTab('settings')
-  }, [properties]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  const hasConnection = connected.length > 0
-  const propId = activeProp ?? connected[0]?.id ?? null
 
   return (
     <div style={{ padding: 32, maxWidth: 980 }}>
@@ -57,9 +44,14 @@ export function Rankings() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
         <TrendingUp size={22} color="#6366f1" />
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Organic Rank Tracker</h1>
+        <span style={gscConnected ? modeGsc : modeDf}>
+          {gscConnected ? 'Search Console' : 'DataForSEO'}
+        </span>
       </div>
       <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 20px' }}>
-        {client?.name ?? 'This client'} · organic positions, clicks &amp; impressions from Search Console.
+        {client?.name ?? 'This client'} · {gscConnected
+          ? 'organic positions, clicks & impressions from Search Console.'
+          : 'organic positions from DataForSEO live SERP checks.'}
       </p>
 
       {/* Tabs */}
@@ -67,40 +59,22 @@ export function Rankings() {
         <TabButton active={tab === 'overview'} onClick={() => setTab('overview')} label="Overview" />
         <TabButton active={tab === 'keywords'} onClick={() => setTab('keywords')} label="Keywords" />
         <TabButton active={tab === 'settings'} onClick={() => setTab('settings')} label="Settings" />
-
-        {hasConnection && connected.length > 1 && tab !== 'settings' && (
-          <select
-            value={propId ?? ''} onChange={(e) => setActiveProp(e.target.value)}
-            style={{ marginLeft: 'auto', fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid #e2e8f0' }}
-          >
-            {connected.map(p => <option key={p.id} value={p.id}>{p.site_url}</option>)}
-          </select>
-        )}
       </div>
 
       {/* Body */}
       {tab === 'settings' ? (
         <RankSettings clientId={clientId} isAdmin={isAdmin} />
-      ) : !hasConnection || !propId ? (
-        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: 28, textAlign: 'center', color: '#64748b' }}>
-          <p style={{ margin: '0 0 12px', fontSize: 14 }}>
-            Connect a Search Console property to start tracking rankings.
-          </p>
-          <button
-            style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
-            onClick={() => setTab('settings')}
-          >
-            Go to Settings
-          </button>
-        </div>
       ) : tab === 'overview' ? (
-        <RankOverview propertyId={propId} />
+        <RankOverview clientId={clientId} />
       ) : (
-        <RankKeywords propertyId={propId} isAdmin={isAdmin} />
+        <RankKeywords clientId={clientId} isAdmin={isAdmin} gscConnected={gscConnected} />
       )}
     </div>
   )
 }
+
+const modeGsc: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#166534', background: '#dcfce7', borderRadius: 999, padding: '3px 10px' }
+const modeDf: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#0369a1', background: '#e0f2fe', borderRadius: 999, padding: '3px 10px' }
 
 function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
   return (

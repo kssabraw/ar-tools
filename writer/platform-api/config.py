@@ -35,6 +35,15 @@ class Settings(BaseSettings):
     # Covers all rolling windows (max 90d) + margin; the full 16-month history
     # stays in gsc_query_daily.
     rank_materialize_days: int = 120
+    # DataForSEO fallback rank (used when GSC is absent or the site doesn't rank
+    # for a keyword). Refreshed WEEKLY on this weekday (0=Mon..6=Sun) to bound
+    # cost. A keyword counts as GSC-covered if it had a GSC position within the
+    # last `rank_gsc_coverage_days` days; otherwise it falls back to DataForSEO.
+    dataforseo_rank_weekday: int = 0
+    rank_gsc_coverage_days: int = 14
+    dataforseo_serp_depth: int = 100  # find rank within the top 100, else "not ranking"
+    dataforseo_default_location_code: int = 2840  # United States
+    dataforseo_default_language_code: str = "en"
     # DataForSEO — GBP review enrichment (shared with pipeline-api modules)
     dataforseo_login: str = ""
     dataforseo_password: str = ""

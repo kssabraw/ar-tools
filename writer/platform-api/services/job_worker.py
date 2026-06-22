@@ -7,6 +7,7 @@ import logging
 
 from config import settings
 from db.supabase_client import get_supabase
+from services.dataforseo_rank import run_dataforseo_rank_job
 from services.gsc_ingest import run_gsc_ingest_job
 from services.rank_materialize import run_gsc_materialize_job
 from services.silo_dedup import process_silo_dedup_job
@@ -124,6 +125,8 @@ async def _process_job(job: dict) -> None:
         await run_gsc_ingest_job(job)
     elif job_type == "gsc_materialize":
         await run_gsc_materialize_job(job)
+    elif job_type == "dataforseo_rank":
+        await run_dataforseo_rank_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 

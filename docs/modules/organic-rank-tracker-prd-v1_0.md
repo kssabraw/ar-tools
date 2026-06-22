@@ -27,6 +27,15 @@ GSC only returns queries the site **already appears for**. A keyword the client 
 
 The UI merges both into one keyword row, and **labels the two ranks distinctly everywhere** — GSC average position is an impression-weighted aggregate, not a point-in-time rank, and must never be reconciled as equal to the DataForSEO live position (see §9).
 
+### Automatic GSC → DataForSEO fallback (built)
+
+Keywords are **client-anchored** (the GSC property is optional), and the rank source is selected **automatically, per keyword**:
+
+- **GSC** is used when the client has a verified property **and** the site ranks for the keyword (GSC returned a position within the last `rank_gsc_coverage_days`).
+- **DataForSEO** is the fallback when GSC can't cover the keyword: the client has **no accessible GSC property**, *or* the site **doesn't rank** for the term (so GSC has nothing). The fallback fetches a live Google organic SERP position for the client's domain, **refreshed weekly** to bound cost (`dataforseo_rank_weekday`), writing `tracked_rank` only (never reconciled with `gsc_position`). The weekly job **skips** keywords GSC already covers, so spend scales with the gaps, not the whole set.
+
+When a keyword (or the whole client) is on the DataForSEO path, the UI **drops the GSC-only views** — clicks, impressions, CTR, and the average-position chart/columns — and shows the live rank ("Today") + its weekly trendline instead. `KeywordSummary.primary_source` (`gsc`/`dataforseo`/`none`) and `Overview.gsc_connected` drive this.
+
 ---
 
 ## 3. Suite-conformance: what changed from the v0.2 spec

@@ -72,11 +72,36 @@ def enqueue_due_ingests() -> int:
     return enqueued
 
 
+def enqueue_due_dataforseo() -> int:
+    """Weekly: enqueue a DataForSEO rank job for each client with active keywords.
+
+    The job itself skips keywords GSC already covers, so this is cheap for
+    GSC-connected clients and the sole rank source for clients without GSC.
+    """
+    from services.dataforseo_rank import enqueue_dataforseo_rank
+
+    supabase = get_supabase()
+    rows = (
+        supabase.table("tracked_keywords")
+        .select("client_id")
+        .eq("active", True)
+        .execute()
+    )
+    client_ids = {r["client_id"] for r in (rows.data or [])}
+    for client_id in client_ids:
+        enqueue_dataforseo_rank(client_id)
+    if client_ids:
+        logger.info("gsc_scheduler.dataforseo_enqueued", extra={"clients": len(client_ids)})
+    return len(client_ids)
+
+
 async def gsc_scheduler() -> None:
-    """Background loop: once per day, enqueue ingest jobs for active properties."""
+    """Background loop: daily GSC ingest enqueue + weekly DataForSEO rank enqueue."""
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
+    weekday = settings.dataforseo_rank_weekday
     last_run_date: Optional[date] = None
+    last_df_date: Optional[date] = None
     logger.info("gsc_scheduler.started", extra={"poll_interval_s": interval, "hour_utc": hour})
     while True:
         await asyncio.sleep(interval)
@@ -85,5 +110,10 @@ async def gsc_scheduler() -> None:
             if should_run(now, last_run_date, hour):
                 enqueue_due_ingests()
                 last_run_date = now.date()
+            # Weekly DataForSEO fallback, same daily-hour guard but only on the
+            # configured weekday.
+            if now.weekday() == weekday and should_run(now, last_df_date, hour):
+                enqueue_due_dataforseo()
+                last_df_date = now.date()
         except Exception as exc:
             logger.error("gsc_scheduler.unhandled", extra={"error": str(exc)})

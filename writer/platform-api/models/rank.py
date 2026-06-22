@@ -27,6 +27,9 @@ class KeywordSummary(BaseModel):
     id: UUID
     keyword: str
     source: str
+    # Which source the row's numbers come from: 'gsc' (rank + clicks/impr),
+    # 'dataforseo' (live rank only), or 'none' (awaiting first data).
+    primary_source: Literal["gsc", "dataforseo", "none"] = "none"
     canonical_url: Optional[str] = None
     canonical_url_locked: bool
     status: KeywordStatus
@@ -72,6 +75,9 @@ class HeroPoint(BaseModel):
 
 class OverviewResponse(BaseModel):
     keyword_count: int
+    # When false, the client has no verified GSC property: the UI drops the
+    # clicks/impressions and average-position views and shows DataForSEO ranks.
+    gsc_connected: bool = False
     status_counts: dict[str, int]
     clicks_30d: int
     impressions_30d: int
@@ -81,8 +87,17 @@ class OverviewResponse(BaseModel):
 
 
 class MaterializeResponse(BaseModel):
-    property_id: UUID
+    client_id: UUID
     status: Literal["ok", "failed"]
     keywords: int
     rows: int
+    error: Optional[str] = None
+
+
+class DataForSeoRefreshResponse(BaseModel):
+    client_id: UUID
+    status: str
+    fetched: int = 0
+    skipped: int = 0
+    failed: int = 0
     error: Optional[str] = None

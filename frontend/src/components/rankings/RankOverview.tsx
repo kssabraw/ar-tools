@@ -9,14 +9,14 @@ import { Sparkline } from './Sparkline'
 import { PositionChart } from './PositionChart'
 import { MetricsChart } from './MetricsChart'
 
-export function RankOverview({ propertyId }: { propertyId: string }) {
+export function RankOverview({ clientId }: { clientId: string }) {
   const { data: ov } = useQuery<Overview>({
-    queryKey: ['rank-overview', propertyId],
-    queryFn: () => api.get<Overview>(`/gsc-properties/${propertyId}/overview`),
+    queryKey: ['rank-overview', clientId],
+    queryFn: () => api.get<Overview>(`/clients/${clientId}/rank/overview`),
   })
   const { data: keywords } = useQuery<KeywordSummary[]>({
-    queryKey: ['rank-keywords', propertyId],
-    queryFn: () => api.get<KeywordSummary[]>(`/gsc-properties/${propertyId}/keywords`),
+    queryKey: ['rank-keywords', clientId],
+    queryFn: () => api.get<KeywordSummary[]>(`/clients/${clientId}/rank/keywords`),
   })
 
   const triage = useMemo(() => {
@@ -36,17 +36,28 @@ export function RankOverview({ propertyId }: { propertyId: string }) {
     )
   }
 
+  const gsc = ov.gsc_connected
+
   return (
     <div>
+      {!gsc && (
+        <div style={dfBanner}>
+          No Search Console connection — this client’s rankings come from DataForSEO live SERP checks.
+          Clicks, impressions and the Search Console average-position chart aren’t shown in this mode.
+        </div>
+      )}
+
       {/* KPI cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 20 }}>
         <Kpi icon={<Hash size={16} />} label="Keywords" value={ov.keyword_count.toLocaleString()} />
         <Kpi icon={<AlertTriangle size={16} />} label="At risk" value={ov.at_risk.toLocaleString()}
           emphasis={ov.at_risk > 0} />
-        <Kpi icon={<BarChart3 size={16} />} label="Avg position 30d"
-          value={ov.avg_position_30d != null ? ov.avg_position_30d.toFixed(1) : '—'} />
-        <Kpi icon={<MousePointerClick size={16} />} label="Clicks 30d" value={ov.clicks_30d.toLocaleString()} />
-        <Kpi icon={<Eye size={16} />} label="Impressions 30d" value={ov.impressions_30d.toLocaleString()} />
+        {gsc && <>
+          <Kpi icon={<BarChart3 size={16} />} label="Avg position 30d"
+            value={ov.avg_position_30d != null ? ov.avg_position_30d.toFixed(1) : '—'} />
+          <Kpi icon={<MousePointerClick size={16} />} label="Clicks 30d" value={ov.clicks_30d.toLocaleString()} />
+          <Kpi icon={<Eye size={16} />} label="Impressions 30d" value={ov.impressions_30d.toLocaleString()} />
+        </>}
       </div>
 
       {/* Status rollup */}
@@ -61,18 +72,18 @@ export function RankOverview({ propertyId }: { propertyId: string }) {
           ))}
       </div>
 
-      {/* Hero: average position */}
-      <div style={{ ...card, marginBottom: 16 }}>
-        <h3 style={chartTitle}>Average position</h3>
-        <p style={chartHint}>GSC impression-weighted average — improving rank trends upward (inverted axis).</p>
-        <PositionChart points={ov.hero.map(h => ({ date: h.date, value: h.avg_position }))} />
-      </div>
-
-      {/* Clicks & impressions */}
-      <div style={{ ...card, marginBottom: 20 }}>
-        <h3 style={chartTitle}>Clicks &amp; impressions</h3>
-        <MetricsChart points={ov.hero.map(h => ({ date: h.date, clicks: h.clicks, impressions: h.impressions }))} />
-      </div>
+      {/* GSC-only visuals: average position + clicks/impressions */}
+      {gsc && <>
+        <div style={{ ...card, marginBottom: 16 }}>
+          <h3 style={chartTitle}>Average position</h3>
+          <p style={chartHint}>GSC impression-weighted average — improving rank trends upward (inverted axis).</p>
+          <PositionChart points={ov.hero.map(h => ({ date: h.date, value: h.avg_position }))} />
+        </div>
+        <div style={{ ...card, marginBottom: 20 }}>
+          <h3 style={chartTitle}>Clicks &amp; impressions</h3>
+          <MetricsChart points={ov.hero.map(h => ({ date: h.date, clicks: h.clicks, impressions: h.impressions }))} />
+        </div>
+      </>}
 
       {/* Triage list */}
       <h3 style={{ ...chartTitle, marginBottom: 10 }}>Needs attention</h3>
@@ -110,3 +121,4 @@ function Kpi({ icon, label, value, emphasis }: { icon: React.ReactNode; label: s
 
 const chartTitle: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: '#0f172a', margin: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }
 const chartHint: React.CSSProperties = { fontSize: 12, color: '#94a3b8', margin: '4px 0 12px' }
+const dfBanner: React.CSSProperties = { background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#0369a1', marginBottom: 20, lineHeight: 1.5 }
