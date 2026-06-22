@@ -91,6 +91,19 @@ class OverviewResponse(BaseModel):
     hero: list[HeroPoint] = Field(default_factory=list)
 
 
+class PageRow(BaseModel):
+    page: str
+    clicks: int
+    impressions: int
+    keywords: int
+    avg_position: Optional[float] = None
+
+
+class PagesResponse(BaseModel):
+    gsc_connected: bool
+    pages: list[PageRow] = Field(default_factory=list)
+
+
 class MaterializeResponse(BaseModel):
     client_id: UUID
     status: Literal["ok", "failed"]

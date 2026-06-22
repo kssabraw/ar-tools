@@ -23,10 +23,13 @@ from services import gsc_service
 
 logger = logging.getLogger(__name__)
 
-# gsc_query_daily is query×date — NO page dimension (that's gsc_query_page_daily,
-# M4). keys[0]=query, keys[1]=date.
+# gsc_query_daily is query×date — NO page dimension. keys[0]=query, keys[1]=date.
 _DIMENSIONS = ["query", "date"]
 _JOB_TYPE = "gsc_query_daily"
+
+# gsc_query_page_daily is query×page×date. keys[0]=query, keys[1]=page, keys[2]=date.
+_PAGE_DIMENSIONS = ["query", "page", "date"]
+_PAGE_JOB_TYPE = "gsc_query_page_daily"
 
 
 @dataclass
@@ -63,6 +66,28 @@ def parse_query_daily_rows(property_id: str, rows: list[dict]) -> list[dict]:
                 "property_id": property_id,
                 "query": keys[0],
                 "date": keys[1],
+                "clicks": int(row.get("clicks", 0) or 0),
+                "impressions": int(row.get("impressions", 0) or 0),
+                "ctr": float(row.get("ctr", 0) or 0),
+                "position": row.get("position"),
+            }
+        )
+    return parsed
+
+
+def parse_query_page_rows(property_id: str, rows: list[dict]) -> list[dict]:
+    """Map raw GSC rows (dimensions = query, page, date) to gsc_query_page_daily."""
+    parsed: list[dict] = []
+    for row in rows:
+        keys = row.get("keys") or []
+        if len(keys) < 3:
+            continue
+        parsed.append(
+            {
+                "property_id": property_id,
+                "query": keys[0],
+                "page": keys[1],
+                "date": keys[2],
                 "clicks": int(row.get("clicks", 0) or 0),
                 "impressions": int(row.get("impressions", 0) or 0),
                 "ctr": float(row.get("ctr", 0) or 0),
@@ -153,6 +178,46 @@ def ingest_property(
     return IngestResult(status="ok", rows=len(records))
 
 
+def ingest_property_pages(property_id: str) -> IngestResult:
+    """Pull the query×page×date window for a property → gsc_query_page_daily.
+
+    Weekly cadence: the page dimension multiplies rows, so we pull a trailing
+    `gsc_page_window_days` window rather than daily.
+    """
+    supabase = get_supabase()
+    found = supabase.table("gsc_properties").select("*").eq("id", property_id).limit(1).execute()
+    if not found.data:
+        return IngestResult(status="failed", rows=0, error="property_not_found")
+    prop = found.data[0]
+
+    end = date.today()
+    start = end - timedelta(days=settings.gsc_page_window_days)
+    start_date, end_date = start.isoformat(), end.isoformat()
+
+    try:
+        site_url = gsc_service.normalize_site_url(prop["site_url"], prop["property_type"])
+        raw = gsc_service.fetch_search_analytics(site_url, _PAGE_DIMENSIONS, start_date, end_date)
+    except Exception as exc:
+        code = gsc_service._extract_status_code(exc)
+        err = f"{gsc_service.classify_access_error(code).detail or 'fetch_failed'}" if code else "fetch_failed"
+        get_supabase().table("sync_runs").insert(
+            {"property_id": property_id, "job_type": _PAGE_JOB_TYPE, "start_date": start_date,
+             "end_date": end_date, "rows": 0, "status": "failed", "error": err}
+        ).execute()
+        return IngestResult(status="failed", rows=0, error=err)
+
+    records = parse_query_page_rows(property_id, raw)
+    if records:
+        supabase.table("gsc_query_page_daily").upsert(
+            records, on_conflict="property_id,date,query,page"
+        ).execute()
+    supabase.table("sync_runs").insert(
+        {"property_id": property_id, "job_type": _PAGE_JOB_TYPE, "start_date": start_date,
+         "end_date": end_date, "rows": len(records), "status": "ok", "error": None}
+    ).execute()
+    return IngestResult(status="ok", rows=len(records))
+
+
 async def run_gsc_ingest_job(job: dict) -> None:
     """async_jobs handler for job_type='gsc_ingest'."""
     payload = job.get("payload") or {}
@@ -184,5 +249,36 @@ async def run_gsc_ingest_job(job: dict) -> None:
         prop = (
             supabase.table("gsc_properties").select("client_id").eq("id", property_id).limit(1).execute()
         )
+        if prop.data:
+            enqueue_materialize(prop.data[0]["client_id"])
+
+
+async def run_gsc_page_ingest_job(job: dict) -> None:
+    """async_jobs handler for job_type='gsc_page_ingest' (weekly query×page)."""
+    from services.rank_materialize import enqueue_materialize
+
+    payload = job.get("payload") or {}
+    property_id = payload.get("property_id")
+    job_id = job["id"]
+    supabase = get_supabase()
+    if not property_id:
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": "missing property_id", "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        return
+
+    result = ingest_property_pages(property_id)
+    supabase.table("async_jobs").update(
+        {
+            "status": "complete" if result.status == "ok" else "failed",
+            "result": {"rows": result.rows},
+            "error": result.error,
+            "completed_at": "now()",
+        }
+    ).eq("id", job_id).execute()
+
+    # Resolve canonical URLs from the fresh page data.
+    if result.status == "ok":
+        prop = supabase.table("gsc_properties").select("client_id").eq("id", property_id).limit(1).execute()
         if prop.data:
             enqueue_materialize(prop.data[0]["client_id"])

@@ -155,6 +155,19 @@ export interface HeroPoint {
   impressions: number
 }
 
+export interface PageRow {
+  page: string
+  clicks: number
+  impressions: number
+  keywords: number
+  avg_position: number | null
+}
+
+export interface PagesResponse {
+  gsc_connected: boolean
+  pages: PageRow[]
+}
+
 export interface RankOverview {
   keyword_count: number
   gsc_connected: boolean

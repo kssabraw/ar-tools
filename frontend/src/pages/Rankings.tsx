@@ -9,8 +9,9 @@ import { backLink } from '../components/localseo/shared'
 import { RankSettings } from '../components/rankings/RankSettings'
 import { RankOverview } from '../components/rankings/RankOverview'
 import { RankKeywords } from '../components/rankings/RankKeywords'
+import { RankPages } from '../components/rankings/RankPages'
 
-type Tab = 'overview' | 'keywords' | 'settings'
+type Tab = 'overview' | 'keywords' | 'pages' | 'settings'
 
 // Per-client Organic Rank Tracker (Module #4). Tabbed shell over the connected
 // GSC property: Overview (triage), Keywords (wide table), Settings (connection).
@@ -58,6 +59,7 @@ export function Rankings() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, borderBottom: '1px solid #e2e8f0', marginBottom: 24 }}>
         <TabButton active={tab === 'overview'} onClick={() => setTab('overview')} label="Overview" />
         <TabButton active={tab === 'keywords'} onClick={() => setTab('keywords')} label="Keywords" />
+        {gscConnected && <TabButton active={tab === 'pages'} onClick={() => setTab('pages')} label="Pages" />}
         <TabButton active={tab === 'settings'} onClick={() => setTab('settings')} label="Settings" />
       </div>
 
@@ -66,6 +68,8 @@ export function Rankings() {
         <RankSettings clientId={clientId} isAdmin={isAdmin} />
       ) : tab === 'overview' ? (
         <RankOverview clientId={clientId} />
+      ) : tab === 'pages' ? (
+        <RankPages clientId={clientId} />
       ) : (
         <RankKeywords clientId={clientId} isAdmin={isAdmin} gscConnected={gscConnected} />
       )}

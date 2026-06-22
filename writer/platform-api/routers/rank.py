@@ -27,6 +27,7 @@ from models.rank import (
     KeywordTrendline,
     MaterializeResponse,
     OverviewResponse,
+    PagesResponse,
     TrackedKeywordCreateRequest,
     TrackedKeywordUpdateRequest,
     TrendPoint,
@@ -258,6 +259,23 @@ async def get_overview(client_id: UUID, auth: dict = Depends(require_auth)) -> O
         at_risk=at_risk,
         hero=hero,
     )
+
+
+@router.get("/clients/{client_id}/rank/pages", response_model=PagesResponse)
+async def get_pages(client_id: UUID, auth: dict = Depends(require_auth)) -> PagesResponse:
+    """GSC performance pivoted by landing page (requires a verified property)."""
+    supabase = get_supabase()
+    property_id = rank_materialize._verified_property_id(supabase, str(client_id))
+    if not property_id:
+        return PagesResponse(gsc_connected=False, pages=[])
+    rows = (
+        supabase.table("gsc_query_page_daily")
+        .select("query, page, clicks, impressions, position")
+        .eq("property_id", property_id)
+        .execute()
+    )
+    pages = rank_status.aggregate_pages(rows.data or [])[:100]
+    return PagesResponse(gsc_connected=True, pages=pages)
 
 
 @router.post("/clients/{client_id}/rank/materialize", response_model=MaterializeResponse)

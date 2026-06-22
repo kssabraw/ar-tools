@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     gsc_repull_days: int = 3
     gsc_ingest_hour_utc: int = 8
     gsc_scheduler_poll_interval_seconds: int = 300
+    # Weekly query×page ingest window (canonical-URL resolution + Pages view).
+    gsc_page_window_days: int = 30
+    # Striking-distance discovery: queries averaging in this position band (and
+    # not already tracked) are page-2 opportunities.
+    striking_distance_min: float = 8.0
+    striking_distance_max: float = 20.0
     # M3 materialize: the trailing window (days) of the per-keyword-per-day axis.
     # Covers all rolling windows (max 90d) + margin; the full 16-month history
     # stays in gsc_query_daily.

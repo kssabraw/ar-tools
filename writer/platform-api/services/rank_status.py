@@ -175,6 +175,40 @@ def compute_keyword_summary(rows: Sequence[dict], today: date, coverage_days: in
     return base
 
 
+def aggregate_pages(page_rows: Sequence[dict]) -> list[dict]:
+    """Pivot gsc_query_page_daily by page for the Pages view.
+
+    Per page: total clicks/impressions, distinct keyword count, and an
+    impression-weighted average position. Sorted by clicks desc.
+    """
+    by_page: dict[str, dict] = {}
+    for row in page_rows:
+        page = row["page"]
+        b = by_page.setdefault(page, {"clicks": 0, "impressions": 0, "queries": set(), "pos_num": 0.0, "pos_den": 0})
+        clicks = int(row.get("clicks", 0) or 0)
+        impressions = int(row.get("impressions", 0) or 0)
+        b["clicks"] += clicks
+        b["impressions"] += impressions
+        b["queries"].add(str(row.get("query", "")).lower())
+        pos = row.get("position")
+        if pos is not None and impressions:
+            b["pos_num"] += pos * impressions
+            b["pos_den"] += impressions
+
+    out = []
+    for page, b in by_page.items():
+        avg_pos = round(b["pos_num"] / b["pos_den"], 1) if b["pos_den"] else None
+        out.append({
+            "page": page,
+            "clicks": b["clicks"],
+            "impressions": b["impressions"],
+            "keywords": len(b["queries"]),
+            "avg_position": avg_pos,
+        })
+    out.sort(key=lambda p: (p["clicks"], p["impressions"]), reverse=True)
+    return out
+
+
 def aggregate_hero(rows: Sequence[dict], today: date, days: int) -> list[dict]:
     """Account-level daily series for the Overview hero chart.
 

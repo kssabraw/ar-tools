@@ -79,6 +79,29 @@ def build_keyword_axis(
     return records
 
 
+def resolve_canonical_pages(page_rows: list[dict]) -> dict[str, str]:
+    """Best landing page per query: most clicks, tie-broken by most impressions.
+
+    `page_rows` are gsc_query_page_daily records (query, page, clicks,
+    impressions). Returns {lowercased query: page}. This is the heuristic the
+    `canonical_url_locked` flag overrides when a client pins a target URL.
+    """
+    totals: dict[str, dict[str, tuple[int, int]]] = {}
+    for row in page_rows:
+        q = str(row["query"]).lower()
+        page = row["page"]
+        clicks = int(row.get("clicks", 0) or 0)
+        impressions = int(row.get("impressions", 0) or 0)
+        bucket = totals.setdefault(q, {})
+        prev = bucket.get(page, (0, 0))
+        bucket[page] = (prev[0] + clicks, prev[1] + impressions)
+    out: dict[str, str] = {}
+    for q, pages in totals.items():
+        best = max(pages.items(), key=lambda kv: (kv[1][0], kv[1][1]))
+        out[q] = best[0]
+    return out
+
+
 def classify_source(merged_rows: list[dict]) -> str:
     """tracked_keywords.source from what data the keyword actually has."""
     has_gsc = any(r.get("gsc_position") is not None for r in merged_rows)
@@ -116,7 +139,7 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
 
     keywords = (
         supabase.table("tracked_keywords")
-        .select("id, keyword")
+        .select("id, keyword, canonical_url, canonical_url_locked")
         .eq("client_id", client_id)
         .eq("active", True)
         .execute()
@@ -128,6 +151,7 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
     # GSC data (only if the client has a verified property).
     property_id = _verified_property_id(supabase, client_id)
     gsc_index: dict[tuple[str, str], dict] = {}
+    canonical_by_query: dict[str, str] = {}
     if property_id:
         raw = (
             supabase.table("gsc_query_daily")
@@ -138,6 +162,14 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
             .execute()
         )
         gsc_index = index_gsc_rows(raw.data or [])
+        # Canonical landing page per query, from the weekly query×page data.
+        page_rows = (
+            supabase.table("gsc_query_page_daily")
+            .select("query, page, clicks, impressions")
+            .eq("property_id", property_id)
+            .execute()
+        )
+        canonical_by_query = resolve_canonical_pages(page_rows.data or [])
 
     # Existing DataForSEO ranks (weekly fallback wrote these); blend for status.
     df_rows = (
@@ -174,9 +206,17 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
                 series = [(r["date"], r.get("gsc_position")) for r in merged]
             status = rank_status.compute_status(series)
 
-            supabase.table("tracked_keywords").update(
-                {"status": status, "source": source, "status_updated_at": now_iso, "updated_at": now_iso}
-            ).eq("id", kw["id"]).execute()
+            update = {
+                "status": status, "source": source,
+                "status_updated_at": now_iso, "updated_at": now_iso,
+            }
+            # Resolve canonical URL unless the client pinned it.
+            if not kw.get("canonical_url_locked"):
+                resolved = canonical_by_query.get(kw["keyword"].lower())
+                if resolved and resolved != kw.get("canonical_url"):
+                    update["canonical_url"] = resolved
+
+            supabase.table("tracked_keywords").update(update).eq("id", kw["id"]).execute()
     except Exception as exc:
         logger.error("rank_materialize_failed", extra={"client_id": client_id, "error": str(exc)})
         return MaterializeResult(status="failed", keywords=len(keywords.data), rows=total_rows, error=str(exc))

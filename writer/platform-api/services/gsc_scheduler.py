@@ -109,6 +109,27 @@ def enqueue_due_market() -> int:
     return len(client_ids)
 
 
+def enqueue_due_page_ingest() -> int:
+    """Weekly: enqueue a query×page ingest for each verified property."""
+    supabase = get_supabase()
+    props = supabase.table("gsc_properties").select("id").eq("access_status", "ok").execute()
+    enqueued = 0
+    for prop in props.data or []:
+        property_id = prop["id"]
+        existing = (
+            supabase.table("async_jobs").select("id")
+            .eq("job_type", "gsc_page_ingest").eq("entity_id", property_id)
+            .in_("status", ["pending", "running"]).limit(1).execute()
+        )
+        if existing.data:
+            continue
+        supabase.table("async_jobs").insert(
+            {"job_type": "gsc_page_ingest", "entity_id": property_id, "payload": {"property_id": property_id}}
+        ).execute()
+        enqueued += 1
+    return enqueued
+
+
 async def gsc_scheduler() -> None:
     """Background loop: daily GSC ingest enqueue + weekly DataForSEO rank enqueue."""
     interval = settings.gsc_scheduler_poll_interval_seconds
@@ -125,10 +146,11 @@ async def gsc_scheduler() -> None:
                 enqueue_due_ingests()
                 enqueue_due_market()
                 last_run_date = now.date()
-            # Weekly DataForSEO fallback, same daily-hour guard but only on the
-            # configured weekday.
+            # Weekly DataForSEO fallback + query×page ingest, same daily-hour
+            # guard but only on the configured weekday.
             if now.weekday() == weekday and should_run(now, last_df_date, hour):
                 enqueue_due_dataforseo()
+                enqueue_due_page_ingest()
                 last_df_date = now.date()
         except Exception as exc:
             logger.error("gsc_scheduler.unhandled", extra={"error": str(exc)})
