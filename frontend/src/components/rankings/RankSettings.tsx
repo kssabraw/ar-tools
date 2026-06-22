@@ -12,7 +12,7 @@ interface ServiceAccountInfo { email: string }
 
 // M1/M2 connection management: service-account email, property CRUD, verify
 // access, and last-sync status / manual sync.
-export function RankSettings({ clientId, isAdmin }: { clientId: string; isAdmin: boolean }) {
+export function RankSettings({ clientId }: { clientId: string }) {
   const queryClient = useQueryClient()
 
   const { data: sa, error: saError } = useQuery<ServiceAccountInfo>({
@@ -96,13 +96,12 @@ export function RankSettings({ clientId, isAdmin }: { clientId: string; isAdmin:
               <PropertyRow
                 key={p.id}
                 property={p}
-                isAdmin={isAdmin}
                 verifying={verifyMut.isPending && verifyMut.variables === p.id}
                 detail={verifyResult[p.id]?.detail ?? null}
                 onVerify={() => verifyMut.mutate(p.id)}
                 onDelete={() => deleteMut.mutate(p.id)}
               >
-                {p.access_status === 'ok' && <SyncStatus propertyId={p.id} isAdmin={isAdmin} />}
+                {p.access_status === 'ok' && <SyncStatus propertyId={p.id} />}
               </PropertyRow>
             ))}
           </div>
@@ -110,7 +109,7 @@ export function RankSettings({ clientId, isAdmin }: { clientId: string; isAdmin:
           <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 16px' }}>No property connected yet.</p>
         )}
 
-        {!isAdmin ? null : adding ? (
+        {adding ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <label style={label} htmlFor="site_url">Property URL</label>
             <input
@@ -142,9 +141,9 @@ export function RankSettings({ clientId, isAdmin }: { clientId: string; isAdmin:
 }
 
 function PropertyRow({
-  property, isAdmin, verifying, detail, onVerify, onDelete, children,
+  property, verifying, detail, onVerify, onDelete, children,
 }: {
-  property: GscProperty; isAdmin: boolean; verifying: boolean; detail: string | null
+  property: GscProperty; verifying: boolean; detail: string | null
   onVerify: () => void; onDelete: () => void; children?: React.ReactNode
 }) {
   const badge = statusBadge(property.access_status)
@@ -175,11 +174,9 @@ function PropertyRow({
           <button style={outlineBtn} onClick={onVerify} disabled={verifying}>
             <RefreshCw size={14} /> {verifying ? 'Verifying…' : 'Verify access'}
           </button>
-          {isAdmin && (
-            <button style={{ ...outlineBtn, color: '#dc2626' }} onClick={onDelete} title="Remove">
-              <Trash2 size={14} />
-            </button>
-          )}
+          <button style={{ ...outlineBtn, color: '#dc2626' }} onClick={onDelete} title="Remove">
+            <Trash2 size={14} />
+          </button>
         </div>
       </div>
       {children}
@@ -187,7 +184,7 @@ function PropertyRow({
   )
 }
 
-function SyncStatus({ propertyId, isAdmin }: { propertyId: string; isAdmin: boolean }) {
+function SyncStatus({ propertyId }: { propertyId: string }) {
   const queryClient = useQueryClient()
   const { data: runs } = useQuery<SyncRun[]>({
     queryKey: ['gsc-sync-runs', propertyId],
@@ -218,23 +215,21 @@ function SyncStatus({ propertyId, isAdmin }: { propertyId: string; isAdmin: bool
           <span>Not synced yet — the daily job runs automatically, or sync now.</span>
         )}
       </div>
-      {isAdmin && (
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
-            onClick={() => ingestMut.mutate()} disabled={ingestMut.isPending}>
-            <RefreshCw size={13} /> {ingestMut.isPending ? 'Syncing…' : 'Sync now'}
-          </button>
-          <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
-            title="Pull ~16 months of history in the background"
-            onClick={() => {
-              if (confirm('Backfill ~16 months of Search Console history? This runs in the background and may take a few minutes.'))
-                backfillMut.mutate()
-            }}
-            disabled={backfillMut.isPending || backfillMut.isSuccess}>
-            <History size={13} /> {backfillMut.isSuccess ? 'Backfill queued' : 'Backfill history'}
-          </button>
-        </div>
-      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
+          onClick={() => ingestMut.mutate()} disabled={ingestMut.isPending}>
+          <RefreshCw size={13} /> {ingestMut.isPending ? 'Syncing…' : 'Sync now'}
+        </button>
+        <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
+          title="Pull ~16 months of history in the background"
+          onClick={() => {
+            if (confirm('Backfill ~16 months of Search Console history? This runs in the background and may take a few minutes.'))
+              backfillMut.mutate()
+          }}
+          disabled={backfillMut.isPending || backfillMut.isSuccess}>
+          <History size={13} /> {backfillMut.isSuccess ? 'Backfill queued' : 'Backfill history'}
+        </button>
+      </div>
     </div>
   )
 }

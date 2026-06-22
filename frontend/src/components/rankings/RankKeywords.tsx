@@ -12,8 +12,8 @@ import { PositionChart } from './PositionChart'
 // `gscConnected` controls whether the GSC-only columns (clicks, impressions,
 // CTR, 7/30/60/90 average position) are shown at all. Without GSC the table
 // falls back to the DataForSEO live rank ("Today") + trend.
-export function RankKeywords({ clientId, isAdmin, gscConnected }: {
-  clientId: string; isAdmin: boolean; gscConnected: boolean
+export function RankKeywords({ clientId, gscConnected }: {
+  clientId: string; gscConnected: boolean
 }) {
   const queryClient = useQueryClient()
   const { data: keywords, isLoading } = useQuery<KeywordSummary[]>({
@@ -109,7 +109,7 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
               <Upload size={14} /> {addMut.isPending ? 'Importing…' : 'Import CSV'}
             </button>
             <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={onCsvSelected} />
-            {isAdmin && (keywords?.length ?? 0) > 0 && (
+            {(keywords?.length ?? 0) > 0 && (
               <button style={outlineBtn} onClick={() => refreshMut.mutate()} disabled={refreshMut.isPending}
                 title="Fetch DataForSEO ranks now for keywords GSC doesn't cover">
                 <RefreshCw size={14} /> {refreshMut.isPending ? 'Fetching…' : 'Refresh live ranks'}
@@ -164,12 +164,12 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
                 <th style={th} title="Est. monthly value = volume × CTR-at-position × CPC">Est. value</th>
                 {showGsc && <><th style={th}>7d</th><th style={th}>30d</th><th style={th}>60d</th><th style={th}>90d</th>
                   <th style={th}>Clicks</th><th style={th}>Impr.</th><th style={th}>CTR</th></>}
-                {isAdmin && <th style={th}></th>}
+                <th style={th}></th>
               </tr>
             </thead>
             <tbody>
               {rows.map(k => (
-                <KeywordRow key={k.id} k={k} isAdmin={isAdmin} clientId={clientId} showGsc={showGsc} />
+                <KeywordRow key={k.id} k={k} clientId={clientId} showGsc={showGsc} />
               ))}
             </tbody>
           </table>
@@ -179,8 +179,8 @@ export function RankKeywords({ clientId, isAdmin, gscConnected }: {
   )
 }
 
-function KeywordRow({ k, isAdmin, clientId, showGsc }: {
-  k: KeywordSummary; isAdmin: boolean; clientId: string; showGsc: boolean
+function KeywordRow({ k, clientId, showGsc }: {
+  k: KeywordSummary; clientId: string; showGsc: boolean
 }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -218,7 +218,7 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
     },
   })
 
-  const colSpan = 7 + (showGsc ? 7 : 0) + (isAdmin ? 1 : 0)
+  const colSpan = 8 + (showGsc ? 7 : 0)
   // DataForSEO keywords plot tracked_rank; GSC keywords plot gsc_position.
   const trendValues = (trend?.points ?? []).map(p => ({
     date: p.date, value: isDf ? (p.tracked_rank ?? null) : p.gsc_position,
@@ -270,17 +270,15 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
           <td style={td}>{k.impressions_30d.toLocaleString()}</td>
           <td style={td}>{k.impressions_30d ? `${(k.ctr_30d * 100).toFixed(1)}%` : <Dash />}</td>
         </>}
-        {isAdmin && (
-          <td style={td} onClick={(e) => e.stopPropagation()}>
-            <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
-              onClick={() => deleteMut.mutate()} title="Stop tracking"><Trash2 size={13} /></button>
-          </td>
-        )}
+        <td style={td} onClick={(e) => e.stopPropagation()}>
+          <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
+            onClick={() => deleteMut.mutate()} title="Stop tracking"><Trash2 size={13} /></button>
+        </td>
       </tr>
       {open && (
         <tr>
           <td colSpan={colSpan} style={{ padding: 16, background: '#fafbfc', borderBottom: '1px solid #f1f5f9' }}>
-            {k.status === 'deindex_risk' && <DeindexBanner k={k} isAdmin={isAdmin}
+            {k.status === 'deindex_risk' && <DeindexBanner k={k}
               checking={checkIndexMut.isPending} onCheck={() => checkIndexMut.mutate()} />}
             <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>
               {isDf
@@ -292,7 +290,6 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
               <PageBreakdown
                 pages={pages.pages}
                 locked={k.canonical_url_locked}
-                isAdmin={isAdmin}
                 pinning={pinMut.isPending}
                 onPin={(page) => pinMut.mutate({ canonical_url: page, canonical_url_locked: true })}
                 onUnpin={() => pinMut.mutate({ canonical_url_locked: false })}
@@ -308,10 +305,9 @@ function KeywordRow({ k, isAdmin, clientId, showGsc }: {
 // Which landing pages a keyword surfaces for — flags the canonical page,
 // surfaces "split across pages" conflicts (PRD §8.5), and lets an admin pin the
 // canonical page so the most-clicks heuristic can't reassign it (§5).
-function PageBreakdown({ pages, locked, isAdmin, pinning, onPin, onUnpin }: {
+function PageBreakdown({ pages, locked, pinning, onPin, onUnpin }: {
   pages: KeywordPagesResponse['pages']
   locked: boolean
-  isAdmin: boolean
   pinning: boolean
   onPin: (page: string) => void
   onUnpin: () => void
@@ -323,12 +319,10 @@ function PageBreakdown({ pages, locked, isAdmin, pinning, onPin, onUnpin }: {
         {locked && (
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#7c3aed' }}>
             <Pin size={11} /> canonical pinned
-            {isAdmin && (
-              <button style={{ ...outlineBtn, padding: '2px 8px', fontSize: 11, marginLeft: 6 }}
-                onClick={onUnpin} disabled={pinning}>
-                <PinOff size={11} /> Unpin
-              </button>
-            )}
+            <button style={{ ...outlineBtn, padding: '2px 8px', fontSize: 11, marginLeft: 6 }}
+              onClick={onUnpin} disabled={pinning}>
+              <PinOff size={11} /> Unpin
+            </button>
           </span>
         )}
       </div>
@@ -343,7 +337,7 @@ function PageBreakdown({ pages, locked, isAdmin, pinning, onPin, onUnpin }: {
             <span style={{ fontSize: 12, color: '#64748b', width: 60, textAlign: 'right' }}>{p.clicks.toLocaleString()} clk</span>
             <span style={{ fontSize: 12, color: '#94a3b8', width: 70, textAlign: 'right' }}>{p.impressions.toLocaleString()} impr</span>
             <span style={{ fontSize: 12, color: '#64748b', width: 40, textAlign: 'right' }}>{p.avg_position != null ? p.avg_position.toFixed(1) : '—'}</span>
-            {isAdmin && !(p.is_canonical && locked) && (
+            {!(p.is_canonical && locked) && (
               <button style={{ ...outlineBtn, padding: '3px 8px', fontSize: 11 }}
                 onClick={() => onPin(p.page)} disabled={pinning} title="Pin this page as the canonical landing page">
                 <Pin size={11} /> Pin
@@ -358,8 +352,8 @@ function PageBreakdown({ pages, locked, isAdmin, pinning, onPin, onUnpin }: {
 
 // For a deindex_risk keyword, surface the URL-Inspection verdict so the message
 // becomes "this page is deindexed" rather than just "rankings look low".
-function DeindexBanner({ k, isAdmin, checking, onCheck }: {
-  k: KeywordSummary; isAdmin: boolean; checking: boolean; onCheck: () => void
+function DeindexBanner({ k, checking, onCheck }: {
+  k: KeywordSummary; checking: boolean; onCheck: () => void
 }) {
   const confirmed = k.index_status === 'not_indexed'
   const indexed = k.index_status === 'indexed'
@@ -376,7 +370,7 @@ function DeindexBanner({ k, isAdmin, checking, onCheck }: {
             ? <>URL Inspection says the page is <strong>indexed</strong> — the disappearance is a ranking drop, not deindexing.</>
             : <>Sustained disappearance after an established baseline — possible deindexing. Run a URL Inspection to confirm.</>}
       </div>
-      {isAdmin && k.canonical_url && (
+      {k.canonical_url && (
         <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }} onClick={onCheck} disabled={checking}>
           {checking ? 'Checking…' : 'Check index'}
         </button>

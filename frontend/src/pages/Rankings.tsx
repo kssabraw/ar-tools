@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, TrendingUp } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, GscProperty } from '../lib/types'
-import { useAuth } from '../context/AuthContext'
 import { backLink } from '../components/localseo/shared'
 import { RankSettings } from '../components/rankings/RankSettings'
 import { RankOverview } from '../components/rankings/RankOverview'
@@ -19,7 +18,6 @@ export function Rankings() {
   const { id } = useParams<{ id: string }>()
   const clientId = id as string
   const navigate = useNavigate()
-  const { isAdmin } = useAuth()
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', clientId],
@@ -65,13 +63,13 @@ export function Rankings() {
 
       {/* Body */}
       {tab === 'settings' ? (
-        <RankSettings clientId={clientId} isAdmin={isAdmin} />
+        <RankSettings clientId={clientId} />
       ) : tab === 'overview' ? (
         <RankOverview clientId={clientId} />
       ) : tab === 'pages' ? (
         <RankPages clientId={clientId} />
       ) : (
-        <RankKeywords clientId={clientId} isAdmin={isAdmin} gscConnected={gscConnected} />
+        <RankKeywords clientId={clientId} gscConnected={gscConnected} />
       )}
     </div>
   )

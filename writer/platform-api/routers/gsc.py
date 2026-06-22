@@ -19,7 +19,7 @@ from config import settings
 from fastapi import APIRouter, Depends, HTTPException
 
 from db.supabase_client import get_supabase
-from middleware.auth import require_admin, require_auth
+from middleware.auth import require_auth
 from models.gsc import (
     BackfillResponse,
     GscProperty,
@@ -66,7 +66,7 @@ async def list_properties(
 async def create_property(
     client_id: UUID,
     body: GscPropertyCreateRequest,
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_auth),
 ) -> GscProperty:
     property_type = body.property_type or gsc_service.infer_property_type(body.site_url)
     try:
@@ -99,7 +99,7 @@ async def create_property(
 
 
 @router.delete("/gsc-properties/{property_id}", status_code=204)
-async def delete_property(property_id: UUID, auth: dict = Depends(require_admin)) -> None:
+async def delete_property(property_id: UUID, auth: dict = Depends(require_auth)) -> None:
     supabase = get_supabase()
     supabase.table("gsc_properties").delete().eq("id", str(property_id)).execute()
 
@@ -161,7 +161,7 @@ async def trigger_ingest(
     property_id: UUID,
     start_date: str | None = None,
     end_date: str | None = None,
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_auth),
 ) -> IngestResponse:
     """Run a GSC ingest now (admin). Omit dates for the default trailing window;
     pass start_date/end_date (YYYY-MM-DD) for a wider initial backfill."""
@@ -176,7 +176,7 @@ async def trigger_ingest(
 
 @router.post("/gsc-properties/{property_id}/backfill", response_model=BackfillResponse)
 async def trigger_backfill(
-    property_id: UUID, auth: dict = Depends(require_admin)
+    property_id: UUID, auth: dict = Depends(require_auth)
 ) -> BackfillResponse:
     """Queue a one-time historical pull (~16 months) so the store keeps GSC data
     forever. Runs in the background via the job worker (admin)."""

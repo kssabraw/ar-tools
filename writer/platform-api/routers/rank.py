@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from middleware.auth import require_admin, require_auth
+from middleware.auth import require_auth
 from models.rank import (
     DataForSeoRefreshResponse,
     KeywordSummary,
@@ -195,7 +195,7 @@ async def add_keywords(
 async def update_keyword(
     keyword_id: UUID,
     body: TrackedKeywordUpdateRequest,
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_auth),
 ) -> KeywordSummary:
     updates = body.model_dump(exclude_unset=True)
     if not updates:
@@ -211,7 +211,7 @@ async def update_keyword(
 
 
 @router.delete("/tracked-keywords/{keyword_id}", status_code=204)
-async def delete_keyword(keyword_id: UUID, auth: dict = Depends(require_admin)) -> None:
+async def delete_keyword(keyword_id: UUID, auth: dict = Depends(require_auth)) -> None:
     get_supabase().table("tracked_keywords").delete().eq("id", str(keyword_id)).execute()
 
 
@@ -347,7 +347,7 @@ async def get_striking_distance(client_id: UUID, auth: dict = Depends(require_au
 
 
 @router.post("/tracked-keywords/{keyword_id}/check-index", response_model=KeywordSummary)
-async def check_index(keyword_id: UUID, auth: dict = Depends(require_admin)) -> KeywordSummary:
+async def check_index(keyword_id: UUID, auth: dict = Depends(require_auth)) -> KeywordSummary:
     """Run URL Inspection now on a keyword's canonical page (admin)."""
     supabase = get_supabase()
     found = supabase.table("tracked_keywords").select("*").eq("id", str(keyword_id)).limit(1).execute()
@@ -390,7 +390,7 @@ async def get_pages(client_id: UUID, auth: dict = Depends(require_auth)) -> Page
 
 
 @router.post("/clients/{client_id}/rank/materialize", response_model=MaterializeResponse)
-async def trigger_materialize(client_id: UUID, auth: dict = Depends(require_admin)) -> MaterializeResponse:
+async def trigger_materialize(client_id: UUID, auth: dict = Depends(require_auth)) -> MaterializeResponse:
     result = rank_materialize.materialize_client(str(client_id))
     return MaterializeResponse(
         client_id=client_id, status=result.status, keywords=result.keywords,
@@ -399,7 +399,7 @@ async def trigger_materialize(client_id: UUID, auth: dict = Depends(require_admi
 
 
 @router.post("/clients/{client_id}/rank/refresh-dataforseo", response_model=DataForSeoRefreshResponse)
-async def trigger_dataforseo(client_id: UUID, auth: dict = Depends(require_admin)) -> DataForSeoRefreshResponse:
+async def trigger_dataforseo(client_id: UUID, auth: dict = Depends(require_auth)) -> DataForSeoRefreshResponse:
     """Fetch DataForSEO ranks now for keywords GSC can't cover (admin)."""
     result = await dataforseo_rank.refresh_client_ranks(str(client_id))
     if result.get("status") == "ok" and result.get("fetched"):
