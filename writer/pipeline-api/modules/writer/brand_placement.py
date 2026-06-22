@@ -74,7 +74,10 @@ def brand_mention_present(body: str, brand_name: str) -> bool:
     (e.g. a brand named "Net" matching "internet")."""
     if not body or not brand_name:
         return False
-    pattern = r"\b" + re.escape(brand_name.strip()) + r"\b"
+    # Use word-char lookarounds rather than \b so brands that begin or end
+    # with a non-word char (e.g. "A.B Inc.", "Foo+Bar") still match - a
+    # trailing \b after a non-word char can never fire.
+    pattern = r"(?<!\w)" + re.escape(brand_name.strip()) + r"(?!\w)"
     return re.search(pattern, body, re.IGNORECASE) is not None
 
 
@@ -232,7 +235,10 @@ def build_brand_placement_plan(
         if icp_anchor_order is not None:
             plan.icp_anchor_order = icp_anchor_order
             plan.icp_anchor_text = text_by_order.get(icp_anchor_order)
-            plan.icp_hook_phrase = hook
+            # When the anchor was forced by fallback (no token overlap), no
+            # phrase matched - surface the first available signal as the hook
+            # so the plan field matches the per-directive fallback below.
+            plan.icp_hook_phrase = hook or (pain_points or verticals or [None])[0]
 
     # Build the per-order directive map. Every content H2 gets an
     # entry: anchors get `must_mention_brand=True` (or hook=…); all
