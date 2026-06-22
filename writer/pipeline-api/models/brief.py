@@ -410,6 +410,26 @@ class IntentSignals(BaseModel):
     comparison_tables: bool = False
 
 
+class MainEntity(BaseModel):
+    """The single noun phrase the AIO answer (or, on fallback, the title)
+    repeatedly names, in its preferred surface form. Consumed by the
+    heading-form pass, the residual restatement gate, and MCS-style
+    rephrase suggestions. See PRD §X.2 / §13.X.8.
+
+    Not yet embedded in BriefResponse — populated by `entity.py` and wired
+    into the pipeline + schema 2.7 in a later increment.
+    """
+    model_config = _FORBID_EXTRA
+
+    canonical: str
+    variants: list[str] = Field(default_factory=list)
+    secondary_entity: Optional[str] = None
+    source: Literal["aio", "title_fallback"]
+    confidence: float
+    multi_entity_flag: bool = False
+    emq_identical: bool = False
+
+
 class BriefMetadata(BaseModel):
     """Operational + tuning metadata. Threshold values used during the
     run are echoed back so consumers (and offline tuners) know exactly
