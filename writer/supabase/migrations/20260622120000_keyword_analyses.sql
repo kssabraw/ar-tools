@@ -5,7 +5,10 @@
 -- SERP analysis depends only on (keyword, location) — NOT the client — so entries
 -- are shared across all clients. See docs/modules SERP analysis PRD §7 (caching).
 
-create table keyword_analyses (
+-- Idempotent: this was first applied to the live project via the Supabase MCP
+-- (recorded as version 20260622055459), so guard against a double-create when
+-- the file-based migrations are replayed/reconciled against that project.
+create table if not exists keyword_analyses (
   id             uuid primary key default gen_random_uuid(),
   -- Normalized "<keyword>::<location_code|location_name>" — the shared cache key.
   cache_key      text not null unique,
@@ -17,7 +20,7 @@ create table keyword_analyses (
   created_at     timestamptz not null default now()
 );
 
-create index keyword_analyses_created_at_idx on keyword_analyses (created_at desc);
+create index if not exists keyword_analyses_created_at_idx on keyword_analyses (created_at desc);
 
 -- RLS: this is an internal cache touched only by the platform-api service-role
 -- key (which bypasses RLS). No policies → anon/authenticated have no direct

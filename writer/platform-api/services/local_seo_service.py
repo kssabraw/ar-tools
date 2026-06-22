@@ -11,6 +11,7 @@ proxy: the frontend never reaches nlp directly.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Optional
@@ -196,27 +197,68 @@ async def search_locations(client_id: str, query: str, country: Optional[str] = 
     return await locations_service.search_locations(client, query, country=country)
 
 
+# Per-key locks collapse concurrent identical cache misses into a single compute
+# (single-flight). Effective because the platform-api runs a single replica; a
+# second caller for the same key waits, then gets the just-stored result.
+_analysis_locks: dict[str, asyncio.Lock] = {}
+
+
+def _analysis_lock(key: str) -> asyncio.Lock:
+    lock = _analysis_locks.get(key)
+    if lock is None:
+        lock = _analysis_locks.setdefault(key, asyncio.Lock())
+    return lock
+
+
+async def _compute_and_store(
+    keyword: str, location: str, location_code: Optional[int], user_id: Optional[str], required: bool,
+) -> Optional[dict]:
+    """Run the nlp SERP analysis and cache it. On provider failure: re-raise when
+    `required` (the analysis IS the deliverable), else log and return None so the
+    caller can degrade gracefully (generate/score are enhanced by analysis, not
+    gated on it)."""
+    try:
+        result = await _post_nlp("/analyze", {
+            "keyword": keyword,
+            "location": location,
+            "location_code": location_code,
+        }, user_id=user_id)
+    except HTTPException as exc:
+        if required:
+            raise
+        logger.warning(
+            "local_seo.analysis_degraded",
+            extra={"keyword": keyword, "location": location, "detail": getattr(exc, "detail", None)},
+        )
+        return None
+    analysis_cache.store(keyword, location_code, location, result)
+    return result
+
+
 async def _get_or_compute_analysis(
     keyword: str,
     location: str,
     location_code: Optional[int],
     force_refresh: bool,
     user_id: Optional[str] = None,
-) -> dict:
+    required: bool = True,
+) -> Optional[dict]:
     """Return a SERP analysis for (keyword, location), served from the shared
     cache when fresh (within the TTL) — otherwise run the nlp pipeline once and
-    cache the result. `force_refresh` always bypasses the cache for a re-scrape."""
-    if not force_refresh:
+    cache the result. `force_refresh` bypasses the cache for a re-scrape;
+    `required=False` degrades to None on provider failure instead of raising."""
+    if force_refresh:
+        return await _compute_and_store(keyword, location, location_code, user_id, required)
+
+    cached = analysis_cache.get(keyword, location_code, location)
+    if cached is not None:
+        return cached
+    # Miss → single-flight so concurrent identical requests don't all re-scrape.
+    async with _analysis_lock(analysis_cache.cache_key(keyword, location_code, location)):
         cached = analysis_cache.get(keyword, location_code, location)
         if cached is not None:
             return cached
-    result = await _post_nlp("/analyze", {
-        "keyword": keyword,
-        "location": location,
-        "location_code": location_code,
-    }, user_id=user_id)
-    analysis_cache.store(keyword, location_code, location, result)
-    return result
+        return await _compute_and_store(keyword, location, location_code, user_id, required)
 
 
 async def generate_page(
@@ -226,17 +268,23 @@ async def generate_page(
     """Generate a local SEO page for a client and persist it.
 
     The location is resolved/validated first: a mistyped area (no picked code)
-    that can't be matched fails loudly (400) instead of silently generating a
-    page with no competitor analysis. When analysis is requested, it's pulled
-    from the shared cache (or computed + cached once) and passed to nlp, so the
-    generator doesn't re-scrape competitors on every page."""
+    that can't be matched fails loudly (400). When analysis is requested it's
+    pulled from the shared cache (or computed + cached once) and passed to nlp so
+    the generator doesn't re-scrape. If the analysis itself fails (e.g. thin SERP
+    / provider outage), generation degrades to a no-competitor page rather than
+    failing outright — and run_analysis is flipped off in the nlp payload so nlp
+    doesn't re-attempt the same failing scrape."""
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
     payload = _gbp_to_generate_payload(client, keyword, location, run_analysis, location_code)
     if run_analysis:
-        payload["serp_analysis"] = await _get_or_compute_analysis(
-            keyword, location, location_code, force_refresh, user_id
+        serp = await _get_or_compute_analysis(
+            keyword, location, location_code, force_refresh, user_id, required=False
         )
+        if serp is not None:
+            payload["serp_analysis"] = serp
+        else:
+            payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
     result = await _stream_nlp("/generate-page", payload)
     return _persist_page(client_id, keyword, location, run_analysis, "generate", result, user_id)
 
@@ -244,10 +292,15 @@ async def generate_page(
 async def analyze(
     client_id: str, keyword: str, location: str, location_code: Optional[int], force_refresh: bool = False,
 ) -> dict:
-    """Run (or reuse a cached) competitor SERP analysis for a keyword + location."""
+    """Run (or reuse a cached) competitor SERP analysis for a keyword + location.
+
+    Here the analysis IS the deliverable, so a provider failure propagates
+    (required=True) instead of degrading."""
     client = _get_client(client_id)  # validate ownership / existence
     location, location_code = await locations_service.resolve_location(client, location, location_code)
-    return await _get_or_compute_analysis(keyword, location, location_code, force_refresh)
+    result = await _get_or_compute_analysis(keyword, location, location_code, force_refresh, required=True)
+    assert result is not None  # required=True never returns None (it raises)
+    return result
 
 
 async def find_page(client_id: str, keyword: str, location: str) -> dict:
@@ -271,19 +324,25 @@ async def score_page(
     page_url: Optional[str],
     page_content: Optional[str],
     serp_analysis: Optional[dict],
+    user_id: Optional[str] = None,
     force_refresh: bool = False,
 ) -> dict:
     """Score an existing page (by URL or raw HTML) against the 8 engines.
 
     Reuses a cached SERP analysis (or computes + caches one) when the caller
-    didn't already supply `serp_analysis`, so scoring doesn't re-scrape."""
+    didn't already supply `serp_analysis`, so scoring doesn't re-scrape. The
+    analysis is optional (per the Score-My-Page contract): if it can't be
+    computed, scoring proceeds and nlp's deterministic engine falls back to a
+    neutral baseline."""
     client = _get_client(client_id)
     fields = _business_fields(client)
     if not page_url and not page_content:
         raise HTTPException(status_code=400, detail="page_url_or_content_required")
     location, location_code = await locations_service.resolve_location(client, location, location_code)
     if not serp_analysis:
-        serp_analysis = await _get_or_compute_analysis(keyword, location, location_code, force_refresh)
+        serp_analysis = await _get_or_compute_analysis(
+            keyword, location, location_code, force_refresh, user_id, required=False
+        )
     return await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,

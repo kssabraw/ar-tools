@@ -103,6 +103,7 @@ async def score_local_seo_page(
         page_url=body.page_url,
         page_content=body.page_content,
         serp_analysis=body.serp_analysis,
+        user_id=auth["user_id"],
         force_refresh=body.force_refresh,
     ))
 
