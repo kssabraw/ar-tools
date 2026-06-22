@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     google_apps_script_url: str = ""
     outscraper_api_key: str = ""
+    # Google Search Console — Organic Rank Tracker (Module #4).
+    # The service-account key JSON (the entire downloaded key file, as a single
+    # string) for the agency-owned identity that clients add as a user on their
+    # Search Console property. Stored once at the app level; never per-client.
+    google_service_account_key: str = ""
     # DataForSEO — GBP review enrichment (shared with pipeline-api modules)
     dataforseo_login: str = ""
     dataforseo_password: str = ""

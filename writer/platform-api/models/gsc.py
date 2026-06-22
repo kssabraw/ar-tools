@@ -1,0 +1,39 @@
+"""Pydantic models for Google Search Console property resources.
+
+Organic Rank Tracker (Module #4), M1. See models/clients.py for conventions.
+"""
+
+from __future__ import annotations
+
+from typing import Literal, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+
+class GscProperty(BaseModel):
+    id: UUID
+    client_id: UUID
+    site_url: str
+    property_type: Literal["url_prefix", "domain"]
+    access_status: Literal["ok", "no_access", "pending"]
+    last_verified_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class GscPropertyCreateRequest(BaseModel):
+    site_url: str = Field(..., min_length=1)
+    # Optional — inferred from the site_url's "sc-domain:" prefix when omitted.
+    property_type: Optional[Literal["url_prefix", "domain"]] = None
+
+
+class VerifyAccessResponse(BaseModel):
+    property_id: UUID
+    access_status: Literal["ok", "no_access", "pending"]
+    detail: Optional[str] = None
+    last_verified_at: Optional[str] = None
+
+
+class ServiceAccountInfo(BaseModel):
+    email: str

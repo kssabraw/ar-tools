@@ -101,13 +101,14 @@ export function ClientWorkspace() {
       {/* ── Rank Trackers ───────────────────────────────────────────── */}
       <Section
         title="Rank Trackers"
-        subtitle="Track organic and local-pack positions over time. Coming in the next phase."
+        subtitle="Track organic and local-pack positions over time."
       >
         <ActionCard
           icon={<TrendingUp size={22} />}
           label="Organic Rank Tracker"
-          description="Daily organic positions for tracked keywords, with clicks & impressions from Search Console."
-          badge="Coming soon"
+          description="Connect Search Console to track organic positions, clicks & impressions. Keyword tracking comes online once a property is verified."
+          to={id ? `/clients/${id}/rankings` : undefined}
+          cta="Connect"
         />
         <ActionCard
           icon={<Map size={22} />}

@@ -65,6 +65,25 @@ export interface Client extends ClientListItem {
   updated_at: string
 }
 
+// Organic Rank Tracker (Module #4) — GSC property connection (M1).
+export interface GscProperty {
+  id: string
+  client_id: string
+  site_url: string
+  property_type: 'url_prefix' | 'domain'
+  access_status: 'ok' | 'no_access' | 'pending'
+  last_verified_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface VerifyAccessResponse {
+  property_id: string
+  access_status: 'ok' | 'no_access' | 'pending'
+  detail: string | null
+  last_verified_at: string | null
+}
+
 // ── ICP + differentiators (converged client-level assets, Option A) ──────────
 
 export interface IcpSegment {
