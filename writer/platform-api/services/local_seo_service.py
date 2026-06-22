@@ -20,7 +20,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import locations_service
+from services import analysis_cache, locations_service
 
 logger = logging.getLogger(__name__)
 
@@ -196,30 +196,58 @@ async def search_locations(client_id: str, query: str, country: Optional[str] = 
     return await locations_service.search_locations(client, query, country=country)
 
 
+async def _get_or_compute_analysis(
+    keyword: str,
+    location: str,
+    location_code: Optional[int],
+    force_refresh: bool,
+    user_id: Optional[str] = None,
+) -> dict:
+    """Return a SERP analysis for (keyword, location), served from the shared
+    cache when fresh (within the TTL) — otherwise run the nlp pipeline once and
+    cache the result. `force_refresh` always bypasses the cache for a re-scrape."""
+    if not force_refresh:
+        cached = analysis_cache.get(keyword, location_code, location)
+        if cached is not None:
+            return cached
+    result = await _post_nlp("/analyze", {
+        "keyword": keyword,
+        "location": location,
+        "location_code": location_code,
+    }, user_id=user_id)
+    analysis_cache.store(keyword, location_code, location, result)
+    return result
+
+
 async def generate_page(
-    client_id: str, keyword: str, location: str, location_code: Optional[int], run_analysis: bool, user_id: str
+    client_id: str, keyword: str, location: str, location_code: Optional[int],
+    run_analysis: bool, user_id: str, force_refresh: bool = False,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
     The location is resolved/validated first: a mistyped area (no picked code)
     that can't be matched fails loudly (400) instead of silently generating a
-    page with no competitor analysis."""
+    page with no competitor analysis. When analysis is requested, it's pulled
+    from the shared cache (or computed + cached once) and passed to nlp, so the
+    generator doesn't re-scrape competitors on every page."""
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
     payload = _gbp_to_generate_payload(client, keyword, location, run_analysis, location_code)
+    if run_analysis:
+        payload["serp_analysis"] = await _get_or_compute_analysis(
+            keyword, location, location_code, force_refresh, user_id
+        )
     result = await _stream_nlp("/generate-page", payload)
     return _persist_page(client_id, keyword, location, run_analysis, "generate", result, user_id)
 
 
-async def analyze(client_id: str, keyword: str, location: str, location_code: Optional[int]) -> dict:
-    """Run competitor SERP analysis for a keyword + location (no persistence)."""
+async def analyze(
+    client_id: str, keyword: str, location: str, location_code: Optional[int], force_refresh: bool = False,
+) -> dict:
+    """Run (or reuse a cached) competitor SERP analysis for a keyword + location."""
     client = _get_client(client_id)  # validate ownership / existence
     location, location_code = await locations_service.resolve_location(client, location, location_code)
-    return await _post_nlp("/analyze", {
-        "keyword": keyword,
-        "location": location,
-        "location_code": location_code,
-    })
+    return await _get_or_compute_analysis(keyword, location, location_code, force_refresh)
 
 
 async def find_page(client_id: str, keyword: str, location: str) -> dict:
@@ -243,13 +271,19 @@ async def score_page(
     page_url: Optional[str],
     page_content: Optional[str],
     serp_analysis: Optional[dict],
+    force_refresh: bool = False,
 ) -> dict:
-    """Score an existing page (by URL or raw HTML) against the 8 engines."""
+    """Score an existing page (by URL or raw HTML) against the 8 engines.
+
+    Reuses a cached SERP analysis (or computes + caches one) when the caller
+    didn't already supply `serp_analysis`, so scoring doesn't re-scrape."""
     client = _get_client(client_id)
     fields = _business_fields(client)
     if not page_url and not page_content:
         raise HTTPException(status_code=400, detail="page_url_or_content_required")
     location, location_code = await locations_service.resolve_location(client, location, location_code)
+    if not serp_analysis:
+        serp_analysis = await _get_or_compute_analysis(keyword, location, location_code, force_refresh)
     return await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,

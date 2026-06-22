@@ -55,6 +55,8 @@ export function LocalSeoContent() {
   // DataForSEO location_code from a picked suggestion; null while free-typing.
   const [locationCode, setLocationCode] = useState<number | null>(null)
   const [runAnalysis, setRunAnalysis] = useState<boolean | null>(null)
+  // Bypass the 14-day shared SERP-analysis cache and re-scrape competitors.
+  const [forceRefresh, setForceRefresh] = useState(false)
   const [error, setError] = useState('')
   const [check, setCheck] = useState<CheckState>({ status: 'idle' })
   const [scanning, setScanning] = useState(false)
@@ -98,7 +100,7 @@ export function LocalSeoContent() {
     setView({ kind: 'creating' })
     startTicker()
     try {
-      const page = await localSeoApi.generate(clientId, { keyword: kw, location: location.trim(), location_code: locationCode, run_analysis: runAnalysis })
+      const page = await localSeoApi.generate(clientId, { keyword: kw, location: location.trim(), location_code: locationCode, run_analysis: runAnalysis, force_refresh: forceRefresh })
       refreshSaved()
       setView({ kind: 'generated', page, isNew: true, prevScore: null })
     } catch (e) {
@@ -138,7 +140,7 @@ export function LocalSeoContent() {
     setError('')
     setAnalyzing(true)
     try {
-      const result = await localSeoApi.analyze(clientId, { keyword: keyword.trim(), location: location.trim(), location_code: locationCode })
+      const result = await localSeoApi.analyze(clientId, { keyword: keyword.trim(), location: location.trim(), location_code: locationCode, force_refresh: forceRefresh })
       setView({ kind: 'analysis', result })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Analysis failed')
@@ -310,6 +312,10 @@ export function LocalSeoContent() {
                 desc="Generate faster from client data only"
               />
             </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 13, color: '#64748b', cursor: 'pointer' }}>
+              <input type="checkbox" checked={forceRefresh} onChange={e => setForceRefresh(e.target.checked)} />
+              Refresh competitor data (ignore the 14-day cache — slower, re-scrapes)
+            </label>
           </div>
 
           {error && <div style={errorBox}>{error}</div>}

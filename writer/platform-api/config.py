@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     dataforseo_login: str = ""
     dataforseo_password: str = ""
 
+    # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
+    # stays fresh before it's re-scraped. Shared across clients by (keyword,
+    # location). Set to 0 to disable caching.
+    analysis_cache_ttl_days: int = 14
+
     # Silo candidate management (Platform PRD v1.4 §7.7 / §8.5)
     silo_dedup_cosine_threshold: float = 0.85
     silo_frequent_threshold: int = 3

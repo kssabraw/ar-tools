@@ -20,6 +20,8 @@ class LocalSeoGenerateRequest(BaseModel):
     location: str = Field(..., min_length=1)
     location_code: Optional[int] = None
     run_analysis: bool
+    # Bypass the shared SERP-analysis cache and re-scrape competitors.
+    force_refresh: bool = False
 
 
 class LocationSuggestion(BaseModel):
@@ -37,6 +39,8 @@ class LocalSeoAnalyzeRequest(BaseModel):
     keyword: str = Field(..., min_length=1)
     location: str = Field(..., min_length=1)
     location_code: Optional[int] = None
+    # Bypass the shared SERP-analysis cache and re-scrape competitors.
+    force_refresh: bool = False
 
 
 class LocalSeoFindPageRequest(BaseModel):
@@ -55,6 +59,8 @@ class LocalSeoScoreRequest(BaseModel):
     page_url: Optional[str] = None
     page_content: Optional[str] = None
     serp_analysis: Optional[dict[str, Any]] = None
+    # Bypass the shared SERP-analysis cache and re-scrape competitors.
+    force_refresh: bool = False
 
 
 class LocalSeoRelatedPagesRequest(BaseModel):

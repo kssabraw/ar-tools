@@ -54,6 +54,7 @@ async def generate_local_seo_page(
             location_code=body.location_code,
             run_analysis=body.run_analysis,
             user_id=auth["user_id"],
+            force_refresh=body.force_refresh,
         )
         return LocalSeoPageDetail(**page).model_dump(mode="json")
 
@@ -71,6 +72,7 @@ async def analyze_local_seo(
         keyword=body.keyword,
         location=body.location,
         location_code=body.location_code,
+        force_refresh=body.force_refresh,
     ))
 
 
@@ -101,6 +103,7 @@ async def score_local_seo_page(
         page_url=body.page_url,
         page_content=body.page_content,
         serp_analysis=body.serp_analysis,
+        force_refresh=body.force_refresh,
     ))
 
 
