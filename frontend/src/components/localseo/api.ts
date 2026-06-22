@@ -27,7 +27,8 @@ export const localSeoApi = {
       force_refresh?: boolean
       page_template_url?: string | null
     },
-  ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body),
+    signal?: AbortSignal,
+  ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body, signal),
 
   // Phase 3 — save (or clear) the client's default page-template URL.
   setPageTemplateDefault: (clientId: string, page_template_url: string | null) =>
