@@ -247,6 +247,11 @@ async def embed_with_gates(
     _nonempty = [(i, t) for i, t in residual_text_by_idx.items() if t]
     if _nonempty:
         _rvecs = await embed([t for _, t in _nonempty])
+        if len(_rvecs) != len(_nonempty):
+            raise RuntimeError(
+                "embed_fn returned wrong number of residual vectors: "
+                f"got {len(_rvecs)}, expected {len(_nonempty)}"
+            )
         for (i, _), v in zip(_nonempty, _rvecs):
             residual_vec_by_idx[i] = v
 
