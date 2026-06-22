@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { FileText, Plus, Trash2, Clock } from 'lucide-react'
+import { FileText, FileUp, Plus, Trash2, Clock, ExternalLink } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { GeneratedReport, ReportListItem, ReportMode, ReportSchedule } from '../../lib/types'
 import { card, errorBox, outlineBtn, primaryBtn, relativeTime } from '../localseo/shared'
@@ -32,12 +32,14 @@ export function RankReports({ clientId }: { clientId: string }) {
   const [dow, setDow] = useState(0)
   const [dom, setDom] = useState(1)
   const [interval, setIntervalDays] = useState(7)
+  const [deliver, setDeliver] = useState(false)
   useEffect(() => {
     if (!schedule) return
     setMode(schedule.mode)
     setDow(schedule.day_of_week ?? 0)
     setDom(schedule.day_of_month ?? 1)
     setIntervalDays(schedule.interval_days ?? 7)
+    setDeliver(schedule.deliver_google_doc)
   }, [schedule])
 
   const saveMut = useMutation({
@@ -46,9 +48,14 @@ export function RankReports({ clientId }: { clientId: string }) {
       day_of_week: mode === 'weekly' ? dow : null,
       day_of_month: mode === 'monthly' ? dom : null,
       interval_days: mode === 'interval' ? interval : null,
+      deliver_google_doc: deliver,
       last_generated_at: null,
     }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rank-report-schedule', clientId] }),
+  })
+  const publishMut = useMutation({
+    mutationFn: (reportId: string) => api.post(`/rank-reports/${reportId}/publish`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rank-reports', clientId] }),
   })
   const genMut = useMutation({
     mutationFn: () => api.post<GeneratedReport>(`/clients/${clientId}/rank/reports`, {}),
@@ -102,6 +109,15 @@ export function RankReports({ clientId }: { clientId: string }) {
           </p>
         )}
 
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, color: '#0f172a', cursor: 'pointer', marginTop: 14, paddingTop: 14, borderTop: '1px solid #f1f5f9' }}>
+          <input type="checkbox" checked={deliver} onChange={e => setDeliver(e.target.checked)} />
+          Also deliver each report as a <strong>Google Doc</strong> in the client’s Drive folder
+        </label>
+        <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0', paddingLeft: 26 }}>
+          Requires a Drive folder on the client (Client → Edit). You can also publish any saved report to a Doc with the
+          button on each report below.
+        </p>
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
           <button style={primaryBtn} onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
             {saveMut.isPending ? 'Saving…' : 'Save schedule'}
@@ -123,6 +139,7 @@ export function RankReports({ clientId }: { clientId: string }) {
           </button>
         </div>
         {genMut.error && <div style={errorBox}>{(genMut.error as Error).message}</div>}
+        {publishMut.error && <div style={errorBox}>Couldn’t publish to Google Doc: {(publishMut.error as Error).message}. Check the client has a Drive folder set.</div>}
 
         {reports && reports.length > 0 ? (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -134,6 +151,18 @@ export function RankReports({ clientId }: { clientId: string }) {
                   {r.title}
                 </Link>
                 <span style={{ fontSize: 12, color: '#94a3b8' }}>{relativeTime(r.created_at)}</span>
+                {r.doc_url ? (
+                  <a href={r.doc_url} target="_blank" rel="noreferrer" style={{ ...outlineBtn, padding: '4px 9px', fontSize: 12, color: '#0369a1', textDecoration: 'none' }}>
+                    <ExternalLink size={12} /> Doc
+                  </a>
+                ) : (
+                  <button style={{ ...outlineBtn, padding: '4px 9px', fontSize: 12 }}
+                    onClick={() => publishMut.mutate(r.id)}
+                    disabled={publishMut.isPending && publishMut.variables === r.id}
+                    title="Publish this report to a Google Doc in the client's Drive folder">
+                    <FileUp size={12} /> {publishMut.isPending && publishMut.variables === r.id ? 'Publishing…' : 'To Doc'}
+                  </button>
+                )}
                 <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
                   onClick={() => delMut.mutate(r.id)} title="Delete report"><Trash2 size={13} /></button>
               </div>

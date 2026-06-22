@@ -15,6 +15,8 @@ import logging
 from datetime import date, datetime, timezone
 from typing import Optional
 
+import httpx
+
 from config import settings
 from db.supabase_client import get_supabase
 from services import dataforseo_rank, keyword_market, rank_status
@@ -22,6 +24,12 @@ from services import dataforseo_rank, keyword_market, rank_status
 logger = logging.getLogger(__name__)
 
 _READ_DAYS = 95
+
+_STATUS_LABELS = {
+    "climbing": "Climbing", "stable": "Stable", "volatile": "Volatile",
+    "dropping": "Dropping", "deindex_risk": "At risk", "no_data": "No data yet",
+}
+_STATUS_ORDER = ["deindex_risk", "dropping", "volatile", "climbing", "stable", "no_data"]
 
 
 # ----------------------------------------------------------------------------
@@ -136,6 +144,110 @@ def build_report_snapshot(supabase, client_id: str, today: Optional[date] = None
     }
 
 
+def _fmt_pos(v) -> str:
+    return f"{v:.1f}" if isinstance(v, (int, float)) else "—"
+
+
+def _best_position(k: dict):
+    return k.get("today_rank") if k.get("primary_source") == "dataforseo" else k.get("avg_30")
+
+
+def render_report_markdown(snapshot: dict) -> str:
+    """Render a report snapshot to Markdown for the Google-Doc publish webhook."""
+    client = (snapshot.get("client") or {}).get("name") or "Client"
+    ov = snapshot.get("overview") or {}
+    gsc = bool(snapshot.get("gsc_connected"))
+    kws = snapshot.get("keywords") or []
+    when = (snapshot.get("generated_at") or "")[:10]
+    loc = snapshot.get("location")
+
+    total_value = round(sum(k.get("est_monthly_value") or 0 for k in kws))
+    lines: list[str] = [f"# Organic Rankings Report — {client}", ""]
+    meta = f"{when} · {'Search Console + DataForSEO' if gsc else 'DataForSEO'}"
+    if loc:
+        meta += f" · {loc}"
+    lines += [f"_{meta}_", "", "## Summary", ""]
+    lines.append(f"- **Keywords tracked:** {ov.get('keyword_count', 0):,}")
+    lines.append(f"- **At risk:** {ov.get('at_risk', 0):,}")
+    if gsc:
+        lines.append(f"- **Avg. position (30d):** {_fmt_pos(ov.get('avg_position_30d'))}")
+        lines.append(f"- **Clicks (30d):** {ov.get('clicks_30d', 0):,}")
+        lines.append(f"- **Impressions (30d):** {ov.get('impressions_30d', 0):,}")
+    lines.append(f"- **Estimated monthly value:** ${total_value:,}")
+    lines.append("")
+
+    counts = ov.get("status_counts") or {}
+    rollup = " · ".join(f"{_STATUS_LABELS.get(s, s)} {counts[s]}" for s in _STATUS_ORDER if counts.get(s))
+    if rollup:
+        lines += [f"**Status:** {rollup}", ""]
+
+    by_value = sorted([k for k in kws if k.get("est_monthly_value")], key=lambda k: k["est_monthly_value"], reverse=True)[:10]
+    if by_value:
+        lines += ["## Top opportunities by estimated value", "",
+                  "| Keyword | Best position | Volume | CPC | Est. value |",
+                  "|---|---|---|---|---|"]
+        for k in by_value:
+            vol = f"{k['search_volume']:,}" if k.get("search_volume") is not None else "—"
+            cpc = f"${k['cpc']:.2f}" if k.get("cpc") is not None else "—"
+            lines.append(f"| {k['keyword']} | {_fmt_pos(_best_position(k))} | {vol} | {cpc} | ${round(k['est_monthly_value']):,} |")
+        lines.append("")
+
+    improving = [k for k in kws if k.get("direction") == "up" or k.get("status") == "climbing"][:8]
+    declining = sorted([k for k in kws if k.get("status") in ("dropping", "deindex_risk") or k.get("direction") == "down"],
+                       key=lambda k: _STATUS_ORDER.index(k.get("status", "no_data")))[:8]
+    if improving:
+        lines += ["## Improving", ""] + [f"- {k['keyword']} ({_STATUS_LABELS.get(k['status'], k['status'])})" for k in improving] + [""]
+    if declining:
+        lines += ["## Needs attention", ""] + [f"- {k['keyword']} ({_STATUS_LABELS.get(k['status'], k['status'])})" for k in declining] + [""]
+
+    lines += ["## All tracked keywords", ""]
+    if gsc:
+        lines += ["| Keyword | Status | Today | 30d | 90d | Clicks |", "|---|---|---|---|---|---|"]
+    else:
+        lines += ["| Keyword | Status | Today |", "|---|---|---|"]
+    for k in sorted(kws, key=lambda k: _STATUS_ORDER.index(k.get("status", "no_data"))):
+        label = _STATUS_LABELS.get(k.get("status"), k.get("status"))
+        today_rank = k.get("today_rank") if k.get("today_rank") is not None else "—"
+        if gsc:
+            lines.append(f"| {k['keyword']} | {label} | {today_rank} | {_fmt_pos(k.get('avg_30'))} | {_fmt_pos(k.get('avg_90'))} | {k.get('clicks_30d', 0):,} |")
+        else:
+            lines.append(f"| {k['keyword']} | {label} | {today_rank} |")
+    return "\n".join(lines)
+
+
+async def publish_report_doc(supabase, report: dict) -> dict:
+    """Publish an archived report as a Google Doc in the client's Drive folder."""
+    if not settings.google_apps_script_url:
+        raise RuntimeError("publish_not_configured")
+    client_res = (
+        supabase.table("clients").select("name, google_drive_folder_id")
+        .eq("id", report["client_id"]).single().execute()
+    )
+    folder_id = (client_res.data or {}).get("google_drive_folder_id")
+    if not folder_id:
+        raise RuntimeError("missing_google_drive_folder_id")
+
+    markdown = render_report_markdown(report["snapshot"])
+    body = {"folder_id": folder_id, "title": report["title"], "content": markdown}
+    async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
+        resp = await http.post(settings.google_apps_script_url, json=body)
+        resp.raise_for_status()
+        result = resp.json()
+    if not result.get("success"):
+        raise RuntimeError(f"apps_script_error: {result.get('error', 'unknown')}")
+
+    doc_id, doc_url = result.get("doc_id"), result.get("doc_url")
+    supabase.table("rank_reports").update(
+        {"doc_id": doc_id, "doc_url": doc_url, "delivered_at": datetime.now(timezone.utc).isoformat()}
+    ).eq("id", report["id"]).execute()
+    return {"doc_id": doc_id, "doc_url": doc_url}
+
+
+def deliver_enabled(supabase, client_id: str) -> bool:
+    cfg = supabase.table("rank_report_config").select("deliver_google_doc").eq("client_id", client_id).limit(1).execute()
+    return bool(cfg.data and cfg.data[0].get("deliver_google_doc"))
+
+
 def generate_and_store(supabase, client_id: str, today: Optional[date] = None, created_by: Optional[str] = None) -> Optional[dict]:
     """Build a snapshot, store it in the archive, and stamp last_generated_at."""
     today = today or date.today()
@@ -181,6 +293,12 @@ async def run_rank_report_job(job: dict) -> None:
         return
     try:
         report = generate_and_store(supabase, client_id)
+        # Auto-deliver to Google Doc when the client opted in (best-effort).
+        if report and deliver_enabled(supabase, client_id):
+            try:
+                await publish_report_doc(supabase, report)
+            except Exception as exc:
+                logger.warning("rank_report_delivery_failed", extra={"client_id": client_id, "error": str(exc)})
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"report_id": report["id"] if report else None}, "completed_at": "now()"}
         ).eq("id", job_id).execute()

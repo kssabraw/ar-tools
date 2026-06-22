@@ -152,6 +152,7 @@ class ReportSchedule(BaseModel):
     day_of_week: Optional[int] = Field(None, ge=0, le=6)      # weekly (0=Mon)
     day_of_month: Optional[int] = Field(None, ge=1, le=31)    # monthly
     interval_days: Optional[int] = Field(None, gt=0)          # every N days
+    deliver_google_doc: bool = False
     last_generated_at: Optional[str] = None
 
 
@@ -159,6 +160,7 @@ class ReportListItem(BaseModel):
     id: UUID
     title: str
     created_at: str
+    doc_url: Optional[str] = None
 
 
 class GeneratedReport(BaseModel):
@@ -166,6 +168,12 @@ class GeneratedReport(BaseModel):
     title: str
     created_at: str
     snapshot: dict
+    doc_url: Optional[str] = None
+
+
+class ReportPublishResponse(BaseModel):
+    doc_url: Optional[str] = None
+    doc_id: Optional[str] = None
 
 
 class RankLocation(BaseModel):
