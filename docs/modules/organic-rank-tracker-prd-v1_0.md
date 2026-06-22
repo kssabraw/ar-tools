@@ -289,6 +289,18 @@ The existing `clients.gsc_property` column (migration `20260529220918_clients_su
 
 ## 12. Open / next up
 - ~~**Shared scheduler mechanism** (suite Open Item #1)~~ — **decided 2026-06-22:** asyncio loop in platform-api enqueuing `async_jobs` (§6).
+- **Competitive SERP Snapshot (built).** A diagnostic store captured **weekly**
+  alongside the DataForSEO rank refresh (so a pre-drop baseline always exists),
+  per tracked keyword: the AI Overview (presence/text/cited sources), the SERP
+  feature inventory (local pack/GBP, PAA, forums, featured snippet, …), the query
+  intent (DataForSEO Labs), and the top-10 organic results (url/domain/rendered
+  title+description/position) each enriched with referring domains + URL Rating
+  (DataForSEO Backlinks page rank 0–1000) — including the client's own ranking
+  page. **Backend-only** (no viewer UI; retrieved on request via the API to
+  diagnose drops). `services/serp_snapshot.py`; `serp_snapshots` +
+  `serp_snapshot_results`; routes under `routers/rank.py`. RESERVED-table note in
+  §5 (`rank_snapshots`) still stands — that is Module #5's geo-grid table, distinct
+  from this `serp_snapshots` diagnostic store.
 - **Reports (built).** On-demand + scheduled client reports. On-demand = a printable in-app view (browser Print → PDF). Scheduled = a per-client `rank_report_config` (as_needed / weekly+day / monthly+day / every 7·14·30 days); the shared scheduler enqueues a `rank_report` job when due, which snapshots the report data into a `rank_reports` archive (in-app list, each printable). **Delivery:** an optional **Google Doc** in the client's Drive folder — reuses the Apps Script publish webhook (renders the snapshot to Markdown via `render_report_markdown`); a per-client toggle (`deliver_google_doc`) auto-publishes scheduled/generated reports, and any saved report can be published on demand (`POST /rank-reports/{id}/publish`). Email delivery remains a future option via the notifications service.
 - **Initial backfill** — M2 ships the recurring 3-day re-pull; a property's full 16-month history is pulled by calling the manual ingest endpoint with an explicit `start_date`/`end_date`. A one-click "backfill history" affordance is a small follow-up.
 - Tunable thresholds: `deindex_risk` N (consecutive NULL days), the `volatile`/`dropping`/`climbing` band sizes — start conservative, expose as config later.

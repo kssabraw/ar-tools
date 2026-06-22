@@ -12,6 +12,7 @@ from services.gsc_ingest import run_gsc_ingest_job, run_gsc_page_ingest_job
 from services.keyword_market import run_keyword_market_job
 from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
+from services.serp_snapshot import run_serp_snapshot_job
 from services.silo_dedup import process_silo_dedup_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
 
@@ -135,6 +136,8 @@ async def _process_job(job: dict) -> None:
         await run_keyword_market_job(job)
     elif job_type == "rank_report":
         await run_rank_report_job(job)
+    elif job_type == "serp_snapshot":
+        await run_serp_snapshot_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 

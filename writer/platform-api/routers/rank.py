@@ -35,12 +35,24 @@ from models.rank import (
     ReportListItem,
     ReportPublishResponse,
     ReportSchedule,
+    SerpSnapshotCaptureResponse,
+    SerpSnapshotDetail,
+    SerpSnapshotListItem,
+    SerpSnapshotResultRow,
     StrikingDistanceResponse,
     TrackedKeywordCreateRequest,
     TrackedKeywordUpdateRequest,
     TrendPoint,
 )
-from services import dataforseo_rank, gsc_service, keyword_market, rank_materialize, rank_report, rank_status
+from services import (
+    dataforseo_rank,
+    gsc_service,
+    keyword_market,
+    rank_materialize,
+    rank_report,
+    rank_status,
+    serp_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -540,3 +552,106 @@ async def get_report(report_id: UUID, auth: dict = Depends(require_auth)) -> Gen
 async def delete_report(report_id: UUID, auth: dict = Depends(require_auth)) -> Response:
     get_supabase().table("rank_reports").delete().eq("id", str(report_id)).execute()
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Competitive SERP Snapshot — diagnostic store. Captured weekly alongside the
+# DataForSEO rank refresh; not a user-facing feature, retrieved here on request
+# to diagnose a ranking drop.
+# ---------------------------------------------------------------------------
+@router.get(
+    "/tracked-keywords/{keyword_id}/serp-snapshots",
+    response_model=list[SerpSnapshotListItem],
+)
+async def list_serp_snapshots(
+    keyword_id: UUID, auth: dict = Depends(require_auth)
+) -> list[SerpSnapshotListItem]:
+    """Dated SERP snapshots stored for a keyword (newest first)."""
+    supabase = get_supabase()
+    snaps = (
+        supabase.table("serp_snapshots")
+        .select("id, captured_at, status, query_intent, aio_present, client_rank")
+        .eq("keyword_id", str(keyword_id))
+        .order("captured_at", desc=True)
+        .execute()
+    ).data or []
+    if not snaps:
+        return []
+    counts = (
+        supabase.table("serp_snapshot_results")
+        .select("snapshot_id")
+        .in_("snapshot_id", [s["id"] for s in snaps])
+        .execute()
+    ).data or []
+    count_by_snapshot: dict[str, int] = {}
+    for row in counts:
+        count_by_snapshot[row["snapshot_id"]] = count_by_snapshot.get(row["snapshot_id"], 0) + 1
+    return [
+        SerpSnapshotListItem(
+            id=s["id"],
+            captured_at=s["captured_at"],
+            status=s["status"],
+            query_intent=s.get("query_intent"),
+            aio_present=s.get("aio_present", False),
+            client_rank=s.get("client_rank"),
+            result_count=count_by_snapshot.get(s["id"], 0),
+        )
+        for s in snaps
+    ]
+
+
+@router.get("/serp-snapshots/{snapshot_id}", response_model=SerpSnapshotDetail)
+async def get_serp_snapshot(
+    snapshot_id: UUID, auth: dict = Depends(require_auth)
+) -> SerpSnapshotDetail:
+    """A full stored snapshot: AIO + sources, intent, SERP features, and the
+    ranking pages with referring domains + URL Rating."""
+    supabase = get_supabase()
+    found = (
+        supabase.table("serp_snapshots").select("*").eq("id", str(snapshot_id)).limit(1).execute()
+    )
+    if not found.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    snap = found.data[0]
+    results = (
+        supabase.table("serp_snapshot_results")
+        .select("*")
+        .eq("snapshot_id", str(snapshot_id))
+        .order("position")
+        .execute()
+    ).data or []
+    return SerpSnapshotDetail(
+        **{k: snap.get(k) for k in (
+            "id", "keyword_id", "client_id", "keyword", "captured_at", "status",
+            "location_code", "language_code", "query_intent", "intent_probabilities",
+            "aio_present", "aio_text", "aio_sources", "serp_features", "client_rank",
+            "client_url", "error",
+        )},
+        results=[SerpSnapshotResultRow(**{k: r.get(k) for k in (
+            "position", "url", "domain", "title", "description", "is_client",
+            "referring_domains", "url_rating", "backlinks", "backlinks_status",
+        )}) for r in results],
+    )
+
+
+@router.post(
+    "/tracked-keywords/{keyword_id}/serp-snapshot",
+    response_model=SerpSnapshotCaptureResponse,
+)
+async def capture_serp_snapshot(
+    keyword_id: UUID, auth: dict = Depends(require_auth)
+) -> SerpSnapshotCaptureResponse:
+    """On-demand capture for one keyword (the weekly pass captures all). Enqueues
+    an async job — the capture is ~13 DataForSEO calls."""
+    supabase = get_supabase()
+    found = (
+        supabase.table("tracked_keywords")
+        .select("id, client_id")
+        .eq("id", str(keyword_id))
+        .limit(1)
+        .execute()
+    )
+    if not found.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    serp_snapshot.enqueue_serp_snapshot(found.data[0]["client_id"], keyword_id=str(keyword_id))
+    return SerpSnapshotCaptureResponse(keyword_id=keyword_id, status="enqueued")

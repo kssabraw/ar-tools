@@ -74,6 +74,7 @@ expected for a shared project, not a problem.
 | `20260622191240` | `gsc_query_page_daily` (#4 — canonical URL + Pages) |
 | `20260622191831` | `keyword_index_status` (#4 — deindex URL-Inspection result) |
 | `20260622203200` | `sie_cache_enable_rls` (drift fix — RLS on `sie_cache`) |
+| `20260622232017` | `serp_snapshots` (Organic Rank Tracker #4 — Competitive SERP Snapshot store) |
 
 > A few `schema_migrations.name` values carry version suffixes (`_v1_4`, `_v2_0`)
 > from how they were originally applied. The CLI matches on the numeric version,
@@ -81,6 +82,13 @@ expected for a shared project, not a problem.
 > the same migration.
 
 ## Reconciliation log
+
+**2026-06-22** — Competitive SERP Snapshot (#4): added `serp_snapshots` +
+`serp_snapshot_results` (+ `serp_snapshot` in the `async_jobs.job_type` check),
+applied via the Supabase MCP. The MCP stamped version `20260622232017`, so the
+file was renamed from its placeholder `…230758` prefix to that recorded version
+and its `-- Migration:` header updated to match. RLS on, no client-facing
+policies (service-role only).
 
 **2026-06-22** — Organic Rank Tracker (#4) migrations + a security fix:
 
