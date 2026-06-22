@@ -312,6 +312,7 @@ class _AllMocks:
             patch("modules.brief.faqs.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.graph.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.entity.embed_batch_large", fake_embed_batch_large),
+            patch("modules.brief.aio_proximity.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.intent.claude_json", fake_claude_json),
             # PRD v2.1 - anchor-slot embedding + framing rewrite LLM call
             patch("modules.brief.skeleton_slots.embed_batch_large", fake_embed_batch_large),

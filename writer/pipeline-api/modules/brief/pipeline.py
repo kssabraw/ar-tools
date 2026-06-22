@@ -89,6 +89,7 @@ from .parsers import (
     parse_serp,
 )
 from .entity import derive_main_entity
+from .aio_proximity import compute_aio_proximity
 from .customer_review_research import research_customer_reviews
 from .editorial_critique import generate_editorial_critique
 from .llm_disagreement import analyze_fanout_disagreement
@@ -927,7 +928,23 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         title=title_scope.title,
     )
 
-    # ---- Step 12 - silos (12.1 + 12.2 + 12.3 sync, then 12.4 async) ----
+    # ---- Step 11 - advisory AIO proximity (§X.5) ----
+    # Observability only; reads heading text, writes only to aio_insights -
+    # heading_structure is untouched. No-op when no AIO block was captured.
+    if aio_insights.available:
+        content_h2_texts = [
+            h.text for h in heading_structure
+            if getattr(h, "level", None) == "H2" and getattr(h, "type", None) == "content"
+        ]
+        proximity_mean, fanout_coverage = await compute_aio_proximity(
+            heading_texts=content_h2_texts,
+            fanout_questions=aio_insights.fanout_questions,
+            answer_text=aio_insights.answer_text,
+        )
+        aio_insights = aio_insights.model_copy(update={
+            "proximity_mean": proximity_mean,
+            "fanout_coverage_pct": fanout_coverage,
+        })
     contributing_region_ids = {
         c.region_id for c in selected_h2s if c.region_id is not None
     }
