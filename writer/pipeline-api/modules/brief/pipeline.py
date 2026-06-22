@@ -84,9 +84,11 @@ from .mmr import select_h2s_mmr
 from .parsers import (
     aggregate_serp_stats,
     normalize_text,
+    parse_aio_insights,
     parse_reddit,
     parse_serp,
 )
+from .entity import derive_main_entity
 from .customer_review_research import research_customer_reviews
 from .editorial_critique import generate_editorial_critique
 from .llm_disagreement import analyze_fanout_disagreement
@@ -101,7 +103,7 @@ from .title_scope import generate_title_and_scope
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = "2.6"
+SCHEMA_VERSION = "2.7"
 
 
 # PRD v2.3 / Phase 3 - per-intent-pattern minimum-words floor for H2
@@ -318,6 +320,8 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         serp_items
     )
     serp_stats = aggregate_serp_stats(serp_headings)
+    # §X.1 - capture the AI Overview block (side-channel, non-gating).
+    aio_insights = parse_aio_insights(serp_items)
 
     organic_urls = [
         item["url"] for item in serp_items
@@ -387,6 +391,18 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         serp_h1s=organic_h1s,
         meta_descriptions=meta_descriptions,
         fanout_response_bodies=raw_fanout_bodies,
+    )
+
+    # ---- Step 3.6 - main-entity derivation (§X.2) ----
+    # Needs the title for fallback; consumed (in a later increment) by the
+    # residual gate + heading-form enforcement. Produces data only - nothing
+    # here changes heading selection, so heading_structure is unaffected.
+    main_entity = await derive_main_entity(
+        primary_keyword=keyword,
+        title=title_scope.title,
+        aio_answer_text=aio_insights.answer_text,
+        aio_cited_domains=aio_insights.cited_domains,
+        aio_present=aio_insights.available,
     )
 
     # ---- Step 4 (pass 1) - aggregate without persona gap ----
@@ -1100,6 +1116,15 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faq_intent_gate_llm_rejected_count=faq_gate_result.llm_rejected_count,
         faq_intent_gate_relaxation_applied=faq_gate_result.relaxation_applied,
         faq_intent_gate_full_relaxation_applied=faq_gate_result.full_relaxation_applied,
+        # §X.8 - AIO main-entity echoes.
+        aio_present=aio_insights.available,
+        main_entity_source=main_entity.source,
+        main_entity_confidence=(
+            main_entity.confidence
+            if main_entity.confidence not in (float("inf"),)
+            else 0.0
+        ),
+        multi_entity_flag=main_entity.multi_entity_flag,
     )
 
     # PRD v2.3 / Phase 3 - derive the per-H2 body floor from the
@@ -1158,6 +1183,8 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             ],
         ),
         editorial_critique=EditorialCritiqueModel(**critique_result.to_dict()),
+        main_entity=main_entity,
+        aio_insights=aio_insights,
         metadata=metadata,
     )
 

@@ -143,7 +143,7 @@ The orchestrator validates `schema_version` from every pipeline response against
 
 | Module | `schema_version` |
 |---|---|
-| Brief Generator | `2.6` |
+| Brief Generator | `2.7` |
 | SIE | `1.4` |
 | Research & Citations | `1.1` |
 | Writer | `1.7` (also accepts `1.7-no-context` / `1.7-degraded`) |

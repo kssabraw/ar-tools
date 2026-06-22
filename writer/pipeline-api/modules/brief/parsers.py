@@ -11,7 +11,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from models.brief import IntentSignals
+from models.brief import AioInsights, IntentSignals
 
 from .sanitization import sanitize_heading
 
@@ -201,6 +201,64 @@ def parse_serp(
                 )
 
     return headings, signals, paa_questions, titles, meta_descriptions
+
+
+def parse_aio_insights(items: list[dict[str, Any]]) -> AioInsights:
+    """Step 1 (§X.1) - extract the AI Overview block from the SERP, if present.
+
+    Side-channel only: never gates selection, degrades to
+    `AioInsights(available=False)` when no `ai_overview` item exists.
+
+    DataForSEO's organic/advanced endpoint returns an `ai_overview` item
+    whose answer text may arrive as a top-level `markdown` string and/or as
+    `ai_overview_element` sub-items carrying `text`. References (cited
+    sources) arrive either nested as `ai_overview_reference` sub-items or in
+    a top-level `references` list - we handle both. When
+    `asynchronous_ai_overview` is true the full text needs a follow-up
+    /ai_overview/live fetch; we capture whatever is inline and flag it.
+    """
+    for item in items:
+        if item.get("type") != "ai_overview":
+            continue
+
+        sub_items = item.get("items") or []
+        texts: list[str] = []
+        refs: list[dict] = list(item.get("references") or [])
+        fanout: list[str] = []
+        for el in sub_items:
+            if not isinstance(el, dict):
+                continue
+            el_type = el.get("type")
+            if el_type == "ai_overview_reference":
+                refs.append(el)
+                continue
+            text = (el.get("text") or "").strip()
+            if text:
+                texts.append(text)
+            title = (el.get("title") or "").strip()
+            if title.endswith("?"):
+                fanout.append(title)
+
+        markdown = (item.get("markdown") or "").strip()
+        answer_text = markdown or "\n".join(texts)
+
+        domains: list[str] = []
+        for ref in refs:
+            if not isinstance(ref, dict):
+                continue
+            dom = (ref.get("domain") or "").strip().lower()
+            if dom and dom not in domains:
+                domains.append(dom)
+
+        return AioInsights(
+            available=bool(answer_text.strip()),
+            answer_text=answer_text,
+            cited_domains=domains,
+            fanout_questions=fanout,
+            asynchronous=bool(item.get("asynchronous_ai_overview")),
+        )
+
+    return AioInsights(available=False)
 
 
 def parse_reddit(items: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
