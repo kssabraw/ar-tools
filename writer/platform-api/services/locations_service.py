@@ -86,7 +86,8 @@ async def _fetch_country_locations(country_iso: str) -> list[dict]:
         return []
 
     slim: list[dict] = []
-    for task in (data.get("tasks") or []):
+    tasks = data.get("tasks") or []
+    for task in tasks:
         for loc in (task.get("result") or []):
             name = loc.get("location_name")
             code = loc.get("location_code")
@@ -100,7 +101,12 @@ async def _fetch_country_locations(country_iso: str) -> list[dict]:
             })
     if slim:
         _cache[country_iso] = (time.monotonic(), slim)
-    logger.info("locations.fetched", extra={"country": country_iso, "count": len(slim)})
+    else:
+        # 200 but nothing parsed — surface DataForSEO's task status + the shape we
+        # actually got, so a wrong response assumption is diagnosable from logs.
+        statuses = [(t.get("status_code"), t.get("status_message"), len(t.get("result") or [])) for t in tasks]
+        logger.warning(f"locations.empty country={country_iso} tasks={len(tasks)} statuses={statuses} top_keys={list(data.keys())}")
+    logger.info(f"locations.fetched country={country_iso} count={len(slim)}")
     return slim
 
 
@@ -139,6 +145,7 @@ async def search_locations(
         if key is not None:
             ranked.append((key, loc))
     ranked.sort(key=lambda x: x[0])
+    logger.info(f"locations.search country={iso} query={q!r} pool={len(locations)} matched={len(ranked)}")
     return [loc for _, loc in ranked[:limit]]
 
 
