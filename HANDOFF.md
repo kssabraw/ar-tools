@@ -1,6 +1,59 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-22 · **Rank-tracker reports** (latest)
+## ⏩ Update — 2026-06-22 · **Competitive SERP Snapshot** (latest)
+
+A diagnostic **SERP snapshot** store for the rank tracker — captured **weekly**
+alongside the DataForSEO rank refresh so a pre-drop baseline always exists when
+investigating a ranking drop later. **Backend-only** (no viewer UI by design —
+retrieved on request via the API). On branch `claude/serp-snapshot`, **draft PR
+open**; migration **applied** to `wvcthtmmcmhkybcesirb`; **awaiting merge confirm**.
+
+**What it captures**, per tracked keyword per capture: the **AI Overview**
+(presence, text, cited sources); the **SERP feature inventory** ("enhancements":
+local pack/GBP, PAA, discussions/forums, featured snippet, … — item types present
++ captured detail); the **query intent** (DataForSEO Labs search-intent); and the
+**top organic results** (url / domain / rendered **title + description** /
+position), each enriched with **referring domains + URL Rating** (DataForSEO
+Backlinks page rank 0–1000, the UR-equivalent) — **including the client's own
+ranking/canonical page** (an extra row if it ranks below the captured depth).
+
+**Decisions (confirmed with user before building):** UR = DataForSEO page rank
+(no new vendor); Backlinks API in scope, ~11 lookups/keyword, cost OK; stored
+dated snapshots per keyword; **auto weekly capture**; **store-only + retrieval API**
+(users don't need routine access).
+
+**Data sources (all DataForSEO, reusing the `dataforseo_rank.py` Basic-auth
+pattern):** SERP advanced (`serp/google/organic/live/advanced`) → AIO + organic +
+features; Labs `search_intent/live` → intent; `backlinks/summary/live` per target
+URL → referring domains + page rank. Per-URL / per-keyword failures are isolated
+(snapshot degrades to `partial`; a SERP failure stores a `failed` marker row).
+
+**Code:** `services/serp_snapshot.py` (pure parse helpers + async orchestrator +
+`enqueue_serp_snapshot` / `run_serp_snapshot_job`); wired into
+`gsc_scheduler.enqueue_due_serp_snapshots` (weekly branch) + `job_worker`
+(`serp_snapshot` job type). Retrieval routes in `routers/rank.py`:
+`GET /tracked-keywords/{id}/serp-snapshots`, `GET /serp-snapshots/{id}`, and an
+on-demand `POST /tracked-keywords/{id}/serp-snapshot` (enqueues a single-keyword
+capture). Models in `models/rank.py`. Config: `serp_snapshot_depth` (20),
+`serp_snapshot_top_n` (10 — how many top results get the pricier Backlinks call).
+
+**Migration (applied; filename = recorded version):** `…232017_serp_snapshots`
+— `serp_snapshots` + `serp_snapshot_results`, widened `async_jobs.job_type`. RLS
+on, no client-facing policies.
+
+**Verification:** `import main` + full suite **220 passed** on the **pinned**
+`fastapi==0.115.0` / `pydantic==2.9.2` (the #43 process). Live providers not
+exercised from the sandbox (DataForSEO calls only run on Railway) — first real
+weekly capture is the live proof.
+
+**Note on cost:** the weekly pass snapshots **every** active keyword for every
+client (≈1 SERP + 1 intent + up to 11 backlinks calls each). Cost was approved;
+if it needs throttling later, gate `enqueue_due_serp_snapshots` (e.g. priority
+keywords only) — the same tiering open question as the DataForSEO "Today" rank.
+
+---
+
+## ⏩ Update — 2026-06-22 · **Rank-tracker reports**
 
 Client **reporting** is built on top of the rank tracker — on-demand, scheduled, and optionally delivered as a Google Doc. All merged to `main` and deployed (PRs **#47**, **#48**, **#50**), each verified live (PLATFORM clean startup, `gsc_scheduler.started`). Sits on the rank-tracker section below.
 

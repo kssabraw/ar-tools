@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     # refresh monthly, so re-fetch only when a keyword's cached row is older
     # than this many days (or missing).
     keyword_market_refresh_days: int = 30
+    # Competitive SERP Snapshot (diagnostic store). Captured WEEKLY alongside the
+    # DataForSEO rank refresh. `serp_snapshot_depth` is how deep the SERP is
+    # pulled; `serp_snapshot_top_n` is how many top organic results get the
+    # (pricier) Backlinks enrichment — including the client's own page.
+    serp_snapshot_depth: int = 20
+    serp_snapshot_top_n: int = 10
     # DataForSEO — GBP review enrichment (shared with pipeline-api modules)
     dataforseo_login: str = ""
     dataforseo_password: str = ""

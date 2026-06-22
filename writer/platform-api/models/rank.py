@@ -190,3 +190,53 @@ class DataForSeoRefreshResponse(BaseModel):
     skipped: int = 0
     failed: int = 0
     error: Optional[str] = None
+
+
+# --- Competitive SERP Snapshot (diagnostic store) ---------------------------
+class SerpSnapshotListItem(BaseModel):
+    id: UUID
+    captured_at: str
+    status: str
+    query_intent: Optional[str] = None
+    aio_present: bool = False
+    client_rank: Optional[int] = None
+    result_count: int = 0
+
+
+class SerpSnapshotResultRow(BaseModel):
+    position: Optional[int] = None
+    url: Optional[str] = None
+    domain: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    is_client: bool = False
+    referring_domains: Optional[int] = None
+    url_rating: Optional[int] = None  # DataForSEO page rank (0–1000), UR-equivalent
+    backlinks: Optional[int] = None
+    backlinks_status: str = "pending"
+
+
+class SerpSnapshotDetail(BaseModel):
+    id: UUID
+    keyword_id: UUID
+    client_id: UUID
+    keyword: str
+    captured_at: str
+    status: str
+    location_code: Optional[int] = None
+    language_code: Optional[str] = None
+    query_intent: Optional[str] = None
+    intent_probabilities: Optional[dict] = None
+    aio_present: bool = False
+    aio_text: Optional[str] = None
+    aio_sources: Optional[list] = None
+    serp_features: Optional[dict] = None
+    client_rank: Optional[int] = None
+    client_url: Optional[str] = None
+    error: Optional[str] = None
+    results: list[SerpSnapshotResultRow] = []
+
+
+class SerpSnapshotCaptureResponse(BaseModel):
+    keyword_id: UUID
+    status: str  # 'enqueued'

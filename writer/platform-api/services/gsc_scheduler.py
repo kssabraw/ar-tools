@@ -95,6 +95,22 @@ def enqueue_due_dataforseo() -> int:
     return len(client_ids)
 
 
+def enqueue_due_serp_snapshots() -> int:
+    """Weekly: enqueue a competitive SERP snapshot capture per client with
+    active keywords (piggybacks the DataForSEO rank weekday). The job captures a
+    dated snapshot per keyword for ranking-drop diagnosis."""
+    from services.serp_snapshot import enqueue_serp_snapshot
+
+    supabase = get_supabase()
+    rows = supabase.table("tracked_keywords").select("client_id").eq("active", True).execute()
+    client_ids = {r["client_id"] for r in (rows.data or [])}
+    for client_id in client_ids:
+        enqueue_serp_snapshot(client_id)
+    if client_ids:
+        logger.info("gsc_scheduler.serp_snapshots_enqueued", extra={"clients": len(client_ids)})
+    return len(client_ids)
+
+
 def enqueue_due_market() -> int:
     """Daily-triggered, monthly-effective: enqueue a market refresh per client
     with active keywords. The job only re-fetches keywords whose cached market
@@ -173,6 +189,7 @@ async def gsc_scheduler() -> None:
             if now.weekday() == weekday and should_run(now, last_df_date, hour):
                 enqueue_due_dataforseo()
                 enqueue_due_page_ingest()
+                enqueue_due_serp_snapshots()
                 last_df_date = now.date()
         except Exception as exc:
             logger.error("gsc_scheduler.unhandled", extra={"error": str(exc)})
