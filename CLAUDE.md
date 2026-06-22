@@ -20,13 +20,14 @@ Most of the original Blog Writer build is **done**. Don't treat this repo as gre
 - **Platform API** (`writer/platform-api/`) — JWT auth middleware; clients CRUD; file upload + parsing; website scraper async worker (`services/job_worker.py` + `services/website_scraper.py` polling `async_jobs`); orchestrator + run dispatch (`services/orchestrator.py`); run polling; briefs; silos (`services/silo_dedup.py`, `services/silo_promotion.py`); publish to Google Drive (`routers/publish.py` via Apps Script webhook); users; **Local SEO** backend (`routers/local_seo.py` + `services/local_seo_service.py`, calling the private `nlp-api`).
 - **NLP API** (`writer/nlp-api/`) — private Railway service powering the Local SEO module: competitor SERP analysis (DataForSEO → ScrapeOwl → **TextRazor** entities — replaced Google Cloud NLP for cost + Wikipedia/Wikidata linking) and Claude page generation + 8-engine page scoring/auto-reoptimization. Ported from the imported ShowUP Local app; auth-less (private network only, like pipeline-api). See its `README.md` for what was stripped.
 - **Suite features added since the original spec:** Google Business Profile (GBP) auto-fetch + review enrichment via DataForSEO/Outscraper (`services/gbp_service.py`), incl. paste-a-link/share-link resolution (`/clients/gbp/resolve`) and auto-fill of client name/website from a selected GBP; content silos (semantic dedup / auto-promotion); client workspace with content + rank-tracker sections; suite dashboard with per-client tiles, including **logo branding** (`clients.logo_url`, public `client-logos` storage bucket).
-- **Frontend** (`frontend/`) — shared React + Vite app: `Login`, `Home` (suite dashboard tiles), `Clients`, `ClientForm`, `ClientWorkspace`, `Runs`, `RunDetail`, `Silos`, `Articles`.
+- **Organic Rank Tracker** (#4) — hybrid GSC + DataForSEO rank tracker on each client workspace. **Built (all milestones except alerting):** GSC service-account connection + verify-access (`services/gsc_service.py`, `routers/gsc.py`); daily GSC ingest → `gsc_query_daily` + weekly query×page → `gsc_query_page_daily`, with `sync_runs` observability (`services/gsc_ingest.py`); the **shared scheduler** — an in-process asyncio loop enqueuing jobs into `async_jobs` (`services/gsc_scheduler.py`); the materialized null date-axis `rank_keyword_metrics` + computed status taxonomy (`services/rank_materialize.py`, `services/rank_status.py`); the **automatic GSC→DataForSEO fallback** (client-anchored keywords; DataForSEO weekly live rank when GSC can't cover a keyword — `services/dataforseo_rank.py`); keyword market data CPC/volume/competition + est. value (`services/keyword_market.py`); canonical-URL resolution + Pages view; striking-distance discovery; deindex **URL Inspection** confirmation; historical backfill; per-keyword page breakdown; canonical pinning; CSV export. API in `routers/rank.py`. **Remaining: alerting** (gated on the notifications service). Authoritative doc: **`docs/modules/organic-rank-tracker-prd-v1_0.md`**.
+- **Frontend** (`frontend/`) — shared React + Vite app: `Login`, `Home` (suite dashboard tiles), `Clients`, `ClientForm`, `ClientWorkspace`, `Runs`, `RunDetail`, `Silos`, `Articles`, `Rankings` (rank tracker — `components/rankings/`, dependency-free SVG charts).
 
 **In active integration (not finished):**
 
 - **Local SEO content** module (#2). **Phases 0–1 done:** the NLP service is rehomed into the suite (`writer/nlp-api/`, deployed private on Railway) and platform-api has the backend (`local_seo_pages` table, generate/list/get routes). **Phase 2 (frontend) and Phase 3 (page-template field) remain.** The raw import still lives at `/local-seo-writer` as the reference copy. Scope/decisions and phasing are in **`docs/modules/local-seo-module-integration-plan-v1_0.md`** (chosen path: C — full port; cut from v1: client-site brand-voice/ICP scraping, the keyword-worthiness "rankability" check, and billing; competitor SERP analysis is an explicit per-page opt-in via a required `run_analysis` flag).
 
-**Not yet built (suite roadmap, in rough order):** Keyword research (migrate from existing repo), Organic rank tracker, Maps / local-pack ranker, Ranking-drop agent, VA content scheduler, the cross-cutting **GSC analytics layer**, the **shared scheduler**, the **SOP store**, and the **notifications service**. The roadmap doc has the full module table, groupings, and locked decisions. (Local SEO content #2 is mid-integration — see above.)
+**Not yet built (suite roadmap, in rough order):** Keyword research (migrate from existing repo), Maps / local-pack ranker, Ranking-drop agent, VA content scheduler, the **SOP store**, and the **notifications service**. The roadmap doc has the full module table, groupings, and locked decisions. (Organic Rank Tracker #4 is built except alerting — see above; the **shared scheduler** is decided + built as the asyncio loop in `services/gsc_scheduler.py`; the **GSC analytics layer** is realized by the rank tracker's GSC ingest. Local SEO content #2 is mid-integration — see above.)
 
 ## The reference documents
 
@@ -44,6 +45,7 @@ Before writing code, read the ones relevant to your task. Note the exact filenam
    - `content-writer-module-prd-v1.3.md` (check the header for its canonical version)
    - `sources-cited-module-prd-v1_1.md`
    - `local-seo-module-integration-plan-v1_0.md` (Local SEO module #2 — scope, cut list, and Path-C phasing; authoritative for that integration)
+   - `organic-rank-tracker-prd-v1_0.md` (Organic Rank Tracker #4 — hybrid GSC + DataForSEO, the auto-fallback, data model, and milestone status; authoritative for that module)
 
 When docs conflict: the engineering spec wins for "how to build it," the product PRD wins for "what should it do," and the **content quality PRD overrides the module PRDs on R1–R7 acceptance criteria**. Where the suite roadmap and the older single-tool framing disagree on "how many tools is this," the roadmap wins.
 
@@ -73,6 +75,8 @@ When docs conflict: the engineering spec wins for "how to build it," the product
 - First admin user in `auth.users` with `role = 'admin'` in `profiles`.
 - GitHub repo cloned. Railway project (`ar-tools`) with **three** services and env vars set: `PLATFORM` (platform-api), `pipeline` (pipeline-api), and `nlp` (nlp-api, private-only — no public domain; reachable at `http://nlp.railway.internal:8080`). Note: the `nlp` service has **no deploy-time healthcheck** (a private service can't pass Railway's probe — see `writer/nlp-api/README.md`); `healthcheckPath` must stay empty.
 
+- **Rank tracker env vars:** DataForSEO creds (`DATAFORSEO_LOGIN`/`DATAFORSEO_PASSWORD`) are already set on `PLATFORM` (shared with GBP enrichment), so the DataForSEO rank + market paths work today. The GSC path needs `GOOGLE_SERVICE_ACCOUNT_KEY` (the full service-account key JSON) on `PLATFORM` — **not yet provisioned**; until it's set, the rank tracker runs in DataForSEO-only mode and GSC verify/ingest show a "not configured" state. Provisioning it requires creating a GCP service account + enabling the Search Console API (a dashboard step — stop and confirm with the user).
+
 You should NOT need dashboard-level setup. If you think you do, stop and ask.
 
 ## Repository layout
@@ -96,10 +100,13 @@ writer/platform-api/
 ├── main.py                    ← FastAPI app, route registration, startup
 ├── config.py                  ← env var loading via pydantic-settings
 ├── routers/                   ← one file per resource
-│     (clients, runs, briefs, silos, files, publish, users)
+│     (clients, runs, briefs, silos, files, publish, users,
+│      local_seo, gsc, rank)
 ├── services/                  ← business logic
 │     (orchestrator, file_parser, job_worker, website_scraper,
-│      gbp_service, silo_dedup, silo_promotion)
+│      gbp_service, silo_dedup, silo_promotion,
+│      gsc_service, gsc_ingest, gsc_scheduler, rank_status,
+│      rank_materialize, dataforseo_rank, keyword_market)
 ├── models/                    ← Pydantic request/response schemas
 ├── middleware/auth.py         ← JWT verification dependency (require_auth / require_admin)
 ├── db/supabase_client.py      ← supabase-py setup (service role key)
@@ -167,7 +174,9 @@ These decisions are not in the docs — ask the user:
 3. Observability tooling beyond stdlib logging (Sentry, Better Stack, etc.) — planned for v2
 4. Whether to add automated tests in CI on push, or rely on manual testing
 5. Branch protection rules and PR requirements
-6. The **shared scheduler** mechanism (still unchosen — see suite roadmap Open Items) before building any scheduled tracker
+6. Alerting/notifications delivery channels (in-app feed vs email/Slack + the provider/webhook details) before building the notifications service / rank-tracker alerting
+
+> **Resolved:** the **shared scheduler** mechanism is decided — an in-process asyncio loop in platform-api (`services/gsc_scheduler.py`) that enqueues jobs into `async_jobs`; reuse it for future scheduled trackers rather than adding new infra.
 
 ## Things NOT to do without asking
 

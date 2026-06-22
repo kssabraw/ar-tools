@@ -18,6 +18,48 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     google_apps_script_url: str = ""
     outscraper_api_key: str = ""
+    # Google Search Console — Organic Rank Tracker (Module #4).
+    # The service-account key JSON (the entire downloaded key file, as a single
+    # string) for the agency-owned identity that clients add as a user on their
+    # Search Console property. Stored once at the app level; never per-client.
+    google_service_account_key: str = ""
+    # GSC daily ingest (M2). The scheduler enqueues one ingest job per active
+    # property once a day, after `gsc_ingest_hour_utc`. Each run re-pulls the
+    # last `gsc_repull_days` days to catch GSC's ~2–3 day late-arriving data
+    # (a missed run is therefore self-healing on the next pull). The scheduler
+    # loop wakes every `gsc_scheduler_poll_interval_seconds`.
+    gsc_repull_days: int = 3
+    gsc_ingest_hour_utc: int = 8
+    gsc_scheduler_poll_interval_seconds: int = 300
+    # One-time historical backfill window. GSC retains ~16 months; pull it all so
+    # the Supabase store keeps it forever (the core value-add — PRD §10).
+    gsc_backfill_days: int = 480
+    # Weekly query×page ingest window (canonical-URL resolution + Pages view).
+    gsc_page_window_days: int = 30
+    # Striking-distance discovery: queries averaging in this position band (and
+    # not already tracked) are page-2 opportunities.
+    striking_distance_min: float = 8.0
+    striking_distance_max: float = 20.0
+    # URL Inspection (deindex confirmation) has a daily per-property quota, so
+    # re-check a flagged keyword's canonical page at most this often.
+    url_inspection_recheck_days: int = 3
+    # M3 materialize: the trailing window (days) of the per-keyword-per-day axis.
+    # Covers all rolling windows (max 90d) + margin; the full 16-month history
+    # stays in gsc_query_daily.
+    rank_materialize_days: int = 120
+    # DataForSEO fallback rank (used when GSC is absent or the site doesn't rank
+    # for a keyword). Refreshed WEEKLY on this weekday (0=Mon..6=Sun) to bound
+    # cost. A keyword counts as GSC-covered if it had a GSC position within the
+    # last `rank_gsc_coverage_days` days; otherwise it falls back to DataForSEO.
+    dataforseo_rank_weekday: int = 0
+    rank_gsc_coverage_days: int = 14
+    dataforseo_serp_depth: int = 100  # find rank within the top 100, else "not ranking"
+    dataforseo_default_location_code: int = 2840  # United States
+    dataforseo_default_language_code: str = "en"
+    # Keyword market data (CPC / volume / competition): Google Ads numbers
+    # refresh monthly, so re-fetch only when a keyword's cached row is older
+    # than this many days (or missing).
+    keyword_market_refresh_days: int = 30
     # DataForSEO — GBP review enrichment (shared with pipeline-api modules)
     dataforseo_login: str = ""
     dataforseo_password: str = ""

@@ -18,12 +18,15 @@ from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
 from routers.clients import router as clients_router
 from routers.files import router as files_router
+from routers.gsc import router as gsc_router
 from routers.icp import router as icp_router
 from routers.local_seo import router as local_seo_router
 from routers.publish import router as publish_router
+from routers.rank import router as rank_router
 from routers.runs import router as runs_router
 from routers.silos import router as silos_router
 from routers.users import router as users_router
+from services.gsc_scheduler import gsc_scheduler
 from services.job_worker import job_worker
 from services.orchestrator import recover_stuck_runs
 
@@ -44,14 +47,16 @@ def _new_request_id() -> str:
 async def lifespan(app: FastAPI):
     logger.info("platform-api starting up")
     await recover_stuck_runs()
-    # Start background job worker
+    # Start background job worker + GSC ingest scheduler
     worker_task = asyncio.create_task(job_worker())
+    scheduler_task = asyncio.create_task(gsc_scheduler())
     yield
-    worker_task.cancel()
-    try:
-        await worker_task
-    except asyncio.CancelledError:
-        pass
+    for task in (worker_task, scheduler_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     logger.info("platform-api shut down")
 
 
@@ -97,8 +102,10 @@ app.include_router(brand_voice_router)
 app.include_router(briefs_router)
 app.include_router(clients_router)
 app.include_router(files_router)
+app.include_router(gsc_router)
 app.include_router(icp_router)
 app.include_router(local_seo_router)
+app.include_router(rank_router)
 app.include_router(runs_router)
 app.include_router(silos_router)
 app.include_router(users_router)

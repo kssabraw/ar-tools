@@ -65,6 +65,149 @@ export interface Client extends ClientListItem {
   updated_at: string
 }
 
+// Organic Rank Tracker (Module #4) — GSC property connection (M1).
+export interface GscProperty {
+  id: string
+  client_id: string
+  site_url: string
+  property_type: 'url_prefix' | 'domain'
+  access_status: 'ok' | 'no_access' | 'pending'
+  last_verified_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface VerifyAccessResponse {
+  property_id: string
+  access_status: 'ok' | 'no_access' | 'pending'
+  detail: string | null
+  last_verified_at: string | null
+}
+
+export interface SyncRun {
+  id: string
+  property_id: string
+  job_type: string
+  run_at: string
+  start_date: string | null
+  end_date: string | null
+  rows: number
+  status: 'ok' | 'failed'
+  error: string | null
+}
+
+export interface IngestResponse {
+  property_id: string
+  status: 'ok' | 'failed'
+  rows: number
+  error: string | null
+}
+
+export type KeywordStatus =
+  | 'climbing' | 'stable' | 'volatile' | 'dropping' | 'deindex_risk' | 'no_data'
+
+export interface KeywordSummary {
+  id: string
+  keyword: string
+  source: string
+  primary_source: 'gsc' | 'dataforseo' | 'none'
+  canonical_url: string | null
+  canonical_url_locked: boolean
+  status: KeywordStatus
+  status_updated_at: string | null
+  avg_7: number | null
+  avg_30: number | null
+  avg_60: number | null
+  avg_90: number | null
+  clicks_30d: number
+  impressions_30d: number
+  ctr_30d: number
+  today_rank: number | null
+  cpc: number | null
+  search_volume: number | null
+  competition: string | null
+  est_monthly_value: number | null
+  index_status: 'indexed' | 'not_indexed' | 'unknown' | null
+  index_checked_at: string | null
+  page_count: number
+  sparkline: (number | null)[]
+  direction: 'up' | 'down' | 'flat' | null
+}
+
+export interface KeywordPageRow {
+  page: string
+  clicks: number
+  impressions: number
+  avg_position: number | null
+  is_canonical: boolean
+}
+
+export interface KeywordPagesResponse {
+  keyword: string
+  canonical_url: string | null
+  pages: KeywordPageRow[]
+}
+
+export interface StrikingKeyword {
+  query: string
+  avg_position: number
+  clicks: number
+  impressions: number
+}
+
+export interface StrikingDistanceResponse {
+  gsc_connected: boolean
+  keywords: StrikingKeyword[]
+}
+
+export interface TrendPoint {
+  date: string
+  gsc_position: number | null
+  tracked_rank: number | null
+  clicks: number
+  impressions: number
+  ctr: number
+}
+
+export interface KeywordTrendline {
+  id: string
+  keyword: string
+  status: KeywordStatus
+  canonical_url: string | null
+  points: TrendPoint[]
+}
+
+export interface HeroPoint {
+  date: string
+  avg_position: number | null
+  clicks: number
+  impressions: number
+}
+
+export interface PageRow {
+  page: string
+  clicks: number
+  impressions: number
+  keywords: number
+  avg_position: number | null
+}
+
+export interface PagesResponse {
+  gsc_connected: boolean
+  pages: PageRow[]
+}
+
+export interface RankOverview {
+  keyword_count: number
+  gsc_connected: boolean
+  status_counts: Record<string, number>
+  clicks_30d: number
+  impressions_30d: number
+  avg_position_30d: number | null
+  at_risk: number
+  hero: HeroPoint[]
+}
+
 // ── ICP + differentiators (converged client-level assets, Option A) ──────────
 
 export interface IcpSegment {

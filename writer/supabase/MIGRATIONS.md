@@ -65,6 +65,15 @@ expected for a shared project, not a problem.
 | `20260531181719` | `fix_profiles_rls_recursion` *(lands via the logo/handoff branch)* |
 | `20260531200317` | `client_logos_bucket` *(lands via the logo/handoff branch)* |
 | `20260531210255` | `fanout_sourced_silo_auto_approve` |
+| … | *(intervening Local SEO / brand-voice / ICP / keyword-analyses module migrations live in the folder with their own version prefixes)* |
+| `20260622181919` | `gsc_properties` (Organic Rank Tracker #4 — M1) |
+| `20260622181933` | `gsc_ingest_storage` (#4 — M2) |
+| `20260622183357` | `rank_tracker_keywords` (#4 — M3; `rank_keyword_metrics`) |
+| `20260622185307` | `keywords_client_anchor` (#4 — client-anchored keywords for the DataForSEO fallback) |
+| `20260622185948` | `keyword_market` (#4 — CPC/volume/competition) |
+| `20260622191240` | `gsc_query_page_daily` (#4 — canonical URL + Pages) |
+| `20260622191831` | `keyword_index_status` (#4 — deindex URL-Inspection result) |
+| `20260622203200` | `sie_cache_enable_rls` (drift fix — RLS on `sie_cache`) |
 
 > A few `schema_migrations.name` values carry version suffixes (`_v1_4`, `_v2_0`)
 > from how they were originally applied. The CLI matches on the numeric version,
@@ -72,6 +81,20 @@ expected for a shared project, not a problem.
 > the same migration.
 
 ## Reconciliation log
+
+**2026-06-22** — Organic Rank Tracker (#4) migrations + a security fix:
+
+- Added 7 rank-tracker migrations (`gsc_properties` → `keyword_index_status`)
+  applied via the Supabase MCP. The MCP stamps `schema_migrations` with the
+  *apply-time* UTC version, so each file was **renamed from its placeholder
+  `…HHMMSS` prefix to the recorded version** (e.g. `20260622160000` →
+  `20260622181919`) and its `-- Migration:` header updated to match. Content is
+  identical to what was applied.
+- `sie_cache_enable_rls` (`20260622203200`): the Supabase advisor flagged
+  `public.sie_cache` with **RLS disabled** on the live project, even though
+  `20260501120000_sie_cache.sql` enabled it at creation (drift). The table is
+  service-role-only (nothing reads it with the anon key — the frontend uses only
+  the `sie_cache_hit` boolean on `runs`), so re-enabled RLS with no policies.
 
 **2026-05-31** — aligned this repo's migration folder with the live
 `schema_migrations`:
