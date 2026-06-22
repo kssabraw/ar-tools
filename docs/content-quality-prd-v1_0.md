@@ -119,7 +119,7 @@ The legacy `silo_candidates[]` field is retained for one release with identical 
 
 | Element | Required Position | Required Content |
 |---|---|---|
-| **Key Takeaways** | Immediately after H1 enrichment, before the first content H2 | A bulleted list of 3–5 standalone sentences, each ≤ 25 words, that summarize the article's most extractable claims. Optimized for AEO snippet capture. |
+| **Key Takeaways** | Immediately after H1 enrichment, before the first content H2 | A bulleted list of 3–5 standalone sentences, each ≤ 25 words, that summarize the article's most extractable claims. Optimized for AEO snippet capture. The **first bullet directly answers the seed query** (definitional/direct answer, liftable as the snippet); the rest surface additional claims. |
 | **Intro** | The intro paragraph(s) directly following the Key Takeaways block, before the first H2 | Opens with **one direct, liftable answer sentence** (~15–30 words) that answers the seed query — self-contained, snippet/AI-Overview ready, grounded in the article's actual content — then continues with a short brand-voice opener grounded in the ICP/audience. 1–2 short paragraphs, 80–120 words total. No fixed beat structure beyond the leading answer. Must not enumerate the article's H2s as a roadmap, and must not use hard sales/CTA framing. (Replaces the former Agree/Promise/Preview "APP" structure, dropped per user decision.) |
 | **CTA** | Final sentence of the conclusion section | A clear next-step call-to-action sentence that names a specific action a reader can take, drawn from `client_context.icp_text` goals when available, or from a generic intent-appropriate template otherwise. Never a hard sales pitch. |
 

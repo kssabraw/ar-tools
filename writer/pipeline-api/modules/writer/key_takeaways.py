@@ -1,8 +1,9 @@
 """Step 6.5 - Key Takeaways generation (content-quality PRD §R4).
 
 A bulleted list of 3-5 standalone sentences placed between H1 enrichment
-and the APP intro. Optimized for AEO snippet capture: each bullet is a
-self-contained, extractable claim from the article body.
+and the intro. Optimized for AEO snippet capture: each bullet is a
+self-contained, extractable claim from the article body. The first bullet
+directly answers the seed query (the keyword).
 
 Hard constraints:
   - 3 to 5 bullets total (let article depth determine; do not pad).
@@ -48,10 +49,12 @@ Key Takeaways sit at the top of the article, between the H1 and the intro. They 
 
 RULES:
 - Return between 3 and 5 bullets. Let the article's depth determine the count - 3 if only 3 points are worth surfacing, 5 if the article is rich enough. Do not pad.
+- The FIRST bullet MUST directly and completely answer the query (the KEYWORD): a self-contained, definitional/direct answer a reader (or an AI Overview) could lift as the snippet - e.g. for "what is X", the first bullet defines X; for "how to X", it states the core how. Ground it in the article body; do not invent.
+- The remaining bullets surface the most important ADDITIONAL extractable claims (do not repeat the answer).
 - Each bullet is ONE sentence, MAXIMUM 25 words.
 - Each bullet summarizes one major point actually made in the article. Do not invent claims that are not in the article body.
 - Bullets must be standalone - a reader must understand each bullet without context from the article.
-- Prioritize actionable, specific, and concrete points. Skip introductory, transitional, or obvious statements.
+- Prioritize actionable, specific, and concrete points. Skip introductory, transitional, or obvious statements (except the required first answer bullet).
 - Plain, confident language. No fluff, no filler ("it's important to remember that", "as we discussed", etc.).
 - Bullets must be distinct - do not repeat the same idea in different words.
 - Do not reference the article ("this article shows", "as shown above", "below we cover").
@@ -111,7 +114,8 @@ def _build_key_takeaways_user_prompt(
 
     parts.append(
         "\nWrite the JSON object now. Return 3-5 bullets, each one sentence, "
-        "each <= 25 words, each a distinct extractable claim."
+        "each <= 25 words, each a distinct extractable claim. The FIRST bullet "
+        "must directly answer the KEYWORD."
     )
     return "\n".join(parts)
 

@@ -196,6 +196,12 @@ async def test_write_key_takeaways_article_body_in_prompt(monkeypatch):
     assert "ARTICLE_BODY" in captured["user"]
 
 
+def test_key_takeaways_system_requires_first_bullet_answers_query():
+    """The first takeaway must directly answer the seed query (AEO/snippet)."""
+    from modules.writer.key_takeaways import KEY_TAKEAWAYS_SYSTEM
+    assert "FIRST bullet MUST directly and completely answer the query" in KEY_TAKEAWAYS_SYSTEM
+
+
 @pytest.mark.asyncio
 async def test_write_key_takeaways_brand_voice_in_prompt(monkeypatch):
     captured: dict = {}
