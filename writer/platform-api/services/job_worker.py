@@ -10,6 +10,7 @@ from db.supabase_client import get_supabase
 from services.dataforseo_rank import run_dataforseo_rank_job
 from services.gsc_ingest import run_gsc_ingest_job, run_gsc_page_ingest_job
 from services.keyword_market import run_keyword_market_job
+from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
 from services.silo_dedup import process_silo_dedup_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
@@ -132,6 +133,8 @@ async def _process_job(job: dict) -> None:
         await run_dataforseo_rank_job(job)
     elif job_type == "keyword_market":
         await run_keyword_market_job(job)
+    elif job_type == "rank_report":
+        await run_rank_report_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 

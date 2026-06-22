@@ -189,6 +189,38 @@ export interface RankLocation {
   location_code: number | null
 }
 
+export type ReportMode = 'as_needed' | 'weekly' | 'monthly' | 'interval'
+
+export interface ReportSchedule {
+  mode: ReportMode
+  day_of_week: number | null
+  day_of_month: number | null
+  interval_days: number | null
+  last_generated_at: string | null
+}
+
+export interface ReportListItem {
+  id: string
+  title: string
+  created_at: string
+}
+
+export interface ReportSnapshot {
+  generated_at: string
+  client: { name: string | null; logo_url: string | null }
+  location: string | null
+  gsc_connected: boolean
+  overview: RankOverview
+  keywords: KeywordSummary[]
+}
+
+export interface GeneratedReport {
+  id: string
+  title: string
+  created_at: string
+  snapshot: ReportSnapshot
+}
+
 export interface PageRow {
   page: string
   clicks: number

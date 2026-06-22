@@ -29,14 +29,17 @@ from models.rank import (
     KeywordPageRow,
     MaterializeResponse,
     OverviewResponse,
+    GeneratedReport,
     PagesResponse,
     RankLocation,
+    ReportListItem,
+    ReportSchedule,
     StrikingDistanceResponse,
     TrackedKeywordCreateRequest,
     TrackedKeywordUpdateRequest,
     TrendPoint,
 )
-from services import dataforseo_rank, gsc_service, keyword_market, rank_materialize, rank_status
+from services import dataforseo_rank, gsc_service, keyword_market, rank_materialize, rank_report, rank_status
 
 logger = logging.getLogger(__name__)
 
@@ -445,3 +448,68 @@ async def trigger_dataforseo(client_id: UUID, auth: dict = Depends(require_auth)
     if result.get("status") == "ok" and result.get("fetched"):
         rank_materialize.materialize_client(str(client_id))
     return DataForSeoRefreshResponse(client_id=client_id, **result)
+
+
+# ---- Scheduled reports + in-app archive --------------------------------------
+@router.get("/clients/{client_id}/rank/report-schedule", response_model=ReportSchedule)
+async def get_report_schedule(client_id: UUID, auth: dict = Depends(require_auth)) -> ReportSchedule:
+    res = (
+        get_supabase().table("rank_report_config").select("*").eq("client_id", str(client_id)).limit(1).execute()
+    )
+    if not res.data:
+        return ReportSchedule()  # default: as_needed
+    r = res.data[0]
+    return ReportSchedule(
+        mode=r["mode"], day_of_week=r.get("day_of_week"), day_of_month=r.get("day_of_month"),
+        interval_days=r.get("interval_days"), last_generated_at=r.get("last_generated_at"),
+    )
+
+
+@router.put("/clients/{client_id}/rank/report-schedule", response_model=ReportSchedule)
+async def set_report_schedule(
+    client_id: UUID, body: ReportSchedule, auth: dict = Depends(require_auth)
+) -> ReportSchedule:
+    """Set the client's report schedule. Only the field for the chosen mode is kept."""
+    supabase = get_supabase()
+    row = {
+        "client_id": str(client_id),
+        "mode": body.mode,
+        "day_of_week": body.day_of_week if body.mode == "weekly" else None,
+        "day_of_month": body.day_of_month if body.mode == "monthly" else None,
+        "interval_days": body.interval_days if body.mode == "interval" else None,
+        "updated_at": "now()",
+    }
+    supabase.table("rank_report_config").upsert(row, on_conflict="client_id").execute()
+    return await get_report_schedule(client_id, auth)
+
+
+@router.get("/clients/{client_id}/rank/reports", response_model=list[ReportListItem])
+async def list_reports(client_id: UUID, auth: dict = Depends(require_auth)) -> list[ReportListItem]:
+    res = (
+        get_supabase().table("rank_reports").select("id, title, created_at")
+        .eq("client_id", str(client_id)).order("created_at", desc=True).limit(60).execute()
+    )
+    return [ReportListItem(**r) for r in (res.data or [])]
+
+
+@router.post("/clients/{client_id}/rank/reports", response_model=GeneratedReport)
+async def generate_report(client_id: UUID, auth: dict = Depends(require_auth)) -> GeneratedReport:
+    """Generate a report now (the 'as needed' path) and store it in the archive."""
+    report = rank_report.generate_and_store(get_supabase(), str(client_id), created_by=auth["user_id"])
+    if report is None:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    return GeneratedReport(**report)
+
+
+@router.get("/rank-reports/{report_id}", response_model=GeneratedReport)
+async def get_report(report_id: UUID, auth: dict = Depends(require_auth)) -> GeneratedReport:
+    res = get_supabase().table("rank_reports").select("*").eq("id", str(report_id)).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    return GeneratedReport(**res.data[0])
+
+
+@router.delete("/rank-reports/{report_id}", status_code=204, response_class=Response)
+async def delete_report(report_id: UUID, auth: dict = Depends(require_auth)) -> Response:
+    get_supabase().table("rank_reports").delete().eq("id", str(report_id)).execute()
+    return Response(status_code=204)

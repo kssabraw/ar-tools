@@ -2,7 +2,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Printer, TrendingUp, AlertTriangle } from 'lucide-react'
 import { api } from '../lib/api'
-import type { Client, KeywordSummary, RankLocation, RankOverview as Overview } from '../lib/types'
+import type { Client, GeneratedReport, KeywordSummary, RankLocation, RankOverview as Overview } from '../lib/types'
 import { STATUS_META, statusRank } from '../components/rankings/status'
 import { Sparkline } from '../components/rankings/Sparkline'
 import { PositionChart } from '../components/rankings/PositionChart'
@@ -11,30 +11,49 @@ import { MetricsChart } from '../components/rankings/MetricsChart'
 // Printable, client-facing organic-rankings report. Uses the data the tracker
 // already serves; "Print / Save as PDF" uses the browser print dialog. A scoped
 // print stylesheet isolates the report from the app chrome.
-export function RankReport() {
-  const { id } = useParams<{ id: string }>()
-  const clientId = id as string
+const fmtDate = (d: Date) => d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
 
-  const { data: client } = useQuery<Client>({
+export function RankReport() {
+  const { id, reportId } = useParams<{ id: string; reportId?: string }>()
+  const clientId = id as string
+  const archived = Boolean(reportId)
+
+  // Archived report: render the stored snapshot. Live report: pull current data.
+  const { data: archivedReport } = useQuery<GeneratedReport>({
+    queryKey: ['rank-report', reportId],
+    queryFn: () => api.get<GeneratedReport>(`/rank-reports/${reportId}`),
+    enabled: archived,
+  })
+  const { data: clientLive } = useQuery<Client>({
     queryKey: ['client', clientId],
     queryFn: () => api.get<Client>(`/clients/${clientId}`),
+    enabled: !archived,
   })
-  const { data: ov } = useQuery<Overview>({
+  const { data: ovLive } = useQuery<Overview>({
     queryKey: ['rank-overview', clientId],
     queryFn: () => api.get<Overview>(`/clients/${clientId}/rank/overview`),
+    enabled: !archived,
   })
-  const { data: keywords } = useQuery<KeywordSummary[]>({
+  const { data: keywordsLive } = useQuery<KeywordSummary[]>({
     queryKey: ['rank-keywords', clientId],
     queryFn: () => api.get<KeywordSummary[]>(`/clients/${clientId}/rank/keywords`),
+    enabled: !archived,
   })
-  const { data: loc } = useQuery<RankLocation>({
+  const { data: locLive } = useQuery<RankLocation>({
     queryKey: ['rank-location', clientId],
     queryFn: () => api.get<RankLocation>(`/clients/${clientId}/rank/location`),
+    enabled: !archived,
   })
 
-  const today = new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })
-  const gsc = ov?.gsc_connected ?? false
-  const kws = keywords ?? []
+  const snap = archivedReport?.snapshot
+  const client = archived
+    ? { name: snap?.client.name ?? null, logo_url: snap?.client.logo_url ?? null }
+    : { name: clientLive?.name ?? null, logo_url: clientLive?.logo_url ?? null }
+  const ov: Overview | undefined = archived ? snap?.overview : ovLive
+  const kws = (archived ? snap?.keywords : keywordsLive) ?? []
+  const locationName = archived ? (snap?.location ?? null) : (locLive?.location ?? null)
+  const gsc = (archived ? snap?.gsc_connected : ovLive?.gsc_connected) ?? false
+  const today = archived ? fmtDate(new Date(archivedReport?.created_at ?? Date.now())) : fmtDate(new Date())
 
   const movement = (k: KeywordSummary) =>
     k.avg_90 != null && k.avg_7 != null ? k.avg_90 - k.avg_7 : 0 // positive = improved
@@ -72,16 +91,16 @@ export function RankReport() {
       <div id="rank-report">
         {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, borderBottom: '2px solid #6366f1', paddingBottom: 16, marginBottom: 22 }}>
-          {client?.logo_url && (
+          {client.logo_url && (
             <img src={client.logo_url} alt="" style={{ width: 48, height: 48, borderRadius: 10, objectFit: 'contain', background: '#f8fafc', border: '1px solid #e2e8f0' }} />
           )}
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 22, fontWeight: 700, color: '#0f172a' }}>{client?.name ?? 'Client'}</div>
+            <div style={{ fontSize: 22, fontWeight: 700, color: '#0f172a' }}>{client.name ?? 'Client'}</div>
             <div style={{ fontSize: 14, color: '#6366f1', fontWeight: 600 }}>Organic Rankings Report</div>
           </div>
           <div style={{ textAlign: 'right', fontSize: 12, color: '#64748b' }}>
             <div>{today}</div>
-            <div>{gsc ? 'Search Console + DataForSEO' : 'DataForSEO'}{loc?.location ? ` · ${loc.location}` : ''}</div>
+            <div>{gsc ? 'Search Console + DataForSEO' : 'DataForSEO'}{locationName ? ` · ${locationName}` : ''}</div>
           </div>
         </div>
 

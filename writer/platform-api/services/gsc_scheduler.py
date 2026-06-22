@@ -130,6 +130,27 @@ def enqueue_due_page_ingest() -> int:
     return enqueued
 
 
+def enqueue_due_reports() -> int:
+    """Daily: enqueue a rank_report job for each client whose schedule is due."""
+    from datetime import date
+
+    from services.rank_report import enqueue_rank_report, is_report_due
+
+    supabase = get_supabase()
+    configs = (
+        supabase.table("rank_report_config").select("*").neq("mode", "as_needed").execute()
+    ).data or []
+    today = date.today()
+    due = 0
+    for cfg in configs:
+        if is_report_due(cfg, today):
+            enqueue_rank_report(cfg["client_id"])
+            due += 1
+    if due:
+        logger.info("gsc_scheduler.reports_enqueued", extra={"clients": due})
+    return due
+
+
 async def gsc_scheduler() -> None:
     """Background loop: daily GSC ingest enqueue + weekly DataForSEO rank enqueue."""
     interval = settings.gsc_scheduler_poll_interval_seconds
@@ -145,6 +166,7 @@ async def gsc_scheduler() -> None:
             if should_run(now, last_run_date, hour):
                 enqueue_due_ingests()
                 enqueue_due_market()
+                enqueue_due_reports()
                 last_run_date = now.date()
             # Weekly DataForSEO fallback + query×page ingest, same daily-hour
             # guard but only on the configured weekday.

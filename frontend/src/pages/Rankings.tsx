@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, FileText, TrendingUp } from 'lucide-react'
+import { ArrowLeft, TrendingUp } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, GscProperty } from '../lib/types'
 import { backLink } from '../components/localseo/shared'
@@ -9,8 +9,9 @@ import { RankSettings } from '../components/rankings/RankSettings'
 import { RankOverview } from '../components/rankings/RankOverview'
 import { RankKeywords } from '../components/rankings/RankKeywords'
 import { RankPages } from '../components/rankings/RankPages'
+import { RankReports } from '../components/rankings/RankReports'
 
-type Tab = 'overview' | 'keywords' | 'pages' | 'settings'
+type Tab = 'overview' | 'keywords' | 'pages' | 'reports' | 'settings'
 
 // Per-client Organic Rank Tracker (Module #4). Tabbed shell over the connected
 // GSC property: Overview (triage), Keywords (wide table), Settings (connection).
@@ -58,11 +59,8 @@ export function Rankings() {
         <TabButton active={tab === 'overview'} onClick={() => setTab('overview')} label="Overview" />
         <TabButton active={tab === 'keywords'} onClick={() => setTab('keywords')} label="Keywords" />
         {gscConnected && <TabButton active={tab === 'pages'} onClick={() => setTab('pages')} label="Pages" />}
+        <TabButton active={tab === 'reports'} onClick={() => setTab('reports')} label="Reports" />
         <TabButton active={tab === 'settings'} onClick={() => setTab('settings')} label="Settings" />
-        <Link to={`/clients/${clientId}/rankings/report`}
-          style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#6366f1', textDecoration: 'none', padding: '8px 4px' }}>
-          <FileText size={14} /> Report
-        </Link>
       </div>
 
       {/* Body */}
@@ -72,6 +70,8 @@ export function Rankings() {
         <RankOverview clientId={clientId} />
       ) : tab === 'pages' ? (
         <RankPages clientId={clientId} />
+      ) : tab === 'reports' ? (
+        <RankReports clientId={clientId} />
       ) : (
         <RankKeywords clientId={clientId} gscConnected={gscConnected} />
       )}
