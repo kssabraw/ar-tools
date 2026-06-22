@@ -57,7 +57,7 @@ def _business_fields(client: dict) -> dict:
 
 
 def _gbp_to_generate_payload(
-    client: dict, keyword: str, location: str, run_analysis: bool, location_code: Optional[int] = None
+    client: dict, keyword: str, location: str, location_code: Optional[int] = None
 ) -> dict:
     """Map a suite client row (with its `gbp` JSONB) to the nlp service's
     GeneratePageRequest. The converged brand_voice / detected_icp /
@@ -78,7 +78,8 @@ def _gbp_to_generate_payload(
         "hours": json.dumps(hours) if hours else None,
         "gbp_description": gbp.get("description"),
         "reviews": gbp.get("reviews") or None,
-        "run_analysis": run_analysis,
+        # Analysis always runs first; nlp only skips it if we degrade below.
+        "run_analysis": True,
         "brand_voice": client.get("brand_voice"),
         "detected_icp": client.get("detected_icp"),
         "differentiators": client.get("differentiators") or [],
@@ -305,35 +306,35 @@ def set_page_template_default(client_id: str, page_template_url: Optional[str]) 
 
 async def generate_page(
     client_id: str, keyword: str, location: str, location_code: Optional[int],
-    run_analysis: bool, user_id: str, force_refresh: bool = False,
+    user_id: str, force_refresh: bool = False,
     page_template_url: Optional[str] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
     The location is resolved/validated first: a mistyped area (no picked code)
-    that can't be matched fails loudly (400). When analysis is requested it's
-    pulled from the shared cache (or computed + cached once) and passed to nlp so
-    the generator doesn't re-scrape. If the analysis itself fails (e.g. thin SERP
-    / provider outage), generation degrades to a no-competitor page rather than
-    failing outright — and run_analysis is flipped off in the nlp payload so nlp
-    doesn't re-attempt the same failing scrape."""
+    that can't be matched fails loudly (400). Competitor SERP analysis always
+    runs first: it's pulled from the shared cache (or computed + cached once)
+    and passed to nlp so the generator doesn't re-scrape. If the analysis itself
+    fails (e.g. thin SERP / provider outage), generation degrades to a
+    no-competitor page rather than failing outright — and run_analysis is
+    flipped off in the nlp payload so nlp doesn't re-attempt the same failing
+    scrape."""
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
-    payload = _gbp_to_generate_payload(client, keyword, location, run_analysis, location_code)
+    payload = _gbp_to_generate_payload(client, keyword, location, location_code)
     # Page template: per-page value wins; otherwise the client's saved default.
     template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
     if template_url:
         payload["page_template_url"] = template_url
-    if run_analysis:
-        serp = await _get_or_compute_analysis(
-            keyword, location, location_code, force_refresh, user_id, required=False
-        )
-        if serp is not None:
-            payload["serp_analysis"] = serp
-        else:
-            payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
+    serp = await _get_or_compute_analysis(
+        keyword, location, location_code, force_refresh, user_id, required=False
+    )
+    if serp is not None:
+        payload["serp_analysis"] = serp
+    else:
+        payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
     result = await _stream_nlp("/generate-page", payload)
-    return _persist_page(client_id, keyword, location, run_analysis, "generate", result, user_id)
+    return _persist_page(client_id, keyword, location, True, "generate", result, user_id)
 
 
 async def analyze(

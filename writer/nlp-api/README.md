@@ -17,10 +17,13 @@ Python/FastAPI microservice powering the suite's **Local SEO Content** module
 - **Cut endpoints** (per the v1 scope): `/analyze-business` (site-scrape ICP),
   `/analyze-brand-voice` (site-scrape brand voice). _(The `/check-rankability`
   map-pack report was later re-added — see below.)_
-- **Analysis is opt-in.** `/generate-page` now takes a required `run_analysis`
-  bool. When no cached `serp_analysis` is supplied AND `run_analysis` is false,
-  generation runs with **no competitor scrape**. When true, it runs the inline
-  SERP analysis as before.
+- **Analysis always runs first.** `/generate-page` takes a `run_analysis` bool
+  that now **defaults to True**: when no cached `serp_analysis` is supplied, the
+  generator runs the inline SERP analysis. `platform-api` always requests
+  analysis; it only passes `run_analysis=false` as a **degraded fallback** when
+  its own analysis attempt already failed (thin SERP / provider outage), so nlp
+  doesn't re-scrape the same failing SERP and instead builds the page from
+  GBP/client data alone.
 - **IPv6 bind** (`--host ::`) so Railway private networking can reach it.
 
 ## Endpoints (kept)

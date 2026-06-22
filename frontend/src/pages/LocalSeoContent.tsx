@@ -62,7 +62,6 @@ export function LocalSeoContent() {
   const [location, setLocation] = useState('')
   // DataForSEO location_code from a picked suggestion; null while free-typing.
   const [locationCode, setLocationCode] = useState<number | null>(null)
-  const [runAnalysis, setRunAnalysis] = useState<boolean | null>(null)
   // Bypass the 14-day shared SERP-analysis cache and re-scrape competitors.
   const [forceRefresh, setForceRefresh] = useState(false)
   // Phase 3 — mirror an existing page's structure. Blank → the client's saved default.
@@ -88,7 +87,6 @@ export function LocalSeoContent() {
 
   // Bulk creation — generate the selected missing silo pages sequentially.
   const [selectedForCreate, setSelectedForCreate] = useState<Set<string>>(new Set())
-  const [bulkRunAnalysis, setBulkRunAnalysis] = useState(false)
   const [bulkCreating, setBulkCreating] = useState(false)
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number; currentKw: string } | null>(null)
   const [bulkElapsed, setBulkElapsed] = useState(0)
@@ -105,7 +103,7 @@ export function LocalSeoContent() {
 
   const hasGbp = Boolean(client?.gbp?.business_name)
   const hasWebsite = Boolean(client?.website_url || client?.gbp?.website)
-  const canGenerate = Boolean(keyword.trim() && location.trim() && runAnalysis !== null)
+  const canGenerate = Boolean(keyword.trim() && location.trim())
   // A GBP with no street address is a service-area business — it hides its address.
   const isSab = hasGbp && !client?.gbp?.address?.trim()
 
@@ -139,12 +137,12 @@ export function LocalSeoContent() {
 
   const handleGenerate = async (kwOverride?: string) => {
     const kw = (typeof kwOverride === 'string' ? kwOverride : keyword).trim()
-    if (!kw || !location.trim() || runAnalysis === null) return
+    if (!kw || !location.trim()) return
     setError('')
     setView({ kind: 'creating' })
     startTicker()
     try {
-      const page = await localSeoApi.generate(clientId, { keyword: kw, location: location.trim(), location_code: locationCode, run_analysis: runAnalysis, force_refresh: forceRefresh, page_template_url: pageTemplateUrl.trim() || null })
+      const page = await localSeoApi.generate(clientId, { keyword: kw, location: location.trim(), location_code: locationCode, force_refresh: forceRefresh, page_template_url: pageTemplateUrl.trim() || null })
       refreshSaved()
       setView({ kind: 'generated', page, isNew: true, prevScore: null })
     } catch (e) {
@@ -271,7 +269,7 @@ export function LocalSeoContent() {
       try {
         await localSeoApi.generate(
           clientId,
-          { keyword: queue[i], location: location.trim(), location_code: locationCode, run_analysis: bulkRunAnalysis, force_refresh: false, page_template_url: null },
+          { keyword: queue[i], location: location.trim(), location_code: locationCode, force_refresh: false, page_template_url: null },
           bulkAbortRef.current?.signal,
         )
         if (bulkCancelledRef.current) break
@@ -342,7 +340,7 @@ export function LocalSeoContent() {
 
   // ── Sub-view routing ─────────────────────────────────────────────────────
 
-  if (view.kind === 'creating') return <CreatingView elapsed={elapsed} runAnalysis={runAnalysis ?? false} />
+  if (view.kind === 'creating') return <CreatingView elapsed={elapsed} />
 
   if (view.kind === 'loading') {
     return (
@@ -582,15 +580,14 @@ export function LocalSeoContent() {
 
                     {selectedCount > 0 && (
                       <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 12, background: '#f8fafc' }}>
-                        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#64748b', cursor: 'pointer' }}>
-                          <input type="checkbox" checked={bulkRunAnalysis} onChange={e => setBulkRunAnalysis(e.target.checked)} />
-                          Run competitor SERP analysis for each page (stronger pages, but much slower)
-                        </label>
+                        <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
+                          Competitor SERP analysis runs for every page so each one targets the right terms and entities.
+                        </p>
                         <button style={{ ...primaryBtn, width: '100%' }} onClick={handleBulkCreate}>
                           <Sparkles size={16} /> Create {selectedCount} selected page{selectedCount === 1 ? '' : 's'}
                         </button>
                         <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textAlign: 'center' }}>
-                          Each page takes ~2–4 minutes{bulkRunAnalysis ? ' (longer with analysis)' : ''}. They’re created one at a time.
+                          Each page takes ~2–4 minutes. They’re created one at a time.
                         </p>
                       </div>
                     )}
@@ -660,28 +657,14 @@ export function LocalSeoContent() {
             </div>
           </div>
 
-          {/* Required analysis choice */}
+          {/* Competitor SERP analysis always runs first */}
           <div>
             <label style={label}>Competitor SERP analysis</label>
             <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 8px' }}>
-              Analyze top-ranking competitor pages to target the right terms, entities, and phrases. Slower and uses more
-              API credit, but produces a stronger page. Required choice.
+              Top-ranking competitor pages are analyzed for every page so the generator targets the right terms,
+              entities, and phrases. This runs automatically.
             </p>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <ChoiceCard
-                active={runAnalysis === true}
-                onClick={() => setRunAnalysis(true)}
-                title="Run analysis"
-                desc="Scrape & analyze competitors (recommended)"
-              />
-              <ChoiceCard
-                active={runAnalysis === false}
-                onClick={() => setRunAnalysis(false)}
-                title="Skip analysis"
-                desc="Generate faster from client data only"
-              />
-            </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 13, color: '#64748b', cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#64748b', cursor: 'pointer' }}>
               <input type="checkbox" checked={forceRefresh} onChange={e => setForceRefresh(e.target.checked)} />
               Refresh competitor data (ignore the 14-day cache — slower, re-scrapes)
             </label>
@@ -791,24 +774,6 @@ function normalizeUrl(u: string): string {
   return t
 }
 
-function ChoiceCard({ active, onClick, title, desc }: { active: boolean; onClick: () => void; title: string; desc: string }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        flex: 1, textAlign: 'left', cursor: 'pointer', borderRadius: 10, padding: '12px 14px',
-        background: active ? '#eef2ff' : '#fff',
-        border: `1.5px solid ${active ? '#6366f1' : '#e2e8f0'}`,
-      }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 14, fontWeight: 600, color: active ? '#4338ca' : '#0f172a' }}>
-        {active && <CheckCircle2 size={15} color="#6366f1" />}{title}
-      </div>
-      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{desc}</div>
-    </button>
-  )
-}
-
 function SavedPagesList({ pages, loading, onOpen, onDelete }: {
   pages: LocalSeoPageListItem[]
   loading: boolean
@@ -871,18 +836,14 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
   )
 }
 
-function CreatingView({ elapsed, runAnalysis }: { elapsed: number; runAnalysis: boolean }) {
+function CreatingView({ elapsed }: { elapsed: number }) {
   const pct = Math.min(95, Math.round((elapsed / 180) * 100))
-  const steps = runAnalysis
-    ? [
-        { label: 'Fetching top search results', done: pct >= 35, active: pct < 35 },
-        { label: 'Scraping & analyzing competitor pages', done: pct >= 65, active: pct >= 35 && pct < 65 },
-        { label: 'Generating & scoring your page', done: pct >= 95, active: pct >= 65 },
-      ]
-    : [
-        { label: 'Building your page', done: pct >= 60, active: pct < 60 },
-        { label: 'Scoring & finalizing', done: pct >= 95, active: pct >= 60 },
-      ]
+  // Analysis always runs first, so the progress steps always include it.
+  const steps = [
+    { label: 'Fetching top search results', done: pct >= 35, active: pct < 35 },
+    { label: 'Scraping & analyzing competitor pages', done: pct >= 65, active: pct >= 35 && pct < 65 },
+    { label: 'Generating & scoring your page', done: pct >= 95, active: pct >= 65 },
+  ]
   const mins = Math.floor(elapsed / 60)
   const secs = elapsed % 60
   const elapsedLabel = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`

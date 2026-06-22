@@ -11,15 +11,13 @@ from pydantic import BaseModel, Field
 class LocalSeoGenerateRequest(BaseModel):
     """Request to generate a local SEO page for a client.
 
-    The user must explicitly choose whether to run competitor SERP analysis
-    (`run_analysis`) — there is no default (plan §2, "force a choice").
+    Competitor SERP analysis always runs first — it is no longer opt-in.
     Business data is pulled server-side from the client's stored GBP record.
     """
 
     keyword: str = Field(..., min_length=1)
     location: str = Field(..., min_length=1)
     location_code: Optional[int] = None
-    run_analysis: bool
     # Bypass the shared SERP-analysis cache and re-scrape competitors.
     force_refresh: bool = False
     # Phase 3 — mirror this reference page's structure. Falls back to the
