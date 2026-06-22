@@ -8,8 +8,9 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import { localSeoApi } from '../components/localseo/api'
 import { LocationAutocomplete } from '../components/localseo/LocationAutocomplete'
-import type { AnalysisResult, LocalSeoPageDetail, LocalSeoPageListItem } from '../components/localseo/types'
+import type { AnalysisResult, LocalSeoPageDetail, LocalSeoPageListItem, RelatedPageItem } from '../components/localseo/types'
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
+import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { AnalysisResultsView } from '../components/localseo/AnalysisResultsView'
 import { Spinner } from '../components/localseo/Spinner'
@@ -49,9 +50,11 @@ export function LocalSeoContent() {
     enabled: Boolean(clientId),
   })
 
-  const [tab, setTab] = useState<'new' | 'saved'>(
-    // Deep-link support: /clients/:id/local-seo?tab=saved opens the Saved tab.
-    searchParams.get('tab') === 'saved' ? 'saved' : 'new',
+  const [tab, setTab] = useState<'new' | 'plan' | 'saved'>(
+    // Deep-link support: /clients/:id/local-seo?tab=saved (or ?tab=plan).
+    searchParams.get('tab') === 'saved' ? 'saved'
+      : searchParams.get('tab') === 'plan' ? 'plan'
+      : 'new',
   )
   const [view, setView] = useState<View>({ kind: 'form' })
   const [keyword, setKeyword] = useState('')
@@ -70,12 +73,18 @@ export function LocalSeoContent() {
   const [analyzing, setAnalyzing] = useState(false)
   const [manualUrl, setManualUrl] = useState('')
 
+  // Plan Silo tab — research a topic's parent/sibling/neighbourhood silo up front.
+  const [planScanning, setPlanScanning] = useState(false)
+  const [planResults, setPlanResults] = useState<RelatedPageItem[] | null>(null)
+  const [planError, setPlanError] = useState('')
+
   // Creating-progress ticker (the generate POST blocks until done, so progress
   // is time-based rather than streamed).
   const [elapsed, setElapsed] = useState(0)
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const hasGbp = Boolean(client?.gbp?.business_name)
+  const hasWebsite = Boolean(client?.website_url || client?.gbp?.website)
   const canGenerate = Boolean(keyword.trim() && location.trim() && runAnalysis !== null)
 
   // Reset transient form state when the service/area inputs change (called from
@@ -139,6 +148,34 @@ export function LocalSeoContent() {
       setCheck({ status: 'idle' })
     } finally {
       setScanning(false)
+    }
+  }
+
+  const handleScanSilo = async () => {
+    if (!keyword.trim() || !location.trim()) return
+    setPlanError('')
+    setPlanScanning(true)
+    setPlanResults(null)
+    try {
+      const data = await localSeoApi.relatedPages(clientId, { keyword: keyword.trim(), location: location.trim() })
+      setPlanResults(data.items ?? [])
+    } catch (e) {
+      setPlanError(e instanceof Error ? e.message : 'Scan failed')
+    } finally {
+      setPlanScanning(false)
+    }
+  }
+
+  // Hand a silo item off to the writer: missing → pre-fill the New Page form;
+  // found → open the existing page in the score/reoptimize view.
+  const handlePlanAction = (item: RelatedPageItem) => {
+    setKeyword(item.keyword)
+    if (item.status === 'found' && item.url) {
+      setView({ kind: 'score', pageUrl: item.url })
+    } else {
+      setError('')
+      setCheck({ status: 'idle' })
+      setTab('new')
     }
   }
 
@@ -257,7 +294,7 @@ export function LocalSeoContent() {
 
       {/* Tabs */}
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-        {(['new', 'saved'] as const).map(t => (
+        {(['new', 'plan', 'saved'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -266,7 +303,7 @@ export function LocalSeoContent() {
               background: tab === t ? '#fff' : 'transparent', color: tab === t ? '#0f172a' : '#64748b',
               boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
             }}
-          >{t === 'new' ? 'New Page' : 'Saved Pages'}</button>
+          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : 'Saved Pages'}</button>
         ))}
       </div>
 
@@ -277,6 +314,80 @@ export function LocalSeoContent() {
           onOpen={openSaved}
           onDelete={async (pid) => { await localSeoApi.deletePage(pid); refreshSaved() }}
         />
+      ) : tab === 'plan' ? (
+        <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 18 }}>
+          <div>
+            <h2 style={{ fontSize: 16, fontWeight: 600, color: '#0f172a', margin: 0 }}>Research the silo for a topic</h2>
+            <p style={{ fontSize: 13, color: '#64748b', margin: '4px 0 0' }}>
+              Enter a seed service and area. We'll derive the parent / sibling / neighbourhood pages that topic should
+              link to and check {client?.name ?? 'this client'}'s site for which already exist — then you can create the
+              missing ones in one click.
+            </p>
+          </div>
+
+          {!hasWebsite && (
+            <div style={{ display: 'flex', gap: 10, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 13, color: '#92400e' }}>
+              <Building2 size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>
+                No website is on file for this client, so every page will show as “missing”. <Link to={`/clients/${clientId}/edit`} style={{ color: '#92400e', fontWeight: 600 }}>Add one →</Link> to detect existing pages.
+              </span>
+            </div>
+          )}
+
+          {/* Service */}
+          <div>
+            <label style={label}>Seed service</label>
+            <input style={input} value={keyword} onChange={e => { setKeyword(e.target.value); setPlanResults(null); setPlanError('') }} placeholder="e.g. emergency plumber" />
+          </div>
+
+          {/* Area */}
+          <div>
+            <label style={label}>Area / Location</label>
+            <LocationAutocomplete
+              clientId={clientId}
+              value={location}
+              onChange={(loc, code) => { setLocation(loc); setLocationCode(code); setPlanResults(null); setPlanError('') }}
+              placeholder="Start typing a city, e.g. Melbourne…"
+            />
+          </div>
+
+          {planError && <div style={errorBox}>{planError}</div>}
+
+          <button
+            style={{ ...primaryBtn, width: '100%', opacity: (planScanning || !keyword.trim() || !location.trim()) ? 0.5 : 1, cursor: (planScanning || !keyword.trim() || !location.trim()) ? 'not-allowed' : 'pointer' }}
+            disabled={planScanning || !keyword.trim() || !location.trim()}
+            onClick={handleScanSilo}
+          >
+            {planScanning ? <Spinner size={16} /> : <Search size={16} />} {planScanning ? 'Scanning site…' : 'Scan site'}
+          </button>
+
+          {planScanning && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 32, color: '#64748b' }}>
+              <Spinner size={22} />
+              <p style={{ fontSize: 14, margin: 0 }}>Deriving related keywords and checking the site…</p>
+              <p style={{ fontSize: 12, opacity: 0.7, margin: 0 }}>This usually takes 30–60 seconds.</p>
+            </div>
+          )}
+
+          {!planScanning && planResults && planResults.length === 0 && (
+            <p style={{ fontSize: 14, color: '#64748b', textAlign: 'center', padding: 24 }}>No related pages found for this topic.</p>
+          )}
+
+          {!planScanning && planResults && planResults.length > 0 && (() => {
+            const found = planResults.filter(r => r.status === 'found').length
+            const missing = planResults.filter(r => r.status === 'missing').length
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#64748b', flexWrap: 'wrap' }}>
+                  <span style={{ fontWeight: 600, color: '#0f172a' }}>{planResults.length} related keywords checked</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#dcfce7', color: '#166534' }}>{found} exist</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#fef3c7', color: '#92400e' }}>{missing} missing</span>
+                </div>
+                <RelatedPagesList items={planResults} onAction={handlePlanAction} />
+              </div>
+            )
+          })()}
+        </div>
       ) : (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 18 }}>
           <h2 style={{ fontSize: 16, fontWeight: 600, color: '#0f172a', margin: 0 }}>What service and area do you want to rank for?</h2>
