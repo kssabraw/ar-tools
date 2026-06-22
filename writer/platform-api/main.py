@@ -25,6 +25,7 @@ from routers.publish import router as publish_router
 from routers.runs import router as runs_router
 from routers.silos import router as silos_router
 from routers.users import router as users_router
+from services.gsc_scheduler import gsc_scheduler
 from services.job_worker import job_worker
 from services.orchestrator import recover_stuck_runs
 
@@ -45,14 +46,16 @@ def _new_request_id() -> str:
 async def lifespan(app: FastAPI):
     logger.info("platform-api starting up")
     await recover_stuck_runs()
-    # Start background job worker
+    # Start background job worker + GSC ingest scheduler
     worker_task = asyncio.create_task(job_worker())
+    scheduler_task = asyncio.create_task(gsc_scheduler())
     yield
-    worker_task.cancel()
-    try:
-        await worker_task
-    except asyncio.CancelledError:
-        pass
+    for task in (worker_task, scheduler_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     logger.info("platform-api shut down")
 
 

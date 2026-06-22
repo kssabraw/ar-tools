@@ -37,3 +37,22 @@ class VerifyAccessResponse(BaseModel):
 
 class ServiceAccountInfo(BaseModel):
     email: str
+
+
+class SyncRun(BaseModel):
+    id: UUID
+    property_id: UUID
+    job_type: str
+    run_at: str
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    rows: int
+    status: Literal["ok", "failed"]
+    error: Optional[str] = None
+
+
+class IngestResponse(BaseModel):
+    property_id: UUID
+    status: Literal["ok", "failed"]
+    rows: int
+    error: Optional[str] = None

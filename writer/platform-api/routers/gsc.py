@@ -21,10 +21,12 @@ from middleware.auth import require_admin, require_auth
 from models.gsc import (
     GscProperty,
     GscPropertyCreateRequest,
+    IngestResponse,
     ServiceAccountInfo,
+    SyncRun,
     VerifyAccessResponse,
 )
-from services import gsc_service
+from services import gsc_ingest, gsc_service
 
 logger = logging.getLogger(__name__)
 
@@ -149,3 +151,37 @@ async def verify_property(
         detail=result.detail,
         last_verified_at=prop.get("last_verified_at"),
     )
+
+
+@router.post("/gsc-properties/{property_id}/ingest", response_model=IngestResponse)
+async def trigger_ingest(
+    property_id: UUID,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    auth: dict = Depends(require_admin),
+) -> IngestResponse:
+    """Run a GSC ingest now (admin). Omit dates for the default trailing window;
+    pass start_date/end_date (YYYY-MM-DD) for a wider initial backfill."""
+    result = gsc_ingest.ingest_property(str(property_id), start_date, end_date)
+    return IngestResponse(
+        property_id=property_id,
+        status=result.status,
+        rows=result.rows,
+        error=result.error,
+    )
+
+
+@router.get("/gsc-properties/{property_id}/sync-runs", response_model=list[SyncRun])
+async def list_sync_runs(
+    property_id: UUID, auth: dict = Depends(require_auth)
+) -> list[SyncRun]:
+    supabase = get_supabase()
+    result = (
+        supabase.table("sync_runs")
+        .select("*")
+        .eq("property_id", str(property_id))
+        .order("run_at", desc=True)
+        .limit(20)
+        .execute()
+    )
+    return [SyncRun(**row) for row in (result.data or [])]

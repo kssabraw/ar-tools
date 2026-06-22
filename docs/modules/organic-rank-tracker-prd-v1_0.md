@@ -165,7 +165,9 @@ rank_snapshots(...)  -- RESERVED for Module #5 (Maps/local-pack geo-grid). Organ
 
 ## 6. Sync jobs & cadence
 
-All jobs run on the **suite shared scheduler** (mechanism = suite Open Item #1, to be chosen before the first job ships) and write observability rows to `sync_runs`.
+All jobs run on the **suite shared scheduler** and write observability rows to `sync_runs`.
+
+> **Scheduler mechanism (decided 2026-06-22, suite Open Item #1):** an in-process **asyncio loop in platform-api** (`services/gsc_scheduler.py`) that, once per day after `gsc_ingest_hour_utc`, enqueues a `gsc_ingest` row into the existing `async_jobs` table for each verified property; the existing `job_worker` executes them. Zero new infrastructure, consistent with the existing `job_worker` pattern, no new deps. A missed run (service down at fire time) self-heals via the ingest's trailing re-pull window. This is the reusable spine for later scheduled trackers (Maps #5, content scheduler #7) — add their enqueue passes there rather than introducing new infra.
 
 | Job | Cadence | Notes |
 |---|---|---|
@@ -258,14 +260,14 @@ The reason a client cares about deindexing is that it costs them money **silentl
 
 ## 11. Build plan
 
-Phasing mirrors the v0.2 spec's milestones, mapped onto the suite. **Open Item #1 (shared scheduler mechanism) must be resolved before M2** — it gates every ingestion job.
+Phasing mirrors the v0.2 spec's milestones, mapped onto the suite. **M1 and M2 are built** (the scheduler decision that gated M2 is settled — see §6).
 
-| Milestone | Scope |
-|---|---|
-| **M1 — Connection (service account)** | `gsc_properties` table + migration (fold in `clients.gsc_property`, then deprecate it — see note). Settings onboarding screen showing the service-account email to add + a **"verify access"** button that runs a test `searchanalytics.query` and flips `access_status` (`pending`→`ok`/`no_access`). Distinguishes the siteUrl-format 403 from the not-added 403 (§4). Much smaller than an OAuth flow. |
-| **M2 — Sync + storage** | Daily GSC query×date job → `gsc_query_daily`, `startRow` pagination, idempotent upserts, `sync_runs` observability, 3-day re-pull. **Requires the shared scheduler.** |
-| **M3 — Materialize + status + UI** | Date-axis materialization → `keyword_metrics` (NULL where absent), computed `status`, keyword CRUD on `tracked_keywords`, merged metrics read API, hero + dual-axis charts, sparklines, the Overview triage list + Keywords wide table, the `no_data` state. |
-| **M4 — DataForSEO + detection + alerts** | Live "Today" rank + CPC/volume/competition (`keyword_market`), weekly query×page → `canonical_url` resolution, deindex gap detection + URL Inspection confirmation, alerting via the suite notifications service, striking-distance discovery from `gsc_query_daily`. |
+| Milestone | Scope | Status |
+|---|---|---|
+| **M1 — Connection (service account)** | `gsc_properties` table + migration (fold in `clients.gsc_property`, then deprecate it — see note). Settings onboarding screen showing the service-account email to add + a **"verify access"** button that runs a test `searchanalytics.query` and flips `access_status` (`pending`→`ok`/`no_access`). Pre-validates site_url format so a verify-time 403 means "not added" (§4). | **Built** |
+| **M2 — Sync + storage** | Daily GSC query×date job → `gsc_query_daily`, `startRow` pagination, idempotent upserts, `sync_runs` observability, 3-day re-pull, the asyncio scheduler (§6), a manual "Sync now" trigger + last-sync status on the connection screen. | **Built** |
+| **M3 — Materialize + status + UI** | Date-axis materialization → `keyword_metrics` (NULL where absent), computed `status`, keyword CRUD on `tracked_keywords`, merged metrics read API, hero + dual-axis charts, sparklines, the Overview triage list + Keywords wide table, the `no_data` state. | Next |
+| **M4 — DataForSEO + detection + alerts** | Live "Today" rank + CPC/volume/competition (`keyword_market`), weekly query×page → `canonical_url` resolution, deindex gap detection + URL Inspection confirmation, alerting via the suite notifications service, striking-distance discovery from `gsc_query_daily`. | Planned |
 
 ### Migration note — `clients.gsc_property`
 The existing `clients.gsc_property` column (migration `20260529220918_clients_suite_fields.sql`) is **folded into `gsc_properties`** in M1: the M1 migration backfills a `gsc_properties` row from any non-null `clients.gsc_property` (inferring `property_type` from the `sc-domain:` prefix), then the column is left deprecated (kept temporarily for safety, dropped in a follow-up migration once nothing reads it). A client can have **two** properties (url-prefix + domain), which a single column cannot represent — the table is the source of truth going forward.
@@ -273,7 +275,8 @@ The existing `clients.gsc_property` column (migration `20260529220918_clients_su
 ---
 
 ## 12. Open / next up
-- **Shared scheduler mechanism** (suite Open Item #1) — pg_cron vs Railway cron vs an asyncio worker loop. **Decide before M2.** CLAUDE.md requires confirming before adding scheduler-like infra.
+- ~~**Shared scheduler mechanism** (suite Open Item #1)~~ — **decided 2026-06-22:** asyncio loop in platform-api enqueuing `async_jobs` (§6).
+- **Initial backfill** — M2 ships the recurring 3-day re-pull; a property's full 16-month history is pulled by calling the manual ingest endpoint with an explicit `start_date`/`end_date`. A one-click "backfill history" affordance is a small follow-up.
 - Tunable thresholds: `deindex_risk` N (consecutive NULL days), the `volatile`/`dropping`/`climbing` band sizes — start conservative, expose as config later.
 - DataForSEO "Today" tiering: which keywords are daily-priority vs weekly long-tail (cost driver).
 - Estimated monthly value column = volume × CTR-at-target-position × CPC (turns the Keywords table into an ROI argument for client reviews) — post-M4 enhancement.

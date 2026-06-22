@@ -84,6 +84,25 @@ export interface VerifyAccessResponse {
   last_verified_at: string | null
 }
 
+export interface SyncRun {
+  id: string
+  property_id: string
+  job_type: string
+  run_at: string
+  start_date: string | null
+  end_date: string | null
+  rows: number
+  status: 'ok' | 'failed'
+  error: string | null
+}
+
+export interface IngestResponse {
+  property_id: string
+  status: 'ok' | 'failed'
+  rows: number
+  error: string | null
+}
+
 // ── ICP + differentiators (converged client-level assets, Option A) ──────────
 
 export interface IcpSegment {

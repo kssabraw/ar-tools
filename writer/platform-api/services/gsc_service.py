@@ -160,6 +160,47 @@ def _run_test_query(client, site_url: str) -> None:
     ).execute()
 
 
+# Google caps a single Search Analytics request at 25k rows; paginate startRow.
+GSC_ROW_LIMIT = 25000
+
+
+def fetch_search_analytics(
+    site_url: str,
+    dimensions: list[str],
+    start_date: str,
+    end_date: str,
+    row_limit: int = GSC_ROW_LIMIT,
+) -> list[dict]:
+    """Fetch all Search Analytics rows for a window, paginating ``startRow``.
+
+    ``site_url`` must already be normalized for its property type. Raises on API
+    error so the caller can classify it (e.g. a 403 → property no_access).
+    Returns the raw GSC rows (each has ``keys`` matching ``dimensions`` order
+    plus clicks/impressions/ctr/position).
+    """
+    client = build_search_console_client()
+    rows: list[dict] = []
+    start_row = 0
+    while True:
+        resp = client.searchanalytics().query(
+            siteUrl=site_url,
+            body={
+                "startDate": start_date,
+                "endDate": end_date,
+                "dimensions": dimensions,
+                "rowLimit": row_limit,
+                "startRow": start_row,
+            },
+        ).execute()
+        page = resp.get("rows", []) or []
+        rows.extend(page)
+        # A short page (fewer than row_limit) is the last page.
+        if len(page) < row_limit:
+            break
+        start_row += row_limit
+    return rows
+
+
 def verify_property_access(site_url: str, property_type: PropertyType) -> VerifyResult:
     """Run a test query against a property and classify the result.
 

@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     # string) for the agency-owned identity that clients add as a user on their
     # Search Console property. Stored once at the app level; never per-client.
     google_service_account_key: str = ""
+    # GSC daily ingest (M2). The scheduler enqueues one ingest job per active
+    # property once a day, after `gsc_ingest_hour_utc`. Each run re-pulls the
+    # last `gsc_repull_days` days to catch GSC's ~2–3 day late-arriving data
+    # (a missed run is therefore self-healing on the next pull). The scheduler
+    # loop wakes every `gsc_scheduler_poll_interval_seconds`.
+    gsc_repull_days: int = 3
+    gsc_ingest_hour_utc: int = 8
+    gsc_scheduler_poll_interval_seconds: int = 300
     # DataForSEO — GBP review enrichment (shared with pipeline-api modules)
     dataforseo_login: str = ""
     dataforseo_password: str = ""

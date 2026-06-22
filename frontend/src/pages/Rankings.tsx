@@ -5,7 +5,9 @@ import {
   ArrowLeft, Check, Clock, Copy, Globe, Plus, RefreshCw, Trash2, TrendingUp, X,
 } from 'lucide-react'
 import { api } from '../lib/api'
-import type { Client, GscProperty, VerifyAccessResponse } from '../lib/types'
+import type {
+  Client, GscProperty, IngestResponse, SyncRun, VerifyAccessResponse,
+} from '../lib/types'
 import { useAuth } from '../context/AuthContext'
 import { Spinner } from '../components/localseo/Spinner'
 import {
@@ -142,7 +144,11 @@ export function Rankings() {
                 detail={verifyResult[p.id]?.detail ?? null}
                 onVerify={() => verifyMut.mutate(p.id)}
                 onDelete={() => deleteMut.mutate(p.id)}
-              />
+              >
+                {p.access_status === 'ok' && (
+                  <SyncStatus propertyId={p.id} isAdmin={isAdmin} />
+                )}
+              </PropertyRow>
             ))}
           </div>
         ) : (
@@ -191,7 +197,7 @@ export function Rankings() {
 }
 
 function PropertyRow({
-  property, isAdmin, verifying, detail, onVerify, onDelete,
+  property, isAdmin, verifying, detail, onVerify, onDelete, children,
 }: {
   property: GscProperty
   isAdmin: boolean
@@ -199,42 +205,90 @@ function PropertyRow({
   detail: string | null
   onVerify: () => void
   onDelete: () => void
+  children?: React.ReactNode
 }) {
   const badge = statusBadge(property.access_status)
   return (
     <div style={propRow}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <code style={{ ...code, fontSize: 13 }}>{property.site_url}</code>
-          <span style={{ fontSize: 11, color: '#94a3b8' }}>
-            {property.property_type === 'domain' ? 'domain' : 'url-prefix'}
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-          <span style={badge.style}>{badge.icon} {badge.text}</span>
-          {property.last_verified_at && (
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <code style={{ ...code, fontSize: 13 }}>{property.site_url}</code>
             <span style={{ fontSize: 11, color: '#94a3b8' }}>
-              checked {relativeTime(property.last_verified_at)}
+              {property.property_type === 'domain' ? 'domain' : 'url-prefix'}
             </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+            <span style={badge.style}>{badge.icon} {badge.text}</span>
+            {property.last_verified_at && (
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                checked {relativeTime(property.last_verified_at)}
+              </span>
+            )}
+          </div>
+          {property.access_status === 'no_access' && (
+            <p style={{ fontSize: 12, color: '#b45309', margin: '6px 0 0' }}>
+              The service account can’t read this property yet — confirm the email was added as a
+              user, then verify again.{detail ? ` (${detail})` : ''}
+            </p>
           )}
         </div>
-        {property.access_status === 'no_access' && (
-          <p style={{ fontSize: 12, color: '#b45309', margin: '6px 0 0' }}>
-            The service account can’t read this property yet — confirm the email was added as a
-            user, then verify again.{detail ? ` (${detail})` : ''}
-          </p>
-        )}
-      </div>
-      <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-        <button style={outlineBtn} onClick={onVerify} disabled={verifying}>
-          <RefreshCw size={14} /> {verifying ? 'Verifying…' : 'Verify access'}
-        </button>
-        {isAdmin && (
-          <button style={{ ...outlineBtn, color: '#dc2626' }} onClick={onDelete} title="Remove">
-            <Trash2 size={14} />
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          <button style={outlineBtn} onClick={onVerify} disabled={verifying}>
+            <RefreshCw size={14} /> {verifying ? 'Verifying…' : 'Verify access'}
           </button>
+          {isAdmin && (
+            <button style={{ ...outlineBtn, color: '#dc2626' }} onClick={onDelete} title="Remove">
+              <Trash2 size={14} />
+            </button>
+          )}
+        </div>
+      </div>
+      {children}
+    </div>
+  )
+}
+
+// M2: surface the latest ingestion outcome + a manual "Sync now" trigger.
+function SyncStatus({ propertyId, isAdmin }: { propertyId: string; isAdmin: boolean }) {
+  const queryClient = useQueryClient()
+  const { data: runs } = useQuery<SyncRun[]>({
+    queryKey: ['gsc-sync-runs', propertyId],
+    queryFn: () => api.get<SyncRun[]>(`/gsc-properties/${propertyId}/sync-runs`),
+  })
+
+  const ingestMut = useMutation({
+    mutationFn: () => api.post<IngestResponse>(`/gsc-properties/${propertyId}/ingest`, {}),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] }),
+  })
+
+  const latest = runs?.[0]
+  return (
+    <div style={syncStrip}>
+      <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <Clock size={12} color="#94a3b8" />
+        {latest ? (
+          latest.status === 'ok' ? (
+            <span>Last sync {relativeTime(latest.run_at)} · {latest.rows.toLocaleString()} rows</span>
+          ) : (
+            <span style={{ color: '#b45309' }}>
+              Last sync failed {relativeTime(latest.run_at)}{latest.error ? ` · ${latest.error}` : ''}
+            </span>
+          )
+        ) : (
+          <span>Not synced yet — the daily job runs automatically, or sync now.</span>
         )}
       </div>
+      {isAdmin && (
+        <button
+          style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
+          onClick={() => ingestMut.mutate()}
+          disabled={ingestMut.isPending}
+        >
+          <RefreshCw size={13} /> {ingestMut.isPending ? 'Syncing…' : 'Sync now'}
+        </button>
+      )}
     </div>
   )
 }
@@ -271,6 +325,10 @@ const emailRow: React.CSSProperties = {
   background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 12px',
 }
 const propRow: React.CSSProperties = {
-  display: 'flex', alignItems: 'flex-start', gap: 12,
+  display: 'flex', flexDirection: 'column', gap: 12,
   border: '1px solid #e2e8f0', borderRadius: 10, padding: 14,
+}
+const syncStrip: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+  borderTop: '1px solid #f1f5f9', paddingTop: 10,
 }
