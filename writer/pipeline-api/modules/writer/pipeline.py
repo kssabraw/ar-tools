@@ -671,12 +671,11 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     article.extend(faq_sections)
 
     # ---- Intro (generated LAST so it sees the final article) ----
-    # Free-form brand-voice intro (no APP/Agree-Promise-Preview structure;
-    # dropped per user decision - see content-quality-prd-v1_0.md R4). By
-    # generating the intro after body+conclusion+FAQ are all finalized, the
-    # prompt sees the real article scope and won't promise sections that
-    # don't exist - the "intro promises 4, body delivers 8" drift the user
-    # reported when the heading_structure mutated mid-pipeline.
+    # Brand-voice intro that LEADS with a direct, liftable answer to the
+    # query, then a short on-voice opener (no APP/Agree-Promise-Preview
+    # structure - see content-quality-prd-v1_0.md R4). Generated after
+    # body+conclusion+FAQ so the answer sentence is grounded in the real
+    # article (via section_summaries) rather than the pre-write outline.
     supporting_stats: Optional[str] = (
         req.research_output.get("supporting_stats")
         if isinstance(req.research_output, dict)
@@ -692,6 +691,9 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         banned_regex=banned_regex,
         intro_order=0,
         supporting_data=supporting_stats,
+        # Ground the opening direct-answer sentence in what the article
+        # actually establishes, so the liftable answer can't drift from the body.
+        answer_context="\n".join(f"- {s}" for s in section_summaries[:8]) or None,
     )
     # Insert intro right after H1 + (optional) h1-enrichment so the
     # render order is: H1 → enrichment → intro → body... → conclusion

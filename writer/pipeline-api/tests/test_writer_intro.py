@@ -226,3 +226,33 @@ async def test_write_intro_h2_list_passed_as_context_not_roadmap(monkeypatch):
     assert "context only" in captured["user"]
     assert "do NOT enumerate" in captured["user"]
     assert "Step one" in captured["user"]
+
+
+def test_intro_system_prompt_requires_direct_answer_first():
+    """The opening sentence must directly answer the query (AEO/snippet)."""
+    from modules.writer.intro import INTRO_SYSTEM
+    assert "directly and completely answers the query" in INTRO_SYSTEM
+    assert "lifted verbatim" in INTRO_SYSTEM
+
+
+@pytest.mark.asyncio
+async def test_write_intro_passes_answer_context(monkeypatch):
+    """answer_context (article grounding for the answer sentence) reaches
+    the prompt, labelled so the model bases the opening answer on it."""
+    captured: dict = {}
+
+    async def _capture(system, user, **kw):
+        captured["user"] = user
+        return _valid_payload()
+
+    monkeypatch.setattr("modules.writer.intro.claude_json", _capture)
+
+    await write_intro(
+        keyword="what is a roth ira", title="t", scope_statement="",
+        intent_type="informational", h2_list=[],
+        brand_voice_card=None, banned_regex=build_banned_regex([]),
+        intro_order=1,
+        answer_context="- A Roth IRA is a retirement account funded with after-tax dollars.",
+    )
+    assert "ANSWER_CONTEXT" in captured["user"]
+    assert "after-tax dollars" in captured["user"]
