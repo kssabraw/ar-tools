@@ -18,7 +18,17 @@ class LocalSeoGenerateRequest(BaseModel):
 
     keyword: str = Field(..., min_length=1)
     location: str = Field(..., min_length=1)
+    location_code: Optional[int] = None
     run_analysis: bool
+
+
+class LocationSuggestion(BaseModel):
+    """One DataForSEO location suggestion for the area typeahead."""
+
+    location_name: str
+    location_code: int
+    location_type: str = ""
+    country_iso_code: str = ""
 
 
 class LocalSeoAnalyzeRequest(BaseModel):

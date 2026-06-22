@@ -77,11 +77,16 @@ async def test_generate_page_persists_row():
     }
     with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
          patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
-        page = await local_seo_service.generate_page("client-1", "emergency plumber", "Anaheim, CA", True, "user-9")
+        # location_code supplied → resolve_location short-circuits (no network).
+        page = await local_seo_service.generate_page(
+            "client-1", "emergency plumber", "Anaheim,California,United States", 1013962, True, "user-9"
+        )
 
     assert page == inserted
     stream.assert_awaited_once()
     assert stream.await_args[0][0] == "/generate-page"
+    # the resolved location_code is forwarded to the nlp generate payload
+    assert stream.await_args[0][1]["location_code"] == 1013962
     persisted = supabase.table.return_value.insert.call_args[0][0]
     assert persisted["mode"] == "generate"
     assert persisted["composite_score"] == 88.0

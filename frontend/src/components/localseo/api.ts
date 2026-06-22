@@ -4,6 +4,7 @@ import type {
   FindPageResult,
   LocalSeoPageDetail,
   LocalSeoPageListItem,
+  LocationSuggestion,
   RelatedPagesResult,
   ScoreResult,
   SocialPostsResult,
@@ -16,8 +17,17 @@ import type {
 // multi-minute generate/score/reoptimize isn't dropped by a proxy idle timeout.
 // They still resolve to the same typed payload as a plain POST would.
 export const localSeoApi = {
-  generate: (clientId: string, body: { keyword: string; location: string; run_analysis: boolean }) =>
-    api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body),
+  generate: (
+    clientId: string,
+    body: { keyword: string; location: string; location_code?: number | null; run_analysis: boolean },
+  ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body),
+
+  // Area-field typeahead — DataForSEO location suggestions scoped to the client's country.
+  searchLocations: (clientId: string, query: string, country?: string) =>
+    api.get<LocationSuggestion[]>(
+      `/clients/${clientId}/local-seo/locations?query=${encodeURIComponent(query)}` +
+        (country ? `&country=${encodeURIComponent(country)}` : ''),
+    ),
 
   analyze: (clientId: string, body: { keyword: string; location: string; location_code?: number | null }) =>
     api.stream<AnalysisResult>(`/clients/${clientId}/local-seo/analyze`, body),

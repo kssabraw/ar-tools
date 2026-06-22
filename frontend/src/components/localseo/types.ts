@@ -2,6 +2,13 @@
 // These mirror the platform-api passthrough responses (which in turn mirror the
 // private nlp service's Pydantic models).
 
+export interface LocationSuggestion {
+  location_name: string
+  location_code: number
+  location_type: string
+  country_iso_code: string
+}
+
 export interface ContentGap {
   category: string
   missing: string
