@@ -7,15 +7,24 @@ const GROUP_LABEL: Record<RelatedPageItem['group'], string> = {
   parents: 'Parent Pages', siblings: 'Sibling Pages', children: 'Child Pages',
 }
 
+interface SelectionMode {
+  // When provided, `missing` items render a checkbox (for bulk creation) instead
+  // of an individual "Create new" button. `found` items keep their action button.
+  selected: Set<string>
+  onToggle: (keyword: string, checked: boolean) => void
+  disabled?: boolean
+}
+
 interface Props {
   items: RelatedPageItem[]
   // Called when the user acts on an item (Reoptimize for found, Create new for missing).
   onAction: (item: RelatedPageItem) => void
+  selection?: SelectionMode
 }
 
 // Shared presentation for the parent/sibling/child silo. Used both by the
 // post-generation "Related Pages" tab and the standalone "Plan Silo" research view.
-export function RelatedPagesList({ items, onAction }: Props) {
+export function RelatedPagesList({ items, onAction, selection }: Props) {
   return (
     <>
       {GROUPS.map(group => {
@@ -54,12 +63,24 @@ export function RelatedPagesList({ items, onAction }: Props) {
                         </ul>
                       )}
                     </div>
-                    <button
-                      style={{ ...outlineBtn, flexShrink: 0, padding: '6px 12px', fontSize: 12 }}
-                      onClick={() => onAction(item)}
-                    >
-                      {item.status === 'found' ? 'Reoptimize' : 'Create new'} <ArrowRight size={13} />
-                    </button>
+                    {selection && item.status === 'missing' ? (
+                      <label style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', cursor: selection.disabled ? 'not-allowed' : 'pointer' }} title="Select for bulk create">
+                        <input
+                          type="checkbox"
+                          checked={selection.selected.has(item.keyword)}
+                          disabled={selection.disabled}
+                          onChange={e => selection.onToggle(item.keyword, e.target.checked)}
+                          style={{ width: 16, height: 16, cursor: selection.disabled ? 'not-allowed' : 'pointer', accentColor: '#6366f1' }}
+                        />
+                      </label>
+                    ) : (
+                      <button
+                        style={{ ...outlineBtn, flexShrink: 0, padding: '6px 12px', fontSize: 12 }}
+                        onClick={() => onAction(item)}
+                      >
+                        {item.status === 'found' ? 'Reoptimize' : 'Create new'} <ArrowRight size={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

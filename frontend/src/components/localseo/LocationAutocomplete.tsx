@@ -12,6 +12,7 @@ interface Props {
   // user is free-typing and hasn't picked a suggestion).
   onChange: (location: string, locationCode: number | null) => void
   placeholder?: string
+  disabled?: boolean
 }
 
 /**
@@ -19,7 +20,7 @@ interface Props {
  * suggestion sets a validated location_code so the SERP lookup can't fail to
  * resolve; free-typing leaves the code null (the backend then validates it).
  */
-export function LocationAutocomplete({ clientId, value, onChange, placeholder }: Props) {
+export function LocationAutocomplete({ clientId, value, onChange, placeholder, disabled }: Props) {
   const [suggestions, setSuggestions] = useState<LocationSuggestion[]>([])
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(-1)
@@ -79,6 +80,7 @@ export function LocationAutocomplete({ clientId, value, onChange, placeholder }:
         style={{ ...input, paddingLeft: 36 }}
         value={value}
         placeholder={placeholder}
+        disabled={disabled}
         autoComplete="off"
         role="combobox"
         aria-expanded={open}

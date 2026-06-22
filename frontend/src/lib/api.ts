@@ -32,12 +32,13 @@ async function request<T>(
 // POST to a heartbeat-SSE endpoint and resolve with the final `done` result.
 // Used for long-running Local SEO operations that stream keepalives so a
 // multi-minute request isn't killed by a load-balancer idle timeout.
-async function streamJson<T>(path: string, body: unknown): Promise<T> {
+async function streamJson<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
   const headers = await authHeaders()
   const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
   })
   // Auth / validation failures happen before the stream starts → normal JSON.
   if (!res.ok) {
@@ -103,5 +104,5 @@ export const api = {
   patch: <T>(path: string, body: unknown) => request<T>('PATCH', path, body),
   delete: <T>(path: string) => request<T>('DELETE', path),
   upload: <T>(path: string, form: FormData) => upload<T>(path, form),
-  stream: <T>(path: string, body: unknown) => streamJson<T>(path, body),
+  stream: <T>(path: string, body: unknown, signal?: AbortSignal) => streamJson<T>(path, body, signal),
 }
