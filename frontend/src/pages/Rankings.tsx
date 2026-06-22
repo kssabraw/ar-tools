@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, TrendingUp } from 'lucide-react'
+import { ArrowLeft, FileText, TrendingUp } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, GscProperty } from '../lib/types'
 import { backLink } from '../components/localseo/shared'
@@ -59,6 +59,10 @@ export function Rankings() {
         <TabButton active={tab === 'keywords'} onClick={() => setTab('keywords')} label="Keywords" />
         {gscConnected && <TabButton active={tab === 'pages'} onClick={() => setTab('pages')} label="Pages" />}
         <TabButton active={tab === 'settings'} onClick={() => setTab('settings')} label="Settings" />
+        <Link to={`/clients/${clientId}/rankings/report`}
+          style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, color: '#6366f1', textDecoration: 'none', padding: '8px 4px' }}>
+          <FileText size={14} /> Report
+        </Link>
       </div>
 
       {/* Body */}
