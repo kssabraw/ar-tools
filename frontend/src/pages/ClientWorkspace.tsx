@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch,
 } from 'lucide-react'
 
 export function ClientWorkspace() {
@@ -115,6 +115,13 @@ export function ClientWorkspace() {
               </Link>
             ) : undefined
           }
+        />
+        <ActionCard
+          icon={<FileSearch size={22} />}
+          label="Plan a Content Silo"
+          description="Research the parent, sibling & neighbourhood pages a topic needs — and see which already exist on this client’s site."
+          to={id ? `/clients/${id}/local-seo?tab=plan` : undefined}
+          cta="Plan"
         />
       </Section>
 
