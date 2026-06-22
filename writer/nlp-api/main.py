@@ -4910,6 +4910,7 @@ async def augment_page(request: Request, body: AugmentPageRequest):
 class GeneratePageRequest(BaseModel):
     keyword: str
     location: str
+    location_code: Optional[int] = None  # DataForSEO numeric location code (preferred)
     business_name: str
     gbp_category: str
     address: str
@@ -4960,7 +4961,7 @@ async def generate_page(request: Request, body: GeneratePageRequest):
         if not serp_analysis_dict and body.run_analysis:
             await q.put({"step": "progress", "progress": 10, "message": "Fetching top search results…"})
             try:
-                inline_serp = await _run_serp_analysis(body.keyword, body.location)
+                inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code)
                 serp_analysis_dict = inline_serp.model_dump() if hasattr(inline_serp, "model_dump") else dict(inline_serp)
                 await q.put({"step": "progress", "progress": 50, "message": "Analyzing competitor pages…"})
             except Exception as _serp_err:

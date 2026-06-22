@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from middleware.auth import require_auth
@@ -30,6 +30,7 @@ from models.local_seo import (
     LocalSeoReoptimizeRequest,
     LocalSeoScoreRequest,
     LocalSeoSocialPostsRequest,
+    LocationSuggestion,
 )
 from services import local_seo_service
 from sse import sse_response
@@ -50,6 +51,7 @@ async def generate_local_seo_page(
             client_id=str(client_id),
             keyword=body.keyword,
             location=body.location,
+            location_code=body.location_code,
             run_analysis=body.run_analysis,
             user_id=auth["user_id"],
         )
@@ -150,6 +152,19 @@ async def social_posts_local_seo(
         page_content=body.page_content,
         serp_analysis=body.serp_analysis,
     ))
+
+
+@router.get("/clients/{client_id}/local-seo/locations", response_model=list[LocationSuggestion])
+async def search_local_seo_locations(
+    client_id: UUID,
+    query: str = Query(..., min_length=2),
+    country: str | None = Query(None, min_length=2, max_length=2),
+    auth: dict = Depends(require_auth),
+) -> list[LocationSuggestion]:
+    """Area-field typeahead: DataForSEO location suggestions scoped to the
+    client's country (overridable via `country`)."""
+    rows = await local_seo_service.search_locations(str(client_id), query, country=country)
+    return [LocationSuggestion(**row) for row in rows]
 
 
 @router.get("/clients/{client_id}/local-seo/pages", response_model=list[LocalSeoPageListItem])

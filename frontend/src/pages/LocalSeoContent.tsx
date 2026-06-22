@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowRight, Building2, CheckCircle2, FilePlus, FileSearch, MapPin, Search, Sparkles, Trash2,
+  ArrowLeft, ArrowRight, Building2, CheckCircle2, FilePlus, FileSearch, Search, Sparkles, Trash2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import { localSeoApi } from '../components/localseo/api'
+import { LocationAutocomplete } from '../components/localseo/LocationAutocomplete'
 import type { AnalysisResult, LocalSeoPageDetail, LocalSeoPageListItem } from '../components/localseo/types'
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { PageScoreView } from '../components/localseo/PageScoreView'
@@ -51,6 +52,8 @@ export function LocalSeoContent() {
   const [view, setView] = useState<View>({ kind: 'form' })
   const [keyword, setKeyword] = useState('')
   const [location, setLocation] = useState('')
+  // DataForSEO location_code from a picked suggestion; null while free-typing.
+  const [locationCode, setLocationCode] = useState<number | null>(null)
   const [runAnalysis, setRunAnalysis] = useState<boolean | null>(null)
   const [error, setError] = useState('')
   const [check, setCheck] = useState<CheckState>({ status: 'idle' })
@@ -95,7 +98,7 @@ export function LocalSeoContent() {
     setView({ kind: 'creating' })
     startTicker()
     try {
-      const page = await localSeoApi.generate(clientId, { keyword: kw, location: location.trim(), run_analysis: runAnalysis })
+      const page = await localSeoApi.generate(clientId, { keyword: kw, location: location.trim(), location_code: locationCode, run_analysis: runAnalysis })
       refreshSaved()
       setView({ kind: 'generated', page, isNew: true, prevScore: null })
     } catch (e) {
@@ -135,7 +138,7 @@ export function LocalSeoContent() {
     setError('')
     setAnalyzing(true)
     try {
-      const result = await localSeoApi.analyze(clientId, { keyword: keyword.trim(), location: location.trim() })
+      const result = await localSeoApi.analyze(clientId, { keyword: keyword.trim(), location: location.trim(), location_code: locationCode })
       setView({ kind: 'analysis', result })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Analysis failed')
@@ -150,6 +153,7 @@ export function LocalSeoContent() {
       const page = await localSeoApi.getPage(pageId)
       setKeyword(page.keyword)
       setLocation(page.location)
+      setLocationCode(null)
       setView({ kind: 'generated', page, isNew: false, prevScore: null })
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not open page')
@@ -274,10 +278,15 @@ export function LocalSeoContent() {
           {/* Area */}
           <div>
             <label style={label}>Area / Location</label>
-            <div style={{ position: 'relative' }}>
-              <MapPin size={16} color="#94a3b8" style={{ position: 'absolute', left: 12, top: 12 }} />
-              <input style={{ ...input, paddingLeft: 36 }} value={location} onChange={e => { setLocation(e.target.value); resetTransient() }} placeholder="e.g. Anaheim, California, United States" />
-            </div>
+            <LocationAutocomplete
+              clientId={clientId}
+              value={location}
+              onChange={(loc, code) => { setLocation(loc); setLocationCode(code); resetTransient() }}
+              placeholder="Start typing a city, e.g. Melbourne…"
+            />
+            <p style={{ fontSize: 12, color: '#94a3b8', margin: '6px 0 0' }}>
+              Pick a suggestion so the location is recognized — free-typed areas that don’t match will be rejected.
+            </p>
           </div>
 
           {/* Required analysis choice */}

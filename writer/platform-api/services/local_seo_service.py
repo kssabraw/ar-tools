@@ -20,6 +20,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import locations_service
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,9 @@ def _business_fields(client: dict) -> dict:
     }
 
 
-def _gbp_to_generate_payload(client: dict, keyword: str, location: str, run_analysis: bool) -> dict:
+def _gbp_to_generate_payload(
+    client: dict, keyword: str, location: str, run_analysis: bool, location_code: Optional[int] = None
+) -> dict:
     """Map a suite client row (with its `gbp` JSONB) to the nlp service's
     GeneratePageRequest. The converged brand_voice / detected_icp /
     differentiators assets are passed through so the generator targets the
@@ -64,6 +67,7 @@ def _gbp_to_generate_payload(client: dict, keyword: str, location: str, run_anal
     return {
         "keyword": keyword,
         "location": location,
+        "location_code": location_code,
         "business_name": fields["business_name"],
         "gbp_category": fields["gbp_category"],
         "address": fields["address"],
@@ -186,17 +190,31 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
 
 # ── public operations ───────────────────────────────────────────────────────
 
-async def generate_page(client_id: str, keyword: str, location: str, run_analysis: bool, user_id: str) -> dict:
-    """Generate a local SEO page for a client and persist it."""
+async def search_locations(client_id: str, query: str, country: Optional[str] = None) -> list[dict]:
+    """Typeahead suggestions for the area field, scoped to the client's country."""
     client = _get_client(client_id)
-    payload = _gbp_to_generate_payload(client, keyword, location, run_analysis)
+    return await locations_service.search_locations(client, query, country=country)
+
+
+async def generate_page(
+    client_id: str, keyword: str, location: str, location_code: Optional[int], run_analysis: bool, user_id: str
+) -> dict:
+    """Generate a local SEO page for a client and persist it.
+
+    The location is resolved/validated first: a mistyped area (no picked code)
+    that can't be matched fails loudly (400) instead of silently generating a
+    page with no competitor analysis."""
+    client = _get_client(client_id)
+    location, location_code = await locations_service.resolve_location(client, location, location_code)
+    payload = _gbp_to_generate_payload(client, keyword, location, run_analysis, location_code)
     result = await _stream_nlp("/generate-page", payload)
     return _persist_page(client_id, keyword, location, run_analysis, "generate", result, user_id)
 
 
 async def analyze(client_id: str, keyword: str, location: str, location_code: Optional[int]) -> dict:
     """Run competitor SERP analysis for a keyword + location (no persistence)."""
-    _get_client(client_id)  # validate ownership / existence
+    client = _get_client(client_id)  # validate ownership / existence
+    location, location_code = await locations_service.resolve_location(client, location, location_code)
     return await _post_nlp("/analyze", {
         "keyword": keyword,
         "location": location,
@@ -231,6 +249,7 @@ async def score_page(
     fields = _business_fields(client)
     if not page_url and not page_content:
         raise HTTPException(status_code=400, detail="page_url_or_content_required")
+    location, location_code = await locations_service.resolve_location(client, location, location_code)
     return await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,
