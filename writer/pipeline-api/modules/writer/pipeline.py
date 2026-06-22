@@ -655,12 +655,13 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     )
     article.extend(faq_sections)
 
-    # ---- Intro (generated LAST so it can preview actual H2s) ----
-    # Writer v1.6 §4.3.1 - Agree/Promise/Preview. By generating the
-    # intro after body+conclusion+FAQ are all finalized, the prompt
-    # can promise EXACTLY the H2s that exist. Eliminates the "intro
-    # promises 4, body delivers 8" drift the user reported when the
-    # heading_structure mutated mid-pipeline.
+    # ---- Intro (generated LAST so it sees the final article) ----
+    # Free-form brand-voice intro (no APP/Agree-Promise-Preview structure;
+    # dropped per user decision - see content-quality-prd-v1_0.md R4). By
+    # generating the intro after body+conclusion+FAQ are all finalized, the
+    # prompt sees the real article scope and won't promise sections that
+    # don't exist - the "intro promises 4, body delivers 8" drift the user
+    # reported when the heading_structure mutated mid-pipeline.
     supporting_stats: Optional[str] = (
         req.research_output.get("supporting_stats")
         if isinstance(req.research_output, dict)
@@ -687,7 +688,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # ---- Key Takeaways (content-quality PRD §R4) ----
     # Generated AFTER body+conclusion+FAQ+intro so the prompt sees the
     # final assembled article and can summarize what was actually
-    # written. Position: between H1 enrichment and the APP intro.
+    # written. Position: between H1 enrichment and the intro.
     article_body_for_takeaways = "\n\n".join(
         s.body for s in article
         if s.body and s.type in {"content", "conclusion"}
