@@ -289,6 +289,7 @@ The existing `clients.gsc_property` column (migration `20260529220918_clients_su
 
 ## 12. Open / next up
 - ~~**Shared scheduler mechanism** (suite Open Item #1)~~ — **decided 2026-06-22:** asyncio loop in platform-api enqueuing `async_jobs` (§6).
+- **Reports (built).** On-demand + scheduled client reports. On-demand = a printable in-app view (browser Print → PDF). Scheduled = a per-client `rank_report_config` (as_needed / weekly+day / monthly+day / every 7·14·30 days); the shared scheduler enqueues a `rank_report` job when due, which snapshots the report data into a `rank_reports` archive (in-app list, each printable). Delivery is the in-app archive for now; a Google-Doc-to-Drive or email delivery (the latter via the notifications service) is a future option.
 - **Initial backfill** — M2 ships the recurring 3-day re-pull; a property's full 16-month history is pulled by calling the manual ingest endpoint with an explicit `start_date`/`end_date`. A one-click "backfill history" affordance is a small follow-up.
 - Tunable thresholds: `deindex_risk` N (consecutive NULL days), the `volatile`/`dropping`/`climbing` band sizes — start conservative, expose as config later.
 - DataForSEO "Today" tiering: which keywords are daily-priority vs weekly long-tail (cost driver).

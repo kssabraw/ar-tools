@@ -144,6 +144,30 @@ class MaterializeResponse(BaseModel):
     error: Optional[str] = None
 
 
+ReportMode = Literal["as_needed", "weekly", "monthly", "interval"]
+
+
+class ReportSchedule(BaseModel):
+    mode: ReportMode = "as_needed"
+    day_of_week: Optional[int] = Field(None, ge=0, le=6)      # weekly (0=Mon)
+    day_of_month: Optional[int] = Field(None, ge=1, le=31)    # monthly
+    interval_days: Optional[int] = Field(None, gt=0)          # every N days
+    last_generated_at: Optional[str] = None
+
+
+class ReportListItem(BaseModel):
+    id: UUID
+    title: str
+    created_at: str
+
+
+class GeneratedReport(BaseModel):
+    id: UUID
+    title: str
+    created_at: str
+    snapshot: dict
+
+
 class RankLocation(BaseModel):
     # The per-client DataForSEO tracking location. Both None = auto (national,
     # detected from the client's website TLD).

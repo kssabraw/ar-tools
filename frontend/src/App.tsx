@@ -48,6 +48,7 @@ export default function App() {
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/rankings/report" element={<RankReport />} />
+                      <Route path="/clients/:id/rankings/report/:reportId" element={<RankReport />} />
                       <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
