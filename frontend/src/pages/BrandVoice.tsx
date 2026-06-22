@@ -225,7 +225,22 @@ function VoiceDisplay({ bv, onEdit, onRescan, onAccept, onReject, recPending }: 
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button style={outlineBtn} onClick={onEdit}><Pencil size={14} /> {isUser ? 'Edit' : 'Write your own'}</button>
-          <button style={outlineBtn} onClick={onRescan}><RefreshCw size={14} /> Re-scan</button>
+          <button
+            style={outlineBtn}
+            onClick={() => {
+              // Re-scan force-overwrites. When the active voice is the user's
+              // own, make the overwrite explicit so it can't happen by accident.
+              if (
+                isUser &&
+                !window.confirm(
+                  'Regenerate the brand voice from the website? This replaces the brand voice you set.',
+                )
+              ) return
+              onRescan()
+            }}
+          >
+            <RefreshCw size={14} /> {isUser ? 'Regenerate' : 'Re-scan'}
+          </button>
         </div>
       </div>
 

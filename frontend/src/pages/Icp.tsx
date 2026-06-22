@@ -185,7 +185,22 @@ function IcpDisplay({ icp, diffs, onEdit, onRescan }: {
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button style={outlineBtn} onClick={onEdit}><Pencil size={14} /> {isUser ? 'Edit' : 'Write your own'}</button>
-          <button style={outlineBtn} onClick={onRescan}><RefreshCw size={14} /> Re-analyze</button>
+          <button
+            style={outlineBtn}
+            onClick={() => {
+              // Re-analyze force-overwrites. When the active ICP is the user's
+              // own, make the overwrite explicit so it can't happen by accident.
+              if (
+                isUser &&
+                !window.confirm(
+                  'Re-analyze the ICP from the website? This replaces the ICP you set.',
+                )
+              ) return
+              onRescan()
+            }}
+          >
+            <RefreshCw size={14} /> {isUser ? 'Regenerate' : 'Re-analyze'}
+          </button>
         </div>
       </div>
 
