@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Clock, Copy, Globe, History, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Check, Clock, Copy, Globe, History, MapPin, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import type {
-  GscProperty, IngestResponse, SyncRun, VerifyAccessResponse,
+  GscProperty, IngestResponse, RankLocation, SyncRun, VerifyAccessResponse,
 } from '../../lib/types'
+import { LocationAutocomplete } from '../localseo/LocationAutocomplete'
 import { Spinner } from '../localseo/Spinner'
 import { card, errorBox, input, label, outlineBtn, primaryBtn, relativeTime } from '../localseo/shared'
 
@@ -61,6 +62,8 @@ export function RankSettings({ clientId }: { clientId: string }) {
 
   return (
     <>
+      <TrackingLocationCard clientId={clientId} />
+
       <div style={{ ...card, marginBottom: 20 }}>
         <h2 style={sectionTitle}>1 · Grant the service account access</h2>
         <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 14px', lineHeight: 1.6 }}>
@@ -137,6 +140,60 @@ export function RankSettings({ clientId }: { clientId: string }) {
         )}
       </div>
     </>
+  )
+}
+
+// Per-client tracking area for the DataForSEO live-rank + market checks.
+function TrackingLocationCard({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<RankLocation>({
+    queryKey: ['rank-location', clientId],
+    queryFn: () => api.get<RankLocation>(`/clients/${clientId}/rank/location`),
+  })
+  const [draft, setDraft] = useState('')
+  useEffect(() => { setDraft(data?.location ?? '') }, [data?.location])
+
+  const setMut = useMutation({
+    mutationFn: (body: RankLocation) => api.put<RankLocation>(`/clients/${clientId}/rank/location`, body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rank-location', clientId] }),
+  })
+
+  return (
+    <div style={{ ...card, marginBottom: 20 }}>
+      <h2 style={sectionTitle}>Tracking location</h2>
+      <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 12px', lineHeight: 1.6 }}>
+        The area used for <strong>DataForSEO live ranks</strong> and CPC/volume. Pick a city, region,
+        or country. Search Console metrics stay national (Google’s limitation). Leave it on
+        <strong> National</strong> to auto-detect the country from the client’s website.
+      </p>
+      <LocationAutocomplete
+        clientId={clientId}
+        value={draft}
+        placeholder="City, region, or country — e.g. Phoenix, Arizona"
+        onChange={(loc, code) => {
+          setDraft(loc)
+          if (code != null) setMut.mutate({ location: loc, location_code: code })
+        }}
+      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, fontSize: 12, color: '#64748b' }}>
+        <MapPin size={13} color="#6366f1" />
+        {data?.location
+          ? <>Tracking in <strong style={{ color: '#0f172a' }}>{data.location}</strong>.</>
+          : <>National — auto-detected from the client’s website.</>}
+        {data?.location && (
+          <button style={{ ...outlineBtn, padding: '3px 9px', fontSize: 12 }}
+            onClick={() => { setDraft(''); setMut.mutate({ location: null, location_code: null }) }}
+            disabled={setMut.isPending}>
+            Use national
+          </button>
+        )}
+        {setMut.isPending && <span style={{ color: '#94a3b8' }}>saving…</span>}
+      </div>
+      <p style={{ fontSize: 11, color: '#94a3b8', margin: '8px 0 0' }}>
+        Pick a suggestion so the area is recognized. Changing it re-fetches ranks &amp; market data for
+        the new location in the background.
+      </p>
+    </div>
   )
 }
 

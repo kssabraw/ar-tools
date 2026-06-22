@@ -131,7 +131,9 @@ async def refresh_client_market(client_id: str, today: Optional[date] = None) ->
     supabase = get_supabase()
     today = today or date.today()
 
-    client_res = supabase.table("clients").select("id, website_url, gbp").eq("id", client_id).limit(1).execute()
+    client_res = supabase.table("clients").select(
+        "id, website_url, gbp, rank_tracking_location_code"
+    ).eq("id", client_id).limit(1).execute()
     if not client_res.data:
         return {"status": "failed", "error": "client_not_found", "fetched": 0}
     location_code = location_code_for(client_res.data[0])
