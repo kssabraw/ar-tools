@@ -356,3 +356,82 @@ def test_set_page_template_default_clears_with_blank():
         out = local_seo_service.set_page_template_default("client-1", "   ")
     assert out == {"local_seo_page_template_url": None}
     assert table.update.call_args[0][0]["local_seo_page_template_url"] is None
+
+
+# ── publish to Google Doc ────────────────────────────────────────────────────
+
+class _FakeResp:
+    def __init__(self, data, status=200):
+        self._data, self.status_code, self.text = data, status, ""
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._data
+
+
+class _FakeAsyncClient:
+    def __init__(self, resp):
+        self._resp = resp
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def post(self, url, json=None):
+        return self._resp
+
+
+def _publish_supabase(page_row, client_row):
+    """execute() returns: page (get_page) → client → update."""
+    supabase = MagicMock()
+    table = MagicMock()
+    supabase.table.return_value = table
+    for m in ("select", "eq", "single", "update"):
+        getattr(table, m).return_value = table
+    table.execute.side_effect = [
+        MagicMock(data=page_row),
+        MagicMock(data=client_row),
+        MagicMock(data=[{"id": "page-1"}]),
+    ]
+    return supabase
+
+
+@pytest.mark.asyncio
+async def test_publish_page_success_persists_doc():
+    page = {"id": "page-1", "client_id": "client-1", "keyword": "plumber",
+            "page_title": "Plumber Anaheim", "content_html": "<h1>Plumber</h1><p>Call us.</p>"}
+    supabase = _publish_supabase(page, {"name": "Joe", "google_drive_folder_id": "folder-9"})
+    resp = _FakeResp({"success": True, "doc_id": "doc-1", "doc_url": "https://docs/doc-1"})
+    with patch.object(local_seo_service.settings, "google_apps_script_url", "https://script"), \
+         patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.httpx, "AsyncClient", lambda *a, **k: _FakeAsyncClient(resp)):
+        out = await local_seo_service.publish_page("page-1", "user-1")
+    assert out == {"success": True, "doc_id": "doc-1", "doc_url": "https://docs/doc-1"}
+    update_arg = supabase.table.return_value.update.call_args[0][0]
+    assert update_arg["published_doc_url"] == "https://docs/doc-1"
+    assert update_arg["published_doc_id"] == "doc-1"
+
+
+@pytest.mark.asyncio
+async def test_publish_page_requires_drive_folder():
+    page = {"id": "page-1", "client_id": "client-1", "keyword": "plumber",
+            "content_html": "<p>x</p>", "page_title": "t"}
+    supabase = _publish_supabase(page, {"name": "Joe", "google_drive_folder_id": None})
+    with patch.object(local_seo_service.settings, "google_apps_script_url", "https://script"), \
+         patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service.publish_page("page-1", "user-1")
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "missing_google_drive_folder_id"
+
+
+@pytest.mark.asyncio
+async def test_publish_page_not_configured():
+    with patch.object(local_seo_service.settings, "google_apps_script_url", ""):
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service.publish_page("page-1", "user-1")
+    assert exc.value.status_code == 503

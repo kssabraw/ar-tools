@@ -90,4 +90,11 @@ export const localSeoApi = {
 
   deletePage: (pageId: string) =>
     api.delete<void>(`/local-seo/pages/${pageId}`),
+
+  // Publish a saved page to a Google Doc in the client's Drive folder.
+  publishPage: (pageId: string) =>
+    api.post<{ success: boolean; doc_id: string | null; doc_url: string | null }>(
+      `/local-seo/pages/${pageId}/publish`,
+      {},
+    ),
 }

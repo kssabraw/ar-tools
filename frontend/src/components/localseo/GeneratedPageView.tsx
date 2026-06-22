@@ -34,6 +34,31 @@ export function GeneratedPageView({
   const [copiedHtml, setCopiedHtml] = useState(false)
   const [copiedSchema, setCopiedSchema] = useState(false)
 
+  // Publish to Google Doc (client's Drive folder).
+  const [publishing, setPublishing] = useState(false)
+  const [publishError, setPublishError] = useState('')
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(page.published_doc_url)
+
+  const handlePublish = async () => {
+    setPublishing(true)
+    setPublishError('')
+    try {
+      const res = await localSeoApi.publishPage(page.id)
+      setPublishedUrl(res.doc_url)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Publish failed'
+      setPublishError(
+        msg.includes('missing_google_drive_folder_id')
+          ? 'Set this client’s Google Drive folder first (Client → Edit), then publish.'
+          : msg.includes('publish_not_configured')
+            ? 'Publishing isn’t configured on the server (no Apps Script URL).'
+            : msg,
+      )
+    } finally {
+      setPublishing(false)
+    }
+  }
+
   // Social posts — lazily generated when the tab is first opened (each call
   // costs an LLM round-trip; suite doesn't persist them).
   const [social, setSocial] = useState<SocialPostsResult | null>(null)
@@ -391,6 +416,18 @@ export function GeneratedPageView({
           </button>
           <button style={{ ...outlineBtn, flex: 1 }} onClick={downloadHtml}><Download size={14} /> Download</button>
         </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button style={outlineBtn} onClick={handlePublish} disabled={publishing}>
+            <ExternalLink size={14} /> {publishing ? 'Publishing…' : publishedUrl ? 'Re-publish to Google Doc' : 'Publish to Google Doc'}
+          </button>
+          {publishedUrl && (
+            <a href={publishedUrl} target="_blank" rel="noreferrer"
+              style={{ fontSize: 13, fontWeight: 600, color: '#16a34a', display: 'inline-flex', alignItems: 'center', gap: 4, textDecoration: 'none' }}>
+              <Check size={14} /> View Google Doc
+            </a>
+          )}
+        </div>
+        {publishError && <div style={errorBox}>{publishError}</div>}
         <button onClick={onNewPage} style={{ ...backLink, alignSelf: 'center', marginBottom: 0 }}>← Start a new page</button>
       </div>
     </div>

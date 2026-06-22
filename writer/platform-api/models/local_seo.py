@@ -118,6 +118,9 @@ class LocalSeoPageDetail(BaseModel):
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None
+    published_doc_url: Optional[str] = None
+    published_doc_id: Optional[str] = None
+    published_at: Optional[str] = None
     created_at: str
     updated_at: str
 
