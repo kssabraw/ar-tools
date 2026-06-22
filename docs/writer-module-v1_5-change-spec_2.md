@@ -4,7 +4,7 @@
 **Base Version:** Writer Module PRD v1.4
 **Target Version:** Writer Module PRD v1.6
 **Date:** April 30, 2026
-**Last Revised:** 2026-05-01 — v1.6 additions: H1 sourced from `brief.title`, Agree/Promise/Preview intro construction, defense-in-depth title-case enforcement on all headings.
+**Last Revised:** 2026-06-22 — intro construction changed to a free-form brand-voice opener (the Agree/Promise/Preview "APP" structure was dropped per user decision); see §4.3.1. Earlier v1.6 additions retained: H1 sourced from `brief.title`, defense-in-depth title-case enforcement on all headings.
 **Status:** Draft — Ready for Implementation
 **Driven By:**
 - Platform PRD v1.2 — introduces per-client brand context (drives v1.5 work)
@@ -44,7 +44,7 @@ Writer v1.5 introduces a fourth input — `client_context` — and the logic to 
 | Update business rules for brand precedence | Rule change | Section 11 |
 | Update failure modes for client context handling | Rule addition | Section 12 |
 | **v1.6:** H1 sourced verbatim from `brief.title` (no LLM regeneration) | Behavioral change | Section 4.5 |
-| **v1.6:** Intro Agree/Promise/Preview construction (60–150 words, single paragraph) | Behavioral change | Section 4.3.1–4.3.2 |
+| Intro: free-form brand-voice opener (80–120 words; replaced the Agree/Promise/Preview "APP" structure) | Behavioral change | Section 4.3.1–4.3.2 |
 | **v1.6:** Defense-in-depth `titlecase` pass on all H1/H2/H3 text | Behavioral change | Section 4.6 |
 | **v1.6:** Multi-format output serialization — `article_markdown` and `article_html` | Schema addition + behavioral change | Section 4.7 / Output contract |
 | Bump output `schema_version` to `1.6` | Schema metadata | Output contract |
@@ -313,55 +313,41 @@ Intros and conclusions get the heaviest brand shaping because they set the artic
 - Both must respect banned-terms rules identically to section writing
 - **No positioning statement is injected** — website analysis does not produce one; brand tone and voice from `brand_guide_text` drive the conclusion's character
 
-#### 4.3.1 Intro Construction (NEW in v1.6) — Agree / Promise / Preview
+#### 4.3.1 Intro Construction — free-form brand voice
 
-The article's introduction MUST follow a three-beat **Agree / Promise / Preview** construction. This replaces the open-ended "intro paragraph(s)" behavior of v1.5 with a deterministic structure that aligns every article on the same opening shape.
+> **Superseded:** the Agree / Promise / Preview ("APP") three-beat construction described in earlier revisions was dropped per user decision. The intro is now a single free-form opener written in the client's brand voice and grounded in the ICP — no fixed beat structure. It is generated **last** (after body, conclusion, and FAQ are finalized) so it reflects the article's real scope.
 
-**Required structure** (single paragraph, in order):
+**Required shape:**
 
-| Beat | Purpose | Length guidance |
-|---|---|---|
-| **Agree** | One or two sentences that name the reader's situation, problem, or curiosity in their own language. Establishes resonance with the ICP. | ~25–45 words |
-| **Promise** | One sentence that states what the article will deliver — explicitly tied to `brief.title` and `brief.scope_statement`. | ~15–35 words |
-| **Preview** | One or two sentences that name the major H2 sections the reader will encounter, in the order they appear in `brief.heading_structure`. Does not need to enumerate every H2 — covering the first 3–5 is sufficient. | ~20–70 words |
-
-**Hard constraints:**
-
-- The intro is **exactly one paragraph** — no `\n\n` paragraph breaks.
-- Word count: **60 ≤ words ≤ 150** (inclusive). Word count is computed by `len(text.split())` after stripping leading/trailing whitespace.
-- The intro lives between H1 and the first content H2 in the rendered article. It is NOT preceded by its own H2 heading.
-- The intro MUST NOT contain any heading markers (`#`, `##`, `###`) and MUST NOT contain bulleted or numbered list markers.
-- The intro MUST respect all banned-term and filtered-SIE-excluded rules from Section 4.4.
+- Written entirely in the brand voice (`brand_voice_card.tone_adjectives` + `voice_directives`), grounded in the ICP/audience pain points and goals when available.
+- 1–2 short paragraphs, **80 ≤ words ≤ 120** (inclusive). Word count is `len(text.split())` after stripping whitespace.
+- Lives between the Key Takeaways block and the first content H2. Not preceded by its own heading.
+- MUST NOT contain heading markers (`#`, `##`, `###`) or bulleted/numbered list markers.
+- MUST NOT enumerate the article's H2s as an ordered roadmap.
+- No hard sales / CTA framing.
+- MUST respect all banned-term and filtered-SIE-excluded rules from Section 4.4.
 
 **Prompt inputs for the intro call:**
 
-The intro-writing prompt receives, in addition to the v1.5 brand/audience/client-context blocks:
-
 | Field | Source | Notes |
 |---|---|---|
-| `title` | `brief.title` (verbatim) | The Promise beat must echo the topic of this title. |
-| `scope_statement` | `brief.scope_statement` | Constrains the Promise — the article does not promise out-of-scope content. |
+| `title` | `brief.title` (verbatim) | The opening should reflect the article's topic. |
+| `scope_statement` | `brief.scope_statement` | Keeps the intro in scope. |
 | `intent_type` | `brief.intent` | Shapes diction (e.g., how-to vs. comparison vs. listicle). |
-| `h2_list` | `[item.text for item in brief.heading_structure if item.level == "H2" and item.type == "content"]` | The Preview beat references these in order. Pass the full list; the LLM picks the first 3–5 to mention by name. |
+| `h2_list` | `[item.text for item in brief.heading_structure if item.level == "H2" and item.type == "content"]` | Passed as topic **context only** — explicitly labelled "do NOT enumerate". |
+| `supporting_data` | `research_output.supporting_stats` | Optional. May anchor the opening; never fabricated. |
 
-**Prompt directive (verbatim text to include in system or user prompt):**
-
-> Write the article's introduction as a single paragraph (60–150 words) in three beats:
-> 1. **Agree** — name the reader's situation in their own words (1–2 sentences).
-> 2. **Promise** — state what this article will deliver, anchored in the title and the article's stated scope (1 sentence).
-> 3. **Preview** — name the first 3–5 H2 sections the reader will encounter, in order (1–2 sentences).
-> Do not break the paragraph. Do not include headings, bullets, or numbered lists. Do not introduce out-of-scope topics.
-
-#### 4.3.2 Intro Validation (NEW in v1.6)
+#### 4.3.2 Intro Validation
 
 After the intro LLM call returns, the Writer applies a deterministic post-validation pass:
 
 | Check | Rule | On Failure |
 |---|---|---|
-| **Word count in range** | `60 ≤ len(text.split()) ≤ 150` | Retry the intro once with the prompt amended to specify the actual word count and direction (too short / too long). After one retry, if still out of range, log warning and accept output (do not abort the run — intros are recoverable). |
-| **Single paragraph** | `"\n\n" not in text.strip()` | Retry once with explicit "single paragraph, no line breaks" directive. After one retry, accept output and collapse line breaks deterministically by replacing `\n+` with a single space. |
-| **No heading markers** | Regex `r"(?m)^\s*#{1,6}\s"` finds no match | Retry once. After one retry, strip any matched heading lines deterministically. |
+| **Word count in range** | `80 ≤ len(text.split()) ≤ 120` | Retry once with the prompt amended to specify the actual word count and direction (too short / too long). After one retry, log a warning and accept output (do not abort — intros are recoverable). |
+| **No heading markers** | Regex `r"(?m)^\s{0,3}#{1,6}\s"` finds no match | Retry once with a "remove all # markers" directive; after one retry, accept-with-warning. |
+| **No list markers** | Regex `r"(?m)^\s*(?:[-*+]\s|\d+[.)]\s)"` finds no match | Retry once with a "prose only" directive; after one retry, accept-with-warning. |
 | **Banned-term / SIE-excluded compliance** | Per Section 4.4 | Standard Section 4.4.3 retry-once-then-abort policy applies to the intro identically to body sections. |
+| **Empty / malformed output** | Non-dict response or empty `intro` field | Retry once; on second failure, degrade to a placeholder section flagged for manual review. |
 
 The validation results (pass / retried / accepted-with-warning) are recorded in the run's structured logs but are NOT surfaced as a user-facing field — the final intro text appears in `article[]` under whichever item-type the platform uses for intro paragraphs (unchanged from v1.5).
 

@@ -51,6 +51,7 @@ from .citation_coverage_validator import (
 from .h2_body_length import H2BodyLengthResult, validate_h2_body_lengths
 from .heading_sanitizer import SanitizationLog, sanitize_heading_structure
 from .heading_seo_optimizer import optimize_headings
+from .heading_entity_enforcer import enforce_heading_entities
 from .icp_verification import verify_icp_callout_landed
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
@@ -360,7 +361,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     section_budgets = allocate_budget(heading_structure, word_budget)
 
     # ---- Brand voice distillation + reconciliation in parallel ----
-    schema_effective: SchemaVersion = "1.7"
+    schema_effective: SchemaVersion = "1.8"
     brand_voice_card: Optional[BrandVoiceCard] = None
     filtered_terms = FilteredSIETerms()
     brand_conflict_log: list[BrandConflictEntry] = []
@@ -368,7 +369,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
 
     if req.client_context is None:
         # v1.4 fallback path
-        schema_effective = "1.7-no-context"
+        schema_effective = "1.8-no-context"
         # Build a flat filtered terms list (all keep)
         from .reconciliation import _all_keep, _avoid_terms_from_sie, _required_terms_from_sie
         filtered_terms = _all_keep(
@@ -383,7 +384,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         no_website = ctx.website_analysis_unavailable
 
         if brand_empty and icp_empty and no_website:
-            schema_effective = "1.7-degraded"
+            schema_effective = "1.8-degraded"
             from .reconciliation import _all_keep, _avoid_terms_from_sie, _required_terms_from_sie
             filtered_terms = _all_keep(
                 _required_terms_from_sie(sie),
@@ -471,6 +472,20 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         subheadings_targets=subheadings_targets,
     )
     heading_structure = heading_opt_result.heading_structure
+
+    # ---- Step 6.6 - AIO heading main-entity enforcement (§X.4) ----
+    # Runs AFTER the SEO optimizer (which is where heading text is finalized)
+    # so its rewrites can't clobber the entity. Entity-presence only; no-op
+    # when the brief carries no main_entity (schema < 2.7). Warn-and-accept.
+    heading_entity_result = await enforce_heading_entities(
+        heading_structure,
+        brief.get("main_entity"),
+        forbidden_terms=(
+            list(brand_voice_card.banned_terms) if brand_voice_card else []
+        ) + list(filtered_terms.avoid),
+    )
+    heading_structure = heading_entity_result.heading_structure
+
     # The article's on-page H1 and the SEO/meta title are SEPARATE concepts:
     # - title = SEO/meta title (browser tab, SERP, og:title). Brief emits this
     #   in `brief.title`. Surfaced as WriterResponse.title.
@@ -655,12 +670,13 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     )
     article.extend(faq_sections)
 
-    # ---- Intro (generated LAST so it can preview actual H2s) ----
-    # Writer v1.6 §4.3.1 - Agree/Promise/Preview. By generating the
-    # intro after body+conclusion+FAQ are all finalized, the prompt
-    # can promise EXACTLY the H2s that exist. Eliminates the "intro
-    # promises 4, body delivers 8" drift the user reported when the
-    # heading_structure mutated mid-pipeline.
+    # ---- Intro (generated LAST so it sees the final article) ----
+    # Free-form brand-voice intro (no APP/Agree-Promise-Preview structure;
+    # dropped per user decision - see content-quality-prd-v1_0.md R4). By
+    # generating the intro after body+conclusion+FAQ are all finalized, the
+    # prompt sees the real article scope and won't promise sections that
+    # don't exist - the "intro promises 4, body delivers 8" drift the user
+    # reported when the heading_structure mutated mid-pipeline.
     supporting_stats: Optional[str] = (
         req.research_output.get("supporting_stats")
         if isinstance(req.research_output, dict)
@@ -687,7 +703,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # ---- Key Takeaways (content-quality PRD §R4) ----
     # Generated AFTER body+conclusion+FAQ+intro so the prompt sees the
     # final assembled article and can summarize what was actually
-    # written. Position: between H1 enrichment and the APP intro.
+    # written. Position: between H1 enrichment and the intro.
     article_body_for_takeaways = "\n\n".join(
         s.body for s in article
         if s.body and s.type in {"content", "conclusion"}
@@ -868,6 +884,12 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         duplicate_h2_headings_dropped=sanitization_log.duplicate_h2s_dropped,
         faq_like_h2_content_dropped=sanitization_log.faq_like_h2s_dropped,
         h3_children_dropped_under_h2=sanitization_log.h3_children_dropped,
+        # Step 6.6 - AIO heading main-entity enforcement (§X.4)
+        main_entity_used=heading_entity_result.main_entity_used,
+        headings_entity_enforced_count=heading_entity_result.enforced_count,
+        headings_entity_rewrites_applied=heading_entity_result.rewrites_applied,
+        headings_entity_violation_count=heading_entity_result.violation_count,
+        headings_entity_violations=heading_entity_result.flagged,
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),

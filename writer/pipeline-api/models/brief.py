@@ -102,6 +102,9 @@ DiscardReason = Literal[
     "h3_promoted_to_h2_candidate",    # routed to silo as standalone topic
     # PRD v2.2 / Phase 2 - Step 10.5 FAQ Intent Gate
     "faq_intent_mismatch",
+    # AIO Heading Optimization §X.3 - candidate is a bare restatement of the
+    # main entity (empty residual after stripping the entity).
+    "bare_entity_restatement",
 ]
 
 SiloRoutedFrom = Literal[
@@ -410,6 +413,47 @@ class IntentSignals(BaseModel):
     comparison_tables: bool = False
 
 
+class MainEntity(BaseModel):
+    """The single noun phrase the AIO answer (or, on fallback, the title)
+    repeatedly names, in its preferred surface form. Consumed by the
+    heading-form pass, the residual restatement gate, and MCS-style
+    rephrase suggestions. See PRD §X.2 / §13.X.8.
+
+    Not yet embedded in BriefResponse — populated by `entity.py` and wired
+    into the pipeline + schema 2.7 in a later increment.
+    """
+    model_config = _FORBID_EXTRA
+
+    canonical: str
+    variants: list[str] = Field(default_factory=list)
+    secondary_entity: Optional[str] = None
+    source: Literal["aio", "title_fallback"]
+    confidence: float
+    multi_entity_flag: bool = False
+    emq_identical: bool = False
+
+
+class AioInsights(BaseModel):
+    """AI Overview capture side-channel (PRD §X.1 / §X.5). Observability-
+    only: it never gates heading selection. `available=False` mirrors the
+    other research side-channels when no AIO block was present on the SERP.
+
+    `proximity_mean` / `fanout_coverage_pct` stay null until the advisory
+    proximity pass (§X.5) lands.
+    """
+    model_config = _FORBID_EXTRA
+
+    available: bool = False
+    answer_text: str = ""
+    cited_domains: list[str] = Field(default_factory=list)
+    fanout_questions: list[str] = Field(default_factory=list)
+    # True when DataForSEO returned the AIO block but the full text needs a
+    # follow-up /ai_overview/live fetch (the encrypted-token expansion).
+    asynchronous: bool = False
+    proximity_mean: Optional[float] = None
+    fanout_coverage_pct: Optional[float] = None
+
+
 class BriefMetadata(BaseModel):
     """Operational + tuning metadata. Threshold values used during the
     run are echoed back so consumers (and offline tuners) know exactly
@@ -526,7 +570,18 @@ class BriefMetadata(BaseModel):
     # Echoed for tuning, like the other threshold values above.
     faq_intent_floor_threshold: float = 0.55
 
-    schema_version: Literal["2.6"] = "2.6"
+    # AIO Heading Optimization (§X.8). Main-entity derivation echoes; the
+    # heading-form enforcement counters are added when §X.4 lands.
+    aio_present: bool = False
+    main_entity_source: Optional[Literal["aio", "title_fallback"]] = None
+    main_entity_confidence: float = 0.0
+    multi_entity_flag: bool = False
+    entity_match_fuzz_ratio: float = 0.0
+    entity_keyword_sanity_floor: float = 0.45
+    # §X.3 - candidates discarded as bare restatements of the main entity.
+    bare_entity_restatement_count: int = 0
+
+    schema_version: Literal["2.7"] = "2.7"
 
 
 # ---- Reddit research (PRD v2.4) ----
@@ -651,4 +706,10 @@ class BriefResponse(BaseModel):
     customer_review_insights: Optional[CustomerReviewInsightsModel] = None
     llm_disagreement: Optional[LLMDisagreementModel] = None
     editorial_critique: Optional[EditorialCritiqueModel] = None
+    # AIO Heading Optimization (§X.2 / §X.5). Optional so cached <2.7 rows
+    # still deserialize. `main_entity` is always populated in the live
+    # pipeline (title fallback guarantees it); `aio_insights` is the
+    # non-gating capture side-channel.
+    main_entity: Optional[MainEntity] = None
+    aio_insights: Optional[AioInsights] = None
     metadata: BriefMetadata

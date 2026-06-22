@@ -311,6 +311,8 @@ class _AllMocks:
             patch("modules.brief.faqs.claude_json", fake_claude_json),
             patch("modules.brief.faqs.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.graph.embed_batch_large", fake_embed_batch_large),
+            patch("modules.brief.entity.embed_batch_large", fake_embed_batch_large),
+            patch("modules.brief.aio_proximity.embed_batch_large", fake_embed_batch_large),
             patch("modules.brief.intent.claude_json", fake_claude_json),
             # PRD v2.1 - anchor-slot embedding + framing rewrite LLM call
             patch("modules.brief.skeleton_slots.embed_batch_large", fake_embed_batch_large),
@@ -347,7 +349,7 @@ async def test_pipeline_produces_schema_v2_response():
         result = await run_brief(req)
 
     # ---- Schema contract ----
-    assert result.metadata.schema_version == "2.6"
+    assert result.metadata.schema_version == "2.7"
     assert result.metadata.embedding_model == "text-embedding-3-large"
 
     # ---- Step 3.5 outputs surface on the response ----
@@ -531,7 +533,7 @@ async def test_cache_hit_short_circuits_pipeline():
         "discarded_headings": [],
         "silo_candidates": [],
         "metadata": {
-            "schema_version": "2.6",
+            "schema_version": "2.7",
             "word_budget": 2500,
             "faq_count": 0,
             "h2_count": 0,
@@ -628,7 +630,7 @@ async def test_pipeline_writes_to_cache_after_generation():
     args = write_called["args"]
     assert args["keyword"] == "what is tiktok shop"
     assert args["location_code"] == 2840
-    assert args["schema_version"] == "2.6"
+    assert args["schema_version"] == "2.7"
     assert args["triggered_by_client_id"] == "client-uuid-123"
     assert args["duration_ms"] >= 0
 

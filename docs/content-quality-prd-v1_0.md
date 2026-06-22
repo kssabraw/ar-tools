@@ -120,14 +120,14 @@ The legacy `silo_candidates[]` field is retained for one release with identical 
 | Element | Required Position | Required Content |
 |---|---|---|
 | **Key Takeaways** | Immediately after H1 enrichment, before the first content H2 | A bulleted list of 3–5 standalone sentences, each ≤ 25 words, that summarize the article's most extractable claims. Optimized for AEO snippet capture. |
-| **Agree / Promise / Preview intro** | The intro paragraph(s) directly following the Key Takeaways block, before the first H2 | Three discrete prose blocks: (a) **Agree** — a sentence acknowledging the reader's situation or question; (b) **Promise** — a sentence stating what the article will deliver; (c) **Preview** — a sentence enumerating 2–4 sub-topics covered. Each block is ≤ 50 words. |
+| **Intro** | The intro paragraph(s) directly following the Key Takeaways block, before the first H2 | A free-form opening written entirely in the client's brand voice and grounded in the ICP/audience context. 1–2 short paragraphs, 80–120 words total. No fixed beat structure. Must not enumerate the article's H2s as a roadmap, and must not use hard sales/CTA framing. (Replaces the former Agree/Promise/Preview "APP" structure, dropped per user decision.) |
 | **CTA** | Final sentence of the conclusion section | A clear next-step call-to-action sentence that names a specific action a reader can take, drawn from `client_context.icp_text` goals when available, or from a generic intent-appropriate template otherwise. Never a hard sales pitch. |
 
 **Acceptance criteria:**
-- The writer's output schema gains three new fields under the article assembly: `key_takeaways: [string]`, `intro: { agree: string, promise: string, preview: string }`, and `cta: string`.
+- The writer's output schema gains three new fields under the article assembly: `key_takeaways: [string]`, `intro: string` (free-form prose), and `cta: string`.
 - The article assembly emits these as ordered sections in `article[]` so downstream renderers see a consistent structure:
   - `{order, level: "none", type: "key-takeaways", heading: "Key Takeaways", body: "<bulleted markdown>"}` — `heading` is rendered as H2 by the renderer.
-  - `{order, level: "none", type: "intro", heading: null, body: "<APP prose, three paragraphs>"}` — three paragraphs separated by blank lines.
+  - `{order, level: "none", type: "intro", heading: null, body: "<free-form brand-voice prose, 1–2 paragraphs>"}`.
   - `{order, level: "none", type: "cta", heading: null, body: "<single CTA sentence>"}` — appended after the conclusion section.
 - A run whose final article is missing any of the three sections aborts with structured error `missing_required_structure` and a `missing_elements: [...]` list. No partial output is returned.
 - The Key Takeaways block is generated **after** all content sections and the conclusion are written (so it summarizes actual content, not the outline). It is a single LLM call that takes the full article body as input.

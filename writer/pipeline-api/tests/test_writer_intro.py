@@ -1,4 +1,4 @@
-"""Tests for the Agree / Promise / Preview intro generator (three-block format)."""
+"""Tests for the free-form brand-voice intro generator."""
 
 from __future__ import annotations
 
@@ -9,9 +9,8 @@ import pytest
 from modules.writer.banned_terms import build_banned_regex
 from modules.writer.intro import (
     INTRO_MAX_WORDS,
-    INTRO_MAX_WORDS_PER_BLOCK,
     INTRO_MIN_WORDS,
-    _validate_intro_blocks,
+    _validate_intro,
     write_intro,
 )
 
@@ -19,13 +18,8 @@ from modules.writer.intro import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _blocks(agree_n: int = 30, promise_n: int = 27, preview_n: int = 25) -> tuple[str, str, str]:
-    """Return (agree, promise, preview) with the specified word counts."""
-    return (
-        " ".join(["word"] * agree_n),
-        " ".join(["word"] * promise_n),
-        " ".join(["word"] * preview_n),
-    )
+def _intro_text(n_words: int = 90) -> str:
+    return " ".join(["word"] * n_words)
 
 
 def _fake(*responses: Any):
@@ -41,92 +35,54 @@ def _fake(*responses: Any):
     return _call
 
 
-def _valid_payload(agree_n: int = 30, promise_n: int = 27, preview_n: int = 25) -> dict:
-    agree, promise, preview = _blocks(agree_n, promise_n, preview_n)
-    return {
-        "agree_style_selected": "direct_thesis",
-        "agree": agree,
-        "promise": promise,
-        "preview": preview,
-    }
+def _valid_payload(n_words: int = 90) -> dict:
+    return {"intro": _intro_text(n_words)}
 
 
 # ---------------------------------------------------------------------------
 # Pure validator (sync, no LLM)
 # ---------------------------------------------------------------------------
 
-def test_validate_intro_blocks_accepts_valid_blocks():
-    agree, promise, preview = _blocks()
-    ok, _ = _validate_intro_blocks(agree, promise, preview)
+def test_validate_intro_accepts_valid_intro():
+    ok, _ = _validate_intro(_intro_text(90))
     assert ok is True
 
 
-def test_validate_intro_blocks_rejects_total_too_short():
-    # 10 + 10 + 10 = 30 words - below INTRO_MIN_WORDS (80)
-    agree, promise, preview = _blocks(agree_n=10, promise_n=10, preview_n=10)
-    ok, msg = _validate_intro_blocks(agree, promise, preview)
+def test_validate_intro_rejects_empty():
+    ok, msg = _validate_intro("")
+    assert ok is False
+    assert "empty" in msg
+
+
+def test_validate_intro_rejects_total_too_short():
+    ok, msg = _validate_intro(_intro_text(30))
     assert ok is False
     assert "too short" in msg
 
 
-def test_validate_intro_blocks_rejects_total_too_long():
-    # 45 + 45 + 45 = 135 words - above INTRO_MAX_WORDS (120); each block ≤ 50
-    agree, promise, preview = _blocks(agree_n=45, promise_n=45, preview_n=45)
-    ok, msg = _validate_intro_blocks(agree, promise, preview)
+def test_validate_intro_rejects_total_too_long():
+    ok, msg = _validate_intro(_intro_text(150))
     assert ok is False
     assert "too long" in msg
 
 
-def test_validate_intro_blocks_rejects_block_over_50_words():
-    agree = " ".join(["word"] * (INTRO_MAX_WORDS_PER_BLOCK + 5))
-    promise = " ".join(["word"] * 25)
-    preview = " ".join(["word"] * 25)
-    ok, msg = _validate_intro_blocks(agree, promise, preview)
-    assert ok is False
-    assert "'agree' block" in msg
-
-
-def test_validate_intro_blocks_rejects_empty_agree():
-    _, promise, preview = _blocks()
-    ok, msg = _validate_intro_blocks("", promise, preview)
-    assert ok is False
-    assert "agree" in msg
-
-
-def test_validate_intro_blocks_rejects_empty_promise():
-    agree, _, preview = _blocks()
-    ok, msg = _validate_intro_blocks(agree, "", preview)
-    assert ok is False
-    assert "promise" in msg
-
-
-def test_validate_intro_blocks_rejects_empty_preview():
-    agree, promise, _ = _blocks()
-    ok, msg = _validate_intro_blocks(agree, promise, "")
-    assert ok is False
-    assert "preview" in msg
-
-
-def test_validate_intro_blocks_rejects_heading_marker():
-    agree = "# Heading inside agree " + " ".join(["word"] * 29)
-    _, promise, preview = _blocks()
-    ok, msg = _validate_intro_blocks(agree, promise, preview)
+def test_validate_intro_rejects_heading_marker():
+    body = "# Heading inside intro\n" + _intro_text(89)
+    ok, msg = _validate_intro(body)
     assert ok is False
     assert "heading marker" in msg
 
 
-def test_validate_intro_blocks_rejects_bullet_list():
-    agree = "- bullet item\n" + " ".join(["word"] * 29)
-    _, promise, preview = _blocks()
-    ok, msg = _validate_intro_blocks(agree, promise, preview)
+def test_validate_intro_rejects_bullet_list():
+    body = "- bullet item\n" + _intro_text(89)
+    ok, msg = _validate_intro(body)
     assert ok is False
     assert "list marker" in msg
 
 
-def test_validate_intro_blocks_rejects_numbered_list():
-    agree = "1. numbered item\n" + " ".join(["word"] * 29)
-    _, promise, preview = _blocks()
-    ok, msg = _validate_intro_blocks(agree, promise, preview)
+def test_validate_intro_rejects_numbered_list():
+    body = "1. numbered item\n" + _intro_text(89)
+    ok, msg = _validate_intro(body)
     assert ok is False
     assert "list marker" in msg
 
@@ -155,23 +111,15 @@ async def test_write_intro_happy_path(monkeypatch):
     assert section.type == "intro"
     assert section.level == "none"
     assert section.heading is None
-    assert "\n\n" in section.body  # three blocks separated by blank lines
     assert INTRO_MIN_WORDS <= section.word_count <= INTRO_MAX_WORDS
 
 
 @pytest.mark.asyncio
-async def test_write_intro_body_joins_three_blocks(monkeypatch):
-    agree = " ".join(["word"] * 30)
-    promise = " ".join(["word"] * 27)
-    preview = " ".join(["word"] * 25)
+async def test_write_intro_uses_intro_field_verbatim(monkeypatch):
+    text = _intro_text(90)
     monkeypatch.setattr(
         "modules.writer.intro.claude_json",
-        _fake({
-            "agree_style_selected": "failure_mode",
-            "agree": agree,
-            "promise": promise,
-            "preview": preview,
-        }),
+        _fake({"intro": text}),
     )
 
     section = await write_intro(
@@ -180,21 +128,15 @@ async def test_write_intro_body_joins_three_blocks(monkeypatch):
         brand_voice_card=None, banned_regex=build_banned_regex([]),
         intro_order=1,
     )
-    assert section.body == f"{agree}\n\n{promise}\n\n{preview}"
+    assert section.body == text
 
 
 @pytest.mark.asyncio
 async def test_write_intro_retries_on_word_count_then_succeeds(monkeypatch):
-    # First attempt: total only 30 words - too short
-    short_payload = {
-        "agree_style_selected": "direct_thesis",
-        "agree": " ".join(["word"] * 10),
-        "promise": " ".join(["word"] * 10),
-        "preview": " ".join(["word"] * 10),
-    }
+    # First attempt too short, second valid.
     monkeypatch.setattr(
         "modules.writer.intro.claude_json",
-        _fake(short_payload, _valid_payload()),
+        _fake({"intro": _intro_text(30)}, _valid_payload()),
     )
 
     section = await write_intro(
@@ -207,13 +149,8 @@ async def test_write_intro_retries_on_word_count_then_succeeds(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_write_intro_accepts_with_warning_after_two_failures(monkeypatch):
-    # Both attempts produce too-short blocks - module accepts with warning
-    bad_payload = {
-        "agree_style_selected": "direct_thesis",
-        "agree": "tiny agree",
-        "promise": "tiny promise",
-        "preview": "tiny preview",
-    }
+    # Both attempts produce too-short text - module accepts with warning.
+    bad_payload = {"intro": "tiny intro"}
     monkeypatch.setattr(
         "modules.writer.intro.claude_json",
         _fake(bad_payload, bad_payload),
@@ -225,7 +162,7 @@ async def test_write_intro_accepts_with_warning_after_two_failures(monkeypatch):
         banned_regex=build_banned_regex([]), intro_order=2,
     )
     assert section.type == "intro"
-    assert "tiny agree" in section.body
+    assert "tiny intro" in section.body
 
 
 @pytest.mark.asyncio
@@ -269,7 +206,7 @@ async def test_write_intro_supporting_data_appears_in_prompt(monkeypatch):
 @pytest.mark.asyncio
 async def test_write_intro_h2_list_passed_as_context_not_roadmap(monkeypatch):
     """H2 titles should appear in the prompt as topic context, clearly
-    labelled to NOT be enumerated in the Preview."""
+    labelled to NOT be enumerated in the intro."""
     captured: dict = {}
 
     async def _capture(system, user, **kw):

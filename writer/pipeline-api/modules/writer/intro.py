@@ -1,22 +1,23 @@
-"""Step 2.5 - Intro writing (Writer v1.6 §4.3.1).
+"""Step 2.5 - Intro writing.
 
-Three-beat Agree / Promise / Preview intro placed between H1 and the
-first content H2. Each beat is a discrete prose block:
-  - Agree:   2–3 sentences grounding the reader's situation. The LLM
-              selects the best Agree style from 10 options based on
-              topic, ICP audience context, and supporting data.
-  - Promise: 1 sentence stating what the article will deliver.
-  - Preview: 1 sentence creating curiosity or momentum - no topic
-              enumeration, no ordered roadmap.
+A single free-form opening intro placed between H1 (and the Key Takeaways
+block) and the first content H2. The intro is written entirely in the
+client's brand voice and grounded in the ICP/audience context - there is
+no fixed beat structure.
+
+(Historical note: earlier versions used an "APP" framework - Agree /
+Promise / Preview - with a menu of opening styles. That rigid structure
+was dropped per user decision; the intro is now brand-voice + ICP driven.
+See content-quality-prd-v1_0.md R4.)
 
 Hard constraints:
-  - 80 ≤ total_word_count ≤ 120 (inclusive).
-  - Each block ≤ 50 words.
-  - No heading markers (#, ##, …) and no list markers in any block.
+  - 80 <= total_word_count <= 120 (inclusive).
+  - No heading markers (#, ##, ...) and no list markers.
+  - Prose only - no roadmap enumeration of the article's H2s.
 
-Validation (per spec §4.3.2): word-count and format checks are post-hoc
-with single retry; intro failures degrade to a placeholder rather than
-aborting the run.
+Validation: word-count and format checks are post-hoc with a single
+retry; intro failures degrade to a placeholder rather than aborting the
+run.
 """
 
 from __future__ import annotations
@@ -36,61 +37,31 @@ logger = logging.getLogger(__name__)
 
 INTRO_MIN_WORDS = 80
 INTRO_MAX_WORDS = 120
-INTRO_MAX_WORDS_PER_BLOCK = 50
 
 _HEADING_MARKER_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s")
 _LIST_MARKER_RE = re.compile(r"(?m)^\s*(?:[-*+]\s|\d+[.)]\s)")
 
 
-INTRO_SYSTEM = """You write the opening intro for a blog post using the APP framework: Agree, Promise, Preview.
+INTRO_SYSTEM = """You write the opening intro for a blog post.
 
 OUTPUT FORMAT:
-{"agree_style_selected": "<style name>", "agree": "<text>", "promise": "<text>", "preview": "<text>"}
+{"intro": "<text>"}
 
-THE THREE BEATS:
+WHAT THE INTRO DOES:
+- Open in the article's topic and pull the reader forward. Meet the reader where they are, then signal why the rest of the piece is worth their time.
+- Write entirely in the BRAND_VOICE. The tone adjectives and voice directives are not optional - every sentence should sound like the brand.
+- When AUDIENCE context is provided, ground the intro in the audience's specific situation, pain points, and language. Do not write generically when ICP context is available.
 
-1. Agree - Meet the reader where they are. Validate a frustration, feeling, or belief they already hold.
-   - When AUDIENCE context is provided, ground it in the audience's specific situation, pain points, or language. Do not write generically when ICP context is available.
-   - 2–3 sentences maximum.
-   - Select the best Agree style from the list below.
-
-2. Promise - One sentence. Specific, concrete commitment about what this article delivers.
-   - No vague language like "we'll cover everything you need to know."
-
-3. Preview - One sentence. Create curiosity or momentum.
-   - Do NOT enumerate topics or write an ordered roadmap ("You'll start with X, move into Y, then Z" or any variation).
-   - The sentence should pull the reader forward, not summarize structure.
-
-TOTAL LENGTH: 80–120 words across all three beats combined. Each individual beat ≤ 50 words.
-
-AGREE STYLES - select the single best style given the topic, audience, and data:
-
-⚠️ HALLUCINATION WARNING: `data_led` and `research_reframe` require real numbers or studies. Only select these styles when SUPPORTING_DATA is provided. If either would be best but no data is available, select the next most appropriate style instead.
-
-counterintuitive_claim - Opens with a statement that flips conventional wisdom. Use when a widely-held belief is demonstrably wrong. Example: "Doing more of the same thing rarely produces different results."
-false_solution - Names an approach everyone uses, then immediately undercuts it. Use when the audience is invested in a popular but ineffective method. Example: "Tracking activity feels like measuring progress. It usually isn't."
-failure_mode - Leads with the mistake the reader is probably making, or the cost of the unchanged status quo. Example: "The instinct is to add more. That's often exactly what slows things down."
-data_led - Anchors with a specific number or average-vs-top-performer comparison. Requires SUPPORTING_DATA. Example: "Most teams hit their targets roughly half the time. High performers hit them consistently."
-research_reframe - References a study or trend that recontextualizes the problem. Requires SUPPORTING_DATA. Example: "Recent data shows buyers decide earlier in the process than most teams assume - yet most content is built for the wrong stage."
-scene_setting - Drops into a specific, recognizable moment - third person or no person. Example: "The work gets done. The results meeting doesn't reflect it."
-before_after - Contrasts two states with tension and resolution implied, no roadmap. Example: "Inconsistent results aren't a strategy problem. They're an execution problem. And execution problems have repeatable fixes."
-core_distinction - Opens by drawing a line between two things the audience conflates. Example: "There's a difference between being busy and making progress. Most teams are optimizing for the wrong one."
-reframe_the_question - Suggests the reader has been asking the wrong question. Example: "The question isn't whether the approach works. It's whether you're set up to see it working."
-direct_thesis - Plain, confident statement of exactly what's true and what this piece proves. Use as the fallback when no other style fits cleanly. Example: "This is solvable, repeatable, and measurable. Here's how to get there."
-
-STYLE SELECTION CRITERIA (apply in order):
-1. If SUPPORTING_DATA is provided and a specific stat or study would strengthen the Agree, prefer data_led or research_reframe.
-2. If AUDIENCE context is provided, match the style to the audience's stated pain points or goals. Practitioners often respond to failure_mode or false_solution; decision-makers to data_led or reframe_the_question.
-3. Choose based on topic shape: a commonly-held wrong belief → counterintuitive_claim; a measurement or methodology topic → core_distinction; a definitional "what is X" topic → direct_thesis.
-4. If no style fits cleanly or would produce an awkward or misleading Agree, use direct_thesis.
+LENGTH: 80-120 words total. Write it as 1-2 short paragraphs.
 
 HARD CONSTRAINTS:
-- No heading markers (#, ##, etc.), no bullets, no numbered lists in any block.
+- No heading markers (#, ##, etc.), no bullets, no numbered lists.
+- Do NOT enumerate the article's sections or write an ordered roadmap ("You'll start with X, move into Y, then Z" or any variation). The intro should create momentum, not summarize structure.
 - Do not introduce topics outside the article's scope.
-- No sales framing or hard CTA language in any beat.
+- No sales framing or hard CTA language.
 - Do NOT use any FORBIDDEN_TERM.
 - Do not use em dashes. Use a plain hyphen (-) instead.
-- Match the BRAND_VOICE tone throughout."""
+- Keep paragraphs to 4 sentences or fewer."""
 
 
 def _build_intro_user_prompt(
@@ -113,8 +84,8 @@ def _build_intro_user_prompt(
     if scope_statement:
         parts.append(f"SCOPE_STATEMENT: {scope_statement}")
 
-    # ICP / audience context - primary driver of Agree style selection and
-    # grounding. Pulled from the distilled brand voice card, which encodes
+    # ICP / audience context - grounds the intro in the audience's
+    # situation. Pulled from the distilled brand voice card, which encodes
     # client_context.icp_text.
     if brand_voice_card:
         audience_parts: list[str] = []
@@ -128,26 +99,27 @@ def _build_intro_user_prompt(
             audience_parts.append(f"verticals: {', '.join(brand_voice_card.audience_verticals[:6])}")
         if brand_voice_card.audience_pain_points:
             audience_parts.append(
-                f"pain points (anchor the Agree here): "
+                f"pain points (ground the opening here): "
                 f"{', '.join(brand_voice_card.audience_pain_points[:3])}"
             )
         if brand_voice_card.audience_goals:
             audience_parts.append(
-                f"goals (the Promise should advance one of these): "
+                f"goals (the intro should hint at advancing one of these): "
                 f"{', '.join(brand_voice_card.audience_goals[:3])}"
             )
         if audience_parts:
             parts.append("\nAUDIENCE:")
             parts.extend(f"  {p}" for p in audience_parts)
 
-    # Supporting data - enables data_led / research_reframe styles.
+    # Supporting data - the intro may anchor on a concrete stat where it
+    # strengthens the opening, but must not fabricate one.
     if supporting_data:
-        parts.append(f"\nSUPPORTING_DATA: {supporting_data}")
+        parts.append(f"\nSUPPORTING_DATA (use only if it strengthens the opening; never fabricate): {supporting_data}")
 
-    # Article topic context - helps the LLM understand the article's scope
-    # when crafting the curiosity-hook Preview. Not to be enumerated.
+    # Article topic context - helps the LLM understand the article's scope.
+    # Must NOT be enumerated as a roadmap in the intro.
     if h2_list:
-        parts.append("\nARTICLE_TOPICS (context only - do NOT enumerate these in the Preview):")
+        parts.append("\nARTICLE_TOPICS (context only - do NOT enumerate these in the intro):")
         for h2 in h2_list[:8]:
             parts.append(f"  - {h2}")
 
@@ -189,45 +161,29 @@ def _word_count(text: str) -> int:
     return len(text.split())
 
 
-def _validate_intro_blocks(
-    agree: str, promise: str, preview: str
-) -> tuple[bool, Optional[str]]:
+def _validate_intro(body: str) -> tuple[bool, Optional[str]]:
     """Return (ok, retry_directive). retry_directive is the correction to
     feed into the retry prompt when ok is False."""
-    if not agree.strip():
-        return False, "Previous attempt: 'agree' block was empty. Write it now."
-    if not promise.strip():
-        return False, "Previous attempt: 'promise' block was empty. Write it now."
-    if not preview.strip():
-        return False, "Previous attempt: 'preview' block was empty. Write it now."
+    if not body.strip():
+        return False, "Previous attempt: 'intro' was empty. Write it now."
 
-    for label, block in [("agree", agree), ("promise", promise), ("preview", preview)]:
-        wc = _word_count(block)
-        if wc > INTRO_MAX_WORDS_PER_BLOCK:
-            return (
-                False,
-                f"Previous attempt: '{label}' block was {wc} words (max "
-                f"{INTRO_MAX_WORDS_PER_BLOCK}). Shorten it.",
-            )
-
-    total = _word_count(agree) + _word_count(promise) + _word_count(preview)
+    total = _word_count(body)
     if total < INTRO_MIN_WORDS:
         return (
             False,
             f"Previous attempt was {total} words total, too short. Expand to "
-            f"{INTRO_MIN_WORDS}–{INTRO_MAX_WORDS} words.",
+            f"{INTRO_MIN_WORDS}-{INTRO_MAX_WORDS} words.",
         )
     if total > INTRO_MAX_WORDS:
         return (
             False,
             f"Previous attempt was {total} words total, too long. Trim to "
-            f"{INTRO_MIN_WORDS}–{INTRO_MAX_WORDS} words.",
+            f"{INTRO_MIN_WORDS}-{INTRO_MAX_WORDS} words.",
         )
 
-    combined = f"{agree}\n{promise}\n{preview}"
-    if _HEADING_MARKER_RE.search(combined):
+    if _HEADING_MARKER_RE.search(body):
         return False, "Previous attempt contained heading markers (#). Remove all # markers."
-    if _LIST_MARKER_RE.search(combined):
+    if _LIST_MARKER_RE.search(body):
         return (
             False,
             "Previous attempt contained list markers. Write prose only - no "
@@ -255,7 +211,7 @@ async def write_intro(
     forbidden_terms = (brand_voice_card.banned_terms if brand_voice_card else []) or []
 
     retry_directive: Optional[str] = None
-    last_blocks: Optional[tuple[str, str, str]] = None
+    last_body: Optional[str] = None
 
     for attempt in range(2):
         user = _build_intro_user_prompt(
@@ -279,22 +235,18 @@ async def write_intro(
             logger.warning("writer.intro.payload_not_dict", extra={"got_type": type(result).__name__})
             return _placeholder_intro(intro_order)
 
-        agree = (result.get("agree") or "").strip()
-        promise = (result.get("promise") or "").strip()
-        preview = (result.get("preview") or "").strip()
-        agree_style = (result.get("agree_style_selected") or "").strip()
+        body = (result.get("intro") or "").strip()
 
-        if not (agree and promise and preview):
+        if not body:
             if attempt == 0:
                 retry_directive = (
-                    "Previous attempt was missing one or more required fields "
-                    "(agree, promise, preview). Return all three."
+                    "Previous attempt was missing the required 'intro' field. "
+                    "Return it now."
                 )
                 continue
             return _placeholder_intro(intro_order)
 
-        last_blocks = (agree, promise, preview)
-        body = f"{agree}\n\n{promise}\n\n{preview}"
+        last_body = body
 
         # Banned-term check - same retry-then-abort policy as body sections
         # per Writer v1.5 §4.4.3.
@@ -312,11 +264,11 @@ async def write_intro(
                 snippet=body[:120],
             )
 
-        ok, validation_directive = _validate_intro_blocks(agree, promise, preview)
+        ok, validation_directive = _validate_intro(body)
         if ok:
             logger.info(
                 "writer.intro.complete",
-                extra={"agree_style": agree_style, "word_count": _word_count(body)},
+                extra={"word_count": _word_count(body)},
             )
             return ArticleSection(
                 order=intro_order,
@@ -350,16 +302,14 @@ async def write_intro(
             section_budget=INTRO_MAX_WORDS,
         )
 
-    if last_blocks:
-        agree, promise, preview = last_blocks
-        body = f"{agree}\n\n{promise}\n\n{preview}"
+    if last_body:
         return ArticleSection(
             order=intro_order,
             level="none",
             type="intro",
             heading=None,
-            body=body,
-            word_count=_word_count(body),
+            body=last_body,
+            word_count=_word_count(last_body),
             section_budget=INTRO_MAX_WORDS,
         )
     return _placeholder_intro(intro_order)

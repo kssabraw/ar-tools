@@ -270,42 +270,36 @@ The H1 in the brief's `heading_structure` is the exact-match seed keyword (e.g.,
 
 ---
 
-### Step 2.5 — Intro Construction (Agree / Promise / Preview) — added per Content Quality PRD v1.0 R4
+### Step 2.5 — Intro Construction (free-form brand voice) — per Content Quality PRD v1.0 R4
 
-The intro is generated **after** the title and H1 enrichment but **before** Step 4 section writing, so the intro's preview block can be built from the post-adherence-filter H2 list.
+> **Superseded:** the original Agree/Promise/Preview ("APP") three-beat construction was dropped per user decision. The intro is now a single free-form opener written in the client's brand voice and grounded in the ICP. This step is generated **last** (after body, conclusion, and FAQ are finalized) so it reflects the article's actual scope rather than the pre-write outline.
 
 **Inputs:**
 - `output.title` (from Step 1)
-- `brief.heading_structure` (post-adherence-filter list of H2s — see Step 1 topic-adherence anchor)
-- `client_context.icp_text` (when available)
+- `brief.heading_structure` (post-adherence-filter list of H2s — passed as topic *context* only, never enumerated as a roadmap)
+- the distilled `BrandVoiceCard` (tone, voice directives, preferred/discouraged terms, and the full ICP/audience block)
+- `research_output.supporting_stats` (optional — may anchor the opening, never fabricated)
 
-**Output:** A structured object with three discrete prose blocks:
+**Output:** A single prose string:
 
 ```json
-{
-  "intro": {
-    "agree": "string (≤ 50 words)",
-    "promise": "string (≤ 50 words)",
-    "preview": "string (≤ 50 words)"
-  }
-}
+{ "intro": "string (80–120 words, 1–2 short paragraphs)" }
 ```
 
-**Block semantics:**
+**Constraints:**
+- Written entirely in the brand voice; grounded in the ICP/audience pain points and goals when available.
+- 80–120 words total. Paragraphs ≤ 4 sentences each (per R6).
+- No heading markers, no bullet/numbered lists.
+- Must NOT enumerate the article's H2s as an ordered roadmap.
+- No hard sales / CTA framing.
 
-| Block | Purpose | Constraints |
-|---|---|---|
-| **Agree** | A sentence acknowledging the reader's situation, question, or pain point. Anchored in `client_context.icp_text` when available; otherwise inferred from the title's question/topic. | One paragraph. ≤ 50 words. Must not name the brand. Must not begin with the seed keyword. |
-| **Promise** | A sentence stating what the article will deliver to the reader. | One paragraph. ≤ 50 words. May reference the seed keyword once. Must not contain a CTA. |
-| **Preview** | A sentence that enumerates 2–4 of the topics covered, drawn from the post-adherence-filter H2 list (not the original brief outline). | One paragraph. ≤ 50 words. Names topics in plain language; does not list bullets or H2 headings verbatim. |
-
-**Banned-term enforcement:** All three blocks pass through the same regex banned-term scan as section bodies (Writer v1.5 §4.4).
+**Banned-term enforcement:** the intro passes through the same regex banned-term scan as section bodies (Writer v1.5 §4.4).
 
 **Failure handling:**
-- LLM returns malformed JSON → retry once with a stricter prompt; on second failure, abort with structured error `intro_generation_failed`.
-- Any single block exceeds 50 words → retry once with the over-length block named explicitly; on second failure, truncate the offending block at the last sentence boundary ≤ 50 words.
+- LLM returns malformed JSON or empty `intro` → retry once; on second failure, degrade to a placeholder section flagged for manual review (does not abort the run).
+- Word-count / format validation failure → retry once with a corrective directive; on second failure, accept-with-warning.
 
-The intro is added to `article[]` as a single section after the H1 enrichment with `type: "intro"`, `level: "none"`, `heading: null`, and `body` formatted as the three blocks separated by blank lines (Markdown paragraph breaks).
+The intro is added to `article[]` as a single section (inserted after the Key Takeaways block) with `type: "intro"`, `level: "none"`, `heading: null`, and `body` containing the free-form prose.
 
 ---
 
@@ -934,7 +928,7 @@ Combined with upstream costs — Brief Generator ($0.19–$0.53), Research & Cit
 | Markers permitted in heading fields | No — markers must only appear in `body` fields |
 | Citation usage tracked per citation_id | Yes — `used`, `sections_used_in`, `marker_placed` in output |
 | Unused citations trigger retry | No — recorded as unused; not an error condition |
-| Required structural elements (R4) | `key-takeaways` (3–5 items, ≤ 25 words each), `intro` (Agree/Promise/Preview, each ≤ 50 words), `cta` (≤ 30 words). All three required; missing any → abort with `missing_required_structure` |
+| Required structural elements (R4) | `key-takeaways` (3–5 items, ≤ 25 words each), `intro` (free-form brand-voice prose, 80–120 words), `cta` (≤ 30 words). All three required; missing any → abort with `missing_required_structure` |
 | H2 topic-adherence threshold (R3) | `cosine(h2.embedding, title.embedding) ≥ 0.62` required; below threshold → drop and route to spin-offs |
 | Paragraph length cap (R6) | 4 sentences per paragraph (default `format_directives.max_sentences_per_paragraph`); over-budget paragraphs trigger one retry, then accept and flag |
 | External citation coverage on citable claims (R7) | ≥ 50% of detected citable claims per section must carry a `{{cit_id}}` marker; below threshold → one retry, then accept and flag |

@@ -77,12 +77,7 @@ def _fake(*responses):
 
 @pytest.mark.asyncio
 async def test_intro_prompt_includes_brand_name_when_present(monkeypatch):
-    fake = _fake({
-        "agree_style_selected": "direct_thesis",
-        "agree": " ".join(["word"] * 30),
-        "promise": " ".join(["word"] * 27),
-        "preview": " ".join(["word"] * 25),
-    })
+    fake = _fake({"intro": " ".join(["word"] * 90)})
     monkeypatch.setattr("modules.writer.intro.claude_json", fake)
 
     card = BrandVoiceCard(brand_name="Ubiquitous", tone_adjectives=["confident"])
@@ -98,12 +93,7 @@ async def test_intro_prompt_includes_brand_name_when_present(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_intro_prompt_skips_brand_block_when_no_brand_name(monkeypatch):
-    fake = _fake({
-        "agree_style_selected": "direct_thesis",
-        "agree": " ".join(["word"] * 30),
-        "promise": " ".join(["word"] * 27),
-        "preview": " ".join(["word"] * 25),
-    })
+    fake = _fake({"intro": " ".join(["word"] * 90)})
     monkeypatch.setattr("modules.writer.intro.claude_json", fake)
 
     card = BrandVoiceCard(tone_adjectives=["confident"])  # no brand_name

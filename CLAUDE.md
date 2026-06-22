@@ -143,10 +143,10 @@ The orchestrator validates `schema_version` from every pipeline response against
 
 | Module | `schema_version` |
 |---|---|
-| Brief Generator | `2.6` |
+| Brief Generator | `2.7` |
 | SIE | `1.4` |
 | Research & Citations | `1.1` |
-| Writer | `1.7` (also accepts `1.7-no-context` / `1.7-degraded`) |
+| Writer | `1.8` (also accepts `1.8-no-context` / `1.8-degraded`) |
 | Sources Cited | `1.1` |
 
 > These drift over time — treat `orchestrator.py` (`EXPECTED_MODULE_VERSIONS` / `WRITER_ACCEPTED_VERSIONS`) and each module's `SCHEMA_VERSION` constant as the source of truth, and update this table when you change them.

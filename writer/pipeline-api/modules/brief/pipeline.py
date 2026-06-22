@@ -84,9 +84,12 @@ from .mmr import select_h2s_mmr
 from .parsers import (
     aggregate_serp_stats,
     normalize_text,
+    parse_aio_insights,
     parse_reddit,
     parse_serp,
 )
+from .entity import derive_main_entity
+from .aio_proximity import compute_aio_proximity
 from .customer_review_research import research_customer_reviews
 from .editorial_critique import generate_editorial_critique
 from .llm_disagreement import analyze_fanout_disagreement
@@ -101,7 +104,7 @@ from .title_scope import generate_title_and_scope
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = "2.6"
+SCHEMA_VERSION = "2.7"
 
 
 # PRD v2.3 / Phase 3 - per-intent-pattern minimum-words floor for H2
@@ -318,6 +321,8 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         serp_items
     )
     serp_stats = aggregate_serp_stats(serp_headings)
+    # §X.1 - capture the AI Overview block (side-channel, non-gating).
+    aio_insights = parse_aio_insights(serp_items)
 
     organic_urls = [
         item["url"] for item in serp_items
@@ -389,6 +394,18 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         fanout_response_bodies=raw_fanout_bodies,
     )
 
+    # ---- Step 3.6 - main-entity derivation (§X.2) ----
+    # Needs the title for fallback; consumed (in a later increment) by the
+    # residual gate + heading-form enforcement. Produces data only - nothing
+    # here changes heading selection, so heading_structure is unaffected.
+    main_entity = await derive_main_entity(
+        primary_keyword=keyword,
+        title=title_scope.title,
+        aio_answer_text=aio_insights.answer_text,
+        aio_cited_domains=aio_insights.cited_domains,
+        aio_present=aio_insights.available,
+    )
+
     # ---- Step 4 (pass 1) - aggregate without persona gap ----
     pass1 = aggregate_candidates(
         serp_stats=serp_stats,
@@ -402,6 +419,16 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         raise BriefError("no_candidates", "No heading candidates after aggregation.")
 
     # ---- Step 5 - embed + gates ----
+    # §X.3 residual gate only fires for a GENUINE, specific AIO-derived
+    # entity. With a title-fallback entity (AIO absent) the entity is
+    # keyword-ish, so nearly every candidate "contains" it and stripping it
+    # would nuke the pool; same for emq_identical (entity == keyword). In
+    # those cases we pass None and Step 5 behaves exactly as pre-X.3.
+    residual_entity = (
+        main_entity.model_dump()
+        if main_entity.source == "aio" and not main_entity.emq_identical
+        else None
+    )
     gate_result = await embed_with_gates(
         seed=keyword,
         title=title_scope.title,
@@ -409,8 +436,10 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         candidates=pass1,
         relevance_floor=settings.brief_relevance_floor,
         restatement_ceiling=settings.brief_restatement_ceiling,
+        main_entity=residual_entity,
     )
     title_embedding = gate_result.title_embedding
+    bare_entity_restatement_count = gate_result.bare_entity_discarded
     if not gate_result.eligible:
         raise BriefError(
             "all_below_threshold",
@@ -467,14 +496,16 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     # GateResult itself is unused here (the new candidates flow into
     # candidate_pool via shared object references).
     if new_candidates:
-        await embed_with_gates(
+        pass2_gate = await embed_with_gates(
             seed=keyword,
             title=title_scope.title,
             scope_statement=title_scope.scope_statement,
             candidates=new_candidates,
             relevance_floor=settings.brief_relevance_floor,
             restatement_ceiling=settings.brief_restatement_ceiling,
+            main_entity=residual_entity,
         )
+        bare_entity_restatement_count += pass2_gate.bare_entity_discarded
 
     # Eligible pool for graph construction = pool members with embeddings
     # that survived the relevance/restatement gates.
@@ -897,7 +928,23 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         title=title_scope.title,
     )
 
-    # ---- Step 12 - silos (12.1 + 12.2 + 12.3 sync, then 12.4 async) ----
+    # ---- Step 11 - advisory AIO proximity (§X.5) ----
+    # Observability only; reads heading text, writes only to aio_insights -
+    # heading_structure is untouched. No-op when no AIO block was captured.
+    if aio_insights.available:
+        content_h2_texts = [
+            h.text for h in heading_structure
+            if getattr(h, "level", None) == "H2" and getattr(h, "type", None) == "content"
+        ]
+        proximity_mean, fanout_coverage = await compute_aio_proximity(
+            heading_texts=content_h2_texts,
+            fanout_questions=aio_insights.fanout_questions,
+            answer_text=aio_insights.answer_text,
+        )
+        aio_insights = aio_insights.model_copy(update={
+            "proximity_mean": proximity_mean,
+            "fanout_coverage_pct": fanout_coverage,
+        })
     contributing_region_ids = {
         c.region_id for c in selected_h2s if c.region_id is not None
     }
@@ -1100,6 +1147,16 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faq_intent_gate_llm_rejected_count=faq_gate_result.llm_rejected_count,
         faq_intent_gate_relaxation_applied=faq_gate_result.relaxation_applied,
         faq_intent_gate_full_relaxation_applied=faq_gate_result.full_relaxation_applied,
+        # §X.8 - AIO main-entity echoes.
+        aio_present=aio_insights.available,
+        main_entity_source=main_entity.source,
+        main_entity_confidence=(
+            main_entity.confidence
+            if main_entity.confidence not in (float("inf"),)
+            else 0.0
+        ),
+        multi_entity_flag=main_entity.multi_entity_flag,
+        bare_entity_restatement_count=bare_entity_restatement_count,
     )
 
     # PRD v2.3 / Phase 3 - derive the per-H2 body floor from the
@@ -1158,6 +1215,8 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             ],
         ),
         editorial_critique=EditorialCritiqueModel(**critique_result.to_dict()),
+        main_entity=main_entity,
+        aio_insights=aio_insights,
         metadata=metadata,
     )
 

@@ -367,6 +367,8 @@ def _fixture_mocks(
         patch("modules.brief.faqs.claude_json", router),
         patch("modules.brief.faqs.embed_batch_large", embed),
         patch("modules.brief.graph.embed_batch_large", embed),
+        patch("modules.brief.entity.embed_batch_large", embed),
+        patch("modules.brief.aio_proximity.embed_batch_large", embed),
         patch("modules.brief.intent.claude_json", router),
         # Step 12.4 viability lives in silos.py
         patch("modules.brief.silos.claude_json", router),
