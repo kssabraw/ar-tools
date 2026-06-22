@@ -206,3 +206,12 @@ async def delete_local_seo_page(
 ) -> dict[str, bool]:
     local_seo_service.delete_page(str(page_id))
     return {"deleted": True}
+
+
+@router.post("/local-seo/pages/{page_id}/publish")
+async def publish_local_seo_page(
+    page_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Publish a saved page to a Google Doc in the client's Drive folder."""
+    return await local_seo_service.publish_page(str(page_id), auth["user_id"])

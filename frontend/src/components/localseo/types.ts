@@ -36,6 +36,9 @@ export interface LocalSeoPageDetail extends LocalSeoPageListItem {
   content_gaps: ContentGap[]
   token_usage: Record<string, unknown> | null
   cost_breakdown: Record<string, unknown> | null
+  published_doc_url: string | null
+  published_doc_id: string | null
+  published_at: string | null
   updated_at: string
 }
 
