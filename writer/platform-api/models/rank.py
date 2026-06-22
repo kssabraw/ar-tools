@@ -144,6 +144,13 @@ class MaterializeResponse(BaseModel):
     error: Optional[str] = None
 
 
+class RankLocation(BaseModel):
+    # The per-client DataForSEO tracking location. Both None = auto (national,
+    # detected from the client's website TLD).
+    location: Optional[str] = None
+    location_code: Optional[int] = None
+
+
 class DataForSeoRefreshResponse(BaseModel):
     client_id: UUID
     status: str

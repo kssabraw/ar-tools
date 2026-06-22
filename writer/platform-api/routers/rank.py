@@ -30,6 +30,7 @@ from models.rank import (
     MaterializeResponse,
     OverviewResponse,
     PagesResponse,
+    RankLocation,
     StrikingDistanceResponse,
     TrackedKeywordCreateRequest,
     TrackedKeywordUpdateRequest,
@@ -76,7 +77,9 @@ def _gsc_connected(supabase, client_id: str) -> bool:
 
 
 def _client_location_code(supabase, client_id: str) -> int:
-    res = supabase.table("clients").select("id, website_url, gbp").eq("id", client_id).limit(1).execute()
+    res = supabase.table("clients").select(
+        "id, website_url, gbp, rank_tracking_location_code"
+    ).eq("id", client_id).limit(1).execute()
     return dataforseo_rank.location_code_for(res.data[0]) if res.data else settings.dataforseo_default_location_code
 
 
@@ -397,6 +400,42 @@ async def trigger_materialize(client_id: UUID, auth: dict = Depends(require_auth
         client_id=client_id, status=result.status, keywords=result.keywords,
         rows=result.rows, error=result.error,
     )
+
+
+@router.get("/clients/{client_id}/rank/location", response_model=RankLocation)
+async def get_tracking_location(client_id: UUID, auth: dict = Depends(require_auth)) -> RankLocation:
+    res = (
+        get_supabase().table("clients")
+        .select("rank_tracking_location, rank_tracking_location_code")
+        .eq("id", str(client_id)).limit(1).execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    row = res.data[0]
+    return RankLocation(
+        location=row.get("rank_tracking_location"),
+        location_code=row.get("rank_tracking_location_code"),
+    )
+
+
+@router.put("/clients/{client_id}/rank/location", response_model=RankLocation)
+async def set_tracking_location(
+    client_id: UUID, body: RankLocation, auth: dict = Depends(require_auth)
+) -> RankLocation:
+    """Set (or clear, with both fields null) the client's DataForSEO tracking
+    location. Clearing reverts to the auto-detected national area. Fresh ranks +
+    market data for the new area are fetched in the background."""
+    supabase = get_supabase()
+    location = (body.location or "").strip() or None
+    code = body.location_code if location else None
+    supabase.table("clients").update(
+        {"rank_tracking_location": location, "rank_tracking_location_code": code, "updated_at": "now()"}
+    ).eq("id", str(client_id)).execute()
+
+    # Re-fetch DataForSEO ranks + market data for the new location.
+    dataforseo_rank.enqueue_dataforseo_rank(str(client_id))
+    keyword_market.enqueue_keyword_market(str(client_id))
+    return RankLocation(location=location, location_code=code)
 
 
 @router.post("/clients/{client_id}/rank/refresh-dataforseo", response_model=DataForSeoRefreshResponse)

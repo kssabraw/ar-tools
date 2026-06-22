@@ -184,6 +184,11 @@ export interface HeroPoint {
   impressions: number
 }
 
+export interface RankLocation {
+  location: string | null
+  location_code: number | null
+}
+
 export interface PageRow {
   page: string
   clicks: number

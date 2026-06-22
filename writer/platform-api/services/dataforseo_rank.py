@@ -59,7 +59,15 @@ def extract_domain(website_url: str) -> str:
 
 
 def location_code_for(client: dict) -> int:
-    """National organic rank: the client's country (from website ccTLD)."""
+    """DataForSEO location for a client's rank/market checks.
+
+    Prefers an explicit per-client tracking location (city/region/country picked
+    in the UI); otherwise falls back to the country auto-detected from the
+    website TLD.
+    """
+    code = client.get("rank_tracking_location_code")
+    if code:
+        return int(code)
     iso = infer_country_iso(client)
     return _COUNTRY_LOCATION_CODES.get(iso, settings.dataforseo_default_location_code)
 
@@ -134,7 +142,9 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
     supabase = get_supabase()
     today = today or date.today()
 
-    client_res = supabase.table("clients").select("id, name, website_url, gbp").eq("id", client_id).limit(1).execute()
+    client_res = supabase.table("clients").select(
+        "id, name, website_url, gbp, rank_tracking_location_code"
+    ).eq("id", client_id).limit(1).execute()
     if not client_res.data:
         return {"status": "failed", "error": "client_not_found", "fetched": 0}
     client = client_res.data[0]

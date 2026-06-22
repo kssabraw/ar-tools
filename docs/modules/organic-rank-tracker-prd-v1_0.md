@@ -36,6 +36,8 @@ Keywords are **client-anchored** (the GSC property is optional), and the rank so
 
 When a keyword (or the whole client) is on the DataForSEO path, the UI **drops the GSC-only views** — clicks, impressions, CTR, and the average-position chart/columns — and shows the live rank ("Today") + its weekly trendline instead. `KeywordSummary.primary_source` (`gsc`/`dataforseo`/`none`) and `Overview.gsc_connected` drive this.
 
+**Tracking location (built).** The DataForSEO rank + market checks run at a per-client **tracking location** (`clients.rank_tracking_location` / `rank_tracking_location_code`), set in Rankings → Settings via the suite's location typeahead (city / region / country). When unset it falls back to the country auto-detected from the client's website TLD (default US). GSC stays national-aggregate regardless (Google's limitation). True local-pack geo-grid tracking remains Module #5 (Maps ranker).
+
 ---
 
 ## 3. Suite-conformance: what changed from the v0.2 spec
