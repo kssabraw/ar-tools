@@ -100,6 +100,75 @@ async def test_generate_page_persists_row():
     assert persisted["run_analysis"] is True
 
 
+def test_gbp_to_rankability_payload_sources_gbp_fields():
+    client = _client_row(
+        gbp_place_id="ChIJ-place",
+        gbp={
+            "business_name": "Joe's Plumbing Co",
+            "gbp_category": "Plumber",
+            "address": "123 Main St, Anaheim, CA",
+            "website": "https://joesplumbing.com",
+            "gbp_review_count": 42,
+            "latitude": 33.8,
+            "longitude": -117.9,
+        },
+    )
+    payload = local_seo_service._gbp_to_rankability_payload(
+        client, "emergency plumber", "Anaheim, CA", 1013962, "  Anaheim  "
+    )
+    assert payload["gbp_category"] == "Plumber"
+    assert payload["business_address"] == "123 Main St, Anaheim, CA"
+    assert payload["business_review_count"] == 42
+    assert payload["business_lat"] == 33.8
+    assert payload["business_lng"] == -117.9
+    assert payload["gbp_place_id"] == "ChIJ-place"
+    assert payload["location_code"] == 1013962
+    assert payload["sab_city"] == "Anaheim"  # trimmed
+
+
+def test_gbp_to_rankability_payload_blank_sab_city_becomes_none():
+    payload = local_seo_service._gbp_to_rankability_payload(
+        _client_row(), "plumber", "Anaheim, CA", None, "   "
+    )
+    assert payload["sab_city"] is None
+
+
+@pytest.mark.asyncio
+async def test_check_rankability_proxies_and_returns_report():
+    supabase = _supabase_for_client(_client_row(gbp_place_id="ChIJ-x"))
+    report = {"score": 72, "verdict": "strong", "score_breakdown": {}, "has_map_pack": True,
+              "competitors": [], "ranking_categories": [], "category_match": "exact"}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("Anaheim,California,United States", 1013962))), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=report)) as post:
+        out = await local_seo_service.check_rankability(
+            "client-1", "emergency plumber", "Anaheim, CA", 1013962, None, user_id="user-7"
+        )
+    assert out == report
+    path, payload = post.await_args[0]
+    assert path == "/check-rankability"
+    assert payload["keyword"] == "emergency plumber"
+    assert payload["gbp_category"] == "Plumber"
+    # the resolved location/code is forwarded
+    assert payload["location_code"] == 1013962
+    # user_id is forwarded for per-user rate limiting
+    assert post.await_args.kwargs["user_id"] == "user-7"
+
+
+@pytest.mark.asyncio
+async def test_check_rankability_requires_gbp_category():
+    supabase = _supabase_for_client(_client_row(gbp={}, business_location=None))
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock()) as post:
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service.check_rankability(
+                "client-1", "plumber", "Anaheim, CA", None, None
+            )
+    assert exc.value.detail == "client_has_no_gbp_category"
+    post.assert_not_awaited()  # short-circuits before any nlp call
+
+
 @pytest.mark.asyncio
 async def test_find_page_requires_website():
     supabase = _supabase_for_client(_client_row(website_url=None, gbp={}))

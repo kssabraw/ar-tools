@@ -26,7 +26,7 @@ The source app is **ShowUP Local** (`kssabraw/showup-local`), imported raw into 
 ### ❌ Cut from this version
 | Cut | Where it lives (NLP service / frontend) |
 |---|---|
-| **Rankability / keyword-worthiness check** — "is this keyword worth pursuing; you're too far; competitor reviews too low" | `/check-rankability`, `_rankability_score()`, `RankabilityRequest`/`RankabilityResponse`; frontend `handleCheckRankability`, `rankability` state, `RankabilityResult` type |
+| ~~**Rankability / keyword-worthiness check**~~ — **RE-ADDED** as the **Map-Pack Rankability Report** per its own build-ready PRD (deterministic map-pack score: category match, distance, review gap, branded-name count, SAB penalty). Backend `nlp-api /check-rankability` + platform-api `/clients/{id}/local-seo/rankability`; frontend `RankabilityReport`. The source app's per-user monthly cap / `purchase-rankability-pack` billing was **not** ported (internal-only, no billing). | `/check-rankability`, `_rankability_score()`, `RankabilityRequest`/`RankabilityResponse`; frontend `handleCheckRankability`, `rankability` state, `RankabilityResult` type |
 | **Brand voice generation** (crawls the client's own site) | `_crawl_pages_for_brand_voice()`, `/analyze-brand-voice`, `analyze_brand_voice_with_anthropic()`; `LocationDetailView` Brand Voice tab |
 | **ICP detection** (crawls the client's own site) | `/analyze-business` → `detected_icp` / `differentiators`; related UI |
 | **Stripe / credits billing** | `purchase-credit-pack`, `purchase-press-release-pack`, `purchase-rankability-pack` edge functions, `credit_balance` / credit-transaction logic |

@@ -85,6 +85,31 @@ def _gbp_to_generate_payload(
     }
 
 
+def _gbp_to_rankability_payload(
+    client: dict, keyword: str, location: str, location_code: Optional[int], sab_city: Optional[str],
+) -> dict:
+    """Map a suite client row to the nlp service's RankabilityRequest, sourcing
+    the business identity from the client's stored GBP record. The nlp service
+    infers SAB-vs-physical from the address and uses lat/lng (physical) or the
+    geocoded `sab_city` (SAB) for the distance check."""
+    gbp = client.get("gbp") or {}
+    fields = _business_fields(client)
+    return {
+        "keyword": keyword,
+        "location": location,
+        "location_code": location_code,
+        "gbp_category": fields["gbp_category"],
+        "business_name": fields["business_name"],
+        "business_address": fields["address"],
+        "business_review_count": gbp.get("gbp_review_count"),
+        "business_lat": gbp.get("latitude"),
+        "business_lng": gbp.get("longitude"),
+        "website": fields["website"],
+        "sab_city": (sab_city or "").strip() or None,
+        "gbp_place_id": client.get("gbp_place_id"),
+    }
+
+
 # ── nlp transport ───────────────────────────────────────────────────────────
 
 async def _post_nlp(
@@ -323,6 +348,28 @@ async def analyze(
     result = await _get_or_compute_analysis(keyword, location, location_code, force_refresh, required=True)
     assert result is not None  # required=True never returns None (it raises)
     return result
+
+
+async def check_rankability(
+    client_id: str,
+    keyword: str,
+    location: str,
+    location_code: Optional[int],
+    sab_city: Optional[str],
+    user_id: Optional[str] = None,
+) -> dict:
+    """Map-pack rankability report for a keyword + location.
+
+    Resolves/validates the area, builds the rankability payload from the client's
+    stored GBP, and proxies to the private nlp `/check-rankability`. The report is
+    a single point-in-time, non-streaming check (no LLM) so it returns plain JSON.
+    """
+    client = _get_client(client_id)
+    if not _business_fields(client)["gbp_category"]:
+        raise HTTPException(status_code=400, detail="client_has_no_gbp_category")
+    location, location_code = await locations_service.resolve_location(client, location, location_code)
+    payload = _gbp_to_rankability_payload(client, keyword, location, location_code, sab_city)
+    return await _post_nlp("/check-rankability", payload, user_id=user_id)
 
 
 async def find_page(client_id: str, keyword: str, location: str) -> dict:
