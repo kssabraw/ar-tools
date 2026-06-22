@@ -556,6 +556,15 @@ ENTITY_MIN_RELEVANCE     = float(os.environ.get("TEXTRAZOR_MIN_RELEVANCE", "0.1"
 # Optional disambiguation-confidence floor (TextRazor confidenceScore). 0 = off.
 ENTITY_MIN_CONFIDENCE    = float(os.environ.get("TEXTRAZOR_MIN_CONFIDENCE", "0"))
 TEXTRAZOR_MAX_BYTES      = 200_000   # TextRazor per-request size limit
+# TextRazor plans cap CONCURRENT requests (free tier ~2). The entity pass
+# fans out one request per competitor page (~15), so without a concurrency
+# gate most requests are rejected with 401 and we extract zero entities. Limit
+# in-flight requests and retry the transient auth/rate rejections with backoff.
+TEXTRAZOR_MAX_CONCURRENCY = int(os.environ.get("TEXTRAZOR_MAX_CONCURRENCY", "2"))
+TEXTRAZOR_MAX_RETRIES     = int(os.environ.get("TEXTRAZOR_MAX_RETRIES", "4"))
+TEXTRAZOR_RETRY_BASE      = float(os.environ.get("TEXTRAZOR_RETRY_BASE", "0.5"))
+_textrazor_semaphore = asyncio.Semaphore(TEXTRAZOR_MAX_CONCURRENCY)
+
 
 # DataForSEO: how many organic results to request
 SERP_RESULT_COUNT = 20
@@ -1114,26 +1123,41 @@ def get_top_quadgrams(
 
 async def fetch_textrazor_entities(text: str, client: httpx.AsyncClient) -> List[dict]:
     """Call TextRazor's entity extractor for one document. Returns the raw
-    `response.entities` list (TextRazor emits one item per mention occurrence)."""
+    `response.entities` list (TextRazor emits one item per mention occurrence).
+
+    Concurrency-gated + retried: TextRazor caps concurrent requests per plan, so
+    the per-page fan-out would otherwise have most requests rejected with 401.
+    The semaphore keeps in-flight requests within the plan limit; a 401/403/429
+    (transient concurrency/rate rejection — the key itself is valid) is retried
+    with exponential backoff outside the semaphore."""
     if not TEXTRAZOR_API_KEY or not text.strip():
         return []
     encoded = text.encode("utf-8")[:TEXTRAZOR_MAX_BYTES]
     safe_text = encoded.decode("utf-8", errors="ignore")
-    try:
-        response = await client.post(
-            TEXTRAZOR_ENDPOINT,
-            headers={
-                "X-TextRazor-Key": TEXTRAZOR_API_KEY,
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            data={"extractors": "entities", "text": safe_text},
-            timeout=15.0,
-        )
-        response.raise_for_status()
-        return response.json().get("response", {}).get("entities", [])
-    except Exception as e:
-        logger.warning(f"TextRazor API error: {e}")
-        return []
+    for attempt in range(TEXTRAZOR_MAX_RETRIES + 1):
+        try:
+            async with _textrazor_semaphore:
+                response = await client.post(
+                    TEXTRAZOR_ENDPOINT,
+                    headers={
+                        "X-TextRazor-Key": TEXTRAZOR_API_KEY,
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    data={"extractors": "entities", "text": safe_text},
+                    timeout=15.0,
+                )
+            if response.status_code in (401, 403, 429) and attempt < TEXTRAZOR_MAX_RETRIES:
+                await asyncio.sleep(TEXTRAZOR_RETRY_BASE * (2 ** attempt))
+                continue
+            response.raise_for_status()
+            return response.json().get("response", {}).get("entities", [])
+        except Exception as e:
+            if attempt < TEXTRAZOR_MAX_RETRIES:
+                await asyncio.sleep(TEXTRAZOR_RETRY_BASE * (2 ** attempt))
+                continue
+            logger.warning(f"TextRazor API error: {e}")
+            return []
+    return []
 
 
 async def get_textrazor_entities(
