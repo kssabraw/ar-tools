@@ -1,32 +1,23 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  ArrowLeft, Check, Clock, Copy, Globe, Plus, RefreshCw, Trash2, TrendingUp, X,
-} from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { ArrowLeft, TrendingUp } from 'lucide-react'
 import { api } from '../lib/api'
-import type {
-  Client, GscProperty, IngestResponse, SyncRun, VerifyAccessResponse,
-} from '../lib/types'
+import type { Client, GscProperty } from '../lib/types'
 import { useAuth } from '../context/AuthContext'
-import { Spinner } from '../components/localseo/Spinner'
-import {
-  backLink, card, errorBox, input, label, outlineBtn, primaryBtn, relativeTime,
-} from '../components/localseo/shared'
+import { backLink } from '../components/localseo/shared'
+import { RankSettings } from '../components/rankings/RankSettings'
+import { RankOverview } from '../components/rankings/RankOverview'
+import { RankKeywords } from '../components/rankings/RankKeywords'
 
-interface ServiceAccountInfo {
-  email: string
-}
+type Tab = 'overview' | 'keywords' | 'settings'
 
-// M1 "Connection (service account)" for the Organic Rank Tracker (Module #4).
-// Onboarding screen: show the service-account email the client must add to their
-// Search Console property, register the property, and verify access with a live
-// test query. Sync, keyword tracking, and charts arrive in M2–M4.
+// Per-client Organic Rank Tracker (Module #4). Tabbed shell over the connected
+// GSC property: Overview (triage), Keywords (wide table), Settings (connection).
 export function Rankings() {
   const { id } = useParams<{ id: string }>()
   const clientId = id as string
   const navigate = useNavigate()
-  const queryClient = useQueryClient()
   const { isAdmin } = useAuth()
 
   const { data: client } = useQuery<Client>({
@@ -35,300 +26,90 @@ export function Rankings() {
     enabled: Boolean(clientId),
   })
 
-  const { data: sa, error: saError } = useQuery<ServiceAccountInfo>({
-    queryKey: ['gsc-service-account'],
-    queryFn: () => api.get<ServiceAccountInfo>('/gsc/service-account-email'),
-    retry: false,
-  })
-
-  const { data: properties, isLoading } = useQuery<GscProperty[]>({
+  const { data: properties } = useQuery<GscProperty[]>({
     queryKey: ['gsc-properties', clientId],
     queryFn: () => api.get<GscProperty[]>(`/clients/${clientId}/gsc-properties`),
     enabled: Boolean(clientId),
   })
 
-  const [siteUrl, setSiteUrl] = useState('')
-  const [adding, setAdding] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [verifyResult, setVerifyResult] = useState<Record<string, VerifyAccessResponse>>({})
+  const connected = (properties ?? []).filter(p => p.access_status === 'ok')
+  const [tab, setTab] = useState<Tab>('overview')
+  const [activeProp, setActiveProp] = useState<string | null>(null)
 
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ['gsc-properties', clientId] })
+  // Default the active property to the first connected one; fall back to
+  // Settings when nothing is connected yet.
+  useEffect(() => {
+    if (connected.length && !connected.some(p => p.id === activeProp)) {
+      setActiveProp(connected[0].id)
+    }
+    if (properties && connected.length === 0) setTab('settings')
+  }, [properties]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const addMut = useMutation({
-    mutationFn: (site_url: string) =>
-      api.post<GscProperty>(`/clients/${clientId}/gsc-properties`, { site_url }),
-    onSuccess: () => { invalidate(); setSiteUrl(''); setAdding(false) },
-  })
-
-  const verifyMut = useMutation({
-    mutationFn: (propertyId: string) =>
-      api.post<VerifyAccessResponse>(`/gsc-properties/${propertyId}/verify`, {}),
-    onSuccess: (res) => {
-      setVerifyResult((prev) => ({ ...prev, [res.property_id]: res }))
-      invalidate()
-    },
-  })
-
-  const deleteMut = useMutation({
-    mutationFn: (propertyId: string) =>
-      api.delete<void>(`/gsc-properties/${propertyId}`),
-    onSuccess: invalidate,
-  })
-
-  const copyEmail = () => {
-    if (!sa?.email) return
-    navigator.clipboard.writeText(sa.email).then(() => {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    })
-  }
+  const hasConnection = connected.length > 0
+  const propId = activeProp ?? connected[0]?.id ?? null
 
   return (
-    <div style={{ padding: 32, maxWidth: 860 }}>
+    <div style={{ padding: 32, maxWidth: 980 }}>
       <button style={backLink} onClick={() => navigate(`/clients/${clientId}`)}>
         <ArrowLeft size={14} /> Back to Workspace
       </button>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
         <TrendingUp size={22} color="#6366f1" />
-        <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>
-          Organic Rank Tracker
-        </h1>
+        <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Organic Rank Tracker</h1>
       </div>
-      <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 24px' }}>
-        Connect {client?.name ?? 'this client'}’s Google Search Console. Keyword tracking,
-        live ranks, and trendlines come online once a property is verified.
+      <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 20px' }}>
+        {client?.name ?? 'This client'} · organic positions, clicks &amp; impressions from Search Console.
       </p>
 
-      {/* Step 1 — grant access */}
-      <div style={{ ...card, marginBottom: 20 }}>
-        <h2 style={sectionTitle}>1 · Grant the service account access</h2>
-        <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 14px', lineHeight: 1.6 }}>
-          In the client’s Search Console, open <strong>Settings → Users and permissions</strong>,
-          add the email below as a user (<strong>Restricted</strong> is enough), then verify below.
-        </p>
-        {saError ? (
-          <div style={errorBox}>
-            Service account not configured yet. An admin needs to set
-            <code style={code}>GOOGLE_SERVICE_ACCOUNT_KEY</code> on the platform API before
-            properties can be verified.
-          </div>
-        ) : sa?.email ? (
-          <div style={emailRow}>
-            <Globe size={15} color="#6366f1" />
-            <code style={{ ...code, flex: 1 }}>{sa.email}</code>
-            <button style={outlineBtn} onClick={copyEmail}>
-              {copied ? <><Check size={14} /> Copied</> : <><Copy size={14} /> Copy</>}
-            </button>
-          </div>
-        ) : (
-          <Spinner />
+      {/* Tabs */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, borderBottom: '1px solid #e2e8f0', marginBottom: 24 }}>
+        <TabButton active={tab === 'overview'} onClick={() => setTab('overview')} label="Overview" />
+        <TabButton active={tab === 'keywords'} onClick={() => setTab('keywords')} label="Keywords" />
+        <TabButton active={tab === 'settings'} onClick={() => setTab('settings')} label="Settings" />
+
+        {hasConnection && connected.length > 1 && tab !== 'settings' && (
+          <select
+            value={propId ?? ''} onChange={(e) => setActiveProp(e.target.value)}
+            style={{ marginLeft: 'auto', fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid #e2e8f0' }}
+          >
+            {connected.map(p => <option key={p.id} value={p.id}>{p.site_url}</option>)}
+          </select>
         )}
       </div>
 
-      {/* Step 2 — properties */}
-      <div style={card}>
-        <h2 style={sectionTitle}>2 · Properties</h2>
-
-        {isLoading ? (
-          <Spinner />
-        ) : properties && properties.length > 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 16 }}>
-            {properties.map((p) => (
-              <PropertyRow
-                key={p.id}
-                property={p}
-                isAdmin={isAdmin}
-                verifying={verifyMut.isPending && verifyMut.variables === p.id}
-                detail={verifyResult[p.id]?.detail ?? null}
-                onVerify={() => verifyMut.mutate(p.id)}
-                onDelete={() => deleteMut.mutate(p.id)}
-              >
-                {p.access_status === 'ok' && (
-                  <SyncStatus propertyId={p.id} isAdmin={isAdmin} />
-                )}
-              </PropertyRow>
-            ))}
-          </div>
-        ) : (
-          <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 16px' }}>
-            No property connected yet.
+      {/* Body */}
+      {tab === 'settings' ? (
+        <RankSettings clientId={clientId} isAdmin={isAdmin} />
+      ) : !hasConnection || !propId ? (
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: 28, textAlign: 'center', color: '#64748b' }}>
+          <p style={{ margin: '0 0 12px', fontSize: 14 }}>
+            Connect a Search Console property to start tracking rankings.
           </p>
-        )}
-
-        {!isAdmin ? null : adding ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <label style={label} htmlFor="site_url">Property URL</label>
-            <input
-              id="site_url"
-              style={input}
-              placeholder="https://acmehvac.com/  or  sc-domain:acmehvac.com"
-              value={siteUrl}
-              onChange={(e) => setSiteUrl(e.target.value)}
-              autoFocus
-            />
-            <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
-              URL-prefix properties need the full https:// URL with a trailing slash; domain
-              properties use the <code style={code}>sc-domain:</code> prefix.
-            </p>
-            {addMut.error && <div style={errorBox}>{(addMut.error as Error).message}</div>}
-            <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
-              <button
-                style={primaryBtn}
-                disabled={!siteUrl.trim() || addMut.isPending}
-                onClick={() => addMut.mutate(siteUrl.trim())}
-              >
-                {addMut.isPending ? 'Adding…' : 'Add property'}
-              </button>
-              <button style={outlineBtn} onClick={() => { setAdding(false); setSiteUrl('') }}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <button style={outlineBtn} onClick={() => setAdding(true)}>
-            <Plus size={14} /> Add property
+          <button
+            style={{ background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+            onClick={() => setTab('settings')}
+          >
+            Go to Settings
           </button>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function PropertyRow({
-  property, isAdmin, verifying, detail, onVerify, onDelete, children,
-}: {
-  property: GscProperty
-  isAdmin: boolean
-  verifying: boolean
-  detail: string | null
-  onVerify: () => void
-  onDelete: () => void
-  children?: React.ReactNode
-}) {
-  const badge = statusBadge(property.access_status)
-  return (
-    <div style={propRow}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <code style={{ ...code, fontSize: 13 }}>{property.site_url}</code>
-            <span style={{ fontSize: 11, color: '#94a3b8' }}>
-              {property.property_type === 'domain' ? 'domain' : 'url-prefix'}
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-            <span style={badge.style}>{badge.icon} {badge.text}</span>
-            {property.last_verified_at && (
-              <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                checked {relativeTime(property.last_verified_at)}
-              </span>
-            )}
-          </div>
-          {property.access_status === 'no_access' && (
-            <p style={{ fontSize: 12, color: '#b45309', margin: '6px 0 0' }}>
-              The service account can’t read this property yet — confirm the email was added as a
-              user, then verify again.{detail ? ` (${detail})` : ''}
-            </p>
-          )}
         </div>
-        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-          <button style={outlineBtn} onClick={onVerify} disabled={verifying}>
-            <RefreshCw size={14} /> {verifying ? 'Verifying…' : 'Verify access'}
-          </button>
-          {isAdmin && (
-            <button style={{ ...outlineBtn, color: '#dc2626' }} onClick={onDelete} title="Remove">
-              <Trash2 size={14} />
-            </button>
-          )}
-        </div>
-      </div>
-      {children}
-    </div>
-  )
-}
-
-// M2: surface the latest ingestion outcome + a manual "Sync now" trigger.
-function SyncStatus({ propertyId, isAdmin }: { propertyId: string; isAdmin: boolean }) {
-  const queryClient = useQueryClient()
-  const { data: runs } = useQuery<SyncRun[]>({
-    queryKey: ['gsc-sync-runs', propertyId],
-    queryFn: () => api.get<SyncRun[]>(`/gsc-properties/${propertyId}/sync-runs`),
-  })
-
-  const ingestMut = useMutation({
-    mutationFn: () => api.post<IngestResponse>(`/gsc-properties/${propertyId}/ingest`, {}),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] }),
-  })
-
-  const latest = runs?.[0]
-  return (
-    <div style={syncStrip}>
-      <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
-        <Clock size={12} color="#94a3b8" />
-        {latest ? (
-          latest.status === 'ok' ? (
-            <span>Last sync {relativeTime(latest.run_at)} · {latest.rows.toLocaleString()} rows</span>
-          ) : (
-            <span style={{ color: '#b45309' }}>
-              Last sync failed {relativeTime(latest.run_at)}{latest.error ? ` · ${latest.error}` : ''}
-            </span>
-          )
-        ) : (
-          <span>Not synced yet — the daily job runs automatically, or sync now.</span>
-        )}
-      </div>
-      {isAdmin && (
-        <button
-          style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
-          onClick={() => ingestMut.mutate()}
-          disabled={ingestMut.isPending}
-        >
-          <RefreshCw size={13} /> {ingestMut.isPending ? 'Syncing…' : 'Sync now'}
-        </button>
+      ) : tab === 'overview' ? (
+        <RankOverview propertyId={propId} />
+      ) : (
+        <RankKeywords propertyId={propId} isAdmin={isAdmin} />
       )}
     </div>
   )
 }
 
-function statusBadge(status: GscProperty['access_status']) {
-  switch (status) {
-    case 'ok':
-      return { text: 'Connected', icon: <Check size={12} />, style: pill('#dcfce7', '#166534') }
-    case 'no_access':
-      return { text: 'No access', icon: <X size={12} />, style: pill('#fee2e2', '#991b1b') }
-    default:
-      return { text: 'Pending', icon: <Clock size={12} />, style: pill('#f1f5f9', '#64748b') }
-  }
-}
-
-function pill(bg: string, color: string): React.CSSProperties {
-  return {
-    display: 'inline-flex', alignItems: 'center', gap: 4,
-    background: bg, color, borderRadius: 999, padding: '2px 9px',
-    fontSize: 11, fontWeight: 600,
-  }
-}
-
-const sectionTitle: React.CSSProperties = {
-  fontSize: 13, fontWeight: 700, color: '#0f172a', margin: '0 0 8px',
-  textTransform: 'uppercase', letterSpacing: '0.04em',
-}
-const code: React.CSSProperties = {
-  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-  fontSize: 12, background: '#f1f5f9', borderRadius: 5, padding: '2px 6px', color: '#334155',
-}
-const emailRow: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10,
-  background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 12px',
-}
-const propRow: React.CSSProperties = {
-  display: 'flex', flexDirection: 'column', gap: 12,
-  border: '1px solid #e2e8f0', borderRadius: 10, padding: 14,
-}
-const syncStrip: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-  borderTop: '1px solid #f1f5f9', paddingTop: 10,
+function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+  return (
+    <button onClick={onClick} style={{
+      background: 'none', border: 'none', cursor: 'pointer',
+      padding: '10px 14px', fontSize: 14, fontWeight: 600,
+      color: active ? '#6366f1' : '#64748b',
+      borderBottom: active ? '2px solid #6366f1' : '2px solid transparent',
+      marginBottom: -1,
+    }}>{label}</button>
+  )
 }

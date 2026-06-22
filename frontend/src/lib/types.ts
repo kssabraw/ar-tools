@@ -103,6 +103,63 @@ export interface IngestResponse {
   error: string | null
 }
 
+export type KeywordStatus =
+  | 'climbing' | 'stable' | 'volatile' | 'dropping' | 'deindex_risk' | 'no_data'
+
+export interface KeywordSummary {
+  id: string
+  keyword: string
+  source: string
+  canonical_url: string | null
+  canonical_url_locked: boolean
+  status: KeywordStatus
+  status_updated_at: string | null
+  avg_7: number | null
+  avg_30: number | null
+  avg_60: number | null
+  avg_90: number | null
+  clicks_30d: number
+  impressions_30d: number
+  ctr_30d: number
+  today_rank: number | null
+  sparkline: (number | null)[]
+  direction: 'up' | 'down' | 'flat' | null
+}
+
+export interface TrendPoint {
+  date: string
+  gsc_position: number | null
+  tracked_rank: number | null
+  clicks: number
+  impressions: number
+  ctr: number
+}
+
+export interface KeywordTrendline {
+  id: string
+  keyword: string
+  status: KeywordStatus
+  canonical_url: string | null
+  points: TrendPoint[]
+}
+
+export interface HeroPoint {
+  date: string
+  avg_position: number | null
+  clicks: number
+  impressions: number
+}
+
+export interface RankOverview {
+  keyword_count: number
+  status_counts: Record<string, number>
+  clicks_30d: number
+  impressions_30d: number
+  avg_position_30d: number | null
+  at_risk: number
+  hero: HeroPoint[]
+}
+
 // ── ICP + differentiators (converged client-level assets, Option A) ──────────
 
 export interface IcpSegment {

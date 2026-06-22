@@ -175,3 +175,9 @@ async def run_gsc_ingest_job(job: dict) -> None:
             "completed_at": "now()",
         }
     ).eq("id", job_id).execute()
+
+    # Chain the date-axis materialize + status recompute after fresh data lands.
+    if result.status == "ok":
+        from services.rank_materialize import enqueue_materialize
+
+        enqueue_materialize(property_id)

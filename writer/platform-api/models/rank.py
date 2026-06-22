@@ -1,0 +1,88 @@
+"""Pydantic models for the Organic Rank Tracker keyword views (M3)."""
+
+from __future__ import annotations
+
+from typing import Literal, Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field
+
+KeywordStatus = Literal[
+    "climbing", "stable", "volatile", "dropping", "deindex_risk", "no_data"
+]
+
+
+class TrackedKeywordCreateRequest(BaseModel):
+    # Accept one or many; the UI's bulk-add box splits on newlines/commas.
+    keywords: list[str] = Field(..., min_length=1)
+
+
+class TrackedKeywordUpdateRequest(BaseModel):
+    canonical_url: Optional[str] = None
+    canonical_url_locked: Optional[bool] = None
+    active: Optional[bool] = None
+
+
+class KeywordSummary(BaseModel):
+    id: UUID
+    keyword: str
+    source: str
+    canonical_url: Optional[str] = None
+    canonical_url_locked: bool
+    status: KeywordStatus
+    status_updated_at: Optional[str] = None
+    # GSC rolling average positions (decimals).
+    avg_7: Optional[float] = None
+    avg_30: Optional[float] = None
+    avg_60: Optional[float] = None
+    avg_90: Optional[float] = None
+    clicks_30d: int = 0
+    impressions_30d: int = 0
+    ctr_30d: float = 0.0
+    # DataForSEO live integer rank (M4) — None until then.
+    today_rank: Optional[int] = None
+    # Recent positions (None entries are gaps) for the row sparkline.
+    sparkline: list[Optional[float]] = Field(default_factory=list)
+    direction: Optional[Literal["up", "down", "flat"]] = None
+
+
+class TrendPoint(BaseModel):
+    date: str
+    gsc_position: Optional[float] = None
+    tracked_rank: Optional[int] = None
+    clicks: int = 0
+    impressions: int = 0
+    ctr: float = 0.0
+
+
+class KeywordTrendline(BaseModel):
+    id: UUID
+    keyword: str
+    status: KeywordStatus
+    canonical_url: Optional[str] = None
+    points: list[TrendPoint] = Field(default_factory=list)
+
+
+class HeroPoint(BaseModel):
+    date: str
+    avg_position: Optional[float] = None
+    clicks: int = 0
+    impressions: int = 0
+
+
+class OverviewResponse(BaseModel):
+    keyword_count: int
+    status_counts: dict[str, int]
+    clicks_30d: int
+    impressions_30d: int
+    avg_position_30d: Optional[float] = None
+    at_risk: int
+    hero: list[HeroPoint] = Field(default_factory=list)
+
+
+class MaterializeResponse(BaseModel):
+    property_id: UUID
+    status: Literal["ok", "failed"]
+    keywords: int
+    rows: int
+    error: Optional[str] = None

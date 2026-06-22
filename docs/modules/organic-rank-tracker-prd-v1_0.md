@@ -133,8 +133,10 @@ gsc_query_page_daily(property_id → gsc_properties(id), date, query, page,
   -- grouping independently, so query×page totals will NOT reconcile against query×date. Do not
   -- try to derive one from the other. PK / unique on (property_id, date, query, page).
 
-keyword_metrics(keyword_id → tracked_keywords(id), date,
+rank_keyword_metrics(keyword_id → tracked_keywords(id), date,
                 clicks, impressions, ctr, gsc_position, tracked_rank)
+  -- Implemented as `rank_keyword_metrics` (not bare `keyword_metrics`) to avoid overloading
+  -- "keyword" across the suite + a ghost keyword_metrics migration in the log. See M3 migration.
   -- THE MATERIALIZED DATE AXIS: exactly ONE row per tracked keyword per day across the tracked
   -- range. gsc_position is NULL on days GSC returned nothing — absence is STORED, not omitted
   -- (see §7). gsc_position = GSC averaged (impression-weighted); tracked_rank = DataForSEO live
@@ -266,8 +268,8 @@ Phasing mirrors the v0.2 spec's milestones, mapped onto the suite. **M1 and M2 a
 |---|---|---|
 | **M1 — Connection (service account)** | `gsc_properties` table + migration (fold in `clients.gsc_property`, then deprecate it — see note). Settings onboarding screen showing the service-account email to add + a **"verify access"** button that runs a test `searchanalytics.query` and flips `access_status` (`pending`→`ok`/`no_access`). Pre-validates site_url format so a verify-time 403 means "not added" (§4). | **Built** |
 | **M2 — Sync + storage** | Daily GSC query×date job → `gsc_query_daily`, `startRow` pagination, idempotent upserts, `sync_runs` observability, 3-day re-pull, the asyncio scheduler (§6), a manual "Sync now" trigger + last-sync status on the connection screen. | **Built** |
-| **M3 — Materialize + status + UI** | Date-axis materialization → `keyword_metrics` (NULL where absent), computed `status`, keyword CRUD on `tracked_keywords`, merged metrics read API, hero + dual-axis charts, sparklines, the Overview triage list + Keywords wide table, the `no_data` state. | Next |
-| **M4 — DataForSEO + detection + alerts** | Live "Today" rank + CPC/volume/competition (`keyword_market`), weekly query×page → `canonical_url` resolution, deindex gap detection + URL Inspection confirmation, alerting via the suite notifications service, striking-distance discovery from `gsc_query_daily`. | Planned |
+| **M3 — Materialize + status + UI** | Date-axis materialization → `rank_keyword_metrics` (NULL where absent), computed `status`, keyword CRUD on `tracked_keywords`, merged metrics read API, hero + dual-axis charts (hand-rolled SVG, no charting dep), sparklines with rendered gaps, the Overview triage list + Keywords wide table, the `no_data` state. | **Built** |
+| **M4 — DataForSEO + detection + alerts** | Live "Today" rank + CPC/volume/competition (`keyword_market`), weekly query×page → `canonical_url` resolution, deindex gap detection + URL Inspection confirmation, alerting via the suite notifications service, striking-distance discovery from `gsc_query_daily`. | Next |
 
 ### Migration note — `clients.gsc_property`
 The existing `clients.gsc_property` column (migration `20260529220918_clients_suite_fields.sql`) is **folded into `gsc_properties`** in M1: the M1 migration backfills a `gsc_properties` row from any non-null `clients.gsc_property` (inferring `property_type` from the `sc-domain:` prefix), then the column is left deprecated (kept temporarily for safety, dropped in a follow-up migration once nothing reads it). A client can have **two** properties (url-prefix + domain), which a single column cannot represent — the table is the source of truth going forward.

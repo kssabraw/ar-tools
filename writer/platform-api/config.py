@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     gsc_repull_days: int = 3
     gsc_ingest_hour_utc: int = 8
     gsc_scheduler_poll_interval_seconds: int = 300
+    # M3 materialize: the trailing window (days) of the per-keyword-per-day axis.
+    # Covers all rolling windows (max 90d) + margin; the full 16-month history
+    # stays in gsc_query_daily.
+    rank_materialize_days: int = 120
     # DataForSEO — GBP review enrichment (shared with pipeline-api modules)
     dataforseo_login: str = ""
     dataforseo_password: str = ""
