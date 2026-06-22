@@ -707,6 +707,20 @@ async def fetch_serp_urls(keyword: str, location: str, client: httpx.AsyncClient
                         break
 
         bold_terms = sorted(bold_terms_raw)
+        # When nothing usable comes back, surface DataForSEO's own task-level
+        # status so a failure can be diagnosed. The most common cause is a
+        # location_name that DataForSEO couldn't resolve (it returns HTTP 200
+        # with a non-20000 task status and a null result), which otherwise looks
+        # identical to a genuinely empty SERP.
+        if not urls:
+            for task in (data.get("tasks") or []):
+                t_code = task.get("status_code")
+                t_msg = task.get("status_message")
+                if t_code and t_code != 20000:
+                    logger.warning(
+                        f"DataForSEO task error for '{keyword}' @ location_name="
+                        f"'{location}' (code={t_code}): {t_msg}"
+                    )
         logger.info(f"DataForSEO returned {len(urls)} usable URLs, {len(bold_terms)} bold terms for '{keyword}'")
         return urls, bold_terms
 
