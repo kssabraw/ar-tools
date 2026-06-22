@@ -16,7 +16,7 @@ import re
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -210,9 +210,10 @@ async def update_keyword(
     return _build_summaries(supabase, k["client_id"], [k], date.today())[0]
 
 
-@router.delete("/tracked-keywords/{keyword_id}", status_code=204)
-async def delete_keyword(keyword_id: UUID, auth: dict = Depends(require_auth)) -> None:
+@router.delete("/tracked-keywords/{keyword_id}", status_code=204, response_class=Response)
+async def delete_keyword(keyword_id: UUID, auth: dict = Depends(require_auth)) -> Response:
     get_supabase().table("tracked_keywords").delete().eq("id", str(keyword_id)).execute()
+    return Response(status_code=204)
 
 
 @router.get("/tracked-keywords/{keyword_id}/trendline", response_model=KeywordTrendline)

@@ -16,7 +16,7 @@ from uuid import UUID
 
 from config import settings
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
@@ -98,10 +98,11 @@ async def create_property(
     return GscProperty(**result.data[0])
 
 
-@router.delete("/gsc-properties/{property_id}", status_code=204)
-async def delete_property(property_id: UUID, auth: dict = Depends(require_auth)) -> None:
+@router.delete("/gsc-properties/{property_id}", status_code=204, response_class=Response)
+async def delete_property(property_id: UUID, auth: dict = Depends(require_auth)) -> Response:
     supabase = get_supabase()
     supabase.table("gsc_properties").delete().eq("id", str(property_id)).execute()
+    return Response(status_code=204)
 
 
 @router.post("/gsc-properties/{property_id}/verify", response_model=VerifyAccessResponse)
