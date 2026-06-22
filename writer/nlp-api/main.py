@@ -4931,6 +4931,51 @@ async def augment_page(request: Request, body: AugmentPageRequest):
 
 # ── /generate-page ────────────────────────────────────────────────────────────
 
+async def _extract_template_outline(url: Optional[str], html: Optional[str]) -> str:
+    """Phase 3: fetch (or use supplied HTML of) a reference page and return a
+    compact heading outline (H1/H2/H3, in document order) for the writer to
+    mirror. Returns '' if unavailable so generation degrades to the default
+    structure rather than failing."""
+    raw_html = html
+    if not raw_html and url:
+        try:
+            _block_ssrf(url)
+        except Exception:
+            return ""
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as c:
+                raw_html = None
+                if SCRAPEOWL_API_KEY:
+                    raw_html = await _scrape_one(url, c, render_js=False) \
+                        or await _scrape_one(url, c, render_js=True)
+                if not raw_html:
+                    r = await c.get(
+                        url,
+                        headers={"User-Agent": "Mozilla/5.0 (compatible; ShowUPBot/1.0)"},
+                        follow_redirects=True,
+                    )
+                    raw_html = r.text if r.status_code == 200 else None
+        except Exception as e:
+            logger.info(f"generate-page: template fetch failed for {url}: {e}")
+            return ""
+    if not raw_html:
+        return ""
+
+    soup = BeautifulSoup(raw_html, "html.parser")
+    for t in soup(["script", "style", "nav", "footer", "head"]):
+        t.decompose()
+    indent = {"h1": "", "h2": "  ", "h3": "    "}
+    lines: List[str] = []
+    for tag in soup.find_all(["h1", "h2", "h3"]):
+        txt = tag.get_text(separator=" ", strip=True)
+        if not txt or len(txt) < 2:
+            continue
+        lines.append(f"{indent[tag.name]}- ({tag.name}) {txt}")
+        if len(lines) >= 40:
+            break
+    return "\n".join(lines)
+
+
 class GeneratePageRequest(BaseModel):
     keyword: str
     location: str
@@ -4947,6 +4992,12 @@ class GeneratePageRequest(BaseModel):
     detected_icp: Optional[dict] = None
     reviews: Optional[List[dict]] = None
     serp_analysis: Optional[dict] = None
+    # Phase 3 — "page template": mirror the section structure of a reference page.
+    # Provide a URL (scraped here) or raw HTML; the writer follows that section
+    # layout/heading hierarchy instead of the default 13-section structure, while
+    # still applying the AEO writing rules + JSON-LD schema.
+    page_template_url: Optional[str] = None
+    page_template_html: Optional[str] = None
     # Whether to run competitor SERP analysis when no cached analysis is
     # supplied. Required (no default) — the suite forces an explicit choice
     # per page. When False and no serp_analysis is passed, generation runs
@@ -5127,6 +5178,22 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 f"were NOT available from the website — flag these as content gaps."
             )
 
+        # Phase 3 — page template: mirror a reference page's section structure.
+        template_text = ""
+        if body.page_template_url or body.page_template_html:
+            _outline = await _extract_template_outline(body.page_template_url, body.page_template_html)
+            if _outline:
+                template_text = (
+                    "STRUCTURE TO MIRROR — OVERRIDES THE DEFAULT 13-SECTION STRUCTURE:\n"
+                    "Ignore the default section structure in the system prompt. Instead, match the "
+                    "section layout, order, and heading hierarchy of the reference outline below — "
+                    "adapt all wording to this business, keyword, and city. STILL apply every AEO "
+                    "writing rule (answer-first, FAQ with 4–7 entries, entity triplets, geo signals, "
+                    "section length) and STILL emit the JSON-LD schema block. Reference outline:\n"
+                    f"{_outline}"
+                )
+                logger.info(f"generate-page: mirroring template structure ({_outline.count(chr(10)) + 1} headings)")
+
         await q.put({"step": "progress", "progress": 60, "message": "Building SEO checklist…"})
         seo_checklist = await _build_seo_checklist(
             keyword=body.keyword,
@@ -5163,7 +5230,9 @@ Full location: {body.location}
 {website_text}
 {serp_ctx}
 
-{seo_checklist}"""
+{seo_checklist}
+
+{template_text}"""
 
         await q.put({"step": "progress", "progress": 65, "message": "Generating your page…"})
 
