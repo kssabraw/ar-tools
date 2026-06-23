@@ -60,6 +60,7 @@ class MapsScanResultRow(BaseModel):
     rank_grid: Optional[list] = None  # 1-based rank per pin (null where not ranked)
     heatmap_image_url: Optional[str] = None  # Local Dominator's rendered map heatmap
     dynamic_url: Optional[str] = None        # interactive heatmap page
+    competitors: Optional[list] = None       # per-keyword competitor leaderboard (top ~25)
 
 
 class MapsScanSummary(BaseModel):

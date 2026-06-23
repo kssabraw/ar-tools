@@ -93,6 +93,63 @@ def to_display_grid(content: list[list]) -> list[list]:
     return out
 
 
+def build_competitor_summary(result_element: dict, our_place_id: Optional[str], top_n: int = 25) -> list[dict]:
+    """Roll a Local Dominator `/results` element into a per-keyword competitor
+    leaderboard. `compressed_grid[row][col]` is a rank-ordered list of indices
+    into `detailsArray` (position 0 = ranks 1st at that pin); we tally, per
+    business, how many in-circle pins it appears on overall / in the top 3 / top
+    10, plus its average rank — then drop our own business and return the top_n
+    by local-pack presence. Pins outside the inscribed circle are ignored so the
+    counts line up with the circular heatmap + our other rollups."""
+    details = result_element.get("detailsArray") or []
+    grid = result_element.get("compressed_grid") or []
+    n = max((len(r) for r in grid), default=0)
+    center = (n - 1) / 2
+    radius_sq = (n / 2) ** 2
+
+    stats: dict[int, dict] = {}
+    for ri, row in enumerate(grid):
+        for ci, cell in enumerate(row or []):
+            if (ri - center) ** 2 + (ci - center) ** 2 > radius_sq:
+                continue  # outside the circle — not shown
+            for pos, idx in enumerate(cell or []):
+                if not isinstance(idx, int) or idx < 0 or idx >= len(details):
+                    continue
+                rank = pos + 1  # 0-indexed position → 1-based rank
+                s = stats.setdefault(idx, {"found": 0, "top3": 0, "top10": 0, "rank_sum": 0})
+                s["found"] += 1
+                s["rank_sum"] += rank
+                if rank <= 3:
+                    s["top3"] += 1
+                if rank <= 10:
+                    s["top10"] += 1
+
+    out: list[dict] = []
+    for idx, s in stats.items():
+        biz = details[idx]
+        place_id = biz.get("placeId")
+        if our_place_id and place_id == our_place_id:
+            continue  # exclude the client's own business
+        out.append(
+            {
+                "place_id": place_id,
+                "name": biz.get("name"),
+                "rating": biz.get("rating"),
+                "reviews": biz.get("ratingCount"),
+                "primary_category": biz.get("primaryCategory"),
+                "website": biz.get("websiteURL"),
+                "found_pins": s["found"],
+                "top3_pins": s["top3"],
+                "top10_pins": s["top10"],
+                "avg_rank": round(s["rank_sum"] / s["found"], 2) if s["found"] else None,
+            }
+        )
+    # Headline ordering: most local-pack (top-3) presence first, then top-10,
+    # then overall presence, then best average rank.
+    out.sort(key=lambda c: (-c["top3_pins"], -c["top10_pins"], -c["found_pins"], c["avg_rank"] or 999))
+    return out[:top_n]
+
+
 def build_scan_request(config: dict, keywords: list[str]) -> dict:
     """The POST /v1/scans body for a client's grid config + active keywords."""
     radius = config["radius_miles"]
@@ -145,6 +202,23 @@ async def get_scan_rows(scan_uuid: str) -> tuple[str, Optional[list[dict]]]:
         rows = resp.json()
         return "complete", rows if isinstance(rows, list) else []
     raise RuntimeError(f"local_dominator_get_failed: {resp.status_code} {resp.text[:300]}")
+
+
+async def get_scan_results(scan_uuid: str) -> Optional[list[dict]]:
+    """GET /v1/scans/{uuid}/results — the per-pin businesses (detailsArray +
+    compressed_grid) used for competitor capture. Best-effort: returns None on
+    202 (not ready) or any error, so competitor enrichment never fails a scan."""
+    url = f"{settings.local_dominator_base_url}{_SCANS_PATH}/{scan_uuid}/results"
+    try:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(url, headers=_auth_header())
+    except Exception as exc:
+        logger.warning("maps_results_fetch_error", extra={"scan_uuid": scan_uuid, "error": str(exc)})
+        return None
+    if resp.status_code != 200:
+        return None
+    rows = resp.json()
+    return rows if isinstance(rows, list) else None
 
 
 # ----------------------------------------------------------------------------
@@ -205,12 +279,16 @@ async def start_client_scan(client_id: str, trigger: str = "scheduled") -> dict:
     return {"status": "polling", "scan_uuid": scan_uuid, "keywords": len(keywords)}
 
 
-def _store_results(supabase, scan_row: dict, rows: list[dict]) -> int:
+def _store_results(
+    supabase, scan_row: dict, rows: list[dict],
+    results: Optional[list[dict]] = None, our_place_id: Optional[str] = None,
+) -> int:
     """Parse the Local Dominator Scan rows into maps_scan_results (one per
-    keyword). Returns the number of keyword results stored."""
+    keyword). When the `/results` payload is supplied, also attach the per-pin
+    competitor leaderboard. Returns the number of keyword results stored."""
     stored: set[str] = set()
     inserts: list[dict] = []
-    for r in rows:
+    for i, r in enumerate(rows):
         keyword = r.get("keyword")
         if not keyword or keyword in stored:
             continue  # one result per keyword (default desktop → one row each)
@@ -218,6 +296,10 @@ def _store_results(supabase, scan_row: dict, rows: list[dict]) -> int:
         content = r.get("content") or []
         summary = summarize_grid(content)
         share = r.get("share_links") if isinstance(r.get("share_links"), dict) else {}
+        # `/results` elements align positionally with the scan rows (one per row,
+        # same order), so index i pairs the competitor grid to this keyword.
+        element = results[i] if results and i < len(results) else None
+        competitors = build_competitor_summary(element, our_place_id) if element else None
         inserts.append(
             {
                 "scan_id": scan_row["id"],
@@ -233,6 +315,7 @@ def _store_results(supabase, scan_row: dict, rows: list[dict]) -> int:
                 "rank_grid": to_display_grid(content),  # 1-based, null = not ranked
                 "heatmap_image_url": r.get("view_only_link") or share.get("image_link"),
                 "dynamic_url": share.get("dynamic_url"),
+                "competitors": competitors,
             }
         )
     if inserts:
@@ -269,8 +352,17 @@ async def poll_scan(scan_row: dict) -> str:
                 return "failed"
         return "polling"
 
-    # Complete — store per-keyword results, mark done, stamp the config.
-    n = _store_results(supabase, scan_row, rows or [])
+    # Complete — fetch the per-pin businesses for competitor capture (best-effort),
+    # then store per-keyword results, mark done, and stamp the config.
+    results = await get_scan_results(scan_uuid)
+    our_place_id = None
+    cfg = (
+        supabase.table("maps_scan_configs").select("google_place_id")
+        .eq("client_id", scan_row["client_id"]).limit(1).execute()
+    ).data
+    if cfg:
+        our_place_id = cfg[0].get("google_place_id")
+    n = _store_results(supabase, scan_row, rows or [], results=results, our_place_id=our_place_id)
     supabase.table("maps_scans").update(
         {"status": "complete", "completed_at": "now()"}
     ).eq("id", scan_id).execute()
