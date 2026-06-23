@@ -9,6 +9,7 @@ uses the service-role client; any authenticated user can operate it.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -16,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from models.maps import (
+    MapsClientThreats,
     MapsCompetitorTrend,
     MapsCompetitorTrendPoint,
     MapsCompetitorTrendsResponse,
@@ -28,6 +30,8 @@ from models.maps import (
     MapsScanDetail,
     MapsScanResultRow,
     MapsScanSummary,
+    MapsThreat,
+    MapsThreatsResponse,
     MapsTrendPoint,
     MapsTrendsResponse,
 )
@@ -376,3 +380,41 @@ async def maps_competitor_trends(
         .in_("scan_id", [s["id"] for s in scans]).execute()
     ).data or []
     return build_competitor_trends(scans, results)
+
+
+@router.get("/maps/threats", response_model=MapsThreatsResponse)
+async def maps_dashboard_threats(top_n: int = 3, auth: dict = Depends(require_auth)) -> MapsThreatsResponse:
+    """Top-threat competitors per client for the suite dashboard tiles — the
+    businesses currently outranking each client on the most of their grid. One
+    call covers every client (two bulk queries), grouped + ranked in memory via
+    the same build_competitor_trends used by the per-client view."""
+    supabase = get_supabase()
+    scans = (
+        supabase.table("maps_scans").select("id, client_id, completed_at")
+        .eq("status", "complete").order("completed_at", desc=True).limit(300).execute()
+    ).data or []
+    if not scans:
+        return MapsThreatsResponse()
+    results = (
+        supabase.table("maps_scan_results").select("scan_id, client_id, total_pins, competitors_above")
+        .in_("scan_id", [s["id"] for s in scans]).execute()
+    ).data or []
+
+    scans_by_client: dict = defaultdict(list)
+    results_by_client: dict = defaultdict(list)
+    for s in scans:
+        scans_by_client[s["client_id"]].append(s)
+    for r in results:
+        results_by_client[r["client_id"]].append(r)
+
+    out: list[MapsClientThreats] = []
+    for client_id, client_scans in scans_by_client.items():
+        trends = build_competitor_trends(client_scans, results_by_client.get(client_id, []))
+        threats = [
+            MapsThreat(name=c.name, beats_pct=c.latest_pct, delta_pct=c.delta_pct)
+            for c in trends.competitors[: max(1, top_n)]
+            if c.latest_pct
+        ]
+        if threats:
+            out.append(MapsClientThreats(client_id=client_id, scan_count=trends.scan_count, threats=threats))
+    return MapsThreatsResponse(clients=out)

@@ -632,3 +632,19 @@ export interface MapsCompetitorTrendsResponse {
   scan_count: number
   competitors: MapsCompetitorTrend[]
 }
+
+export interface MapsThreat {
+  name: string | null
+  beats_pct: number | null
+  delta_pct: number | null   // positive = gaining on us
+}
+
+export interface MapsClientThreats {
+  client_id: string
+  scan_count: number
+  threats: MapsThreat[]
+}
+
+export interface MapsThreatsResponse {
+  clients: MapsClientThreats[]
+}
