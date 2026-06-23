@@ -302,7 +302,7 @@ class Settings(BaseSettings):
     sie_coverage_threshold: int = 3            # M8: 3-of-top-10
     sie_tfidf_threshold: float = 0.005         # M9
     sie_semantic_threshold: float = 0.65       # M10 (dynamic 0.60/0.70)
-    sie_textrazor_relevance_min: float = 0.40  # M11 pass-1 salience proxy
+    sie_textrazor_relevance_min: float = 0.15  # M11 pass-1 salience proxy (lenient; LLM pass-2 is the quality backstop)
     sie_min_eligible_pages: int = 5            # below -> degraded-confidence warning
     sie_scrape_max_workers: int = 6
     sie_textrazor_max_workers: int = 2         # TextRazor 401s on a high concurrent fan-out
