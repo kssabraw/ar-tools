@@ -1046,6 +1046,48 @@ def generate_article_core(
     return True
 
 
+def generate_local_seo_page_core(
+    *, session: dict, keyword: str, location: str,
+    location_code: int | None, user_id: str | None,
+) -> bool:
+    """Generate one Local SEO page for a cluster's keyword via the suite's nlp-api
+    generator (`services.local_seo_service.generate_page`) — competitor analysis +
+    Claude generation + 8-engine scoring/auto-reoptimization. The page is persisted as a
+    first-class suite artifact in `local_seo_pages` (NOT `fanout.article_outputs`), so it
+    shows up in the client's Local SEO workspace and is scorable / reoptimizable /
+    publishable like any other. Returns True on success.
+
+    Cross-pipeline reuse (the locked decision): Fanout's backend is mounted inside
+    platform-api, so we import the suite service lazily here (no circular import — the
+    service never imports fanout). The service is async; this runs in the scheduler's
+    worker thread, so we drive it on a fresh event loop."""
+    import asyncio
+
+    client_id = session.get("client_id")
+    if not client_id:
+        logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
+                     "keyword": keyword, "reason": "session has no client_id"})
+        return False
+    if not (location or "").strip():
+        logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
+                     "keyword": keyword, "reason": "no target location"})
+        return False
+    try:
+        from services.local_seo_service import generate_page
+        asyncio.run(generate_page(
+            client_id=client_id, keyword=keyword, location=location,
+            location_code=location_code, user_id=user_id,
+            force_refresh=False, page_template_url=None,
+        ))
+    except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
+        logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
+                     "keyword": keyword, "reason": repr(exc)})
+        return False
+    logger.info("step_complete", extra={"event": "step_complete", "step": "local_seo_page_job",
+                "keyword": keyword, "location": location})
+    return True
+
+
 # ---- Pre-publish ranking check (per client) -------------------------------
 def submit_prepublish_rank_check(session_id: str) -> None:
     """Run the pre-publish ranking check off the request path. Orthogonal to the

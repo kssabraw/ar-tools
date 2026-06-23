@@ -124,6 +124,7 @@ def _process_run(row: dict) -> None:
     """Generate the article for one claimed run, then record the outcome + advance the schedule."""
     from fanout import jobs
     from fanout.storage import silo as store
+    from fanout.writer import schedule_store
 
     run_id = row["id"]
     cluster_id = row["cluster_id"]
@@ -137,13 +138,23 @@ def _process_run(row: dict) -> None:
         if not keyword or not session:
             _finish_run(run_id, "failed", error="cluster has no primary keyword or session missing")
             return
+        # The schedule decides which generator runs (blog post vs Local SEO page).
+        schedule = schedule_store.get_schedule(schedule_id) if schedule_id else None
+        content_type = (schedule or {}).get("content_type", "blog_post")
         location_code = store.session_location_code(session)
         with metered_run(session_id, "article_generation"):
-            ok = jobs.generate_article_core(
-                session_id, cluster_id, keyword, location_code,
-                scheduled_article_run_id=run_id)
+            if content_type == "local_seo_page":
+                ok = jobs.generate_local_seo_page_core(
+                    session=session, keyword=keyword,
+                    location=(schedule or {}).get("location") or "",
+                    location_code=(schedule or {}).get("location_code"),
+                    user_id=row.get("user_id"))
+            else:
+                ok = jobs.generate_article_core(
+                    session_id, cluster_id, keyword, location_code,
+                    scheduled_article_run_id=run_id)
         _finish_run(run_id, "complete" if ok else "failed",
-                    error=None if ok else "article generation failed")
+                    error=None if ok else "content generation failed")
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
         logger.error("scheduled_run_failed",
                      extra={"event": "scheduled_run_failed", "run_id": run_id,

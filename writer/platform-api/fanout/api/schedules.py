@@ -36,6 +36,12 @@ class ScheduleBody(BaseModel):
     time_of_day: time | None = None
     timezone: str = "UTC"
     site_base_url: str | None = None            # persisted to the session (links need it)
+    # Which generator each run uses. 'local_seo_page' requires the session to be
+    # linked to a client (GBP) and a target `location`; it produces suite Local
+    # SEO pages via the nlp-api generator instead of the Fanout blog writer.
+    content_type: str = "blog_post"             # blog_post | local_seo_page
+    location: str | None = None                 # local_seo_page: target area
+    location_code: int | None = None            # local_seo_page: optional DataForSEO city code
 
 
 # ----- helpers --------------------------------------------------------------
@@ -105,15 +111,32 @@ def create_schedule(
     supplied. Skips clusters already queued in another active schedule (double-book guard).
     A VA over the $90 batch threshold is refused with `requires_approval` (owner not gated)."""
     session = _require_session(user, session_id)
+    is_local_seo = body.content_type == "local_seo_page"
 
-    # Base URL must be available (links are absolute), but don't persist it until the whole
-    # request is validated/approved/planned — so a request that 400s leaves no side effect.
-    base_url = (body.site_base_url or "").strip() or session.get("site_base_url")
-    if not base_url:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="A site base URL is required so internal links are absolute. Set it in the modal.",
-        )
+    if is_local_seo:
+        # Local SEO pages are generated against a client's GBP for a target area —
+        # both are required, and there's no internal-link injection so no base URL.
+        if not session.get("client_id"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Local SEO pages need a client. Link this session to a client (with a "
+                       "Google Business Profile) to schedule them.",
+            )
+        if not (body.location or "").strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A target area / location is required for Local SEO pages.",
+            )
+        base_url = None
+    else:
+        # Base URL must be available (links are absolute), but don't persist it until the whole
+        # request is validated/approved/planned — so a request that 400s leaves no side effect.
+        base_url = (body.site_base_url or "").strip() or session.get("site_base_url")
+        if not base_url:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A site base URL is required so internal links are absolute. Set it in the modal.",
+            )
 
     ordered = _ordered_targets(session_id, body.cluster_ids)
     pending = schedule_store.pending_cluster_ids(session_id)
@@ -152,7 +175,8 @@ def create_schedule(
     schedule = schedule_store.create_schedule(
         session_id=session_id, user_id=session["user_id"], mode=body.mode, runs=runs,
         per_day=body.per_day, start_date=body.start_date, time_of_day=body.time_of_day,
-        tz_name=body.timezone,
+        tz_name=body.timezone, content_type=body.content_type,
+        location=(body.location or "").strip() or None, location_code=body.location_code,
     )
     logger.info("schedule_created", extra={"event": "schedule_created", "session_id": session_id,
                                            "mode": body.mode, "runs": len(runs), "skipped": skipped})

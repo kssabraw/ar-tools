@@ -7,6 +7,7 @@ import {
 } from "./api";
 
 type Mode = "all_at_once" | "drip" | "fixed";
+type ContentType = "blog_post" | "local_seo_page";
 
 // M15 — Schedule modal (handoff §9.4). Whole-session ("Schedule all") or a chosen subset
 // (clusterIds). Three modes: all-at-once, drip N/day, or a specific delivery date. Live
@@ -32,6 +33,10 @@ export function ScheduleModal(props: {
   const [timeOfDay, setTimeOfDay] = useState("09:00");
   const [timezone] = useState(browserTz);
   const [baseUrl, setBaseUrl] = useState(props.baseUrl ?? "");
+  const [contentType, setContentType] = useState<ContentType>("blog_post");
+  const [location, setLocation] = useState("");
+
+  const isLocalSeo = contentType === "local_seo_page";
 
   const body: ScheduleRequest = {
     mode,
@@ -40,12 +45,15 @@ export function ScheduleModal(props: {
     start_date: mode === "drip" || mode === "fixed" ? startDate : undefined,
     time_of_day: mode === "drip" || mode === "fixed" ? timeOfDay : undefined,
     timezone,
-    site_base_url: baseUrl.trim() || undefined,
+    content_type: contentType,
+    // Blog posts need a base URL (absolute internal links); Local SEO pages need a target area.
+    site_base_url: isLocalSeo ? undefined : baseUrl.trim() || undefined,
+    location: isLocalSeo ? location.trim() || undefined : undefined,
   };
 
   // Live preview — re-estimates as the inputs change.
   const est = useQuery({
-    queryKey: ["schedule-estimate", sessionId, mode, perDay, startDate, timeOfDay, clusterIds],
+    queryKey: ["schedule-estimate", sessionId, mode, perDay, startDate, timeOfDay, clusterIds, contentType],
     queryFn: () => scheduleEstimate(sessionId, body),
   });
 
@@ -67,33 +75,73 @@ export function ScheduleModal(props: {
     onError: (e: Error) => alert(e.message),
   });
 
-  const needsBaseUrl = !baseUrl.trim();
+  // Blog posts need a base URL; Local SEO pages need a target area instead.
+  const missingRequirement = isLocalSeo ? !location.trim() : !baseUrl.trim();
   const count = est.data?.count ?? 0;
-  const scope = clusterIds ? `${clusterIds.length} selected article(s)` : "the whole session";
+  const noun = isLocalSeo ? "page" : "article";
+  const scope = clusterIds ? `${clusterIds.length} selected ${noun}(s)` : "the whole session";
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
         <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <h2 className="page-title" style={{ margin: 0 }}>Schedule articles</h2>
+          <h2 className="page-title" style={{ margin: 0 }}>Schedule content</h2>
           <button className="link-btn" onClick={onClose}>Close</button>
         </header>
 
         <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-          Scheduling {scope}. Articles are written automatically at their scheduled time.
+          Scheduling {scope}. Content is generated automatically at its scheduled time.
         </p>
 
         <div style={{ display: "grid", gap: 14, marginTop: 8 }}>
-          <label className="field">
-            <span className="field-label">Site base URL</span>
-            <input
-              className="input"
-              placeholder="https://yoursite.com"
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-            />
-            <span className="field-hint">Required — internal links are built as absolute URLs.</span>
-          </label>
+          <div className="field">
+            <span className="field-label">Content type</span>
+            <div className="seg-radios">
+              {([
+                ["blog_post", "Blog post"],
+                ["local_seo_page", "Local SEO page"],
+              ] as [ContentType, string][]).map(([c, label]) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={"seg-radio" + (contentType === c ? " seg-radio-active" : "")}
+                  onClick={() => setContentType(c)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {isLocalSeo && (
+              <span className="field-hint">
+                Generates suite Local SEO pages (competitor analysis + scoring) for each cluster's
+                keyword. Requires this session to be linked to a client with a Google Business Profile.
+              </span>
+            )}
+          </div>
+
+          {isLocalSeo ? (
+            <label className="field">
+              <span className="field-label">Target area / location</span>
+              <input
+                className="input"
+                placeholder="e.g. Round Rock, TX"
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+              />
+              <span className="field-hint">Required — the city/area each Local SEO page targets.</span>
+            </label>
+          ) : (
+            <label className="field">
+              <span className="field-label">Site base URL</span>
+              <input
+                className="input"
+                placeholder="https://yoursite.com"
+                value={baseUrl}
+                onChange={(e) => setBaseUrl(e.target.value)}
+              />
+              <span className="field-hint">Required — internal links are built as absolute URLs.</span>
+            </label>
+          )}
 
           <div className="field">
             <span className="field-label">When</span>
@@ -158,7 +206,7 @@ export function ScheduleModal(props: {
               <span className="form-error">Couldn’t estimate this schedule.</span>
             ) : est.data ? (
               <>
-                <strong>{count}</strong> article{count === 1 ? "" : "s"}
+                <strong>{count}</strong> {noun}{count === 1 ? "" : "s"}
                 {est.data.mode === "drip" && est.data.days ? <> · {est.data.days} days</> : null}
                 {est.data.finish_date ? <> · {est.data.mode === "fixed" ? "writes" : "finishes"} {est.data.finish_date}</> : null}
                 {mode !== "all_at_once" ? <> · {timeOfDay} {timezone}</> : null}
@@ -182,11 +230,15 @@ export function ScheduleModal(props: {
             <button
               className="btn btn-primary"
               style={{ width: "auto" }}
-              disabled={create.isPending || needsBaseUrl || count === 0}
-              title={needsBaseUrl ? "Enter a site base URL first" : count === 0 ? "Nothing to schedule" : ""}
+              disabled={create.isPending || missingRequirement || count === 0}
+              title={
+                missingRequirement
+                  ? isLocalSeo ? "Enter a target area first" : "Enter a site base URL first"
+                  : count === 0 ? "Nothing to schedule" : ""
+              }
               onClick={() => create.mutate()}
             >
-              {create.isPending ? "Scheduling…" : `Schedule ${count} article${count === 1 ? "" : "s"}`}
+              {create.isPending ? "Scheduling…" : `Schedule ${count} ${noun}${count === 1 ? "" : "s"}`}
             </button>
           </div>
         </div>

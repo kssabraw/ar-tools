@@ -999,6 +999,11 @@ export interface ScheduleRequest {
   time_of_day?: string;            // HH:MM
   timezone?: string;
   site_base_url?: string;
+  // 'local_seo_page' produces suite Local SEO pages (needs a client-linked
+  // session + a target location); omit -> 'blog_post' (the Fanout writer).
+  content_type?: "blog_post" | "local_seo_page";
+  location?: string;
+  location_code?: number;
 }
 export interface ScheduleEstimate {
   count: number;
