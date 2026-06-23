@@ -512,6 +512,19 @@ export interface MapsKeyword {
   active: boolean
 }
 
+export interface MapsCompetitor {
+  place_id: string | null
+  name: string | null
+  rating: number | null
+  reviews: number | null
+  primary_category: string | null
+  website: string | null
+  found_pins: number
+  top3_pins: number
+  top10_pins: number
+  avg_rank: number | null
+}
+
 export interface MapsScanResultRow {
   keyword: string
   average_rank: number | null
@@ -522,6 +535,7 @@ export interface MapsScanResultRow {
   rank_grid: Array<Array<number | null>> | null
   heatmap_image_url: string | null
   dynamic_url: string | null
+  competitors: MapsCompetitor[] | null
 }
 
 export interface MapsScanSummary {
