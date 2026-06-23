@@ -168,12 +168,17 @@ def enqueue_due_reports() -> int:
 
 
 async def gsc_scheduler() -> None:
-    """Background loop: daily GSC ingest enqueue + weekly DataForSEO rank enqueue."""
+    """Background loop: daily GSC ingest enqueue + weekly DataForSEO rank enqueue
+    + weekly Maps geo-grid scans, and a per-tick poll of in-flight Maps scans."""
+    from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
+
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
     weekday = settings.dataforseo_rank_weekday
+    maps_weekday = settings.maps_scan_weekday
     last_run_date: Optional[date] = None
     last_df_date: Optional[date] = None
+    last_maps_date: Optional[date] = None
     logger.info("gsc_scheduler.started", extra={"poll_interval_s": interval, "hour_utc": hour})
     while True:
         await asyncio.sleep(interval)
@@ -191,5 +196,11 @@ async def gsc_scheduler() -> None:
                 enqueue_due_page_ingest()
                 enqueue_due_serp_snapshots()
                 last_df_date = now.date()
+            # Weekly Maps geo-grid scans (Module #5) on their own weekday.
+            if now.weekday() == maps_weekday and should_run(now, last_maps_date, hour):
+                enqueue_due_maps_scans()
+                last_maps_date = now.date()
+            # Advance any in-flight Maps scans every tick (non-blocking GETs).
+            await poll_pending_maps_scans()
         except Exception as exc:
             logger.error("gsc_scheduler.unhandled", extra={"error": str(exc)})

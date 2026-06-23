@@ -27,7 +27,7 @@ Most of the original Blog Writer build is **done**. Don't treat this repo as gre
 
 - **Local SEO content** module (#2). **Phases 0–1 done:** the NLP service is rehomed into the suite (`writer/nlp-api/`, deployed private on Railway) and platform-api has the backend (`local_seo_pages` table, generate/list/get routes). **Phase 2 (frontend) and Phase 3 (page-template field) remain.** The raw import still lives at `/local-seo-writer` as the reference copy. Scope/decisions and phasing are in **`docs/modules/local-seo-module-integration-plan-v1_0.md`** (chosen path: C — full port; cut from v1: client-site brand-voice/ICP scraping, the keyword-worthiness "rankability" check, and billing; competitor SERP analysis **always runs first** — originally a per-page opt-in via a `run_analysis` flag, but that opt-out was removed; the flag now defaults to True in nlp-api, and platform-api only sets it False as a degraded fallback when its own analysis attempt fails).
 
-**Not yet built (suite roadmap, in rough order):** Keyword research (migrate from existing repo), Maps / local-pack ranker, Ranking-drop agent, VA content scheduler, the **SOP store**, and the **notifications service**. The roadmap doc has the full module table, groupings, and locked decisions. (Organic Rank Tracker #4 is built except alerting — see above; the **shared scheduler** is decided + built as the asyncio loop in `services/gsc_scheduler.py`; the **GSC analytics layer** is realized by the rank tracker's GSC ingest. Local SEO content #2 is mid-integration — see above.)
+**Not yet built (suite roadmap, in rough order):** Keyword research (migrate from existing repo), Ranking-drop agent, VA content scheduler, the **SOP store**, and the **notifications service**. (Maps / local-pack geo-grid ranker #5 is **built** — Local Dominator, `services/local_dominator.py` + `services/maps_grid.py` + `routers/maps.py` + `pages/MapsGeogrid.tsx`; pending a live smoke-test.) The roadmap doc has the full module table, groupings, and locked decisions. (Organic Rank Tracker #4 is built except alerting — see above; the **shared scheduler** is decided + built as the asyncio loop in `services/gsc_scheduler.py`; the **GSC analytics layer** is realized by the rank tracker's GSC ingest. Local SEO content #2 is mid-integration — see above.)
 
 ## The reference documents
 
@@ -63,7 +63,7 @@ When docs conflict: the engineering spec wins for "how to build it," the product
 | State management | TanStack Query (no Redux/Zustand) | Engineering spec §10.5 |
 | LLM provider | **Anthropic Claude** for module content generation | User decision |
 | Embeddings | OpenAI `text-embedding-3-small` for SIE only | User decision |
-| Rank / SERP data | **DataForSEO** for organic SERP and maps/local-pack; **Outscraper** for GBP search/details; DataForSEO for GBP review enrichment | Suite roadmap decision log |
+| Rank / SERP data | **DataForSEO** for organic SERP; **Local Dominator** for Maps/local-pack **geo-grid** (Module #5 — supersedes DataForSEO geo-grid, user decision 2026-06-23); **Outscraper** for GBP search/details; DataForSEO for GBP review enrichment | Suite roadmap decision log |
 | GSC analytics | Google Search Console via **service account** (no interactive OAuth) | Suite roadmap decision log |
 | Publish destination | Google Doc in client's Drive folder via Apps Script webhook (CMS-ready later) | Suite roadmap decision log |
 | Hosting | Railway with **three** services + private networking (`PLATFORM`, `pipeline`, `nlp`) | Engineering spec §2 |

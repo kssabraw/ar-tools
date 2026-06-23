@@ -70,6 +70,15 @@ class Settings(BaseSettings):
     dataforseo_login: str = ""
     dataforseo_password: str = ""
 
+    # Maps / local-pack geo-grid ranker (Module #5) — Local Dominator API.
+    local_dominator_api_key: str = ""
+    local_dominator_base_url: str = "https://api.localdominator.co"
+    # Weekly geo-grid scans fire on this weekday (0=Mon..6=Sun) via the shared
+    # scheduler; the scheduler also polls in-flight scans each tick until done.
+    maps_scan_weekday: int = 1
+    # How long (minutes) to keep polling a scan before marking it failed.
+    maps_scan_poll_timeout_minutes: int = 30
+
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
     # location). Set to 0 to disable caching.

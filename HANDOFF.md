@@ -1,6 +1,55 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-23 · **Rank-drop alerting (in-app)** (latest)
+## ⏩ Update — 2026-06-23 · **Module #5 — Maps geo-grid ranker (Local Dominator)** (latest)
+
+**Module #5 is built** (backend + frontend) on branch `claude/maps-geogrid`, **draft
+PR #59**; migration applied to `wvcthtmmcmhkybcesirb`; **awaiting merge confirm** and
+a **live smoke-test** (Local Dominator calls only run on Railway, never from the
+sandbox — so the API path is unproven until a real scan).
+
+**Vendor change (logged):** Maps/local-pack geo-grid uses **Local Dominator**, not
+DataForSEO — this **supersedes** the suite roadmap's locked "DataForSEO geo-grid /
+no new SERP vendor" decision for #5 (user direction). Roadmap decision log + data
+sources updated. `LOCAL_DOMINATOR_API_KEY` is set on the **PLATFORM** Railway service.
+
+**The model.** Per client: a **3/5/7-mile radius, 1-mile pin spacing** grid around
+the business → `grid_size` 7/11/15 (49/121/225 pins; the API caps `grid_size` at
+**21**, which the 1-mile spacing respects). Tracked keywords are scanned across the
+whole grid. **Async, decoupled from the worker:** a `maps_scan` job `POST`s
+`/v1/scans` (returns `scan_uuid`, status `polling`); the **shared scheduler polls**
+`GET /v1/scans/{uuid}` each tick (202=running, 200=done) and parses each keyword's
+`content` (per-pin rank grid, `null`=not in top 20) + `average_rank` into results.
+Weekly on `maps_scan_weekday` + an on-demand **"Run scan now"**.
+
+**Code.** `services/local_dominator.py` (auth + `create_scan`/`get_scan_rows`; pure
+`summarize_grid`/`build_scan_request`; create job + `poll_pending_maps_scans` +
+`enqueue_due_maps_scans`) and `services/maps_grid.py` (pure radius→grid geometry).
+Wired into `job_worker` (`maps_scan`) and `gsc_scheduler` (weekly enqueue + per-tick
+poll). `routers/maps.py` + `models/maps.py`: config GET/PUT, keywords GET/POST/DELETE,
+run-now, scans list/detail/latest. Frontend: a **separate workspace module**
+(`pages/MapsGeogrid.tsx`, route `/clients/:id/maps`, workspace card activated) —
+Heatmap (dependency-free colored rank grid + rollups), Setup (grid config + keywords),
+History. Business id/center prefill from the client's `gbp_place_id` + `gbp` lat/lng.
+
+**Migration (applied; filename = recorded version):** `…005340_maps_geogrid` —
+`maps_scan_configs` / `maps_keywords` / `maps_scans` / `maps_scan_results` (+
+`async_jobs` `maps_scan`). RLS on, no client-facing policies.
+
+**Verification.** `import main` + full suite **243 passed** on pinned
+`fastapi==0.115.0` / `pydantic==2.9.2`; frontend `npm run build` clean. Pure helpers
+unit-tested (grid geometry, `summarize_grid`, `build_scan_request`). **Not yet live**
+against Local Dominator.
+
+**Open follow-ups.** Live smoke-test (config a client with Place ID + lat/lng, add a
+keyword, Run now, confirm the heatmap). Defaults chosen: `resource_category`
+`googleMaps` (Local Finder selectable), `serp_device` `desktop` (so `both`'s
+desktop+mobile rows aren't disambiguated — first row per keyword wins). The
+**rank-of-record `RANK_UNIVERSE=20`** sentinel + the `average_rank` semantics
+("0 means first" per the spec) should be sanity-checked on the first real scan.
+
+---
+
+## ⏩ Update — 2026-06-23 · **Rank-drop alerting (in-app)**
 
 The Organic Rank Tracker's **alerting** — M4's last open piece — is built. **In-app
 only** (the channel decision the user made); email stays deferred to the

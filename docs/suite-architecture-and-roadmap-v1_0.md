@@ -20,7 +20,7 @@ Not customer-facing. No billing, no signup. Internal team only. (Unchanged from 
 | 2 | Local SEO content | On-demand content | Imported (`/local-seo-writer`) — integration deferred, see Appendix A | Google NLP + competitor SERP + Claude |
 | 3 | Keyword research | On-demand research | Migrate from existing repo | Existing tool + **GSC** opportunity data |
 | 4 | Organic rank tracker | Scheduled time-series | Build on shared spine | **DataForSEO** (rank-of-record) + GSC context |
-| 5 | Maps / local-pack ranker | Scheduled time-series + geo | Build on shared spine | **DataForSEO** geo-grid |
+| 5 | Maps / local-pack ranker | Scheduled time-series + geo | **Built** (2026-06-23) | **Local Dominator** geo-grid (supersedes the DataForSEO-geo-grid plan — user decision) |
 | 6 | Ranking-drop agent | Intelligence over #4 + #5 | Build | Position **+ GSC clicks/impressions** |
 | 7 | Content scheduler (VA) | Workflow / automation | Build | Orchestrates #1 & #2 |
 
@@ -38,9 +38,9 @@ These were decided with the user during scoping on 2026-05-29. Do not reverse wi
 
 | Topic | Decision |
 |---|---|
-| **Organic rank source** | **Hybrid.** DataForSEO is the authoritative daily organic position (precise; covers target + competitor + not-yet-ranking keywords) and is the **only** source for maps/local-pack. GSC supplies clicks/impressions/CTR/average-position for analytics + keyword discovery, shown as *context* next to the DataForSEO rank. |
+| **Organic rank source** | **Hybrid.** DataForSEO is the authoritative daily organic position (precise; covers target + competitor + not-yet-ranking keywords). GSC supplies clicks/impressions/CTR/average-position for analytics + keyword discovery, shown as *context* next to the DataForSEO rank. *(Maps/local-pack is a separate provider — see below.)* |
 | **GSC connection** | **Service account.** A Google Cloud service-account key in env (no interactive OAuth/token refresh). Per-client onboarding step: add the service account's email as a user on that client's Search Console property, and store the property/site URL on the `clients` row. |
-| **Rank data provider** | **DataForSEO** for both organic SERP and maps/local-pack (already wired into the Blog Writer). No new SERP vendor. |
+| **Rank data provider** | **DataForSEO** for organic SERP (already wired into the Blog Writer). **Maps/local-pack geo-grid (#5) uses Local Dominator** — `LOCAL_DOMINATOR_API_KEY` on PLATFORM; async `POST /v1/scans` → poll `GET /v1/scans/{uuid}`; per-pin Maps rank grid. This supersedes the original "DataForSEO geo-grid, no new SERP vendor" line for Module #5 (user decision, 2026-06-23). |
 | **Ranking-drop agent knowledge** | Build an **SOP store** (Supabase table + in-dashboard Markdown editor) the agent reasons over. SOPs are editable by the team without code changes. |
 | **Alerting** | **In-app alerts feed** (badges on client tiles) **+ email/Slack** push on a flagged drop. Adds a small outbound notification service. |
 | **Content scheduler trigger** | **Generate + publish, no human approval gate.** On the target date the system generates the content and publishes it automatically. |
@@ -49,7 +49,8 @@ These were decided with the user during scoping on 2026-05-29. Do not reverse wi
 
 ## 4. Data sources
 
-- **DataForSEO** — organic positions, maps/local-pack, geo-grid. (Already integrated.)
+- **DataForSEO** — organic positions, SERP, GBP review enrichment. (Already integrated.)
+- **Local Dominator** — Maps/local-pack **geo-grid** scans (Module #5). Async scan API; per-pin Maps rank around the business.
 - **Google Search Console** (service account) — clicks, impressions, CTR, average position; keyword/opportunity discovery.
 - **Anthropic Claude** — content generation (per existing module PRDs) + drop-agent recommendations.
 - **OpenAI `text-embedding-3-small`** — SIE only (unchanged).
