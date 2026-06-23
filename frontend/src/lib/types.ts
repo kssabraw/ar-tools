@@ -520,6 +520,8 @@ export interface MapsScanResultRow {
   top3_pins: number
   top10_pins: number
   rank_grid: Array<Array<number | null>> | null
+  heatmap_image_url: string | null
+  dynamic_url: string | null
 }
 
 export interface MapsScanSummary {

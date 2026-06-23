@@ -57,7 +57,9 @@ class MapsScanResultRow(BaseModel):
     total_pins: int = 0
     top3_pins: int = 0
     top10_pins: int = 0
-    rank_grid: Optional[list] = None  # 2-D array of our rank per pin (null where absent)
+    rank_grid: Optional[list] = None  # 1-based rank per pin (null where not ranked)
+    heatmap_image_url: Optional[str] = None  # Local Dominator's rendered map heatmap
+    dynamic_url: Optional[str] = None        # interactive heatmap page
 
 
 class MapsScanSummary(BaseModel):

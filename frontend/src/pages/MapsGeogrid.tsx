@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Map, Play, Trash2, MapPin } from 'lucide-react'
 import { api } from '../lib/api'
 import type {
-  Client, MapsConfig, MapsKeyword, MapsRadius, MapsRunResponse, MapsScanDetail, MapsScanSummary,
+  Client, MapsConfig, MapsKeyword, MapsRadius, MapsRunResponse, MapsScanDetail,
+  MapsScanResultRow, MapsScanSummary,
 } from '../lib/types'
 import { backLink, card, errorBox, outlineBtn, primaryBtn, relativeTime } from '../components/localseo/shared'
 
@@ -98,23 +99,19 @@ function Heatmap({ clientId, inFlight }: { clientId: string; inFlight: boolean }
   if (isLoading) return <p style={muted}>Loading…</p>
   if (error || !latest) {
     return (
-      <div style={card}>
-        {inFlight ? (
-          <div style={{ ...okBox, display: 'flex', alignItems: 'center', gap: 10, color: '#92400e', background: '#fef3c7', marginBottom: 12 }}>
-            <span className="ld-pulse" style={{ width: 9, height: 9, borderRadius: 999, background: '#d97706', flexShrink: 0 }} />
-            <span><strong>Scan in progress.</strong> This can take a few minutes — the heatmap will appear here automatically when it finishes. You can leave this page.</span>
+      <div>
+        {inFlight ? <InProgressBanner /> : (
+          <div style={card}>
+            <p style={{ ...muted, marginTop: 0 }}>
+              No completed scans yet. Set the business location &amp; keywords in <strong>Setup</strong>, then run a scan.
+            </p>
+            {runMut.error && <div style={errorBox}>{(runMut.error as Error).message}</div>}
+            {runMut.data?.status === 'failed' && (
+              <div style={{ ...errorBox, marginTop: 10 }}>Couldn’t start: {runMut.data.error}. Check Setup is complete (Place ID, center lat/lng, and at least one keyword).</div>
+            )}
+            {runButton}
           </div>
-        ) : (
-          <p style={{ ...muted, marginTop: 0 }}>
-            No completed scans yet. Set the business location &amp; keywords in <strong>Setup</strong>, then run a scan.
-          </p>
         )}
-        {runMut.error && <div style={errorBox}>{(runMut.error as Error).message}</div>}
-        {runMut.data?.status === 'failed' && (
-          <div style={{ ...errorBox, marginTop: 10 }}>Couldn’t start: {runMut.data.error}. Check Setup is complete (Place ID, center lat/lng, and at least one keyword).</div>
-        )}
-        {!inFlight && runButton}
-        <style>{'@keyframes ld-pulse{0%,100%{opacity:1}50%{opacity:.3}}.ld-pulse{animation:ld-pulse 1.2s ease-in-out infinite}'}</style>
       </div>
     )
   }
@@ -127,7 +124,7 @@ function Heatmap({ clientId, inFlight }: { clientId: string; inFlight: boolean }
         </div>
         {runButton}
       </div>
-      {runMut.data?.status === 'enqueued' && <div style={{ ...okBox, marginBottom: 12 }}>New scan started — results will appear here when it finishes.</div>}
+      {inFlight && <InProgressBanner />}
 
       {latest.results.length === 0 ? (
         <div style={card}><p style={muted}>This scan returned no keyword results.</p></div>
@@ -142,7 +139,7 @@ function Heatmap({ clientId, inFlight }: { clientId: string; inFlight: boolean }
                 <span><strong>Found</strong> {r.found_pins}/{r.total_pins} pins</span>
               </div>
             </div>
-            <div style={{ marginTop: 12 }}><Grid grid={r.rank_grid} /></div>
+            <ResultView r={r} />
           </div>
         ))
       )}
@@ -151,20 +148,60 @@ function Heatmap({ clientId, inFlight }: { clientId: string; inFlight: boolean }
   )
 }
 
+// One keyword's result: Local Dominator's rendered map heatmap (pins on Google
+// Maps) when available, with the numeric rank grid as a secondary view.
+function ResultView({ r }: { r: MapsScanResultRow }) {
+  if (r.heatmap_image_url) {
+    return (
+      <div style={{ marginTop: 12 }}>
+        <img src={r.heatmap_image_url} alt={`Geo-grid heatmap for ${r.keyword}`}
+          style={{ width: '100%', maxWidth: 460, borderRadius: 8, border: '1px solid #e2e8f0', display: 'block' }} />
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 8 }}>
+          {r.dynamic_url && (
+            <a href={r.dynamic_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', textDecoration: 'none' }}>
+              Open interactive map ↗
+            </a>
+          )}
+          <details>
+            <summary style={{ fontSize: 12, color: '#64748b', cursor: 'pointer' }}>Show rank grid</summary>
+            <div style={{ marginTop: 10 }}><Grid grid={r.rank_grid} /></div>
+          </details>
+        </div>
+      </div>
+    )
+  }
+  return <div style={{ marginTop: 12 }}><Grid grid={r.rank_grid} /></div>
+}
+
+function InProgressBanner() {
+  return (
+    <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 14, background: '#fffbeb', border: '1px solid #fde68a', marginBottom: 16 }}>
+      <span className="ld-spin" style={{ width: 22, height: 22, borderRadius: 999, border: '3px solid #fcd34d', borderTopColor: '#d97706', flexShrink: 0 }} />
+      <div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#92400e' }}>Scan in progress…</div>
+        <div style={{ fontSize: 13, color: '#b45309' }}>
+          Scanning the grid across Google Maps — this takes a few minutes. The heatmap appears here automatically when it’s done; you can leave this page.
+        </div>
+      </div>
+      <style>{'@keyframes ld-spin{to{transform:rotate(360deg)}}.ld-spin{animation:ld-spin .9s linear infinite}'}</style>
+    </div>
+  )
+}
+
 function Grid({ grid }: { grid: Array<Array<number | null>> | null }) {
   if (!grid || grid.length === 0) return <p style={muted}>No grid data.</p>
   const cols = Math.max(...grid.map(r => r.length))
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 3, maxWidth: cols * 30 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 2, maxWidth: cols * 22 }}>
       {grid.flatMap((row, ri) =>
         row.map((cell, ci) => {
-          // Not-ranked pins come back non-positive (-1, 0, or null).
+          // Grid is 1-based; not-ranked pins are null.
           const ranked = typeof cell === 'number' && cell >= 1
           return (
             <div key={`${ri}-${ci}`} title={ranked ? `Rank ${cell}` : 'Not ranked here'}
               style={{
                 aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                borderRadius: 4, fontSize: 11, fontWeight: 700,
+                borderRadius: 3, fontSize: 9, fontWeight: 700,
                 background: rankColor(cell), color: ranked ? '#fff' : '#9ca3af',
               }}>
               {ranked ? cell : '·'}
@@ -374,4 +411,3 @@ const sectionTitle: React.CSSProperties = { fontSize: 13, fontWeight: 700, color
 const muted: React.CSSProperties = { fontSize: 13, color: '#94a3b8' }
 const input: React.CSSProperties = { fontSize: 14, padding: '8px 10px', borderRadius: 6, border: '1px solid #cbd5e1', width: '100%', boxSizing: 'border-box' }
 const scanningPill: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#92400e', background: '#fef3c7', borderRadius: 999, padding: '3px 10px' }
-const okBox: React.CSSProperties = { fontSize: 13, color: '#166534', background: '#dcfce7', borderRadius: 6, padding: '8px 12px' }
