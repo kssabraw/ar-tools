@@ -2,9 +2,24 @@ import { ArrowRight, ExternalLink } from 'lucide-react'
 import type { RelatedPageItem } from './types'
 import { outlineBtn, scoreColor } from './shared'
 
-const GROUPS: Array<RelatedPageItem['group']> = ['parents', 'siblings', 'children']
-const GROUP_LABEL: Record<RelatedPageItem['group'], string> = {
+// Known relationship groups from the /related-pages flow — rendered first and
+// in this order, with friendly labels. The Plan Silo flow passes free-form silo
+// labels, which render after these (in first-seen order) using the label as-is.
+const KNOWN_ORDER = ['parents', 'siblings', 'children']
+const GROUP_LABEL: Record<string, string> = {
   parents: 'Parent Pages', siblings: 'Sibling Pages', children: 'Child Pages',
+}
+
+// Distinct groups present in `items`, known relationship groups first (in their
+// canonical order), then any silo labels in the order they first appear.
+function orderedGroups(items: RelatedPageItem[]): string[] {
+  const seen = new Set(items.map(i => i.group))
+  const known = KNOWN_ORDER.filter(g => seen.has(g))
+  const rest: string[] = []
+  for (const i of items) {
+    if (!KNOWN_ORDER.includes(i.group) && !rest.includes(i.group)) rest.push(i.group)
+  }
+  return [...known, ...rest]
 }
 
 interface SelectionMode {
@@ -27,12 +42,12 @@ interface Props {
 export function RelatedPagesList({ items, onAction, selection }: Props) {
   return (
     <>
-      {GROUPS.map(group => {
+      {orderedGroups(items).map(group => {
         const groupItems = items.filter(i => i.group === group)
         if (!groupItems.length) return null
         return (
           <div key={group} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <h3 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94a3b8', margin: 0 }}>{GROUP_LABEL[group]}</h3>
+            <h3 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em', color: '#94a3b8', margin: 0 }}>{GROUP_LABEL[group] ?? group}</h3>
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
               {groupItems.map((item, idx) => (
                 <div key={item.keyword} style={{ padding: '12px 16px', background: '#fff', borderTop: idx ? '1px solid #f1f5f9' : 'none' }}>

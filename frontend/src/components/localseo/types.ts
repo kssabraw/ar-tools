@@ -76,7 +76,10 @@ export interface FindPageResult {
 
 export interface RelatedPageItem {
   keyword: string
-  group: 'parents' | 'siblings' | 'children'
+  // The /related-pages flow uses 'parents'|'siblings'|'children'; the
+  // Fanout-powered Plan Silo flow uses free-form silo labels — so this is a
+  // string, with the known relationship groups still rendered/ordered first.
+  group: string
   status: 'found' | 'missing'
   url?: string | null
   page_title?: string | null
@@ -88,6 +91,19 @@ export interface RelatedPageItem {
 export interface RelatedPagesResult {
   items: RelatedPageItem[]
   token_usage: Record<string, unknown>
+}
+
+// Plan Silo (Fanout-powered) — kicked off async; the client polls for the result.
+export interface SiloPlanJob {
+  job_id: string
+  status: string
+}
+
+export interface SiloPlanResult {
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  items: RelatedPageItem[]
+  degraded_notes: string[]
+  error?: string | null
 }
 
 export interface SocialPostsResult {
