@@ -175,6 +175,14 @@ async def poll_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> dic
     return {"polled": advanced}
 
 
+@router.post("/clients/{client_id}/maps/scan/cancel")
+async def cancel_client_scan(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Stop the client's in-flight scan and drop any queued (not-yet-started) one.
+    Drives the Heatmap "Stop scan" control, covering both a running scan and a
+    scan that's still sitting in the job queue."""
+    return local_dominator.cancel_client_scans(str(client_id))
+
+
 @router.get("/clients/{client_id}/maps/scans", response_model=list[MapsScanSummary])
 async def list_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> list[MapsScanSummary]:
     rows = (
@@ -183,6 +191,39 @@ async def list_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> lis
         .eq("client_id", str(client_id)).order("created_at", desc=True).limit(50).execute()
     ).data or []
     return [MapsScanSummary(**r) for r in rows]
+
+
+@router.delete("/clients/{client_id}/maps/scans")
+async def clear_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Clear the client's scan history. Deletes every terminal scan (and its
+    per-keyword results, via cascade); in-flight scans are left untouched —
+    stop them first if you want them gone."""
+    res = (
+        get_supabase().table("maps_scans").delete()
+        .eq("client_id", str(client_id))
+        .in_("status", ["complete", "failed", "cancelled"]).execute()
+    )
+    return {"deleted": len(res.data or [])}
+
+
+@router.post("/maps-scans/{scan_id}/cancel")
+async def cancel_scan(scan_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Cancel a single in-flight scan (the History list's Stop control)."""
+    return local_dominator.cancel_scan(str(scan_id))
+
+
+@router.delete("/maps-scans/{scan_id}")
+async def delete_scan(scan_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Hard-delete one scan and its results. Blocked while the scan is in flight
+    (cancel it first) so a running scan can't be silently orphaned."""
+    supabase = get_supabase()
+    found = supabase.table("maps_scans").select("status").eq("id", str(scan_id)).limit(1).execute().data
+    if not found:
+        raise HTTPException(status_code=404, detail="not_found")
+    if found[0]["status"] in ("pending", "polling"):
+        raise HTTPException(status_code=409, detail="scan_in_flight")
+    supabase.table("maps_scans").delete().eq("id", str(scan_id)).execute()
+    return {"deleted": True}
 
 
 def _scan_detail(scan_id: str) -> MapsScanDetail:

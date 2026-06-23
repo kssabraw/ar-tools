@@ -592,7 +592,7 @@ export interface MapsOctantPins {
 export interface MapsScanSummary {
   id: string
   scan_uuid: string | null
-  status: 'pending' | 'polling' | 'complete' | 'failed'
+  status: 'pending' | 'polling' | 'complete' | 'failed' | 'cancelled'
   trigger: 'scheduled' | 'manual'
   radius_miles: number | null
   grid_size: number | null
