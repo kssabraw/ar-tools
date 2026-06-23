@@ -525,6 +525,24 @@ export interface MapsCompetitor {
   avg_rank: number | null
 }
 
+export interface MapsCompetitorDirEntry {
+  name: string | null
+  rating: number | null
+  reviews: number | null
+  primary_category: string | null
+  website: string | null
+  lat: number | null
+  lng: number | null
+}
+
+// Per-pin businesses ranking ABOVE the client. grid[row][col] is a list of
+// [place_id, rank] for the pin (rank-ordered, above us only), or null when the
+// pin is outside the scan circle. directory holds each business's details once.
+export interface MapsCompetitorsAbove {
+  directory: Record<string, MapsCompetitorDirEntry>
+  grid: Array<Array<Array<[string, number]> | null>>
+}
+
 export interface MapsScanResultRow {
   keyword: string
   average_rank: number | null
@@ -536,6 +554,7 @@ export interface MapsScanResultRow {
   heatmap_image_url: string | null
   dynamic_url: string | null
   competitors: MapsCompetitor[] | null
+  competitors_above: MapsCompetitorsAbove | null
 }
 
 export interface MapsScanSummary {

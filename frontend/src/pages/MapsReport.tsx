@@ -42,27 +42,35 @@ export function MapsReport() {
   const ranks = results.map(r => r.average_rank).filter((v): v is number => v != null)
   const avgRank = ranks.length ? ranks.reduce((a, b) => a + b, 0) / ranks.length : null
 
-  // Aggregate competitors across the scan's keywords → "who outranks us, and
-  // where". Share of Local Voice = % of all pin·keyword slots a business holds a
-  // local-pack (top-3) spot on.
-  const totalSlots = results.reduce((s, r) => s + r.total_pins, 0)
-  const slotPct = (n: number) => (totalSlots ? Math.round((n / totalSlots) * 100) : 0)
-  const compAgg = new Map<string, { name: string | null; rating: number | null; reviews: number | null; top3: number; top10: number; found: number; rankSum: number; rankN: number }>()
+  // Who outranks the client, and how often: tally — across every keyword's
+  // per-pin "above us" list — the in-circle pins where each business beats us.
+  const dir: Record<string, { name: string | null; rating: number | null; reviews: number | null }> = {}
+  const beat = new Map<string, { pins: number; rankSum: number }>()
+  let totalSlots = 0
   for (const r of results) {
-    for (const c of r.competitors ?? []) {
-      const key = c.place_id || c.name || ''
-      if (!key) continue
-      const e = compAgg.get(key) || { name: c.name, rating: c.rating, reviews: c.reviews, top3: 0, top10: 0, found: 0, rankSum: 0, rankN: 0 }
-      e.top3 += c.top3_pins; e.top10 += c.top10_pins; e.found += c.found_pins
-      if (c.avg_rank != null) { e.rankSum += c.avg_rank * c.found_pins; e.rankN += c.found_pins }
-      compAgg.set(key, e)
+    const ca = r.competitors_above
+    if (!ca) continue
+    Object.assign(dir, ca.directory)
+    for (const row of ca.grid) {
+      for (const cell of row) {
+        if (cell == null) continue   // out-of-circle pin
+        totalSlots += 1
+        for (const [pid, rank] of cell) {
+          const e = beat.get(pid) || { pins: 0, rankSum: 0 }
+          e.pins += 1; e.rankSum += rank
+          beat.set(pid, e)
+        }
+      }
     }
   }
-  const topCompetitors = [...compAgg.values()]
-    .sort((a, b) => b.top3 - a.top3 || b.top10 - a.top10 || b.found - a.found)
+  const slotPct = (n: number) => (totalSlots ? Math.round((n / totalSlots) * 100) : 0)
+  const topCompetitors = [...beat.entries()]
+    .map(([pid, e]) => ({
+      pid, name: dir[pid]?.name ?? null, rating: dir[pid]?.rating ?? null, reviews: dir[pid]?.reviews ?? null,
+      pins: e.pins, avgRank: e.pins ? e.rankSum / e.pins : null,
+    }))
+    .sort((a, b) => b.pins - a.pins)
     .slice(0, 10)
-  const ourTop3 = results.reduce((s, r) => s + r.top3_pins, 0)
-  const ourTop10 = results.reduce((s, r) => s + r.top10_pins, 0)
 
   const hasTrend = (trends?.keywords ?? []).some(k => k.points.length > 1)
   const source = latest?.resource_category === 'googleLocalFinder' ? 'Local Finder' : 'Google Maps'
@@ -128,35 +136,28 @@ export function MapsReport() {
             </div>
           )}
 
-          {/* Top competitors (share of local voice) */}
+          {/* Competitors outranking the client */}
           {topCompetitors.length > 0 && (
             <div className="avoid-break" style={{ marginBottom: 22 }}>
-              <SectionTitle>Top competitors · share of local voice</SectionTitle>
+              <SectionTitle>Competitors outranking you</SectionTitle>
               <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 8px' }}>
-                Share of Local Voice = % of all tracked pins where a business holds a local-pack (top-3) spot, across {results.length} keyword{results.length === 1 ? '' : 's'}.
+                Businesses ranking above {client?.name ?? 'the client'} on the grid — “Beats you on” is the % of tracked pins where they outrank you, across {results.length} keyword{results.length === 1 ? '' : 's'}.
               </p>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr>
                     <CompTh left>Business</CompTh><CompTh>Rating</CompTh>
-                    <CompTh>SoLV (top 3)</CompTh><CompTh>Top 10</CompTh><CompTh>Avg rank</CompTh>
+                    <CompTh>Beats you on</CompTh><CompTh>Pins</CompTh><CompTh>Avg rank</CompTh>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr style={{ background: '#eef2ff' }}>
-                    <CompTd left><strong>{client?.name ?? 'You'}</strong> <span style={{ color: '#6366f1', fontSize: 11 }}>· you</span></CompTd>
-                    <CompTd>—</CompTd>
-                    <CompTd><strong>{slotPct(ourTop3)}%</strong></CompTd>
-                    <CompTd>{slotPct(ourTop10)}%</CompTd>
-                    <CompTd>{avgRank != null ? avgRank.toFixed(1) : '—'}</CompTd>
-                  </tr>
-                  {topCompetitors.map((c, i) => (
-                    <tr key={i} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  {topCompetitors.map((c) => (
+                    <tr key={c.pid} style={{ borderTop: '1px solid #f1f5f9' }}>
                       <CompTd left>{c.name ?? '—'}</CompTd>
                       <CompTd>{c.rating != null && c.rating > 0 ? `${c.rating}★ (${c.reviews ?? 0})` : '—'}</CompTd>
-                      <CompTd>{slotPct(c.top3)}%</CompTd>
-                      <CompTd>{slotPct(c.top10)}%</CompTd>
-                      <CompTd>{c.rankN ? (c.rankSum / c.rankN).toFixed(1) : '—'}</CompTd>
+                      <CompTd><strong>{slotPct(c.pins)}%</strong></CompTd>
+                      <CompTd>{c.pins}</CompTd>
+                      <CompTd>{c.avgRank != null ? c.avgRank.toFixed(1) : '—'}</CompTd>
                     </tr>
                   ))}
                 </tbody>

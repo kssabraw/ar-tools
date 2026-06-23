@@ -150,6 +150,69 @@ def build_competitor_summary(result_element: dict, our_place_id: Optional[str], 
     return out[:top_n]
 
 
+def build_competitors_above(result_element: dict, our_place_id: Optional[str]) -> dict:
+    """For each in-circle pin, the businesses ranking ABOVE the client (everyone
+    at/below us is discarded). `compressed_grid[row][col]` is rank-ordered, so
+    "above us" is the slice before our own position; if the client isn't in a
+    pin's top-20 at all, every business there outranks us and all are kept.
+
+    Returns a compact, de-duplicated structure:
+      {"directory": {place_id: {name, rating, reviews, primary_category, website, lat, lng}},
+       "grid": [[ per-pin: [[place_id, rank], ...] | null (out-of-circle) ]]}
+    Ranks are 1-based; an empty list means the client ranks 1st at that pin."""
+    details = result_element.get("detailsArray") or []
+    grid = result_element.get("compressed_grid") or []
+    n = max((len(r) for r in grid), default=0)
+    center = (n - 1) / 2
+    radius_sq = (n / 2) ** 2
+
+    # The client's index in detailsArray (None if it never appears in this scan).
+    our_index = None
+    if our_place_id:
+        for i, biz in enumerate(details):
+            if biz.get("placeId") == our_place_id:
+                our_index = i
+                break
+
+    directory: dict[str, dict] = {}
+    out_grid: list = []
+    for ri in range(n):
+        row_out: list = []
+        for ci in range(n):
+            if (ri - center) ** 2 + (ci - center) ** 2 > radius_sq:
+                row_out.append(None)  # outside the circle — not shown
+                continue
+            cell = grid[ri][ci] if ri < len(grid) and ci < len(grid[ri] or []) else []
+            cell = cell or []
+            # Our position at this pin; everything before it outranks us. Absent
+            # (our_index not found) → the whole local pack ranks above us.
+            our_pos = next((p for p, idx in enumerate(cell) if idx == our_index), None) if our_index is not None else None
+            above = cell[:our_pos] if our_pos is not None else cell
+            pins_above: list = []
+            for p, idx in enumerate(above):
+                if not isinstance(idx, int) or idx < 0 or idx >= len(details):
+                    continue
+                biz = details[idx]
+                pid = biz.get("placeId")
+                if not pid or (our_place_id and pid == our_place_id):
+                    continue
+                if pid not in directory:
+                    loc = biz.get("location") or {}
+                    directory[pid] = {
+                        "name": biz.get("name"),
+                        "rating": biz.get("rating"),
+                        "reviews": biz.get("ratingCount"),
+                        "primary_category": biz.get("primaryCategory"),
+                        "website": biz.get("websiteURL"),
+                        "lat": loc.get("latitude"),
+                        "lng": loc.get("longitude"),
+                    }
+                pins_above.append([pid, p + 1])  # [place_id, 1-based rank]
+            row_out.append(pins_above)
+        out_grid.append(row_out)
+    return {"directory": directory, "grid": out_grid}
+
+
 def build_scan_request(config: dict, keywords: list[str]) -> dict:
     """The POST /v1/scans body for a client's grid config + active keywords."""
     radius = config["radius_miles"]
@@ -300,6 +363,7 @@ def _store_results(
         # same order), so index i pairs the competitor grid to this keyword.
         element = results[i] if results and i < len(results) else None
         competitors = build_competitor_summary(element, our_place_id) if element else None
+        competitors_above = build_competitors_above(element, our_place_id) if element else None
         inserts.append(
             {
                 "scan_id": scan_row["id"],
@@ -316,6 +380,7 @@ def _store_results(
                 "heatmap_image_url": r.get("view_only_link") or share.get("image_link"),
                 "dynamic_url": share.get("dynamic_url"),
                 "competitors": competitors,
+                "competitors_above": competitors_above,
             }
         )
     if inserts:

@@ -61,6 +61,7 @@ class MapsScanResultRow(BaseModel):
     heatmap_image_url: Optional[str] = None  # Local Dominator's rendered map heatmap
     dynamic_url: Optional[str] = None        # interactive heatmap page
     competitors: Optional[list] = None       # per-keyword competitor leaderboard (top ~25)
+    competitors_above: Optional[dict] = None  # per-pin businesses ranking above the client
 
 
 class MapsScanSummary(BaseModel):
