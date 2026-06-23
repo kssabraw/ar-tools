@@ -37,14 +37,18 @@ async def create_google_doc(folder_id: str, title: str, markdown: str) -> dict:
             response = await http.post(settings.google_apps_script_url, json=body)
             response.raise_for_status()
             result = response.json()
+        # Validate inside the try so a non-dict/odd body can't AttributeError out
+        # uncaught; a legit success=false is re-raised below without re-wrapping.
+        if not isinstance(result, dict) or not result.get("success"):
+            err = result.get("error", "unknown") if isinstance(result, dict) else "non_object_response"
+            raise GoogleDocError(f"apps_script_returned_error: {err}")
+    except GoogleDocError:
+        raise
     except httpx.HTTPStatusError as exc:
         logger.error("apps_script_http_error", extra={"status": exc.response.status_code, "body": exc.response.text[:300]})
         raise GoogleDocError("apps_script_http_error") from exc
     except Exception as exc:
         logger.error("apps_script_call_failed", extra={"error": str(exc)})
         raise GoogleDocError(f"apps_script_call_failed: {exc}") from exc
-
-    if not result.get("success"):
-        raise GoogleDocError(f"apps_script_returned_error: {result.get('error', 'unknown')}")
 
     return {"doc_id": result.get("doc_id"), "doc_url": result.get("doc_url")}

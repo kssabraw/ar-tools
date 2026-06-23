@@ -191,17 +191,18 @@ function ResultView({ r, scan, clientId }: { r: MapsScanResultRow; scan: MapsSca
           <div style={{ marginTop: 10 }}><Grid grid={r.rank_grid} /></div>
         </details>
       </div>
-      <LocalRankAnalysis r={r} clientId={clientId} />
+      <LocalRankAnalysis r={r} clientId={clientId} scanId={scan.id} />
     </div>
   )
 }
 
 // Local Rank Analysis: the auto-generated client-facing report (Markdown) plus
 // suggested hyper-local pins for the weak zones, with a Regenerate control.
-function LocalRankAnalysis({ r, clientId }: { r: MapsScanResultRow; clientId: string }) {
+function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clientId: string; scanId: string }) {
   const queryClient = useQueryClient()
   const regenMut = useMutation({
-    mutationFn: () => api.post(`/clients/${clientId}/maps/report`, {}),
+    // Target the scan being viewed (not just the client's latest).
+    mutationFn: () => api.post(`/clients/${clientId}/maps/report?scan_id=${scanId}`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maps-latest', clientId] }),
   })
 
