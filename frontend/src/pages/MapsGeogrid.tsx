@@ -31,7 +31,17 @@ export function MapsGeogrid() {
   })
   // Track a just-clicked run so the progress UI shows immediately, before the
   // scan row exists (the create job runs async, a few seconds behind the click).
-  const [recentRunAt, setRecentRunAt] = useState<number | null>(null)
+  // recentlyRan holds a ~90s grace window after a run; runSeq bumps on each run so
+  // the timer effect restarts. Holding the window in a timeout (rather than a
+  // Date.now() comparison in render) keeps render pure and avoids setState-in-effect.
+  const [recentlyRan, setRecentlyRan] = useState(false)
+  const [runSeq, setRunSeq] = useState(0)
+  useEffect(() => {
+    if (!recentlyRan) return
+    const t = setTimeout(() => setRecentlyRan(false), 90000)
+    return () => clearTimeout(t)
+  }, [recentlyRan, runSeq])
+  const markRun = () => { setRecentlyRan(true); setRunSeq(s => s + 1) }
 
   const { data: scans } = useQuery<MapsScanSummary[]>({
     queryKey: ['maps-scans', clientId],
@@ -39,13 +49,12 @@ export function MapsGeogrid() {
     // Poll while a scan is running OR just after a run (to catch the new row).
     refetchInterval: (q) => {
       const inf = (q.state.data ?? []).some(s => s.status === 'polling' || s.status === 'pending')
-      const recent = recentRunAt != null && Date.now() - recentRunAt < 90000
-      return inf || recent ? 6000 : false
+      return inf || recentlyRan ? 6000 : false
     },
   })
 
   const inFlight = (scans ?? []).some(s => s.status === 'polling' || s.status === 'pending')
-  const scanning = inFlight || (recentRunAt != null && Date.now() - recentRunAt < 90000)
+  const scanning = inFlight || recentlyRan
 
   // While scanning, drive Local Dominator polling from the client so results
   // land in seconds instead of waiting for the 5-minute scheduler tick.
@@ -82,7 +91,7 @@ export function MapsGeogrid() {
       ) : tab === 'history' ? (
         <History clientId={clientId} scans={scans ?? []} onOpen={() => setTab('heatmap')} />
       ) : (
-        <Heatmap clientId={clientId} scanning={scanning} onRan={() => setRecentRunAt(Date.now())} />
+        <Heatmap clientId={clientId} scanning={scanning} onRan={markRun} />
       )}
     </div>
   )
@@ -267,8 +276,15 @@ function Setup({ clientId }: { clientId: string }) {
     queryFn: () => api.get<MapsKeyword[]>(`/clients/${clientId}/maps/keywords`),
   })
 
+  // Seed the editable form from the fetched config once it arrives (and re-seed if
+  // the config object reference changes), via the "adjust state during render"
+  // pattern — no setState-in-effect.
   const [form, setForm] = useState<Partial<MapsConfig>>({})
-  useEffect(() => { if (config) setForm(config) }, [config])
+  const [seededFrom, setSeededFrom] = useState<MapsConfig | null>(null)
+  if (config && config !== seededFrom) {
+    setSeededFrom(config)
+    setForm(config)
+  }
   const set = (patch: Partial<MapsConfig>) => setForm(f => ({ ...f, ...patch }))
 
   const saveMut = useMutation({
