@@ -1,17 +1,20 @@
 :root {
-  --bg: #f6f7f9;
+  /* Aligned to the AR Tools suite palette (Tailwind slate + indigo).
+     The suite uses inline styles; these tokens mirror its hex values so the
+     Topic Fanout UI matches the rest of the apps. */
+  --bg: #f8fafc;          /* slate-50 */
   --surface: #ffffff;
-  --border: #e3e6ea;
-  --text: #1a1d21;
-  --text-muted: #6b7280;
-  --accent: #4f46e5;
-  --accent-hover: #4338ca;
-  --accent-soft: #eef2ff;
-  --danger: #dc2626;
+  --border: #e2e8f0;      /* slate-200 */
+  --text: #0f172a;        /* slate-900 */
+  --text-muted: #64748b;  /* slate-500 */
+  --accent: #6366f1;      /* indigo-500 (suite's dominant accent) */
+  --accent-hover: #4f46e5;/* indigo-600 */
+  --accent-soft: #eef2ff; /* indigo-50 */
+  --danger: #dc2626;      /* red-600 */
   --radius: 12px;
-  --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 8px 24px rgba(16, 24, 40, 0.06);
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.06);
+  --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
 }
 
 * {
@@ -104,7 +107,7 @@ body {
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: linear-gradient(135deg, var(--accent), #7c6cf0);
+  background: var(--accent);
   flex: none;
 }
 .brand-name {
@@ -156,19 +159,31 @@ body {
 /* ---------- App shell / dashboard ---------- */
 .topbar {
   height: 60px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
+  /* Suite chrome: dark slate bar mirroring the main app's sidebar identity. */
+  background: #0f172a;          /* slate-900 */
+  border-bottom: 1px solid #1e293b;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 24px;
+}
+.topbar .brand-name {
+  color: #f1f5f9;
 }
 .topbar-user {
   display: flex;
   align-items: center;
   gap: 14px;
   font-size: 13px;
-  color: var(--text-muted);
+  color: #94a3b8;              /* slate-400 on dark */
+}
+/* Sign-out (ghost) needs a dark-bar variant so it isn't dark-on-dark. */
+.topbar .btn-ghost {
+  border-color: #334155;
+  color: #e2e8f0;
+}
+.topbar .btn-ghost:hover {
+  background: #1e293b;
 }
 .role-badge {
   text-transform: uppercase;
@@ -238,7 +253,7 @@ body {
 .skeleton {
   height: 86px;
   border-radius: var(--radius);
-  background: linear-gradient(90deg, #eef0f3 25%, #f6f7f9 37%, #eef0f3 63%);
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 37%, #e2e8f0 63%);
   background-size: 400% 100%;
   animation: shimmer 1.4s ease infinite;
 }
@@ -521,8 +536,8 @@ body {
   white-space: nowrap;
 }
 .status-ok {
-  background: #ecfdf5;
-  color: #047857;
+  background: #dcfce7;
+  color: #15803d;
 }
 .status-bad {
   background: #fef2f2;
@@ -837,8 +852,8 @@ body {
   border: 1px solid var(--border);
 }
 .status-active {
-  background: #ecfdf5;
-  color: #047857;
+  background: #dcfce7;
+  color: #15803d;
   border-color: transparent;
 }
 .status-excluded {
@@ -1230,12 +1245,12 @@ body {
   align-items: center;
   gap: 6px;
   text-decoration: none;
-  color: var(--text);
+  color: #cbd5e1;             /* slate-300 on dark bar */
   font-size: 13px;
   font-weight: 600;
 }
 .topbar-link:hover {
-  color: var(--accent);
+  color: #a5b4fc;             /* indigo-300, matches the suite's active nav */
 }
 .nav-badge {
   min-width: 18px;

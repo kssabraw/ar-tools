@@ -76,7 +76,7 @@ export function DebugView() {
                     lh.dangling_links === 0;
                   return (
                     <p className="muted" style={{ marginTop: 0 }}>
-                      <strong style={{ color: ok ? "inherit" : "#c0392b" }}>
+                      <strong style={{ color: ok ? "inherit" : "var(--danger)" }}>
                         {ok ? "✓ Healthy" : "⚠ Issues found"}
                       </strong>{" "}
                       · orphan articles: {lh.orphan_articles} · orphan pillars:{" "}

@@ -74,7 +74,7 @@ export function ArchitectureView() {
           return (
             <span
               className="muted"
-              style={{ color: ok ? "inherit" : "#c0392b" }}
+              style={{ color: ok ? "inherit" : "var(--danger)" }}
               title="No-orphan / no-dangling audit (§15.2 #3). Each page links to ≤5 others; every article has ≥1 inbound link."
             >
               {ok

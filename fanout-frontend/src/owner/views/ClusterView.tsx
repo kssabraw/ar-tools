@@ -502,7 +502,7 @@ function ArticleRow(p: {
           {rank?.ranked && (
             <span
               className="badge"
-              style={{ background: "#dcfce7", color: "#166534" }}
+              style={{ background: "#dcfce7", color: "#15803d" }}
               title={`${rank.url ?? ""} — source: ${rank.source === "gsc" ? "Google Search Console" : "DataForSEO SERP"}`}
             >
               ranking #{rank.position} ({rank.source === "gsc" ? "GSC" : "SERP"})

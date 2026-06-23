@@ -219,7 +219,7 @@ export default function ArticlePanel(props: {
             <pre
               style={{
                 whiteSpace: "pre-wrap", wordBreak: "break-word", fontFamily: "inherit",
-                fontSize: 14, lineHeight: 1.5, background: "var(--surface-2, #f6f8fa)",
+                fontSize: 14, lineHeight: 1.5, background: "var(--surface-2, #f1f5f9)",
                 padding: 16, borderRadius: 8, maxHeight: "60vh", overflowY: "auto", margin: 0,
               }}
             >
