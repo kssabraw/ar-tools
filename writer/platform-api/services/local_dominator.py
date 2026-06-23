@@ -34,8 +34,6 @@ logger = logging.getLogger(__name__)
 
 _SCANS_PATH = "/v1/scans"
 _TIMEOUT = 60.0
-# Maps ranking universe — pins ranked beyond this are treated as "not in top N".
-RANK_UNIVERSE = 20
 
 
 def _auth_header() -> dict[str, str]:
@@ -51,9 +49,11 @@ def _auth_header() -> dict[str, str]:
 def summarize_grid(content: list[list]) -> dict:
     """Roll a `content` rank grid up into pin counts + a computed average.
 
-    `content[row][col]` is the business's rank at that pin (int, 1 = best) or
-    None when it doesn't rank there. Returns total/found/top3/top10 pin counts
-    and the mean rank over pins where it ranks (None if it ranks nowhere).
+    `content[row][col]` is the business's rank at that pin (int, 1 = best). A
+    pin where it doesn't rank comes back as a NON-POSITIVE sentinel — Local
+    Dominator uses `-1` (the OpenAPI example showed `null`); both are handled.
+    Returns total/found/top3/top10 pin counts and the mean rank over pins where
+    it ranks (None if it ranks nowhere).
     """
     ranks: list[int] = []
     total = 0
@@ -61,7 +61,7 @@ def summarize_grid(content: list[list]) -> dict:
     for row in content or []:
         for cell in row:
             total += 1
-            if isinstance(cell, (int, float)) and 1 <= cell <= RANK_UNIVERSE:
+            if isinstance(cell, (int, float)) and cell >= 1:
                 r = int(cell)
                 ranks.append(r)
                 if r <= 3:
@@ -212,7 +212,8 @@ def _store_results(supabase, scan_row: dict, rows: list[dict]) -> int:
             }
         )
     if inserts:
-        supabase.table("maps_scan_results").insert(inserts).execute()
+        # Upsert so a concurrent poller (scheduler + on-demand) can't duplicate.
+        supabase.table("maps_scan_results").upsert(inserts, on_conflict="scan_id,keyword").execute()
     return len(inserts)
 
 
@@ -256,18 +257,35 @@ async def poll_scan(scan_row: dict) -> str:
     return "complete"
 
 
+async def _poll_rows(rows: list[dict]) -> int:
+    advanced = 0
+    for scan_row in rows:
+        try:
+            await poll_scan(scan_row)
+            advanced += 1
+        except Exception as exc:
+            logger.warning("maps_scan_poll_failed", extra={"scan_id": scan_row.get("id"), "error": str(exc)})
+    return advanced
+
+
 async def poll_pending_maps_scans() -> int:
     """Scheduler pass: advance every in-flight ('polling') scan. Returns count."""
     supabase = get_supabase()
     pending = (
         supabase.table("maps_scans").select("*").eq("status", "polling").limit(50).execute()
     ).data or []
-    for scan_row in pending:
-        try:
-            await poll_scan(scan_row)
-        except Exception as exc:
-            logger.warning("maps_scan_poll_failed", extra={"scan_id": scan_row.get("id"), "error": str(exc)})
-    return len(pending)
+    return await _poll_rows(pending)
+
+
+async def poll_client_scans(client_id: str) -> int:
+    """On-demand: advance a single client's in-flight scans (driven by the UI
+    while a user watches, for faster completion than the 5-min scheduler tick)."""
+    supabase = get_supabase()
+    pending = (
+        supabase.table("maps_scans").select("*")
+        .eq("client_id", client_id).eq("status", "polling").limit(10).execute()
+    ).data or []
+    return await _poll_rows(pending)
 
 
 # ----------------------------------------------------------------------------

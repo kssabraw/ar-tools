@@ -9,15 +9,16 @@ from services import local_dominator
 # summarize_grid
 # ---------------------------------------------------------------------------
 def test_summarize_grid_counts_and_average():
-    # 1 = best; None = not ranked at that pin; 21 = beyond the top-20 universe.
+    # 1 = best. Not-ranked pins come back non-positive: Local Dominator uses -1,
+    # the spec example showed null, and 0 can appear — all mean "not ranked".
     content = [
         [1, 2, 3],
         [4, None, 11],
-        [None, 21, 5],
+        [-1, 0, 5],
     ]
     s = local_dominator.summarize_grid(content)
     assert s["total_pins"] == 9
-    assert s["found_pins"] == 6          # 1,2,3,4,11,5 (None ×2 and 21 excluded)
+    assert s["found_pins"] == 6          # 1,2,3,4,11,5 (None, -1, 0 excluded)
     assert s["top3_pins"] == 3           # 1,2,3
     assert s["top10_pins"] == 5          # 1,2,3,4,5 (11 excluded)
     assert s["computed_average"] == round((1 + 2 + 3 + 4 + 11 + 5) / 6, 2)
@@ -27,7 +28,7 @@ def test_summarize_grid_empty_and_all_unranked():
     assert local_dominator.summarize_grid([]) == {
         "total_pins": 0, "found_pins": 0, "top3_pins": 0, "top10_pins": 0, "computed_average": None,
     }
-    s = local_dominator.summarize_grid([[None, None], [None, None]])
+    s = local_dominator.summarize_grid([[-1, None], [0, -1]])
     assert s["total_pins"] == 4 and s["found_pins"] == 0 and s["computed_average"] is None
 
 
