@@ -95,6 +95,34 @@ def client_domain(client_id: str | None) -> str | None:
     return None
 
 
+def gsc_available(client_id: str | None) -> bool:
+    """True when the client has a verified GSC property (access_status 'ok').
+
+    When GSC is available it is the sole source of truth: a keyword absent from
+    the client's GSC top-10 is treated as "not ranking", and DataForSEO is not
+    called at all. DataForSEO is only a fallback for clients with no GSC."""
+    if not client_id:
+        return False
+    try:
+        from db.supabase_client import get_supabase
+
+        resp = (
+            get_supabase()
+            .table("gsc_properties")
+            .select("id, access_status")
+            .eq("client_id", client_id)
+            .execute()
+        )
+        return any(p.get("access_status") == "ok" for p in (resp.data or []))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "prepublish_gsc_available_failed",
+            extra={"event": "prepublish_gsc_available_failed",
+                   "client_id": client_id, "reason": repr(exc)},
+        )
+        return False
+
+
 # ---- GSC lookup (source 1) ------------------------------------------------
 def gsc_lookup(client_id: str, keywords: list[str]) -> dict[str, dict]:
     """Map normalized keyword -> {position, url, source:'gsc'} for the client's

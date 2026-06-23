@@ -237,6 +237,11 @@ export function ClusterView() {
         {rankCheck?.status === "complete" && (
           <span className="muted">
             {rankCheck.ranked ?? 0} of {rankCheck.checked ?? 0} already rank top-10
+            {rankCheck.source_mode === "gsc"
+              ? " · via GSC"
+              : rankCheck.source_mode === "dataforseo"
+                ? " · via DataForSEO SERP"
+                : ""}
             {rankCheck.as_of ? ` · as of ${new Date(rankCheck.as_of).toLocaleDateString()}` : ""}
           </span>
         )}
