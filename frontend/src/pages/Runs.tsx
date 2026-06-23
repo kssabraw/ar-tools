@@ -60,7 +60,7 @@ export function Runs() {
   const [keyword, setKeyword] = useState('')
   const [creating, setCreating] = useState(false)
 
-  const { data: runsResp, isLoading: runsLoading, refetch } = useQuery<RunListResponse>({
+  const { data: runsResp, isLoading: runsLoading, isFetching: runsFetching, refetch } = useQuery<RunListResponse>({
     queryKey: ['runs', scopedClientId ?? null],
     queryFn: () => api.get<RunListResponse>(scopedClientId ? `/runs?client_id=${scopedClientId}` : '/runs'),
     refetchInterval: (query) => {
@@ -170,10 +170,15 @@ export function Runs() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
         <h1 style={h1Style}>{scopedClientId ? `Content Runs · ${scopedClient?.name ?? ''}` : 'Content Runs'}</h1>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={() => refetch()} style={ghostBtn}>
-            <RefreshCw size={15} /> Refresh
+          <button
+            onClick={() => refetch()}
+            disabled={runsFetching}
+            style={{ ...ghostBtn, ...(runsFetching ? { opacity: 0.7, cursor: 'default' } : {}) }}
+          >
+            <RefreshCw size={15} style={runsFetching ? { animation: 'spin 1s linear infinite' } : undefined} />
+            {runsFetching ? 'Refreshing…' : 'Refresh'}
           </button>
-          {scopedClientId && (
+          {scopedClientId && !showNewRun && (
             <button onClick={() => setShowNewRun(true)} style={primaryBtn}>
               <Plus size={15} /> New Run
             </button>
