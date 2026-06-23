@@ -11,7 +11,7 @@ import {
   type SessionListItem,
 } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
-import { CLIENT_SCOPE } from "../shared/clientScope";
+import { CLIENT_SCOPE, exitClientScope } from "../shared/clientScope";
 import { statusLabel, statusClass } from "../shared/sessionStatus";
 
 // Project + Session Browser (PRD §9.4). Left rail lists projects; the main pane
@@ -84,13 +84,24 @@ export function ProjectsPage() {
             <h1 className="page-title" style={{ margin: 0 }}>
               {heading}
             </h1>
-            <button
-              className="btn btn-primary"
-              style={{ width: "auto" }}
-              onClick={() => navigate("/session/new")}
-            >
-              New research session
-            </button>
+            <div className="silo-actions">
+              {clientId && (
+                <button
+                  className="btn btn-ghost"
+                  style={{ width: "auto" }}
+                  onClick={exitClientScope}
+                >
+                  All clients
+                </button>
+              )}
+              <button
+                className="btn btn-primary"
+                style={{ width: "auto" }}
+                onClick={() => navigate("/session/new")}
+              >
+                New research session
+              </button>
+            </div>
           </div>
 
           <label className="archived-toggle">
