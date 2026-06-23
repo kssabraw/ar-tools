@@ -95,6 +95,8 @@ class OverviewResponse(BaseModel):
     avg_position_30d: Optional[float] = None
     at_risk: int
     hero: list[HeroPoint] = Field(default_factory=list)
+    # Unread in-app rank-drop alerts for this client (drives the Alerts tab badge).
+    unread_alert_count: int = 0
 
 
 class StrikingKeyword(BaseModel):
@@ -240,3 +242,25 @@ class SerpSnapshotDetail(BaseModel):
 class SerpSnapshotCaptureResponse(BaseModel):
     keyword_id: UUID
     status: str  # 'enqueued'
+
+
+# --- In-app rank-drop alerts ------------------------------------------------
+class RankAlert(BaseModel):
+    id: UUID
+    keyword_id: UUID
+    keyword: str
+    alert_type: Literal["weekly_drop", "page_one_exit", "thirty_day_drop", "deindexed"]
+    source: Optional[str] = None
+    from_position: Optional[float] = None
+    to_position: Optional[float] = None
+    delta: Optional[float] = None
+    message: str
+    status: Literal["unread", "read", "dismissed"]
+    triggered_on: Optional[str] = None
+    resolved_at: Optional[str] = None
+    created_at: str
+
+
+class RankAlertsResponse(BaseModel):
+    alerts: list[RankAlert] = Field(default_factory=list)
+    unread_count: int = 0

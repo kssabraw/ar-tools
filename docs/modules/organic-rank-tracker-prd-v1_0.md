@@ -265,9 +265,20 @@ The **integer-vs-decimal** distinction (Today vs windows) is deliberate: it sign
 
 ## 10. Alerting
 
-The reason a client cares about deindexing is that it costs them money **silently between logins** — so the alarm must leave the screen. The same gap-detection that sets `deindex_risk` (§7) fires an outbound alert through the **suite notifications service** (in-app alerts feed + email/Slack): e.g. "2 keywords on acmehvac dropped out of the index." The dashboard is for when they look; the alert is for when they don't. Alert rules and channels are configured per property in the `Alerts` tab.
+The reason a client cares about deindexing is that it costs them money **silently between logins** — so the alarm must leave the screen. The dashboard is for when they look; the alert is for when they don't.
 
-> Differs from the v0.2 spec, which named Telegram + n8n. Those are not used — the suite notifications service is the only channel.
+### In-app alerting (built — 2026-06-23)
+
+Delivered **in-app** (the channel decision; email stays deferred to the suite notifications service). The daily materialize job (`services/rank_materialize.py`) evaluates each keyword on its **primary source** and opens alerts in `rank_alerts` via `services/rank_alerts.py`. Four rules:
+
+- **weekly_drop** — baseline (a week ago) in spots **1–15** and dropped **≥6 spots**.
+- **page_one_exit** — was on **page 1** (≤10) a week ago, now **off it** (>10).
+- **thirty_day_drop** — baseline (30 days ago) in **~top 20** and dropped **≥6 spots** (top-20 floor cuts deep-keyword noise).
+- **deindexed** — reuses the `deindex_risk` signal (§7); GSC-only.
+
+GSC paths compare **7-day rolling averages** (the position is a noisy decimal aggregate); DataForSEO paths compare weekly **point** ranks. The two sources are never mixed in a comparison (§2). **Episode model:** at most one *open* alert per (keyword, type) — opened on first occurrence, **auto-resolved** when the condition clears, so a flapping keyword doesn't spam. Surfaced in a per-client **Rankings → Alerts** tab with an unread badge (`OverviewResponse.unread_alert_count`); read/dismiss/read-all via `routers/rank.py`. Thresholds are conservative tunables (constants in `rank_alerts.py`).
+
+> Email / Slack delivery remains a future option via the suite notifications service. The v0.2 spec's Telegram + n8n are not used.
 
 ---
 
@@ -280,7 +291,7 @@ Phasing mirrors the v0.2 spec's milestones, mapped onto the suite. **M1 and M2 a
 | **M1 — Connection (service account)** | `gsc_properties` table + migration (fold in `clients.gsc_property`, then deprecate it — see note). Settings onboarding screen showing the service-account email to add + a **"verify access"** button that runs a test `searchanalytics.query` and flips `access_status` (`pending`→`ok`/`no_access`). Pre-validates site_url format so a verify-time 403 means "not added" (§4). | **Built** |
 | **M2 — Sync + storage** | Daily GSC query×date job → `gsc_query_daily`, `startRow` pagination, idempotent upserts, `sync_runs` observability, 3-day re-pull, the asyncio scheduler (§6), a manual "Sync now" trigger + last-sync status on the connection screen. | **Built** |
 | **M3 — Materialize + status + UI** | Date-axis materialization → `rank_keyword_metrics` (NULL where absent), computed `status`, keyword CRUD on `tracked_keywords`, merged metrics read API, hero + dual-axis charts (hand-rolled SVG, no charting dep), sparklines with rendered gaps, the Overview triage list + Keywords wide table, the `no_data` state. | **Built** |
-| **M4 — DataForSEO + detection + alerts** | **Built:** live "Today" rank (the fallback, see §2) + CPC/volume/competition (`keyword_market`) + estimated-monthly-value ROI; weekly query×page (`gsc_query_page_daily`) → `canonical_url` resolution + Pages view; striking-distance discovery; deindex gap detection + **URL Inspection confirmation** (`tracked_keywords.index_status`). **Remaining:** alerting via the suite notifications service. | Alerting pending |
+| **M4 — DataForSEO + detection + alerts** | **Built:** live "Today" rank (the fallback, see §2) + CPC/volume/competition (`keyword_market`) + estimated-monthly-value ROI; weekly query×page (`gsc_query_page_daily`) → `canonical_url` resolution + Pages view; striking-distance discovery; deindex gap detection + **URL Inspection confirmation** (`tracked_keywords.index_status`); **in-app rank-drop alerting** (`rank_alerts`, see §10). | **Built** |
 
 ### Migration note — `clients.gsc_property`
 The existing `clients.gsc_property` column (migration `20260529220918_clients_suite_fields.sql`) is **folded into `gsc_properties`** in M1: the M1 migration backfills a `gsc_properties` row from any non-null `clients.gsc_property` (inferring `property_type` from the `sc-domain:` prefix), then the column is left deprecated (kept temporarily for safety, dropped in a follow-up migration once nothing reads it). A client can have **two** properties (url-prefix + domain), which a single column cannot represent — the table is the source of truth going forward.

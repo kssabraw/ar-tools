@@ -245,6 +245,30 @@ export interface RankOverview {
   avg_position_30d: number | null
   at_risk: number
   hero: HeroPoint[]
+  unread_alert_count: number
+}
+
+export type RankAlertType = 'weekly_drop' | 'page_one_exit' | 'thirty_day_drop' | 'deindexed'
+
+export interface RankAlert {
+  id: string
+  keyword_id: string
+  keyword: string
+  alert_type: RankAlertType
+  source: string | null
+  from_position: number | null
+  to_position: number | null
+  delta: number | null
+  message: string
+  status: 'unread' | 'read' | 'dismissed'
+  triggered_on: string | null
+  resolved_at: string | null
+  created_at: string
+}
+
+export interface RankAlertsResponse {
+  alerts: RankAlert[]
+  unread_count: number
 }
 
 // ── ICP + differentiators (converged client-level assets, Option A) ──────────

@@ -1,6 +1,57 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-22 · **Competitive SERP Snapshot** (latest)
+## ⏩ Update — 2026-06-23 · **Rank-drop alerting (in-app)** (latest)
+
+The Organic Rank Tracker's **alerting** — M4's last open piece — is built. **In-app
+only** (the channel decision the user made); email stays deferred to the
+notifications service proper. On branch `claude/rank-alerts`, **draft PR open**;
+migration **applied** to `wvcthtmmcmhkybcesirb`; **awaiting merge confirm**.
+
+**The four rules** (evaluated daily in the existing materialize job, per keyword,
+on the keyword's **primary source** — GSC avg position where covered, else
+DataForSEO weekly rank; never reconciling the two):
+- **weekly_drop** — was ranking in spots **1–15** and dropped **≥6 spots in a week**.
+- **page_one_exit** — was on **page 1** (≤10) a week ago, now **off it** (>10).
+- **thirty_day_drop** — was in **~top 20** and dropped **≥6 spots over 30 days**
+  (a top-20 floor, confirmed with the user, to cut deep-keyword noise).
+- **deindexed** — reuses the existing **`deindex_risk`** signal (sustained NULL
+  GSC days after an established baseline; GSC-only).
+
+GSC paths compare **7-day rolling averages** (GSC position is a noisy decimal
+aggregate); DataForSEO paths compare weekly **point** ranks. **Episode model:** at
+most one *open* alert per (keyword, type) — opened when the condition first holds,
+**auto-resolved** when it clears (so a flapping keyword doesn't spam). `status`
+(unread/read/dismissed) is the user's read-state, separate from `resolved_at`.
+
+**Surface:** a per-client **Rankings → Alerts tab** (the only surface the user
+wanted — no global notification center), with an **unread count badge** on the tab
+(sourced from `OverviewResponse.unread_alert_count`, already fetched). Mark-read /
+mark-all-read / dismiss; recovered alerts show a "Recovered" tag.
+
+**Code:** `services/rank_alerts.py` (pure `detect_alerts` + `reconcile_alerts`),
+hooked into `services/rank_materialize.py` (collects signals per keyword in the
+existing loop, reconciles once after — **no new job/scheduler**). API in
+`routers/rank.py`: `GET /clients/{id}/rank/alerts`, `POST /rank-alerts/{id}/read`,
+`POST /rank-alerts/{id}/dismiss`, `POST /clients/{id}/rank/alerts/read-all`; plus
+`unread_alert_count` on the overview. Frontend `components/rankings/RankAlerts.tsx`
++ the Alerts tab in `pages/Rankings.tsx`.
+
+**Migration (applied; filename = recorded version):** `…000343_rank_alerts` —
+`rank_alerts` + the partial-unique open-episode index. RLS on, no policies.
+
+**Verification:** `import main` + full suite **229 passed** on the **pinned**
+`fastapi==0.115.0` / `pydantic==2.9.2`; frontend `npm run build` clean. Detection
+is pure-unit-tested (9 cases: each rule, the top-20 floor, GSC + DataForSEO,
+no-fire). Alerts populate on the next daily materialize run.
+
+**Tunables (start conservative; PRD §12):** thresholds live as constants in
+`rank_alerts.py` (`WEEKLY_DROP_SPOTS=6`, `WEEKLY_DROP_BASELINE_MAX=15`,
+`THIRTY_DAY_BASELINE_MAX=20`, the GSC smoothing window, etc.) — promote to config
+if they need per-client tuning.
+
+---
+
+## ⏩ Update — 2026-06-22 · **Competitive SERP Snapshot**
 
 A diagnostic **SERP snapshot** store for the rank tracker — captured **weekly**
 alongside the DataForSEO rank refresh so a pre-drop baseline always exists when
