@@ -4,8 +4,13 @@
 
 The Organic Rank Tracker's **alerting** — M4's last open piece — is built. **In-app
 only** (the channel decision the user made); email stays deferred to the
-notifications service proper. On branch `claude/rank-alerts`, **draft PR open**;
-migration **applied** to `wvcthtmmcmhkybcesirb`; **awaiting merge confirm**.
+notifications service proper. **Merged to `main` and deployed** (PR **#55**, squash)
+— PLATFORM redeploy **runtime startup verified clean** via Railway logs
+(`job_worker.started` + `gsc_scheduler.started` + `Application startup complete`,
+no Traceback), and the Netlify deploy preview was green pre-merge; migration
+**applied** to `wvcthtmmcmhkybcesirb`. **This closes M4 — the Organic Rank Tracker
+is now feature-complete per its PRD.** Alerts populate on the next daily
+materialize run (GSC's 2–3 day lag applies).
 
 **The four rules** (evaluated daily in the existing materialize job, per keyword,
 on the keyword's **primary source** — GSC avg position where covered, else
