@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { getMe, listApprovals } from "./api";
 import { useAuth } from "./auth";
+import { CLIENT_SCOPE } from "./clientScope";
 
 // Shared top bar + page frame for every Owner view. The brand links home; the
 // right side shows the signed-in user and a sign-out control.
@@ -10,6 +11,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { signOut } = useAuth();
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const isOwner = me.data?.role === "owner";
+  // Cross-app shortcuts back into the AR Tools suite (a separate app at the site
+  // root, so these are plain full-page links, not router navigation). Dashboard
+  // only appears when Fanout was opened scoped to a client — its id is the suite
+  // client id passed in via the Content Scheduler card.
+  const suiteClientId = CLIENT_SCOPE.clientId;
   // VAs have no project browser; their home is the wizard (PRD §10.3).
   const home = isOwner ? "/projects" : "/wizard";
 
@@ -30,6 +36,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="brand-name">Topic Fanout</span>
         </Link>
         <div className="topbar-user">
+          <a href="/" className="topbar-link">
+            Home
+          </a>
+          {suiteClientId && (
+            <a href={`/clients/${suiteClientId}`} className="topbar-link">
+              Dashboard
+            </a>
+          )}
           {isOwner && (
             <Link to="/approvals" className="topbar-link">
               Approvals
