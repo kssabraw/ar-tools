@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { RunListResponse, ClientListItem, RunStatus, SiloListResponse, SiloStatus } from '../lib/types'
+import type { RunListResponse, ClientListItem, RunStatus, SiloListResponse, SiloStatus, SiloListItem, Run } from '../lib/types'
 import { Plus, RefreshCw, ArrowLeft, Layers, ArrowRight } from 'lucide-react'
 import {
   BriefCacheDecisionModal,
@@ -81,6 +81,18 @@ export function Runs() {
     enabled: Boolean(scopedClientId),
   })
   const silos = silosResp?.items ?? []
+
+  // Group each silo under the article (run) that first surfaced it, so silos
+  // render inside their parent article's card. Silos whose parent run isn't in
+  // the current list (e.g. an older/filtered-out run) fall into an "other" bucket.
+  const silosByRun = new Map<string, SiloListItem[]>()
+  for (const silo of silos) {
+    const arr = silosByRun.get(silo.first_seen_run_id)
+    if (arr) arr.push(silo)
+    else silosByRun.set(silo.first_seen_run_id, [silo])
+  }
+  const runIdSet = new Set(runs.map(r => r.id))
+  const orphanSilos = silos.filter(s => !runIdSet.has(s.first_seen_run_id))
 
   const { data: clients = [] } = useQuery<ClientListItem[]>({
     queryKey: ['clients'],
@@ -232,6 +244,28 @@ export function Runs() {
             ? 'No runs yet. Create one to get started.'
             : 'No runs yet. Open a client to create content.'}
         </div>
+      ) : scopedClientId ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {runs.map(run => (
+            <ArticleCard key={run.id} run={run} silos={silosByRun.get(run.id) ?? []} />
+          ))}
+          {orphanSilos.length > 0 && (
+            <div style={{ ...cardStyle, marginBottom: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <h2 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 600, margin: 0, color: '#0f172a' }}>
+                  <Layers size={17} /> Other content silos
+                </h2>
+                <Link to="/silos" style={manageSilosLinkStyle}>
+                  Manage silos <ArrowRight size={14} />
+                </Link>
+              </div>
+              <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 16px' }}>
+                Silo topics discovered in earlier runs not shown above.
+              </p>
+              <SiloTable items={orphanSilos} />
+            </div>
+          )}
+        </div>
       ) : (
         <div style={cardStyle}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -263,58 +297,6 @@ export function Runs() {
         </div>
       )}
 
-      {scopedClientId && (
-        <div style={cardStyle}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-            <h2 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 600, margin: 0, color: '#0f172a' }}>
-              <Layers size={17} /> Content Silos
-            </h2>
-            <Link to="/silos" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#6366f1', fontSize: 13, fontWeight: 500, textDecoration: 'none' }}>
-              Manage silos <ArrowRight size={14} />
-            </Link>
-          </div>
-          <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 16px' }}>
-            Standalone-article topics discovered while generating blog posts for this client.
-          </p>
-          {silos.length === 0 ? (
-            <div style={{ color: '#64748b', fontSize: 14, padding: '8px 0' }}>
-              No silo pages yet. They appear here as the Brief Generator discovers them during content runs.
-            </div>
-          ) : (
-            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  {['Keyword', 'Status', 'Occurrences', 'Intent', ''].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {silos.map(silo => (
-                  <tr key={silo.id} style={{ borderBottom: '1px solid #f8fafc' }}>
-                    <td style={{ ...tdStyle, fontWeight: 500, color: '#0f172a' }}>{silo.suggested_keyword}</td>
-                    <td style={tdStyle}>{siloStatusBadge(silo.status)}</td>
-                    <td style={{ ...tdStyle, color: '#64748b' }}>{silo.occurrence_count}</td>
-                    <td style={{ ...tdStyle, color: '#64748b', fontSize: 13 }}>{silo.estimated_intent ?? '—'}</td>
-                    <td style={tdStyle}>
-                      {silo.promoted_to_run_id ? (
-                        <Link to={`/runs/${silo.promoted_to_run_id}`} style={{ color: '#6366f1', fontSize: 13, textDecoration: 'none', fontWeight: 500 }}>
-                          View run →
-                        </Link>
-                      ) : (
-                        <Link to="/silos" style={{ color: '#6366f1', fontSize: 13, textDecoration: 'none', fontWeight: 500 }}>
-                          Review →
-                        </Link>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
       <BriefCacheDecisionModal
         open={showCacheModal}
         cacheStatus={cacheStatus}
@@ -331,8 +313,76 @@ export function Runs() {
   )
 }
 
+// An article (run) and the silo topics discovered while generating it,
+// rendered inside the same card so silos read as children of their parent.
+function ArticleCard({ run, silos }: { run: Run; silos: SiloListItem[] }) {
+  const hasDistinctTitle = Boolean(run.title && run.title !== run.keyword)
+  return (
+    <div style={{ ...cardStyle, marginBottom: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 15, color: '#0f172a' }}>
+            {run.title ?? run.keyword}
+          </div>
+          {hasDistinctTitle && (
+            <div style={{ marginTop: 2, fontSize: 13, color: '#94a3b8' }}>{run.keyword}</div>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexShrink: 0 }}>
+          {statusBadge(run.status)}
+          <span style={{ fontSize: 13, color: '#64748b' }}>
+            {new Date(run.created_at).toLocaleDateString()}
+          </span>
+          <Link to={`/runs/${run.id}`} style={viewLinkStyle}>View →</Link>
+        </div>
+      </div>
+      {silos.length > 0 && (
+        <div style={{ marginTop: 16, borderTop: '1px solid #f1f5f9', paddingTop: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
+            <Layers size={13} /> Content Silos
+          </div>
+          <SiloTable items={silos} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function SiloTable({ items }: { items: SiloListItem[] }) {
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead>
+        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+          {['Keyword', 'Status', 'Occurrences', 'Intent', ''].map(h => (
+            <th key={h} style={thStyle}>{h}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {items.map(silo => (
+          <tr key={silo.id} style={{ borderBottom: '1px solid #f8fafc' }}>
+            <td style={{ ...tdStyle, fontWeight: 500, color: '#0f172a' }}>{silo.suggested_keyword}</td>
+            <td style={tdStyle}>{siloStatusBadge(silo.status)}</td>
+            <td style={{ ...tdStyle, color: '#64748b' }}>{silo.occurrence_count}</td>
+            <td style={{ ...tdStyle, color: '#64748b', fontSize: 13 }}>{silo.estimated_intent ?? '—'}</td>
+            <td style={tdStyle}>
+              {silo.promoted_to_run_id ? (
+                <Link to={`/runs/${silo.promoted_to_run_id}`} style={viewLinkStyle}>View run →</Link>
+              ) : (
+                <Link to="/silos" style={viewLinkStyle}>Review →</Link>
+              )}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 const h1Style: React.CSSProperties = { fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }
 const cardStyle: React.CSSProperties = { background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 24, marginBottom: 20 }
+const viewLinkStyle: React.CSSProperties = { color: '#6366f1', fontSize: 13, textDecoration: 'none', fontWeight: 500 }
+const manageSilosLinkStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, color: '#6366f1', fontSize: 13, fontWeight: 500, textDecoration: 'none' }
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 5 }
 const inputStyle: React.CSSProperties = { padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, color: '#0f172a' }
 const readonlyClientStyle: React.CSSProperties = { padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 14, color: '#0f172a', fontWeight: 500, background: '#f8fafc' }
