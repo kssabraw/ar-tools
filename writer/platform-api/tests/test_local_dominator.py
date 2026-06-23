@@ -50,7 +50,7 @@ def test_build_scan_request_maps_radius_to_grid_params():
     assert body["grid_size"] == 11          # 5 mi @ 1-mile spacing
     assert body["distance"] == 1609         # 1 mile in metres
     assert body["latitude"] == 26.0481 and body["longitude"] == -80.1819
-    assert body["shape"] == "circle"
+    assert body["shape"] == "square"  # square lattice, masked to a circle in the UI
     assert body["google_place_id"] == "ChIJabc"
     assert body["search_terms"] == ["plumber", "emergency plumber"]
     assert body["resource_category"] == "googleMaps" and body["serp_device"] == "desktop"
@@ -63,6 +63,6 @@ def test_build_scan_request_defaults_shape_and_surface():
     }
     body = local_dominator.build_scan_request(config, ["x"])
     assert body["grid_size"] == 7           # 3 mi
-    assert body["shape"] == "circle"        # the grid is always a circle
+    assert body["shape"] == "square"  # square lattice, masked to a circle in the UI
     assert body["resource_category"] == "googleMaps"
     assert body["serp_device"] == "desktop"

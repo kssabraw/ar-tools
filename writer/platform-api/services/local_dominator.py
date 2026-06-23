@@ -55,11 +55,18 @@ def summarize_grid(content: list[list]) -> dict:
     (the OpenAPI example showed `null`); both are handled. All metrics are
     reported **1-based** (display rank = raw + 1).
     """
+    # The scan is a square lattice; count only the pins within the inscribed
+    # circle so the rollups match the circular heatmap shown in the UI.
+    n = max((len(r) for r in (content or [])), default=0)
+    center = (n - 1) / 2
+    radius_sq = (n / 2) ** 2
     display_ranks: list[int] = []  # 1-based
     total = 0
     top3 = top10 = 0
-    for row in content or []:
-        for cell in row:
+    for ri, row in enumerate(content or []):
+        for ci, cell in enumerate(row):
+            if (ri - center) ** 2 + (ci - center) ** 2 > radius_sq:
+                continue  # outside the circle — not shown
             total += 1
             if isinstance(cell, (int, float)) and cell >= 0:
                 r = int(cell) + 1  # 0-indexed → 1-based display rank
@@ -93,7 +100,11 @@ def build_scan_request(config: dict, keywords: list[str]) -> dict:
     return {
         "latitude": config["center_lat"],
         "longitude": config["center_lng"],
-        "shape": "circle",  # the grid is always a circle (user decision)
+        # Scan a SQUARE lattice: it returns a clean row×col grid that maps to
+        # real lat/lng per pin (renderable on a map). Local Dominator's "circle"
+        # mode returns concentric rings that can't be placed without its
+        # undocumented ring geometry. We mask the square to a circle in the UI.
+        "shape": "square",
         "distance": params["distance"],
         "google_place_id": config["google_place_id"],
         "grid_size": params["grid_size"],
