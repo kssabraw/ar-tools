@@ -2,10 +2,39 @@
 
 ## ⏩ Update — 2026-06-23 · **Module #5 — Maps geo-grid ranker (Local Dominator)** (latest)
 
-**Module #5 is built** (backend + frontend) on branch `claude/maps-geogrid`, **draft
-PR #59**; migration applied to `wvcthtmmcmhkybcesirb`; **awaiting merge confirm** and
-a **live smoke-test** (Local Dominator calls only run on Railway, never from the
-sandbox — so the API path is unproven until a real scan).
+**Module #5 is built, merged, deployed, and proven live** — a real scan ran end to
+end against Local Dominator (PRs **#59, #61, #63, #64, #66, #68, #69**, all merged;
+PLATFORM startups verified). Per-client geo-grid of the business's Google Maps rank,
+with a heatmap + history.
+
+**Field-learnings (the expensive ones — don't rediscover):**
+- Local Dominator ranks in `content` are **0-indexed** (`0` = 1st place — the spec's
+  "0 means ranks first"). Display is **+1** (`to_display_grid`); not-ranked pins come
+  back **`-1`** (or null), **not** the `null` the OpenAPI example implied.
+- The grid is **always a circle** (`shape='circle'` forced; square dropped — user
+  decision). A circle returns ~`π/4 × grid_size²` pins (e.g. 95 for an 11×11), not
+  the full square — handy as a circle-vs-square sanity check.
+- LD's own heatmap image (`view_only_link`) is **not embeddable** — it's an
+  `app.localdominator.co` URL needing an LD login, so it 403s/breaks in our app.
+- `grid_size` is capped at **21** by the API (our 3/5/7-mile @ 1-mile presets =
+  7/11/15 fit).
+
+**Heatmap rendering (#68/#69):** primary view is a **Google Static Map** with small
+color-coded pins at each in-circle pin's real lat/lng (built client-side from the
+grid + scan center; row 0 = north — verify orientation vs LD's interactive link).
+Gated on **`VITE_GOOGLE_MAPS_API_KEY`** (a **Netlify** build var — set via the
+Netlify MCP; referrer-restricted Maps Static API key). Falls back to a
+dependency-free **circular pin heatmap** when the key is absent or the image fails.
+
+**Scan UX (#63/#66):** async create job + a per-tick scheduler poll **and** a
+client-driven `POST …/maps/poll` (every ~10–15s while watching) so results land in
+seconds, not the 5-min tick; idempotent result storage (`unique(scan_id,keyword)`);
+a prominent **spinner + progress bar + elapsed timer** (the in-flight detection was
+fixed to fire immediately on click, before the scan row exists).
+
+---
+
+## ⏩ Update — 2026-06-23 · Module #5 build detail
 
 **Vendor change (logged):** Maps/local-pack geo-grid uses **Local Dominator**, not
 DataForSEO — this **supersedes** the suite roadmap's locked "DataForSEO geo-grid /
