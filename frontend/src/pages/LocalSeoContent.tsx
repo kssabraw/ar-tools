@@ -11,6 +11,7 @@ import { LocationAutocomplete } from '../components/localseo/LocationAutocomplet
 import type { AnalysisResult, LocalSeoPageDetail, LocalSeoPageListItem, RankabilityResult, RelatedPageItem } from '../components/localseo/types'
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
+import { useSiloPlan } from '../components/localseo/useSiloPlan'
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
@@ -80,16 +81,14 @@ export function LocalSeoContent() {
   const [sabCity, setSabCity] = useState('')
 
   // Plan Silo tab — Fanout-powered silo discovery + keyword clustering, surfaced
-  // as candidate page targets grouped by silo. The pipeline runs for minutes as
-  // an async job, so we kick it off and poll.
-  const [planScanning, setPlanScanning] = useState(false)
-  const [planResults, setPlanResults] = useState<RelatedPageItem[] | null>(null)
-  const [planNotes, setPlanNotes] = useState<string[]>([])
-  const [planError, setPlanError] = useState('')
-  // Monotonic run token: a new scan (or unmount) invalidates an in-flight poll
-  // loop so stale results can't land. `planPollRef` holds the pending timeout.
-  const planRunRef = useRef(0)
-  const planPollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // as candidate page targets grouped by silo. Same async engine as the per-page
+  // "Related Pages" tab, via the shared hook (kick off + poll). Aliased to the
+  // local names the render uses.
+  const siloPlan = useSiloPlan(clientId)
+  const planScanning = siloPlan.loading
+  const planResults = siloPlan.items
+  const planNotes = siloPlan.notes
+  const planError = siloPlan.error
 
   // Bulk creation — generate the selected missing silo pages sequentially.
   const [selectedForCreate, setSelectedForCreate] = useState<Set<string>>(new Set())
@@ -135,11 +134,6 @@ export function LocalSeoContent() {
   useEffect(() => () => {
     if (bulkTickRef.current) clearInterval(bulkTickRef.current)
     bulkAbortRef.current?.abort()
-  }, [])
-  // Invalidate any in-flight silo-plan poll loop on unmount.
-  useEffect(() => () => {
-    planRunRef.current++
-    if (planPollRef.current) clearTimeout(planPollRef.current)
   }, [])
 
   const refreshSaved = () => queryClient.invalidateQueries({ queryKey: ['local-seo-pages', clientId] })
@@ -222,40 +216,12 @@ export function LocalSeoContent() {
     }
   }
 
-  const handleScanSilo = async () => {
+  const handleScanSilo = () => {
     if (!keyword.trim() || !location.trim()) return
-    setPlanError('')
-    setPlanScanning(true)
-    setPlanResults(null)
-    setPlanNotes([])
     setSelectedForCreate(new Set())
     setBulkDone(0)
     setBulkFailed(0)
-    const myRun = ++planRunRef.current // invalidates any prior in-flight poll loop
-    try {
-      const { job_id } = await localSeoApi.startSiloPlan(clientId, {
-        keyword: keyword.trim(), location: location.trim(), location_code: locationCode,
-      })
-      // Poll the async job until it completes / fails (or this run is superseded).
-      while (planRunRef.current === myRun) {
-        await new Promise<void>(resolve => { planPollRef.current = setTimeout(resolve, 3000) })
-        if (planRunRef.current !== myRun) return
-        const res = await localSeoApi.getSiloPlan(clientId, job_id)
-        if (res.status === 'complete') {
-          setPlanResults(res.items ?? [])
-          setPlanNotes(res.degraded_notes ?? [])
-          break
-        }
-        if (res.status === 'failed') {
-          setPlanError(res.error || 'Silo planning failed')
-          break
-        }
-      }
-    } catch (e) {
-      if (planRunRef.current === myRun) setPlanError(e instanceof Error ? e.message : 'Scan failed')
-    } finally {
-      if (planRunRef.current === myRun) setPlanScanning(false)
-    }
+    void siloPlan.run(keyword, location, locationCode)
   }
 
   // Hand a single found silo page off to the writer's score/reoptimize view.
@@ -462,7 +428,7 @@ export function LocalSeoContent() {
           {/* Service */}
           <div>
             <label style={label}>Seed service</label>
-            <input style={input} value={keyword} disabled={bulkCreating} onChange={e => { setKeyword(e.target.value); setPlanResults(null); setPlanNotes([]); setPlanError(''); setSelectedForCreate(new Set()) }} placeholder="e.g. emergency plumber" />
+            <input style={input} value={keyword} disabled={bulkCreating} onChange={e => { setKeyword(e.target.value); siloPlan.reset(); setSelectedForCreate(new Set()) }} placeholder="e.g. emergency plumber" />
           </div>
 
           {/* Area */}
@@ -471,7 +437,7 @@ export function LocalSeoContent() {
             <LocationAutocomplete
               clientId={clientId}
               value={location}
-              onChange={(loc, code) => { setLocation(loc); setLocationCode(code); setPlanResults(null); setPlanNotes([]); setPlanError(''); setSelectedForCreate(new Set()) }}
+              onChange={(loc, code) => { setLocation(loc); setLocationCode(code); siloPlan.reset(); setSelectedForCreate(new Set()) }}
               placeholder="Start typing a city, e.g. Melbourne…"
               disabled={bulkCreating}
             />
