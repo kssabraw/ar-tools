@@ -6,5 +6,5 @@ import { SiloDiscovery } from "./SiloDiscovery";
 // session can be reopened in the three views.
 export function NewSession() {
   const navigate = useNavigate();
-  return <SiloDiscovery onExit={() => navigate("/projects")} />;
+  return <SiloDiscovery onExit={() => navigate("/sessions")} />;
 }

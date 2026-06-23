@@ -106,7 +106,6 @@ function DecisionModal(p: {
         <dl className="approval-detail">
           <div><dt>Seed</dt><dd>{item.seed_keyword}</dd></div>
           <div><dt>VA</dt><dd>{item.va_display_name ?? "—"}</dd></div>
-          <div><dt>Project</dt><dd>{item.project_name ?? "—"}</dd></div>
           <div><dt>Coverage</dt><dd>{item.coverage_mode}</dd></div>
           <div><dt>Silos</dt><dd>{item.topic_count ?? "—"}</dd></div>
           <div><dt>Deep-mined</dt><dd>{item.deep_mine_count}</dd></div>

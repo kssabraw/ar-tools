@@ -82,12 +82,12 @@ interface NavItem {
 }
 
 function navActive(pathname: string, to: string): boolean {
-  if (to === "/projects") {
-    // Projects is "home" for owners; stay lit while browsing or inside a
+  if (to === "/sessions") {
+    // Sessions is "home" for owners; stay lit while browsing or inside a
     // session workspace, but not on the New-session form.
     return (
       pathname === "/" ||
-      pathname.startsWith("/projects") ||
+      pathname.startsWith("/sessions") ||
       (pathname.startsWith("/session/") && !pathname.startsWith("/session/new"))
     );
   }
@@ -104,8 +104,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   // only appears when Fanout was opened scoped to a client — its id is the suite
   // client id passed in via the Content Scheduler card.
   const suiteClientId = CLIENT_SCOPE.clientId;
-  // VAs have no project browser; their home is the wizard (PRD §10.3).
-  const home = isOwner ? "/projects" : "/wizard";
+  // VAs have no session browser; their home is the wizard (PRD §10.3).
+  const home = isOwner ? "/sessions" : "/wizard";
 
   // Pending-approval badge (PRD §11.3 step 3), owner-only, 30s polling.
   const approvals = useQuery({
@@ -118,7 +118,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   const nav: NavItem[] = isOwner
     ? [
-        { label: "Projects", to: "/projects", icon: <FolderIcon /> },
+        { label: "Sessions", to: "/sessions", icon: <FolderIcon /> },
         { label: "New session", to: "/session/new", icon: <PlusIcon /> },
         { label: "Approvals", to: "/approvals", icon: <CheckIcon />, badge: pendingCount },
       ]

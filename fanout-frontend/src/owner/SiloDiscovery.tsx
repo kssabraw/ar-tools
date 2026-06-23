@@ -144,7 +144,7 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
         <div className="workspace-head-row" style={{ marginBottom: 16 }}>
           <h1 className="page-title" style={{ margin: 0 }}>New session</h1>
           <button className="btn btn-ghost" style={{ width: "auto" }} onClick={onExit}>
-            Back to projects
+            Back to sessions
           </button>
         </div>
         {error && <p className="form-error">{error}</p>}
@@ -331,7 +331,7 @@ function PipelineView(p: {
           or retry from the project list.
         </p>
         <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onExit}>
-          Back to projects
+          Back to sessions
         </button>
       </div>
     );
@@ -518,7 +518,7 @@ function DeepMineSelection(p: {
 
       <div className="toolbar" style={{ marginTop: 16 }}>
         <button className="btn btn-ghost" onClick={p.onExit}>
-          Back to projects
+          Back to sessions
         </button>
         <button
           className="btn btn-primary"

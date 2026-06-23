@@ -9,13 +9,6 @@ export interface Me {
   role: "owner" | "va";
 }
 
-export interface Project {
-  id: string;
-  name: string;
-  is_scratch: boolean;
-  created_at: string;
-}
-
 export type RelationshipType =
   | "property_or_mechanism"
   | "use_case"
@@ -85,9 +78,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 export const getMe = () => request<Me>("/me");
-export const getProjects = () => request<Project[]>("/projects");
 
-// Session Browser (PRD §9.4): sessions under a project, newest first, for
+// Session Browser (PRD §9.4): sessions, newest first, for
 // resume. cluster_count is the planned-article count; status drives where a
 // resumed session lands (results views vs. still-in-flight).
 export interface SessionListItem {
@@ -101,16 +93,18 @@ export interface SessionListItem {
   completed_at: string | null;
 }
 
-export const listSessions = (projectId: string, includeArchived = false) =>
-  request<SessionListItem[]>(
-    `/projects/${projectId}/sessions${includeArchived ? "?include_archived=true" : ""}`,
-  );
-
 // Client-scoped runs (when the Fanout UI is opened from a client's Content
-// Scheduler card). Same row shape as listSessions.
+// Scheduler card). Same row shape as the owner overview.
 export const listClientSessions = (clientId: string, includeArchived = false) =>
   request<SessionListItem[]>(
     `/clients/${clientId}/sessions${includeArchived ? "?include_archived=true" : ""}`,
+  );
+
+// All of the caller's sessions (owner overview), no project/client filter. Backs
+// the session browser when the Fanout UI isn't client-scoped.
+export const listAllSessions = (includeArchived = false) =>
+  request<SessionListItem[]>(
+    `/sessions${includeArchived ? "?include_archived=true" : ""}`,
   );
 
 // Supported English-market countries (E1, 2026-06-17). The code is the

@@ -573,6 +573,25 @@ def list_client_sessions(
     return _browser_session_rows(rows)
 
 
+def list_all_sessions(
+    access_token: str, include_archived: bool = False
+) -> list[dict]:
+    """All sessions the caller may see (owner overview), newest first, with no
+    project/client filter. RLS-scoped like `list_sessions`; same row shape. Used
+    by the project-free session browser when the Fanout UI isn't client-scoped."""
+    q = (
+        get_user_client(access_token)
+        .table("sessions")
+        .select(
+            "id, seed_keyword, status, settings, archived, created_at, completed_at"
+        )
+    )
+    if not include_archived:
+        q = q.eq("archived", False)
+    rows = q.order("created_at", desc=True).execute().data
+    return _browser_session_rows(rows)
+
+
 def _browser_session_rows(rows: list[dict]) -> list[dict]:
     """Shape session rows for the Session Browser: derive coverage_mode from
     settings and attach the planned-article (cluster) count."""

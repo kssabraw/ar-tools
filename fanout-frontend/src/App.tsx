@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "./shared/auth";
 import { Login } from "./shared/Login";
 import { getMe } from "./shared/api";
-import { ProjectsPage } from "./owner/ProjectsPage";
+import { SessionsPage } from "./owner/SessionsPage";
 import { ApprovalsPage } from "./owner/ApprovalsPage";
 import { NewSession } from "./owner/NewSession";
 import { SessionWorkspace } from "./owner/SessionWorkspace";
@@ -45,8 +45,8 @@ function RoleRoutes() {
 function OwnerRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/projects" replace />} />
-      <Route path="/projects" element={<ProjectsPage />} />
+      <Route path="/" element={<Navigate to="/sessions" replace />} />
+      <Route path="/sessions" element={<SessionsPage />} />
       <Route path="/approvals" element={<ApprovalsPage />} />
       <Route path="/session/new" element={<NewSession />} />
       <Route path="/session/:id/debug" element={<DebugView />} />
@@ -60,7 +60,7 @@ function OwnerRoutes() {
         <Route path="articles" element={<ArticlesView />} />
         <Route path="exports" element={<ExportsView />} />
       </Route>
-      <Route path="*" element={<Navigate to="/projects" replace />} />
+      <Route path="*" element={<Navigate to="/sessions" replace />} />
     </Routes>
   );
 }

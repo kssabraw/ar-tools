@@ -13,7 +13,6 @@ import {
   expandSession,
   finalizeSilos,
   getCostEstimate,
-  getProjects,
   getSession,
   getSummary,
   overrideAudience,
@@ -41,7 +40,6 @@ import { RELATIONSHIP_LABELS, RELATIONSHIP_OPTIONS } from "../shared/relationshi
 const VA_DEEP_MINE_MAX = 2;
 
 type Step =
-  | "project"
   | "seed"
   | "disambiguation"
   | "review"
@@ -53,7 +51,6 @@ type Step =
 // The visible step rail (PRD §10.1). Disambiguation is conditional, so it's not a
 // fixed rail entry — it slots between Seed and Review only when needed.
 const RAIL: { key: Step; label: string }[] = [
-  { key: "project", label: "Project" },
   { key: "seed", label: "Seed & settings" },
   { key: "review", label: "Review silos" },
   { key: "deepmine", label: "Deep-mine" },
@@ -69,15 +66,13 @@ const NON_LATIN = /[^\u0000-\u024f\u2000-\u206f]/;
 export function Wizard() {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const [step, setStep] = useState<Step>("project");
+  const [step, setStep] = useState<Step>("seed");
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [degradedNotes, setDegradedNotes] = useState<string[]>([]);
   const [interpretations, setInterpretations] = useState<string[]>([]);
 
-  // Step 1
-  const [projectId, setProjectId] = useState<string>("");
-  // Step 2
+  // Step 1: seed & settings
   const [seed, setSeed] = useState("");
   const [audience, setAudience] = useState("");
   const [disambHint, setDisambHint] = useState("");
@@ -155,7 +150,6 @@ export function Wizard() {
     setError(null);
     createMut.mutate({
       seed_keyword: seed.trim(),
-      project_id: projectId || undefined,
       audience_hint: audience.trim() || undefined,
       disambiguation_hint: disambHint.trim() || undefined,
       topic_count: topicCount,
@@ -178,17 +172,6 @@ export function Wizard() {
           </div>
         )}
 
-        {!working && step === "project" && (
-          <ProjectStep
-            projectId={projectId}
-            setProjectId={setProjectId}
-            onNext={() => {
-              setError(null);
-              setStep("seed");
-            }}
-          />
-        )}
-
         {!working && step === "seed" && (
           <SeedStep
             {...{
@@ -197,7 +180,6 @@ export function Wizard() {
               topicCount, setTopicCount, mode, setMode,
               locationCode, setLocationCode,
               enrichMetrics, setEnrichMetrics,
-              onBack: () => setStep("project"),
               onSubmit: submitSeed,
             }}
           />
@@ -309,59 +291,6 @@ function StepRail({ current }: { current: Step }) {
 }
 
 // ---------------------------------------------------------------------------
-function ProjectStep(p: {
-  projectId: string;
-  setProjectId: (v: string) => void;
-  onNext: () => void;
-}) {
-  const projects = useQuery({ queryKey: ["projects"], queryFn: getProjects });
-
-  // Default to the Scratch project (or the first available) once loaded.
-  useEffect(() => {
-    if (!p.projectId && projects.data && projects.data.length > 0) {
-      const scratch = projects.data.find((x) => x.is_scratch) ?? projects.data[0];
-      p.setProjectId(scratch.id);
-    }
-  }, [projects.data, p]);
-
-  return (
-    <div className="card" style={{ maxWidth: 520 }}>
-      <h1 className="page-title">Pick a project</h1>
-      <p className="muted">Your research session will be saved under this project.</p>
-      {projects.isLoading && <p className="muted">Loading projects…</p>}
-      {projects.data && (
-        <label className="field">
-          <span className="field-label">Project</span>
-          <select
-            className="select"
-            value={p.projectId}
-            onChange={(e) => p.setProjectId(e.target.value)}
-          >
-            {projects.data.map((proj) => (
-              <option key={proj.id} value={proj.id}>
-                {proj.name}
-                {proj.is_scratch ? " (Scratch)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      <div className="toolbar">
-        <span className="muted" />
-        <button
-          className="btn btn-primary"
-          style={{ width: "auto" }}
-          disabled={!p.projectId}
-          onClick={p.onNext}
-        >
-          Continue
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
 function SeedStep(p: {
   seed: string;
   setSeed: (v: string) => void;
@@ -381,7 +310,6 @@ function SeedStep(p: {
   setMode: (v: "standard" | "comprehensive") => void;
   enrichMetrics: boolean;
   setEnrichMetrics: (v: boolean) => void;
-  onBack: () => void;
   onSubmit: (e: FormEvent) => void;
 }) {
   const trimmed = p.seed.trim();
@@ -506,9 +434,7 @@ function SeedStep(p: {
         </div>
 
         <div className="toolbar">
-          <button type="button" className="btn btn-ghost" style={{ width: "auto" }} onClick={p.onBack}>
-            Back
-          </button>
+          <span className="muted" />
           <button className="btn btn-primary" type="submit" style={{ width: "auto" }} disabled={!valid}>
             Discover silos
           </button>

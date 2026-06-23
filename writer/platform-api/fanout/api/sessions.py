@@ -1374,6 +1374,19 @@ def list_project_sessions(
     return store.list_sessions(user.access_token, project_id, include_archived=include_archived)
 
 
+@router.get("/sessions")
+def list_all_sessions(
+    user: AuthedUser = Depends(require_user),
+    include_archived: bool = False,
+) -> list[dict]:
+    """All sessions the caller may see (owner overview), newest first — no project
+    or client filter. Backs the project-free session browser when the Fanout UI is
+    not client-scoped. RLS-scoped; archived hidden unless include_archived=true."""
+    return store.list_all_sessions(
+        user.access_token, include_archived=include_archived
+    )
+
+
 @router.get("/clients/{client_id}/sessions")
 def list_client_sessions(
     client_id: str,
