@@ -2,11 +2,42 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import type { ClientListItem } from '../lib/types'
+import type { ClientListItem, MapsClientThreats, MapsThreatsResponse } from '../lib/types'
 import { Plus, Globe } from 'lucide-react'
 
 function initials(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
+}
+
+// Top competitors outranking this client on the local-pack grid (Maps module).
+// Renders nothing for clients without competitor scan data, so non-Maps tiles
+// are unchanged.
+function ThreatBlock({ threats }: { threats?: MapsClientThreats }) {
+  if (!threats || threats.threats.length === 0) return null
+  return (
+    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #f1f5f9' }}>
+      <div style={threatLabel}>Outranking you on the map</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {threats.threats.map((t, i) => {
+          const up = t.delta_pct != null && t.delta_pct > 0
+          const down = t.delta_pct != null && t.delta_pct < 0
+          return (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, minWidth: 0 }}>
+              <span style={{ color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
+                {t.name ?? '—'}
+              </span>
+              <span style={threatChip}>{t.beats_pct != null ? `${Math.round(t.beats_pct)}%` : '—'}</span>
+              {(up || down) && (
+                <span style={{ color: up ? '#dc2626' : '#16a34a', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
+                  {up ? '▲' : '▼'}{Math.abs(t.delta_pct as number)}
+                </span>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export function Home() {
@@ -16,6 +47,13 @@ export function Home() {
     queryKey: ['clients'],
     queryFn: () => api.get<ClientListItem[]>('/clients'),
   })
+
+  // Top-threat competitors per client (Maps geo-grid) — one call for all tiles.
+  const { data: threatsResp } = useQuery<MapsThreatsResponse>({
+    queryKey: ['maps-threats'],
+    queryFn: () => api.get<MapsThreatsResponse>('/maps/threats'),
+  })
+  const threatsByClient = new Map((threatsResp?.clients ?? []).map(c => [c.client_id, c]))
 
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
@@ -49,6 +87,7 @@ export function Home() {
                   </div>
                 </div>
               </div>
+              <ThreatBlock threats={threatsByClient.get(c.id)} />
             </Link>
           ))}
 
@@ -77,6 +116,14 @@ const tileStyle: React.CSSProperties = {
   borderRadius: 12,
   padding: 20,
   textDecoration: 'none',
+}
+const threatLabel: React.CSSProperties = {
+  fontSize: 10, fontWeight: 600, color: '#94a3b8',
+  textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 6,
+}
+const threatChip: React.CSSProperties = {
+  fontSize: 11, fontWeight: 700, color: '#b91c1c', background: '#fef2f2',
+  borderRadius: 999, padding: '1px 7px', flexShrink: 0,
 }
 const avatarStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',

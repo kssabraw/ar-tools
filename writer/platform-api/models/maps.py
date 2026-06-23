@@ -137,3 +137,20 @@ class MapsCompetitorTrend(BaseModel):
 class MapsCompetitorTrendsResponse(BaseModel):
     scan_count: int = 0          # number of scans that carry competitor data
     competitors: list[MapsCompetitorTrend] = Field(default_factory=list)
+
+
+class MapsThreat(BaseModel):
+    """One top-threat competitor for a dashboard tile."""
+    name: Optional[str] = None
+    beats_pct: Optional[float] = None   # latest "beats you %"
+    delta_pct: Optional[float] = None   # change vs first scan; positive = gaining
+
+
+class MapsClientThreats(BaseModel):
+    client_id: UUID
+    scan_count: int = 0
+    threats: list[MapsThreat] = Field(default_factory=list)
+
+
+class MapsThreatsResponse(BaseModel):
+    clients: list[MapsClientThreats] = Field(default_factory=list)
