@@ -20,10 +20,13 @@ from models.maps import (
     MapsConfigUpdate,
     MapsKeyword,
     MapsKeywordCreate,
+    MapsKeywordTrend,
     MapsRunResponse,
     MapsScanDetail,
     MapsScanResultRow,
     MapsScanSummary,
+    MapsTrendPoint,
+    MapsTrendsResponse,
 )
 from services import local_dominator
 
@@ -211,3 +214,67 @@ async def latest_scan(client_id: UUID, auth: dict = Depends(require_auth)) -> Ma
     if not rows:
         raise HTTPException(status_code=404, detail="no_completed_scan")
     return _scan_detail(rows[0]["id"])
+
+
+def _pct(n: int | None, d: int | None) -> float | None:
+    """A 0–100 percentage rounded to 1 dp, or None when there are no pins."""
+    if not d:
+        return None
+    return round(100 * (n or 0) / d, 1)
+
+
+def build_maps_trends(scans: list[dict], results: list[dict]) -> MapsTrendsResponse:
+    """Pure aggregation: turn completed scans + their per-keyword results into a
+    per-keyword time series (oldest → newest) of coverage metrics. Kept free of
+    DB access so it can be unit-tested directly."""
+    meta = {s["id"]: s for s in scans}
+    by_keyword: dict[str, list[MapsTrendPoint]] = {}
+    for r in results:
+        s = meta.get(r.get("scan_id"))
+        if not s:
+            continue
+        total = r.get("total_pins") or 0
+        point = MapsTrendPoint(
+            scan_id=r["scan_id"],
+            completed_at=s.get("completed_at"),
+            trigger=s.get("trigger", "scheduled"),
+            total_pins=total,
+            found_pins=r.get("found_pins") or 0,
+            top3_pins=r.get("top3_pins") or 0,
+            top10_pins=r.get("top10_pins") or 0,
+            average_rank=r.get("average_rank"),
+            found_pct=_pct(r.get("found_pins"), total),
+            top3_pct=_pct(r.get("top3_pins"), total),
+            top10_pct=_pct(r.get("top10_pins"), total),
+        )
+        by_keyword.setdefault(r["keyword"], []).append(point)
+    keywords = [
+        MapsKeywordTrend(
+            keyword=kw,
+            points=sorted(by_keyword[kw], key=lambda p: p.completed_at or ""),
+        )
+        for kw in sorted(by_keyword)
+    ]
+    return MapsTrendsResponse(keywords=keywords)
+
+
+@router.get("/clients/{client_id}/maps/trends", response_model=MapsTrendsResponse)
+async def maps_trends(
+    client_id: UUID, limit: int = 52, auth: dict = Depends(require_auth)
+) -> MapsTrendsResponse:
+    """Per-keyword trend across the client's completed scans — Top-3 %, Top-10 %,
+    Found %, and average rank over time — for charting in History/reporting."""
+    supabase = get_supabase()
+    scans = (
+        supabase.table("maps_scans").select("id, completed_at, trigger")
+        .eq("client_id", str(client_id)).eq("status", "complete")
+        .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
+    ).data or []
+    if not scans:
+        return MapsTrendsResponse()
+    results = (
+        supabase.table("maps_scan_results")
+        .select("scan_id, keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins")
+        .in_("scan_id", [s["id"] for s in scans]).execute()
+    ).data or []
+    return build_maps_trends(scans, results)
