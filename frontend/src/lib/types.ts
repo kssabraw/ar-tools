@@ -486,3 +486,66 @@ export interface SiloPromoteResponse {
   run_id: string
   status: SiloStatus
 }
+
+// --- Maps / local-pack geo-grid ranker (Module #5) ---
+export type MapsRadius = 3 | 5 | 7
+export interface MapsConfig {
+  client_id: string
+  google_place_id: string | null
+  business_name: string | null
+  center_lat: number | null
+  center_lng: number | null
+  radius_miles: MapsRadius
+  shape: 'circle' | 'square'
+  resource_category: 'googleMaps' | 'googleLocalFinder'
+  serp_device: 'desktop' | 'mobile' | 'both'
+  cadence: 'off' | 'weekly'
+  weekday: number
+  active: boolean
+  last_scanned_at: string | null
+  configured: boolean
+}
+
+export interface MapsKeyword {
+  id: string
+  keyword: string
+  active: boolean
+}
+
+export interface MapsScanResultRow {
+  keyword: string
+  average_rank: number | null
+  found_pins: number
+  total_pins: number
+  top3_pins: number
+  top10_pins: number
+  rank_grid: Array<Array<number | null>> | null
+}
+
+export interface MapsScanSummary {
+  id: string
+  scan_uuid: string | null
+  status: 'pending' | 'polling' | 'complete' | 'failed'
+  trigger: 'scheduled' | 'manual'
+  radius_miles: number | null
+  grid_size: number | null
+  requested_at: string | null
+  completed_at: string | null
+  error: string | null
+}
+
+export interface MapsScanDetail extends MapsScanSummary {
+  shape: string | null
+  distance: number | null
+  center_lat: number | null
+  center_lng: number | null
+  resource_category: string | null
+  serp_device: string | null
+  results: MapsScanResultRow[]
+}
+
+export interface MapsRunResponse {
+  client_id: string
+  status: string
+  error: string | null
+}
