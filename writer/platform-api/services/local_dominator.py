@@ -49,32 +49,41 @@ def _auth_header() -> dict[str, str]:
 def summarize_grid(content: list[list]) -> dict:
     """Roll a `content` rank grid up into pin counts + a computed average.
 
-    `content[row][col]` is the business's rank at that pin (int, 1 = best). A
-    pin where it doesn't rank comes back as a NON-POSITIVE sentinel — Local
-    Dominator uses `-1` (the OpenAPI example showed `null`); both are handled.
-    Returns total/found/top3/top10 pin counts and the mean rank over pins where
-    it ranks (None if it ranks nowhere).
+    `content[row][col]` is the business's rank at that pin, **0-indexed** (0 =
+    1st place — per the API's "0 means the business ranks first"). A pin where it
+    doesn't rank comes back as a NEGATIVE sentinel — Local Dominator uses `-1`
+    (the OpenAPI example showed `null`); both are handled. All metrics are
+    reported **1-based** (display rank = raw + 1).
     """
-    ranks: list[int] = []
+    display_ranks: list[int] = []  # 1-based
     total = 0
     top3 = top10 = 0
     for row in content or []:
         for cell in row:
             total += 1
-            if isinstance(cell, (int, float)) and cell >= 1:
-                r = int(cell)
-                ranks.append(r)
+            if isinstance(cell, (int, float)) and cell >= 0:
+                r = int(cell) + 1  # 0-indexed → 1-based display rank
+                display_ranks.append(r)
                 if r <= 3:
                     top3 += 1
                 if r <= 10:
                     top10 += 1
     return {
         "total_pins": total,
-        "found_pins": len(ranks),
+        "found_pins": len(display_ranks),
         "top3_pins": top3,
         "top10_pins": top10,
-        "computed_average": round(mean(ranks), 2) if ranks else None,
+        "computed_average": round(mean(display_ranks), 2) if display_ranks else None,
     }
+
+
+def to_display_grid(content: list[list]) -> list[list]:
+    """Convert the raw 0-indexed grid to a 1-based display grid: each ranked pin
+    becomes raw+1; not-ranked pins (negative / null) become None."""
+    out: list[list] = []
+    for row in content or []:
+        out.append([int(c) + 1 if isinstance(c, (int, float)) and c >= 0 else None for c in row])
+    return out
 
 
 def build_scan_request(config: dict, keywords: list[str]) -> dict:
@@ -197,18 +206,22 @@ def _store_results(supabase, scan_row: dict, rows: list[dict]) -> int:
         stored.add(keyword)
         content = r.get("content") or []
         summary = summarize_grid(content)
-        api_avg = r.get("average_rank")
+        share = r.get("share_links") if isinstance(r.get("share_links"), dict) else {}
         inserts.append(
             {
                 "scan_id": scan_row["id"],
                 "client_id": scan_row["client_id"],
                 "keyword": keyword,
-                "average_rank": api_avg if api_avg is not None else summary["computed_average"],
+                # 1-based average (display rank), computed from the grid so it
+                # matches the +1 pins regardless of the API's averaging base.
+                "average_rank": summary["computed_average"],
                 "found_pins": summary["found_pins"],
                 "total_pins": summary["total_pins"],
                 "top3_pins": summary["top3_pins"],
                 "top10_pins": summary["top10_pins"],
-                "rank_grid": content,
+                "rank_grid": to_display_grid(content),  # 1-based, null = not ranked
+                "heatmap_image_url": r.get("view_only_link") or share.get("image_link"),
+                "dynamic_url": share.get("dynamic_url"),
             }
         )
     if inserts:
