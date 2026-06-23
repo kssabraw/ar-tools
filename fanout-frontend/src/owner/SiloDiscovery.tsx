@@ -24,6 +24,7 @@ import {
   type SiloDiscovery as Discovery,
 } from "../shared/api";
 import { CLIENT_SCOPE } from "../shared/clientScope";
+import { AppShell } from "../shared/AppShell";
 import {
   RELATIONSHIP_LABELS,
   RELATIONSHIP_OPTIONS,
@@ -138,18 +139,14 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
   }
 
   return (
-    <>
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden="true" />
-          <span className="brand-name">Topic Fanout</span>
-        </div>
-        <button className="btn btn-ghost" onClick={onExit}>
-          Back to projects
-        </button>
-      </header>
-
+    <AppShell>
       <main className="content">
+        <div className="workspace-head-row" style={{ marginBottom: 16 }}>
+          <h1 className="page-title" style={{ margin: 0 }}>New session</h1>
+          <button className="btn btn-ghost" style={{ width: "auto" }} onClick={onExit}>
+            Back to projects
+          </button>
+        </div>
         {error && <p className="form-error">{error}</p>}
 
         {busy && (
@@ -232,7 +229,7 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
           />
         )}
       </main>
-    </>
+    </AppShell>
   );
 }
 

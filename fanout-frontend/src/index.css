@@ -157,33 +157,124 @@ body {
 }
 
 /* ---------- App shell / dashboard ---------- */
-.topbar {
-  height: 60px;
-  /* Suite chrome: dark slate bar mirroring the main app's sidebar identity. */
-  background: #0f172a;          /* slate-900 */
-  border-bottom: 1px solid #1e293b;
+/* ---------- App shell: suite-style dark sidebar ---------- */
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  width: 220px;
+  flex: none;
+  background: #0f172a;            /* slate-900 — matches the suite sidebar */
+  color: #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 0;
+}
+.sidebar-brand {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 24px;
+  gap: 10px;
+  padding: 0 20px 20px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #1e293b;
+  text-decoration: none;
+  color: inherit;
 }
-.topbar .brand-name {
+.sidebar-brand .brand-mark {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+.sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.sidebar .brand-name {
+  font-size: 16px;
   color: #f1f5f9;
 }
-.topbar-user {
+.sidebar-module {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+.sidebar-nav {
+  flex: 1;
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+}
+.sidebar-group {
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #1e293b;
+}
+.sidebar-link {
   display: flex;
   align-items: center;
-  gap: 14px;
-  font-size: 13px;
-  color: #94a3b8;              /* slate-400 on dark */
+  gap: 10px;
+  padding: 10px 20px;
+  color: #94a3b8;                /* slate-400 */
+  background: transparent;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
 }
-/* Sign-out (ghost) needs a dark-bar variant so it isn't dark-on-dark. */
-.topbar .btn-ghost {
-  border-color: #334155;
+.sidebar-link:hover {
   color: #e2e8f0;
 }
-.topbar .btn-ghost:hover {
+.sidebar-link.active {
+  color: #a5b4fc;                /* indigo-300 */
   background: #1e293b;
+  font-weight: 600;
+}
+.sidebar-link .nav-badge {
+  margin-left: auto;
+}
+.sidebar-foot {
+  padding: 16px 20px 0;
+  border-top: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sidebar-user {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.sidebar-email {
+  font-size: 11px;
+  color: #64748b;
+  word-break: break-all;
+}
+.sidebar-signout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0;
+}
+.sidebar-signout:hover {
+  color: #e2e8f0;
+}
+.app-main {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
 }
 .role-badge {
   text-transform: uppercase;
@@ -1240,18 +1331,6 @@ body {
 }
 
 /* ---------- M9: approval workflow ---------- */
-.topbar-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  text-decoration: none;
-  color: #cbd5e1;             /* slate-300 on dark bar */
-  font-size: 13px;
-  font-weight: 600;
-}
-.topbar-link:hover {
-  color: #a5b4fc;             /* indigo-300, matches the suite's active nav */
-}
 .nav-badge {
   min-width: 18px;
   height: 18px;
