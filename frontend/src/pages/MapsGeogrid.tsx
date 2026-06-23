@@ -193,7 +193,6 @@ function Setup({ clientId }: { clientId: string }) {
       center_lat: form.center_lat ?? null,
       center_lng: form.center_lng ?? null,
       radius_miles: form.radius_miles ?? 5,
-      shape: form.shape ?? 'square',
       resource_category: form.resource_category ?? 'googleMaps',
       serp_device: form.serp_device ?? 'desktop',
       cadence: form.cadence ?? 'weekly',
@@ -240,12 +239,6 @@ function Setup({ clientId }: { clientId: string }) {
           <Field label={`Radius (≈${pins} pins)`}>
             <select style={input} value={form.radius_miles ?? 5} onChange={e => set({ radius_miles: Number(e.target.value) as MapsRadius })}>
               {[3, 5, 7].map(r => <option key={r} value={r}>{r} miles</option>)}
-            </select>
-          </Field>
-          <Field label="Shape">
-            <select style={input} value={form.shape ?? 'square'} onChange={e => set({ shape: e.target.value as 'square' | 'circle' })}>
-              <option value="square">Square</option>
-              <option value="circle">Circle</option>
             </select>
           </Field>
           <Field label="Surface">

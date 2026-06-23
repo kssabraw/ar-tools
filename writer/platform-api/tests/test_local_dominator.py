@@ -57,6 +57,6 @@ def test_build_scan_request_defaults_shape_and_surface():
     }
     body = local_dominator.build_scan_request(config, ["x"])
     assert body["grid_size"] == 7           # 3 mi
-    assert body["shape"] == "square"
+    assert body["shape"] == "circle"        # the grid is always a circle
     assert body["resource_category"] == "googleMaps"
     assert body["serp_device"] == "desktop"
