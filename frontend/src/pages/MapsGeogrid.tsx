@@ -161,55 +161,93 @@ function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: bo
 }
 
 const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined
+const MAP_SIZE = 480 // logical px of the square static map (requested at scale=2 for sharpness)
 
-// Static-map color band for a 1-based rank (0xRRGGBB for Google Static Maps).
-function rankBucketColor(rank: number | null): string {
-  if (rank == null || rank < 1) return '0x9ca3af'
-  if (rank <= 3) return '0x16a34a'
-  if (rank <= 7) return '0x65a30d'
-  if (rank <= 10) return '0xca8a04'
-  if (rank <= 15) return '0xea580c'
-  return '0xdc2626'
+// Lat/lng of an in-circle grid cell: pins are spaced 1 mile, row 0 = north.
+function cellLatLng(row: number, col: number, n: number, centerLat: number, centerLng: number) {
+  const c = (n - 1) / 2
+  const lat = centerLat + (c - row) * (1 / 69)
+  const lng = centerLng + (col - c) * (1 / (69 * Math.cos((centerLat * Math.PI) / 180)))
+  return { lat, lng }
 }
 
-// A Google Static Maps URL with one small color-coded pin per in-circle grid
-// point at its real lat/lng (pins spaced 1 mile; row 0 = north). Null when no
-// API key is configured (→ fall back to the dependency-free circular heatmap).
-function buildStaticMapUrl(grid: Array<Array<number | null>> | null, centerLat: number | null, centerLng: number | null): string | null {
-  if (!GMAPS_KEY || !grid || grid.length === 0 || centerLat == null || centerLng == null) return null
-  const n = Math.max(...grid.map(r => r.length))
-  const center = (n - 1) / 2
-  const radiusSq = (n / 2) ** 2
-  const degPerMileLng = 1 / (69 * Math.cos((centerLat * Math.PI) / 180))
-  const buckets: Record<string, string[]> = {}
-  for (let row = 0; row < n; row++) {
-    for (let col = 0; col < n; col++) {
-      if ((row - center) ** 2 + (col - center) ** 2 > radiusSq) continue
-      const lat = centerLat + (center - row) * (1 / 69)   // row 0 = north
-      const lng = centerLng + (col - center) * degPerMileLng
-      const rank = grid[row] && grid[row][col] != null ? grid[row][col] : null
-      const color = rankBucketColor(rank)
-      ;(buckets[color] ||= []).push(`${lat.toFixed(6)},${lng.toFixed(6)}`)
-    }
+// Largest integer Google zoom that fits the ~n-mile-wide grid into ~90% of the
+// image (floored so edge pins never spill outside the map and get clipped).
+function fitZoom(centerLat: number, n: number): number {
+  const target = (n * 1609.34) / (MAP_SIZE * 0.9) // meters per logical px wanted
+  const z = Math.log2((156543.03392 * Math.cos((centerLat * Math.PI) / 180)) / target)
+  return Math.max(1, Math.min(16, Math.floor(z)))
+}
+
+// Web-Mercator projection of a lat/lng to a pixel within a MAP_SIZE square map
+// centered on (centerLat, centerLng) at the given zoom.
+function projectToPixel(lat: number, lng: number, centerLat: number, centerLng: number, zoom: number) {
+  const worldSize = 256 * 2 ** zoom
+  const px = (lo: number) => ((lo + 180) / 360) * worldSize
+  const py = (la: number) => {
+    const s = Math.max(-0.9999, Math.min(0.9999, Math.sin((la * Math.PI) / 180)))
+    return (0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)) * worldSize
   }
-  const markers = Object.entries(buckets).map(
-    ([color, locs]) => `markers=${encodeURIComponent(`size:tiny|color:${color}|${locs.join('|')}`)}`,
-  )
-  if (markers.length === 0) return null
-  return `https://maps.googleapis.com/maps/api/staticmap?size=480x480&scale=2&maptype=roadmap&${markers.join('&')}&key=${GMAPS_KEY}`
+  return { x: px(lng) - px(centerLng) + MAP_SIZE / 2, y: py(lat) - py(centerLat) + MAP_SIZE / 2 }
 }
 
-// One keyword's result: color-coded pins at their real lat/lng on a Google Static
-// Map when a Maps API key is configured; otherwise a dependency-free circular pin
-// heatmap. (Local Dominator's own image URL isn't embeddable outside their app.)
+// The base (marker-less) Google Static Map centered on the scan, at a zoom that
+// frames the grid. Null when no API key is configured (→ fall back to the
+// dependency-free circular heatmap).
+function buildBaseMapUrl(centerLat: number | null, centerLng: number | null, zoom: number): string | null {
+  if (!GMAPS_KEY || centerLat == null || centerLng == null) return null
+  return `https://maps.googleapis.com/maps/api/staticmap?center=${centerLat},${centerLng}&zoom=${zoom}` +
+    `&size=${MAP_SIZE}x${MAP_SIZE}&scale=2&maptype=roadmap&key=${GMAPS_KEY}`
+}
+
+// One keyword's result: the business's Maps rank per pin shown as numbered,
+// color-coded badges projected onto a Google Static Map at their real lat/lng
+// (ranked pins show the rank number; not-ranked pins are small grey dots). Falls
+// back to the dependency-free circular heatmap when no Maps key is configured.
 function ResultView({ r, scan }: { r: MapsScanResultRow; scan: MapsScanDetail }) {
   const [imgError, setImgError] = useState(false)
-  const mapUrl = buildStaticMapUrl(r.rank_grid, scan.center_lat, scan.center_lng)
+  const grid = r.rank_grid
+  const { center_lat: centerLat, center_lng: centerLng } = scan
+  const n = grid && grid.length ? Math.max(...grid.map(row => row.length)) : 0
+  const zoom = centerLat != null && n ? fitZoom(centerLat, n) : 12
+  const mapUrl = n ? buildBaseMapUrl(centerLat, centerLng, zoom) : null
+
+  // Project each in-circle pin onto the map and tag it with its rank.
+  const pins: Array<{ x: number; y: number; rank: number | null; ranked: boolean }> = []
+  if (mapUrl && grid && centerLat != null && centerLng != null) {
+    const c = (n - 1) / 2
+    const radiusSq = (n / 2) ** 2
+    for (let row = 0; row < n; row++) {
+      for (let col = 0; col < n; col++) {
+        if ((row - c) ** 2 + (col - c) ** 2 > radiusSq) continue
+        const { lat, lng } = cellLatLng(row, col, n, centerLat, centerLng)
+        const { x, y } = projectToPixel(lat, lng, centerLat, centerLng, zoom)
+        const cell = grid[row] && grid[row][col] != null ? grid[row][col] : null
+        pins.push({ x, y, rank: cell, ranked: typeof cell === 'number' && cell >= 1 })
+      }
+    }
+  }
+
   return (
     <div style={{ marginTop: 12 }}>
       {mapUrl && !imgError ? (
-        <img src={mapUrl} alt={`Geo-grid heatmap for ${r.keyword}`} onError={() => setImgError(true)}
-          style={{ width: '100%', maxWidth: 480, borderRadius: 8, border: '1px solid #e2e8f0', display: 'block' }} />
+        <div style={{ position: 'relative', width: '100%', maxWidth: MAP_SIZE, aspectRatio: '1 / 1', borderRadius: 8, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
+          <img src={mapUrl} alt={`Geo-grid map for ${r.keyword}`} onError={() => setImgError(true)}
+            style={{ width: '100%', height: '100%', display: 'block' }} />
+          {pins.map((p, i) => (
+            <div key={i} title={p.ranked ? `Rank ${p.rank}` : 'Not ranked here'}
+              style={{
+                position: 'absolute', left: `${(p.x / MAP_SIZE) * 100}%`, top: `${(p.y / MAP_SIZE) * 100}%`,
+                transform: 'translate(-50%, -50%)',
+                width: p.ranked ? 22 : 12, height: p.ranked ? 22 : 12, borderRadius: '50%',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                background: rankColor(p.rank), color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: 1,
+                border: '1.5px solid #fff', boxShadow: '0 1px 2px rgba(0,0,0,.35)', boxSizing: 'border-box',
+              }}>
+              {p.ranked ? p.rank : ''}
+            </div>
+          ))}
+        </div>
       ) : (
         <CircleHeatmap grid={r.rank_grid} />
       )}
