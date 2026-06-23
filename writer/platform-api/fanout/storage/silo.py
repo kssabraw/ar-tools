@@ -1104,13 +1104,35 @@ def list_clusters(session_id: str) -> list[dict]:
         .select(
             "id, topic_id, name, primary_keyword_id, intent, suggested_h2s, "
             "peer_article_links, source_statistical_grouping_id, orchestrator_notes, "
-            "is_user_edited, is_gap_placeholder, created_at"
+            "is_user_edited, is_gap_placeholder, prepublish_action, created_at"
         )
         .in_("topic_id", topic_ids)
         .order("created_at")
         .execute()
     )
     return res.data
+
+
+def set_clusters_prepublish_action(
+    session_id: str, cluster_ids: list[str], action: str | None
+) -> int:
+    """Set the pre-publish decision ('skip' | 'refresh' | None to clear) on a set
+    of the session's clusters. Scoped to the session's own clusters (via its
+    topics) so a foreign cluster id can't be written."""
+    if not cluster_ids:
+        return 0
+    topic_ids = [t["id"] for t in list_topics(session_id)]
+    if not topic_ids:
+        return 0
+    res = (
+        get_service_client()
+        .table("clusters")
+        .update({"prepublish_action": action})
+        .in_("id", cluster_ids)
+        .in_("topic_id", topic_ids)
+        .execute()
+    )
+    return len(res.data or [])
 
 
 def _count(table: str, **eqs) -> int:
@@ -1281,6 +1303,11 @@ def get_pipeline_summary(session_id: str) -> dict:
         },
         "plan": plan,
         "architecture": architecture,
+        # Pre-publish ranking check (per client): persisted result + as-of, or
+        # null until the user runs "Check current rankings". Orthogonal to the
+        # pipeline status — it never flips `status`, so the content map stays
+        # visible while it runs.
+        "prepublish_rank_check": session.get("prepublish_rank_check"),
     }
 
 

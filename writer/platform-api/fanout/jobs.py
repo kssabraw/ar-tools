@@ -51,6 +51,7 @@ from fanout.pipeline.recursive_fanout import (
     run_recursive_expansion,
 )
 from fanout.storage import silo as store
+from fanout import prepublish_rank
 
 logger = logging.getLogger(__name__)
 
@@ -1043,3 +1044,99 @@ def generate_article_core(
                "sections": article.metadata.get("section_count"), "cost_usd": cost},
     )
     return True
+
+
+# ---- Pre-publish ranking check (per client) -------------------------------
+def submit_prepublish_rank_check(session_id: str) -> None:
+    """Run the pre-publish ranking check off the request path. Orthogonal to the
+    pipeline status machine — it writes only `sessions.prepublish_rank_check`, so
+    the content map stays visible while it runs (the frontend polls /summary)."""
+    _EXECUTOR.submit(run_prepublish_rank_check_job, session_id)
+
+
+def _utcnow_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+@_metered("prepublish_rank_check")
+def run_prepublish_rank_check_job(session_id: str) -> None:
+    """For every planned article's target keyword (supporting clusters + pillars),
+    determine whether the client already ranks top-10: GSC first (free, instant),
+    DataForSEO SERP for the residue. Persist the per-keyword result on the session
+    so the cluster/architecture review renders badges without re-fetching."""
+    bind_session_id(session_id)
+    store.update_session(
+        session_id,
+        {"prepublish_rank_check": {"status": "running", "as_of": _utcnow_iso()}},
+    )
+    try:
+        session = store.get_session(session_id) or {}
+        client_id = session.get("client_id")
+
+        # Targets: supporting articles (clusters) + pillars (architecture).
+        targets: list[dict] = [
+            {"cluster_id": c["id"], "keyword": c["name"]}
+            for c in store.list_clusters(session_id)
+            if c.get("name") and not c.get("is_gap_placeholder")
+        ]
+        arch = store.get_architecture(session_id)
+        if arch:
+            for p in (arch.get("architecture_json") or {}).get("pillars", []):
+                kw = (p.get("target_keyword") or "").strip()
+                if kw:
+                    targets.append({"cluster_id": None, "keyword": kw,
+                                    "topic_id": p.get("topic_id"), "is_pillar": True})
+
+        keywords = sorted({prepublish_rank.norm_keyword(t["keyword"]) for t in targets})
+
+        # 1) GSC (bulk, free). 2) DataForSEO for the residue (location-aware).
+        gsc = prepublish_rank.gsc_lookup(client_id, keywords) if client_id else {}
+        residue = [k for k in keywords if k not in gsc]
+        domain = prepublish_rank.client_domain(client_id) if client_id else None
+        dfs_map: dict[str, dict] = {}
+        if residue and domain:
+            dfs = get_dataforseo(store.session_location_code(session))
+            dfs_map = prepublish_rank.dataforseo_lookup(dfs, domain, residue)
+
+        results: list[dict] = []
+        ranked = 0
+        for t in targets:
+            nk = prepublish_rank.norm_keyword(t["keyword"])
+            hit = gsc.get(nk) or dfs_map.get(nk)
+            if hit:
+                ranked += 1
+            results.append({
+                "cluster_id": t.get("cluster_id"),
+                "keyword": t["keyword"],
+                "is_pillar": t.get("is_pillar", False),
+                "ranked": bool(hit),
+                "position": hit["position"] if hit else None,
+                "url": hit["url"] if hit else None,
+                "source": hit["source"] if hit else None,
+            })
+
+        store.update_session(session_id, {"prepublish_rank_check": {
+            "status": "complete",
+            "as_of": _utcnow_iso(),
+            "checked": len(results),
+            "ranked": ranked,
+            "gsc_connected": bool(gsc) or bool(client_id),
+            "results": results,
+        }})
+        logger.info(
+            "step_complete",
+            extra={"event": "step_complete", "step": "prepublish_rank_check",
+                   "checked": len(results), "ranked": ranked,
+                   "dataforseo_swept": len(dfs_map)},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error(
+            "step_failed",
+            extra={"event": "step_failed", "step": "prepublish_rank_check",
+                   "reason": _short(exc)},
+        )
+        store.update_session(session_id, {"prepublish_rank_check": {
+            "status": "error", "as_of": _utcnow_iso(), "error": _short(exc),
+        }})

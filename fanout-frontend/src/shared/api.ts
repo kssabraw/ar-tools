@@ -260,7 +260,45 @@ export interface PipelineSummary {
     topics: SummaryPlanTopic[];
   } | null;
   architecture: { generated_at: string; is_user_edited: boolean } | null;
+  prepublish_rank_check: PrepublishRankCheck | null;
 }
+
+// Pre-publish ranking check (per client): does the client already rank top-10
+// for each planned article's target keyword? Null until the user runs it.
+export interface PrepublishRankResult {
+  cluster_id: string | null;
+  keyword: string;
+  is_pillar: boolean;
+  ranked: boolean;
+  position: number | null;
+  url: string | null;
+  source: "gsc" | "dataforseo" | null;
+}
+export interface PrepublishRankCheck {
+  status: "running" | "complete" | "error";
+  as_of: string | null;
+  checked?: number;
+  ranked?: number;
+  gsc_connected?: boolean;
+  error?: string;
+  results?: PrepublishRankResult[];
+}
+
+export const runRankingCheck = (sessionId: string) =>
+  request<{ status: string; session_id: string }>(
+    `/sessions/${sessionId}/ranking-check`,
+    { method: "POST" },
+  );
+
+export const setPrepublishAction = (
+  sessionId: string,
+  clusterIds: string[],
+  action: "skip" | "refresh" | null,
+) =>
+  request<{ updated: number; action: string | null }>(
+    `/sessions/${sessionId}/prepublish-action`,
+    { method: "POST", body: JSON.stringify({ cluster_ids: clusterIds, action }) },
+  );
 
 export interface Keyword {
   id: string;
@@ -298,6 +336,9 @@ export interface Cluster {
   orchestrator_notes: string | null;
   is_user_edited: boolean;
   is_gap_placeholder: boolean;
+  // Pre-publish decision for an already-ranking article: skip it, or refresh the
+  // existing page instead of writing a new one. Null = no decision.
+  prepublish_action: "skip" | "refresh" | null;
   created_at: string;
 }
 

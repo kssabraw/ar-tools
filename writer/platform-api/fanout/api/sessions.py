@@ -1389,6 +1389,43 @@ def list_client_sessions(
     )
 
 
+# ---- Pre-publish ranking check (per client) -------------------------------
+class PrepublishActionBody(BaseModel):
+    cluster_ids: list[str] = Field(default_factory=list)
+    # 'skip' / 'refresh' to set, null to clear the decision.
+    action: str | None = Field(default=None, pattern="^(skip|refresh)$")
+
+
+@router.post(
+    "/sessions/{session_id}/ranking-check", status_code=status.HTTP_202_ACCEPTED
+)
+def run_ranking_check(
+    session_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Kick off the per-client pre-publish ranking check in the background: does
+    the client already rank top-10 for each planned article's target keyword
+    (GSC first, DataForSEO SERP for the residue)? Result lands on
+    `/summary`.prepublish_rank_check. Returns immediately (202)."""
+    _require_session(user, session_id)
+    bind_session_id(session_id)
+    jobs.submit_prepublish_rank_check(session_id)
+    return {"status": "running", "session_id": session_id}
+
+
+@router.post("/sessions/{session_id}/prepublish-action")
+def set_prepublish_action(
+    session_id: str, body: PrepublishActionBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Record the user's decision for already-ranking articles before they accept
+    the content map: skip them, or refresh the existing page instead of writing a
+    new article (or null to clear). Scoped to the session's own clusters."""
+    _require_session(user, session_id)
+    updated = store.set_clusters_prepublish_action(
+        session_id, body.cluster_ids, body.action
+    )
+    return {"updated": updated, "action": body.action}
+
+
 @router.patch("/sessions/{session_id}")
 def patch_session(
     session_id: str, body: SessionPatchBody, user: AuthedUser = Depends(require_user)

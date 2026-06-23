@@ -67,6 +67,34 @@ def _host_matches(result_url: str | None, client_domain: str | None) -> bool:
     return bool(rd and client_domain and rd == client_domain)
 
 
+def client_domain(client_id: str | None) -> str | None:
+    """Registrable domain for the AR Tools client (from public.clients.website_url),
+    via the host suite's public-schema client. Used for the DataForSEO SERP
+    domain match. None when there's no client or no website on file."""
+    if not client_id:
+        return None
+    try:
+        from db.supabase_client import get_supabase
+
+        resp = (
+            get_supabase()
+            .table("clients")
+            .select("website_url")
+            .eq("id", client_id)
+            .limit(1)
+            .execute()
+        )
+        if resp.data:
+            return registrable_domain(resp.data[0].get("website_url"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "prepublish_client_domain_failed",
+            extra={"event": "prepublish_client_domain_failed",
+                   "client_id": client_id, "reason": repr(exc)},
+        )
+    return None
+
+
 # ---- GSC lookup (source 1) ------------------------------------------------
 def gsc_lookup(client_id: str, keywords: list[str]) -> dict[str, dict]:
     """Map normalized keyword -> {position, url, source:'gsc'} for the client's

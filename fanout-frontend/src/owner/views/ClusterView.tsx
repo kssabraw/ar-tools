@@ -14,13 +14,17 @@ import {
   generateArticles,
   getClusterKeywords,
   getClusters,
+  getSummary,
   mergeClusters,
   planArticles,
   promotePrimary,
+  runRankingCheck,
+  setPrepublishAction,
   splitCluster,
   type Cluster,
   type CoverageGap,
   type Keyword,
+  type PrepublishRankResult,
 } from "../../shared/api";
 import { useSession } from "../SessionWorkspace";
 
@@ -60,6 +64,38 @@ export function ClusterView() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["summary", sessionId] }),
     onError: (e: Error) => alert(e.message),
   });
+
+  // Pre-publish ranking check: does the client already rank top-10 for each
+  // article's target keyword? Read from /summary; poll while it runs.
+  const summaryQ = useQuery({
+    queryKey: ["summary", sessionId],
+    queryFn: () => getSummary(sessionId),
+    refetchInterval: (q) =>
+      q.state.data?.prepublish_rank_check?.status === "running" ? 4000 : false,
+  });
+  const rankCheck = summaryQ.data?.prepublish_rank_check ?? null;
+  const rankByCluster = useMemo(() => {
+    const m = new Map<string, PrepublishRankResult>();
+    rankCheck?.results?.forEach((r) => {
+      if (r.cluster_id) m.set(r.cluster_id, r);
+    });
+    return m;
+  }, [rankCheck]);
+  const checkMut = useMutation({
+    mutationFn: () => runRankingCheck(sessionId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["summary", sessionId] }),
+    onError: (e: Error) => alert(e.message),
+  });
+  const actionMut = useMutation({
+    mutationFn: (v: { ids: string[]; action: "skip" | "refresh" | null }) =>
+      setPrepublishAction(sessionId, v.ids, v.action),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["clusters", sessionId] }),
+    onError: (e: Error) => alert(e.message),
+  });
+  const onSetAction = (ids: string[], action: "skip" | "refresh" | null) =>
+    actionMut.mutate({ ids, action });
+  const rankedClusterIds = () =>
+    (rankCheck?.results ?? []).filter((r) => r.ranked && r.cluster_id).map((r) => r.cluster_id!);
 
   const [mergeMode, setMergeMode] = useState(false);
   const [mergeSel, setMergeSel] = useState<Set<string>>(new Set());
@@ -182,6 +218,43 @@ export function ClusterView() {
       </div>
       )}
 
+      <div className="edit-toolbar">
+        <button
+          className="btn btn-ghost"
+          style={{ width: "auto" }}
+          disabled={checkMut.isPending || rankCheck?.status === "running"}
+          title="Check whether this client already ranks top-10 for each article's target keyword (GSC first, DataForSEO fallback)"
+          onClick={() => checkMut.mutate()}
+        >
+          {rankCheck?.status === "running" ? (
+            <><span className="spinner-sm" />Checking rankings…</>
+          ) : rankCheck?.status === "complete" ? (
+            "Re-check rankings"
+          ) : (
+            "Check current rankings"
+          )}
+        </button>
+        {rankCheck?.status === "complete" && (
+          <span className="muted">
+            {rankCheck.ranked ?? 0} of {rankCheck.checked ?? 0} already rank top-10
+            {rankCheck.as_of ? ` · as of ${new Date(rankCheck.as_of).toLocaleDateString()}` : ""}
+          </span>
+        )}
+        {!isVA && rankCheck?.status === "complete" && (rankCheck.ranked ?? 0) > 0 && (
+          <>
+            <button className="btn btn-sm" disabled={actionMut.isPending} onClick={() => onSetAction(rankedClusterIds(), "skip")}>
+              Skip all ranking
+            </button>
+            <button className="btn btn-sm" disabled={actionMut.isPending} onClick={() => onSetAction(rankedClusterIds(), "refresh")}>
+              Mark all refresh
+            </button>
+          </>
+        )}
+        {rankCheck?.status === "error" && (
+          <span className="form-error">Ranking check failed — try again.</span>
+        )}
+      </div>
+
       {!isVA && genSel.size > 0 && (
         <div className="bulk-bar">
           <span>{genSel.size} article{genSel.size === 1 ? "" : "s"} selected</span>
@@ -227,6 +300,8 @@ export function ClusterView() {
             genSel={genSel}
             toggleGen={toggleGen}
             setTopicGen={setTopicGen}
+            rankByCluster={rankByCluster}
+            onSetAction={onSetAction}
           />
         ))}
       </div>
@@ -250,6 +325,8 @@ function TopicGroup(p: {
   genSel: Set<string>;
   toggleGen: (id: string) => void;
   setTopicGen: (ids: string[], on: boolean) => void;
+  rankByCluster: Map<string, PrepublishRankResult>;
+  onSetAction: (ids: string[], action: "skip" | "refresh" | null) => void;
 }) {
   const [open, setOpen] = useState(true);
   const ids = p.clusters.map((c) => c.id);
@@ -290,6 +367,8 @@ function TopicGroup(p: {
               selectable={p.selectable}
               genChecked={p.genSel.has(c.id)}
               toggleGen={p.toggleGen}
+              rankResult={p.rankByCluster.get(c.id)}
+              onSetAction={p.onSetAction}
             />
           ))}
           {/* Gaps are auto-accepted into keyword-named placeholder articles, so
@@ -316,8 +395,11 @@ function ArticleRow(p: {
   selectable: boolean;
   genChecked: boolean;
   toggleGen: (id: string) => void;
+  rankResult?: PrepublishRankResult;
+  onSetAction: (ids: string[], action: "skip" | "refresh" | null) => void;
 }) {
   const { cluster: c, keywords, run } = p;
+  const rank = p.rankResult;
   const { role } = useSession();
   const isVA = role === "va";
   const [open, setOpen] = useState(false);
@@ -412,6 +494,18 @@ function ArticleRow(p: {
           )}
           {c.intent && <span className="badge badge-rel">{c.intent}</span>}
           {c.is_gap_placeholder && <span className="badge badge-warn">gap placeholder</span>}
+          {rank?.ranked && (
+            <span
+              className="badge"
+              style={{ background: "#dcfce7", color: "#166534" }}
+              title={`${rank.url ?? ""} — source: ${rank.source === "gsc" ? "Google Search Console" : "DataForSEO SERP"}`}
+            >
+              ranking #{rank.position} ({rank.source === "gsc" ? "GSC" : "SERP"})
+            </span>
+          )}
+          {c.prepublish_action && (
+            <span className="badge badge-warn">{c.prepublish_action}</span>
+          )}
           <span className="topic-group-count">
             {canonicalKeywords.length} kw
             {hiddenVariantCount > 0 && (
@@ -588,6 +682,24 @@ function ArticleRow(p: {
               </>
             ) : (
               <>
+                {rank?.ranked && (
+                  <>
+                    <button
+                      className="link-btn"
+                      title="Already ranking — skip writing this article"
+                      onClick={() => p.onSetAction([c.id], c.prepublish_action === "skip" ? null : "skip")}
+                    >
+                      {c.prepublish_action === "skip" ? "un-skip" : "skip"}
+                    </button>
+                    <button
+                      className="link-btn"
+                      title="Refresh the existing ranking page instead of writing a new article"
+                      onClick={() => p.onSetAction([c.id], c.prepublish_action === "refresh" ? null : "refresh")}
+                    >
+                      {c.prepublish_action === "refresh" ? "un-mark refresh" : "refresh existing"}
+                    </button>
+                  </>
+                )}
                 <button className="link-btn" onClick={() => setSplitMode(true)}>Split…</button>
                 <button
                   className="link-btn link-danger"
