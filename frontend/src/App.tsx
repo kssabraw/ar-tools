@@ -15,6 +15,7 @@ import { Icp } from './pages/Icp'
 import { LocalSeoContent } from './pages/LocalSeoContent'
 import { Rankings } from './pages/Rankings'
 import { MapsGeogrid } from './pages/MapsGeogrid'
+import { MapsReport } from './pages/MapsReport'
 import { RankReport } from './pages/RankReport'
 import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
@@ -49,6 +50,7 @@ export default function App() {
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/maps" element={<MapsGeogrid />} />
+                      <Route path="/clients/:id/maps/report" element={<MapsReport />} />
                       <Route path="/clients/:id/rankings/report" element={<RankReport />} />
                       <Route path="/clients/:id/rankings/report/:reportId" element={<RankReport />} />
                       <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
