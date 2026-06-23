@@ -6,6 +6,7 @@ import type { RunListResponse } from '../lib/types'
 import { Download, Copy, FileText, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 import { sectionsToMarkdown } from '../lib/sectionsToMarkdown'
 import { sectionsToHtml } from '../lib/sectionsToHtml'
+import { FeedbackButton } from '../components/FeedbackButton'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -19,7 +20,6 @@ function downloadFile(content: string, filename: string, mime: string) {
 
 function ArticleCard({ run }: { run: any }) {
   const [expanded, setExpanded] = useState(false)
-  const [copied, setCopied] = useState(false)
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
 
@@ -55,14 +55,6 @@ function ArticleCard({ run }: { run: any }) {
     : null
   const slug = run.keyword.replace(/\s+/g, '-').toLowerCase()
 
-  function handleCopy() {
-    const content = fmt === 'html' ? html : markdown
-    if (!content) return
-    navigator.clipboard.writeText(content)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
   return (
     <div style={cardStyle}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
@@ -93,21 +85,37 @@ function ArticleCard({ run }: { run: any }) {
                   </button>
                 ))}
               </div>
-              <button onClick={handleCopy} style={ghostBtn}>
-                <Copy size={13} /> {copied ? 'Copied!' : `Copy ${fmt === 'html' ? 'HTML' : 'MD'}`}
-              </button>
+              <FeedbackButton
+                baseStyle={ghostBtn}
+                doneLabel="Copied!"
+                onAction={() => { const content = fmt === 'html' ? html : markdown; if (content) navigator.clipboard.writeText(content) }}
+              >
+                <Copy size={13} /> Copy {fmt === 'html' ? 'HTML' : 'MD'}
+              </FeedbackButton>
               {fmt === 'html' ? (
-                <button onClick={() => downloadFile(html ?? '', `${slug}.html`, 'text/html')} style={ghostBtn}>
+                <FeedbackButton
+                  baseStyle={ghostBtn}
+                  doneLabel="Saved!"
+                  onAction={() => downloadFile(html ?? '', `${slug}.html`, 'text/html')}
+                >
                   <Download size={13} /> .html
-                </button>
+                </FeedbackButton>
               ) : (
                 <>
-                  <button onClick={() => downloadFile(markdown, `${slug}.md`, 'text/markdown')} style={ghostBtn}>
+                  <FeedbackButton
+                    baseStyle={ghostBtn}
+                    doneLabel="Saved!"
+                    onAction={() => downloadFile(markdown, `${slug}.md`, 'text/markdown')}
+                  >
                     <Download size={13} /> .md
-                  </button>
-                  <button onClick={() => downloadFile(markdown, `${slug}.txt`, 'text/plain')} style={ghostBtn}>
+                  </FeedbackButton>
+                  <FeedbackButton
+                    baseStyle={ghostBtn}
+                    doneLabel="Saved!"
+                    onAction={() => downloadFile(markdown, `${slug}.txt`, 'text/plain')}
+                  >
                     <Download size={13} /> .txt
-                  </button>
+                  </FeedbackButton>
                 </>
               )}
               {publishedUrl ? (

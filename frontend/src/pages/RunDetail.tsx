@@ -3,13 +3,14 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
-import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, RotateCcw, Repeat, Play, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, Check, RotateCcw, Repeat, Play, ExternalLink } from 'lucide-react'
 import {
   BriefCacheDecisionModal,
   type BriefCacheStatus,
 } from '../components/BriefCacheDecisionModal'
 import { sectionsToMarkdown, toTitleCase } from '../lib/sectionsToMarkdown'
 import { sectionsToHtml, escapeHtml } from '../lib/sectionsToHtml'
+import { FeedbackButton } from '../components/FeedbackButton'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -545,21 +546,37 @@ export function RunDetail() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={() => navigator.clipboard.writeText(fmt === 'html' ? (fullHtml ?? '') : (fullMarkdown ?? ''))} style={ghostBtn}>
+              <FeedbackButton
+                baseStyle={ghostBtn}
+                doneLabel="Copied!"
+                onAction={() => navigator.clipboard.writeText(fmt === 'html' ? (fullHtml ?? '') : (fullMarkdown ?? ''))}
+              >
                 <Copy size={13} /> Copy {fmt === 'html' ? 'HTML' : 'Markdown'}
-              </button>
+              </FeedbackButton>
               {fmt === 'html' ? (
-                <button onClick={() => downloadFile(fullHtml ?? '', `${run.keyword.replace(/\s+/g, '-')}.html`, 'text/html')} style={ghostBtn}>
+                <FeedbackButton
+                  baseStyle={ghostBtn}
+                  doneLabel="Downloaded!"
+                  onAction={() => downloadFile(fullHtml ?? '', `${run.keyword.replace(/\s+/g, '-')}.html`, 'text/html')}
+                >
                   <Download size={13} /> Download .html
-                </button>
+                </FeedbackButton>
               ) : (
                 <>
-                  <button onClick={() => downloadFile(fullMarkdown ?? '', `${run.keyword.replace(/\s+/g, '-')}.md`, 'text/markdown')} style={ghostBtn}>
+                  <FeedbackButton
+                    baseStyle={ghostBtn}
+                    doneLabel="Downloaded!"
+                    onAction={() => downloadFile(fullMarkdown ?? '', `${run.keyword.replace(/\s+/g, '-')}.md`, 'text/markdown')}
+                  >
                     <Download size={13} /> Download .md
-                  </button>
-                  <button onClick={() => downloadFile(fullMarkdown ?? '', `${run.keyword.replace(/\s+/g, '-')}.txt`, 'text/plain')} style={ghostBtn}>
+                  </FeedbackButton>
+                  <FeedbackButton
+                    baseStyle={ghostBtn}
+                    doneLabel="Saved!"
+                    onAction={() => downloadFile(fullMarkdown ?? '', `${run.keyword.replace(/\s+/g, '-')}.txt`, 'text/plain')}
+                  >
                     <Download size={13} /> .txt
-                  </button>
+                  </FeedbackButton>
                 </>
               )}
               {publishedUrl ? (
@@ -802,9 +819,9 @@ function CopyableLine({ label, text, hint }: { label: string; text: string; hint
             setCopied(true)
             setTimeout(() => setCopied(false), 1500)
           }}
-          style={ghostBtn}
+          style={{ ...ghostBtn, ...(copied ? { color: '#16a34a', borderColor: '#bbf7d0', background: '#f0fdf4' } : {}) }}
         >
-          <Copy size={12} /> {copied ? 'Copied!' : 'Copy'}
+          {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copied!' : 'Copy'}
         </button>
       </div>
       <div style={{
