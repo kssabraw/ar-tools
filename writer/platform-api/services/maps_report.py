@@ -267,10 +267,19 @@ async def _call_llm(snapshot: dict) -> dict:
         tool_choice={"type": "tool", "name": "emit_report"},
         messages=[{"role": "user", "content": build_user_prompt(snapshot)}],
     )
+    out = None
     for block in response.content:
         if getattr(block, "type", None) == "tool_use" and block.name == "emit_report":
-            return block.input
-    raise RuntimeError("maps_report_llm_no_tool_use")
+            out = block.input or {}
+            break
+    if out is None:
+        raise RuntimeError(f"maps_report_llm_no_tool_use (stop={response.stop_reason})")
+    # A truncated tool-use response (e.g. stop_reason='max_tokens') yields an
+    # empty/partial input and no usable summary — fail loudly so it's retryable
+    # rather than silently storing an empty "complete" report.
+    if not (out.get("summary") or "").strip():
+        raise RuntimeError(f"maps_report_empty_summary (stop={response.stop_reason})")
+    return out
 
 
 # ----------------------------------------------------------------------------
