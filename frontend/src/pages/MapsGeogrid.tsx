@@ -160,29 +160,56 @@ function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: bo
   )
 }
 
-// One keyword's result: Local Dominator's rendered map heatmap (pins on Google
-// Maps) when available, with the numeric rank grid as a secondary view.
+// One keyword's result: a circular, color-coded pin heatmap rendered from the
+// grid (Local Dominator's own image URL isn't embeddable outside their app), with
+// a link to LD's interactive map and the full numeric grid available.
 function ResultView({ r }: { r: MapsScanResultRow }) {
-  if (r.heatmap_image_url) {
-    return (
-      <div style={{ marginTop: 12 }}>
-        <img src={r.heatmap_image_url} alt={`Geo-grid heatmap for ${r.keyword}`}
-          style={{ width: '100%', maxWidth: 460, borderRadius: 8, border: '1px solid #e2e8f0', display: 'block' }} />
-        <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 8 }}>
-          {r.dynamic_url && (
-            <a href={r.dynamic_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', textDecoration: 'none' }}>
-              Open interactive map ↗
-            </a>
-          )}
-          <details>
-            <summary style={{ fontSize: 12, color: '#64748b', cursor: 'pointer' }}>Show rank grid</summary>
-            <div style={{ marginTop: 10 }}><Grid grid={r.rank_grid} /></div>
-          </details>
-        </div>
+  return (
+    <div style={{ marginTop: 12 }}>
+      <CircleHeatmap grid={r.rank_grid} />
+      <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 10 }}>
+        {r.dynamic_url && (
+          <a href={r.dynamic_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', textDecoration: 'none' }}>
+            Open interactive map ↗
+          </a>
+        )}
+        <details>
+          <summary style={{ fontSize: 12, color: '#64748b', cursor: 'pointer' }}>Show full grid</summary>
+          <div style={{ marginTop: 10 }}><Grid grid={r.rank_grid} /></div>
+        </details>
       </div>
-    )
-  }
-  return <div style={{ marginTop: 12 }}><Grid grid={r.rank_grid} /></div>
+    </div>
+  )
+}
+
+// Circular pin heatmap: small color-coded dots laid out in a circle (cells
+// outside the scan circle are omitted so the shape reads as a circle).
+function CircleHeatmap({ grid }: { grid: Array<Array<number | null>> | null }) {
+  if (!grid || grid.length === 0) return <p style={muted}>No grid data.</p>
+  const n = Math.max(...grid.map(r => r.length))
+  const center = (n - 1) / 2
+  const radiusSq = (n / 2) ** 2
+  const inCircle = (r: number, c: number) => (r - center) ** 2 + (c - center) ** 2 <= radiusSq
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: `repeat(${n}, 1fr)`, gap: 3, maxWidth: n * 28 }}>
+      {Array.from({ length: n }).flatMap((_, ri) =>
+        Array.from({ length: n }).map((__, ci) => {
+          if (!inCircle(ri, ci)) return <div key={`${ri}-${ci}`} />
+          const cell = (grid[ri] && grid[ri][ci] != null) ? grid[ri][ci] : null
+          const ranked = typeof cell === 'number' && cell >= 1
+          return (
+            <div key={`${ri}-${ci}`} title={ranked ? `Rank ${cell}` : 'Not ranked here'}
+              style={{
+                aspectRatio: '1', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 9, fontWeight: 700, background: rankColor(cell), color: ranked ? '#fff' : '#cbd5e1',
+              }}>
+              {ranked ? cell : ''}
+            </div>
+          )
+        }),
+      )}
+    </div>
+  )
 }
 
 function InProgressBanner() {
