@@ -114,3 +114,26 @@ class MapsKeywordTrend(BaseModel):
 
 class MapsTrendsResponse(BaseModel):
     keywords: list[MapsKeywordTrend] = Field(default_factory=list)
+
+
+class MapsCompetitorTrendPoint(BaseModel):
+    """One competitor's pressure at a single completed scan."""
+    scan_id: UUID
+    completed_at: Optional[str] = None
+    beats_pins: int = 0          # in-circle pins (across keywords) where it outranks the client
+    total_slots: int = 0         # total in-circle pins that scan
+    beats_pct: Optional[float] = None   # beats_pins / total_slots, 0–100
+    avg_rank_above: Optional[float] = None
+
+
+class MapsCompetitorTrend(BaseModel):
+    place_id: str
+    name: Optional[str] = None
+    latest_pct: Optional[float] = None
+    delta_pct: Optional[float] = None   # latest − earliest beats_pct; positive = gaining on us
+    points: list[MapsCompetitorTrendPoint] = Field(default_factory=list)  # oldest → newest
+
+
+class MapsCompetitorTrendsResponse(BaseModel):
+    scan_count: int = 0          # number of scans that carry competitor data
+    competitors: list[MapsCompetitorTrend] = Field(default_factory=list)

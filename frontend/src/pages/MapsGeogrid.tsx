@@ -5,8 +5,8 @@ import { ArrowLeft, Map, Play, Trash2, MapPin, Download, Printer } from 'lucide-
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type {
-  Client, MapsConfig, MapsKeyword, MapsRadius, MapsRunResponse, MapsScanDetail,
-  MapsScanResultRow, MapsScanSummary, MapsTrendsResponse,
+  Client, MapsCompetitorTrendsResponse, MapsConfig, MapsKeyword, MapsRadius, MapsRunResponse,
+  MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
 import { rankColor, TREND_METRICS } from '../components/maps/rank'
@@ -404,6 +404,7 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
         </Link>
       </div>
       <TrendPanel trends={trends} />
+      <CompetitorMomentum clientId={clientId} />
       {scans.length === 0 ? (
         <div style={card}><p style={muted}>No scans yet.</p></div>
       ) : (
@@ -478,6 +479,68 @@ function TrendPanel({ trends }: { trends?: MapsTrendsResponse }) {
         <TrendChart keywords={keywords} metric={TREND_METRICS.find(m => m.key === metric)!} />
       )}
     </div>
+  )
+}
+
+// ── Competitor momentum (are they gaining on us?) ───────────────────────────
+function CompetitorMomentum({ clientId }: { clientId: string }) {
+  const { data } = useQuery<MapsCompetitorTrendsResponse>({
+    queryKey: ['maps-competitor-trends', clientId],
+    queryFn: () => api.get<MapsCompetitorTrendsResponse>(`/clients/${clientId}/maps/competitor-trends`),
+  })
+  const comps = data?.competitors ?? []
+  const enough = (data?.scan_count ?? 0) >= 2 && comps.length > 0
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 13, color: '#334155' }
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Competitor momentum</h2>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+        Who’s gaining on you — % of pins each competitor outranks you, over time. <span style={{ color: '#dc2626', fontWeight: 600 }}>▲ gaining</span> (more threat) · <span style={{ color: '#16a34a', fontWeight: 600 }}>▼ losing ground</span>.
+      </p>
+      {!enough ? (
+        <p style={muted}>Need at least 2 scans with competitor data to show momentum — run another scan and check back.</p>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={{ ...th, textAlign: 'left' }}>Competitor</th><th style={th}>Beats you now</th><th style={th}>Change</th><th style={th}>Trend</th>
+          </tr></thead>
+          <tbody>
+            {comps.map(c => {
+              const up = c.delta_pct != null && c.delta_pct > 0
+              const down = c.delta_pct != null && c.delta_pct < 0
+              const color = up ? '#dc2626' : down ? '#16a34a' : '#94a3b8'
+              return (
+                <tr key={c.place_id} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
+                  <td style={td}>{c.latest_pct != null ? `${Math.round(c.latest_pct)}%` : '—'}</td>
+                  <td style={{ ...td, color, fontWeight: 600 }}>{c.delta_pct != null ? `${up ? '▲' : down ? '▼' : '–'} ${Math.abs(c.delta_pct)} pts` : '—'}</td>
+                  <td style={{ ...td, width: 100 }}><PctSparkline values={c.points.map(p => p.beats_pct)} color={color} /></td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+// Up-is-more sparkline (rising line = increasing threat), gaps for missing pts.
+function PctSparkline({ values, color, width = 90, height = 24 }: { values: (number | null)[]; color: string; width?: number; height?: number }) {
+  const present = values.filter((v): v is number => v != null)
+  if (present.length < 2) return <svg width={width} height={height} />
+  const min = Math.min(...present), max = Math.max(...present)
+  const span = (max - min) || 1
+  const pad = 2
+  const dx = values.length > 1 ? width / (values.length - 1) : 0
+  const y = (v: number) => pad + (1 - (v - min) / span) * (height - pad * 2)  // higher % → top
+  const pts = values.map((v, i) => (v == null ? null : `${i * dx},${y(v)}`)).filter(Boolean).join(' ')
+  return (
+    <svg width={width} height={height} role="img" aria-label="competitor pressure trend" style={{ display: 'block', marginLeft: 'auto' }}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
   )
 }
 
