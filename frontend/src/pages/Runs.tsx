@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { RunListResponse, ClientListItem, RunStatus } from '../lib/types'
-import { Plus, RefreshCw, ArrowLeft } from 'lucide-react'
+import type { RunListResponse, ClientListItem, RunStatus, SiloListResponse, SiloStatus } from '../lib/types'
+import { Plus, RefreshCw, ArrowLeft, Layers, ArrowRight } from 'lucide-react'
 import {
   BriefCacheDecisionModal,
   type BriefCacheStatus,
@@ -35,6 +35,23 @@ function statusBadge(status: RunStatus) {
   )
 }
 
+function siloStatusBadge(status: SiloStatus) {
+  const map: Record<SiloStatus, { bg: string; color: string; label: string }> = {
+    proposed:    { bg: '#fef3c7', color: '#92400e', label: 'Proposed' },
+    approved:    { bg: '#dbeafe', color: '#1e40af', label: 'Approved' },
+    rejected:    { bg: '#fee2e2', color: '#991b1b', label: 'Rejected' },
+    in_progress: { bg: '#e0e7ff', color: '#3730a3', label: 'In Progress' },
+    published:   { bg: '#dcfce7', color: '#166534', label: 'Published' },
+    superseded:  { bg: '#f1f5f9', color: '#64748b', label: 'Superseded' },
+  }
+  const s = map[status] ?? { bg: '#f1f5f9', color: '#475569', label: status }
+  return (
+    <span style={{ background: s.bg, color: s.color, borderRadius: 999, padding: '2px 10px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
+      {s.label}
+    </span>
+  )
+}
+
 export function Runs() {
   const qc = useQueryClient()
   const [searchParams] = useSearchParams()
@@ -54,6 +71,17 @@ export function Runs() {
   })
 
   const runs = runsResp?.data ?? []
+
+  // Silo candidates discovered while generating blog posts for this client.
+  // Only meaningful when the page is scoped to a single client — the
+  // /silos endpoint requires a client_id. page_size is bumped so we show
+  // all of them ("see all silo pages") rather than the default first page.
+  const { data: silosResp } = useQuery<SiloListResponse>({
+    queryKey: ['silos', 'runs-scoped', scopedClientId ?? null],
+    queryFn: () => api.get<SiloListResponse>(`/silos?client_id=${scopedClientId}&page_size=200`),
+    enabled: Boolean(scopedClientId),
+  })
+  const silos = silosResp?.items ?? []
 
   const { data: clients = [] } = useQuery<ClientListItem[]>({
     queryKey: ['clients'],
@@ -227,6 +255,58 @@ export function Runs() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {scopedClientId && (
+        <div style={cardStyle}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 600, margin: 0, color: '#0f172a' }}>
+              <Layers size={17} /> Content Silos
+            </h2>
+            <Link to="/silos" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#6366f1', fontSize: 13, fontWeight: 500, textDecoration: 'none' }}>
+              Manage silos <ArrowRight size={14} />
+            </Link>
+          </div>
+          <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 16px' }}>
+            Standalone-article topics discovered while generating blog posts for this client.
+          </p>
+          {silos.length === 0 ? (
+            <div style={{ color: '#64748b', fontSize: 14, padding: '8px 0' }}>
+              No silo pages yet. They appear here as the Brief Generator discovers them during content runs.
+            </div>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  {['Keyword', 'Status', 'Occurrences', 'Intent', ''].map(h => (
+                    <th key={h} style={thStyle}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {silos.map(silo => (
+                  <tr key={silo.id} style={{ borderBottom: '1px solid #f8fafc' }}>
+                    <td style={{ ...tdStyle, fontWeight: 500, color: '#0f172a' }}>{silo.suggested_keyword}</td>
+                    <td style={tdStyle}>{siloStatusBadge(silo.status)}</td>
+                    <td style={{ ...tdStyle, color: '#64748b' }}>{silo.occurrence_count}</td>
+                    <td style={{ ...tdStyle, color: '#64748b', fontSize: 13 }}>{silo.estimated_intent ?? '—'}</td>
+                    <td style={tdStyle}>
+                      {silo.promoted_to_run_id ? (
+                        <Link to={`/runs/${silo.promoted_to_run_id}`} style={{ color: '#6366f1', fontSize: 13, textDecoration: 'none', fontWeight: 500 }}>
+                          View run →
+                        </Link>
+                      ) : (
+                        <Link to="/silos" style={{ color: '#6366f1', fontSize: 13, textDecoration: 'none', fontWeight: 500 }}>
+                          Review →
+                        </Link>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
       )}
 
