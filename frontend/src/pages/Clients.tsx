@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
@@ -14,6 +14,7 @@ function AnalysisStatus({ status }: { status: ClientListItem['website_analysis_s
 
 export function Clients() {
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const { isAdmin } = useAuth()
   const [deleteId, setDeleteId] = useState<string | null>(null)
 
@@ -59,14 +60,17 @@ export function Clients() {
       ) : (
         <div style={{ display: 'grid', gap: 14 }}>
           {clients.map(c => (
-            <div key={c.id} style={{ ...cardStyle, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 0 }}>
+            <div
+              key={c.id}
+              onClick={() => navigate(`/clients/${c.id}`)}
+              role="link"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/clients/${c.id}`) }}
+              style={{ ...cardStyle, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 0, cursor: 'pointer' }}
+            >
               <div>
-                <div style={{ marginBottom: 4 }}>
-                  <Link to={`/clients/${c.id}`} style={{ fontWeight: 600, fontSize: 15, color: '#0f172a', textDecoration: 'none' }}>
-                    {c.name}
-                  </Link>
-                </div>
-                <a href={c.website_url} target="_blank" rel="noreferrer"
+                <div style={{ fontWeight: 600, fontSize: 15, color: '#0f172a', marginBottom: 4 }}>{c.name}</div>
+                <a href={c.website_url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#6366f1', textDecoration: 'none' }}>
                   <Globe size={12} /> {c.website_url}
                 </a>
@@ -75,7 +79,7 @@ export function Clients() {
                 </div>
               </div>
               {isAdmin && (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                   <Link to={`/clients/${c.id}/edit`} style={iconBtn} title="Edit">
                     <Pencil size={14} />
                   </Link>
