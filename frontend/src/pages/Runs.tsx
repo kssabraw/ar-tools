@@ -223,7 +223,9 @@ export function Runs() {
         <div style={{ color: '#64748b', fontSize: 14 }}>Loading runs…</div>
       ) : runs.length === 0 ? (
         <div style={{ ...cardStyle, textAlign: 'center', color: '#64748b', padding: 48 }}>
-          No runs yet. Create one to get started.
+          {scopedClientId
+            ? 'No runs yet. Create one to get started.'
+            : 'No runs yet. Open a client to create content.'}
         </div>
       ) : (
         <div style={cardStyle}>
