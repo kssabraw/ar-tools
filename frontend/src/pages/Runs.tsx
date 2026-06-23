@@ -2,12 +2,18 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { RunListResponse, ClientListItem, RunStatus, SiloListResponse, SiloStatus, SiloListItem, Run } from '../lib/types'
+import type { RunListResponse, ClientListItem, RunStatus, SiloListResponse, SiloListItem, Run } from '../lib/types'
 import { Plus, RefreshCw, ArrowLeft, Layers, ArrowRight } from 'lucide-react'
 import {
   BriefCacheDecisionModal,
   type BriefCacheStatus,
 } from '../components/BriefCacheDecisionModal'
+import {
+  SiloBulkToolbar,
+  SiloRow,
+  SiloTableHead,
+} from '../components/silos/SiloTable'
+import { useSiloMutations } from '../components/silos/siloShared'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
 
@@ -30,23 +36,6 @@ function statusBadge(status: RunStatus) {
   const s = map[status] ?? { bg: '#f1f5f9', color: '#475569', label: status }
   return (
     <span style={{ background: s.bg, color: s.color, borderRadius: 999, padding: '2px 10px', fontSize: 12, fontWeight: 600 }}>
-      {s.label}
-    </span>
-  )
-}
-
-function siloStatusBadge(status: SiloStatus) {
-  const map: Record<SiloStatus, { bg: string; color: string; label: string }> = {
-    proposed:    { bg: '#fef3c7', color: '#92400e', label: 'Proposed' },
-    approved:    { bg: '#dbeafe', color: '#1e40af', label: 'Approved' },
-    rejected:    { bg: '#fee2e2', color: '#991b1b', label: 'Rejected' },
-    in_progress: { bg: '#e0e7ff', color: '#3730a3', label: 'In Progress' },
-    published:   { bg: '#dcfce7', color: '#166534', label: 'Published' },
-    superseded:  { bg: '#f1f5f9', color: '#64748b', label: 'Superseded' },
-  }
-  const s = map[status] ?? { bg: '#f1f5f9', color: '#475569', label: status }
-  return (
-    <span style={{ background: s.bg, color: s.color, borderRadius: 999, padding: '2px 10px', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>
       {s.label}
     </span>
   )
@@ -93,6 +82,61 @@ export function Runs() {
   }
   const runIdSet = new Set(runs.map(r => r.id))
   const orphanSilos = silos.filter(s => !runIdSet.has(s.first_seen_run_id))
+
+  // Silo management (shared with the Silos dashboard): selection for bulk
+  // actions, row expansion, and the promote/approve/reject mutations.
+  const siloMutations = useSiloMutations()
+  const [selectedSilos, setSelectedSilos] = useState<Set<string>>(new Set())
+  const [expandedSilo, setExpandedSilo] = useState<string | null>(null)
+
+  function toggleSilo(id: string) {
+    setSelectedSilos(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function toggleSiloGroup(list: SiloListItem[]) {
+    setSelectedSilos(prev => {
+      const next = new Set(prev)
+      const allSelected = list.length > 0 && list.every(s => next.has(s.id))
+      for (const s of list) {
+        if (allSelected) next.delete(s.id)
+        else next.add(s.id)
+      }
+      return next
+    })
+  }
+
+  // One silo table, reused by each article card and the "other" bucket.
+  function renderSiloTable(list: SiloListItem[]) {
+    return (
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <SiloTableHead
+          allChecked={list.length > 0 && list.every(s => selectedSilos.has(s.id))}
+          onToggleAll={() => toggleSiloGroup(list)}
+        />
+        <tbody>
+          {list.map(silo => (
+            <SiloRow
+              key={silo.id}
+              silo={silo}
+              selected={selectedSilos.has(silo.id)}
+              expanded={expandedSilo === silo.id}
+              onToggleSelect={() => toggleSilo(silo.id)}
+              onToggleExpand={() => setExpandedSilo(prev => (prev === silo.id ? null : silo.id))}
+              onApprove={() => siloMutations.updateStatus.mutate({ id: silo.id, status: 'approved' })}
+              onReject={() => siloMutations.updateStatus.mutate({ id: silo.id, status: 'rejected' })}
+              onPromote={() => siloMutations.promote.mutate(silo.id)}
+              promoting={siloMutations.promote.isPending && siloMutations.promote.variables === silo.id}
+            />
+          ))}
+        </tbody>
+      </table>
+    )
+  }
 
   const { data: clients = [] } = useQuery<ClientListItem[]>({
     queryKey: ['clients'],
@@ -246,9 +290,21 @@ export function Runs() {
         </div>
       ) : scopedClientId ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {runs.map(run => (
-            <ArticleCard key={run.id} run={run} silos={silosByRun.get(run.id) ?? []} />
-          ))}
+          <SiloBulkToolbar
+            selectedIds={selectedSilos}
+            mutations={siloMutations}
+            onClear={() => setSelectedSilos(new Set())}
+          />
+          {runs.map(run => {
+            const runSilos = silosByRun.get(run.id) ?? []
+            return (
+              <ArticleCard
+                key={run.id}
+                run={run}
+                silosContent={runSilos.length > 0 ? renderSiloTable(runSilos) : undefined}
+              />
+            )
+          })}
           {orphanSilos.length > 0 && (
             <div style={{ ...cardStyle, marginBottom: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -262,7 +318,7 @@ export function Runs() {
               <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 16px' }}>
                 Silo topics discovered in earlier runs not shown above.
               </p>
-              <SiloTable items={orphanSilos} />
+              {renderSiloTable(orphanSilos)}
             </div>
           )}
         </div>
@@ -315,7 +371,7 @@ export function Runs() {
 
 // An article (run) and the silo topics discovered while generating it,
 // rendered inside the same card so silos read as children of their parent.
-function ArticleCard({ run, silos }: { run: Run; silos: SiloListItem[] }) {
+function ArticleCard({ run, silosContent }: { run: Run; silosContent?: React.ReactNode }) {
   const hasDistinctTitle = Boolean(run.title && run.title !== run.keyword)
   return (
     <div style={{ ...cardStyle, marginBottom: 0 }}>
@@ -336,46 +392,15 @@ function ArticleCard({ run, silos }: { run: Run; silos: SiloListItem[] }) {
           <Link to={`/runs/${run.id}`} style={viewLinkStyle}>View →</Link>
         </div>
       </div>
-      {silos.length > 0 && (
+      {silosContent && (
         <div style={{ marginTop: 16, borderTop: '1px solid #f1f5f9', paddingTop: 14 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
             <Layers size={13} /> Content Silos
           </div>
-          <SiloTable items={silos} />
+          {silosContent}
         </div>
       )}
     </div>
-  )
-}
-
-function SiloTable({ items }: { items: SiloListItem[] }) {
-  return (
-    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-      <thead>
-        <tr style={{ borderBottom: '1px solid #f1f5f9' }}>
-          {['Keyword', 'Status', 'Occurrences', 'Intent', ''].map(h => (
-            <th key={h} style={thStyle}>{h}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {items.map(silo => (
-          <tr key={silo.id} style={{ borderBottom: '1px solid #f8fafc' }}>
-            <td style={{ ...tdStyle, fontWeight: 500, color: '#0f172a' }}>{silo.suggested_keyword}</td>
-            <td style={tdStyle}>{siloStatusBadge(silo.status)}</td>
-            <td style={{ ...tdStyle, color: '#64748b' }}>{silo.occurrence_count}</td>
-            <td style={{ ...tdStyle, color: '#64748b', fontSize: 13 }}>{silo.estimated_intent ?? '—'}</td>
-            <td style={tdStyle}>
-              {silo.promoted_to_run_id ? (
-                <Link to={`/runs/${silo.promoted_to_run_id}`} style={viewLinkStyle}>View run →</Link>
-              ) : (
-                <Link to="/silos" style={viewLinkStyle}>Review →</Link>
-              )}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   )
 }
 
