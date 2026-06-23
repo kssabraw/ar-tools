@@ -78,6 +78,17 @@ class Settings(BaseSettings):
     maps_scan_weekday: int = 1
     # How long (minutes) to keep polling a scan before marking it failed.
     maps_scan_poll_timeout_minutes: int = 30
+    # Local Rank Analysis report (auto-generated per keyword when a scan completes).
+    # Sonnet writes the client-facing narrative from the deterministic geo-grid
+    # rollups + competitor data; Top-5 competitors are those rated >= this with
+    # the most reviews. The octant pin generator runs under this rule (R1 = 4 pins
+    # across the 4 weakest octants; R3/R5 = 2 far-apart; R8 = none).
+    maps_report_model: str = "claude-sonnet-4-6"
+    # The full templated report (10 sections + 4 tables) is large; too small a
+    # budget truncates the forced tool-use JSON and yields an empty summary.
+    maps_report_max_tokens: int = 8192
+    maps_report_competitor_min_rating: float = 4.7
+    maps_report_octant_rule: str = "R1"
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,

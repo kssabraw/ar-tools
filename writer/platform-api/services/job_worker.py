@@ -15,6 +15,7 @@ from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
 from services.serp_snapshot import run_serp_snapshot_job
 from services.local_dominator import run_maps_scan_job
+from services.maps_report import run_maps_report_job
 from services.silo_dedup import process_silo_dedup_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
 
@@ -142,6 +143,8 @@ async def _process_job(job: dict) -> None:
         await run_serp_snapshot_job(job)
     elif job_type == "maps_scan":
         await run_maps_scan_job(job)
+    elif job_type == "maps_report":
+        await run_maps_report_job(job)
     elif job_type == "local_seo_silo":
         await run_silo_plan_job(job)
     else:

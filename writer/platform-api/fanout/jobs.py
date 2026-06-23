@@ -1091,14 +1091,19 @@ def run_prepublish_rank_check_job(session_id: str) -> None:
 
         keywords = sorted({prepublish_rank.norm_keyword(t["keyword"]) for t in targets})
 
-        # 1) GSC (bulk, free). 2) DataForSEO for the residue (location-aware).
-        gsc = prepublish_rank.gsc_lookup(client_id, keywords) if client_id else {}
-        residue = [k for k in keywords if k not in gsc]
-        domain = prepublish_rank.client_domain(client_id) if client_id else None
+        # GSC is authoritative when the client has a verified property: a keyword
+        # absent from GSC = "not ranking", and DataForSEO is NOT called. DataForSEO
+        # is only a fallback for clients with no GSC at all.
+        use_gsc = prepublish_rank.gsc_available(client_id)
+        gsc: dict[str, dict] = {}
         dfs_map: dict[str, dict] = {}
-        if residue and domain:
-            dfs = get_dataforseo(store.session_location_code(session))
-            dfs_map = prepublish_rank.dataforseo_lookup(dfs, domain, residue)
+        if use_gsc:
+            gsc = prepublish_rank.gsc_lookup(client_id, keywords)
+        else:
+            domain = prepublish_rank.client_domain(client_id) if client_id else None
+            if domain:
+                dfs = get_dataforseo(store.session_location_code(session))
+                dfs_map = prepublish_rank.dataforseo_lookup(dfs, domain, keywords)
 
         results: list[dict] = []
         ranked = 0
@@ -1122,13 +1127,15 @@ def run_prepublish_rank_check_job(session_id: str) -> None:
             "as_of": _utcnow_iso(),
             "checked": len(results),
             "ranked": ranked,
-            "gsc_connected": bool(gsc) or bool(client_id),
+            "source_mode": "gsc" if use_gsc else ("dataforseo" if dfs_map or client_id else "none"),
+            "gsc_connected": use_gsc,
             "results": results,
         }})
         logger.info(
             "step_complete",
             extra={"event": "step_complete", "step": "prepublish_rank_check",
                    "checked": len(results), "ranked": ranked,
+                   "source_mode": "gsc" if use_gsc else "dataforseo",
                    "dataforseo_swept": len(dfs_map)},
         )
     except Exception as exc:  # noqa: BLE001

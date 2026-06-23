@@ -279,6 +279,9 @@ export interface PrepublishRankCheck {
   as_of: string | null;
   checked?: number;
   ranked?: number;
+  // Which source was used: "gsc" (authoritative — missing = not ranking),
+  // "dataforseo" (no GSC, SERP fallback), or "none" (no client data).
+  source_mode?: "gsc" | "dataforseo" | "none";
   gsc_connected?: boolean;
   error?: string;
   results?: PrepublishRankResult[];
