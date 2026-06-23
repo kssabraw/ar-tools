@@ -31,11 +31,14 @@ from models.local_seo import (
     LocalSeoRelatedPagesRequest,
     LocalSeoReoptimizeRequest,
     LocalSeoScoreRequest,
+    LocalSeoSiloPlanJob,
+    LocalSeoSiloPlanRequest,
+    LocalSeoSiloPlanResult,
     LocalSeoSocialPostsRequest,
     LocationSuggestion,
     PageTemplateDefaultRequest,
 )
-from services import local_seo_service
+from services import local_seo_service, local_seo_silo
 from sse import sse_response
 
 logger = logging.getLogger(__name__)
@@ -132,6 +135,36 @@ async def related_local_seo_pages(
         keyword=body.keyword,
         location=body.location,
     ))
+
+
+@router.post("/clients/{client_id}/local-seo/silo-plan", response_model=LocalSeoSiloPlanJob)
+async def start_local_seo_silo_plan(
+    client_id: UUID,
+    body: LocalSeoSiloPlanRequest,
+    auth: dict = Depends(require_auth),
+) -> LocalSeoSiloPlanJob:
+    """Enqueue a Fanout-powered silo plan (runs minutes; poll for the result)."""
+    job_id = await local_seo_silo.start_silo_plan(
+        client_id=str(client_id),
+        keyword=body.keyword,
+        location=body.location,
+        location_code=body.location_code,
+        user_id=auth["user_id"],
+    )
+    return LocalSeoSiloPlanJob(job_id=job_id, status="pending")
+
+
+@router.get(
+    "/clients/{client_id}/local-seo/silo-plan/{job_id}",
+    response_model=LocalSeoSiloPlanResult,
+)
+async def get_local_seo_silo_plan(
+    client_id: UUID,
+    job_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> LocalSeoSiloPlanResult:
+    """Poll a silo-plan job; returns its status and (when complete) page targets."""
+    return LocalSeoSiloPlanResult(**local_seo_silo.get_silo_plan(str(job_id), str(client_id)))
 
 
 @router.post("/clients/{client_id}/local-seo/reoptimize")

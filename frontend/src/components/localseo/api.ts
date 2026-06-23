@@ -8,6 +8,8 @@ import type {
   RankabilityResult,
   RelatedPagesResult,
   ScoreResult,
+  SiloPlanJob,
+  SiloPlanResult,
   SocialPostsResult,
 } from './types'
 
@@ -73,6 +75,17 @@ export const localSeoApi = {
 
   relatedPages: (clientId: string, body: { keyword: string; location: string }) =>
     api.stream<RelatedPagesResult>(`/clients/${clientId}/local-seo/related-pages`, body),
+
+  // Plan Silo (Fanout-powered): enqueue the keyword-research pipeline, then poll.
+  // It runs for minutes and bills DataForSEO/LLM, so it's an async job rather
+  // than a blocking stream.
+  startSiloPlan: (
+    clientId: string,
+    body: { keyword: string; location: string; location_code?: number | null },
+  ) => api.post<SiloPlanJob>(`/clients/${clientId}/local-seo/silo-plan`, body),
+
+  getSiloPlan: (clientId: string, jobId: string) =>
+    api.get<SiloPlanResult>(`/clients/${clientId}/local-seo/silo-plan/${jobId}`),
 
   reoptimize: (
     clientId: string,

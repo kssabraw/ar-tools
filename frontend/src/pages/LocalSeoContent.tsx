@@ -11,6 +11,7 @@ import { LocationAutocomplete } from '../components/localseo/LocationAutocomplet
 import type { AnalysisResult, LocalSeoPageDetail, LocalSeoPageListItem, RankabilityResult, RelatedPageItem } from '../components/localseo/types'
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
+import { useSiloPlan } from '../components/localseo/useSiloPlan'
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
@@ -79,10 +80,15 @@ export function LocalSeoContent() {
   // business is physically in, so distance to the target area can be measured.
   const [sabCity, setSabCity] = useState('')
 
-  // Plan Silo tab — research a topic's parent/sibling/neighbourhood silo up front.
-  const [planScanning, setPlanScanning] = useState(false)
-  const [planResults, setPlanResults] = useState<RelatedPageItem[] | null>(null)
-  const [planError, setPlanError] = useState('')
+  // Plan Silo tab — Fanout-powered silo discovery + keyword clustering, surfaced
+  // as candidate page targets grouped by silo. Same async engine as the per-page
+  // "Related Pages" tab, via the shared hook (kick off + poll). Aliased to the
+  // local names the render uses.
+  const siloPlan = useSiloPlan(clientId)
+  const planScanning = siloPlan.loading
+  const planResults = siloPlan.items
+  const planNotes = siloPlan.notes
+  const planError = siloPlan.error
 
   // Bulk creation — generate the selected missing silo pages sequentially.
   const [selectedForCreate, setSelectedForCreate] = useState<Set<string>>(new Set())
@@ -210,22 +216,12 @@ export function LocalSeoContent() {
     }
   }
 
-  const handleScanSilo = async () => {
+  const handleScanSilo = () => {
     if (!keyword.trim() || !location.trim()) return
-    setPlanError('')
-    setPlanScanning(true)
-    setPlanResults(null)
     setSelectedForCreate(new Set())
     setBulkDone(0)
     setBulkFailed(0)
-    try {
-      const data = await localSeoApi.relatedPages(clientId, { keyword: keyword.trim(), location: location.trim() })
-      setPlanResults(data.items ?? [])
-    } catch (e) {
-      setPlanError(e instanceof Error ? e.message : 'Scan failed')
-    } finally {
-      setPlanScanning(false)
-    }
+    void siloPlan.run(keyword, location, locationCode)
   }
 
   // Hand a single found silo page off to the writer's score/reoptimize view.
@@ -412,11 +408,11 @@ export function LocalSeoContent() {
       ) : tab === 'plan' ? (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 18 }}>
           <div>
-            <h2 style={{ fontSize: 16, fontWeight: 600, color: '#0f172a', margin: 0 }}>Research the silo for a topic</h2>
+            <h2 style={{ fontSize: 16, fontWeight: 600, color: '#0f172a', margin: 0 }}>Plan the silo for a service</h2>
             <p style={{ fontSize: 13, color: '#64748b', margin: '4px 0 0' }}>
-              Enter a seed service and area. We'll derive the parent / sibling / neighbourhood pages that topic should
-              link to and check {client?.name ?? 'this client'}'s site for which already exist — then you can create the
-              missing ones in one click.
+              Enter a seed service and area. We research the topic, discover the service silos around it, then expand
+              and cluster real search demand into candidate pages — grouped by silo. Each is checked against
+              {' '}{client?.name ?? 'this client'}'s existing pages, so you can create the missing ones in one batch.
             </p>
           </div>
 
@@ -432,7 +428,7 @@ export function LocalSeoContent() {
           {/* Service */}
           <div>
             <label style={label}>Seed service</label>
-            <input style={input} value={keyword} disabled={bulkCreating} onChange={e => { setKeyword(e.target.value); setPlanResults(null); setPlanError(''); setSelectedForCreate(new Set()) }} placeholder="e.g. emergency plumber" />
+            <input style={input} value={keyword} disabled={bulkCreating} onChange={e => { setKeyword(e.target.value); siloPlan.reset(); setSelectedForCreate(new Set()) }} placeholder="e.g. emergency plumber" />
           </div>
 
           {/* Area */}
@@ -441,7 +437,7 @@ export function LocalSeoContent() {
             <LocationAutocomplete
               clientId={clientId}
               value={location}
-              onChange={(loc, code) => { setLocation(loc); setLocationCode(code); setPlanResults(null); setPlanError(''); setSelectedForCreate(new Set()) }}
+              onChange={(loc, code) => { setLocation(loc); setLocationCode(code); siloPlan.reset(); setSelectedForCreate(new Set()) }}
               placeholder="Start typing a city, e.g. Melbourne…"
               disabled={bulkCreating}
             />
@@ -454,30 +450,38 @@ export function LocalSeoContent() {
             disabled={planScanning || bulkCreating || !keyword.trim() || !location.trim()}
             onClick={handleScanSilo}
           >
-            {planScanning ? <Spinner size={16} /> : <Search size={16} />} {planScanning ? 'Scanning site…' : 'Scan site'}
+            {planScanning ? <Spinner size={16} /> : <Search size={16} />} {planScanning ? 'Planning silo…' : 'Plan silo'}
           </button>
 
           {planScanning && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 32, color: '#64748b' }}>
               <Spinner size={22} />
-              <p style={{ fontSize: 14, margin: 0 }}>Deriving related keywords and checking the site…</p>
-              <p style={{ fontSize: 12, opacity: 0.7, margin: 0 }}>This usually takes 30–60 seconds.</p>
+              <p style={{ fontSize: 14, margin: 0 }}>Discovering silos, expanding keywords, and clustering demand…</p>
+              <p style={{ fontSize: 12, opacity: 0.7, margin: 0 }}>This usually takes 1–3 minutes. You can keep this tab open.</p>
             </div>
           )}
 
           {!planScanning && planResults && planResults.length === 0 && (
-            <p style={{ fontSize: 14, color: '#64748b', textAlign: 'center', padding: 24 }}>No related pages found for this topic.</p>
+            <p style={{ fontSize: 14, color: '#64748b', textAlign: 'center', padding: 24 }}>No candidate pages found for this service / area. Try a broader service term.</p>
+          )}
+
+          {!planScanning && planNotes.length > 0 && (
+            <div style={{ display: 'flex', gap: 10, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12, color: '#92400e' }}>
+              <Building2 size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>Some steps ran in degraded mode — results may be partial: {planNotes.join(' · ')}</span>
+            </div>
           )}
 
           {!planScanning && planResults && planResults.length > 0 && (() => {
             const found = planResults.filter(r => r.status === 'found').length
             const missingKws = planResults.filter(r => r.status === 'missing').map(r => r.keyword)
+            const siloCount = new Set(planResults.map(r => r.group)).size
             const allMissingSelected = missingKws.length > 0 && missingKws.every(kw => selectedForCreate.has(kw))
             const selectedCount = selectedForCreate.size
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#64748b', flexWrap: 'wrap' }}>
-                  <span style={{ fontWeight: 600, color: '#0f172a' }}>{planResults.length} related keywords checked</span>
+                  <span style={{ fontWeight: 600, color: '#0f172a' }}>{planResults.length} candidate pages across {siloCount} silo{siloCount === 1 ? '' : 's'}</span>
                   <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#dcfce7', color: '#166534' }}>{found} exist</span>
                   <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#fef3c7', color: '#92400e' }}>{missingKws.length} missing</span>
                   {missingKws.length > 0 && !bulkCreating && (

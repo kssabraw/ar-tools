@@ -14,11 +14,17 @@ def create_schedule(
     *, session_id: str, user_id: str, mode: str, runs: list[PlannedRun],
     per_day: int | None = None, start_date: date | None = None,
     time_of_day: time | None = None, tz_name: str = "UTC",
+    content_type: str = "blog_post", location: str | None = None,
+    location_code: int | None = None,
 ) -> dict:
     """Insert the parent schedule + one queued run per planned cluster. Returns the parent
     row augmented with `run_count`. (Two statements — PostgREST has no multi-table txn; the
     children reference the parent id, and a failed child insert leaves an empty schedule that
-    the worker simply never advances.)"""
+    the worker simply never advances.)
+
+    `content_type` selects the generator the worker uses per run ('blog_post' -> the Fanout
+    writer; 'local_seo_page' -> the suite's nlp-api Local SEO generator). For local SEO the
+    schedule also carries the target `location` (+ optional DataForSEO `location_code`)."""
     client = get_service_client()
     parent = client.table("content_schedules").insert({
         "session_id": session_id, "user_id": user_id, "mode": mode,
@@ -26,6 +32,8 @@ def create_schedule(
         "start_date": start_date.isoformat() if start_date else None,
         "time_of_day": time_of_day.isoformat() if time_of_day else "09:00",
         "timezone": tz_name, "total_count": len(runs),
+        "content_type": content_type, "location": location,
+        "location_code": location_code,
     }).execute().data[0]
 
     rows = [{

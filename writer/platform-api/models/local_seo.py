@@ -77,6 +77,44 @@ class LocalSeoRelatedPagesRequest(BaseModel):
     location: str = Field(..., min_length=1)
 
 
+class LocalSeoSiloPlanRequest(BaseModel):
+    """Kick off a Fanout-powered silo plan for a service + area.
+
+    The pipeline (silo discovery → expansion → relevance gate → clustering)
+    runs for minutes, so the route enqueues an async job and the client polls
+    `GET …/silo-plan/{job_id}`."""
+
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    location_code: Optional[int] = None
+
+
+class LocalSeoSiloPlanJob(BaseModel):
+    """Handle returned when a silo-plan job is enqueued."""
+
+    job_id: str
+    status: str
+
+
+class LocalSeoSiloPlanItem(BaseModel):
+    """One candidate page target (a cluster representative) under its silo."""
+
+    keyword: str
+    # The silo this target belongs to (free-form label from silo discovery).
+    group: str
+    status: str  # 'found' (a page already exists) | 'missing'
+    url: Optional[str] = None
+
+
+class LocalSeoSiloPlanResult(BaseModel):
+    """Polled state of a silo-plan job."""
+
+    status: str  # async_jobs status: pending | running | complete | failed
+    items: list[LocalSeoSiloPlanItem] = Field(default_factory=list)
+    degraded_notes: list[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
 class LocalSeoReoptimizeRequest(BaseModel):
     """Reoptimize an existing page to lift its score, then persist the result.
 

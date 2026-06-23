@@ -3,8 +3,9 @@ import {
   ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2,
 } from 'lucide-react'
 import { localSeoApi } from './api'
-import type { LocalSeoPageDetail, RelatedPageItem, SocialPostsResult } from './types'
+import type { LocalSeoPageDetail, SocialPostsResult } from './types'
 import { RelatedPagesList } from './RelatedPagesList'
+import { useSiloPlan } from './useSiloPlan'
 import { Spinner } from './Spinner'
 import {
   backLink, card, downloadFile, errorBox, formatHtml, htmlToText, outlineBtn,
@@ -68,10 +69,10 @@ export function GeneratedPageView({
   const [copiedPost, setCopiedPost] = useState<string | null>(null)
   const socialRequested = useRef(false)
 
-  // Related pages — lazily fetched when the tab is first opened.
-  const [related, setRelated] = useState<RelatedPageItem[] | null>(null)
-  const [relatedLoading, setRelatedLoading] = useState(false)
-  const [relatedError, setRelatedError] = useState('')
+  // Related pages — the Fanout-powered silo plan (same engine as the Plan Silo
+  // tab), seeded from this page's keyword + area. Lazily kicked off when the tab
+  // is first opened; it runs as an async job, so we poll via the shared hook.
+  const relatedPlan = useSiloPlan(clientId)
   const relatedRequested = useRef(false)
 
   const fetchSocial = async () => {
@@ -89,18 +90,7 @@ export function GeneratedPageView({
     }
   }
 
-  const fetchRelated = async () => {
-    setRelatedLoading(true)
-    setRelatedError('')
-    try {
-      const data = await localSeoApi.relatedPages(clientId, { keyword, location })
-      setRelated(data.items ?? [])
-    } catch (e) {
-      setRelatedError(e instanceof Error ? e.message : 'Could not load related pages')
-    } finally {
-      setRelatedLoading(false)
-    }
-  }
+  const fetchRelated = () => void relatedPlan.run(keyword, location)
 
   useEffect(() => {
     if (tab === 'social' && !socialRequested.current) {
@@ -109,7 +99,7 @@ export function GeneratedPageView({
     }
     if (tab === 'related' && !relatedRequested.current) {
       relatedRequested.current = true
-      void fetchRelated()
+      fetchRelated()
     }
   }, [tab]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -144,7 +134,7 @@ export function GeneratedPageView({
     { key: 'preview', label: 'Preview' },
     { key: 'html', label: 'HTML' },
     { key: 'social', label: 'GBP Posts', busy: socialLoading },
-    { key: 'related', label: 'Related Pages', busy: relatedLoading },
+    { key: 'related', label: 'Related Pages', busy: relatedPlan.loading },
   ]
 
   return (
@@ -320,21 +310,26 @@ export function GeneratedPageView({
       {/* Related Pages */}
       {tab === 'related' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {relatedLoading && (
+          {relatedPlan.loading && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 48, color: '#64748b' }}>
-              <Spinner size={22} /><p style={{ fontSize: 14, margin: 0 }}>Analyzing site architecture and checking for existing pages…</p>
+              <Spinner size={22} />
+              <p style={{ fontSize: 14, margin: 0 }}>Discovering silos, expanding keywords, and clustering demand…</p>
+              <p style={{ fontSize: 12, opacity: 0.7, margin: 0 }}>This usually takes 1–3 minutes.</p>
             </div>
           )}
-          {relatedError && (
-            <div style={errorBox}>{relatedError} <button onClick={fetchRelated} style={{ ...backLink, marginBottom: 0, marginLeft: 8 }}>Retry</button></div>
+          {!relatedPlan.loading && relatedPlan.notes.length > 0 && (
+            <p style={{ fontSize: 12, color: '#92400e', margin: 0 }}>Some steps ran in degraded mode — results may be partial: {relatedPlan.notes.join(' · ')}</p>
           )}
-          {related && related.length === 0 && (
+          {relatedPlan.error && (
+            <div style={errorBox}>{relatedPlan.error} <button onClick={fetchRelated} style={{ ...backLink, marginBottom: 0, marginLeft: 8 }}>Retry</button></div>
+          )}
+          {relatedPlan.items && relatedPlan.items.length === 0 && (
             <p style={{ fontSize: 14, color: '#64748b', textAlign: 'center', padding: 32 }}>No related pages found.</p>
           )}
-          {related && related.length > 0 && (
+          {relatedPlan.items && relatedPlan.items.length > 0 && (
             <>
               <RelatedPagesList
-                items={related}
+                items={relatedPlan.items}
                 onAction={(item) => onRelatedAction(
                   item.status === 'found'
                     ? { mode: 'reoptimize', keyword: item.keyword, existingUrl: item.url ?? undefined }
