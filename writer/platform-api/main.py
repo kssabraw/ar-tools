@@ -31,6 +31,18 @@ from services.gsc_scheduler import gsc_scheduler
 from services.job_worker import job_worker
 from services.orchestrator import recover_stuck_runs
 
+# Topic Fanout Tool — vendored sub-package (writer/platform-api/fanout/).
+# Self-contained: its own config, fanout-schema-scoped Supabase client, and
+# Supabase-JWT auth deps. Mounted here under a /fanout prefix so the suite
+# runs one backend / one login. See fanout/ for the original (kssabraw/
+# info-site-kw-research-cluster).
+from fanout.api import exports as fanout_exports
+from fanout.api import health as fanout_health
+from fanout.api import projects as fanout_projects
+from fanout.api import schedules as fanout_schedules
+from fanout.api import sessions as fanout_sessions
+from fanout.writer import scheduler as fanout_scheduler
+
 logging.basicConfig(
     level=settings.log_level.upper(),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -51,7 +63,13 @@ async def lifespan(app: FastAPI):
     # Start background job worker + GSC ingest scheduler
     worker_task = asyncio.create_task(job_worker())
     scheduler_task = asyncio.create_task(gsc_scheduler())
+    # Start the Topic Fanout in-process content scheduler (its own asyncio loop;
+    # claims due scheduled article runs). Driven explicitly here rather than via
+    # the vendored sub-app's lifespan, which is not invoked when its routers are
+    # mounted into this app.
+    await fanout_scheduler.start()
     yield
+    await fanout_scheduler.stop()
     for task in (worker_task, scheduler_task):
         task.cancel()
         try:
@@ -112,6 +130,16 @@ app.include_router(runs_router)
 app.include_router(silos_router)
 app.include_router(users_router)
 app.include_router(publish_router)
+
+# Topic Fanout Tool routers, namespaced under /fanout (e.g. /fanout/sessions,
+# /fanout/projects, /fanout/healthz). The vendored routers use absolute paths,
+# so the prefix is the only thing separating them from the suite's own routes.
+_FANOUT_PREFIX = "/fanout"
+app.include_router(fanout_health.router, prefix=_FANOUT_PREFIX)
+app.include_router(fanout_projects.router, prefix=_FANOUT_PREFIX)
+app.include_router(fanout_sessions.router, prefix=_FANOUT_PREFIX)
+app.include_router(fanout_exports.router, prefix=_FANOUT_PREFIX)
+app.include_router(fanout_schedules.router, prefix=_FANOUT_PREFIX)
 
 
 @app.get("/health")
