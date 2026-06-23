@@ -156,6 +156,14 @@ async def run_scan(client_id: UUID, auth: dict = Depends(require_auth)) -> MapsR
     return MapsRunResponse(client_id=client_id, status="enqueued")
 
 
+@router.post("/clients/{client_id}/maps/poll")
+async def poll_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Advance this client's in-flight scans now (the UI calls this on an interval
+    while a scan is running, so results land faster than the 5-min scheduler)."""
+    advanced = await local_dominator.poll_client_scans(str(client_id))
+    return {"polled": advanced}
+
+
 @router.get("/clients/{client_id}/maps/scans", response_model=list[MapsScanSummary])
 async def list_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> list[MapsScanSummary]:
     rows = (

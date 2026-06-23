@@ -33,6 +33,15 @@ export function MapsGeogrid() {
 
   const inFlight = (scans ?? []).some(s => s.status === 'polling' || s.status === 'pending')
 
+  // While a scan is in flight, drive Local Dominator polling from the client so
+  // results land in ~15s instead of waiting for the 5-minute scheduler tick.
+  useQuery({
+    queryKey: ['maps-poll', clientId],
+    queryFn: () => api.post(`/clients/${clientId}/maps/poll`, {}),
+    enabled: inFlight,
+    refetchInterval: inFlight ? 15000 : false,
+  })
+
   return (
     <div style={{ padding: 32, maxWidth: 1040 }}>
       <button style={backLink} onClick={() => navigate(`/clients/${clientId}`)}>
@@ -59,19 +68,21 @@ export function MapsGeogrid() {
       ) : tab === 'history' ? (
         <History clientId={clientId} scans={scans ?? []} onOpen={() => setTab('heatmap')} />
       ) : (
-        <Heatmap clientId={clientId} />
+        <Heatmap clientId={clientId} inFlight={inFlight} />
       )}
     </div>
   )
 }
 
 // ── Heatmap (latest completed scan) ─────────────────────────────────────────
-function Heatmap({ clientId }: { clientId: string }) {
+function Heatmap({ clientId, inFlight }: { clientId: string; inFlight: boolean }) {
   const queryClient = useQueryClient()
   const { data: latest, error, isLoading } = useQuery<MapsScanDetail>({
     queryKey: ['maps-latest', clientId],
     queryFn: () => api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest`),
     retry: false,
+    // Refresh while a scan runs so the heatmap appears as soon as it completes.
+    refetchInterval: inFlight ? 15000 : false,
   })
   const runMut = useMutation({
     mutationFn: () => api.post<MapsRunResponse>(`/clients/${clientId}/maps/scan`, {}),
@@ -88,14 +99,22 @@ function Heatmap({ clientId }: { clientId: string }) {
   if (error || !latest) {
     return (
       <div style={card}>
-        <p style={{ ...muted, marginTop: 0 }}>
-          No completed scans yet. Set the business location &amp; keywords in <strong>Setup</strong>, then run a scan.
-        </p>
-        {runMut.error && <div style={errorBox}>{(runMut.error as Error).message}</div>}
-        {runButton}
-        {runMut.data?.status === 'failed' && (
-          <div style={{ ...errorBox, marginTop: 10 }}>Couldn’t start: {runMut.data.error}. Check Setup is complete.</div>
+        {inFlight ? (
+          <div style={{ ...okBox, display: 'flex', alignItems: 'center', gap: 10, color: '#92400e', background: '#fef3c7', marginBottom: 12 }}>
+            <span className="ld-pulse" style={{ width: 9, height: 9, borderRadius: 999, background: '#d97706', flexShrink: 0 }} />
+            <span><strong>Scan in progress.</strong> This can take a few minutes — the heatmap will appear here automatically when it finishes. You can leave this page.</span>
+          </div>
+        ) : (
+          <p style={{ ...muted, marginTop: 0 }}>
+            No completed scans yet. Set the business location &amp; keywords in <strong>Setup</strong>, then run a scan.
+          </p>
         )}
+        {runMut.error && <div style={errorBox}>{(runMut.error as Error).message}</div>}
+        {runMut.data?.status === 'failed' && (
+          <div style={{ ...errorBox, marginTop: 10 }}>Couldn’t start: {runMut.data.error}. Check Setup is complete (Place ID, center lat/lng, and at least one keyword).</div>
+        )}
+        {!inFlight && runButton}
+        <style>{'@keyframes ld-pulse{0%,100%{opacity:1}50%{opacity:.3}}.ld-pulse{animation:ld-pulse 1.2s ease-in-out infinite}'}</style>
       </div>
     )
   }
@@ -138,16 +157,20 @@ function Grid({ grid }: { grid: Array<Array<number | null>> | null }) {
   return (
     <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 3, maxWidth: cols * 30 }}>
       {grid.flatMap((row, ri) =>
-        row.map((cell, ci) => (
-          <div key={`${ri}-${ci}`} title={cell == null ? 'Not in top 20' : `Rank ${cell}`}
-            style={{
-              aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center',
-              borderRadius: 4, fontSize: 11, fontWeight: 700,
-              background: rankColor(cell), color: cell == null ? '#9ca3af' : '#fff',
-            }}>
-            {cell == null ? '·' : cell}
-          </div>
-        )),
+        row.map((cell, ci) => {
+          // Not-ranked pins come back non-positive (-1, 0, or null).
+          const ranked = typeof cell === 'number' && cell >= 1
+          return (
+            <div key={`${ri}-${ci}`} title={ranked ? `Rank ${cell}` : 'Not ranked here'}
+              style={{
+                aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                borderRadius: 4, fontSize: 11, fontWeight: 700,
+                background: rankColor(cell), color: ranked ? '#fff' : '#9ca3af',
+              }}>
+              {ranked ? cell : '·'}
+            </div>
+          )
+        }),
       )}
     </div>
   )
@@ -156,7 +179,7 @@ function Grid({ grid }: { grid: Array<Array<number | null>> | null }) {
 function Legend() {
   const items: Array<[string, string]> = [
     ['1–3', rankColor(2)], ['4–7', rankColor(5)], ['8–10', rankColor(9)],
-    ['11–15', rankColor(13)], ['16–20', rankColor(18)], ['20+', rankColor(null)],
+    ['11–15', rankColor(13)], ['16–20', rankColor(18)], ['Not ranked', rankColor(null)],
   ]
   return (
     <div style={{ display: 'flex', gap: 14, alignItems: 'center', fontSize: 12, color: '#64748b', marginTop: 4 }}>
@@ -316,7 +339,7 @@ function History({ scans }: { clientId: string; scans: MapsScanSummary[]; onOpen
 
 // ── helpers / styles ────────────────────────────────────────────────────────
 function rankColor(rank: number | null): string {
-  if (rank == null) return '#e5e7eb'
+  if (rank == null || rank < 1) return '#e5e7eb'  // not ranked (-1 / 0 / null)
   if (rank <= 3) return '#16a34a'
   if (rank <= 7) return '#65a30d'
   if (rank <= 10) return '#ca8a04'
