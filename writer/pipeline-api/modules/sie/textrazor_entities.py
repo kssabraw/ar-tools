@@ -3,7 +3,7 @@
 Mirrors the Google NLP entity flow but with TextRazor's per-occurrence
 relevance / confidence semantics. Per the user spec:
 
-  - Per-occurrence filter: relevanceScore >= 0.33 AND confidenceScore >= 2.00
+  - Per-occurrence filter: relevanceScore >= 0.15 AND confidenceScore >= 1.00
   - Aggregate filter: must appear on > 3 distinct pages (i.e. >= 4)
   - Anything failing either gets discarded here (won't reach scoring)
 
@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 # the floor for an individual occurrence to be counted toward the
 # aggregate; an entity that fails either threshold doesn't contribute
 # even one page to the per-entity page count.
-TEXTRAZOR_MIN_RELEVANCE = 0.33
-TEXTRAZOR_MIN_CONFIDENCE = 2.00
+TEXTRAZOR_MIN_RELEVANCE = 0.15
+TEXTRAZOR_MIN_CONFIDENCE = 1.00
 
 # Aggregate filter: minimum distinct page count (after per-occurrence
 # filter) for the entity to survive. Spec is "discarded if used on 3
@@ -76,7 +76,7 @@ def aggregate_textrazor_results(
 ) -> list[AggregatedTextRazorEntity]:
     """Combine per-page TextRazor entities into aggregated records.
 
-    Applies per-occurrence filter (rel ≥ 0.33, conf ≥ 2.00) and the
+    Applies per-occurrence filter (rel ≥ 0.15, conf ≥ 1.00) and the
     aggregate page filter (> 3 pages) per the v1.2 spec. Anything that
     survives gets returned with rolled-up stats.
     """

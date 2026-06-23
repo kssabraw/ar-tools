@@ -237,11 +237,11 @@ def _make_textrazor_entity(
 
 
 def test_aggregate_filters_by_relevance():
-    """Entity with relevance below 0.33 doesn't contribute to its
+    """Entity with relevance below 0.15 doesn't contribute to its
     aggregate, even if confidence is high."""
     pages = [
         _make_page(f"https://e.com/{i}", [
-            _make_textrazor_entity("Term", relevance=0.20, confidence=10.0),
+            _make_textrazor_entity("Term", relevance=0.10, confidence=10.0),
         ])
         for i in range(5)
     ]
@@ -250,10 +250,10 @@ def test_aggregate_filters_by_relevance():
 
 
 def test_aggregate_filters_by_confidence():
-    """Entity with confidence below 2.00 doesn't contribute."""
+    """Entity with confidence below 1.00 doesn't contribute."""
     pages = [
         _make_page(f"https://e.com/{i}", [
-            _make_textrazor_entity("Term", relevance=0.8, confidence=1.5),
+            _make_textrazor_entity("Term", relevance=0.8, confidence=0.5),
         ])
         for i in range(5)
     ]

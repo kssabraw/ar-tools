@@ -546,7 +546,7 @@ RELATED_MIN_PAGE_SPREAD  = 0.49
 RELATED_MIN_SIMILARITY   = 0.1
 QUADGRAM_MIN_PAGE_SPREAD = 0.49
 QUADGRAM_MIN_SIMILARITY  = 0.1
-ENTITY_MIN_PAGE_SPREAD   = 0.49
+ENTITY_MIN_PAGE_SPREAD   = 0.33
 # Entity relevance cutoff for the TextRazor path. TextRazor's relevanceScore
 # (0–1) is a DIFFERENT scale/meaning than Google NLP's old salience, so the
 # prior 0.40 salience cutoff does NOT carry over. Env-tunable, and should be
