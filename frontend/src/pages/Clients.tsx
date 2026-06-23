@@ -61,7 +61,11 @@ export function Clients() {
           {clients.map(c => (
             <div key={c.id} style={{ ...cardStyle, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 0 }}>
               <div>
-                <div style={{ fontWeight: 600, fontSize: 15, color: '#0f172a', marginBottom: 4 }}>{c.name}</div>
+                <div style={{ marginBottom: 4 }}>
+                  <Link to={`/clients/${c.id}`} style={{ fontWeight: 600, fontSize: 15, color: '#0f172a', textDecoration: 'none' }}>
+                    {c.name}
+                  </Link>
+                </div>
                 <a href={c.website_url} target="_blank" rel="noreferrer"
                   style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#6366f1', textDecoration: 'none' }}>
                   <Globe size={12} /> {c.website_url}
