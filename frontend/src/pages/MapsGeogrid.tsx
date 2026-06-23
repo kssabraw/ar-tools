@@ -25,22 +25,31 @@ export function MapsGeogrid() {
     queryFn: () => api.get<Client>(`/clients/${clientId}`),
     enabled: Boolean(clientId),
   })
+  // Track a just-clicked run so the progress UI shows immediately, before the
+  // scan row exists (the create job runs async, a few seconds behind the click).
+  const [recentRunAt, setRecentRunAt] = useState<number | null>(null)
+
   const { data: scans } = useQuery<MapsScanSummary[]>({
     queryKey: ['maps-scans', clientId],
     queryFn: () => api.get<MapsScanSummary[]>(`/clients/${clientId}/maps/scans`),
-    // Poll while a scan is in flight so the heatmap appears when it lands.
-    refetchInterval: (q) => ((q.state.data ?? []).some(s => s.status === 'polling' || s.status === 'pending') ? 15000 : false),
+    // Poll while a scan is running OR just after a run (to catch the new row).
+    refetchInterval: (q) => {
+      const inf = (q.state.data ?? []).some(s => s.status === 'polling' || s.status === 'pending')
+      const recent = recentRunAt != null && Date.now() - recentRunAt < 90000
+      return inf || recent ? 6000 : false
+    },
   })
 
   const inFlight = (scans ?? []).some(s => s.status === 'polling' || s.status === 'pending')
+  const scanning = inFlight || (recentRunAt != null && Date.now() - recentRunAt < 90000)
 
-  // While a scan is in flight, drive Local Dominator polling from the client so
-  // results land in ~15s instead of waiting for the 5-minute scheduler tick.
+  // While scanning, drive Local Dominator polling from the client so results
+  // land in seconds instead of waiting for the 5-minute scheduler tick.
   useQuery({
     queryKey: ['maps-poll', clientId],
     queryFn: () => api.post(`/clients/${clientId}/maps/poll`, {}),
-    enabled: inFlight,
-    refetchInterval: inFlight ? 15000 : false,
+    enabled: scanning,
+    refetchInterval: scanning ? 10000 : false,
   })
 
   return (
@@ -52,7 +61,7 @@ export function MapsGeogrid() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
         <Map size={22} color="#6366f1" />
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Maps Geo-Grid Ranker</h1>
-        {inFlight && <span style={scanningPill}>Scanning…</span>}
+        {scanning && <span style={scanningPill}>Scanning…</span>}
       </div>
       <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 20px' }}>
         {client?.name ?? 'This client'} · local-pack &amp; Maps rank across a grid of points around the business.
@@ -69,25 +78,28 @@ export function MapsGeogrid() {
       ) : tab === 'history' ? (
         <History clientId={clientId} scans={scans ?? []} onOpen={() => setTab('heatmap')} />
       ) : (
-        <Heatmap clientId={clientId} inFlight={inFlight} />
+        <Heatmap clientId={clientId} scanning={scanning} onRan={() => setRecentRunAt(Date.now())} />
       )}
     </div>
   )
 }
 
 // ── Heatmap (latest completed scan) ─────────────────────────────────────────
-function Heatmap({ clientId, inFlight }: { clientId: string; inFlight: boolean }) {
+function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: boolean; onRan: () => void }) {
   const queryClient = useQueryClient()
   const { data: latest, error, isLoading } = useQuery<MapsScanDetail>({
     queryKey: ['maps-latest', clientId],
     queryFn: () => api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest`),
     retry: false,
     // Refresh while a scan runs so the heatmap appears as soon as it completes.
-    refetchInterval: inFlight ? 15000 : false,
+    refetchInterval: scanning ? 8000 : false,
   })
   const runMut = useMutation({
     mutationFn: () => api.post<MapsRunResponse>(`/clients/${clientId}/maps/scan`, {}),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] }),
+    onSuccess: () => {
+      onRan()
+      queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
+    },
   })
 
   const runButton = (
@@ -100,7 +112,7 @@ function Heatmap({ clientId, inFlight }: { clientId: string; inFlight: boolean }
   if (error || !latest) {
     return (
       <div>
-        {inFlight ? <InProgressBanner /> : (
+        {scanning || runMut.isPending ? <InProgressBanner /> : (
           <div style={card}>
             <p style={{ ...muted, marginTop: 0 }}>
               No completed scans yet. Set the business location &amp; keywords in <strong>Setup</strong>, then run a scan.
@@ -124,7 +136,7 @@ function Heatmap({ clientId, inFlight }: { clientId: string; inFlight: boolean }
         </div>
         {runButton}
       </div>
-      {inFlight && <InProgressBanner />}
+      {(scanning || runMut.isPending) && <InProgressBanner />}
 
       {latest.results.length === 0 ? (
         <div style={card}><p style={muted}>This scan returned no keyword results.</p></div>
@@ -174,16 +186,29 @@ function ResultView({ r }: { r: MapsScanResultRow }) {
 }
 
 function InProgressBanner() {
+  const [secs, setSecs] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setSecs(s => s + 1), 1000)
+    return () => clearInterval(t)
+  }, [])
+  const mm = Math.floor(secs / 60)
+  const ss = String(secs % 60).padStart(2, '0')
   return (
     <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 14, background: '#fffbeb', border: '1px solid #fde68a', marginBottom: 16 }}>
-      <span className="ld-spin" style={{ width: 22, height: 22, borderRadius: 999, border: '3px solid #fcd34d', borderTopColor: '#d97706', flexShrink: 0 }} />
-      <div>
-        <div style={{ fontSize: 14, fontWeight: 700, color: '#92400e' }}>Scan in progress…</div>
-        <div style={{ fontSize: 13, color: '#b45309' }}>
-          Scanning the grid across Google Maps — this takes a few minutes. The heatmap appears here automatically when it’s done; you can leave this page.
+      <span className="ld-spin" style={{ width: 24, height: 24, borderRadius: 999, border: '3px solid #fcd34d', borderTopColor: '#d97706', flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#92400e', display: 'flex', justifyContent: 'space-between' }}>
+          <span>Scan in progress…</span>
+          <span style={{ fontVariantNumeric: 'tabular-nums', color: '#b45309' }}>{mm}:{ss}</span>
+        </div>
+        <div style={{ fontSize: 13, color: '#b45309', margin: '2px 0 8px' }}>
+          Scanning the grid across Google Maps — usually a couple of minutes. The heatmap appears here automatically when it’s done; you can leave this page.
+        </div>
+        <div style={{ height: 6, borderRadius: 999, background: '#fde68a', overflow: 'hidden' }}>
+          <div className="ld-bar" style={{ height: '100%', width: '35%', borderRadius: 999, background: '#d97706' }} />
         </div>
       </div>
-      <style>{'@keyframes ld-spin{to{transform:rotate(360deg)}}.ld-spin{animation:ld-spin .9s linear infinite}'}</style>
+      <style>{'@keyframes ld-spin{to{transform:rotate(360deg)}}.ld-spin{animation:ld-spin .9s linear infinite}@keyframes ld-bar{0%{margin-left:-35%}100%{margin-left:100%}}.ld-bar{animation:ld-bar 1.4s ease-in-out infinite}'}</style>
     </div>
   )
 }
