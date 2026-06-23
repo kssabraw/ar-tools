@@ -4,6 +4,7 @@ import { ArrowLeft, Printer, MapPin } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, MapsScanDetail, MapsScanResultRow, MapsTrendsResponse } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
+import { Markdown } from '../components/Markdown'
 import { TREND_METRICS, rankColor } from '../components/maps/rank'
 
 // Printable, client-facing Maps geo-grid report: branded header, coverage KPIs,
@@ -180,6 +181,11 @@ export function MapsReport() {
                   <Stat label="Found" value={`${r.found_pins}/${r.total_pins}`} />
                   <Stat label="Avg rank" value={r.average_rank != null ? r.average_rank.toFixed(1) : '—'} />
                 </div>
+                {r.report_md && (
+                  <div style={{ marginTop: 12, borderTop: '1px solid #f1f5f9', paddingTop: 10 }}>
+                    <Markdown>{r.report_md}</Markdown>
+                  </div>
+                )}
               </div>
             ))}
           </div>

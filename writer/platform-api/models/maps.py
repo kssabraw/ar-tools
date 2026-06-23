@@ -62,6 +62,15 @@ class MapsScanResultRow(BaseModel):
     dynamic_url: Optional[str] = None        # interactive heatmap page
     competitors: Optional[list] = None       # per-keyword competitor leaderboard (top ~25)
     competitors_above: Optional[dict] = None  # per-pin businesses ranking above the client
+    # Local Rank Analysis report (auto-generated when the scan completes).
+    report_status: Optional[str] = None       # 'pending' | 'complete' | 'failed' | null
+    report_md: Optional[str] = None           # the full client-facing report (Markdown)
+    report_weak_directions: Optional[str] = None
+    report_top_competitors: Optional[list] = None
+    report_octant_pins: Optional[dict] = None  # hyper-local pin suggestions {ok, points, debug}
+    report_analytics: Optional[dict] = None    # ring/sector rollups (for the printable report)
+    report_doc_url: Optional[str] = None
+    report_generated_at: Optional[str] = None
 
 
 class MapsScanSummary(BaseModel):

@@ -6,12 +6,12 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
+from services.google_docs import GoogleDocError, create_google_doc
 
 logger = logging.getLogger(__name__)
 
@@ -99,33 +99,14 @@ async def publish_to_google_docs(
         raise HTTPException(status_code=422, detail="article_is_empty")
 
     title = f"{run['keyword']} — {client['name']}"
-    body = {"folder_id": folder_id, "title": title, "content": markdown}
-
     try:
-        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
-            response = await http.post(settings.google_apps_script_url, json=body)
-            response.raise_for_status()
-            result = response.json()
-    except httpx.HTTPStatusError as exc:
-        logger.error("apps_script_http_error", extra={"status": exc.response.status_code, "body": exc.response.text[:300]})
-        raise HTTPException(status_code=502, detail="apps_script_http_error") from exc
-    except Exception as exc:
-        logger.error("apps_script_call_failed", extra={"error": str(exc)})
-        raise HTTPException(status_code=502, detail=f"apps_script_call_failed: {exc}") from exc
-
-    if not result.get("success"):
-        raise HTTPException(
-            status_code=502,
-            detail=f"apps_script_returned_error: {result.get('error', 'unknown')}",
-        )
+        result = await create_google_doc(folder_id, title, markdown)
+    except GoogleDocError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     logger.info(
         "doc_published",
         extra={"run_id": str(run_id), "doc_id": result.get("doc_id"), "user_id": auth["user_id"]},
     )
 
-    return {
-        "success": True,
-        "doc_id": result.get("doc_id"),
-        "doc_url": result.get("doc_url"),
-    }
+    return {"success": True, "doc_id": result.get("doc_id"), "doc_url": result.get("doc_url")}

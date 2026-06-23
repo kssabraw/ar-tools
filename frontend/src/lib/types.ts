@@ -558,6 +558,35 @@ export interface MapsScanResultRow {
   dynamic_url: string | null
   competitors: MapsCompetitor[] | null
   competitors_above: MapsCompetitorsAbove | null
+  // Local Rank Analysis report (auto-generated when the scan completes).
+  report_status: 'pending' | 'complete' | 'failed' | null
+  report_md: string | null
+  report_weak_directions: string | null
+  report_top_competitors: string[] | null
+  report_octant_pins: MapsOctantPins | null
+  report_analytics: Record<string, unknown> | null
+  report_doc_url: string | null
+  report_generated_at: string | null
+}
+
+export interface MapsOctantPin {
+  sector: string
+  octant: string
+  ring: number
+  radius_m: number
+  radius_mi: number
+  bearing_deg: number
+  lat: number
+  lng: number
+  strength: string
+}
+
+export interface MapsOctantPins {
+  ok: boolean
+  used_rule?: string | null
+  reason: string
+  points: MapsOctantPin[]
+  debug?: Record<string, unknown>
 }
 
 export interface MapsScanSummary {

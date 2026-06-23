@@ -434,6 +434,12 @@ async def poll_scan(scan_row: dict) -> str:
     supabase.table("maps_scan_configs").update({"last_scanned_at": "now()"}).eq(
         "client_id", scan_row["client_id"]
     ).execute()
+    # Kick off the Local Rank Analysis report (per-keyword) for this scan.
+    try:
+        from services.maps_report import enqueue_maps_report
+        enqueue_maps_report(scan_id)
+    except Exception as exc:  # reporting is best-effort — never fail the scan
+        logger.warning("maps_report_enqueue_failed", extra={"scan_id": scan_id, "error": str(exc)})
     logger.info("maps_scan_complete", extra={"scan_id": scan_id, "keywords": n})
     return "complete"
 
