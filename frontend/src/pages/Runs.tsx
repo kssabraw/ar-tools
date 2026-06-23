@@ -57,7 +57,6 @@ export function Runs() {
   const [searchParams] = useSearchParams()
   const scopedClientId = searchParams.get('client') ?? undefined
   const [showNewRun, setShowNewRun] = useState(searchParams.get('new') === '1')
-  const [clientId, setClientId] = useState(scopedClientId ?? '')
   const [keyword, setKeyword] = useState('')
   const [creating, setCreating] = useState(false)
 
@@ -100,7 +99,6 @@ export function Runs() {
       qc.invalidateQueries({ queryKey: ['runs'] })
       setShowNewRun(false)
       setKeyword('')
-      setClientId('')
     },
   })
 
@@ -114,10 +112,11 @@ export function Runs() {
   const [showCacheModal, setShowCacheModal] = useState(false)
 
   async function submitCreate(briefForceRefresh: boolean) {
+    if (!scopedClientId) return
     setCreating(true)
     try {
       await createRun.mutateAsync({
-        client_id: clientId,
+        client_id: scopedClientId,
         keyword,
         sie_outlier_mode: 'safe',
         sie_force_refresh: false,
@@ -174,24 +173,23 @@ export function Runs() {
           <button onClick={() => refetch()} style={ghostBtn}>
             <RefreshCw size={15} /> Refresh
           </button>
-          <button onClick={() => setShowNewRun(true)} style={primaryBtn}>
-            <Plus size={15} /> New Run
-          </button>
+          {scopedClientId && (
+            <button onClick={() => setShowNewRun(true)} style={primaryBtn}>
+              <Plus size={15} /> New Run
+            </button>
+          )}
         </div>
       </div>
 
-      {showNewRun && (
+      {scopedClientId && showNewRun && (
         <div style={cardStyle}>
           <h2 style={{ fontSize: 15, fontWeight: 600, margin: '0 0 16px', color: '#0f172a' }}>New Run</h2>
           <form onSubmit={handleCreate} style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
             <div>
               <label style={labelStyle}>Client</label>
-              <select value={clientId} onChange={e => setClientId(e.target.value)} required style={inputStyle}>
-                <option value="">Select client…</option>
-                {clients.filter(c => !c.archived).map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+              {/* Content is always written for the client whose workspace you
+                  came from — the client is fixed, not chosen here. */}
+              <div style={readonlyClientStyle}>{scopedClient?.name ?? 'This client'}</div>
             </div>
             <div style={{ flex: 1, minWidth: 240 }}>
               <label style={labelStyle}>Keyword</label>
@@ -330,6 +328,7 @@ const h1Style: React.CSSProperties = { fontSize: 22, fontWeight: 700, color: '#0
 const cardStyle: React.CSSProperties = { background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 24, marginBottom: 20 }
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 5 }
 const inputStyle: React.CSSProperties = { padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 8, fontSize: 14, color: '#0f172a' }
+const readonlyClientStyle: React.CSSProperties = { padding: '8px 12px', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 14, color: '#0f172a', fontWeight: 500, background: '#f8fafc' }
 const thStyle: React.CSSProperties = { textAlign: 'left', padding: '10px 12px', fontSize: 12, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }
 const tdStyle: React.CSSProperties = { padding: '12px 12px', fontSize: 14, color: '#374151' }
 const primaryBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: 'pointer' }
