@@ -154,6 +154,8 @@ export function ClientWorkspace() {
             icon={t.icon}
             label={t.label}
             description={t.description}
+            href={t.href}
+            cta={t.href ? 'Open' : undefined}
             badge="Coming soon"
             compact
           />
@@ -193,7 +195,7 @@ function icpCopy(client?: Client): string {
     : 'AI-detected — review, edit, or replace it with your own.'
 }
 
-const moreTools = [
+const moreTools: { label: string; description: string; icon: React.ReactNode; href?: string }[] = [
   {
     label: 'Keyword Research',
     description: 'Discover and cluster keyword opportunities, enriched with Search Console data.',
@@ -206,8 +208,9 @@ const moreTools = [
   },
   {
     label: 'Content Scheduler',
-    description: 'Plan and auto-publish monthly blog and local SEO content per client.',
+    description: 'Plan and auto-publish monthly blog and local SEO content. Opens the Topic Fanout keyword-research, planning & scheduling tool.',
     icon: <CalendarClock size={20} />,
+    href: '/fanout/',
   },
 ]
 
@@ -230,6 +233,8 @@ interface ActionCardProps {
   label: string
   description: string
   to?: string
+  /** Full-page navigation (used to open a separately-built suite section, e.g. /fanout). */
+  href?: string
   cta?: string
   badge?: string
   compact?: boolean
@@ -237,8 +242,8 @@ interface ActionCardProps {
   footer?: React.ReactNode
 }
 
-function ActionCard({ icon, label, description, to, cta, badge, compact, highlight, footer }: ActionCardProps) {
-  const active = Boolean(to)
+function ActionCard({ icon, label, description, to, href, cta, badge, compact, highlight, footer }: ActionCardProps) {
+  const active = Boolean(to || href)
   const inner = (
     <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -265,16 +270,20 @@ function ActionCard({ icon, label, description, to, cta, badge, compact, highlig
     </>
   )
 
-  if (active && to) {
-    const tile = (
-      <Link
-        to={to}
-        style={{
-          ...tileStyle,
-          cursor: 'pointer',
-          ...(highlight ? { borderColor: '#c7d2fe', background: '#f8faff' } : {}),
-        }}
-      >
+  if (active) {
+    const tileLinkStyle: React.CSSProperties = {
+      ...tileStyle,
+      cursor: 'pointer',
+      ...(highlight ? { borderColor: '#c7d2fe', background: '#f8faff' } : {}),
+    }
+    // `href` does a real navigation into a separately-built section (the Fanout
+    // app under /fanout); `to` is in-app react-router navigation.
+    const tile = href ? (
+      <a href={href} style={tileLinkStyle}>
+        {inner}
+      </a>
+    ) : (
+      <Link to={to!} style={tileLinkStyle}>
         {inner}
       </Link>
     )
