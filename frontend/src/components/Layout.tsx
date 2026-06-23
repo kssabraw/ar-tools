@@ -9,7 +9,6 @@ interface NavItem {
 }
 
 const nav: NavItem[] = [
-  { label: 'Home', to: '/', icon: <Home size={18} /> },
   { label: 'Runs', to: '/runs', icon: <LayoutDashboard size={18} /> },
   { label: 'Articles', to: '/articles', icon: <BookOpen size={18} /> },
   { label: 'Silos', to: '/silos', icon: <Layers size={18} /> },
@@ -21,6 +20,15 @@ function isActive(pathname: string, to: string): boolean {
   return pathname === to || pathname.startsWith(to + '/')
 }
 
+// The client whose workspace we're currently inside, if any. Drives the
+// contextual "Dashboard" shortcut back to that client's workspace. `/clients/new`
+// is the create-client form, not a real client, so it's excluded.
+function currentClientId(pathname: string): string | null {
+  const m = pathname.match(/^\/clients\/([^/]+)/)
+  if (!m || m[1] === 'new') return null
+  return m[1]
+}
+
 export function Layout({ children }: { children: React.ReactNode }) {
   const { user, signOut } = useAuth()
   const location = useLocation()
@@ -29,6 +37,39 @@ export function Layout({ children }: { children: React.ReactNode }) {
   async function handleSignOut() {
     await signOut()
     navigate('/login')
+  }
+
+  const clientId = currentClientId(location.pathname)
+  const quickNav: NavItem[] = [
+    { label: 'Home', to: '/', icon: <Home size={18} /> },
+    ...(clientId
+      ? [{ label: 'Dashboard', to: `/clients/${clientId}`, icon: <LayoutDashboard size={18} /> }]
+      : []),
+  ]
+
+  const renderLink = (item: NavItem) => {
+    const active = isActive(location.pathname, item.to)
+    return (
+      <Link
+        key={item.to}
+        to={item.to}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 10,
+          padding: '10px 20px',
+          color: active ? '#a5b4fc' : '#94a3b8',
+          background: active ? '#1e293b' : 'transparent',
+          textDecoration: 'none',
+          fontSize: 14,
+          fontWeight: active ? 600 : 400,
+          transition: 'background 0.15s',
+        }}
+      >
+        {item.icon}
+        {item.label}
+      </Link>
+    )
   }
 
   return (
@@ -49,30 +90,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>{user?.email}</div>
         </div>
         <nav style={{ flex: 1, padding: '16px 0' }}>
-          {nav.map(item => {
-            const active = isActive(location.pathname, item.to)
-            return (
-              <Link
-                key={item.to}
-                to={item.to}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  padding: '10px 20px',
-                  color: active ? '#a5b4fc' : '#94a3b8',
-                  background: active ? '#1e293b' : 'transparent',
-                  textDecoration: 'none',
-                  fontSize: 14,
-                  fontWeight: active ? 600 : 400,
-                  transition: 'background 0.15s',
-                }}
-              >
-                {item.icon}
-                {item.label}
-              </Link>
-            )
-          })}
+          <div style={{ paddingBottom: 12, marginBottom: 12, borderBottom: '1px solid #1e293b' }}>
+            {quickNav.map(renderLink)}
+          </div>
+          {nav.map(renderLink)}
         </nav>
         <div style={{ padding: '16px 20px', borderTop: '1px solid #1e293b' }}>
           <button
