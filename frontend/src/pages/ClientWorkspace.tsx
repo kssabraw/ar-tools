@@ -139,7 +139,7 @@ export function ClientWorkspace() {
         />
         <ActionCard
           icon={<Map size={22} />}
-          label="Maps Geo-Grid Ranker"
+          label="Maps Ranker"
           description="Local-pack and Maps rankings across a geo-grid around this client's business."
           to={id ? `/clients/${id}/maps` : undefined}
           cta="Open"
