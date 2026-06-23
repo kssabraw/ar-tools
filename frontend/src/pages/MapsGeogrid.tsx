@@ -151,7 +151,7 @@ function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: bo
                 <span><strong>Found</strong> {r.found_pins}/{r.total_pins} pins</span>
               </div>
             </div>
-            <ResultView r={r} />
+            <ResultView r={r} scan={latest} />
           </div>
         ))
       )}
@@ -160,13 +160,59 @@ function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: bo
   )
 }
 
-// One keyword's result: a circular, color-coded pin heatmap rendered from the
-// grid (Local Dominator's own image URL isn't embeddable outside their app), with
-// a link to LD's interactive map and the full numeric grid available.
-function ResultView({ r }: { r: MapsScanResultRow }) {
+const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined
+
+// Static-map color band for a 1-based rank (0xRRGGBB for Google Static Maps).
+function rankBucketColor(rank: number | null): string {
+  if (rank == null || rank < 1) return '0x9ca3af'
+  if (rank <= 3) return '0x16a34a'
+  if (rank <= 7) return '0x65a30d'
+  if (rank <= 10) return '0xca8a04'
+  if (rank <= 15) return '0xea580c'
+  return '0xdc2626'
+}
+
+// A Google Static Maps URL with one small color-coded pin per in-circle grid
+// point at its real lat/lng (pins spaced 1 mile; row 0 = north). Null when no
+// API key is configured (→ fall back to the dependency-free circular heatmap).
+function buildStaticMapUrl(grid: Array<Array<number | null>> | null, centerLat: number | null, centerLng: number | null): string | null {
+  if (!GMAPS_KEY || !grid || grid.length === 0 || centerLat == null || centerLng == null) return null
+  const n = Math.max(...grid.map(r => r.length))
+  const center = (n - 1) / 2
+  const radiusSq = (n / 2) ** 2
+  const degPerMileLng = 1 / (69 * Math.cos((centerLat * Math.PI) / 180))
+  const buckets: Record<string, string[]> = {}
+  for (let row = 0; row < n; row++) {
+    for (let col = 0; col < n; col++) {
+      if ((row - center) ** 2 + (col - center) ** 2 > radiusSq) continue
+      const lat = centerLat + (center - row) * (1 / 69)   // row 0 = north
+      const lng = centerLng + (col - center) * degPerMileLng
+      const rank = grid[row] && grid[row][col] != null ? grid[row][col] : null
+      const color = rankBucketColor(rank)
+      ;(buckets[color] ||= []).push(`${lat.toFixed(6)},${lng.toFixed(6)}`)
+    }
+  }
+  const markers = Object.entries(buckets).map(
+    ([color, locs]) => `markers=${encodeURIComponent(`size:tiny|color:${color}|${locs.join('|')}`)}`,
+  )
+  if (markers.length === 0) return null
+  return `https://maps.googleapis.com/maps/api/staticmap?size=480x480&scale=2&maptype=roadmap&${markers.join('&')}&key=${GMAPS_KEY}`
+}
+
+// One keyword's result: color-coded pins at their real lat/lng on a Google Static
+// Map when a Maps API key is configured; otherwise a dependency-free circular pin
+// heatmap. (Local Dominator's own image URL isn't embeddable outside their app.)
+function ResultView({ r, scan }: { r: MapsScanResultRow; scan: MapsScanDetail }) {
+  const [imgError, setImgError] = useState(false)
+  const mapUrl = buildStaticMapUrl(r.rank_grid, scan.center_lat, scan.center_lng)
   return (
     <div style={{ marginTop: 12 }}>
-      <CircleHeatmap grid={r.rank_grid} />
+      {mapUrl && !imgError ? (
+        <img src={mapUrl} alt={`Geo-grid heatmap for ${r.keyword}`} onError={() => setImgError(true)}
+          style={{ width: '100%', maxWidth: 480, borderRadius: 8, border: '1px solid #e2e8f0', display: 'block' }} />
+      ) : (
+        <CircleHeatmap grid={r.rank_grid} />
+      )}
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 10 }}>
         {r.dynamic_url && (
           <a href={r.dynamic_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', textDecoration: 'none' }}>
