@@ -4,9 +4,12 @@ preserved, Google-specific params mapped to TextRazor, §9 #6).
 
 TextRazor grounds entities in actual page text (the model cannot invent — it
 surfaces what's present), matching the PRD's "LLM pass-2 may not add" constraint.
-Google's `salience ≥ 0.40` maps to TextRazor `relevanceScore ≥ 0.40` (calibrate
-live); the 100 KB Google input cap is kept as a truncation rule (TextRazor accepts
-more, so it's non-binding). The key is sent as `x-textrazor-key` (header).
+Google's `salience ≥ 0.40` originally mapped to TextRazor `relevanceScore ≥ 0.40`,
+but the relevance floor is now lenient (default 0.15, configurable) because there is
+no page-spread gate here and the LLM pass-2 (`categorize_entities`) is the quality
+backstop that drops off-topic / navigational entities. The 100 KB Google input cap is
+kept as a truncation rule (TextRazor accepts more, so it's non-binding). The key is
+sent as `x-textrazor-key` (header).
 """
 
 from __future__ import annotations
