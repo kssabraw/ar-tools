@@ -8,8 +8,8 @@ import {
   BriefCacheDecisionModal,
   type BriefCacheStatus,
 } from '../components/BriefCacheDecisionModal'
-import { sectionsToMarkdown } from '../lib/sectionsToMarkdown'
-import { sectionsToHtml } from '../lib/sectionsToHtml'
+import { sectionsToMarkdown, toTitleCase } from '../lib/sectionsToMarkdown'
+import { sectionsToHtml, escapeHtml } from '../lib/sectionsToHtml'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -354,13 +354,32 @@ export function RunDetail() {
   const articleTitle = typeof enrichedArticle?.title === 'string' ? enrichedArticle.title : undefined
   const articleMarkdown = articleSections ? sectionsToMarkdown(articleSections, articleTitle) : null
   const articleHtml = articleSections ? sectionsToHtml(articleSections, articleTitle) : null
-  // The page chrome already renders the article title as an <h1> above
-  // (line ~444). Showing the same `# title` line at the top of the
-  // markdown preview made readers see the headline twice. Strip the
-  // leading H1 from the preview only — copy / download / export still
-  // use `articleMarkdown` so the exported file is self-contained.
-  const articleMarkdownPreview = articleMarkdown
-    ? articleMarkdown.replace(/^# [^\n]*\n+/, '')
+
+  // The exported article is a single self-contained document: the SEO/meta
+  // title (labelled, since it's metadata — not body prose) and the on-page H1
+  // sit above the body, so one Copy/Download grabs everything. The two strings
+  // are often near-identical, so the H1 renders as the real heading while the
+  // SEO title is a labelled line to avoid looking like a duplicated headline.
+  // `sectionsTo*` already injects a leading heading from `articleTitle`; we
+  // strip it and re-add the H1 from `run.h1` so it matches the "Title & H1"
+  // section exactly (falling back to the article title when h1 is absent).
+  const bodyMarkdown = articleMarkdown ? articleMarkdown.replace(/^# [^\n]*\n+/, '') : null
+  const bodyHtml = articleHtml ? articleHtml.replace(/^<h1>.*?<\/h1>\n?/, '') : null
+  const h1Heading = run.h1 ?? (articleTitle ? toTitleCase(articleTitle) : undefined)
+
+  const fullMarkdown = articleMarkdown
+    ? [
+        run.title ? `**SEO Title:** ${run.title}` : null,
+        h1Heading ? `# ${h1Heading}` : null,
+        bodyMarkdown,
+      ].filter(Boolean).join('\n\n')
+    : null
+  const fullHtml = articleHtml
+    ? [
+        run.title ? `<p><strong>SEO Title:</strong> ${escapeHtml(run.title)}</p>` : null,
+        h1Heading ? `<h1>${escapeHtml(h1Heading)}</h1>` : null,
+        bodyHtml,
+      ].filter(Boolean).join('\n')
     : null
   const termUsageByZone = run.module_outputs?.writer?.output_payload?.term_usage_by_zone as
     | Record<string, { related_keywords: any[]; entities: any[]; quadgrams: any[] }>
@@ -526,19 +545,19 @@ export function RunDetail() {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={() => navigator.clipboard.writeText(fmt === 'html' ? (articleHtml ?? '') : articleMarkdown)} style={ghostBtn}>
+              <button onClick={() => navigator.clipboard.writeText(fmt === 'html' ? (fullHtml ?? '') : (fullMarkdown ?? ''))} style={ghostBtn}>
                 <Copy size={13} /> Copy {fmt === 'html' ? 'HTML' : 'Markdown'}
               </button>
               {fmt === 'html' ? (
-                <button onClick={() => downloadFile(articleHtml ?? '', `${run.keyword.replace(/\s+/g, '-')}.html`, 'text/html')} style={ghostBtn}>
+                <button onClick={() => downloadFile(fullHtml ?? '', `${run.keyword.replace(/\s+/g, '-')}.html`, 'text/html')} style={ghostBtn}>
                   <Download size={13} /> Download .html
                 </button>
               ) : (
                 <>
-                  <button onClick={() => downloadFile(articleMarkdown, `${run.keyword.replace(/\s+/g, '-')}.md`, 'text/markdown')} style={ghostBtn}>
+                  <button onClick={() => downloadFile(fullMarkdown ?? '', `${run.keyword.replace(/\s+/g, '-')}.md`, 'text/markdown')} style={ghostBtn}>
                     <Download size={13} /> Download .md
                   </button>
-                  <button onClick={() => downloadFile(articleMarkdown, `${run.keyword.replace(/\s+/g, '-')}.txt`, 'text/plain')} style={ghostBtn}>
+                  <button onClick={() => downloadFile(fullMarkdown ?? '', `${run.keyword.replace(/\s+/g, '-')}.txt`, 'text/plain')} style={ghostBtn}>
                     <Download size={13} /> .txt
                   </button>
                 </>
@@ -566,7 +585,7 @@ export function RunDetail() {
             </div>
           )}
           <pre style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, overflowX: 'auto', fontSize: 13, lineHeight: 1.7, color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 600, overflowY: 'auto' }}>
-            {fmt === 'html' ? articleHtml : articleMarkdownPreview}
+            {fmt === 'html' ? fullHtml : fullMarkdown}
           </pre>
         </div>
       )}
