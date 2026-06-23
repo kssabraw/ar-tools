@@ -31,6 +31,8 @@ from models.rank import (
     OverviewResponse,
     GeneratedReport,
     PagesResponse,
+    RankAlert,
+    RankAlertsResponse,
     RankLocation,
     ReportListItem,
     ReportPublishResponse,
@@ -327,6 +329,14 @@ async def get_overview(client_id: UUID, auth: dict = Depends(require_auth)) -> O
     hero = rank_status.aggregate_hero(all_rows, today, 90)
     at_risk = status_counts.get("deindex_risk", 0) + status_counts.get("dropping", 0)
 
+    unread_alerts = (
+        supabase.table("rank_alerts")
+        .select("id", count="exact")
+        .eq("client_id", str(client_id))
+        .eq("status", "unread")
+        .execute()
+    )
+
     return OverviewResponse(
         keyword_count=len(rows),
         gsc_connected=_gsc_connected(supabase, str(client_id)),
@@ -336,6 +346,7 @@ async def get_overview(client_id: UUID, auth: dict = Depends(require_auth)) -> O
         avg_position_30d=positions_30,
         at_risk=at_risk,
         hero=hero,
+        unread_alert_count=unread_alerts.count or 0,
     )
 
 
@@ -655,3 +666,80 @@ async def capture_serp_snapshot(
         raise HTTPException(status_code=404, detail="not_found")
     serp_snapshot.enqueue_serp_snapshot(found.data[0]["client_id"], keyword_id=str(keyword_id))
     return SerpSnapshotCaptureResponse(keyword_id=keyword_id, status="enqueued")
+
+
+# ---------------------------------------------------------------------------
+# In-app rank-drop alerts (per-client Rankings "Alerts" tab).
+# ---------------------------------------------------------------------------
+def _alert_row(r: dict) -> RankAlert:
+    return RankAlert(
+        id=r["id"], keyword_id=r["keyword_id"], keyword=r["keyword"],
+        alert_type=r["alert_type"], source=r.get("source"),
+        from_position=r.get("from_position"), to_position=r.get("to_position"),
+        delta=r.get("delta"), message=r["message"], status=r["status"],
+        triggered_on=r.get("triggered_on"), resolved_at=r.get("resolved_at"),
+        created_at=r["created_at"],
+    )
+
+
+@router.get("/clients/{client_id}/rank/alerts", response_model=RankAlertsResponse)
+async def list_alerts(
+    client_id: UUID, include_dismissed: bool = False, auth: dict = Depends(require_auth)
+) -> RankAlertsResponse:
+    """Rank-drop alerts for a client, newest first. Dismissed are hidden by default."""
+    supabase = get_supabase()
+    query = (
+        supabase.table("rank_alerts")
+        .select("*")
+        .eq("client_id", str(client_id))
+        .order("created_at", desc=True)
+    )
+    if not include_dismissed:
+        query = query.neq("status", "dismissed")
+    rows = (query.execute()).data or []
+    unread = sum(1 for r in rows if r["status"] == "unread")
+    return RankAlertsResponse(alerts=[_alert_row(r) for r in rows], unread_count=unread)
+
+
+@router.post("/rank-alerts/{alert_id}/read", response_model=RankAlert)
+async def mark_alert_read(alert_id: UUID, auth: dict = Depends(require_auth)) -> RankAlert:
+    supabase = get_supabase()
+    res = (
+        supabase.table("rank_alerts")
+        .update({"status": "read", "read_at": "now()"})
+        .eq("id", str(alert_id))
+        .eq("status", "unread")  # don't clobber a dismissed alert
+        .execute()
+    )
+    row = res.data[0] if res.data else _get_alert_or_404(supabase, alert_id)
+    return _alert_row(row)
+
+
+@router.post("/rank-alerts/{alert_id}/dismiss", response_model=RankAlert)
+async def dismiss_alert(alert_id: UUID, auth: dict = Depends(require_auth)) -> RankAlert:
+    supabase = get_supabase()
+    res = (
+        supabase.table("rank_alerts")
+        .update({"status": "dismissed", "dismissed_at": "now()"})
+        .eq("id", str(alert_id))
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    return _alert_row(res.data[0])
+
+
+@router.post("/clients/{client_id}/rank/alerts/read-all", response_model=RankAlertsResponse)
+async def mark_all_alerts_read(client_id: UUID, auth: dict = Depends(require_auth)) -> RankAlertsResponse:
+    supabase = get_supabase()
+    supabase.table("rank_alerts").update({"status": "read", "read_at": "now()"}).eq(
+        "client_id", str(client_id)
+    ).eq("status", "unread").execute()
+    return await list_alerts(client_id, include_dismissed=False, auth=auth)
+
+
+def _get_alert_or_404(supabase, alert_id: UUID) -> dict:
+    res = supabase.table("rank_alerts").select("*").eq("id", str(alert_id)).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    return res.data[0]

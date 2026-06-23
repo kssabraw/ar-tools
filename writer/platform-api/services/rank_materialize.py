@@ -21,7 +21,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import rank_status
+from services import rank_alerts, rank_status
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +206,7 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
 
     total_rows = 0
     now_iso = "now()"
+    alert_inputs: list[tuple[str, str, list]] = []  # (keyword_id, keyword, signals)
     try:
         for kw in keywords.data:
             records = build_keyword_axis(kw["id"], kw["keyword"], dates, gsc_index)
@@ -225,6 +226,11 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
             else:
                 series = [(r["date"], r.get("gsc_position")) for r in merged]
             status = rank_status.compute_status(series)
+
+            # Collect rank-drop alert signals for this keyword (reconciled below).
+            alert_inputs.append(
+                (kw["id"], kw["keyword"], rank_alerts.detect_alerts(kw["keyword"], merged, primary, status, today))
+            )
 
             update = {
                 "status": status, "source": source,
@@ -251,6 +257,12 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
 
     if to_inspect and prop_row:
         _confirm_deindex(supabase, prop_row, to_inspect)
+
+    # Open/resolve in-app rank-drop alerts from this run's signals.
+    try:
+        rank_alerts.reconcile_alerts(supabase, client_id, alert_inputs, today)
+    except Exception as exc:
+        logger.warning("rank_alerts_reconcile_failed", extra={"client_id": client_id, "error": str(exc)})
 
     logger.info(
         "rank_materialize_complete",

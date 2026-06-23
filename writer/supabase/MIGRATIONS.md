@@ -75,6 +75,7 @@ expected for a shared project, not a problem.
 | `20260622191831` | `keyword_index_status` (#4 — deindex URL-Inspection result) |
 | `20260622203200` | `sie_cache_enable_rls` (drift fix — RLS on `sie_cache`) |
 | `20260622232017` | `serp_snapshots` (Organic Rank Tracker #4 — Competitive SERP Snapshot store) |
+| `20260623000343` | `rank_alerts` (Organic Rank Tracker #4 — in-app rank-drop alerting) |
 
 > A few `schema_migrations.name` values carry version suffixes (`_v1_4`, `_v2_0`)
 > from how they were originally applied. The CLI matches on the numeric version,
@@ -82,6 +83,12 @@ expected for a shared project, not a problem.
 > the same migration.
 
 ## Reconciliation log
+
+**2026-06-23** — Rank-drop alerting (#4): added `rank_alerts` (one-open-alert-per
+-keyword-per-type via a partial unique index; in-app only) applied via the
+Supabase MCP. Recorded version `20260623000343`; file renamed from its placeholder
+`…235708` prefix and its `-- Migration:` header updated to match. RLS on, no
+client-facing policies.
 
 **2026-06-22** — Competitive SERP Snapshot (#4): added `serp_snapshots` +
 `serp_snapshot_results` (+ `serp_snapshot` in the `async_jobs.job_type` check),
