@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Map, Play, Trash2, MapPin } from 'lucide-react'
+import { ArrowLeft, Map, Play, Trash2, MapPin, Download } from 'lucide-react'
 import { api } from '../lib/api'
+import { toCsv, downloadCsv } from '../lib/csv'
 import type {
   Client, MapsConfig, MapsKeyword, MapsKeywordTrend, MapsRadius, MapsRunResponse, MapsScanDetail,
   MapsScanResultRow, MapsScanSummary, MapsTrendPoint, MapsTrendsResponse,
@@ -536,18 +537,39 @@ function TrendPanel({ trends }: { trends?: MapsTrendsResponse }) {
   const keywords = trends?.keywords ?? []
   const hasData = keywords.some(k => k.points.length > 0)
 
+  // Export the full per-keyword, per-scan history (all metrics) — one row per
+  // (keyword, scan), oldest → newest, for spreadsheets / client reporting.
+  const exportCsv = () => {
+    const headers = ['Date', 'Keyword', 'Total pins', 'Found pins', 'Found %',
+      'Top 3 pins', 'Top 3 %', 'Top 10 pins', 'Top 10 %', 'Avg rank', 'Trigger']
+    const rows = keywords.flatMap(k => k.points.map(p => [
+      p.completed_at ? p.completed_at.slice(0, 10) : '',
+      k.keyword, p.total_pins, p.found_pins, p.found_pct ?? '',
+      p.top3_pins, p.top3_pct ?? '', p.top10_pins, p.top10_pct ?? '',
+      p.average_rank ?? '', p.trigger,
+    ] as (string | number | null)[]))
+    downloadCsv(`maps-trends-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(headers, rows))
+  }
+
   return (
     <div style={{ ...card, marginBottom: 16 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
         <h2 style={{ ...sectionTitle, margin: 0 }}>Trend over time</h2>
-        <div style={{ display: 'flex', gap: 4, background: '#f1f5f9', borderRadius: 8, padding: 3 }}>
-          {TREND_METRICS.map(m => (
-            <button key={m.key} onClick={() => setMetric(m.key)} style={{
-              border: 'none', cursor: 'pointer', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600,
-              background: metric === m.key ? '#fff' : 'transparent', color: metric === m.key ? '#6366f1' : '#64748b',
-              boxShadow: metric === m.key ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
-            }}>{m.label}</button>
-          ))}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 4, background: '#f1f5f9', borderRadius: 8, padding: 3 }}>
+            {TREND_METRICS.map(m => (
+              <button key={m.key} onClick={() => setMetric(m.key)} style={{
+                border: 'none', cursor: 'pointer', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600,
+                background: metric === m.key ? '#fff' : 'transparent', color: metric === m.key ? '#6366f1' : '#64748b',
+                boxShadow: metric === m.key ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
+              }}>{m.label}</button>
+            ))}
+          </div>
+          {hasData && (
+            <button style={outlineBtn} onClick={exportCsv} title="Export the full trend history to CSV">
+              <Download size={14} /> Export CSV
+            </button>
+          )}
         </div>
       </div>
       {!hasData ? (
