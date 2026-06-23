@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -192,7 +193,7 @@ def _scan_detail(scan_id: str) -> MapsScanDetail:
     s = found[0]
     results = (
         supabase.table("maps_scan_results")
-        .select("keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins, rank_grid, heatmap_image_url, dynamic_url, competitors, competitors_above")
+        .select("keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins, rank_grid, heatmap_image_url, dynamic_url, competitors, competitors_above, report_status, report_md, report_weak_directions, report_top_competitors, report_octant_pins, report_analytics, report_doc_url, report_generated_at")
         .eq("scan_id", scan_id).order("keyword").execute()
     ).data or []
     return MapsScanDetail(
@@ -208,6 +209,31 @@ def _scan_detail(scan_id: str) -> MapsScanDetail:
 @router.get("/maps-scans/{scan_id}", response_model=MapsScanDetail)
 async def get_scan(scan_id: UUID, auth: dict = Depends(require_auth)) -> MapsScanDetail:
     return _scan_detail(str(scan_id))
+
+
+@router.post("/clients/{client_id}/maps/report")
+async def trigger_maps_report(
+    client_id: UUID, scan_id: Optional[UUID] = None, auth: dict = Depends(require_auth),
+) -> dict:
+    """(Re)generate the Local Rank Analysis report for a scan — defaults to the
+    client's latest completed scan. Reports also generate automatically when a
+    scan completes; this backfills existing scans and forces a regeneration."""
+    from services.maps_report import enqueue_maps_report
+
+    supabase = get_supabase()
+    if scan_id is None:
+        rows = (
+            supabase.table("maps_scans").select("id")
+            .eq("client_id", str(client_id)).eq("status", "complete")
+            .order("completed_at", desc=True).limit(1).execute()
+        ).data
+        if not rows:
+            raise HTTPException(status_code=404, detail="no_completed_scan")
+        target = rows[0]["id"]
+    else:
+        target = str(scan_id)
+    enqueued = enqueue_maps_report(target)
+    return {"scan_id": target, "enqueued": enqueued}
 
 
 @router.get("/clients/{client_id}/maps/latest", response_model=MapsScanDetail)

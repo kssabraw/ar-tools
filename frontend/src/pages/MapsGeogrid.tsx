@@ -9,6 +9,7 @@ import type {
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
+import { Markdown } from '../components/Markdown'
 import { rankColor, TREND_METRICS } from '../components/maps/rank'
 import type { TrendMetric } from '../components/maps/rank'
 import { backLink, card, errorBox, outlineBtn, primaryBtn, relativeTime } from '../components/localseo/shared'
@@ -164,7 +165,7 @@ function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: bo
                 <span><strong>Found</strong> {r.found_pins}/{r.total_pins} pins</span>
               </div>
             </div>
-            <ResultView r={r} scan={latest} />
+            <ResultView r={r} scan={latest} clientId={clientId} />
           </div>
         ))
       )}
@@ -175,7 +176,7 @@ function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: bo
 
 // One keyword's result: the geo-grid map (numbered rank pins) plus the LD
 // interactive-map link and the full numeric grid.
-function ResultView({ r, scan }: { r: MapsScanResultRow; scan: MapsScanDetail }) {
+function ResultView({ r, scan, clientId }: { r: MapsScanResultRow; scan: MapsScanDetail; clientId: string }) {
   return (
     <div style={{ marginTop: 12 }}>
       <GeoGridMap grid={r.rank_grid} centerLat={scan.center_lat} centerLng={scan.center_lng} />
@@ -190,6 +191,83 @@ function ResultView({ r, scan }: { r: MapsScanResultRow; scan: MapsScanDetail })
           <div style={{ marginTop: 10 }}><Grid grid={r.rank_grid} /></div>
         </details>
       </div>
+      <LocalRankAnalysis r={r} clientId={clientId} />
+    </div>
+  )
+}
+
+// Local Rank Analysis: the auto-generated client-facing report (Markdown) plus
+// suggested hyper-local pins for the weak zones, with a Regenerate control.
+function LocalRankAnalysis({ r, clientId }: { r: MapsScanResultRow; clientId: string }) {
+  const queryClient = useQueryClient()
+  const regenMut = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/report`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maps-latest', clientId] }),
+  })
+
+  const pins = r.report_octant_pins?.points ?? []
+
+  return (
+    <div style={{ marginTop: 16, borderTop: '1px solid #f1f5f9', paddingTop: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+        <h4 style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', margin: 0 }}>Local Rank Analysis</h4>
+        <button
+          style={{ ...outlineBtn, padding: '6px 10px', fontSize: 12 }}
+          onClick={() => regenMut.mutate()}
+          disabled={regenMut.isPending}
+        >
+          {regenMut.isPending ? 'Queuing…' : 'Regenerate report'}
+        </button>
+      </div>
+
+      {r.report_status === 'complete' && r.report_md ? (
+        <div>
+          <Markdown>{r.report_md}</Markdown>
+          {pins.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 6 }}>Suggested hyper-local pins (weak zones)</div>
+              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+                <thead>
+                  <tr>
+                    {['Octant', 'Ring (mi)', 'Strength', 'Lat', 'Lng'].map((h, hi) => (
+                      <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 0 || hi === 2 ? 'left' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {pins.map((p, pi) => (
+                    <tr key={pi}>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.octant}</td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>{p.radius_mi.toFixed(1)}</td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.strength}</td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>{p.lat.toFixed(5)}</td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>{p.lng.toFixed(5)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 10 }}>
+            {r.report_doc_url && (
+              <a href={r.report_doc_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', textDecoration: 'none' }}>
+                View Google Doc ↗
+              </a>
+            )}
+            {r.report_generated_at && (
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>Generated {relativeTime(r.report_generated_at)}</span>
+            )}
+          </div>
+        </div>
+      ) : r.report_status === 'pending' ? (
+        <p style={muted}>Generating report…</p>
+      ) : r.report_status === 'failed' ? (
+        <p style={muted}>Report generation failed.</p>
+      ) : (
+        <p style={muted}>No report yet.</p>
+      )}
+
+      {regenMut.error && <div style={{ ...errorBox, marginTop: 10 }}>{(regenMut.error as Error).message}</div>}
     </div>
   )
 }
