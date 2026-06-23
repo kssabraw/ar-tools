@@ -278,3 +278,38 @@ async def maps_trends(
         .in_("scan_id", [s["id"] for s in scans]).execute()
     ).data or []
     return build_maps_trends(scans, results)
+
+
+# ===========================================================================
+# TEMPORARY debug route — REMOVE after capturing the Local Dominator /results
+# shape. Read-only: proxies GET /v1/scans/{uuid}/results so we can see the
+# detailsArray / compressed_grid / ids structure (the per-pin competitor data).
+# Unauthenticated for one-off browser access, guarded by a one-off token.
+# ===========================================================================
+@router.get("/maps/_debug/ld-results/{token}")
+async def _debug_ld_results(token: str, scan_uuid: str):
+    import httpx
+    from config import settings
+
+    if token != "k7Rb2mN9pQ4wZ8xT3vL6yJ1c":
+        raise HTTPException(status_code=404, detail="not_found")
+
+    url = f"{settings.local_dominator_base_url}/v1/scans/{scan_uuid}/results"
+    headers = {"Authorization": f"Bearer {settings.local_dominator_api_key}"}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.get(url, headers=headers)
+    try:
+        body = resp.json()
+    except Exception:
+        return {"status_code": resp.status_code, "text": resp.text[:5000]}
+
+    # A compact shape summary alongside the raw payload, so the structure is
+    # legible even when the per-pin arrays are large.
+    def shape(v, depth=0):
+        if isinstance(v, dict):
+            return {k: shape(val, depth + 1) for k, val in v.items()}
+        if isinstance(v, list):
+            return {"list_len": len(v), "item": shape(v[0], depth + 1) if v and depth < 5 else None}
+        return type(v).__name__
+
+    return {"status_code": resp.status_code, "shape": shape(body), "raw": body}
