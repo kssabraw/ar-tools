@@ -88,3 +88,27 @@ class MapsRunResponse(BaseModel):
     client_id: UUID
     status: str  # 'enqueued' | 'failed'
     error: Optional[str] = None
+
+
+class MapsTrendPoint(BaseModel):
+    """One keyword's metrics at a single completed scan (a point on the trend)."""
+    scan_id: UUID
+    completed_at: Optional[str] = None
+    trigger: str = "scheduled"
+    total_pins: int = 0
+    found_pins: int = 0
+    top3_pins: int = 0
+    top10_pins: int = 0
+    average_rank: Optional[float] = None
+    found_pct: Optional[float] = None   # % of pins where the business appears
+    top3_pct: Optional[float] = None    # % of pins ranking in the local pack (<= 3)
+    top10_pct: Optional[float] = None   # % of pins ranking <= 10
+
+
+class MapsKeywordTrend(BaseModel):
+    keyword: str
+    points: list[MapsTrendPoint] = Field(default_factory=list)  # oldest → newest
+
+
+class MapsTrendsResponse(BaseModel):
+    keywords: list[MapsKeywordTrend] = Field(default_factory=list)

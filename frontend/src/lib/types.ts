@@ -551,3 +551,26 @@ export interface MapsRunResponse {
   status: string
   error: string | null
 }
+
+export interface MapsTrendPoint {
+  scan_id: string
+  completed_at: string | null
+  trigger: 'scheduled' | 'manual'
+  total_pins: number
+  found_pins: number
+  top3_pins: number
+  top10_pins: number
+  average_rank: number | null
+  found_pct: number | null
+  top3_pct: number | null
+  top10_pct: number | null
+}
+
+export interface MapsKeywordTrend {
+  keyword: string
+  points: MapsTrendPoint[]
+}
+
+export interface MapsTrendsResponse {
+  keywords: MapsKeywordTrend[]
+}

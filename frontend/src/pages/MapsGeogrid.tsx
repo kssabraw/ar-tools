@@ -4,8 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Map, Play, Trash2, MapPin } from 'lucide-react'
 import { api } from '../lib/api'
 import type {
-  Client, MapsConfig, MapsKeyword, MapsRadius, MapsRunResponse, MapsScanDetail,
-  MapsScanResultRow, MapsScanSummary,
+  Client, MapsConfig, MapsKeyword, MapsKeywordTrend, MapsRadius, MapsRunResponse, MapsScanDetail,
+  MapsScanResultRow, MapsScanSummary, MapsTrendPoint, MapsTrendsResponse,
 } from '../lib/types'
 import { backLink, card, errorBox, outlineBtn, primaryBtn, relativeTime } from '../components/localseo/shared'
 
@@ -485,27 +485,138 @@ function Setup({ clientId }: { clientId: string }) {
   )
 }
 
-// ── History ─────────────────────────────────────────────────────────────────
-function History({ scans }: { clientId: string; scans: MapsScanSummary[]; onOpen: () => void }) {
-  if (scans.length === 0) return <div style={card}><p style={muted}>No scans yet.</p></div>
+// ── History (trend over time + scan list) ───────────────────────────────────
+function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary[]; onOpen: () => void }) {
+  const { data: trends } = useQuery<MapsTrendsResponse>({
+    queryKey: ['maps-trends', clientId],
+    queryFn: () => api.get<MapsTrendsResponse>(`/clients/${clientId}/maps/trends`),
+  })
   return (
-    <div style={card}>
-      <h2 style={sectionTitle}>Scan history</h2>
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
-        {scans.map((s, i) => (
-          <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
-            <span style={statusDot(s.status)} />
-            <span style={{ flex: 1, fontSize: 14, color: '#0f172a' }}>
-              {s.radius_miles}-mile · {s.grid_size}×{s.grid_size}
-              <span style={{ color: '#94a3b8', marginLeft: 8, fontSize: 12 }}>{s.trigger}</span>
-            </span>
-            <span style={{ fontSize: 12, color: '#64748b' }}>{cap(s.status)}</span>
-            <span style={{ fontSize: 12, color: '#94a3b8', minWidth: 90, textAlign: 'right' }}>
-              {relativeTime(s.completed_at || s.requested_at || '')}
-            </span>
+    <div>
+      <TrendPanel trends={trends} />
+      {scans.length === 0 ? (
+        <div style={card}><p style={muted}>No scans yet.</p></div>
+      ) : (
+        <div style={card}>
+          <h2 style={sectionTitle}>Scan history</h2>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {scans.map((s, i) => (
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                <span style={statusDot(s.status)} />
+                <span style={{ flex: 1, fontSize: 14, color: '#0f172a' }}>
+                  {s.radius_miles}-mile · {s.grid_size}×{s.grid_size}
+                  <span style={{ color: '#94a3b8', marginLeft: 8, fontSize: 12 }}>{s.trigger}</span>
+                </span>
+                <span style={{ fontSize: 12, color: '#64748b' }}>{cap(s.status)}</span>
+                <span style={{ fontSize: 12, color: '#94a3b8', minWidth: 90, textAlign: 'right' }}>
+                  {relativeTime(s.completed_at || s.requested_at || '')}
+                </span>
+              </div>
+            ))}
           </div>
-        ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+type TrendMetric = 'top3_pct' | 'top10_pct' | 'found_pct' | 'average_rank'
+const TREND_METRICS: Array<{ key: TrendMetric; label: string; unit: string; lowerIsBetter: boolean; fixedMax?: number }> = [
+  { key: 'top3_pct', label: 'Top 3 %', unit: '%', lowerIsBetter: false, fixedMax: 100 },
+  { key: 'top10_pct', label: 'Top 10 %', unit: '%', lowerIsBetter: false, fixedMax: 100 },
+  { key: 'found_pct', label: 'Found %', unit: '%', lowerIsBetter: false, fixedMax: 100 },
+  { key: 'average_rank', label: 'Avg rank', unit: '', lowerIsBetter: true },
+]
+const SERIES_COLORS = ['#6366f1', '#16a34a', '#ea580c', '#0ea5e9', '#db2777', '#ca8a04', '#7c3aed', '#0d9488']
+
+// Coverage/rank trend over time, one line per keyword, with a metric switch.
+// Top-3 % and Top-10 % are the headline measures of local-pack visibility.
+function TrendPanel({ trends }: { trends?: MapsTrendsResponse }) {
+  const [metric, setMetric] = useState<TrendMetric>('top3_pct')
+  const keywords = trends?.keywords ?? []
+  const hasData = keywords.some(k => k.points.length > 0)
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+        <h2 style={{ ...sectionTitle, margin: 0 }}>Trend over time</h2>
+        <div style={{ display: 'flex', gap: 4, background: '#f1f5f9', borderRadius: 8, padding: 3 }}>
+          {TREND_METRICS.map(m => (
+            <button key={m.key} onClick={() => setMetric(m.key)} style={{
+              border: 'none', cursor: 'pointer', borderRadius: 6, padding: '5px 10px', fontSize: 12, fontWeight: 600,
+              background: metric === m.key ? '#fff' : 'transparent', color: metric === m.key ? '#6366f1' : '#64748b',
+              boxShadow: metric === m.key ? '0 1px 2px rgba(0,0,0,.08)' : 'none',
+            }}>{m.label}</button>
+          ))}
+        </div>
       </div>
+      {!hasData ? (
+        <p style={muted}>Run at least one scan to start building a trend. Each scan adds a point per keyword.</p>
+      ) : (
+        <TrendChart keywords={keywords} metric={TREND_METRICS.find(m => m.key === metric)!} />
+      )}
+    </div>
+  )
+}
+
+function TrendChart({ keywords, metric }: { keywords: MapsKeywordTrend[]; metric: typeof TREND_METRICS[number] }) {
+  const W = 600, H = 240, padL = 38, padR = 12, padT = 12, padB = 26
+  const plotW = W - padL - padR, plotH = H - padT - padB
+
+  const val = (p: MapsTrendPoint): number | null => p[metric.key] as number | null
+  // X domain over all points' completed_at; fall back to index when timestamps tie.
+  const times = keywords.flatMap(k => k.points.map(p => Date.parse(p.completed_at || '') || 0))
+  const tMin = Math.min(...times), tMax = Math.max(...times)
+  // Y domain: 0–100 for percentages; for avg rank, 1..max(observed) padded a little.
+  const vals = keywords.flatMap(k => k.points.map(val).filter((v): v is number => v != null))
+  const yLo = metric.lowerIsBetter ? 1 : 0
+  const yHi = metric.fixedMax ?? Math.max(yLo + 1, Math.ceil((Math.max(...vals, yLo) + 1)))
+
+  const x = (t: number) => padL + (tMax === tMin ? plotW / 2 : ((t - tMin) / (tMax - tMin)) * plotW)
+  const y = (v: number) => {
+    const frac = (v - yLo) / (yHi - yLo || 1)
+    return padT + (metric.lowerIsBetter ? frac : 1 - frac) * plotH
+  }
+  const ticks = Array.from({ length: 5 }, (_, i) => yLo + ((yHi - yLo) * i) / 4)
+  const fmt = (v: number | null) => (v == null ? '—' : `${metric.lowerIsBetter ? (Math.round(v * 10) / 10) : Math.round(v)}${metric.unit}`)
+
+  return (
+    <div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ maxWidth: W, display: 'block' }} role="img" aria-label={`${metric.label} trend`}>
+        {ticks.map((tk, i) => (
+          <g key={i}>
+            <line x1={padL} x2={W - padR} y1={y(tk)} y2={y(tk)} stroke="#eef2f7" strokeWidth={1} />
+            <text x={padL - 6} y={y(tk) + 3} textAnchor="end" fontSize={9} fill="#94a3b8">{Math.round(tk)}{metric.unit}</text>
+          </g>
+        ))}
+        {keywords.map((k, ki) => {
+          const color = SERIES_COLORS[ki % SERIES_COLORS.length]
+          const pts = k.points.filter(p => val(p) != null)
+          const line = pts.map(p => `${x(Date.parse(p.completed_at || '') || 0)},${y(val(p) as number)}`).join(' ')
+          return (
+            <g key={k.keyword}>
+              {pts.length > 1 && <polyline points={line} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />}
+              {pts.map((p, i) => (
+                <circle key={i} cx={x(Date.parse(p.completed_at || '') || 0)} cy={y(val(p) as number)} r={2.8} fill={color}>
+                  <title>{`${k.keyword} · ${fmt(val(p))} · ${p.completed_at ? new Date(p.completed_at).toLocaleDateString() : ''}`}</title>
+                </circle>
+              ))}
+            </g>
+          )
+        })}
+      </svg>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
+        {keywords.map((k, ki) => {
+          const last = [...k.points].reverse().find(p => val(p) != null)
+          return (
+            <span key={k.keyword} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475569' }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: SERIES_COLORS[ki % SERIES_COLORS.length] }} />
+              {k.keyword}<strong style={{ color: '#0f172a' }}>{fmt(last ? val(last) : null)}</strong>
+            </span>
+          )
+        })}
+      </div>
+      {metric.lowerIsBetter && <p style={{ ...muted, marginBottom: 0, marginTop: 8 }}>Lower is better — the line is drawn so up = improving.</p>}
     </div>
   )
 }
