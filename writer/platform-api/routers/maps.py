@@ -185,7 +185,7 @@ def _scan_detail(scan_id: str) -> MapsScanDetail:
     s = found[0]
     results = (
         supabase.table("maps_scan_results")
-        .select("keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins, rank_grid, heatmap_image_url, dynamic_url, competitors")
+        .select("keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins, rank_grid, heatmap_image_url, dynamic_url, competitors, competitors_above")
         .eq("scan_id", scan_id).order("keyword").execute()
     ).data or []
     return MapsScanDetail(
