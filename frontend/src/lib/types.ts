@@ -607,3 +607,25 @@ export interface MapsKeywordTrend {
 export interface MapsTrendsResponse {
   keywords: MapsKeywordTrend[]
 }
+
+export interface MapsCompetitorTrendPoint {
+  scan_id: string
+  completed_at: string | null
+  beats_pins: number
+  total_slots: number
+  beats_pct: number | null
+  avg_rank_above: number | null
+}
+
+export interface MapsCompetitorTrend {
+  place_id: string
+  name: string | null
+  latest_pct: number | null
+  delta_pct: number | null   // positive = gaining on us
+  points: MapsCompetitorTrendPoint[]
+}
+
+export interface MapsCompetitorTrendsResponse {
+  scan_count: number
+  competitors: MapsCompetitorTrend[]
+}

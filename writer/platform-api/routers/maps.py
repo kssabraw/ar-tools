@@ -16,6 +16,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from models.maps import (
+    MapsCompetitorTrend,
+    MapsCompetitorTrendPoint,
+    MapsCompetitorTrendsResponse,
     MapsConfig,
     MapsConfigUpdate,
     MapsKeyword,
@@ -278,3 +281,98 @@ async def maps_trends(
         .in_("scan_id", [s["id"] for s in scans]).execute()
     ).data or []
     return build_maps_trends(scans, results)
+
+
+def build_competitor_trends(scans: list[dict], results: list[dict], top_n: int = 15) -> MapsCompetitorTrendsResponse:
+    """Pure aggregation: across completed scans, how each competitor's pressure on
+    the client changes over time. For each scan we tally, per competitor, the
+    in-circle pins (summed over keywords) where it ranks above the client, over
+    the scan's total in-circle pins → a "beats you %" series. Only scans that
+    actually carry competitor data are included (older pre-capture scans are
+    skipped so they don't read as a false 0%). DB-free for unit testing."""
+    meta = {s["id"]: s for s in scans}
+    comp_scan_ids: set = set()
+    slots: dict = {}                 # scan_id -> total in-circle pins
+    beats: dict = {}                 # scan_id -> place_id -> {pins, rank_sum}
+    names: dict = {}                 # place_id -> latest name seen
+    for r in results:
+        sid = r.get("scan_id")
+        if sid not in meta:
+            continue
+        slots[sid] = slots.get(sid, 0) + (r.get("total_pins") or 0)
+        ca = r.get("competitors_above")
+        if ca:
+            comp_scan_ids.add(sid)
+        directory = (ca or {}).get("directory") or {}
+        for pid, info in directory.items():
+            if isinstance(info, dict) and info.get("name"):
+                names[pid] = info["name"]
+        sb = beats.setdefault(sid, {})
+        for row in (ca or {}).get("grid") or []:
+            for cell in row or []:
+                if not cell:  # None (out-of-circle) or [] (client ranks 1st)
+                    continue
+                for entry in cell:
+                    if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+                        continue
+                    pid, rank = entry[0], entry[1]
+                    e = sb.setdefault(pid, {"pins": 0, "rank_sum": 0})
+                    e["pins"] += 1
+                    if isinstance(rank, (int, float)):
+                        e["rank_sum"] += rank
+
+    order = sorted(comp_scan_ids, key=lambda sid: meta[sid].get("completed_at") or "")
+    all_pids: set = set()
+    for sid in order:
+        all_pids |= set(beats.get(sid, {}).keys())
+
+    competitors: list[MapsCompetitorTrend] = []
+    for pid in all_pids:
+        points: list[MapsCompetitorTrendPoint] = []
+        for sid in order:
+            e = beats.get(sid, {}).get(pid)
+            total = slots.get(sid, 0)
+            pins = e["pins"] if e else 0
+            points.append(
+                MapsCompetitorTrendPoint(
+                    scan_id=sid,
+                    completed_at=meta[sid].get("completed_at"),
+                    beats_pins=pins,
+                    total_slots=total,
+                    beats_pct=round(pins / total * 100, 1) if total else None,
+                    avg_rank_above=round(e["rank_sum"] / e["pins"], 2) if e and e["pins"] else None,
+                )
+            )
+        pcts = [p.beats_pct for p in points if p.beats_pct is not None]
+        competitors.append(
+            MapsCompetitorTrend(
+                place_id=pid,
+                name=names.get(pid),
+                latest_pct=pcts[-1] if pcts else None,
+                delta_pct=round(pcts[-1] - pcts[0], 1) if len(pcts) >= 2 else None,
+                points=points,
+            )
+        )
+    competitors.sort(key=lambda c: -(c.latest_pct or 0))
+    return MapsCompetitorTrendsResponse(scan_count=len(order), competitors=competitors[:top_n])
+
+
+@router.get("/clients/{client_id}/maps/competitor-trends", response_model=MapsCompetitorTrendsResponse)
+async def maps_competitor_trends(
+    client_id: UUID, limit: int = 52, auth: dict = Depends(require_auth)
+) -> MapsCompetitorTrendsResponse:
+    """Per-competitor "are they gaining on us?" trend across the client's
+    completed scans, from the per-pin above-us capture."""
+    supabase = get_supabase()
+    scans = (
+        supabase.table("maps_scans").select("id, completed_at")
+        .eq("client_id", str(client_id)).eq("status", "complete")
+        .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
+    ).data or []
+    if not scans:
+        return MapsCompetitorTrendsResponse()
+    results = (
+        supabase.table("maps_scan_results").select("scan_id, total_pins, competitors_above")
+        .in_("scan_id", [s["id"] for s in scans]).execute()
+    ).data or []
+    return build_competitor_trends(scans, results)
