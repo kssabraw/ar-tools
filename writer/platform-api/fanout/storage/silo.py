@@ -1215,20 +1215,40 @@ def get_pipeline_summary(session_id: str) -> dict:
             ],
         }
 
+    counts = {
+        "active": _count("keywords", session_id=session_id, status="active"),
+        "filtered_relevance": _count("keywords", session_id=session_id,
+                                     status="filtered_relevance"),
+        "filtered_junk": _count("keywords", session_id=session_id,
+                                status="filtered_junk"),
+        "filtered_language": _count_status_safe(session_id, "filtered_language"),
+    }
+
+    # Settling guard. The expand/regate/fanout jobs persist the full gated keyword
+    # pool *before* flipping the session to `awaiting_article_planning`, so a
+    # terminal status reporting a completely empty pool means this read raced
+    # ahead of the just-committed writes becoming visible. Rather than let the UI
+    # latch on "pipeline complete · 0 keywords" (the poller stops once status
+    # leaves `running`), report the run as still `running` so polling continues
+    # and the next read lands on real counts. Scoped to runs that actually
+    # produced clustering groupings, so a genuinely empty run still reports its
+    # honest zero.
+    if (
+        status == "awaiting_article_planning"
+        and sum(counts.values()) == 0
+        and any((clog_topics.get(t["id"]) or {}).get("grouping_count", 0) for t in topics)
+    ):
+        return {"status": "running", "last_error": last_error, "approval": approval,
+                "cost": cost, "expansion": _EMPTY_EXPANSION, "plan": None,
+                "architecture": None}
+
     return {
         "status": session.get("status"),
         "last_error": session.get("last_error"),
         "approval": approval,
         "cost": cost,
         "expansion": {
-            "counts": {
-                "active": _count("keywords", session_id=session_id, status="active"),
-                "filtered_relevance": _count("keywords", session_id=session_id,
-                                             status="filtered_relevance"),
-                "filtered_junk": _count("keywords", session_id=session_id,
-                                        status="filtered_junk"),
-                "filtered_language": _count_status_safe(session_id, "filtered_language"),
-            },
+            "counts": counts,
             "topics": expansion_topics,
         },
         "plan": plan,
