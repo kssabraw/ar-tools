@@ -16,6 +16,7 @@ client's Drive folder (best-effort).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -28,6 +29,9 @@ from services.google_docs import GoogleDocError, create_google_doc
 
 logger = logging.getLogger(__name__)
 
+# Max concurrent per-keyword report generations within one scan's job.
+_REPORT_CONCURRENCY = 5
+
 # Generic tokens in a keyword that aren't a brandable "name keyword" signal.
 _STOPWORDS = {
     "near", "me", "best", "top", "in", "the", "and", "for", "of", "a", "service",
@@ -38,6 +42,11 @@ _STOPWORDS = {
 # ----------------------------------------------------------------------------
 # Pure helpers (unit-tested)
 # ----------------------------------------------------------------------------
+def _is_number(v) -> bool:
+    """True for real numeric values (ints/floats), excluding bool."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
 def keyword_tokens(keyword: str) -> list[str]:
     """Meaningful lowercased tokens of a keyword (drops generic/location words)."""
     words = re.findall(r"[a-z]+", (keyword or "").lower())
@@ -74,7 +83,7 @@ def competitor_diagnostics(
     for c in eligible[:top_n]:
         reviews = c.get("reviews")
         hit = name_keyword_hit(c.get("name"), tokens)
-        gap = (reviews - client_reviews) if (isinstance(reviews, int) and isinstance(client_reviews, int)) else None
+        gap = (reviews - client_reviews) if (_is_number(reviews) and _is_number(client_reviews)) else None
         out.append({
             "name": c.get("name"),
             "rating": c.get("rating"),
@@ -385,11 +394,23 @@ async def run_maps_report_job(job: dict) -> None:
             .eq("scan_id", scan_id).execute()
         ).data or []
 
+        # Generate per-keyword reports concurrently (each is a ~1-min LLM call) so
+        # a multi-keyword scan doesn't hold the single async-job worker for many
+        # minutes serially. Bounded so a large keyword set can't fan out an
+        # unbounded burst of Anthropic calls. Each keyword still fails in
+        # isolation; Supabase writes (sync) are done after, off the gather.
+        sem = asyncio.Semaphore(_REPORT_CONCURRENCY)
+
+        async def _gen_one(result_row: dict):
+            async with sem:
+                try:
+                    return result_row, await generate_report_for_result(client, scan_row, result_row), None
+                except Exception as exc:  # noqa: BLE001 — isolate per-keyword failure
+                    return result_row, None, exc
+
         generated: list[tuple[str, str]] = []  # (keyword, markdown)
-        for result_row in results:
-            try:
-                fields = await generate_report_for_result(client, scan_row, result_row)
-            except Exception as exc:
+        for result_row, fields, exc in await asyncio.gather(*(_gen_one(r) for r in results)):
+            if exc is not None or fields is None:
                 logger.warning(
                     "maps_report_keyword_failed",
                     extra={"scan_id": scan_id, "keyword": result_row.get("keyword"), "error": str(exc)},
