@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { MapsKeywordTrend, MapsTrendPoint } from '../../lib/types'
+import { rankColor, TREND_METRICS } from './rank'
 
 // Shared Maps geo-grid visuals: the rank-color scale, the geo-grid map (numbered
 // pins on a Google Static Map, with a dependency-free circular fallback), and the
@@ -8,16 +9,6 @@ import type { MapsKeywordTrend, MapsTrendPoint } from '../../lib/types'
 const GMAPS_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined
 const MAP_SIZE = 480 // logical px of the square static map (requested at scale=2 for sharpness)
 const muted: React.CSSProperties = { fontSize: 13, color: '#94a3b8' }
-
-// Color band for a 1-based rank (grey = not ranked / null).
-export function rankColor(rank: number | null): string {
-  if (rank == null || rank < 1) return '#e5e7eb'
-  if (rank <= 3) return '#16a34a'
-  if (rank <= 7) return '#65a30d'
-  if (rank <= 10) return '#ca8a04'
-  if (rank <= 15) return '#ea580c'
-  return '#dc2626'
-}
 
 // Lat/lng of an in-circle grid cell: pins are spaced 1 mile, row 0 = north.
 function cellLatLng(row: number, col: number, n: number, centerLat: number, centerLng: number) {
@@ -137,13 +128,6 @@ function CircleHeatmap({ grid }: { grid: Array<Array<number | null>> | null }) {
   )
 }
 
-export type TrendMetric = 'top3_pct' | 'top10_pct' | 'found_pct' | 'average_rank'
-export const TREND_METRICS: Array<{ key: TrendMetric; label: string; unit: string; lowerIsBetter: boolean; fixedMax?: number }> = [
-  { key: 'top3_pct', label: 'Top 3 %', unit: '%', lowerIsBetter: false, fixedMax: 100 },
-  { key: 'top10_pct', label: 'Top 10 %', unit: '%', lowerIsBetter: false, fixedMax: 100 },
-  { key: 'found_pct', label: 'Found %', unit: '%', lowerIsBetter: false, fixedMax: 100 },
-  { key: 'average_rank', label: 'Avg rank', unit: '', lowerIsBetter: true },
-]
 const SERIES_COLORS = ['#6366f1', '#16a34a', '#ea580c', '#0ea5e9', '#db2777', '#ca8a04', '#7c3aed', '#0d9488']
 
 // Coverage/rank trend over time, one line per keyword. Avg rank is drawn inverted

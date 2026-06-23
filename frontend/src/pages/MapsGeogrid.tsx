@@ -8,8 +8,9 @@ import type {
   Client, MapsConfig, MapsKeyword, MapsRadius, MapsRunResponse, MapsScanDetail,
   MapsScanResultRow, MapsScanSummary, MapsTrendsResponse,
 } from '../lib/types'
-import { GeoGridMap, rankColor, TrendChart, TREND_METRICS } from '../components/maps/visuals'
-import type { TrendMetric } from '../components/maps/visuals'
+import { GeoGridMap, TrendChart } from '../components/maps/visuals'
+import { rankColor, TREND_METRICS } from '../components/maps/rank'
+import type { TrendMetric } from '../components/maps/rank'
 import { backLink, card, errorBox, outlineBtn, primaryBtn, relativeTime } from '../components/localseo/shared'
 
 type Tab = 'heatmap' | 'setup' | 'history'

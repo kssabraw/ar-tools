@@ -3,7 +3,8 @@ import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Printer, MapPin } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, MapsScanDetail, MapsScanResultRow, MapsTrendsResponse } from '../lib/types'
-import { GeoGridMap, TrendChart, TREND_METRICS, rankColor } from '../components/maps/visuals'
+import { GeoGridMap, TrendChart } from '../components/maps/visuals'
+import { TREND_METRICS, rankColor } from '../components/maps/rank'
 
 // Printable, client-facing Maps geo-grid report: branded header, coverage KPIs,
 // Top-3 %/Top-10 % trend over time, and a per-keyword heatmap. Uses the data the
