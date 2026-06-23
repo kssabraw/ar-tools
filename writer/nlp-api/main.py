@@ -4999,10 +4999,11 @@ class GeneratePageRequest(BaseModel):
     page_template_url: Optional[str] = None
     page_template_html: Optional[str] = None
     # Whether to run competitor SERP analysis when no cached analysis is
-    # supplied. Required (no default) — the suite forces an explicit choice
-    # per page. When False and no serp_analysis is passed, generation runs
-    # with NO competitor scrape (lighter page from GBP/client data only).
-    run_analysis: bool
+    # supplied. Defaults to True — the suite always runs analysis first.
+    # platform-api only passes False as a degraded fallback (its own analysis
+    # attempt already failed, so nlp must not re-scrape the same failing SERP);
+    # a direct caller that omits this still gets the full competitor analysis.
+    run_analysis: bool = True
 
 class GeneratePageResponse(BaseModel):
     content_html: str
@@ -5029,9 +5030,10 @@ async def generate_page(request: Request, body: GeneratePageRequest):
         await q.put({"step": "progress", "progress": 5, "message": "Starting…"})
 
         # Use supplied analysis if present; otherwise run an inline SERP
-        # analysis ONLY when the caller opted in (run_analysis=True). When
-        # run_analysis is False, generation proceeds with no competitor
-        # scrape — the page is built from GBP/client data alone.
+        # analysis (the default — analysis always runs first). run_analysis is
+        # only False as a degraded fallback from platform-api when its own
+        # analysis attempt already failed, in which case we skip the re-scrape
+        # and build the page from GBP/client data alone.
         serp_analysis_dict = body.serp_analysis
         if not serp_analysis_dict and body.run_analysis:
             await q.put({"step": "progress", "progress": 10, "message": "Fetching top search results…"})

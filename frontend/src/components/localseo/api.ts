@@ -24,7 +24,6 @@ export const localSeoApi = {
       keyword: string
       location: string
       location_code?: number | null
-      run_analysis: boolean
       force_refresh?: boolean
       page_template_url?: string | null
     },

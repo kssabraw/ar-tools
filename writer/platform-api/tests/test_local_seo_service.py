@@ -48,7 +48,7 @@ def _supabase_for_client(client_row, insert_row=None):
 
 
 def test_gbp_to_generate_payload_maps_fields():
-    payload = local_seo_service._gbp_to_generate_payload(_client_row(), "emergency plumber", "Anaheim, CA", True)
+    payload = local_seo_service._gbp_to_generate_payload(_client_row(), "emergency plumber", "Anaheim, CA")
     assert payload["keyword"] == "emergency plumber"
     assert payload["business_name"] == "Joe's Plumbing Co"
     assert payload["gbp_category"] == "Plumber"
@@ -82,7 +82,7 @@ async def test_generate_page_persists_row():
          patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
         # location_code supplied → resolve_location short-circuits (no network).
         page = await local_seo_service.generate_page(
-            "client-1", "emergency plumber", "Anaheim,California,United States", 1013962, True, "user-9"
+            "client-1", "emergency plumber", "Anaheim,California,United States", 1013962, "user-9"
         )
 
     assert page == inserted
@@ -90,7 +90,7 @@ async def test_generate_page_persists_row():
     assert stream.await_args[0][0] == "/generate-page"
     # the resolved location_code is forwarded to the nlp generate payload
     assert stream.await_args[0][1]["location_code"] == 1013962
-    # run_analysis=True → the cached analysis is fetched and passed to nlp
+    # analysis always runs → the cached analysis is fetched and passed to nlp
     cache_get.assert_called_once()
     assert stream.await_args[0][1]["serp_analysis"] == cached_analysis
     persisted = supabase.table.return_value.insert.call_args[0][0]
@@ -299,13 +299,13 @@ async def test_generate_degrades_when_analysis_unavailable():
          patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=None)), \
          patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
         await local_seo_service.generate_page(
-            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, True, "user-1"
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
         )
     payload = stream.await_args[0][1]
     assert payload["run_analysis"] is False     # degraded → nlp won't re-attempt the scrape
     assert "serp_analysis" not in payload
     persisted = supabase.table.return_value.insert.call_args[0][0]
-    assert persisted["run_analysis"] is True    # provenance: the user DID request analysis
+    assert persisted["run_analysis"] is True    # provenance: analysis always runs first
 
 
 @pytest.mark.asyncio
@@ -380,7 +380,7 @@ async def test_generate_uses_per_page_template_over_client_default():
          patch.object(local_seo_service.analysis_cache, "get", return_value={"serp_urls": []}), \
          patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=_GEN_NLP_RESULT)) as stream:
         await local_seo_service.generate_page(
-            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, True, "user-1",
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1",
             page_template_url="https://override.example/y",
         )
     assert stream.await_args[0][1]["page_template_url"] == "https://override.example/y"
@@ -396,7 +396,7 @@ async def test_generate_falls_back_to_client_template_default():
          patch.object(local_seo_service.analysis_cache, "get", return_value={"serp_urls": []}), \
          patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=_GEN_NLP_RESULT)) as stream:
         await local_seo_service.generate_page(
-            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, True, "user-1",
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1",
         )
     assert stream.await_args[0][1]["page_template_url"] == "https://default.example/x"
 
