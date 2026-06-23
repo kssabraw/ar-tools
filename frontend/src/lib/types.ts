@@ -54,6 +54,9 @@ export interface Client extends ClientListItem {
   icp_text: string
   icp_original_filename: string | null
   google_drive_folder_id: string | null
+  github_repo: string | null
+  github_branch: string | null
+  github_content_path: string | null
   gsc_property: string | null
   business_location: string | null
   gbp_place_id: string | null

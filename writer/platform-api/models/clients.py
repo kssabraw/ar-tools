@@ -67,6 +67,11 @@ class ClientDetail(BaseModel):
     created_at: str
     updated_at: str
     google_drive_folder_id: Optional[str] = None
+    # Publish-target scaffold (#3): GitHub repo the Fanout/Blog content can be
+    # committed to (resolved per-client when publishing). Wired, used later.
+    github_repo: Optional[str] = None
+    github_branch: Optional[str] = None
+    github_content_path: Optional[str] = None
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None
@@ -85,6 +90,11 @@ class ClientCreateRequest(BaseModel):
     icp_text: str = ""
     icp_file_id: Optional[UUID] = None
     google_drive_folder_id: Optional[str] = None
+    # Publish-target scaffold (#3): GitHub repo the Fanout/Blog content can be
+    # committed to (resolved per-client when publishing). Wired, used later.
+    github_repo: Optional[str] = None
+    github_branch: Optional[str] = None
+    github_content_path: Optional[str] = None
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None
@@ -102,6 +112,11 @@ class ClientUpdateRequest(BaseModel):
     icp_text: Optional[str] = None
     icp_file_id: Optional[UUID] = None
     google_drive_folder_id: Optional[str] = None
+    # Publish-target scaffold (#3): GitHub repo the Fanout/Blog content can be
+    # committed to (resolved per-client when publishing). Wired, used later.
+    github_repo: Optional[str] = None
+    github_branch: Optional[str] = None
+    github_content_path: Optional[str] = None
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None

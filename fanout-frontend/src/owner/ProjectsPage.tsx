@@ -4,12 +4,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteSession,
   getProjects,
+  listClientSessions,
   listSessions,
   patchSession,
   type Project,
   type SessionListItem,
 } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
+import { CLIENT_SCOPE } from "../shared/clientScope";
 import { statusLabel, statusClass } from "../shared/sessionStatus";
 
 // Project + Session Browser (PRD §9.4). Left rail lists projects; the main pane
@@ -18,23 +20,35 @@ import { statusLabel, statusClass } from "../shared/sessionStatus";
 export function ProjectsPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
-  const projects = useQuery({ queryKey: ["projects"], queryFn: getProjects });
-  const [selected, setSelected] = useState<string | null>(null);
+  // Client-scoped when opened from a client's Content Scheduler card; otherwise
+  // the global project + session browser.
+  const { clientId, clientName } = CLIENT_SCOPE;
   const [showArchived, setShowArchived] = useState(false);
 
+  // Global mode: projects rail + the selected project's sessions.
+  const projects = useQuery({ queryKey: ["projects"], queryFn: getProjects, enabled: !clientId });
+  const [selected, setSelected] = useState<string | null>(null);
   useEffect(() => {
-    if (!selected && projects.data && projects.data.length > 0) {
+    if (!clientId && !selected && projects.data && projects.data.length > 0) {
       setSelected(projects.data[0].id);
     }
-  }, [projects.data, selected]);
+  }, [projects.data, selected, clientId]);
 
-  const sessions = useQuery({
+  const projectSessions = useQuery({
     queryKey: ["sessions", selected, showArchived],
     queryFn: () => listSessions(selected!, showArchived),
-    enabled: !!selected,
+    enabled: !clientId && !!selected,
   });
+  // Client mode: only this client's runs.
+  const clientSessions = useQuery({
+    queryKey: ["client-sessions", clientId, showArchived],
+    queryFn: () => listClientSessions(clientId!, showArchived),
+    enabled: !!clientId,
+  });
+  const sessions = clientId ? clientSessions : projectSessions;
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["sessions"] });
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: clientId ? ["client-sessions"] : ["sessions"] });
   const mut = useMutation({
     mutationFn: (fn: () => Promise<unknown>) => fn(),
     onSuccess: invalidate,
@@ -42,29 +56,33 @@ export function ProjectsPage() {
   });
 
   const selectedProject = projects.data?.find((p) => p.id === selected);
+  const heading = clientId ? `${clientName ?? "Client"} · Runs` : (selectedProject?.name ?? "Sessions");
+  const emptyText = clientId ? "No runs for this client yet." : "No sessions in this project yet.";
 
   return (
     <AppShell>
-      <div className="browser-layout">
-        <aside className="browser-rail">
-          <div className="browser-rail-head">Projects</div>
-          {projects.isLoading && <p className="muted" style={{ padding: "0 14px" }}>Loading…</p>}
-          {projects.data?.map((p) => (
-            <button
-              key={p.id}
-              className={"rail-item" + (p.id === selected ? " rail-item-active" : "")}
-              onClick={() => setSelected(p.id)}
-            >
-              <span className="rail-item-name">{p.name}</span>
-              {p.is_scratch && <span className="tag-scratch">Scratch</span>}
-            </button>
-          ))}
-        </aside>
+      <div className={clientId ? undefined : "browser-layout"}>
+        {!clientId && (
+          <aside className="browser-rail">
+            <div className="browser-rail-head">Projects</div>
+            {projects.isLoading && <p className="muted" style={{ padding: "0 14px" }}>Loading…</p>}
+            {projects.data?.map((p) => (
+              <button
+                key={p.id}
+                className={"rail-item" + (p.id === selected ? " rail-item-active" : "")}
+                onClick={() => setSelected(p.id)}
+              >
+                <span className="rail-item-name">{p.name}</span>
+                {p.is_scratch && <span className="tag-scratch">Scratch</span>}
+              </button>
+            ))}
+          </aside>
+        )}
 
         <main className="browser-main">
           <div className="silo-head" style={{ marginBottom: 20 }}>
             <h1 className="page-title" style={{ margin: 0 }}>
-              {selectedProject?.name ?? "Sessions"}
+              {heading}
             </h1>
             <button
               className="btn btn-primary"
@@ -88,7 +106,7 @@ export function ProjectsPage() {
           )}
           {sessions.isError && <p className="form-error">Failed to load sessions. Please try again.</p>}
           {sessions.data && sessions.data.length === 0 && (
-            <p className="muted">No sessions in this project yet.</p>
+            <p className="muted">{emptyText}</p>
           )}
           {sessions.data && sessions.data.length > 0 && (
             <div className="session-list">
@@ -96,8 +114,9 @@ export function ProjectsPage() {
                 <SessionRow
                   key={s.id}
                   session={s}
-                  projects={projects.data ?? []}
-                  currentProjectId={selected!}
+                  // Move-to-project is a global-view affordance; hidden in client scope.
+                  projects={clientId ? [] : (projects.data ?? [])}
+                  currentProjectId={selected ?? ""}
                   busy={mut.isPending}
                   onOpen={() => navigate(`/session/${s.id}`)}
                   onArchive={(v) => mut.mutate(() => patchSession(s.id, { archived: v }))}

@@ -106,6 +106,13 @@ export const listSessions = (projectId: string, includeArchived = false) =>
     `/projects/${projectId}/sessions${includeArchived ? "?include_archived=true" : ""}`,
   );
 
+// Client-scoped runs (when the Fanout UI is opened from a client's Content
+// Scheduler card). Same row shape as listSessions.
+export const listClientSessions = (clientId: string, includeArchived = false) =>
+  request<SessionListItem[]>(
+    `/clients/${clientId}/sessions${includeArchived ? "?include_archived=true" : ""}`,
+  );
+
 // Supported English-market countries (E1, 2026-06-17). The code is the
 // DataForSEO location_code (2000 + ISO-3166 numeric); language stays "en". Must
 // mirror the backend allow-list (storage/silo.SUPPORTED_LOCATION_CODES) + the DB
@@ -122,6 +129,9 @@ export const DEFAULT_LOCATION_CODE = 2840;
 export interface CreateSessionBody {
   seed_keyword: string;
   project_id?: string;
+  // AR Tools client this run belongs to (client-scoped runs). Omit for a
+  // global/owner run created outside a client context.
+  client_id?: string;
   audience_hint?: string;
   disambiguation_hint?: string;
   topic_count?: number;

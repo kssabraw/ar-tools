@@ -148,18 +148,25 @@ export function ClientWorkspace() {
 
       {/* ── More tools (de-emphasized roadmap) ──────────────────────── */}
       <Section title="More tools" subtitle="Additional modules on the roadmap.">
-        {moreTools.map(t => (
-          <ActionCard
-            key={t.label}
-            icon={t.icon}
-            label={t.label}
-            description={t.description}
-            href={t.href}
-            cta={t.href ? 'Open' : undefined}
-            badge="Coming soon"
-            compact
-          />
-        ))}
+        {moreTools.map(t => {
+          // Carry the current client into the Fanout app so it shows only this
+          // client's runs (client-scoped runs) and tags new runs to it.
+          const href = t.href && id
+            ? `${t.href}?client_id=${id}&client_name=${encodeURIComponent(client?.name ?? '')}`
+            : t.href
+          return (
+            <ActionCard
+              key={t.label}
+              icon={t.icon}
+              label={t.label}
+              description={t.description}
+              href={href}
+              cta={href ? 'Open' : undefined}
+              badge="Coming soon"
+              compact
+            />
+          )
+        })}
       </Section>
     </div>
   )

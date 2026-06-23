@@ -93,6 +93,7 @@ def create_session(
     disambiguation_hint: str | None,
     settings: dict,
     location_code: int = DEFAULT_LOCATION_CODE,
+    client_id: str | None = None,
 ) -> dict:
     # Tag the session with the active embedding model so its stored vectors are
     # never compared against another provider's space (freeze-old-sessions guard,
@@ -106,6 +107,7 @@ def create_session(
             {
                 "user_id": user_id,
                 "project_id": project_id,
+                "client_id": client_id,
                 "seed_keyword": seed_keyword,
                 "audience_hint": audience_hint,
                 "disambiguation_hint": disambiguation_hint,
@@ -547,9 +549,35 @@ def list_sessions(
     if not include_archived:
         q = q.eq("archived", False)
     rows = q.order("created_at", desc=True).execute().data
+    return _browser_session_rows(rows)
+
+
+def list_client_sessions(
+    access_token: str, client_id: str, include_archived: bool = False
+) -> list[dict]:
+    """Sessions belonging to an AR Tools client (client-scoped runs view),
+    newest first. RLS-scoped like `list_sessions`; same row shape so the browser
+    renders them identically. Used when the Fanout UI is opened from a client's
+    Content Scheduler card."""
+    q = (
+        get_user_client(access_token)
+        .table("sessions")
+        .select(
+            "id, seed_keyword, status, settings, archived, created_at, completed_at"
+        )
+        .eq("client_id", client_id)
+    )
+    if not include_archived:
+        q = q.eq("archived", False)
+    rows = q.order("created_at", desc=True).execute().data
+    return _browser_session_rows(rows)
+
+
+def _browser_session_rows(rows: list[dict]) -> list[dict]:
+    """Shape session rows for the Session Browser: derive coverage_mode from
+    settings and attach the planned-article (cluster) count."""
     if not rows:
         return []
-
     session_ids = [r["id"] for r in rows]
     counts = _cluster_counts_by_session(session_ids)
     out = []

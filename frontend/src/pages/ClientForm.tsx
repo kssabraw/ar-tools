@@ -12,6 +12,9 @@ interface FormData {
   brand_guide_text: string
   icp_text: string
   google_drive_folder_id: string
+  github_repo: string
+  github_branch: string
+  github_content_path: string
   logo_url: string
   gsc_property: string
   business_location: string
@@ -21,6 +24,7 @@ interface FormData {
 
 const empty: FormData = {
   name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
+  github_repo: '', github_branch: '', github_content_path: '',
   logo_url: '', gsc_property: '', business_location: '', gbp_place_id: null, gbp: null,
 }
 
@@ -84,6 +88,9 @@ export function ClientForm() {
         brand_guide_text: existing.brand_guide_text ?? '',
         icp_text: existing.icp_text ?? '',
         google_drive_folder_id: existing.google_drive_folder_id ?? '',
+        github_repo: existing.github_repo ?? '',
+        github_branch: existing.github_branch ?? '',
+        github_content_path: existing.github_content_path ?? '',
         logo_url: existing.logo_url ?? '',
         gsc_property: existing.gsc_property ?? '',
         business_location: existing.business_location ?? '',
@@ -126,6 +133,9 @@ export function ClientForm() {
         icp_source_type: 'text',
         icp_text: form.icp_text,
         google_drive_folder_id: form.google_drive_folder_id || null,
+        github_repo: form.github_repo || null,
+        github_branch: form.github_branch || null,
+        github_content_path: form.github_content_path || null,
         logo_url: form.logo_url || null,
         gsc_property: form.gsc_property || null,
         business_location: form.business_location || null,
@@ -340,6 +350,43 @@ export function ClientForm() {
           />
           <p style={hintStyle}>
             Find the ID in the folder's URL — the part after <code>/folders/</code>. Make sure your Apps Script account has Editor access.
+          </p>
+        </div>
+
+        <div style={sectionStyle}>
+          <h2 style={sectionTitle}>GitHub Publishing</h2>
+          <p style={descStyle}>
+            Optional. Where this client's generated articles get committed when published to a repo (Astro content). Used by the Content Scheduler / Topic Fanout tool.
+          </p>
+          <label style={labelStyle}>Repository</label>
+          <input
+            value={form.github_repo}
+            onChange={set('github_repo')}
+            placeholder="owner/repo"
+            style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' }}
+          />
+          <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Branch</label>
+              <input
+                value={form.github_branch}
+                onChange={set('github_branch')}
+                placeholder="main"
+                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' }}
+              />
+            </div>
+            <div style={{ flex: 2 }}>
+              <label style={labelStyle}>Content path</label>
+              <input
+                value={form.github_content_path}
+                onChange={set('github_content_path')}
+                placeholder="src/content/blog"
+                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' }}
+              />
+            </div>
+          </div>
+          <p style={hintStyle}>
+            Scaffold — saved on the client now; the publish wiring comes later.
           </p>
         </div>
 

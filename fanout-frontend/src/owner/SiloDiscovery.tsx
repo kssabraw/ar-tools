@@ -23,6 +23,7 @@ import {
   type Silo,
   type SiloDiscovery as Discovery,
 } from "../shared/api";
+import { CLIENT_SCOPE } from "../shared/clientScope";
 import {
   RELATIONSHIP_LABELS,
   RELATIONSHIP_OPTIONS,
@@ -126,6 +127,7 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
     setError(null);
     createMut.mutate({
       seed_keyword: seed.trim(),
+      client_id: CLIENT_SCOPE.clientId ?? undefined,
       audience_hint: audience.trim() || undefined,
       disambiguation_hint: disambHint.trim() || undefined,
       topic_count: topicCount,

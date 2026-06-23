@@ -41,6 +41,9 @@ router = APIRouter(tags=["sessions"])
 class CreateSessionBody(BaseModel):
     seed_keyword: str = Field(min_length=1, max_length=200)
     project_id: str | None = None
+    # AR Tools client this run belongs to (client-scoped runs). Optional — a run
+    # created outside a client context (the global/owner view) leaves it null.
+    client_id: str | None = None
     audience_hint: str | None = None
     disambiguation_hint: str | None = None
     topic_count: int = Field(default=5, ge=3, le=10)
@@ -341,6 +344,7 @@ def create_session(
     session = store.create_session(
         user_id=user.id,
         project_id=project_id,
+        client_id=body.client_id,
         seed_keyword=body.seed_keyword.strip(),
         audience_hint=body.audience_hint,
         disambiguation_hint=body.disambiguation_hint,
@@ -1368,6 +1372,21 @@ def list_project_sessions(
             status_code=status.HTTP_404_NOT_FOUND, detail="Project not found"
         )
     return store.list_sessions(user.access_token, project_id, include_archived=include_archived)
+
+
+@router.get("/clients/{client_id}/sessions")
+def list_client_sessions(
+    client_id: str,
+    user: AuthedUser = Depends(require_user),
+    include_archived: bool = False,
+) -> list[dict]:
+    """Runs belonging to an AR Tools client (client-scoped runs view), newest
+    first. Same row shape as the project browser. RLS-scoped to the runs the
+    caller may see; archived hidden unless include_archived=true. Backs the
+    Fanout UI when it is opened from a client's Content Scheduler card."""
+    return store.list_client_sessions(
+        user.access_token, client_id, include_archived=include_archived
+    )
 
 
 @router.patch("/sessions/{session_id}")

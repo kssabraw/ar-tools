@@ -156,6 +156,9 @@ async def create_client(
         "icp_file_path": icp_file_path,
         "website_analysis_status": "pending",
         "google_drive_folder_id": body.google_drive_folder_id,
+        "github_repo": body.github_repo,
+        "github_branch": body.github_branch,
+        "github_content_path": body.github_content_path,
         "logo_url": body.logo_url,
         "gsc_property": body.gsc_property,
         "business_location": body.business_location,
@@ -241,6 +244,12 @@ async def update_client(
             )
     if body.google_drive_folder_id is not None:
         updates["google_drive_folder_id"] = body.google_drive_folder_id
+    if body.github_repo is not None:
+        updates["github_repo"] = body.github_repo
+    if body.github_branch is not None:
+        updates["github_branch"] = body.github_branch
+    if body.github_content_path is not None:
+        updates["github_content_path"] = body.github_content_path
     if body.logo_url is not None:
         updates["logo_url"] = body.logo_url
     if body.gsc_property is not None:
