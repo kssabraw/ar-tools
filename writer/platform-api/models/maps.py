@@ -15,7 +15,7 @@ class MapsConfig(BaseModel):
     center_lat: Optional[float] = None
     center_lng: Optional[float] = None
     radius_miles: Literal[3, 5, 7] = 5
-    shape: Literal["circle", "square"] = "square"
+    shape: Literal["circle", "square"] = "circle"
     resource_category: Literal["googleMaps", "googleLocalFinder"] = "googleMaps"
     serp_device: Literal["desktop", "mobile", "both"] = "desktop"
     cadence: Literal["off", "weekly"] = "weekly"

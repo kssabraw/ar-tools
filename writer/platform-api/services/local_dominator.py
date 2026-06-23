@@ -84,7 +84,7 @@ def build_scan_request(config: dict, keywords: list[str]) -> dict:
     return {
         "latitude": config["center_lat"],
         "longitude": config["center_lng"],
-        "shape": config.get("shape") or "square",
+        "shape": "circle",  # the grid is always a circle (user decision)
         "distance": params["distance"],
         "google_place_id": config["google_place_id"],
         "grid_size": params["grid_size"],
