@@ -195,6 +195,66 @@ def test_jsonld_service_only_when_no_faqs():
     assert '"FAQPage"' not in out
 
 
+def test_jsonld_location_emits_a_service_node_per_service():
+    import json
+
+    out = build_jsonld(
+        service="Austin, TX",
+        primary_query="Austin, TX",
+        brand_name="Acme",
+        page_type="location",
+        location="Austin, TX",
+        services=["Emergency Plumbing", "Drain Cleaning", "Water Heater Repair"],
+        faqs=[{"question": "Do you serve all of Austin?", "answer": "Yes."}],
+    )
+    graph = json.loads(out)["@graph"]
+    service_nodes = [n for n in graph if n.get("@type") == "Service"]
+    assert {n["name"] for n in service_nodes} == {
+        "Emergency Plumbing", "Drain Cleaning", "Water Heater Repair",
+    }
+    # Each service node is served in the target area + carries the provider.
+    assert all(n.get("areaServed") == "Austin, TX" for n in service_nodes)
+    assert all(n.get("provider", {}).get("name") == "Acme" for n in service_nodes)
+    assert any(n.get("@type") == "FAQPage" for n in graph)
+
+
+async def test_location_mode_title_meta_leads_with_location():
+    """A location page's title/meta frame the area + services, not a single service."""
+    captured: dict = {}
+
+    async def fake(system, user, **kwargs):
+        if "SEO metadata" in system:
+            captured["system"] = system
+            captured["user"] = user
+            return {"title": "Austin Plumbing Services | Acme",
+                    "meta_description": "Acme serves Austin: emergency plumbing, drain cleaning.",
+                    "cta_text": "Call Now"}
+        if "answer FAQs" in system:
+            return {"faqs": []}
+        if "ONE section body" in system:
+            return {"blocks": [{"type": "paragraph", "text": "We serve Austin."}]}
+        return {}
+
+    req = ServiceWriterRequest(
+        run_id="run-loc",
+        service_brief_output=_brief(),
+        client_context=ClientContextInput(brand_guide_text="x"),
+        page_type="location",
+        location="Austin, TX",
+        services=["Emergency Plumbing", "Drain Cleaning"],
+    )
+    with patch(_GEN, AsyncMock(side_effect=fake)), patch(_DISTILL, AsyncMock(return_value=BrandVoiceCard(brand_name="Acme"))):
+        result = await run_service_writer(req)
+
+    # The location metadata prompt (not the single-service one) was used.
+    assert "LOCATION landing page" in captured["system"]
+    assert "Austin, TX" in captured["user"]
+    assert "Emergency Plumbing" in captured["user"]
+    assert result.title == "Austin Plumbing Services | Acme"
+    # The page's JSON-LD reflects the multi-service location shape.
+    assert result.schema_jsonld.count('"Service"') == 2
+
+
 def test_coerce_blocks_tolerates_bad_level():
     """A non-numeric `level` from the LLM must not discard the section's blocks."""
     from modules.service_writer.generation import _coerce_blocks

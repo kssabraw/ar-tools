@@ -59,19 +59,48 @@ def _infer_intent(service_pages: int, directories: int, informational: int) -> s
     return "commercial"
 
 
+def _anchor_query(
+    *,
+    page_type: str,
+    primary_query: str,
+    services: list[str] | None,
+    location: str | None,
+) -> str:
+    """Pick the single representative SERP query.
+
+    For a service page that's the `primary_query`. A location page covers many
+    services, so it anchors research on the most representative single query —
+    the first listed service in the target location (e.g. "emergency plumber
+    Austin") — falling back to `primary_query` when services/location are absent.
+    """
+    if page_type == "location" and services:
+        head = (services[0] or "").strip()
+        if head:
+            return f"{head} {location}".strip() if location else head
+    return primary_query
+
+
 async def run_research(
     *,
     service: str,
     primary_query: str,
     location: str | None,
     location_code: int,
+    page_type: str = "service",
+    services: list[str] | None = None,
 ) -> ResearchBundle:
     """Execute the standalone research pipeline and return the bundle."""
     notes: list[str] = []
+    anchor = _anchor_query(
+        page_type=page_type,
+        primary_query=primary_query,
+        services=services,
+        location=location,
+    )
 
     # ---- Stage 1: SERP composition (gating) ----
     try:
-        serp = await serp_organic_advanced(primary_query, location_code=location_code)
+        serp = await serp_organic_advanced(anchor, location_code=location_code)
     except (DataForSEOError, Exception) as exc:
         # No SERP → no market truth to build from. This is fatal (PRD §4.1).
         raise ServiceBriefError(
@@ -118,7 +147,7 @@ async def run_research(
     entity_coverage: list[EntityCoverageItem] = []
     if page_zones:
         try:
-            entities, failed = await extract_entities(page_zones, keyword=primary_query)
+            entities, failed = await extract_entities(page_zones, keyword=anchor)
             for ent in entities:
                 entity_coverage.append(EntityCoverageItem(
                     term=ent.name,
@@ -145,7 +174,7 @@ async def run_research(
             if text and text.strip():
                 questions.append(MinedQuestion(question=text.strip(), source="related_search"))
     try:
-        for sug in await autocomplete(primary_query, location_code=location_code):
+        for sug in await autocomplete(anchor, location_code=location_code):
             if "?" in sug or sug.lower().startswith(("how", "what", "why", "can", "do", "is")):
                 questions.append(MinedQuestion(question=sug, source="autocomplete"))
     except Exception as exc:

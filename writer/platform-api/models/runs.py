@@ -20,12 +20,17 @@ class RunCreateRequest(BaseModel):
     # modal.
     brief_force_refresh: bool = False
     # Content type. 'blog_post' (default) runs the 5-module blog pipeline;
-    # 'service_page' runs service_brief -> service_writer. For service_page,
-    # `keyword` is the head commercial query; `service` defaults to it.
-    content_type: Literal["blog_post", "service_page"] = "blog_post"
+    # 'service_page' and 'location_page' both run service_brief -> service_writer.
+    # For service_page, `keyword` is the head commercial query and `service`
+    # defaults to it. For location_page, `keyword` is the location display,
+    # `location` the target area, and `services` the major services to cover
+    # (one section each) — a multi-service location hub.
+    content_type: Literal["blog_post", "service_page", "location_page"] = "blog_post"
     service: Optional[str] = Field(default=None, max_length=200)
     location: Optional[str] = Field(default=None, max_length=150)
     location_code: Optional[int] = None
+    # Services a location page must cover. Required (non-empty) for location_page.
+    services: list[str] = Field(default_factory=list)
 
 
 class RunListItem(BaseModel):
@@ -133,6 +138,8 @@ class RunDetail(BaseModel):
             "sources_cited": None,
         }
     )
+    # Services covered by a location_page run (echoed for the UI). Empty otherwise.
+    services: list[str] = Field(default_factory=list)
     # Pre-bucketed SIE terms for the UI. Populated when the SIE
     # module_output is available. None for runs that haven't reached
     # the SIE stage yet.

@@ -70,6 +70,59 @@ _SYNTHESIS_SYSTEM = (
 )
 
 
+# A location page is a multi-service hub for ONE location, not a single-service
+# page. The architecture is section-per-service rather than a single deep service
+# treatment, and the wedge is local (why this provider, in this area). The output
+# JSON shape is identical to the service prompt so assembly is unchanged.
+_LOCATION_SYNTHESIS_SYSTEM = (
+    "You are a senior local-SEO conversion strategist producing the BRIEF (a "
+    "plan, not copy) for one LOCATION landing page. This page targets a single "
+    "location and must cover EACH major service the client offers in that area — "
+    "it is a multi-service hub, not a single-service page. You receive (a) market "
+    "truth from research, (b) the client's differentiator + ICP, and (c) the list "
+    "of services to cover. Your job is RECONCILIATION + LOCAL relevance, not SERP "
+    "echo.\n\n"
+    "HARD RULES:\n"
+    "1. Collapse ICP × differentiator × location into ONE positioning_angle (the "
+    "wedge) — a specific local stance ('the <area> team that…'), not 'we offer X'.\n"
+    "2. ARCHITECTURE must be section-per-service: open with a location intro / "
+    "area-served section that establishes local relevance, then ONE H2 section "
+    "per service in `services_to_cover` (each tied to this location — local proof, "
+    "local intent, what the service means for buyers here), then a why-us / proof "
+    "section, an FAQ, and a CTA. Do NOT collapse multiple services into one "
+    "section and do NOT invent services beyond the provided list.\n"
+    "3. The differentiator may OVERRIDE or RESHAPE the layout — resolve conflicts "
+    "in the differentiator's favor unless it breaks local search-intent fit. The "
+    "result must NOT be strategically identical to the ranking pages.\n"
+    "4. Identify the top 2-3 OBJECTIONS a local buyer has and map each to a "
+    "section or proof asset. For any section that deviates from the competitor "
+    "skeleton, write a divergence_note explaining WHY.\n"
+    "5. Directives are SECTION-LEVEL ONLY: purpose, what to cover, which proof "
+    "asset, length target. NEVER write sentence-level prose, taglines, or "
+    "headlines-as-copy. 'heading' is a working label, not finished copy.\n"
+    "6. If a `client_reference_page_structure` is provided, mirror its section "
+    "layout, ordering, and heading hierarchy as the structural baseline — then "
+    "still apply rules 1-4 (the per-service sections are required regardless).\n\n"
+    "Return ONLY this JSON object:\n"
+    "{\n"
+    '  "positioning_angle": "...",\n'
+    '  "secondary_queries": ["..."],\n'
+    '  "objections": [{"objection": "...", "where_addressed": "<section heading>"}],\n'
+    '  "sections": [{"heading": "...", "level": "H1|H2|H3", "purpose": "...", '
+    '"must_cover": ["entity/term"], "proof_asset": "case_study|certification|'
+    'guarantee|review|stat|null", "length_target": <int words>, '
+    '"citation_fit": true|false, "divergence_note": "... or null"}],\n'
+    '  "cta_strategy": "...",\n'
+    '  "cta_placement": ["after hero", "after proof", "end"],\n'
+    '  "objection_preemption_map": {"objection": "section/tactic that defuses it"},\n'
+    '  "internal_links": ["related service slug/topic"],\n'
+    '  "faq_targets": ["question"],\n'
+    '  "paa_targets": ["question"],\n'
+    '  "silo_candidates": [{"suggested_keyword": "...", "estimated_intent": "commercial"}]\n'
+    "}"
+)
+
+
 def _render_differentiator(ctx: ClientContextInput) -> str:
     """Render the wedge source from structured differentiators (or fallback)."""
     if ctx.differentiators:
@@ -149,15 +202,26 @@ async def synthesize(
     primary_query: str,
     bundle: ResearchBundle,
     client_context: ClientContextInput,
+    page_type: str = "service",
+    services: list[str] | None = None,
+    location: str | None = None,
 ) -> dict[str, Any]:
     """Run the reconciliation synthesis. Returns the raw JSON dict (assembly
-    coerces it into the response schema)."""
+    coerces it into the response schema).
+
+    For a location page (`page_type='location'`) this uses the location-hub
+    prompt and passes the services-to-cover + location so synthesis produces a
+    section-per-service architecture; the output JSON shape is identical.
+    """
     differentiator = _render_differentiator(client_context)
     if not differentiator:
         logger.warning(
             "service_brief.synthesis.no_differentiator",
             extra={"primary_query": primary_query},
         )
+
+    is_location = page_type == "location"
+    services = [s.strip() for s in (services or []) if s and s.strip()]
 
     payload = {
         "service": service,
@@ -193,20 +257,37 @@ async def synthesize(
         "client_business_context": _render_business_context(client_context),
     }
 
-    # Optional: mirror the client's own service-page layout. Additive — when the
-    # client hasn't configured a reference service page this key is omitted and
+    # Location pages drive the section-per-service architecture off the explicit
+    # services list + the target location.
+    if is_location:
+        payload["page_type"] = "location"
+        payload["location"] = location or service
+        payload["services_to_cover"] = services
+
+    # Optional: mirror the client's own page layout for this page type. Additive —
+    # when the client hasn't configured a reference page this key is omitted and
     # synthesis behaves exactly as before.
     if (client_context.reference_page_structure or "").strip():
         payload["client_reference_page_structure"] = client_context.reference_page_structure
 
-    user = (
-        "Produce the service-page brief JSON for the following. Remember: the "
-        "differentiator must reshape the skeleton, and every divergence needs a "
-        "note.\n\n" + str(payload)
-    )
+    if is_location:
+        user = (
+            "Produce the LOCATION-page brief JSON for the following. Remember: one "
+            "H2 section per service in services_to_cover, every section tied to the "
+            "location, the differentiator reshapes the layout, and every divergence "
+            "needs a note.\n\n" + str(payload)
+        )
+        system = _LOCATION_SYNTHESIS_SYSTEM
+    else:
+        user = (
+            "Produce the service-page brief JSON for the following. Remember: the "
+            "differentiator must reshape the skeleton, and every divergence needs a "
+            "note.\n\n" + str(payload)
+        )
+        system = _SYNTHESIS_SYSTEM
 
     result = await claude_json_model(
-        _SYNTHESIS_SYSTEM,
+        system,
         user,
         model=synthesis_model(),
         max_tokens=4000,

@@ -374,7 +374,7 @@ export interface ModuleOutput {
   module_version: string | null
 }
 
-export type RunContentType = 'blog_post' | 'service_page'
+export type RunContentType = 'blog_post' | 'service_page' | 'location_page'
 
 export interface Run {
   id: string

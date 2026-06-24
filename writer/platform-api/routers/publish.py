@@ -84,14 +84,16 @@ async def publish_to_google_docs(
 
     # Resolve the publishable Markdown from the right module output for the
     # run's content type. Blog posts pull from sources_cited's enriched
-    # article; service pages pull the service_writer's Markdown rendering.
-    if content_type == "service_page":
+    # article; service + location pages pull the service_writer's Markdown
+    # rendering (latest attempt — reoptimize adds higher attempts).
+    if content_type in ("service_page", "location_page"):
         sw_result = (
             supabase.table("module_outputs")
-            .select("output_payload")
+            .select("output_payload, attempt_number")
             .eq("run_id", str(run_id))
             .eq("module", "service_writer")
             .eq("status", "complete")
+            .order("attempt_number", desc=True)
             .execute()
         )
         rows = sw_result.data or []

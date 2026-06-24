@@ -82,6 +82,9 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
         positioning_angle=positioning_angle,
         brand_name=brand_name,
         brand_directive=brand_directive,
+        page_type=request.page_type,
+        location=request.location,
+        services=request.services,
     )
 
     sections: list[WriterSection] = []
@@ -160,6 +163,9 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
         brand_name=brand_name,
         website_analysis=website_analysis,
         faqs=faqs,
+        page_type=request.page_type,
+        location=request.location,
+        services=request.services,
     )
 
     metadata = ServiceWriterMetadata(

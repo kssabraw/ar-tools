@@ -26,6 +26,10 @@ SCHEMA_VERSION = "1.1"  # 1.1: optional reference_page_structure mirroring
 ServiceMode = Literal["local_service", "national_b2b"]
 LengthBand = Literal["short", "medium", "long"]
 HeadingLevel = Literal["H1", "H2", "H3"]
+# A `service` page targets one service; a `location` page is a multi-service
+# hub targeting one location (a section per major service). Both run through
+# this same brief→writer→scoring stack — only synthesis / title / JSON-LD branch.
+PageType = Literal["service", "location"]
 
 
 # ----------------------------------------------------------------------
@@ -73,6 +77,11 @@ class ServiceBriefRequest(BaseModel):
     # Influences research + mode classification.
     location: Optional[str] = None
     location_code: int = 2840  # United States
+    # `service` (default) = single-service page; `location` = a multi-service
+    # location hub. For a location page, `services` lists the major services to
+    # cover (one section each) and `service` carries the location label.
+    page_type: PageType = "service"
+    services: list[str] = Field(default_factory=list)
     force_refresh: bool = False
     client_context: ClientContextInput = Field(default_factory=ClientContextInput)
 

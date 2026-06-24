@@ -33,6 +33,14 @@ export function ClientWorkspace() {
   })
   const savedServicePageCount = servicePageRuns?.total ?? 0
 
+  // Count of location pages generated for this client (location_page runs).
+  const { data: locationPageRuns } = useQuery<{ total: number }>({
+    queryKey: ['location-page-runs', id],
+    queryFn: () => api.get<{ total: number }>(`/runs?client_id=${id}&content_type=location_page&page_size=1`),
+    enabled: Boolean(id),
+  })
+  const savedLocationPageCount = locationPageRuns?.total ?? 0
+
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
       <Link to="/" style={backLinkStyle}>
@@ -138,6 +146,24 @@ export function ClientWorkspace() {
             savedServicePageCount > 0 && id ? (
               <Link to={`/clients/${id}/service-pages`} style={footerLinkStyle}>
                 View {savedServicePageCount} page{savedServicePageCount === 1 ? '' : 's'} <ArrowRight size={13} />
+              </Link>
+            ) : undefined
+          }
+        />
+        <ActionCard
+          icon={<MapPin size={22} />}
+          label="Create Location Pages"
+          description={
+            savedLocationPageCount > 0
+              ? `Multi-service pages targeting one location. ${savedLocationPageCount} generated for this client.`
+              : 'Location landing pages covering every major service in one area — brief + writer in one run.'
+          }
+          to={id ? `/clients/${id}/location-pages` : undefined}
+          cta="Create"
+          footer={
+            savedLocationPageCount > 0 && id ? (
+              <Link to={`/clients/${id}/location-pages`} style={footerLinkStyle}>
+                View {savedLocationPageCount} page{savedLocationPageCount === 1 ? '' : 's'} <ArrowRight size={13} />
               </Link>
             ) : undefined
           }

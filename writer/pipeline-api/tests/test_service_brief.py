@@ -297,3 +297,76 @@ async def test_research_bundle_round_trips():
     # Reconstructing from the cached dict must not raise.
     rebuilt = ResearchBundle(**payload)
     assert rebuilt.mode == first.research_bundle.mode
+
+
+# ----------------------------------------------------------------------
+# Location-page mode: section-per-service hub, location-anchored research
+# ----------------------------------------------------------------------
+
+def _location_request() -> ServiceBriefRequest:
+    return ServiceBriefRequest(
+        run_id="run-loc-1",
+        service="Austin, TX",          # location carried as the service label
+        primary_query="Austin, TX",    # keyword == location display
+        location="Austin, TX",
+        page_type="location",
+        services=["Emergency Plumbing", "Drain Cleaning", "Water Heater Repair"],
+        client_context=ClientContextInput(
+            differentiators=[{"claim": "24-hour response guarantee", "type": "speed"}]
+        ),
+    )
+
+
+def _location_synthesis_spy(captured: dict):
+    """Records the system + user prompts and returns one section per service."""
+    async def _fake(system, user, **kwargs):
+        captured["system"] = system
+        captured["user"] = user
+        return {
+            "positioning_angle": "the Austin team that answers within the hour",
+            "secondary_queries": ["austin emergency plumber"],
+            "objections": [{"objection": "Are they local?", "where_addressed": "Serving Austin"}],
+            "sections": [
+                {"heading": "Serving Austin", "level": "H2", "purpose": "Local intro",
+                 "must_cover": ["Austin"], "length_target": 0},
+                {"heading": "Emergency Plumbing in Austin", "level": "H2",
+                 "purpose": "Service 1", "must_cover": ["emergency"], "length_target": 0},
+                {"heading": "Drain Cleaning in Austin", "level": "H2",
+                 "purpose": "Service 2", "must_cover": ["drains"], "length_target": 0},
+                {"heading": "Water Heater Repair in Austin", "level": "H2",
+                 "purpose": "Service 3", "must_cover": ["water heater"], "length_target": 0},
+            ],
+            "cta_strategy": "Call now",
+            "cta_placement": ["end"],
+            "faq_targets": ["Do you serve all of Austin?"],
+            "silo_candidates": [],
+        }
+    return AsyncMock(side_effect=_fake)
+
+
+async def test_location_mode_anchors_serp_and_uses_location_prompt():
+    captured: dict = {}
+    serp_mock = AsyncMock(return_value={"items": _serp_items(local_pack=True)})
+    with patch(f"{_PREFIX}.research.serp_organic_advanced", serp_mock), \
+         patch(f"{_PREFIX}.research.autocomplete", AsyncMock(return_value=[])), \
+         patch(f"{_PREFIX}.research.extract_entities", AsyncMock(side_effect=_fake_entities)), \
+         patch(f"{_PREFIX}.competitor.scrape_many", side_effect=_fake_scrape_many), \
+         patch(f"{_PREFIX}.competitor.claude_json_model", AsyncMock(side_effect=_fake_teardown_extract)), \
+         patch(f"{_PREFIX}.synthesis.claude_json_model", _location_synthesis_spy(captured)), \
+         patch(f"{_PREFIX}.cache.get_cached", AsyncMock(return_value=None)) as get_cached, \
+         patch(f"{_PREFIX}.cache.write_cache", AsyncMock()) as write_cache:
+        result = await run_service_brief(_location_request())
+
+    # Research is anchored on "<first service> <location>", not the bare keyword.
+    assert serp_mock.call_args.args[0] == "Emergency Plumbing Austin, TX"
+    # The location-hub synthesis prompt was used + carried the services list.
+    assert "LOCATION landing page" in captured["system"]
+    assert "services_to_cover" in captured["user"]
+    assert "Drain Cleaning" in captured["user"]
+    # Cache key is namespaced for location pages + uses the anchor query.
+    assert get_cached.call_args.args == ("Emergency Plumbing Austin, TX", 2840, "location")
+    assert write_cache.call_args.kwargs["page_type"] == "location"
+    # One section per service (plus the local intro) is preserved in the brief.
+    headings = [s.heading for s in result.architecture]
+    assert "Emergency Plumbing in Austin" in headings
+    assert "Water Heater Repair in Austin" in headings
