@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin
 from models.users import (
+    PasswordResetEmailRequest,
     PasswordSetRequest,
     UserInviteRequest,
     UserResponse,
@@ -52,8 +53,9 @@ async def invite_user(
     auth: dict = Depends(require_admin),
 ) -> UserResponse:
     supabase = get_supabase()
+    options = {"redirect_to": body.redirect_to} if body.redirect_to else {}
     try:
-        resp = supabase.auth.admin.invite_user_by_email(body.email)
+        resp = supabase.auth.admin.invite_user_by_email(body.email, options)
         user_id = str(resp.user.id)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"invite_failed: {exc}") from exc
@@ -132,6 +134,7 @@ async def set_user_password(
 @router.post("/users/{user_id}/password-reset", response_model=dict)
 async def send_password_reset(
     user_id: UUID,
+    body: PasswordResetEmailRequest = PasswordResetEmailRequest(),
     auth: dict = Depends(require_admin),
 ) -> dict:
     """Trigger a Supabase password-recovery email so the user sets their own
@@ -142,8 +145,9 @@ async def send_password_reset(
     if not email:
         raise HTTPException(status_code=404, detail="user_not_found")
 
+    options = {"redirect_to": body.redirect_to} if body.redirect_to else {}
     try:
-        supabase.auth.reset_password_for_email(email)
+        supabase.auth.reset_password_for_email(email, options)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"reset_email_failed: {exc}") from exc
 
