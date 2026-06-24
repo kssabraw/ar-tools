@@ -3,7 +3,7 @@ import { useNavigate, useParams, Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { Client, GbpProfile, PageStructureType, PageStructureEntry } from '../lib/types'
-import { ArrowLeft, Check, Image as ImageIcon } from 'lucide-react'
+import { ArrowLeft, Check, Image as ImageIcon, RefreshCw } from 'lucide-react'
 import { GbpPicker } from '../components/GbpPicker'
 
 interface FormData {
@@ -131,6 +131,14 @@ export function ClientForm() {
   })
 
   const error = createMutation.error ?? updateMutation.error
+
+  // Force a fresh scrape + analysis of an already-stored reference URL (e.g. the
+  // client redesigned that page). Create/update only re-scrape when a URL changes.
+  const reanalyzeMutation = useMutation({
+    mutationFn: (type: PageStructureType) =>
+      api.post(`/clients/${id}/page-structures/reanalyze?page_type=${type}`, {}),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ['client', id] }) },
+  })
 
   function set(field: keyof FormData) {
     return (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
@@ -358,24 +366,44 @@ export function ClientForm() {
             Optional. Paste one example URL per page type. We scrape and analyze each page's
             structure — ignoring nav, sidebars, footers, and popups — and store the layout so the
             writing modules can mirror how this client structures their own pages. We re-analyze a
-            URL whenever you change it.
+            URL whenever you change it; use <strong>Re-analyze</strong> to refresh a stored URL whose
+            page has since changed.
           </p>
-          {PAGE_STRUCTURE_FIELDS.map(({ key, type, label, placeholder, help }) => (
-            <div key={type} style={{ marginBottom: 16 }}>
-              <div style={titleRow}>
-                <label style={{ ...labelStyle, margin: 0 }}>{label}</label>
-                {isEdit && <PageStructureStatus entry={existing?.page_structures?.[type]} url={form[key] as string} />}
+          {PAGE_STRUCTURE_FIELDS.map(({ key, type, label, placeholder, help }) => {
+            const entry = existing?.page_structures?.[type]
+            const trimmed = (form[key] as string).trim()
+            // Re-analyze applies to the STORED url — only offer it when the typed
+            // value matches what's stored (no unsaved edit) and it's not already
+            // mid-analysis.
+            const canReanalyze = isEdit && !!entry?.url && entry.url === trimmed && entry.status !== 'pending'
+            const rowReanalyzing = reanalyzeMutation.isPending && reanalyzeMutation.variables === type
+            return (
+              <div key={type} style={{ marginBottom: 16 }}>
+                <div style={titleRow}>
+                  <label style={{ ...labelStyle, margin: 0 }}>{label}</label>
+                  {isEdit && <PageStructureStatus entry={entry} url={form[key] as string} />}
+                  {(canReanalyze || rowReanalyzing) && (
+                    <button
+                      type="button"
+                      onClick={() => reanalyzeMutation.mutate(type)}
+                      disabled={rowReanalyzing}
+                      style={{ ...reanalyzeBtnStyle, ...(rowReanalyzing ? { opacity: 0.6, cursor: 'default' } : {}) }}
+                    >
+                      <RefreshCw size={12} /> {rowReanalyzing ? 'Re-analyzing…' : 'Re-analyze'}
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="url"
+                  value={form[key] as string}
+                  onChange={set(key)}
+                  placeholder={placeholder}
+                  style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', marginTop: 6 }}
+                />
+                <p style={hintStyle}>{help}</p>
               </div>
-              <input
-                type="url"
-                value={form[key] as string}
-                onChange={set(key)}
-                placeholder={placeholder}
-                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', marginTop: 6 }}
-              />
-              <p style={hintStyle}>{help}</p>
-            </div>
-          ))}
+            )
+          })}
         </div>
 
         <div style={sectionStyle}>
@@ -486,6 +514,7 @@ const sectionStyle: React.CSSProperties = { background: '#fff', border: '1px sol
 const titleRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }
 const parkedBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
 const psBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
+const reanalyzeBtnStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', background: '#fff', color: '#4f46e5', border: '1px solid #c7d2fe', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }
 const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#0f172a', margin: '0 0 4px' }
 const descStyle: React.CSSProperties = { fontSize: 13, color: '#64748b', margin: '0 0 16px', lineHeight: 1.6 }
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 6 }
