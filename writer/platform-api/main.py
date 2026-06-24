@@ -17,6 +17,7 @@ from config import settings
 from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
 from routers.clients import router as clients_router
+from routers.dashboard import router as dashboard_router
 from routers.files import router as files_router
 from routers.gsc import router as gsc_router
 from routers.icp import router as icp_router
@@ -120,6 +121,7 @@ app.add_middleware(
 app.include_router(brand_voice_router)
 app.include_router(briefs_router)
 app.include_router(clients_router)
+app.include_router(dashboard_router)
 app.include_router(files_router)
 app.include_router(gsc_router)
 app.include_router(icp_router)
