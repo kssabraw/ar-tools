@@ -38,12 +38,21 @@ type ContentType = "blog_post" | "local_seo_page";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong");
 
-export function SiloDiscovery({ onExit }: { onExit: () => void }) {
+export function SiloDiscovery({
+  onExit,
+  initialContentType,
+}: {
+  onExit: () => void;
+  // When the flow is entered from a content-type card (sessions page), the type
+  // is preselected and we skip straight to the seed form. Otherwise the flow
+  // opens on the chooser so both outputs are visible up front.
+  initialContentType?: ContentType;
+}) {
   const qc = useQueryClient();
-  // The flow opens on the content-type chooser so both outputs (blog posts and
-  // Local SEO pages) are visible up front; the choice is carried on the session.
-  const [step, setStep] = useState<Step>("intent");
-  const [contentType, setContentType] = useState<ContentType>("blog_post");
+  const [step, setStep] = useState<Step>(initialContentType ? "form" : "intent");
+  const [contentType, setContentType] = useState<ContentType>(
+    initialContentType ?? "blog_post",
+  );
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   // Degraded-mode notes belong to the discovery run, so keep them in state —
