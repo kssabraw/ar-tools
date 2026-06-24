@@ -252,6 +252,48 @@ async def test_reoptimize_url_skips_page_at_or_above_threshold():
 
 
 @pytest.mark.asyncio
+async def test_reoptimize_url_skips_at_exact_threshold():
+    # Boundary: composite == threshold is "at or above" → skipped (gate is >=).
+    supabase = _supabase_for_client(_client_row())
+    score = {"composite_score": 75.0, "composite_status": "needs_improvement", "deficiencies": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("Anaheim,California,United States", 1013962))), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=None)), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=score)), \
+         patch.object(local_seo_service, "reoptimize_page", new=AsyncMock()) as reopt:
+        out = await local_seo_service.reoptimize_url(
+            "client-1", "https://x.com/p", "plumber", "Anaheim, CA", 1013962, "user-1",
+            score_threshold=75.0,
+        )
+    assert out["status"] == "skipped"
+    reopt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reoptimize_url_rewrites_when_unscoreable():
+    # Score endpoint returns no composite_score (e.g. page couldn't be fetched/scored)
+    # → gate is False → proceed to reoptimize, with prev_score None.
+    supabase = _supabase_for_client(_client_row())
+    score = {"deficiencies": []}  # no composite_score key
+    page = {"id": "page-u", "page_title": "T", "composite_score": 79.0,
+            "composite_status": "needs_improvement", "published_doc_url": None}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("Anaheim,California,United States", 1013962))), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=None)), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=score)), \
+         patch.object(local_seo_service, "reoptimize_page", new=AsyncMock(return_value=page)) as reopt:
+        out = await local_seo_service.reoptimize_url(
+            "client-1", "https://x.com/p", "plumber", "Anaheim, CA", 1013962, "user-1",
+        )
+    assert out["status"] == "reoptimized"
+    assert out["prev_score"] is None
+    assert out["new_score"] == 79.0
+    reopt.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_reoptimize_url_rewrites_page_below_threshold():
     supabase = _supabase_for_client(_client_row())
     score = {"composite_score": 54.0, "composite_status": "poor", "deficiencies": [{"engine_key": "organic_ranking"}]}
