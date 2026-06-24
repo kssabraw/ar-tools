@@ -9,6 +9,10 @@ function roleLabel(role: TeamUser['role']): string {
   return role === 'admin' ? 'Admin' : 'VA'
 }
 
+// Where invite / reset-email links land the user. Must be in Supabase's
+// redirect allowlist. Uses the current app origin so it's correct per deploy.
+const PW_REDIRECT = `${window.location.origin}/set-password`
+
 export function Team() {
   const qc = useQueryClient()
   const { user } = useAuth()
@@ -33,7 +37,8 @@ export function Team() {
   })
 
   const inviteMutation = useMutation({
-    mutationFn: (email: string) => api.post('/users/invite', { email, role: 'team_member' }),
+    mutationFn: (email: string) =>
+      api.post('/users/invite', { email, role: 'team_member', redirect_to: PW_REDIRECT }),
     onSuccess: (_d, email) => {
       setInviteEmail('')
       setError(null)
@@ -53,7 +58,7 @@ export function Team() {
   })
 
   const resetMutation = useMutation({
-    mutationFn: (id: string) => api.post(`/users/${id}/password-reset`, {}),
+    mutationFn: (id: string) => api.post(`/users/${id}/password-reset`, { redirect_to: PW_REDIRECT }),
     onSuccess: (_d, id) => showFlash(id, 'Reset email sent'),
     onError: (e: Error) => setError(e.message),
   })
