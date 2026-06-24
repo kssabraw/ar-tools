@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Map, Play, Trash2, MapPin, Download, Printer } from 'lucide-react'
+import { ArrowLeft, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type {
@@ -43,6 +43,9 @@ export function MapsGeogrid() {
     return () => clearTimeout(t)
   }, [recentlyRan, runSeq])
   const markRun = () => { setRecentlyRan(true); setRunSeq(s => s + 1) }
+  // Stopping a scan clears the grace window so the in-progress UI drops away
+  // immediately rather than lingering for the rest of the 90s.
+  const stopRun = () => setRecentlyRan(false)
 
   const { data: scans } = useQuery<MapsScanSummary[]>({
     queryKey: ['maps-scans', clientId],
@@ -92,14 +95,14 @@ export function MapsGeogrid() {
       ) : tab === 'history' ? (
         <History clientId={clientId} scans={scans ?? []} onOpen={() => setTab('heatmap')} />
       ) : (
-        <Heatmap clientId={clientId} scanning={scanning} onRan={markRun} />
+        <Heatmap clientId={clientId} scanning={scanning} onRan={markRun} onStopped={stopRun} />
       )}
     </div>
   )
 }
 
 // ── Heatmap (latest completed scan) ─────────────────────────────────────────
-function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: boolean; onRan: () => void }) {
+function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; scanning: boolean; onRan: () => void; onStopped: () => void }) {
   const queryClient = useQueryClient()
   const { data: latest, error, isLoading } = useQuery<MapsScanDetail>({
     queryKey: ['maps-latest', clientId],
@@ -115,29 +118,49 @@ function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: bo
       queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
     },
   })
+  const cancelMut = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/scan/cancel`, {}),
+    onSuccess: () => {
+      onStopped()
+      queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
+    },
+  })
 
-  const runButton = (
-    <button style={primaryBtn} onClick={() => runMut.mutate()} disabled={runMut.isPending}>
-      <Play size={14} /> {runMut.isPending ? 'Starting…' : 'Run scan now'}
-    </button>
+  const busy = scanning || runMut.isPending
+  // One-off run + a stop control (while a scan is in flight) + the quick weekly
+  // schedule toggle, grouped so they sit together above the heatmap.
+  const controls = (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+      <ScheduleToggle clientId={clientId} />
+      {busy && (
+        <button style={{ ...outlineBtn, color: '#dc2626', borderColor: '#fecaca' }} onClick={() => cancelMut.mutate()} disabled={cancelMut.isPending}>
+          <Square size={13} /> {cancelMut.isPending ? 'Stopping…' : 'Stop scan'}
+        </button>
+      )}
+      <button style={primaryBtn} onClick={() => runMut.mutate()} disabled={runMut.isPending}>
+        <Play size={14} /> {runMut.isPending ? 'Starting…' : 'Run scan now'}
+      </button>
+    </div>
   )
 
   if (isLoading) return <p style={muted}>Loading…</p>
   if (error || !latest) {
     return (
       <div>
-        {scanning || runMut.isPending ? <InProgressBanner /> : (
-          <div style={card}>
+        {busy && <InProgressBanner />}
+        <div style={card}>
+          {!busy && (
             <p style={{ ...muted, marginTop: 0 }}>
               No completed scans yet. Set the business location &amp; keywords in <strong>Setup</strong>, then run a scan.
             </p>
-            {runMut.error && <div style={errorBox}>{(runMut.error as Error).message}</div>}
-            {runMut.data?.status === 'failed' && (
-              <div style={{ ...errorBox, marginTop: 10 }}>Couldn’t start: {runMut.data.error}. Check Setup is complete (Place ID, center lat/lng, and at least one keyword).</div>
-            )}
-            {runButton}
-          </div>
-        )}
+          )}
+          {runMut.error && <div style={errorBox}>{(runMut.error as Error).message}</div>}
+          {runMut.data?.status === 'failed' && (
+            <div style={{ ...errorBox, marginTop: 10 }}>Couldn’t start: {runMut.data.error}. Check Setup is complete (Place ID, center lat/lng, and at least one keyword).</div>
+          )}
+          {cancelMut.error && <div style={{ ...errorBox, marginTop: 10 }}>{(cancelMut.error as Error).message}</div>}
+          <div style={{ marginTop: busy ? 0 : 4 }}>{controls}</div>
+        </div>
       </div>
     )
   }
@@ -148,7 +171,7 @@ function Heatmap({ clientId, scanning, onRan }: { clientId: string; scanning: bo
         <div style={{ fontSize: 13, color: '#64748b' }}>
           Last scan {latest.completed_at ? relativeTime(latest.completed_at) : ''} · {latest.radius_miles}-mile radius · {latest.grid_size}×{latest.grid_size} grid · {latest.resource_category === 'googleLocalFinder' ? 'Local Finder' : 'Google Maps'}
         </div>
-        {runButton}
+        {controls}
       </div>
       {(scanning || runMut.isPending) && <InProgressBanner />}
 
@@ -270,6 +293,33 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
 
       {regenMut.error && <div style={{ ...errorBox, marginTop: 10 }}>{(regenMut.error as Error).message}</div>}
     </div>
+  )
+}
+
+// Quick on/off for the weekly recurring scan, without going to Setup. Shares the
+// ['maps-config'] cache with Setup so both views stay in sync.
+function ScheduleToggle({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data: config } = useQuery<MapsConfig>({
+    queryKey: ['maps-config', clientId],
+    queryFn: () => api.get<MapsConfig>(`/clients/${clientId}/maps/config`),
+  })
+  const on = config?.cadence === 'weekly'
+  const toggleMut = useMutation({
+    mutationFn: () => api.put<MapsConfig>(`/clients/${clientId}/maps/config`, { cadence: on ? 'off' : 'weekly' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maps-config', clientId] }),
+  })
+  if (!config) return null
+  return (
+    <button
+      style={{ ...outlineBtn, color: on ? '#16a34a' : '#64748b' }}
+      onClick={() => toggleMut.mutate()}
+      disabled={toggleMut.isPending}
+      title={on ? 'Weekly auto-scan is on — click to pause' : 'Weekly auto-scan is off — click to resume'}
+    >
+      {on ? <ToggleRight size={16} /> : <ToggleLeft size={16} />}
+      {toggleMut.isPending ? 'Saving…' : on ? 'Weekly: On' : 'Weekly: Off'}
+    </button>
   )
 }
 
@@ -471,9 +521,26 @@ function Setup({ clientId }: { clientId: string }) {
 
 // ── History (trend over time + scan list) ───────────────────────────────────
 function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary[]; onOpen: () => void }) {
+  const queryClient = useQueryClient()
   const { data: trends } = useQuery<MapsTrendsResponse>({
     queryKey: ['maps-trends', clientId],
     queryFn: () => api.get<MapsTrendsResponse>(`/clients/${clientId}/maps/trends`),
+  })
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['maps-scans', clientId] })
+    queryClient.invalidateQueries({ queryKey: ['maps-trends', clientId] })
+  }
+  const stopMut = useMutation({
+    mutationFn: (id: string) => api.post(`/maps-scans/${id}/cancel`, {}),
+    onSuccess: invalidate,
+  })
+  const delMut = useMutation({
+    mutationFn: (id: string) => api.delete(`/maps-scans/${id}`),
+    onSuccess: invalidate,
+  })
+  const clearMut = useMutation({
+    mutationFn: () => api.delete(`/clients/${clientId}/maps/scans`),
+    onSuccess: () => { invalidate(); queryClient.invalidateQueries({ queryKey: ['maps-latest', clientId] }) },
   })
   return (
     <div>
@@ -488,22 +555,50 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
         <div style={card}><p style={muted}>No scans yet.</p></div>
       ) : (
         <div style={card}>
-          <h2 style={sectionTitle}>Scan history</h2>
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {scans.map((s, i) => (
-              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
-                <span style={statusDot(s.status)} />
-                <span style={{ flex: 1, fontSize: 14, color: '#0f172a' }}>
-                  {s.radius_miles}-mile · {s.grid_size}×{s.grid_size}
-                  <span style={{ color: '#94a3b8', marginLeft: 8, fontSize: 12 }}>{s.trigger}</span>
-                </span>
-                <span style={{ fontSize: 12, color: '#64748b' }}>{cap(s.status)}</span>
-                <span style={{ fontSize: 12, color: '#94a3b8', minWidth: 90, textAlign: 'right' }}>
-                  {relativeTime(s.completed_at || s.requested_at || '')}
-                </span>
-              </div>
-            ))}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+            <h2 style={{ ...sectionTitle, margin: 0 }}>Scan history</h2>
+            <button
+              style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12, color: '#dc2626', borderColor: '#fecaca' }}
+              onClick={() => { if (confirm('Delete all finished scans for this client? This removes their heatmaps and results and can’t be undone.')) clearMut.mutate() }}
+              disabled={clearMut.isPending}
+              title="Delete all finished scans (keeps any in-flight scan)"
+            >
+              <Trash2 size={13} /> {clearMut.isPending ? 'Clearing…' : 'Clear all'}
+            </button>
           </div>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            {scans.map((s, i) => {
+              const inFlight = s.status === 'polling' || s.status === 'pending'
+              return (
+                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                  <span style={statusDot(s.status)} />
+                  <span style={{ flex: 1, fontSize: 14, color: '#0f172a' }}>
+                    {s.radius_miles}-mile · {s.grid_size}×{s.grid_size}
+                    <span style={{ color: '#94a3b8', marginLeft: 8, fontSize: 12 }}>{s.trigger}</span>
+                  </span>
+                  <span style={{ fontSize: 12, color: '#64748b' }}>{cap(s.status)}</span>
+                  <span style={{ fontSize: 12, color: '#94a3b8', minWidth: 90, textAlign: 'right' }}>
+                    {relativeTime(s.completed_at || s.requested_at || '')}
+                  </span>
+                  {inFlight ? (
+                    <button style={{ ...outlineBtn, padding: '4px 7px', fontSize: 12, color: '#dc2626' }}
+                      onClick={() => stopMut.mutate(s.id)} disabled={stopMut.isPending} title="Stop this scan">
+                      <Square size={12} /> Stop
+                    </button>
+                  ) : (
+                    <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
+                      onClick={() => { if (confirm('Delete this scan and its results?')) delMut.mutate(s.id) }}
+                      disabled={delMut.isPending} title="Delete this scan">
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+          {(stopMut.error || delMut.error || clearMut.error) && (
+            <div style={{ ...errorBox, marginTop: 10 }}>{((stopMut.error || delMut.error || clearMut.error) as Error).message}</div>
+          )}
         </div>
       )}
     </div>
@@ -627,7 +722,10 @@ function PctSparkline({ values, color, width = 90, height = 24 }: { values: (num
 function pct(n: number, d: number): string { return d ? `${Math.round((n / d) * 100)}%` : '—' }
 function cap(s: string): string { return s.charAt(0).toUpperCase() + s.slice(1) }
 function statusDot(status: string): React.CSSProperties {
-  const color = status === 'complete' ? '#16a34a' : status === 'failed' ? '#dc2626' : '#d97706'
+  const color = status === 'complete' ? '#16a34a'
+    : status === 'failed' ? '#dc2626'
+    : status === 'cancelled' ? '#94a3b8'
+    : '#d97706'
   return { width: 8, height: 8, borderRadius: 999, background: color, flexShrink: 0 }
 }
 

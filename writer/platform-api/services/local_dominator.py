@@ -514,6 +514,45 @@ async def run_maps_scan_job(job: dict) -> None:
     ).eq("id", job_id).execute()
 
 
+def cancel_client_scans(client_id: str) -> dict:
+    """Stop a client's in-flight + queued scan: mark every pending/polling scan
+    'cancelled' and drop any not-yet-started maps_scan job so the poller and the
+    worker both leave it alone. Best-effort (a job already mid-create may still
+    produce a polling scan, which a follow-up stop will catch)."""
+    supabase = get_supabase()
+    scans = (
+        supabase.table("maps_scans")
+        .update({"status": "cancelled", "error": "cancelled_by_user", "completed_at": "now()"})
+        .eq("client_id", client_id).in_("status", ["pending", "polling"]).execute()
+    ).data or []
+    jobs = (
+        supabase.table("async_jobs").delete()
+        .eq("job_type", "maps_scan").eq("entity_id", client_id).eq("status", "pending").execute()
+    ).data or []
+    if scans or jobs:
+        logger.info("maps_scan_cancelled", extra={"client_id": client_id, "scans": len(scans), "jobs": len(jobs)})
+    return {"scans_cancelled": len(scans), "jobs_dropped": len(jobs)}
+
+
+def cancel_scan(scan_id: str) -> dict:
+    """Cancel one specific in-flight scan (from the History list). No-op (returns
+    cancelled=False) if it's already in a terminal state."""
+    supabase = get_supabase()
+    found = (
+        supabase.table("maps_scans").select("id, status").eq("id", scan_id).limit(1).execute()
+    ).data
+    if not found:
+        return {"status": "not_found", "cancelled": False}
+    status = found[0]["status"]
+    if status not in ("pending", "polling"):
+        return {"status": status, "cancelled": False}
+    supabase.table("maps_scans").update(
+        {"status": "cancelled", "error": "cancelled_by_user", "completed_at": "now()"}
+    ).eq("id", scan_id).execute()
+    logger.info("maps_scan_cancelled", extra={"scan_id": scan_id})
+    return {"status": "cancelled", "cancelled": True}
+
+
 def enqueue_due_maps_scans() -> int:
     """Weekly: enqueue a scan for each client with an active weekly config + keywords."""
     supabase = get_supabase()
