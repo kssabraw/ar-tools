@@ -426,27 +426,39 @@ def get_session(
 
 @router.get("/locations", response_model=list[LocationSuggestion])
 async def search_locations(
-    client_id: str,
     query: str,
     country: str | None = None,
+    client_id: str | None = None,
     user: AuthedUser = Depends(require_user),
 ) -> list[LocationSuggestion]:
-    """Service-area typeahead for the Local SEO new-session form (Service +
-    location dropdown, mirroring the Local SEO writer). Thin wrapper over the
-    suite's DataForSEO location lookup (scoped to the client's country), so the
-    fanout-frontend — mounted under /fanout — doesn't have to reach a suite path
-    outside its prefix. Best-effort: returns [] on a short query or any lookup
-    failure rather than erroring the form."""
+    """Location typeahead for the Local SEO new-session form (Service + location
+    autocomplete, mirroring the Local SEO writer). DataForSEO location suggestions
+    served by a thin /fanout wrapper so the fanout-frontend — mounted under /fanout
+    — doesn't reach a suite path outside its prefix.
+
+    Scoped by `country` (ISO-2, from the form's selected market) when given, else
+    by the client's country (`client_id`). The country path needs no client, so the
+    field autocompletes even on a non-client run. Best-effort: returns [] on a short
+    query, no scope, or any lookup failure rather than erroring the form."""
     if len((query or "").strip()) < 2:
         return []
     try:
-        # Lazy import: the suite service lives in platform-api, which mounts this
+        # Lazy import: the suite services live in platform-api, which mounts this
         # fanout app — import at call time to avoid an import-order coupling.
-        from services import local_seo_service
+        from services import local_seo_service, locations_service
 
-        rows = await local_seo_service.search_locations(client_id, query, country=country)
+        if country:
+            # An explicit country short-circuits client-country inference, so an
+            # empty client dict is sufficient.
+            rows = await locations_service.search_locations({}, query, country=country)
+        elif client_id:
+            rows = await local_seo_service.search_locations(client_id, query)
+        else:
+            return []
     except Exception:
-        logger.exception("fanout.locations.search failed client_id=%s", client_id)
+        logger.exception(
+            "fanout.locations.search failed country=%s client_id=%s", country, client_id
+        )
         return []
     return [LocationSuggestion(**row) for row in rows]
 

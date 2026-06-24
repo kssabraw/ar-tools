@@ -118,13 +118,18 @@ export const listAllSessions = (includeArchived = false) =>
 // mirror the backend allow-list (storage/silo.SUPPORTED_LOCATION_CODES) + the DB
 // check constraint. Default = US.
 export const SUPPORTED_COUNTRIES = [
-  { label: "United States", code: 2840 },
-  { label: "United Kingdom", code: 2826 },
-  { label: "Canada", code: 2124 },
-  { label: "Australia", code: 2036 },
-  { label: "New Zealand", code: 2554 },
+  { label: "United States", code: 2840, iso: "US" },
+  { label: "United Kingdom", code: 2826, iso: "GB" },
+  { label: "Canada", code: 2124, iso: "CA" },
+  { label: "Australia", code: 2036, iso: "AU" },
+  { label: "New Zealand", code: 2554, iso: "NZ" },
 ] as const;
 export const DEFAULT_LOCATION_CODE = 2840;
+
+// DataForSEO market location_code -> ISO-2, used to scope the Local SEO location
+// typeahead to the session's selected market.
+export const isoForLocationCode = (code: number): string =>
+  SUPPORTED_COUNTRIES.find((c) => c.code === code)?.iso ?? "US";
 
 export interface CreateSessionBody {
   seed_keyword: string;
@@ -166,10 +171,16 @@ export interface LocationSuggestion {
   country_iso_code?: string;
 }
 
-export const searchLocations = (clientId: string, query: string, country?: string) =>
+// Scope by `country` (ISO-2, from the selected market) so the field autocompletes
+// without a client; `clientId` is an optional fallback scope.
+export const searchLocations = (
+  query: string,
+  opts: { country?: string; clientId?: string | null } = {},
+) =>
   request<LocationSuggestion[]>(
-    `/locations?client_id=${encodeURIComponent(clientId)}&query=${encodeURIComponent(query)}` +
-      (country ? `&country=${encodeURIComponent(country)}` : ""),
+    `/locations?query=${encodeURIComponent(query)}` +
+      (opts.country ? `&country=${encodeURIComponent(opts.country)}` : "") +
+      (opts.clientId ? `&client_id=${encodeURIComponent(opts.clientId)}` : ""),
   );
 
 export const disambiguateSession = (id: string, choice: string) =>

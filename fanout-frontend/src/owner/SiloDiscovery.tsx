@@ -13,6 +13,7 @@ import {
   getKeywords,
   getSession,
   getSummary,
+  isoForLocationCode,
   overrideAudience,
   planArticles,
   setDeepMine,
@@ -661,12 +662,13 @@ function SeedForm(p: {
 
         {isLocalSeo && (
           <label className="field">
-            <span className="field-label">Service area</span>
+            <span className="field-label">Location</span>
             <LocationAutocomplete
+              country={isoForLocationCode(p.locationCode)}
               clientId={p.clientId}
               value={p.location}
               inputValue={p.locationInput}
-              placeholder="e.g. Round Rock, TX"
+              placeholder="Start typing a city or area…"
               onSelect={(loc) => {
                 p.setLocation(loc.location_name);
                 p.setLocationInput(loc.location_name);
@@ -681,9 +683,8 @@ function SeedForm(p: {
               }}
             />
             <span className="field-hint">
-              {p.clientId
-                ? "The city/area these pages target. Pre-fills when you schedule; you can change it then."
-                : "Open from a client workspace for area suggestions. You can set this when you schedule."}
+              The city/area these pages target. Suggestions match the selected market;
+              pre-fills when you schedule.
             </span>
           </label>
         )}

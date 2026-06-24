@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { searchLocations, type LocationSuggestion } from "./api";
 
-// Service-area typeahead for the Local SEO new-session form, mirroring the Local
-// SEO writer's location dropdown. Debounced DataForSEO suggestions (scoped to the
-// client's country, served by the /fanout/locations wrapper). When no client is
-// in scope the lookup needs no key — there's nothing to scope to — so it degrades
-// to a plain free-text field (the schedule step still validates the area).
+// Location typeahead for the Local SEO new-session form, mirroring the Local SEO
+// writer's location autocomplete. Debounced DataForSEO suggestions served by the
+// /fanout/locations wrapper, scoped by `country` (the selected market) so it
+// autocompletes for everyone; `clientId` is an optional fallback scope.
 export function LocationAutocomplete(p: {
-  clientId: string | null;
+  country?: string;
+  clientId?: string | null;
   // Committed location (a value means a suggestion was picked); used only to mark
   // the field as resolved.
   value: string;
@@ -33,11 +33,12 @@ export function LocationAutocomplete(p: {
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
+  const canSearch = Boolean(p.country || p.clientId);
+
   function handleInput(raw: string) {
     p.onInputChange(raw);
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    // No client scope -> no country to search within; stay a plain text field.
-    if (!p.clientId || raw.trim().length < 2) {
+    if (!canSearch || raw.trim().length < 2) {
       setSuggestions([]);
       setOpen(false);
       return;
@@ -45,7 +46,10 @@ export function LocationAutocomplete(p: {
     debounceRef.current = setTimeout(async () => {
       setLoading(true);
       try {
-        const rows = await searchLocations(p.clientId!, raw.trim());
+        const rows = await searchLocations(raw.trim(), {
+          country: p.country,
+          clientId: p.clientId,
+        });
         setSuggestions(rows);
         setOpen(true);
       } catch {
