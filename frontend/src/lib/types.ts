@@ -617,6 +617,7 @@ export interface MapsScanSummary {
   trigger: 'scheduled' | 'manual'
   radius_miles: number | null
   grid_size: number | null
+  search_terms: string[] | null
   requested_at: string | null
   completed_at: string | null
   error: string | null

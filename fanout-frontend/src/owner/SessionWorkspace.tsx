@@ -13,6 +13,10 @@ export interface SessionCtx {
   topicName: (id: string) => string;
   // Drives the restricted VA editing surface in the shared views (PRD §10).
   role: "owner" | "va";
+  // Content type chosen at session creation; seeds the Schedule modal.
+  contentType?: "blog_post" | "local_seo_page" | null;
+  // Local SEO target area chosen at session creation; pre-fills the Schedule modal.
+  location?: string | null;
 }
 
 export function useSession() {
@@ -157,7 +161,11 @@ export function SessionWorkspace() {
         )}
 
         {status && hasResults(status) && session.data && (
-          <Outlet context={{ sessionId, topics, topicName, role } satisfies SessionCtx} />
+          <Outlet
+            context={
+              { sessionId, topics, topicName, role, contentType: session.data?.content_type, location: session.data?.location } satisfies SessionCtx
+            }
+          />
         )}
       </main>
     </AppShell>

@@ -16,6 +16,12 @@ export function ScheduleModal(props: {
   sessionId: string;
   clusterIds?: string[];          // omit -> whole session
   baseUrl?: string | null;
+  // Content type chosen up front in the new-session flow (carried on the
+  // session). Seeds the toggle below; the user can still switch here.
+  defaultContentType?: ContentType | null;
+  // Local SEO target area chosen at session creation; pre-fills the location
+  // field below. The user can still change it here.
+  defaultLocation?: string | null;
   onClose: () => void;
   onScheduled?: (scheduled: number) => void;
 }) {
@@ -33,8 +39,10 @@ export function ScheduleModal(props: {
   const [timeOfDay, setTimeOfDay] = useState("09:00");
   const [timezone] = useState(browserTz);
   const [baseUrl, setBaseUrl] = useState(props.baseUrl ?? "");
-  const [contentType, setContentType] = useState<ContentType>("blog_post");
-  const [location, setLocation] = useState("");
+  const [contentType, setContentType] = useState<ContentType>(
+    props.defaultContentType ?? "blog_post",
+  );
+  const [location, setLocation] = useState(props.defaultLocation ?? "");
 
   const isLocalSeo = contentType === "local_seo_page";
 

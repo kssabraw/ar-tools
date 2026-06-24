@@ -48,6 +48,17 @@ class CreateSessionBody(BaseModel):
     disambiguation_hint: str | None = None
     topic_count: int = Field(default=5, ge=3, le=10)
     coverage_mode: str = Field(default="standard", pattern="^(standard|comprehensive)$")
+    # Intended content type for this run, chosen up front in the new-session flow
+    # so the writer/scheduler defaults to it later. The keyword pipeline itself is
+    # content-type agnostic; this is carried on the session (in `settings`) and
+    # used to seed the Schedule modal. `local_seo_page` needs a client-linked
+    # session + a target location at schedule time.
+    content_type: str = Field(default="blog_post", pattern="^(blog_post|local_seo_page)$")
+    # Local SEO target area, chosen on the new-session form (Service + location
+    # typeahead, mirroring the Local SEO writer). Carried on the session (in
+    # `settings`) so the Schedule modal pre-fills it. Ignored for blog runs; the
+    # keyword pipeline itself is location-agnostic beyond `location_code`.
+    location: str | None = Field(default=None, max_length=200)
     recursive_fanout: bool = False
     # Per-country locale (E1, 2026-06-17). DataForSEO location_code for the
     # session's market; validated against the supported English-market set in the
@@ -149,8 +160,21 @@ class SiloDiscoveryResponse(BaseModel):
     degraded_notes: list[str] = []
     silos: list[dict] = []
     site_base_url: str | None = None
+    # Intended content type chosen at session creation (lives in `settings`); the
+    # Schedule modal seeds from it. Null/absent -> treat as blog_post.
+    content_type: str | None = None
+    # Local SEO target area chosen at session creation (lives in `settings`); the
+    # Schedule modal pre-fills its location from it. Null for blog runs.
+    location: str | None = None
     publish_config: dict = {}
     publish_available: dict = {}     # which destinations have server creds (no secrets)
+
+
+class LocationSuggestion(BaseModel):
+    location_name: str
+    location_code: int
+    location_type: str = ""
+    country_iso_code: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +376,8 @@ def create_session(
         settings={
             "topic_count": body.topic_count,
             "coverage_mode": body.coverage_mode,
+            "content_type": body.content_type,
+            "location": (body.location or "").strip() or None,
             "recursive_fanout": body.recursive_fanout,
             "enrich_with_metrics": (
                 body.enrich_with_metrics
@@ -388,12 +414,53 @@ def get_session(
         detected_audience=session.get("detected_audience"),
         silos=store.list_topics(session_id),
         site_base_url=session.get("site_base_url"),
+        content_type=(session.get("settings") or {}).get("content_type"),
+        location=(session.get("settings") or {}).get("location"),
         publish_config=session.get("publish_config") or {},
         publish_available={
             "github": bool(_s.github_publish_token),
             "drive": bool(_s.google_oauth_client_id and _s.google_oauth_refresh_token),
         },
     )
+
+
+@router.get("/locations", response_model=list[LocationSuggestion])
+async def search_locations(
+    query: str,
+    country: str | None = None,
+    client_id: str | None = None,
+    user: AuthedUser = Depends(require_user),
+) -> list[LocationSuggestion]:
+    """Location typeahead for the Local SEO new-session form (Service + location
+    autocomplete, mirroring the Local SEO writer). DataForSEO location suggestions
+    served by a thin /fanout wrapper so the fanout-frontend — mounted under /fanout
+    — doesn't reach a suite path outside its prefix.
+
+    Scoped by `country` (ISO-2, from the form's selected market) when given, else
+    by the client's country (`client_id`). The country path needs no client, so the
+    field autocompletes even on a non-client run. Best-effort: returns [] on a short
+    query, no scope, or any lookup failure rather than erroring the form."""
+    if len((query or "").strip()) < 2:
+        return []
+    try:
+        # Lazy import: the suite services live in platform-api, which mounts this
+        # fanout app — import at call time to avoid an import-order coupling.
+        from services import local_seo_service, locations_service
+
+        if country:
+            # An explicit country short-circuits client-country inference, so an
+            # empty client dict is sufficient.
+            rows = await locations_service.search_locations({}, query, country=country)
+        elif client_id:
+            rows = await local_seo_service.search_locations(client_id, query)
+        else:
+            return []
+    except Exception:
+        logger.exception(
+            "fanout.locations.search failed country=%s client_id=%s", country, client_id
+        )
+        return []
+    return [LocationSuggestion(**row) for row in rows]
 
 
 @router.patch("/sessions/{session_id}/audience", response_model=SiloDiscoveryResponse)
