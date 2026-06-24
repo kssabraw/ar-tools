@@ -38,6 +38,13 @@ class ServiceWriterRequest(BaseModel):
     # The ServiceBriefResponse dict (Strategy / Architecture / Conversion+SEO).
     service_brief_output: dict[str, Any]
     client_context: Optional[ClientContextInput] = None
+    # Reoptimization: when 'reoptimize', the writer regenerates guided by the
+    # scorer's deficiencies, using the prior page's sections as the baseline.
+    mode: Literal["generate", "reoptimize"] = "generate"
+    # Prior service_writer sections (serialized) — baseline for reoptimize.
+    prior_sections: list[dict[str, Any]] = Field(default_factory=list)
+    # Scorer deficiencies: [{engine, engine_key, score, issues[], recommendations[]}].
+    deficiencies: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ----------------------------------------------------------------------

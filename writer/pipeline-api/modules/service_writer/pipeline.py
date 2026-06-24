@@ -69,6 +69,12 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
     brand_name = (brand_card or {}).get("brand_name", "") or ""
     brand_directive = generation._brand_directive(brand_card)
 
+    # Reoptimization: fold the scorer's deficiencies into the per-call directive
+    # so every section/title/FAQ generation addresses them. Same output shape.
+    if request.mode == "reoptimize":
+        brand_directive += generation.reopt_directive(request.deficiencies, request.prior_sections)
+        notes.append(f"reoptimize:{len(request.deficiencies)}_deficiencies")
+
     # ---- Title / meta / CTA label ----
     tmc = await generation.generate_title_meta_cta(
         service=service,

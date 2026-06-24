@@ -426,6 +426,8 @@ export interface RunDetail {
     // Present on service_page runs instead of the blog modules above.
     service_brief?: ModuleOutput | null
     service_writer?: ModuleOutput | null
+    // Latest score (nlp-api national mode) for a service_page run.
+    service_score?: ModuleOutput | null
   }
 }
 

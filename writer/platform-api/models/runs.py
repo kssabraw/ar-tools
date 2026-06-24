@@ -163,6 +163,11 @@ class RunBulkCreateResponse(BaseModel):
     skipped: int = 0
 
 
+class ServicePageReoptimizeRequest(BaseModel):
+    # Scorer deficiencies the writer should fix; empty = reoptimize against all.
+    deficiencies: list[dict[str, Any]] = []
+
+
 class RunPollResponse(BaseModel):
     run_id: UUID
     status: str

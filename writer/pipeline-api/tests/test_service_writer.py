@@ -156,6 +156,39 @@ def test_render_wordpress_blocks():
     assert "wp-block-button__link" in wp
 
 
+def test_reopt_directive_includes_issues_and_prior_headings():
+    from modules.service_writer.generation import reopt_directive
+
+    out = reopt_directive(
+        [{"engine": "AEO", "issues": ["no FAQ section"], "recommendations": ["add 4-7 FAQs"]}],
+        prior_sections=[{"heading": "Our Promise"}],
+    )
+    assert "no FAQ section" in out
+    assert "add 4-7 FAQs" in out
+    assert "Our Promise" in out
+    assert reopt_directive([]) == ""
+
+
+async def test_reoptimize_mode_runs_and_keeps_shape():
+    ctx = ClientContextInput(brand_guide_text="Be confident.")
+    req = ServiceWriterRequest(
+        run_id="run-1",
+        service_brief_output=_brief(),
+        client_context=ctx,
+        mode="reoptimize",
+        deficiencies=[{"engine": "AEO", "engine_key": "aeo_llm_retrieval",
+                       "issues": ["no FAQ"], "recommendations": ["add an FAQ section"]}],
+        prior_sections=[{"order": 1, "level": "H2", "heading": "Our Promise", "blocks": []}],
+    )
+    with patch(_GEN, _fake_llm_factory(None)), patch(_DISTILL, AsyncMock(return_value=BrandVoiceCard(brand_name="Acme"))):
+        result = await run_service_writer(req)
+
+    assert any(n.startswith("reoptimize:") for n in result.metadata.degraded_notes)
+    assert result.metadata.schema_version == "1.0"
+    assert result.renderings.markdown and result.renderings.html and result.renderings.wordpress
+    assert result.schema_jsonld
+
+
 def test_jsonld_service_only_when_no_faqs():
     out = build_jsonld(service="Drain Cleaning", primary_query="drain cleaning", brand_name="Acme", faqs=[])
     assert '"Service"' in out

@@ -96,6 +96,8 @@ NON_TERMINAL_STATUSES = {
     "sources_cited_running",
     "service_brief_running",
     "service_writer_running",
+    "service_scoring_running",
+    "service_reopt_running",
 }
 
 
@@ -621,6 +623,26 @@ async def _orchestrate_service_page(
         await _call_module(
             "service_writer", run_id, _build_service_writer_payload(run, brief_result, snapshot)
         )
+
+    # Stage C: auto score + (≤1) reoptimize. Best-effort — scoring/reopt failure
+    # logs but never fails the run (the page already exists). Skipped on resume if
+    # a score already exists.
+    if await _is_cancelled(run_id):
+        raise CancellationError()
+    if completed.get("service_score") is None:
+        try:
+            from services.service_page_score import reoptimize_run, score_run
+
+            await _set_run_status(run_id, "service_scoring_running")
+            score = await score_run(run_id)
+            if (score.get("composite_score") or 0) < settings.service_page_score_threshold:
+                await _set_run_status(run_id, "service_reopt_running")
+                await reoptimize_run(run_id, score.get("deficiencies") or [])
+        except Exception as exc:
+            logger.warning(
+                "service_page_autoscore_failed",
+                extra={"run_id": run_id, "error": str(exc)},
+            )
 
 
 # ---------------------------------------------------------------------------

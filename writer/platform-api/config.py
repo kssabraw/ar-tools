@@ -103,6 +103,11 @@ class Settings(BaseSettings):
     silo_embedding_dimensions: int = 1536
     silo_embedding_model: str = "text-embedding-3-large"
 
+    # Service Page scoring: after a service_page run generates, it auto-scores
+    # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below
+    # this threshold. Manual Score/Reoptimize controls remain available in the UI.
+    service_page_score_threshold: float = 90.0
+
     class Config:
         env_file = ".env"
 
