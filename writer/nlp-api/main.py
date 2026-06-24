@@ -2919,6 +2919,40 @@ Return ONLY valid JSON — no markdown, no explanation:
 Be specific — reference actual content found (or missing) in the page."""
 
 
+# Location-agnostic variant for national / non-local service pages (geo_mode="national").
+# Scores only the 5 non-geo engines (drops geographic_legitimacy + near-me; de-geos
+# gbp_maps + entity_establishment). The deterministic SERP Signal Coverage engine still
+# applies. Used by the Service Page scorer — Local SEO pages keep the 7-engine prompt above.
+_SCORE_SYSTEM_PROMPT_NATIONAL = """You are an expert SEO analyst. Score the provided SERVICE PAGE against the 5 engines below.
+
+This is a NATIONAL / location-agnostic service page. Do NOT score, require, or reward any city, neighborhood, landmark, ZIP code, address, NAP, or other local-geo signal. Judge purely on service relevance, entity coverage, audience fit, and answer-engine readiness.
+
+IMPORTANT: These 5 engines account for ~81% of the composite score. The remaining ~19% is scored separately by a deterministic Python engine (SERP Signal Coverage) that checks exact keyword/entity/quadgram presence per HTML zone. You do NOT score that engine — focus only on the 5 below.
+
+SCORING CRITERIA — score each engine 0–100:
+
+1. organic_ranking (weight 10%): keyword in title + H1 + opening ¶; service/transactional tone (not blog); clear CTA visible; clear service offering.
+
+2. gbp_maps (weight 20%): brand + service entity pairing present and consistent; service matches the business's category/offering; multiple, specific service mentions; descriptive, non-generic service framing. Do NOT require or reward any city/NAP/location signal.
+
+3. entity_establishment (weight 10%): brand + service co-occurrence across ≥3 sections; sub-services mentioned; descriptive anchor-text signals; topical depth. No city co-occurrence required.
+
+4. icp_alignment (weight 5%): detect ICP from keyword modifier (emergency→urgent tone; commercial→B2B tone; general→professional/reliable); CTA tone matches ICP; pain points addressed; emotional register of copy matches searcher intent.
+
+5. aeo_llm_retrieval (weight 20%): answer-first formatting (direct claim before explanation); FAQ with 4–7 entries (penalise if fewer than 4 or more than 7), each opening with a direct statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets; ≥1 numbered list for a process or steps; tables used where content is genuinely comparative — penalise only if comparative data is present but no table was used; specific operational facts (numbers, timeframes) rather than generic filler.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "organic_ranking":      {"score": 0, "issues": [], "recommendations": []},
+  "gbp_maps":             {"score": 0, "issues": [], "recommendations": []},
+  "entity_establishment": {"score": 0, "issues": [], "recommendations": []},
+  "icp_alignment":        {"score": 0, "icp_detected": "", "issues": [], "recommendations": []},
+  "aeo_llm_retrieval":    {"score": 0, "issues": [], "recommendations": []}
+}
+
+Be specific — reference actual content found (or missing) in the page."""
+
+
 _ENGINE_WEIGHTS = {
     "organic_ranking":      0.10,
     "gbp_maps":             0.20,
@@ -2928,6 +2962,17 @@ _ENGINE_WEIGHTS = {
     "geographic_legitimacy":0.10,
     "nearme_intent":        0.10,
     "serp_signal_coverage": 0.15,   # deterministic — scored in Python, not Claude
+}
+
+# National / location-agnostic weights (geo_mode="national"): the local weights
+# minus geographic_legitimacy + nearme_intent, renormalized to sum to 1.0.
+_ENGINE_WEIGHTS_NATIONAL = {
+    "organic_ranking":      0.125,
+    "gbp_maps":             0.25,
+    "entity_establishment": 0.125,
+    "icp_alignment":        0.0625,
+    "aeo_llm_retrieval":    0.25,
+    "serp_signal_coverage": 0.1875,
 }
 
 _ENGINE_LABELS = {
@@ -3064,8 +3109,9 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     }
 
 
-def _composite_from_scores(scores: dict) -> tuple[float, str]:
-    composite = sum(scores[k]["score"] * w for k, w in _ENGINE_WEIGHTS.items() if k in scores)
+def _composite_from_scores(scores: dict, weights: Optional[dict] = None) -> tuple[float, str]:
+    weights = weights or _ENGINE_WEIGHTS
+    composite = sum(scores[k]["score"] * w for k, w in weights.items() if k in scores)
     if composite >= 90:   status = "excellent"
     elif composite >= 80: status = "good"
     elif composite >= 70: status = "needs_improvement"
@@ -3362,17 +3408,18 @@ def _build_score_prompt(
     serp_ctx: str,
     page_text: str,
     html_structure: str = "",
+    geo_mode: str = "local",
 ) -> str:
     """Returns the dynamic user-message portion of the scoring prompt.
-    The static system instructions are in _SCORE_SYSTEM_PROMPT (cached separately)."""
+    The static system instructions are in _SCORE_SYSTEM_PROMPT (cached separately).
+    For geo_mode="national" the city/address context is omitted (location-agnostic)."""
     structure_block = f"\n{html_structure}\n" if html_structure else ""
+    geo_lines = "" if geo_mode == "national" else f"City: {city}\nAddress: {address or 'Not provided'}\n"
     return f"""CONTEXT
 Business: {business_name}
 Category: {gbp_category}
 Keyword: {keyword}
-City: {city}
-Address: {address or "Not provided"}
-{serp_ctx}{structure_block}
+{geo_lines}{serp_ctx}{structure_block}
 PAGE CONTENT (first 8,000 chars):
 {page_text}"""
 
@@ -4368,7 +4415,7 @@ async def find_page_for_keyword(request: Request, body: FindPageRequest):
 
 class ScorePageRequest(BaseModel):
     keyword: str
-    location: str
+    location: str = ""  # optional in national mode
     location_code: Optional[int] = None  # DataForSEO numeric location code
     page_url: Optional[str] = None
     page_content: Optional[str] = None  # if omitted, fetched from page_url
@@ -4376,6 +4423,9 @@ class ScorePageRequest(BaseModel):
     gbp_category: str
     address: Optional[str] = None
     serp_analysis: Optional[dict] = None
+    # "local" (default — full 7-engine Local SEO scoring) or "national" (Service
+    # Pages — drops the geo engines, de-geos gbp_maps/entity_establishment).
+    geo_mode: str = "local"
 
 class ScorePageResponse(BaseModel):
     composite_score: float
@@ -4396,6 +4446,13 @@ async def score_page(request: Request, body: ScorePageRequest):
     import anthropic as _anthropic
     client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
 
+    # geo_mode: "national" service-page scoring drops the geo engines + de-geos
+    # gbp_maps/entity_establishment (location-agnostic). Default "local" is the
+    # full 7-engine Local SEO rubric — unchanged.
+    national = (body.geo_mode or "local").lower() == "national"
+    system_prompt = _SCORE_SYSTEM_PROMPT_NATIONAL if national else _SCORE_SYSTEM_PROMPT
+    weights = _ENGINE_WEIGHTS_NATIONAL if national else _ENGINE_WEIGHTS
+
     # ── Run SERP analysis inline if not provided ───────────────────────────────
     # Scoring against competitors requires SERP data. If the caller doesn't pass
     # serp_analysis (e.g. user hits Score directly without a prior analysis run),
@@ -4405,7 +4462,11 @@ async def score_page(request: Request, body: ScorePageRequest):
     if not serp_analysis_dict:
         logger.info(f"score-page: no serp_analysis provided — running inline SERP analysis for '{body.keyword}'")
         try:
-            inline_serp = await _run_serp_analysis(body.keyword, body.location, body.location_code)
+            # National mode has no location — analyze the keyword at US-national scope
+            # so SERP Signal Coverage still has competitor data to score against.
+            _serp_loc = body.location or ("United States" if national else body.location)
+            _serp_code = body.location_code or (2840 if national else body.location_code)
+            inline_serp = await _run_serp_analysis(body.keyword, _serp_loc, _serp_code)
             serp_analysis_dict = inline_serp.model_dump()
         except Exception as _serp_err:
             logger.warning(f"score-page: inline SERP analysis failed ({_serp_err})")
@@ -4424,10 +4485,10 @@ async def score_page(request: Request, body: ScorePageRequest):
         raise HTTPException(status_code=422, detail="Either page_content or page_url is required")
     html_structure = _detect_html_structure(page_html)
     page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
-    city = body.location.split(",")[0].strip()
+    city = body.location.split(",")[0].strip() if body.location else ""
     serp_ctx = _serp_context(serp_analysis_dict)
 
-    user_prompt = _build_score_prompt(body.business_name, body.gbp_category, body.keyword, city, body.address, serp_ctx, page_text, html_structure)
+    user_prompt = _build_score_prompt(body.business_name, body.gbp_category, body.keyword, city, body.address, serp_ctx, page_text, html_structure, geo_mode=("national" if national else "local"))
 
     scores = None
     token_rec = None
@@ -4436,7 +4497,7 @@ async def score_page(request: Request, body: ScorePageRequest):
             msg = await client.messages.create(
                 model=SCORE_MODEL,
                 max_tokens=8192,
-                system=[{"type": "text", "text": _SCORE_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                system=[{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
                 messages=[
                     {"role": "user", "content": user_prompt},
                 ],
@@ -4458,7 +4519,7 @@ async def score_page(request: Request, body: ScorePageRequest):
     # Inject deterministic SERP signal coverage (Python, not Claude)
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
 
-    composite, status = _composite_from_scores(scores)
+    composite, status = _composite_from_scores(scores, weights)
 
     return ScorePageResponse(
         composite_score=composite,

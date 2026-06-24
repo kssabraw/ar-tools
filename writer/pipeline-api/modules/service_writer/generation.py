@@ -37,6 +37,44 @@ def _brand_directive(brand_card: Optional[dict]) -> str:
     return " ".join(lines)
 
 
+def reopt_directive(deficiencies: list[dict], prior_sections: Optional[list[dict]] = None) -> str:
+    """Build a reoptimization directive from the scorer's deficiencies (appended to
+    the per-call brand_directive so every generation call addresses them). Empty
+    string when there's nothing to fix."""
+    if not deficiencies:
+        return ""
+    lines: list[str] = []
+    for d in deficiencies:
+        if not isinstance(d, dict):
+            continue
+        eng = d.get("engine") or d.get("engine_key") or "quality"
+        issues = "; ".join(str(i) for i in (d.get("issues") or []) if i)
+        recs = "; ".join(str(r) for r in (d.get("recommendations") or []) if r)
+        piece = f"- {eng}"
+        if issues:
+            piece += f" — issues: {issues}"
+        if recs:
+            piece += f" — fixes: {recs}"
+        lines.append(piece)
+    if not lines:
+        return ""
+    prior_note = ""
+    if prior_sections:
+        headings = [str(s.get("heading", "")).strip() for s in prior_sections if isinstance(s, dict)]
+        headings = [h for h in headings if h]
+        if headings:
+            prior_note = (
+                "\nThe prior draft had these sections (preserve what already works, "
+                f"improve the rest): {headings}."
+            )
+    return (
+        "\n\nREOPTIMIZATION PASS — the prior draft scored low on these dimensions; "
+        "rewrite to fix them while keeping the page's strengths:\n"
+        + "\n".join(lines)
+        + prior_note
+    )
+
+
 def _coerce_blocks(raw: Any) -> list[Block]:
     out: list[Block] = []
     for b in (raw or []):

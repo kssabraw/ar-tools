@@ -22,13 +22,15 @@ from models.runs import (
     RunListItem,
     RunListResponse,
     RunPollResponse,
+    ServicePageReoptimizeRequest,
     SIETermsByCategory,
     bucket_sie_required_terms,
 )
 from services.orchestrator import NON_TERMINAL_STATUSES, orchestrate_run
 from services.run_dispatch import create_run_and_snapshot
 from services.file_parser import detect_format
-from services import brand_voice_service, icp_service
+from services import brand_voice_service, icp_service, service_page_score
+from sse import sse_response
 
 logger = logging.getLogger(__name__)
 
@@ -163,11 +165,12 @@ async def get_run(
             website_analysis_unavailable=snap.get("website_analysis_unavailable", False),
         )
 
-    # Load module outputs
+    # Load module outputs, ordered by attempt so later attempts come last.
     mo_result = (
         supabase.table("module_outputs")
-        .select("module, status, output_payload, cost_usd, duration_ms, module_version")
+        .select("module, status, output_payload, cost_usd, duration_ms, module_version, attempt_number")
         .eq("run_id", str(run_id))
+        .order("attempt_number")
         .execute()
     )
     module_outputs: dict[str, Optional[ModuleOutputSummary]] = {
@@ -177,7 +180,13 @@ async def get_run(
         "writer": None,
         "sources_cited": None,
     }
+    # Pick the latest COMPLETE attempt per module (a reoptimized service_writer or
+    # a re-score creates a 2nd attempt); fall back to the latest non-complete row
+    # so an in-flight/failed stage is still visible. Rows arrive attempt-ascending.
     for mo in mo_result.data or []:
+        existing = module_outputs.get(mo["module"])
+        if existing is not None and existing.status == "complete" and mo["status"] != "complete":
+            continue
         module_outputs[mo["module"]] = ModuleOutputSummary(
             status=mo["status"],
             output_payload=mo.get("output_payload"),
@@ -339,6 +348,29 @@ async def create_runs_bulk(
         extra={"count": len(run_ids), "content_type": body.content_type, "user_id": auth["user_id"]},
     )
     return RunBulkCreateResponse(run_ids=run_ids, created=len(run_ids), skipped=skipped)
+
+
+@router.post("/runs/{run_id}/score")
+async def score_service_page(
+    run_id: UUID,
+    auth: dict = Depends(require_auth),
+):
+    """Score a service_page run's current page (nlp-api national mode). SSE
+    heartbeat stream → the ScoreResult (composite + per-engine + deficiencies)."""
+    return sse_response(service_page_score.score_run(str(run_id), user_id=auth["user_id"]))
+
+
+@router.post("/runs/{run_id}/reoptimize")
+async def reoptimize_service_page(
+    run_id: UUID,
+    body: ServicePageReoptimizeRequest,
+    auth: dict = Depends(require_auth),
+):
+    """Reoptimize a service_page run via the Service Page Writer (fed the given
+    deficiencies), persist a new attempt, then re-score. SSE → {page, score}."""
+    return sse_response(
+        service_page_score.reoptimize_run(str(run_id), body.deficiencies, user_id=auth["user_id"])
+    )
 
 
 @router.post("/runs/{run_id}/cancel", response_model=dict)
