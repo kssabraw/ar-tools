@@ -23,6 +23,7 @@ from models.runs import (
     bucket_sie_required_terms,
 )
 from services.orchestrator import NON_TERMINAL_STATUSES, orchestrate_run
+from services.run_dispatch import create_run_and_snapshot
 from services.file_parser import detect_format
 from services import brand_voice_service, icp_service
 
@@ -58,6 +59,7 @@ async def list_runs(
     client_id: Optional[UUID] = Query(None),
     status: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
+    content_type: Optional[str] = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     auth: dict = Depends(require_auth),
@@ -73,6 +75,8 @@ async def list_runs(
         query = query.eq("client_id", str(client_id))
     if status:
         query = query.eq("status", status)
+    if content_type:
+        query = query.eq("content_type", content_type)
     if search:
         query = query.ilike("keyword", f"%{search}%")
 
@@ -255,46 +259,19 @@ async def create_run(
         raise HTTPException(status_code=404, detail="client_not_found")
     client = client_result.data
 
-    # Create run row
-    run_result = supabase.table("runs").insert(
-        {
-            "client_id": str(body.client_id),
-            "keyword": body.keyword,
-            "intent_override": body.intent_override,
-            "sie_outlier_mode": body.sie_outlier_mode,
-            "sie_force_refresh": body.sie_force_refresh,
-            "brief_force_refresh": body.brief_force_refresh,
-            "content_type": body.content_type,
-            "service": body.service or (body.keyword if body.content_type == "service_page" else None),
-            "location": body.location,
-            "location_code": body.location_code,
-            "status": "queued",
-            "created_by": auth["user_id"],
-        }
-    ).execute()
-    run = run_result.data[0]
-    run_id = run["id"]
-
-    # Determine brand_guide format and icp_format from text content + source type.
-    # brand_text comes from the converged brand_voice (Option A), falling back to
-    # the legacy free-text column when brand_voice is unset.
-    brand_text = brand_voice_service.resolve_brand_guide_text(client)
-    icp_text = icp_service.resolve_icp_text(client)
-    website_analysis = client.get("website_analysis")
-    website_unavailable = website_analysis is None or client.get("website_analysis_status") != "complete"
-
-    supabase.table("client_context_snapshots").insert(
-        {
-            "run_id": run_id,
-            "client_id": str(body.client_id),
-            "brand_guide_text": brand_text,
-            "brand_guide_format": detect_format(brand_text, "text/plain"),
-            "icp_text": icp_text,
-            "icp_format": detect_format(icp_text, "text/plain"),
-            "website_analysis": website_analysis,
-            "website_analysis_unavailable": website_unavailable,
-        }
-    ).execute()
+    run_id = create_run_and_snapshot(
+        client=client,
+        keyword=body.keyword,
+        content_type=body.content_type,
+        service=body.service,
+        location=body.location,
+        location_code=body.location_code,
+        intent_override=body.intent_override,
+        sie_outlier_mode=body.sie_outlier_mode,
+        sie_force_refresh=body.sie_force_refresh,
+        brief_force_refresh=body.brief_force_refresh,
+        created_by=auth["user_id"],
+    )
 
     logger.info(
         "run_dispatched",

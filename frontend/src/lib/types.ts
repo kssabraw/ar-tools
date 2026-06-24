@@ -5,6 +5,8 @@ export type RunStatus =
   | 'research_running'
   | 'writer_running'
   | 'sources_cited_running'
+  | 'service_brief_running'
+  | 'service_writer_running'
   | 'complete'
   | 'failed'
   | 'cancelled'
@@ -361,18 +363,31 @@ export interface ModuleOutput {
   module_version: string | null
 }
 
+export type RunContentType = 'blog_post' | 'service_page'
+
 export interface Run {
   id: string
   client_id: string
   client_name: string
   keyword: string
   title: string | null
+  content_type: RunContentType
   status: RunStatus
   sie_cache_hit: boolean | null
   total_cost_usd: number | null
   created_at: string
   started_at: string | null
   completed_at: string | null
+}
+
+// Service Page Writer output (module_outputs.service_writer.output_payload)
+export interface ServiceWriterOutput {
+  title: string
+  meta_description: string
+  sections: Array<Record<string, unknown>>
+  renderings: { markdown: string; html: string; wordpress: string }
+  schema_jsonld: string
+  metadata: Record<string, unknown>
 }
 
 export interface RunListResponse {
@@ -387,6 +402,7 @@ export interface RunDetail {
   title: string | null
   h1: string | null
   client_id: string
+  content_type: RunContentType
   status: RunStatus
   sie_cache_hit: boolean | null
   error_stage: string | null
@@ -407,6 +423,9 @@ export interface RunDetail {
     research: ModuleOutput | null
     writer: ModuleOutput | null
     sources_cited: ModuleOutput | null
+    // Present on service_page runs instead of the blog modules above.
+    service_brief?: ModuleOutput | null
+    service_writer?: ModuleOutput | null
   }
 }
 

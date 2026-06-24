@@ -1088,6 +1088,58 @@ def generate_local_seo_page_core(
     return True
 
 
+def generate_service_page_core(
+    *, session: dict, keyword: str, user_id: str | None,
+) -> bool:
+    """Generate one Service Page for a cluster's keyword by creating a suite
+    `runs` row (content_type='service_page') and driving the orchestrator
+    (service_brief -> service_writer) to completion. The suite run owns the
+    artifact (runs/module_outputs) — nothing is written to fanout.article_outputs
+    — so the page appears in the client's Service Pages workspace and publishes
+    via the standard run publish path. Returns True on success.
+
+    Keyword-only (no location). Cross-pipeline reuse (the locked decision):
+    Fanout is mounted inside platform-api, so we import the suite run helpers
+    lazily (no circular import — they never import fanout). The orchestrator is
+    async; this runs in the scheduler's worker thread, so we drive it on a fresh
+    event loop. The orchestrator swallows its own errors and records a terminal
+    run status, so we read that status to decide success."""
+    import asyncio
+
+    client_id = session.get("client_id")
+    if not client_id:
+        logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
+                     "keyword": keyword, "reason": "session has no client_id"})
+        return False
+    try:
+        from db.supabase_client import get_supabase
+        from services.local_seo_service import _get_client
+        from services.orchestrator import orchestrate_run
+        from services.run_dispatch import create_run_and_snapshot
+
+        client = _get_client(client_id)
+        run_id = create_run_and_snapshot(
+            client=client, keyword=keyword, content_type="service_page",
+            created_by=user_id,
+        )
+        asyncio.run(orchestrate_run(run_id))
+        status = (
+            (get_supabase().table("runs").select("status").eq("id", run_id).single().execute()).data
+            or {}
+        ).get("status")
+        if status != "complete":
+            logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
+                         "keyword": keyword, "reason": f"run status {status}"})
+            return False
+    except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
+        logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
+                     "keyword": keyword, "reason": repr(exc)})
+        return False
+    logger.info("step_complete", extra={"event": "step_complete", "step": "service_page_job",
+                "keyword": keyword})
+    return True
+
+
 # ---- Pre-publish ranking check (per client) -------------------------------
 def submit_prepublish_rank_check(session_id: str) -> None:
     """Run the pre-publish ranking check off the request path. Orthogonal to the

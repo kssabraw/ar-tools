@@ -29,6 +29,8 @@ function statusBadge(status: RunStatus) {
     research_running:        { bg: '#dbeafe', color: '#1e40af', label: 'Research' },
     writer_running:          { bg: '#dbeafe', color: '#1e40af', label: 'Writing' },
     sources_cited_running:   { bg: '#dbeafe', color: '#1e40af', label: 'Citations' },
+    service_brief_running:   { bg: '#dbeafe', color: '#1e40af', label: 'Brief' },
+    service_writer_running:  { bg: '#dbeafe', color: '#1e40af', label: 'Writing' },
     complete:                { bg: '#dcfce7', color: '#166534', label: 'Complete' },
     failed:                  { bg: '#fee2e2', color: '#991b1b', label: 'Failed' },
     cancelled:               { bg: '#f1f5f9', color: '#475569', label: 'Cancelled' },

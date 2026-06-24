@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText,
 } from 'lucide-react'
 
 export function ClientWorkspace() {
@@ -24,6 +24,14 @@ export function ClientWorkspace() {
     enabled: Boolean(id),
   })
   const savedLocalSeoCount = localSeoPages?.length ?? 0
+
+  // Count of service pages generated for this client (service_page runs).
+  const { data: servicePageRuns } = useQuery<{ total: number }>({
+    queryKey: ['service-page-runs', id],
+    queryFn: () => api.get<{ total: number }>(`/runs?client_id=${id}&content_type=service_page&page_size=1`),
+    enabled: Boolean(id),
+  })
+  const savedServicePageCount = servicePageRuns?.total ?? 0
 
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
@@ -112,6 +120,24 @@ export function ClientWorkspace() {
             savedLocalSeoCount > 0 && id ? (
               <Link to={`/clients/${id}/local-seo?tab=saved`} style={footerLinkStyle}>
                 View {savedLocalSeoCount} saved page{savedLocalSeoCount === 1 ? '' : 's'} <ArrowRight size={13} />
+              </Link>
+            ) : undefined
+          }
+        />
+        <ActionCard
+          icon={<FileText size={22} />}
+          label="Create Service Pages"
+          description={
+            savedServicePageCount > 0
+              ? `Conversion-focused service / landing pages. ${savedServicePageCount} generated for this client.`
+              : 'Conversion-focused service / landing pages, brief + writer in one run.'
+          }
+          to={id ? `/clients/${id}/service-pages` : undefined}
+          cta="Create"
+          footer={
+            savedServicePageCount > 0 && id ? (
+              <Link to={`/clients/${id}/service-pages`} style={footerLinkStyle}>
+                View {savedServicePageCount} page{savedServicePageCount === 1 ? '' : 's'} <ArrowRight size={13} />
               </Link>
             ) : undefined
           }
