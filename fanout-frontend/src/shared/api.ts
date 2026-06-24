@@ -41,6 +41,9 @@ export interface SiloDiscovery {
   degraded_notes: string[];
   silos: Silo[];
   site_base_url?: string | null;
+  // Intended content type chosen at session creation; the Schedule modal seeds
+  // from it. Absent -> treat as blog_post.
+  content_type?: "blog_post" | "local_seo_page" | null;
   publish_config?: {
     github?: { repo?: string; branch?: string; content_path?: string };
     drive?: { folder_id?: string };
@@ -130,6 +133,10 @@ export interface CreateSessionBody {
   disambiguation_hint?: string;
   topic_count?: number;
   coverage_mode?: "standard" | "comprehensive";
+  // Intended content type for this run, chosen up front in the new-session flow.
+  // Carried on the session so the Schedule modal defaults to it. Omit ->
+  // backend defaults to 'blog_post'.
+  content_type?: "blog_post" | "local_seo_page";
   // Per-country locale (E1). DataForSEO location_code for the session's market.
   // Omit -> backend defaults to US (2840).
   location_code?: number;

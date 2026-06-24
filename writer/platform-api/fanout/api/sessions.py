@@ -48,6 +48,12 @@ class CreateSessionBody(BaseModel):
     disambiguation_hint: str | None = None
     topic_count: int = Field(default=5, ge=3, le=10)
     coverage_mode: str = Field(default="standard", pattern="^(standard|comprehensive)$")
+    # Intended content type for this run, chosen up front in the new-session flow
+    # so the writer/scheduler defaults to it later. The keyword pipeline itself is
+    # content-type agnostic; this is carried on the session (in `settings`) and
+    # used to seed the Schedule modal. `local_seo_page` needs a client-linked
+    # session + a target location at schedule time.
+    content_type: str = Field(default="blog_post", pattern="^(blog_post|local_seo_page)$")
     recursive_fanout: bool = False
     # Per-country locale (E1, 2026-06-17). DataForSEO location_code for the
     # session's market; validated against the supported English-market set in the
@@ -149,6 +155,9 @@ class SiloDiscoveryResponse(BaseModel):
     degraded_notes: list[str] = []
     silos: list[dict] = []
     site_base_url: str | None = None
+    # Intended content type chosen at session creation (lives in `settings`); the
+    # Schedule modal seeds from it. Null/absent -> treat as blog_post.
+    content_type: str | None = None
     publish_config: dict = {}
     publish_available: dict = {}     # which destinations have server creds (no secrets)
 
@@ -352,6 +361,7 @@ def create_session(
         settings={
             "topic_count": body.topic_count,
             "coverage_mode": body.coverage_mode,
+            "content_type": body.content_type,
             "recursive_fanout": body.recursive_fanout,
             "enrich_with_metrics": (
                 body.enrich_with_metrics
@@ -388,6 +398,7 @@ def get_session(
         detected_audience=session.get("detected_audience"),
         silos=store.list_topics(session_id),
         site_base_url=session.get("site_base_url"),
+        content_type=(session.get("settings") or {}).get("content_type"),
         publish_config=session.get("publish_config") or {},
         publish_available={
             "github": bool(_s.github_publish_token),
