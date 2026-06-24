@@ -138,7 +138,8 @@ def _process_run(row: dict) -> None:
         if not keyword or not session:
             _finish_run(run_id, "failed", error="cluster has no primary keyword or session missing")
             return
-        # The schedule decides which generator runs (blog post vs Local SEO page).
+        # The schedule decides which generator runs (blog post, Local SEO page,
+        # or service page).
         schedule = schedule_store.get_schedule(schedule_id) if schedule_id else None
         content_type = (schedule or {}).get("content_type", "blog_post")
         location_code = store.session_location_code(session)
@@ -148,6 +149,10 @@ def _process_run(row: dict) -> None:
                     session=session, keyword=keyword,
                     location=(schedule or {}).get("location") or "",
                     location_code=(schedule or {}).get("location_code"),
+                    user_id=row.get("user_id"))
+            elif content_type == "service_page":
+                ok = jobs.generate_service_page_core(
+                    session=session, keyword=keyword,
                     user_id=row.get("user_id"))
             else:
                 ok = jobs.generate_article_core(

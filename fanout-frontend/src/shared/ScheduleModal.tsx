@@ -7,7 +7,7 @@ import {
 } from "./api";
 
 type Mode = "all_at_once" | "drip" | "fixed";
-type ContentType = "blog_post" | "local_seo_page";
+type ContentType = "blog_post" | "local_seo_page" | "service_page";
 
 // M15 — Schedule modal (handoff §9.4). Whole-session ("Schedule all") or a chosen subset
 // (clusterIds). Three modes: all-at-once, drip N/day, or a specific delivery date. Live
@@ -45,6 +45,7 @@ export function ScheduleModal(props: {
   const [location, setLocation] = useState(props.defaultLocation ?? "");
 
   const isLocalSeo = contentType === "local_seo_page";
+  const isServicePage = contentType === "service_page";
 
   const body: ScheduleRequest = {
     mode,
@@ -54,8 +55,9 @@ export function ScheduleModal(props: {
     time_of_day: mode === "drip" || mode === "fixed" ? timeOfDay : undefined,
     timezone,
     content_type: contentType,
-    // Blog posts need a base URL (absolute internal links); Local SEO pages need a target area.
-    site_base_url: isLocalSeo ? undefined : baseUrl.trim() || undefined,
+    // Only blog posts need a base URL (absolute internal links); Local SEO pages
+    // need a target area; service pages are keyword-only.
+    site_base_url: contentType === "blog_post" ? baseUrl.trim() || undefined : undefined,
     location: isLocalSeo ? location.trim() || undefined : undefined,
   };
 
@@ -83,10 +85,11 @@ export function ScheduleModal(props: {
     onError: (e: Error) => alert(e.message),
   });
 
-  // Blog posts need a base URL; Local SEO pages need a target area instead.
-  const missingRequirement = isLocalSeo ? !location.trim() : !baseUrl.trim();
+  // Blog posts need a base URL; Local SEO pages need a target area; service
+  // pages are keyword-only (the client link is enforced server-side).
+  const missingRequirement = isServicePage ? false : isLocalSeo ? !location.trim() : !baseUrl.trim();
   const count = est.data?.count ?? 0;
-  const noun = isLocalSeo ? "page" : "article";
+  const noun = isLocalSeo || isServicePage ? "page" : "article";
   const scope = clusterIds ? `${clusterIds.length} selected ${noun}(s)` : "the whole session";
 
   return (
@@ -108,6 +111,7 @@ export function ScheduleModal(props: {
               {([
                 ["blog_post", "Blog post"],
                 ["local_seo_page", "Local SEO page"],
+                ["service_page", "Service page"],
               ] as [ContentType, string][]).map(([c, label]) => (
                 <button
                   key={c}
@@ -125,9 +129,15 @@ export function ScheduleModal(props: {
                 keyword. Requires this session to be linked to a client with a Google Business Profile.
               </span>
             )}
+            {isServicePage && (
+              <span className="field-hint">
+                Generates conversion-focused suite service pages (brief + writer) for each cluster's
+                keyword. Keyword-only. Requires this session to be linked to a client.
+              </span>
+            )}
           </div>
 
-          {isLocalSeo ? (
+          {isLocalSeo && (
             <label className="field">
               <span className="field-label">Target area / location</span>
               <input
@@ -138,7 +148,8 @@ export function ScheduleModal(props: {
               />
               <span className="field-hint">Required — the city/area each Local SEO page targets.</span>
             </label>
-          ) : (
+          )}
+          {contentType === "blog_post" && (
             <label className="field">
               <span className="field-label">Site base URL</span>
               <input

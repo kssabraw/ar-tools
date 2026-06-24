@@ -36,10 +36,12 @@ class ScheduleBody(BaseModel):
     time_of_day: time | None = None
     timezone: str = "UTC"
     site_base_url: str | None = None            # persisted to the session (links need it)
-    # Which generator each run uses. 'local_seo_page' requires the session to be
-    # linked to a client (GBP) and a target `location`; it produces suite Local
-    # SEO pages via the nlp-api generator instead of the Fanout blog writer.
-    content_type: str = "blog_post"             # blog_post | local_seo_page
+    # Which generator each run uses. 'local_seo_page' needs a client-linked
+    # session + a target `location`. 'service_page' needs a client-linked
+    # session (keyword-only, no location/base URL); it creates a suite
+    # service_page run (service_brief -> service_writer). Both produce
+    # first-class suite artifacts instead of the Fanout blog writer's output.
+    content_type: str = "blog_post"             # blog_post | local_seo_page | service_page
     location: str | None = None                 # local_seo_page: target area
     location_code: int | None = None            # local_seo_page: optional DataForSEO city code
 
@@ -112,10 +114,22 @@ def create_schedule(
     A VA over the $90 batch threshold is refused with `requires_approval` (owner not gated)."""
     session = _require_session(user, session_id)
     is_local_seo = body.content_type == "local_seo_page"
+    is_service_page = body.content_type == "service_page"
     resolved_location: str | None = None
     resolved_location_code: int | None = None
 
-    if is_local_seo:
+    if is_service_page:
+        # Service pages are generated against a client (brand voice / ICP) for a
+        # head commercial query — keyword-only, so no target area and no internal-
+        # link base URL. They create a suite service_page run.
+        if not session.get("client_id"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Service pages need a client. Link this session to a client to "
+                       "schedule them.",
+            )
+        base_url = None
+    elif is_local_seo:
         # Local SEO pages are generated against a client's GBP for a target area —
         # both are required, and there's no internal-link injection so no base URL.
         if not session.get("client_id"):
