@@ -84,22 +84,23 @@ export function GeoGridMap({ grid, centerLat, centerLng, size = MAP_SIZE }: {
       <img src={mapUrl} alt="Geo-grid map" onError={() => setImgError(true)}
         style={{ width: '100%', height: '100%', display: 'block' }} />
       {pins.map((p, i) => {
-        const dim = p.isCenter ? 26 : p.ranked ? 22 : 12
+        const dim = p.isCenter ? 28 : p.ranked ? 22 : 12
         return (
           <div key={i}
             title={p.isCenter ? `Your business${p.ranked ? ` · rank ${p.rank}` : ''}` : p.ranked ? `Rank ${p.rank}` : 'Not ranked here'}
             style={{
               position: 'absolute', left: `${(p.x / MAP_SIZE) * 100}%`, top: `${(p.y / MAP_SIZE) * 100}%`,
               transform: 'translate(-50%, -50%)',
-              zIndex: p.isCenter ? 2 : 1,
+              zIndex: p.isCenter ? 3 : 1,
               width: dim, height: dim, borderRadius: '50%',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               background: rankColor(p.rank), color: '#fff', fontSize: p.isCenter ? 12 : 11, fontWeight: 700, lineHeight: 1,
-              // The centre pin (the business itself) gets an indigo ring + halo so
-              // it stands out from the surrounding rank pins.
-              border: p.isCenter ? '2.5px solid #4f46e5' : '1.5px solid #fff',
+              // The centre pin (the business itself) gets a white separator ring
+              // and a bold SOLID indigo outer ring so it clearly stands out from
+              // the surrounding rank pins.
+              border: p.isCenter ? '2px solid #fff' : '1.5px solid #fff',
               boxShadow: p.isCenter
-                ? '0 0 0 3px rgba(99,102,241,.35), 0 1px 3px rgba(0,0,0,.45)'
+                ? '0 0 0 4px #4f46e5, 0 0 0 6px rgba(99,102,241,.35), 0 1px 4px rgba(0,0,0,.5)'
                 : '0 1px 2px rgba(0,0,0,.35)',
               boxSizing: 'border-box',
             }}>
@@ -133,8 +134,9 @@ function CircleHeatmap({ grid }: { grid: Array<Array<number | null>> | null }) {
               style={{
                 aspectRatio: '1', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 9, fontWeight: 700, background: rankColor(cell), color: ranked ? '#fff' : '#cbd5e1',
-                border: isCenter ? '2px solid #4f46e5' : undefined,
-                boxShadow: isCenter ? '0 0 0 2px rgba(99,102,241,.35)' : undefined,
+                border: isCenter ? '1.5px solid #fff' : undefined,
+                boxShadow: isCenter ? '0 0 0 3px #4f46e5' : undefined,
+                zIndex: isCenter ? 2 : undefined,
                 boxSizing: 'border-box',
               }}>
               {ranked ? cell : ''}
