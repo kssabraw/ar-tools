@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { Client, GbpProfile } from '../lib/types'
+import type { Client, GbpProfile, PageStructureType, PageStructureEntry } from '../lib/types'
 import { ArrowLeft, Check, Image as ImageIcon } from 'lucide-react'
 import { GbpPicker } from '../components/GbpPicker'
 
@@ -20,13 +20,25 @@ interface FormData {
   business_location: string
   gbp_place_id: string | null
   gbp: GbpProfile | null
+  ps_local_landing: string
+  ps_service: string
+  ps_location: string
+  ps_blog_post: string
 }
 
 const empty: FormData = {
   name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
   github_repo: '', github_branch: '', github_content_path: '',
   logo_url: '', gsc_property: '', business_location: '', gbp_place_id: null, gbp: null,
+  ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '',
 }
+
+const PAGE_STRUCTURE_FIELDS: { key: keyof FormData; type: PageStructureType; label: string; placeholder: string; help: string }[] = [
+  { key: 'ps_local_landing', type: 'local_landing', label: 'Local Landing Page URL', placeholder: 'https://acmehvac.com/ac-repair-austin', help: 'A service-in-location landing page. Used by Local SEO page generation.' },
+  { key: 'ps_service', type: 'service', label: 'Service Page URL', placeholder: 'https://acmehvac.com/services/ac-repair', help: 'A core service page. Used by the Service Page writer.' },
+  { key: 'ps_location', type: 'location', label: 'Location Page URL', placeholder: 'https://acmehvac.com/locations/austin', help: 'An area-served / location page. Used by Local SEO page generation.' },
+  { key: 'ps_blog_post', type: 'blog_post', label: 'Blog Post URL', placeholder: 'https://acmehvac.com/blog/why-ac-fails', help: "A representative blog post. The Blog Writer mirrors its opening pattern." },
+]
 
 export function ClientForm() {
   const navigate = useNavigate()
@@ -96,6 +108,10 @@ export function ClientForm() {
         business_location: existing.business_location ?? '',
         gbp_place_id: existing.gbp_place_id,
         gbp: existing.gbp,
+        ps_local_landing: existing.page_structures?.local_landing?.url ?? '',
+        ps_service: existing.page_structures?.service?.url ?? '',
+        ps_location: existing.page_structures?.location?.url ?? '',
+        ps_blog_post: existing.page_structures?.blog_post?.url ?? '',
       })
     }
   }, [existing])
@@ -141,6 +157,12 @@ export function ClientForm() {
         business_location: form.business_location || null,
         gbp_place_id: form.gbp_place_id,
         gbp: form.gbp,
+        page_structure_urls: {
+          local_landing: form.ps_local_landing.trim() || null,
+          service: form.ps_service.trim() || null,
+          location: form.ps_location.trim() || null,
+          blog_post: form.ps_blog_post.trim() || null,
+        },
       }
       if (isEdit) {
         await updateMutation.mutateAsync(payload)
@@ -331,6 +353,32 @@ export function ClientForm() {
         </div>
 
         <div style={sectionStyle}>
+          <h2 style={sectionTitle}>Reference Page Structures</h2>
+          <p style={descStyle}>
+            Optional. Paste one example URL per page type. We scrape and analyze each page's
+            structure — ignoring nav, sidebars, footers, and popups — and store the layout so the
+            writing modules can mirror how this client structures their own pages. We re-analyze a
+            URL whenever you change it.
+          </p>
+          {PAGE_STRUCTURE_FIELDS.map(({ key, type, label, placeholder, help }) => (
+            <div key={type} style={{ marginBottom: 16 }}>
+              <div style={titleRow}>
+                <label style={{ ...labelStyle, margin: 0 }}>{label}</label>
+                {isEdit && <PageStructureStatus entry={existing?.page_structures?.[type]} url={form[key] as string} />}
+              </div>
+              <input
+                type="url"
+                value={form[key] as string}
+                onChange={set(key)}
+                placeholder={placeholder}
+                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', marginTop: 6 }}
+              />
+              <p style={hintStyle}>{help}</p>
+            </div>
+          ))}
+        </div>
+
+        <div style={sectionStyle}>
           <h2 style={sectionTitle}>Google Drive Publishing</h2>
           <p style={descStyle}>
             Optional. Paste this client's Google Drive folder ID to enable one-click publishing of finished articles into their folder.
@@ -402,6 +450,27 @@ export function ClientForm() {
   )
 }
 
+function PageStructureStatus({ entry, url }: { entry?: PageStructureEntry; url: string }) {
+  const trimmed = url.trim()
+  // Pending save: the typed URL differs from what's stored (or nothing stored yet).
+  if (!entry?.url || entry.url !== trimmed) {
+    if (!trimmed) return null
+    return <span style={{ ...psBadge, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0' }}>Analyzes on save</span>
+  }
+  if (entry.status === 'pending')
+    return <span style={{ ...psBadge, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a' }}>Analyzing…</span>
+  if (entry.status === 'complete')
+    return <span style={{ ...psBadge, color: '#166534', background: '#dcfce7', border: '1px solid #bbf7d0' }}>Analyzed</span>
+  return (
+    <span
+      style={{ ...psBadge, color: '#dc2626', background: '#fef2f2', border: '1px solid #fecaca' }}
+      title={entry.error ?? undefined}
+    >
+      Failed
+    </span>
+  )
+}
+
 function ParkedBadge() {
   return (
     <span
@@ -416,6 +485,7 @@ function ParkedBadge() {
 const sectionStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 24, marginBottom: 20 }
 const titleRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }
 const parkedBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
+const psBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
 const sectionTitle: React.CSSProperties = { fontSize: 15, fontWeight: 600, color: '#0f172a', margin: '0 0 4px' }
 const descStyle: React.CSSProperties = { fontSize: 13, color: '#64748b', margin: '0 0 16px', lineHeight: 1.6 }
 const labelStyle: React.CSSProperties = { display: 'block', fontSize: 12, fontWeight: 500, color: '#374151', marginBottom: 6 }

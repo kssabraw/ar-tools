@@ -77,6 +77,7 @@ def _build_intro_user_prompt(
     supporting_data: Optional[str],
     answer_context: Optional[str],
     retry_directive: Optional[str],
+    reference_structure: Optional[str] = None,
 ) -> str:
     parts: list[str] = [
         f"KEYWORD: {keyword}",
@@ -85,6 +86,17 @@ def _build_intro_user_prompt(
     ]
     if scope_statement:
         parts.append(f"SCOPE_STATEMENT: {scope_statement}")
+
+    # Optional: mirror how this client opens their own blog posts. The blog
+    # brief is client-agnostic + globally cached, so the heading structure can't
+    # carry the client's layout; the intro honors the opening pattern here.
+    if reference_structure and reference_structure.strip():
+        parts.append(
+            "\nCLIENT_REFERENCE_STRUCTURE (how this client structures their own "
+            "blog posts — match the OPENING pattern: how they lead in, the first "
+            "few sentences' shape. Do not enumerate the outline; adapt to this topic):"
+        )
+        parts.append(reference_structure.strip())
 
     # Grounding for the opening direct-answer sentence: a digest of what the
     # article actually says (section summaries), so the liftable answer can't
@@ -217,6 +229,7 @@ async def write_intro(
     intro_order: int,
     supporting_data: Optional[str] = None,
     answer_context: Optional[str] = None,
+    reference_structure: Optional[str] = None,
 ) -> ArticleSection:
     """One LLM call + at most one validation retry. Banned-term hits get
     their own retry per Section 4.4.3. Validation failures after the retry
@@ -238,6 +251,7 @@ async def write_intro(
             supporting_data=supporting_data,
             answer_context=answer_context,
             retry_directive=retry_directive,
+            reference_structure=reference_structure,
         )
         try:
             result = await claude_json(INTRO_SYSTEM, user, max_tokens=800, temperature=0.4)

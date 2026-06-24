@@ -75,7 +75,18 @@ export interface Client extends ClientListItem {
   detected_icp: DetectedIcp | null
   differentiators: Differentiator[] | null
   local_seo_page_template_url: string | null
+  page_structures: Record<string, PageStructureEntry> | null
   updated_at: string
+}
+
+export type PageStructureType = 'local_landing' | 'service' | 'location' | 'blog_post'
+
+export interface PageStructureEntry {
+  url: string
+  status: 'pending' | 'complete' | 'failed'
+  error: string | null
+  analysis: Record<string, unknown> | null
+  analyzed_at: string | null
 }
 
 // Organic Rank Tracker (Module #4) — GSC property connection (M1).

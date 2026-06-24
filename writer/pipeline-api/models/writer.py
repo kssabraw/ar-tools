@@ -38,6 +38,12 @@ class ClientContextInput(BaseModel):
     icp_text: str = ""
     website_analysis: Optional[dict[str, Any]] = None
     website_analysis_unavailable: bool = False
+    # Pre-rendered "mirror this layout" block from the client's reference blog
+    # post (clients.page_structures.blog_post). The blog brief is client-agnostic
+    # and globally cached, so the heading structure can't carry client-specific
+    # layout; instead the Writer uses this as soft guidance for the opening
+    # pattern. Optional — None/absent leaves writing behavior unchanged.
+    reference_page_structure: Optional[str] = None
 
 
 class WriterRequest(BaseModel):

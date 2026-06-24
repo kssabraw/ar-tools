@@ -76,6 +76,9 @@ def create_run_and_snapshot(
             "icp_format": detect_format(icp_text, "text/plain"),
             "website_analysis": website_analysis,
             "website_analysis_unavailable": website_unavailable,
+            # Reference page structures the writing modules mirror, frozen at
+            # run-creation time alongside the rest of the client context.
+            "page_structures": client.get("page_structures") or {},
         }
     ).execute()
 

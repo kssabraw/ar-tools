@@ -326,6 +326,18 @@ async def generate_page(
     template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
     if template_url:
         payload["page_template_url"] = template_url
+    else:
+        # No explicit template — mirror the client's own local page layout from
+        # the pre-analyzed reference structures (local landing preferred, else
+        # location). Avoids re-scraping a template URL at generate time.
+        from services.page_structure_render import render_reference_structure
+
+        structures = client.get("page_structures") or {}
+        reference = render_reference_structure(
+            structures.get("local_landing"), "local_landing"
+        ) or render_reference_structure(structures.get("location"), "location")
+        if reference:
+            payload["reference_page_structure"] = reference
     serp = await _get_or_compute_analysis(
         keyword, location, location_code, force_refresh, user_id, required=False
     )

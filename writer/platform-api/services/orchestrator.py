@@ -13,6 +13,7 @@ import httpx
 
 from config import settings
 from db.supabase_client import get_supabase
+from services.page_structure_render import render_reference_structure
 
 logger = logging.getLogger(__name__)
 
@@ -533,6 +534,10 @@ def _build_writer_payload(
     icp_format = snapshot.get("icp_format") or "text"
     website_analysis = snapshot.get("website_analysis")
     website_unavailable = snapshot.get("website_analysis_unavailable", False)
+    # Blog posts mirror the client's own blog-post layout when one is configured.
+    reference_page_structure = render_reference_structure(
+        (snapshot.get("page_structures") or {}).get("blog_post"), "blog_post"
+    )
 
     return {
         "run_id": run["id"],
@@ -547,6 +552,7 @@ def _build_writer_payload(
             "icp_format": icp_format,
             "website_analysis": website_analysis,
             "website_analysis_unavailable": website_unavailable,
+            "reference_page_structure": reference_page_structure,
         },
     }
 
@@ -579,6 +585,10 @@ def _build_service_brief_payload(run: dict, snapshot: dict) -> dict:
             "brand_voice_text": snapshot.get("brand_guide_text") or "",
             "icp_text": snapshot.get("icp_text") or "",
             "website_analysis": snapshot.get("website_analysis"),
+            # Service pages mirror the client's own service-page layout.
+            "reference_page_structure": render_reference_structure(
+                (snapshot.get("page_structures") or {}).get("service"), "service"
+            ),
         },
     }
 

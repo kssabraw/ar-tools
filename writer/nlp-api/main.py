@@ -5064,6 +5064,11 @@ class GeneratePageRequest(BaseModel):
     # still applying the AEO writing rules + JSON-LD schema.
     page_template_url: Optional[str] = None
     page_template_html: Optional[str] = None
+    # Pre-analyzed reference page structure (outline + summary) the suite already
+    # scraped + stored for the client (clients.page_structures). Used to mirror
+    # the client's own local-landing / location page layout WITHOUT re-scraping a
+    # template URL here. Lower precedence than page_template_url/html.
+    reference_page_structure: Optional[str] = None
     # Whether to run competitor SERP analysis when no cached analysis is
     # supplied. Defaults to True — the suite always runs analysis first.
     # platform-api only passes False as a degraded fallback (its own analysis
@@ -5261,6 +5266,20 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                     f"{_outline}"
                 )
                 logger.info(f"generate-page: mirroring template structure ({_outline.count(chr(10)) + 1} headings)")
+        elif (body.reference_page_structure or "").strip():
+            # No explicit template URL/HTML, but the suite supplied a pre-analyzed
+            # reference structure for this client's page type — mirror it.
+            template_text = (
+                "STRUCTURE TO MIRROR — OVERRIDES THE DEFAULT 13-SECTION STRUCTURE:\n"
+                "Ignore the default section structure in the system prompt. Instead, match the "
+                "section layout, order, and heading hierarchy of the client's reference page "
+                "structure below — adapt all wording to this business, keyword, and city. STILL "
+                "apply every AEO writing rule (answer-first, FAQ with 4–7 entries, entity triplets, "
+                "geo signals, section length) and STILL emit the JSON-LD schema block. "
+                "Client reference page structure:\n"
+                f"{body.reference_page_structure.strip()}"
+            )
+            logger.info("generate-page: mirroring client reference page structure")
 
         await q.put({"step": "progress", "progress": 60, "message": "Building SEO checklist…"})
         seo_checklist = await _build_seo_checklist(

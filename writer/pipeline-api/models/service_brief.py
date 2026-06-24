@@ -54,6 +54,11 @@ class ClientContextInput(BaseModel):
     website_analysis: Optional[dict[str, Any]] = None
     gbp: Optional[dict[str, Any]] = None
     business_name: Optional[str] = None
+    # Pre-rendered "mirror this layout" block from the client's reference
+    # service page (clients.page_structures.service). Optional — when present,
+    # synthesis is told to match its section layout/order. See platform-api's
+    # services/page_structure_render.render_reference_structure.
+    reference_page_structure: Optional[str] = None
 
 
 class ServiceBriefRequest(BaseModel):

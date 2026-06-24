@@ -10,10 +10,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
-from models.clients import ClientCreateRequest, ClientDetail, ClientListItem, ClientUpdateRequest
+from models.clients import (
+    ClientCreateRequest,
+    ClientDetail,
+    ClientListItem,
+    ClientUpdateRequest,
+    PageStructureUrls,
+)
 from services import brand_voice_service, icp_service
 from services.file_parser import detect_format
 from services.gbp_service import get_business_details, resolve_business, search_businesses
+from services.page_structure_scraper import PAGE_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +36,55 @@ def _enqueue_website_scrape(client_id: str, website_url: str) -> None:
             "payload": {"website_url": website_url, "client_id": client_id},
         }
     ).execute()
+
+
+def _enqueue_page_structure_scrape(client_id: str, page_type: str, url: str) -> None:
+    supabase = get_supabase()
+    supabase.table("async_jobs").insert(
+        {
+            "job_type": "page_structure_scrape",
+            "entity_id": client_id,
+            "payload": {"client_id": client_id, "page_type": page_type, "url": url},
+        }
+    ).execute()
+
+
+def _sync_page_structures(
+    existing: dict, urls: Optional[PageStructureUrls]
+) -> tuple[dict, list[tuple[str, str]]]:
+    """Diff submitted reference URLs against the stored structures.
+
+    Returns (merged_structures, to_enqueue) where to_enqueue is the list of
+    (page_type, url) whose page must be (re)scraped. Behavior per page type:
+      - new/changed URL  → mark pending + clear stale analysis + enqueue scrape
+      - unchanged URL    → keep the stored entry (don't re-scrape)
+      - cleared (empty)  → drop the entry entirely
+    A None `urls` (field omitted) leaves the structures untouched.
+    """
+    merged = dict(existing or {})
+    to_enqueue: list[tuple[str, str]] = []
+    if urls is None:
+        return merged, to_enqueue
+
+    submitted = urls.model_dump()
+    for page_type in PAGE_TYPES:
+        new_url = (submitted.get(page_type) or "").strip()
+        current = merged.get(page_type) or {}
+        current_url = (current.get("url") or "").strip()
+        if not new_url:
+            merged.pop(page_type, None)
+            continue
+        if new_url == current_url and current.get("status") == "complete":
+            continue  # unchanged + already analyzed — leave as-is
+        merged[page_type] = {
+            "url": new_url,
+            "status": "pending",
+            "error": None,
+            "analysis": None,
+            "analyzed_at": None,
+        }
+        to_enqueue.append((page_type, new_url))
+    return merged, to_enqueue
 
 
 def _resolve_file_fields(
@@ -168,6 +224,11 @@ async def create_client(
         row["gbp_place_id"] = body.gbp_place_id
     if body.gbp is not None:
         row["gbp"] = body.gbp.model_dump()
+    # Reference page structures: seed the pending entries so the row reflects the
+    # configured URLs immediately; the scrape jobs are enqueued after insert.
+    page_structures, ps_to_enqueue = _sync_page_structures({}, body.page_structure_urls)
+    if page_structures:
+        row["page_structures"] = page_structures
     # Converge the legacy free-text brand guide into the canonical brand_voice
     # (Option A) so a brand-new client's guide is usable by both consumers.
     brand_voice = brand_voice_service.merge_raw_text(None, brand_text)
@@ -180,6 +241,8 @@ async def create_client(
     client = result.data[0]
 
     _enqueue_website_scrape(client["id"], body.website_url)
+    for page_type, url in ps_to_enqueue:
+        _enqueue_page_structure_scrape(client["id"], page_type, url)
     logger.info("client_created", extra={"client_id": client["id"], "user_id": auth["user_id"]})
 
     return ClientDetail(**client)
@@ -261,12 +324,22 @@ async def update_client(
     if body.gbp is not None:
         updates["gbp"] = body.gbp.model_dump()
 
+    # Reference page structures: diff submitted URLs vs stored, enqueue changed.
+    ps_to_enqueue: list[tuple[str, str]] = []
+    if body.page_structure_urls is not None:
+        merged_ps, ps_to_enqueue = _sync_page_structures(
+            existing.get("page_structures") or {}, body.page_structure_urls
+        )
+        updates["page_structures"] = merged_ps
+
     result = supabase.table("clients").update(updates).eq("id", str(client_id)).execute()
     if not result.data:
         raise HTTPException(status_code=404, detail="client_not_found")
 
     if website_changed:
         _enqueue_website_scrape(str(client_id), body.website_url)
+    for page_type, url in ps_to_enqueue:
+        _enqueue_page_structure_scrape(str(client_id), page_type, url)
 
     logger.info("client_updated", extra={"client_id": str(client_id), "user_id": auth["user_id"]})
     return ClientDetail(**result.data[0])

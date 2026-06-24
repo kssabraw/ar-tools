@@ -694,6 +694,10 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         # Ground the opening direct-answer sentence in what the article
         # actually establishes, so the liftable answer can't drift from the body.
         answer_context="\n".join(f"- {s}" for s in section_summaries[:8]) or None,
+        # Mirror the client's own blog-post opening pattern when configured.
+        reference_structure=(
+            req.client_context.reference_page_structure if req.client_context else None
+        ),
     )
     # Insert intro right after H1 + (optional) h1-enrichment so the
     # render order is: H1 → enrichment → intro → body... → conclusion
