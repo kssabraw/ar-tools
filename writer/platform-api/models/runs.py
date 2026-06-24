@@ -144,6 +144,25 @@ class RunCreateResponse(BaseModel):
     status: str
 
 
+# Max keywords per bulk request. Bulk runs are dispatched as sequential
+# background tasks (no concurrency burst); larger paced batches should use the
+# Topic Fanout content scheduler.
+BULK_RUNS_MAX = 20
+
+
+class RunBulkCreateRequest(BaseModel):
+    client_id: UUID
+    content_type: Literal["blog_post", "service_page"] = "service_page"
+    # One head query per item. Blanks/dupes are dropped server-side.
+    keywords: list[str] = Field(..., min_length=1, max_length=BULK_RUNS_MAX)
+
+
+class RunBulkCreateResponse(BaseModel):
+    run_ids: list[UUID]
+    created: int
+    skipped: int = 0
+
+
 class RunPollResponse(BaseModel):
     run_id: UUID
     status: str
