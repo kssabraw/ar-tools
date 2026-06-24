@@ -1,4 +1,5 @@
-import { useParams, Link } from 'react-router-dom'
+import { useEffect } from 'react'
+import { useParams, useSearchParams, Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Printer, MapPin } from 'lucide-react'
 import { api } from '../lib/api'
@@ -18,14 +19,22 @@ const fmtPct = (v: number | null) => (v == null ? '—' : `${v}%`)
 export function MapsReport() {
   const { id } = useParams<{ id: string }>()
   const clientId = id as string
+  // Optional per-keyword focus + auto-print, driven by the "Download report"
+  // button on a single keyword's analysis (opens this page filtered + printing).
+  const [params] = useSearchParams()
+  const focusKeyword = params.get('keyword')
+  const autoPrint = params.get('print') === '1'
+  const scanId = params.get('scan_id')  // a specific past scan, else the latest
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', clientId],
     queryFn: () => api.get<Client>(`/clients/${clientId}`),
   })
   const { data: latest, error } = useQuery<MapsScanDetail>({
-    queryKey: ['maps-latest', clientId],
-    queryFn: () => api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest`),
+    queryKey: scanId ? ['maps-scan', scanId] : ['maps-latest', clientId],
+    queryFn: () => scanId
+      ? api.get<MapsScanDetail>(`/maps-scans/${scanId}`)
+      : api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest`),
     retry: false,
   })
   const { data: trends } = useQuery<MapsTrendsResponse>({
@@ -33,7 +42,18 @@ export function MapsReport() {
     queryFn: () => api.get<MapsTrendsResponse>(`/clients/${clientId}/maps/trends`),
   })
 
-  const results: MapsScanResultRow[] = latest?.results ?? []
+  const allResults: MapsScanResultRow[] = latest?.results ?? []
+  // When focused on one keyword, the whole report (KPIs, competitors, detail)
+  // narrows to that keyword so the PDF is a single-keyword deliverable.
+  const results = focusKeyword ? allResults.filter(r => r.keyword === focusKeyword) : allResults
+
+  // Auto-open the print dialog once the focused report has rendered.
+  useEffect(() => {
+    if (!autoPrint || !latest || results.length === 0) return
+    const t = setTimeout(() => window.print(), 700)
+    return () => clearTimeout(t)
+  }, [autoPrint, latest, results.length])
+
   const withPins = results.filter(r => r.total_pins > 0)
   const meanPct = (sel: (r: MapsScanResultRow) => number) =>
     withPins.length ? Math.round(withPins.reduce((s, r) => s + (sel(r) / r.total_pins) * 100, 0) / withPins.length) : null
@@ -104,7 +124,9 @@ export function MapsReport() {
             )}
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 22, fontWeight: 700, color: '#0f172a' }}>{client?.name ?? 'Client'}</div>
-              <div style={{ fontSize: 14, color: '#6366f1', fontWeight: 600 }}>Local Maps Visibility Report</div>
+              <div style={{ fontSize: 14, color: '#6366f1', fontWeight: 600 }}>
+                Local Maps Visibility Report{focusKeyword ? ` — “${focusKeyword}”` : ''}
+              </div>
             </div>
             <div style={{ textAlign: 'right', fontSize: 12, color: '#64748b' }}>
               <div>{fmtDate(new Date())}</div>
