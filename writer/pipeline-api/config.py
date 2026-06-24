@@ -100,6 +100,19 @@ class Settings(BaseSettings):
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 
+    # ------------------------------------------------------------
+    # Service Page Brief Generator (PRD §7 - model tiering + cache)
+    # ------------------------------------------------------------
+    # Cheap tier for per-page competitor teardown extraction; strong tier
+    # reserved for the synthesis/reconciliation step. Overridable via env so
+    # the tiering can be tuned without a code change.
+    service_brief_extraction_model: str = "claude-haiku-4-5-20251001"
+    service_brief_synthesis_model: str = "claude-sonnet-4-6"
+    # Research-bundle cache TTL (keyword + location_code; client-agnostic). The
+    # competitor SERP for a service doesn't move much week-to-week, so a 7-day
+    # window pays for itself while synthesis stays per-client.
+    service_brief_cache_ttl_days: int = 7
+
     # Writer §4 - per-section term cap, bucket-aware. The section prompt
     # sends this many of each (entities, related keywords, keyword
     # variants) from the reconciled SIE pool to each H2 group's LLM
