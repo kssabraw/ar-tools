@@ -112,6 +112,8 @@ def create_schedule(
     A VA over the $90 batch threshold is refused with `requires_approval` (owner not gated)."""
     session = _require_session(user, session_id)
     is_local_seo = body.content_type == "local_seo_page"
+    resolved_location: str | None = None
+    resolved_location_code: int | None = None
 
     if is_local_seo:
         # Local SEO pages are generated against a client's GBP for a target area —
@@ -127,6 +129,19 @@ def create_schedule(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A target area / location is required for Local SEO pages.",
             )
+        # Validate + canonicalize the area now (not per-run), so a typo / unrecognized
+        # city fails fast here — with suggestions — instead of silently failing each
+        # scheduled run minutes later. Reuses the suite's resolver (the same one the
+        # single-page Local SEO form uses), keyed to the client's country.
+        import asyncio
+
+        from services import locations_service
+        from services.local_seo_service import _get_client
+
+        client = _get_client(session["client_id"])
+        resolved_location, resolved_location_code = asyncio.run(
+            locations_service.resolve_location(client, body.location.strip(), body.location_code)
+        )
         base_url = None
     else:
         # Base URL must be available (links are absolute), but don't persist it until the whole
@@ -176,7 +191,7 @@ def create_schedule(
         session_id=session_id, user_id=session["user_id"], mode=body.mode, runs=runs,
         per_day=body.per_day, start_date=body.start_date, time_of_day=body.time_of_day,
         tz_name=body.timezone, content_type=body.content_type,
-        location=(body.location or "").strip() or None, location_code=body.location_code,
+        location=resolved_location, location_code=resolved_location_code,
     )
     logger.info("schedule_created", extra={"event": "schedule_created", "session_id": session_id,
                                            "mode": body.mode, "runs": len(runs), "skipped": skipped})
