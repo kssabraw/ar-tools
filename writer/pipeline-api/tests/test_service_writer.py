@@ -160,3 +160,18 @@ def test_jsonld_service_only_when_no_faqs():
     out = build_jsonld(service="Drain Cleaning", primary_query="drain cleaning", brand_name="Acme", faqs=[])
     assert '"Service"' in out
     assert '"FAQPage"' not in out
+
+
+def test_coerce_blocks_tolerates_bad_level():
+    """A non-numeric `level` from the LLM must not discard the section's blocks."""
+    from modules.service_writer.generation import _coerce_blocks
+
+    blocks = _coerce_blocks([
+        {"type": "subheading", "text": "Why us", "level": "three"},  # bad level
+        {"type": "paragraph", "text": "Fast, reliable service."},
+        {"type": "list", "items": ["24/7", "Licensed"]},
+        {"type": "weird", "text": "falls back to paragraph"},  # unknown type
+    ])
+    assert len(blocks) == 4
+    assert blocks[0].type == "subheading" and blocks[0].level == 3  # safe default
+    assert blocks[3].type == "paragraph"
