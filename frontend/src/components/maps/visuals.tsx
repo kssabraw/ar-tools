@@ -62,7 +62,7 @@ export function GeoGridMap({ grid, centerLat, centerLng, size = MAP_SIZE }: {
 
   if (!mapUrl || imgError) return <CircleHeatmap grid={grid} />
 
-  const pins: Array<{ x: number; y: number; rank: number | null; ranked: boolean }> = []
+  const pins: Array<{ x: number; y: number; rank: number | null; ranked: boolean; isCenter: boolean }> = []
   if (grid && centerLat != null && centerLng != null) {
     const c = (n - 1) / 2
     const radiusSq = (n / 2) ** 2
@@ -72,7 +72,9 @@ export function GeoGridMap({ grid, centerLat, centerLng, size = MAP_SIZE }: {
         const { lat, lng } = cellLatLng(row, col, n, centerLat, centerLng)
         const { x, y } = projectToPixel(lat, lng, centerLat, centerLng, zoom)
         const cell = grid[row] && grid[row][col] != null ? grid[row][col] : null
-        pins.push({ x, y, rank: cell, ranked: typeof cell === 'number' && cell >= 1 })
+        // The dead-centre cell is the business's own location (n is odd → exact).
+        const isCenter = Number.isInteger(c) && row === c && col === c
+        pins.push({ x, y, rank: cell, ranked: typeof cell === 'number' && cell >= 1, isCenter })
       }
     }
   }
@@ -81,19 +83,31 @@ export function GeoGridMap({ grid, centerLat, centerLng, size = MAP_SIZE }: {
     <div style={{ position: 'relative', width: '100%', maxWidth: size, aspectRatio: '1 / 1', borderRadius: 8, border: '1px solid #e2e8f0', overflow: 'hidden' }}>
       <img src={mapUrl} alt="Geo-grid map" onError={() => setImgError(true)}
         style={{ width: '100%', height: '100%', display: 'block' }} />
-      {pins.map((p, i) => (
-        <div key={i} title={p.ranked ? `Rank ${p.rank}` : 'Not ranked here'}
-          style={{
-            position: 'absolute', left: `${(p.x / MAP_SIZE) * 100}%`, top: `${(p.y / MAP_SIZE) * 100}%`,
-            transform: 'translate(-50%, -50%)',
-            width: p.ranked ? 22 : 12, height: p.ranked ? 22 : 12, borderRadius: '50%',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: rankColor(p.rank), color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: 1,
-            border: '1.5px solid #fff', boxShadow: '0 1px 2px rgba(0,0,0,.35)', boxSizing: 'border-box',
-          }}>
-          {p.ranked ? p.rank : ''}
-        </div>
-      ))}
+      {pins.map((p, i) => {
+        const dim = p.isCenter ? 28 : p.ranked ? 22 : 12
+        return (
+          <div key={i}
+            title={p.isCenter ? `Your business${p.ranked ? ` · rank ${p.rank}` : ''}` : p.ranked ? `Rank ${p.rank}` : 'Not ranked here'}
+            style={{
+              position: 'absolute', left: `${(p.x / MAP_SIZE) * 100}%`, top: `${(p.y / MAP_SIZE) * 100}%`,
+              transform: 'translate(-50%, -50%)',
+              zIndex: p.isCenter ? 3 : 1,
+              width: dim, height: dim, borderRadius: '50%',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: rankColor(p.rank), color: '#fff', fontSize: p.isCenter ? 12 : 11, fontWeight: 700, lineHeight: 1,
+              // The centre pin (the business itself) gets a white separator ring
+              // and a bold SOLID indigo outer ring so it clearly stands out from
+              // the surrounding rank pins.
+              border: p.isCenter ? '2px solid #fff' : '1.5px solid #fff',
+              boxShadow: p.isCenter
+                ? '0 0 0 4px #4f46e5, 0 0 0 6px rgba(99,102,241,.35), 0 1px 4px rgba(0,0,0,.5)'
+                : '0 1px 2px rgba(0,0,0,.35)',
+              boxSizing: 'border-box',
+            }}>
+            {p.ranked ? p.rank : ''}
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -113,11 +127,17 @@ function CircleHeatmap({ grid }: { grid: Array<Array<number | null>> | null }) {
           if (!inCircle(ri, ci)) return <div key={`${ri}-${ci}`} />
           const cell = (grid[ri] && grid[ri][ci] != null) ? grid[ri][ci] : null
           const ranked = typeof cell === 'number' && cell >= 1
+          const isCenter = Number.isInteger(center) && ri === center && ci === center
           return (
-            <div key={`${ri}-${ci}`} title={ranked ? `Rank ${cell}` : 'Not ranked here'}
+            <div key={`${ri}-${ci}`}
+              title={isCenter ? `Your business${ranked ? ` · rank ${cell}` : ''}` : ranked ? `Rank ${cell}` : 'Not ranked here'}
               style={{
                 aspectRatio: '1', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
                 fontSize: 9, fontWeight: 700, background: rankColor(cell), color: ranked ? '#fff' : '#cbd5e1',
+                border: isCenter ? '1.5px solid #fff' : undefined,
+                boxShadow: isCenter ? '0 0 0 3px #4f46e5' : undefined,
+                zIndex: isCenter ? 2 : undefined,
+                boxSizing: 'border-box',
               }}>
               {ranked ? cell : ''}
             </div>
