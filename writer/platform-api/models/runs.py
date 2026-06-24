@@ -19,6 +19,13 @@ class RunCreateRequest(BaseModel):
     # the user explicitly chose "regenerate" on the cache-decision
     # modal.
     brief_force_refresh: bool = False
+    # Content type. 'blog_post' (default) runs the 5-module blog pipeline;
+    # 'service_page' runs service_brief -> service_writer. For service_page,
+    # `keyword` is the head commercial query; `service` defaults to it.
+    content_type: Literal["blog_post", "service_page"] = "blog_post"
+    service: Optional[str] = Field(default=None, max_length=200)
+    location: Optional[str] = Field(default=None, max_length=150)
+    location_code: Optional[int] = None
 
 
 class RunListItem(BaseModel):
@@ -27,6 +34,7 @@ class RunListItem(BaseModel):
     title: Optional[str] = None
     client_id: UUID
     client_name: str
+    content_type: str = "blog_post"
     status: str
     sie_cache_hit: Optional[bool] = None
     total_cost_usd: Optional[float] = None
@@ -106,6 +114,7 @@ class RunDetail(BaseModel):
     title: Optional[str] = None
     h1: Optional[str] = None
     client_id: UUID
+    content_type: str = "blog_post"
     status: str
     sie_cache_hit: Optional[bool] = None
     error_stage: Optional[str] = None
