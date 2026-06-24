@@ -361,7 +361,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     section_budgets = allocate_budget(heading_structure, word_budget)
 
     # ---- Brand voice distillation + reconciliation in parallel ----
-    schema_effective: SchemaVersion = "1.8"
+    schema_effective: SchemaVersion = "1.9"
     brand_voice_card: Optional[BrandVoiceCard] = None
     filtered_terms = FilteredSIETerms()
     brand_conflict_log: list[BrandConflictEntry] = []
@@ -369,7 +369,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
 
     if req.client_context is None:
         # v1.4 fallback path
-        schema_effective = "1.8-no-context"
+        schema_effective = "1.9-no-context"
         # Build a flat filtered terms list (all keep)
         from .reconciliation import _all_keep, _avoid_terms_from_sie, _required_terms_from_sie
         filtered_terms = _all_keep(
@@ -384,7 +384,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         no_website = ctx.website_analysis_unavailable
 
         if brand_empty and icp_empty and no_website:
-            schema_effective = "1.8-degraded"
+            schema_effective = "1.9-degraded"
             from .reconciliation import _all_keep, _avoid_terms_from_sie, _required_terms_from_sie
             filtered_terms = _all_keep(
                 _required_terms_from_sie(sie),
@@ -414,6 +414,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
                 brand_guide_provided=not brand_empty,
                 icp_provided=not icp_empty,
                 website_analysis_used=not no_website,
+                reference_structure_used=bool((ctx.reference_page_structure or "").strip()),
                 schema_version_effective=schema_effective,
             )
 

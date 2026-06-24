@@ -89,13 +89,11 @@ def _build_intro_user_prompt(
 
     # Optional: mirror how this client opens their own blog posts. The blog
     # brief is client-agnostic + globally cached, so the heading structure can't
-    # carry the client's layout; the intro honors the opening pattern here.
+    # carry the client's layout; the intro honors the opening pattern here. The
+    # block is already opening-scoped (rendered with mode="opening") — pass it
+    # through under a clear header.
     if reference_structure and reference_structure.strip():
-        parts.append(
-            "\nCLIENT_REFERENCE_STRUCTURE (how this client structures their own "
-            "blog posts — match the OPENING pattern: how they lead in, the first "
-            "few sentences' shape. Do not enumerate the outline; adapt to this topic):"
-        )
+        parts.append("")  # blank line before the block
         parts.append(reference_structure.strip())
 
     # Grounding for the opening direct-answer sentence: a digest of what the

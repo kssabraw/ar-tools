@@ -170,7 +170,7 @@ async def _run_pipeline(request, *, local_pack=False, cached_bundle=None):
 async def test_happy_path_complete_brief():
     result, _ = await _run_pipeline(_request([{"claim": "24-hour response guarantee", "mechanism": "on-call crews", "type": "speed"}]))
 
-    assert result.metadata.schema_version == "1.0"
+    assert result.metadata.schema_version == "1.1"
     assert result.strategy.positioning_angle.strip()
     assert result.strategy.primary_query == "emergency drain cleaning austin"
     assert result.architecture, "architecture must have sections"

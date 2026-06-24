@@ -13,7 +13,12 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-SchemaVersion = Literal["1.8", "1.8-no-context", "1.8-degraded"]
+# 1.9: Writer consumes client_context.reference_page_structure (blog-post layout
+# mirroring in the intro). 1.8 variants kept for backward compatibility.
+SchemaVersion = Literal[
+    "1.9", "1.9-no-context", "1.9-degraded",
+    "1.8", "1.8-no-context", "1.8-degraded",
+]
 ArticleLevel = Literal["H1", "H2", "H3", "none"]
 ArticleType = Literal[
     "content", "faq-header", "faq-question", "conclusion", "h1-enrichment", "title", "intro", "key-takeaways",
@@ -96,7 +101,8 @@ class ClientContextSummary(BaseModel):
     brand_guide_provided: bool = False
     icp_provided: bool = False
     website_analysis_used: bool = False
-    schema_version_effective: SchemaVersion = "1.8"
+    reference_structure_used: bool = False
+    schema_version_effective: SchemaVersion = "1.9"
 
 
 # ---- Article output ----
@@ -232,7 +238,7 @@ class WriterMetadata(BaseModel):
     headings_entity_rewrites_applied: int = 0
     headings_entity_violation_count: int = 0
     headings_entity_violations: list[dict] = []
-    schema_version: SchemaVersion = "1.8"
+    schema_version: SchemaVersion = "1.9"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0
 

@@ -123,5 +123,114 @@ def test_sync_page_structures():
     assert enq5 == []
 
 
+def test_render_full_includes_replication_checklist():
+    out = render_reference_structure(_complete_entry(), "service", mode="full")
+    assert out is not None
+    assert "Replication checklist:" in out
+    # section_count from elements drives an explicit count directive
+    assert "3 main" in out
+    # element flags become a "include the same blocks" directive
+    assert "FAQ" in out
+
+
+def test_render_opening_mode_omits_outline():
+    out = render_reference_structure(_complete_entry(), "blog_post", mode="opening")
+    assert out is not None
+    assert "REFERENCE OPENING" in out
+    assert "Opening pattern: direct answer" in out
+    # The opening block must NOT enumerate the full outline.
+    assert "Outline:" not in out
+    assert "Why it matters" not in out
+
+
 def test_page_types_constant():
     assert set(PAGE_TYPES) == {"local_landing", "service", "location", "blog_post"}
+
+
+# ── page_structure_eval (structural-fidelity scoring) ───────────────────────
+
+def test_extract_outline_from_html():
+    from services.page_structure_eval import extract_outline_from_html
+
+    html = """
+    <article>
+      <h1>AC Repair in Austin</h1>
+      <p>Direct answer paragraph.</p>
+      <h2>Our Services</h2>
+      <ul><li>Repair</li><li>Install</li></ul>
+      <h2>Pricing</h2>
+      <table><tr><td>Service</td><td>Cost</td></tr></table>
+      <h2>Frequently Asked Questions</h2>
+      <p>Q and A.</p>
+    </article>
+    """
+    analysis = extract_outline_from_html(html)
+    levels = [it["level"] for it in analysis["outline"]]
+    assert levels == ["H1", "H2", "H2", "H2"]
+    assert analysis["elements"]["section_count"] == 3
+    assert analysis["elements"]["has_lists"] is True
+    assert analysis["elements"]["has_table"] is True
+    assert analysis["elements"]["has_faq"] is True
+
+
+def test_extract_outline_from_markdown():
+    from services.page_structure_eval import extract_outline_from_markdown
+
+    md = (
+        "# Title\n\nLead paragraph.\n\n"
+        "## Section One\n\n- a\n- b\n\n"
+        "## Section Two\n\n| h | h |\n| --- | --- |\n| x | y |\n\n"
+        "## FAQ\n\nQuestions.\n"
+    )
+    analysis = extract_outline_from_markdown(md)
+    assert analysis["elements"]["section_count"] == 3
+    assert analysis["elements"]["has_lists"] is True
+    assert analysis["elements"]["has_table"] is True
+    assert analysis["elements"]["has_faq"] is True
+
+
+def test_score_identical_structure_is_high():
+    from services.page_structure_eval import extract_outline_from_html, score_structural_fidelity
+
+    html = """
+    <article>
+      <h1>T</h1><p>p</p>
+      <h2>One</h2><ul><li>x</li></ul>
+      <h2>Two</h2><table><tr><td>a</td></tr></table>
+      <h2>Frequently Asked Questions</h2><p>q</p>
+    </article>
+    """
+    analysis = extract_outline_from_html(html)
+    result = score_structural_fidelity(analysis, analysis)
+    assert result["composite"] >= 95.0
+    assert result["dimensions"]["section_count"] == 100.0
+
+
+def test_score_divergent_structure_is_lower():
+    from services.page_structure_eval import (
+        extract_outline_from_html,
+        extract_outline_from_markdown,
+        score_structural_fidelity,
+    )
+
+    reference = extract_outline_from_html(
+        "<article><h1>T</h1><p>p</p>"
+        "<h2>One</h2><ul><li>x</li></ul>"
+        "<h2>Two</h2><table><tr><td>a</td></tr></table>"
+        "<h2>Frequently Asked Questions</h2><p>q</p></article>"
+    )
+    # Generated page: fewer sections, no list/table/FAQ.
+    generated = extract_outline_from_markdown("# T\n\njust one paragraph and nothing else\n")
+    result = score_structural_fidelity(reference, generated)
+    assert result["composite"] < 60.0
+    assert any("missing" in n for n in result["notes"])
+
+
+def test_score_accepts_full_page_structures_entry():
+    from services.page_structure_eval import extract_outline_from_html, score_structural_fidelity
+
+    gen = extract_outline_from_html("<article><h1>T</h1><h2>A</h2><p>x</p></article>")
+    # A full entry (with status/analysis wrapper) is unwrapped automatically.
+    entry = {"status": "complete", "analysis": gen}
+    result = score_structural_fidelity(entry, gen)
+    assert result["composite"] >= 95.0
