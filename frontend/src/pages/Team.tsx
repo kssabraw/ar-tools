@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type { TeamUser } from '../lib/types'
-import { UserPlus, Trash2, KeyRound, Mail, Check, X } from 'lucide-react'
+import { UserPlus, Trash2, KeyRound, Mail, Check, X, Shield } from 'lucide-react'
 
 function roleLabel(role: TeamUser['role']): string {
   return role === 'admin' ? 'Admin' : 'VA'
@@ -20,6 +20,7 @@ export function Team() {
 
   const [inviteEmail, setInviteEmail] = useState('')
   const [removeId, setRemoveId] = useState<string | null>(null)
+  const [roleId, setRoleId] = useState<string | null>(null)
   const [pwOpenId, setPwOpenId] = useState<string | null>(null)
   const [pwValue, setPwValue] = useState('')
   // Transient confirmation for actions that don't change the list (reset/set pw).
@@ -57,6 +58,16 @@ export function Team() {
     onError: (e: Error) => setError(e.message),
   })
 
+  const roleMutation = useMutation({
+    mutationFn: ({ id, role }: { id: string; role: TeamUser['role'] }) =>
+      api.patch(`/users/${id}/role`, { role }),
+    onSuccess: () => {
+      setRoleId(null)
+      qc.invalidateQueries({ queryKey: ['users'] })
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
   const resetMutation = useMutation({
     mutationFn: (id: string) => api.post(`/users/${id}/password-reset`, { redirect_to: PW_REDIRECT }),
     onSuccess: (_d, id) => showFlash(id, 'Reset email sent'),
@@ -81,7 +92,7 @@ export function Team() {
       <div style={{ marginBottom: 8 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Team</h1>
         <p style={{ color: '#64748b', fontSize: 13, margin: '6px 0 0' }}>
-          Invite VAs, remove access, and help them reset their passwords.
+          Invite VAs, change roles, remove access, and help them reset their passwords.
         </p>
       </div>
 
@@ -207,6 +218,30 @@ export function Team() {
                           <X size={14} />
                         </button>
                       </div>
+                    ) : roleId === u.id ? (
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <span style={{ fontSize: 12, color: '#475569' }}>
+                          {u.role === 'admin'
+                            ? `Change ${u.email} to VA?`
+                            : `Make ${u.email} an admin?`}
+                        </span>
+                        <button
+                          onClick={() =>
+                            roleMutation.mutate({
+                              id: u.id,
+                              role: u.role === 'admin' ? 'team_member' : 'admin',
+                            })
+                          }
+                          disabled={roleMutation.isPending}
+                          style={{ ...iconBtn, color: '#16a34a', borderColor: '#86efac' }}
+                          title="Confirm role change"
+                        >
+                          <Check size={14} />
+                        </button>
+                        <button onClick={() => setRoleId(null)} style={iconBtn} title="Cancel">
+                          <X size={14} />
+                        </button>
+                      </div>
                     ) : (
                       <>
                         <button
@@ -223,6 +258,13 @@ export function Team() {
                           title="Set a new password directly"
                         >
                           <KeyRound size={13} /> Set password
+                        </button>
+                        <button
+                          onClick={() => { setError(null); setRoleId(u.id) }}
+                          style={textBtn}
+                          title={u.role === 'admin' ? 'Change to VA' : 'Make admin'}
+                        >
+                          <Shield size={13} /> {u.role === 'admin' ? 'Make VA' : 'Make admin'}
                         </button>
                         <button
                           onClick={() => { setError(null); setRemoveId(u.id) }}
