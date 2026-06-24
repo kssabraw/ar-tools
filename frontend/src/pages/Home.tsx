@@ -2,39 +2,47 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import type { ClientListItem, MapsClientThreats, MapsThreatsResponse } from '../lib/types'
+import type { ClientListItem, ClientRankingHealth, RankingHealthResponse, RankingTrend } from '../lib/types'
 import { Plus, Globe } from 'lucide-react'
 
 function initials(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
 }
 
-// Top competitors outranking this client on the local-pack grid (Maps module).
-// Renders nothing for clients without competitor scan data, so non-Maps tiles
-// are unchanged.
-function ThreatBlock({ threats }: { threats?: MapsClientThreats }) {
-  if (!threats || threats.threats.length === 0) return null
+// One average-rank trend (latest run vs first). Lower rank is better, so an "up"
+// direction (rank number dropped) is an improvement → green up-arrow; "down" is
+// worse → red down-arrow. Renders nothing when there's no latest value to show.
+function TrendRow({ label, trend }: { label: string; trend: RankingTrend }) {
+  if (trend.latest_avg == null) return null
+  const up = trend.direction === 'up'
+  const down = trend.direction === 'down'
+  const color = up ? '#16a34a' : down ? '#dc2626' : '#94a3b8'
+  const arrow = up ? '▲' : down ? '▼' : '–'
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+      <span style={{ color: '#334155', flex: 1 }}>{label}</span>
+      <span style={{ color: '#64748b', fontWeight: 600 }}>avg #{trend.latest_avg.toFixed(1)}</span>
+      <span style={{ color, fontSize: 11, fontWeight: 700, flexShrink: 0, minWidth: 46, textAlign: 'right' }}>
+        {arrow}{trend.delta != null && trend.direction !== 'flat' ? ` ${Math.abs(trend.delta).toFixed(1)}` : ''}
+      </span>
+    </div>
+  )
+}
+
+// Average organic + maps ranking trend (most recent run vs the first) for a
+// client tile. Renders nothing for clients with neither tracked, so non-ranking
+// tiles are unchanged.
+function RankTrendBlock({ health }: { health?: ClientRankingHealth }) {
+  if (!health) return null
+  const hasOrganic = health.organic.latest_avg != null
+  const hasMaps = health.maps.latest_avg != null
+  if (!hasOrganic && !hasMaps) return null
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #f1f5f9' }}>
-      <div style={threatLabel}>Outranking you on the map</div>
+      <div style={threatLabel}>Average ranking · latest vs first</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {threats.threats.map((t, i) => {
-          const up = t.delta_pct != null && t.delta_pct > 0
-          const down = t.delta_pct != null && t.delta_pct < 0
-          return (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, minWidth: 0 }}>
-              <span style={{ color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1 }}>
-                {t.name ?? '—'}
-              </span>
-              <span style={threatChip}>{t.beats_pct != null ? `${Math.round(t.beats_pct)}%` : '—'}</span>
-              {(up || down) && (
-                <span style={{ color: up ? '#dc2626' : '#16a34a', fontSize: 11, fontWeight: 700, flexShrink: 0 }}>
-                  {up ? '▲' : '▼'}{Math.abs(t.delta_pct as number)}
-                </span>
-              )}
-            </div>
-          )
-        })}
+        <TrendRow label="Organic" trend={health.organic} />
+        <TrendRow label="Maps" trend={health.maps} />
       </div>
     </div>
   )
@@ -48,12 +56,13 @@ export function Home() {
     queryFn: () => api.get<ClientListItem[]>('/clients'),
   })
 
-  // Top-threat competitors per client (Maps geo-grid) — one call for all tiles.
-  const { data: threatsResp } = useQuery<MapsThreatsResponse>({
-    queryKey: ['maps-threats'],
-    queryFn: () => api.get<MapsThreatsResponse>('/maps/threats'),
+  // Per-client average-ranking trend (organic + maps, latest vs first) — one
+  // call for all tiles.
+  const { data: rankingResp } = useQuery<RankingHealthResponse>({
+    queryKey: ['ranking-health'],
+    queryFn: () => api.get<RankingHealthResponse>('/dashboard/ranking-health'),
   })
-  const threatsByClient = new Map((threatsResp?.clients ?? []).map(c => [c.client_id, c]))
+  const healthByClient = new Map((rankingResp?.clients ?? []).map(c => [c.client_id, c]))
 
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
@@ -87,7 +96,7 @@ export function Home() {
                   </div>
                 </div>
               </div>
-              <ThreatBlock threats={threatsByClient.get(c.id)} />
+              <RankTrendBlock health={healthByClient.get(c.id)} />
             </Link>
           ))}
 
@@ -120,10 +129,6 @@ const tileStyle: React.CSSProperties = {
 const threatLabel: React.CSSProperties = {
   fontSize: 10, fontWeight: 600, color: '#94a3b8',
   textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 6,
-}
-const threatChip: React.CSSProperties = {
-  fontSize: 11, fontWeight: 700, color: '#b91c1c', background: '#fef2f2',
-  borderRadius: 999, padding: '1px 7px', flexShrink: 0,
 }
 const avatarStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
