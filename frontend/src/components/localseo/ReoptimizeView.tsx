@@ -27,12 +27,13 @@ interface Target {
 }
 
 // Per-target run state. 'pending' before it runs, 'running' while in flight,
-// then the resolved ReoptimizeUrlResult — or a failure message.
+// then the resolved ReoptimizeUrlResult — or a failure / cancellation.
 type RowState =
   | { phase: 'pending' }
   | { phase: 'running' }
   | { phase: 'done'; result: ReoptimizeUrlResult }
   | { phase: 'failed'; error: string }
+  | { phase: 'cancelled' }
 
 function normalizeUrl(u: string): string {
   const t = u.trim()
@@ -169,6 +170,14 @@ export function ReoptimizeView({ clientId, clientName, onOpenSaved }: Props) {
     abortRef.current = null
     setRunning(false)
     setProgress(null)
+    // Resolve any still-open rows so they don't hang on a stuck spinner / "Queued".
+    // (The in-flight server task may still finish + save its page — that page shows
+    // up in Saved Pages; the row here just reflects that we stopped watching it.)
+    setRows(prev => prev.map(r =>
+      r.state.phase === 'running' || r.state.phase === 'pending'
+        ? { ...r, state: { phase: 'cancelled' } }
+        : r,
+    ))
   }
 
   const reoptimizedCount = rows.filter(r => r.state.phase === 'done' && r.state.result.status === 'reoptimized').length
@@ -380,6 +389,9 @@ function ResultRow({ target, state, onOpenSaved }: { target: Target; state: RowS
   } else if (state.phase === 'failed') {
     badge = <span style={chip('#fef2f2', '#dc2626')}><XCircle size={12} /> Failed</span>
     detail = <span style={{ fontSize: 12, color: '#dc2626' }}>{state.error}</span>
+  } else if (state.phase === 'cancelled') {
+    badge = <span style={chip('#f1f5f9', '#94a3b8')}>Cancelled</span>
+    detail = <span style={{ fontSize: 12, color: '#94a3b8' }}>Stopped before completing — any page that finished saving will appear in Saved Pages.</span>
   } else {
     const r = state.result
     if (r.status === 'skipped') {

@@ -489,7 +489,11 @@ HARD RULES — NEVER:
 - Change any CSS class, ID, or HTML attribute on existing elements
 - Remove or reorder existing HTML elements
 - Use "near me" literally in body content
-- Fabricate reviews or invent addresses/phone numbers not provided
+- Fabricate reviews, prices, fees, discounts, or invent addresses/phone numbers not provided
+- Add or imply ANY pricing/quote language ("free estimate", "request a quote", "no hidden fees",
+  "transparent pricing", "no trip fee") that is not already on the page or explicitly supported by the
+  business data — if the pricing deficiency can't be fixed from real data, leave it unaddressed (it will
+  simply score lower). Never invent or imply pricing to satisfy the pricing signal.
 - Include placeholder text like [Insert here]
 
 Return the complete page HTML with all changes applied. No markdown, no explanations."""
@@ -2899,7 +2903,7 @@ SCORING CRITERIA — score each engine 0–100:
 
 6. geographic_legitimacy (weight 10%): city in title+H1+opening ¶; ≥2 neighborhood references in sentence context; ≥1 landmark reference; ≥3 zip codes in visible content; geo signals in ≥3 page sections.
 
-7. nearme_intent (weight 10%): phone above fold; availability language in opening block ("available now", "same-day", "emergency response"); response time stated explicitly (e.g. "arrive within 2 hours", "respond in 15 minutes"); ≥2 neighborhood+service+availability blocks; ≥1 street reference; ≥2 proximity FAQs (availability/response/coverage/emergency).
+7. nearme_intent (weight 10%): phone above fold; availability language in opening block ("available now", "same-day", "emergency response"); response time stated explicitly (e.g. "arrive within 2 hours", "respond in 15 minutes"); ≥2 neighborhood+service+availability blocks; ≥1 street reference; ≥2 proximity FAQs (availability/response/coverage/emergency); PRICING SIGNAL (★ HIGH IMPORTANCE — weight this criterion heavily within this engine): credit pricing/cost ONLY when it is explicitly present on the page — specific prices/fees/ranges, or an explicit pricing/quote offer the page actually states (e.g. "free estimate", "no hidden fees", "request a quote"). If neither is present, score this criterion LOW. Do NOT infer, assume, or give any credit for pricing that is merely implied or absent, and never reward invented figures.
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
@@ -3921,6 +3925,7 @@ async def _build_seo_checklist(
     lines += [
         '  • Include ≥2 blocks combining: [neighborhood name] + [service] + [availability signal]',
         '  • Include ≥2 FAQ entries on coverage area, response time, or service availability (proximity FAQs)',
+        '  • PRICING SIGNAL ★ HIGH IMPORTANCE — include pricing/cost ONLY when it comes from the business data: specific prices/fees/ranges, or an explicit pricing offer the business actually states (e.g. "free estimates", "no trip fee"). If the business data has no pricing, do NOT invent figures and do NOT add or imply any pricing/quote language ("free estimate", "request a quote", "no hidden fees", "transparent pricing") to satisfy this — leave pricing out entirely and add a Pricing gap to the Content Gaps report. A page with no pricing data will score lower on this signal; that is acceptable — never manufacture or imply pricing to lift the score.',
     ]
     if street_ref:
         lines.append(f'  • Include street-level reference: "{street_ref}" or nearby street names')

@@ -595,14 +595,20 @@ async def reoptimize_url(
     }
 
     if publish_to_doc:
-        # The page is already saved in-app, so a publish failure is non-fatal —
-        # surface it per-row rather than losing the rewrite.
+        # The page is already saved in-app, so ANY publish failure is non-fatal —
+        # surface it per-row rather than failing the whole reoptimize. Catch broadly
+        # (not just HTTPException): publish_page's final published_doc_url update is
+        # unwrapped, so a transient DB error there must not lose the saved rewrite.
         try:
             pub = await publish_page(page["id"], user_id)
             out["published"] = {"doc_url": pub.get("doc_url"), "doc_id": pub.get("doc_id")}
             out["page"]["published_doc_url"] = pub.get("doc_url")
-        except HTTPException as exc:
-            out["publish_error"] = str(getattr(exc, "detail", "publish_failed"))
+        except Exception as exc:
+            out["publish_error"] = str(getattr(exc, "detail", None) or exc or "publish_failed")
+            logger.warning(
+                "local_seo.reoptimize_url_publish_failed",
+                extra={"client_id": client_id, "page_id": page["id"], "error": str(exc)},
+            )
 
     return out
 

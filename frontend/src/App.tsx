@@ -21,6 +21,7 @@ import { RankReport } from './pages/RankReport'
 import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
 import { Team } from './pages/Team'
+import { SetPassword } from './pages/SetPassword'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,6 +36,7 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<Login />} />
+            <Route path="/set-password" element={<SetPassword />} />
             <Route
               path="/*"
               element={
