@@ -9,6 +9,14 @@ export type RunStatus =
   | 'failed'
   | 'cancelled'
 
+export interface TeamUser {
+  id: string
+  email: string
+  full_name: string | null
+  role: 'admin' | 'team_member'
+  created_at: string
+}
+
 export interface ClientListItem {
   id: string
   name: string
