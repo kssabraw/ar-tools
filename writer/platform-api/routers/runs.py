@@ -11,8 +11,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from models.runs import (
+    BULK_RUNS_MAX,
     ClientContextSnapshot,
     ModuleOutputSummary,
+    RunBulkCreateRequest,
+    RunBulkCreateResponse,
     RunCreateRequest,
     RunCreateResponse,
     RunDetail,
@@ -280,6 +283,62 @@ async def create_run(
     background_tasks.add_task(orchestrate_run, run_id)
 
     return RunCreateResponse(run_id=run_id, status="queued")
+
+
+@router.post("/runs/bulk", response_model=RunBulkCreateResponse, status_code=202)
+async def create_runs_bulk(
+    body: RunBulkCreateRequest,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(require_auth),
+) -> RunBulkCreateResponse:
+    """Create several runs at once (e.g. bulk service pages from a pasted list).
+
+    Each keyword becomes its own queued run; the runs are dispatched as
+    sequential background tasks (one processes at a time — no concurrency
+    burst), so this intentionally skips the single-run in-flight cap. For
+    large, paced batches use the Topic Fanout content scheduler instead.
+    """
+    supabase = get_supabase()
+
+    client_result = (
+        supabase.table("clients").select("*").eq("id", str(body.client_id)).single().execute()
+    )
+    if not client_result.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    client = client_result.data
+
+    # Normalize: trim, drop blanks + over-length, de-dupe (case-insensitive),
+    # preserve order.
+    seen: set[str] = set()
+    keywords: list[str] = []
+    for raw in body.keywords:
+        kw = (raw or "").strip()
+        key = kw.lower()
+        if kw and len(kw) <= 150 and key not in seen:
+            seen.add(key)
+            keywords.append(kw)
+    skipped = len(body.keywords) - len(keywords)
+    if not keywords:
+        raise HTTPException(status_code=400, detail="no_valid_keywords")
+    if len(keywords) > BULK_RUNS_MAX:
+        raise HTTPException(status_code=400, detail="bulk_limit_exceeded")
+
+    run_ids: list[str] = []
+    for kw in keywords:
+        run_id = create_run_and_snapshot(
+            client=client,
+            keyword=kw,
+            content_type=body.content_type,
+            created_by=auth["user_id"],
+        )
+        background_tasks.add_task(orchestrate_run, run_id)
+        run_ids.append(run_id)
+
+    logger.info(
+        "runs_bulk_dispatched",
+        extra={"count": len(run_ids), "content_type": body.content_type, "user_id": auth["user_id"]},
+    )
+    return RunBulkCreateResponse(run_ids=run_ids, created=len(run_ids), skipped=skipped)
 
 
 @router.post("/runs/{run_id}/cancel", response_model=dict)

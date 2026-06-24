@@ -17,7 +17,20 @@ function statusColor(status: RunStatus): string {
 export function ServicePages() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
-  const [keyword, setKeyword] = useState('')
+  const [text, setText] = useState('')
+
+  const BULK_MAX = 20
+  // One service per line; trimmed, de-duped (case-insensitive), capped.
+  const services = (() => {
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const line of text.split('\n')) {
+      const s = line.trim()
+      const key = s.toLowerCase()
+      if (s && !seen.has(key)) { seen.add(key); out.push(s) }
+    }
+    return out
+  })()
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
@@ -35,14 +48,23 @@ export function ServicePages() {
     },
   })
 
-  const createRun = useMutation({
-    mutationFn: (kw: string) =>
-      api.post<{ run_id: string }>('/runs', { client_id: id, keyword: kw, content_type: 'service_page' }),
+  const createRuns = useMutation({
+    mutationFn: (keywords: string[]) =>
+      api.post<{ created: number }>('/runs/bulk', {
+        client_id: id,
+        content_type: 'service_page',
+        keywords,
+      }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['service-page-runs', id] })
-      setKeyword('')
+      setText('')
     },
   })
+
+  const canSubmit = services.length > 0 && services.length <= BULK_MAX && !createRuns.isPending
+  function submit() {
+    if (canSubmit) createRuns.mutate(services)
+  }
 
   const list = runs?.data ?? []
 
@@ -58,31 +80,40 @@ export function ServicePages() {
       </div>
       <p style={{ color: '#64748b', fontSize: 14, marginTop: 0 }}>
         Conversion-focused service / landing pages. Enter the head commercial query — the brief and
-        writer run in one pass, and you get Markdown, HTML, and WordPress-ready output.
+        writer run in one pass, and you get Markdown, HTML, and WordPress-ready output. Add one
+        service per line to bulk-create several at once.
       </p>
 
       {/* Create */}
-      <div style={{ display: 'flex', gap: 8, margin: '16px 0 28px' }}>
-        <input
+      <div style={{ display: 'flex', gap: 8, margin: '16px 0 6px', alignItems: 'flex-start' }}>
+        <textarea
           className="input"
-          placeholder="e.g. emergency drain cleaning austin"
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && keyword.trim()) createRun.mutate(keyword.trim()) }}
-          style={inputStyle}
+          placeholder={'e.g. emergency plumber\nwater heater repair\ndrain cleaning'}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit() } }}
+          rows={4}
+          style={{ ...inputStyle, resize: 'vertical', fontFamily: 'inherit', lineHeight: 1.5 }}
         />
         <button
           type="button"
-          onClick={() => keyword.trim() && createRun.mutate(keyword.trim())}
-          disabled={!keyword.trim() || createRun.isPending}
-          style={{ ...btnStyle, color: '#fff', background: '#6366f1', borderColor: '#6366f1', opacity: keyword.trim() ? 1 : 0.5 }}
+          onClick={submit}
+          disabled={!canSubmit}
+          style={{ ...btnStyle, color: '#fff', background: '#6366f1', borderColor: '#6366f1', opacity: canSubmit ? 1 : 0.5 }}
         >
-          {createRun.isPending ? 'Starting…' : 'Generate'}
+          {createRuns.isPending
+            ? 'Starting…'
+            : services.length > 1 ? `Generate ${services.length} pages` : 'Generate'}
         </button>
       </div>
-      {createRun.isError && (
+      <div style={{ fontSize: 12, color: services.length > BULK_MAX ? '#dc2626' : '#94a3b8', marginBottom: 24 }}>
+        {services.length > BULK_MAX
+          ? `Up to ${BULK_MAX} at a time — remove ${services.length - BULK_MAX}, or use the Content Scheduler for larger batches.`
+          : 'One service per line. ⌘/Ctrl + Enter to generate.'}
+      </div>
+      {createRuns.isError && (
         <div style={{ color: '#dc2626', fontSize: 13, marginTop: -16, marginBottom: 16 }}>
-          Could not start the run. {(createRun.error as Error)?.message}
+          Could not start the runs. {(createRuns.error as Error)?.message}
         </div>
       )}
 
