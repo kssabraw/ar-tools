@@ -13,6 +13,7 @@ import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
 import { useSiloPlan } from '../components/localseo/useSiloPlan'
 import { PageScoreView } from '../components/localseo/PageScoreView'
+import { ReoptimizeView } from '../components/localseo/ReoptimizeView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
 import {
@@ -50,10 +51,11 @@ export function LocalSeoContent() {
     enabled: Boolean(clientId),
   })
 
-  const [tab, setTab] = useState<'new' | 'plan' | 'saved'>(
-    // Deep-link support: /clients/:id/local-seo?tab=saved (or ?tab=plan).
+  const [tab, setTab] = useState<'new' | 'plan' | 'reopt' | 'saved'>(
+    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / reopt).
     searchParams.get('tab') === 'saved' ? 'saved'
       : searchParams.get('tab') === 'plan' ? 'plan'
+      : searchParams.get('tab') === 'reopt' ? 'reopt'
       : 'new',
   )
   const [view, setView] = useState<View>({ kind: 'form' })
@@ -385,7 +387,7 @@ export function LocalSeoContent() {
 
       {/* Tabs */}
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-        {(['new', 'plan', 'saved'] as const).map(t => (
+        {(['new', 'plan', 'reopt', 'saved'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -394,7 +396,7 @@ export function LocalSeoContent() {
               background: tab === t ? '#fff' : 'transparent', color: tab === t ? '#0f172a' : '#64748b',
               boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
             }}
-          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : 'Saved Pages'}</button>
+          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'reopt' ? 'Reoptimize' : 'Saved Pages'}</button>
         ))}
       </div>
 
@@ -404,6 +406,12 @@ export function LocalSeoContent() {
           loading={loadingSaved}
           onOpen={openSaved}
           onDelete={async (pid) => { await localSeoApi.deletePage(pid); refreshSaved() }}
+        />
+      ) : tab === 'reopt' ? (
+        <ReoptimizeView
+          clientId={clientId}
+          clientName={client?.name}
+          onOpenSaved={() => { refreshSaved(); setTab('saved') }}
         />
       ) : tab === 'plan' ? (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 18 }}>
