@@ -19,6 +19,7 @@ import { MapsReport } from './pages/MapsReport'
 import { RankReport } from './pages/RankReport'
 import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
+import { Team } from './pages/Team'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -56,6 +57,7 @@ export default function App() {
                       <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
+                      <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Layout>

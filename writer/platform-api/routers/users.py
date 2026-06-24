@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin
-from models.users import UserInviteRequest, UserResponse, UserRoleUpdateRequest
+from models.users import (
+    PasswordSetRequest,
+    UserInviteRequest,
+    UserResponse,
+    UserRoleUpdateRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +106,52 @@ async def update_user_role(
         role=p["role"],
         created_at=p["created_at"],
     )
+
+
+@router.post("/users/{user_id}/password", response_model=dict)
+async def set_user_password(
+    user_id: UUID,
+    body: PasswordSetRequest,
+    auth: dict = Depends(require_admin),
+) -> dict:
+    """Admin directly sets a new password for a user (e.g. a VA who can't
+    receive the reset email). The admin relays the password out-of-band."""
+    supabase = get_supabase()
+    try:
+        supabase.auth.admin.update_user_by_id(str(user_id), {"password": body.password})
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"password_update_failed: {exc}") from exc
+
+    logger.info(
+        "user_password_set",
+        extra={"target_user_id": str(user_id), "user_id": auth["user_id"]},
+    )
+    return {"id": str(user_id), "password_set": True}
+
+
+@router.post("/users/{user_id}/password-reset", response_model=dict)
+async def send_password_reset(
+    user_id: UUID,
+    auth: dict = Depends(require_admin),
+) -> dict:
+    """Trigger a Supabase password-recovery email so the user sets their own
+    password. The admin never sees the password."""
+    supabase = get_supabase()
+    user_resp = supabase.auth.admin.get_user_by_id(str(user_id))
+    email = user_resp.user.email if user_resp and user_resp.user else None
+    if not email:
+        raise HTTPException(status_code=404, detail="user_not_found")
+
+    try:
+        supabase.auth.reset_password_for_email(email)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"reset_email_failed: {exc}") from exc
+
+    logger.info(
+        "user_password_reset_sent",
+        extra={"target_user_id": str(user_id), "user_id": auth["user_id"]},
+    )
+    return {"id": str(user_id), "email": email, "reset_sent": True}
 
 
 @router.delete("/users/{user_id}", status_code=204, response_class=Response)

@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -30,9 +30,15 @@ function currentClientId(pathname: string): string | null {
 }
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { user, signOut } = useAuth()
+  const { user, signOut, isAdmin } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+
+  // Team management is admin-only (matches the /team AdminRoute guard).
+  const mainNav: NavItem[] = [
+    ...nav,
+    ...(isAdmin ? [{ label: 'Team', to: '/team', icon: <UserCog size={18} /> }] : []),
+  ]
 
   async function handleSignOut() {
     await signOut()
@@ -93,7 +99,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div style={{ paddingBottom: 12, marginBottom: 12, borderBottom: '1px solid #1e293b' }}>
             {quickNav.map(renderLink)}
           </div>
-          {nav.map(renderLink)}
+          {mainNav.map(renderLink)}
         </nav>
         <div style={{ padding: '16px 20px', borderTop: '1px solid #1e293b' }}>
           <button

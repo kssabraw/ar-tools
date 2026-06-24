@@ -23,3 +23,9 @@ class UserInviteRequest(BaseModel):
 
 class UserRoleUpdateRequest(BaseModel):
     role: Literal["admin", "team_member"]
+
+
+class PasswordSetRequest(BaseModel):
+    # bcrypt truncates beyond 72 bytes; 8 is the app-level floor (Supabase's
+    # own default minimum is 6). The plaintext password is never logged.
+    password: str = Field(min_length=8, max_length=72)
