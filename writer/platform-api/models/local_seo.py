@@ -130,6 +130,25 @@ class LocalSeoReoptimizeRequest(BaseModel):
     serp_analysis: Optional[dict[str, Any]] = None
 
 
+class LocalSeoReoptimizeUrlRequest(BaseModel):
+    """Reoptimize a live page identified by URL, gated on a minimum score.
+
+    The page is scored first; only pages *below* `score_threshold` are rewritten
+    — stronger pages are skipped with a note rather than burning a rewrite. Backs
+    the Reoptimization tab's single + bulk URL flows (the frontend loops one URL
+    per call so progress + failures are isolated per page).
+    """
+
+    page_url: str = Field(..., min_length=1)
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    location_code: Optional[int] = None
+    # Pages at/above this composite score are skipped (product default: 75).
+    score_threshold: float = Field(default=75.0, ge=0, le=100)
+    # Also publish each reoptimized page to a Google Doc in the client's Drive.
+    publish_to_doc: bool = False
+
+
 class LocalSeoSocialPostsRequest(BaseModel):
     """Generate GBP social posts from a generated page's text."""
 
