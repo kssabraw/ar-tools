@@ -396,3 +396,64 @@ async def reanalyze_client(
 
     job_id = (job_result.data or [{}])[0].get("id", "")
     return {"job_id": job_id}
+
+
+@router.post("/clients/{client_id}/page-structures/reanalyze", response_model=dict, status_code=202)
+async def reanalyze_page_structures(
+    client_id: UUID,
+    page_type: Optional[str] = Query(None),
+    auth: dict = Depends(require_admin),
+) -> dict:
+    """Re-scrape + re-analyze the client's stored reference page structure(s).
+
+    Unlike create/update — which only (re)scrape a URL when it *changes* — this
+    forces a fresh analysis of the already-stored URL(s), e.g. after the client's
+    page itself was redesigned. Pass `page_type` to refresh one reference page;
+    omit it to refresh all stored ones. Resets each target to `pending` and
+    enqueues a `page_structure_scrape` job.
+    """
+    if page_type is not None and page_type not in PAGE_TYPES:
+        raise HTTPException(status_code=422, detail="invalid_page_type")
+
+    supabase = get_supabase()
+    result = (
+        supabase.table("clients")
+        .select("page_structures")
+        .eq("id", str(client_id))
+        .single()
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+
+    structures = result.data.get("page_structures") or {}
+    targets = [page_type] if page_type else list(PAGE_TYPES)
+    reanalyzed: list[str] = []
+    for pt in targets:
+        url = ((structures.get(pt) or {}).get("url") or "").strip()
+        if not url:
+            continue
+        structures[pt] = {
+            "url": url,
+            "status": "pending",
+            "error": None,
+            "analysis": None,
+            "analyzed_at": None,
+        }
+        reanalyzed.append(pt)
+
+    if not reanalyzed:
+        raise HTTPException(status_code=422, detail="no_reference_urls_to_reanalyze")
+
+    supabase.table("clients").update(
+        {"page_structures": structures, "updated_at": "now()"}
+    ).eq("id", str(client_id)).execute()
+
+    for pt in reanalyzed:
+        _enqueue_page_structure_scrape(str(client_id), pt, structures[pt]["url"])
+
+    logger.info(
+        "client_page_structures_reanalyze",
+        extra={"client_id": str(client_id), "user_id": auth["user_id"], "page_types": reanalyzed},
+    )
+    return {"reanalyzed": reanalyzed}
