@@ -45,11 +45,18 @@ def _coerce_blocks(raw: Any) -> list[Block]:
         btype = str(b.get("type", "paragraph")).lower()
         if btype not in _ALLOWED_BLOCK_TYPES:
             btype = "paragraph"
+        # Defensive: the LLM occasionally returns a non-numeric level
+        # (e.g. "three"); coerce safely so one bad value can't discard the
+        # whole section's blocks.
+        try:
+            level = int(b.get("level", 3) or 3)
+        except (TypeError, ValueError):
+            level = 3
         out.append(Block(
             type=btype,
             text=str(b.get("text", "")).strip(),
             items=[str(i).strip() for i in (b.get("items") or []) if str(i).strip()],
-            level=int(b.get("level", 3) or 3),
+            level=level,
             href=(str(b["href"]).strip() if b.get("href") else None),
         ))
     # Drop empties (a paragraph with no text / a list with no items).
