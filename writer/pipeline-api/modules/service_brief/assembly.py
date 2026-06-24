@@ -95,7 +95,13 @@ def _build_silos(raw: list, primary_query: str) -> list[ServiceSiloCandidate]:
         key = kw.lower()
         if kw and key not in seen and key != primary_query.strip().lower():
             seen.add(key)
-            out.append(ServiceSiloCandidate(suggested_keyword=kw))
+            intent = "commercial"
+            if isinstance(c, dict):
+                intent = (
+                    str(c.get("estimated_intent") or c.get("recommended_intent") or "commercial").strip()
+                    or "commercial"
+                )
+            out.append(ServiceSiloCandidate(suggested_keyword=kw, estimated_intent=intent))
     return out
 
 

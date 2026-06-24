@@ -59,7 +59,7 @@ _SYNTHESIS_SYSTEM = (
     '  "internal_links": ["related service slug/topic"],\n'
     '  "faq_targets": ["question"],\n'
     '  "paa_targets": ["question"],\n'
-    '  "silo_candidates": [{"suggested_keyword": "...", "recommended_intent": "commercial"}]\n'
+    '  "silo_candidates": [{"suggested_keyword": "...", "estimated_intent": "commercial"}]\n'
     "}"
 )
 
