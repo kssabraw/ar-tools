@@ -52,7 +52,7 @@ async def publish_to_google_docs(
 
     run_result = (
         supabase.table("runs")
-        .select("id, client_id, keyword, status")
+        .select("id, client_id, keyword, status, content_type")
         .eq("id", str(run_id))
         .single()
         .execute()
@@ -60,6 +60,7 @@ async def publish_to_google_docs(
     if not run_result.data:
         raise HTTPException(status_code=404, detail="run_not_found")
     run = run_result.data
+    content_type = run.get("content_type") or "blog_post"
 
     if run["status"] != "complete":
         raise HTTPException(status_code=409, detail="run_not_complete")
@@ -81,22 +82,45 @@ async def publish_to_google_docs(
             detail="missing_google_drive_folder_id: client has no Drive folder configured",
         )
 
-    sc_result = (
-        supabase.table("module_outputs")
-        .select("output_payload")
-        .eq("run_id", str(run_id))
-        .eq("module", "sources_cited")
-        .eq("status", "complete")
-        .execute()
-    )
-    rows = sc_result.data or []
-    if not rows:
-        raise HTTPException(status_code=422, detail="article_not_available")
-    payload = rows[0].get("output_payload") or {}
-    article = (payload.get("enriched_article") or {}).get("article") or []
-    markdown = _sections_to_markdown(article)
-    if not markdown.strip():
-        raise HTTPException(status_code=422, detail="article_is_empty")
+    # Resolve the publishable Markdown from the right module output for the
+    # run's content type. Blog posts pull from sources_cited's enriched
+    # article; service pages pull the service_writer's Markdown rendering.
+    if content_type == "service_page":
+        sw_result = (
+            supabase.table("module_outputs")
+            .select("output_payload")
+            .eq("run_id", str(run_id))
+            .eq("module", "service_writer")
+            .eq("status", "complete")
+            .execute()
+        )
+        rows = sw_result.data or []
+        if not rows:
+            raise HTTPException(status_code=422, detail="page_not_available")
+        payload = rows[0].get("output_payload") or {}
+        markdown = (payload.get("renderings") or {}).get("markdown") or ""
+        if not markdown.strip():
+            # Fallback: reconstruct from the structured sections.
+            markdown = _sections_to_markdown(payload.get("sections") or [])
+        if not markdown.strip():
+            raise HTTPException(status_code=422, detail="page_is_empty")
+    else:
+        sc_result = (
+            supabase.table("module_outputs")
+            .select("output_payload")
+            .eq("run_id", str(run_id))
+            .eq("module", "sources_cited")
+            .eq("status", "complete")
+            .execute()
+        )
+        rows = sc_result.data or []
+        if not rows:
+            raise HTTPException(status_code=422, detail="article_not_available")
+        payload = rows[0].get("output_payload") or {}
+        article = (payload.get("enriched_article") or {}).get("article") or []
+        markdown = _sections_to_markdown(article)
+        if not markdown.strip():
+            raise HTTPException(status_code=422, detail="article_is_empty")
 
     title = f"{run['keyword']} — {client['name']}"
     try:

@@ -227,6 +227,103 @@ async def test_reoptimize_falls_back_to_rescore_when_score_absent():
     assert persisted["composite_score"] == 84.0
 
 
+# ── reoptimize-by-URL (the Reoptimization tab: score-gate at threshold) ──────
+
+@pytest.mark.asyncio
+async def test_reoptimize_url_skips_page_at_or_above_threshold():
+    # A page already scoring >= the threshold is left untouched (no rewrite).
+    supabase = _supabase_for_client(_client_row())
+    score = {"composite_score": 82.0, "composite_status": "good", "deficiencies": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("Anaheim,California,United States", 1013962))), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value={"serp": 1})), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=score)) as post, \
+         patch.object(local_seo_service, "reoptimize_page", new=AsyncMock()) as reopt:
+        out = await local_seo_service.reoptimize_url(
+            "client-1", "https://x.com/p", "plumber", "Anaheim, CA", 1013962, "user-1",
+            score_threshold=75.0,
+        )
+    assert out["status"] == "skipped"
+    assert out["score"] == 82.0
+    assert "82" in out["reason"]
+    assert post.await_args[0][0] == "/score-page"      # scored once
+    reopt.assert_not_awaited()                          # but not rewritten
+
+
+@pytest.mark.asyncio
+async def test_reoptimize_url_rewrites_page_below_threshold():
+    supabase = _supabase_for_client(_client_row())
+    score = {"composite_score": 54.0, "composite_status": "poor", "deficiencies": [{"engine_key": "organic_ranking"}]}
+    page = {"id": "page-9", "page_title": "T", "composite_score": 81.0,
+            "composite_status": "good", "published_doc_url": None}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("Anaheim,California,United States", 1013962))), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value={"serp": 1})), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=score)), \
+         patch.object(local_seo_service, "reoptimize_page", new=AsyncMock(return_value=page)) as reopt:
+        out = await local_seo_service.reoptimize_url(
+            "client-1", "https://x.com/p", "plumber", "Anaheim, CA", 1013962, "user-1",
+        )
+    assert out["status"] == "reoptimized"
+    assert out["prev_score"] == 54.0
+    assert out["new_score"] == 81.0
+    assert out["page"]["id"] == "page-9"
+    reopt.assert_awaited_once()
+    # the scored deficiencies + shared serp analysis are forwarded to the rewrite
+    assert reopt.await_args.kwargs["deficiencies"] == [{"engine_key": "organic_ranking"}]
+    assert reopt.await_args.kwargs["serp_analysis"] == {"serp": 1}
+    assert reopt.await_args.kwargs["existing_page_url"] == "https://x.com/p"
+
+
+@pytest.mark.asyncio
+async def test_reoptimize_url_publishes_when_requested():
+    supabase = _supabase_for_client(_client_row())
+    score = {"composite_score": 40.0, "deficiencies": []}
+    page = {"id": "page-9", "page_title": "T", "composite_score": 80.0,
+            "composite_status": "good", "published_doc_url": None}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("loc", 1))), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=None)), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=score)), \
+         patch.object(local_seo_service, "reoptimize_page", new=AsyncMock(return_value=page)), \
+         patch.object(local_seo_service, "publish_page",
+                      new=AsyncMock(return_value={"doc_url": "https://d/1", "doc_id": "1"})) as pub:
+        out = await local_seo_service.reoptimize_url(
+            "client-1", "https://x.com/p", "plumber", "Anaheim, CA", 1, "user-1",
+            publish_to_doc=True,
+        )
+    pub.assert_awaited_once_with("page-9", "user-1")
+    assert out["published"]["doc_url"] == "https://d/1"
+    assert out["page"]["published_doc_url"] == "https://d/1"
+
+
+@pytest.mark.asyncio
+async def test_reoptimize_url_publish_failure_is_non_fatal():
+    # The rewrite is already saved in-app, so a publish failure is surfaced per
+    # row rather than losing the work.
+    supabase = _supabase_for_client(_client_row())
+    score = {"composite_score": 40.0, "deficiencies": []}
+    page = {"id": "page-9", "page_title": "T", "composite_score": 80.0,
+            "composite_status": "good", "published_doc_url": None}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("loc", 1))), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=None)), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=score)), \
+         patch.object(local_seo_service, "reoptimize_page", new=AsyncMock(return_value=page)), \
+         patch.object(local_seo_service, "publish_page",
+                      new=AsyncMock(side_effect=HTTPException(status_code=422, detail="missing_google_drive_folder_id"))):
+        out = await local_seo_service.reoptimize_url(
+            "client-1", "https://x.com/p", "plumber", "Anaheim, CA", 1, "user-1",
+            publish_to_doc=True,
+        )
+    assert out["status"] == "reoptimized"          # rewrite still returned
+    assert out["publish_error"] == "missing_google_drive_folder_id"
+
+
 @pytest.mark.asyncio
 async def test_related_pages_proxies_business_fields():
     supabase = _supabase_for_client(_client_row())

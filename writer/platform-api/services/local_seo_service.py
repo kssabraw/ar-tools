@@ -495,6 +495,118 @@ async def reoptimize_page(
     return _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id)
 
 
+# Pages scoring at/above this are already strong enough that a rewrite isn't
+# worth the cost — the batch reoptimizer skips them with a note instead. Product
+# default; overridable per request via `score_threshold`.
+REOPT_SCORE_THRESHOLD = 75.0
+
+
+async def reoptimize_url(
+    client_id: str,
+    page_url: str,
+    keyword: str,
+    location: str,
+    location_code: Optional[int],
+    user_id: str,
+    score_threshold: float = REOPT_SCORE_THRESHOLD,
+    publish_to_doc: bool = False,
+) -> dict:
+    """Score a live page (by URL) and reoptimize it only if it scores below
+    `score_threshold`. Strong pages (>= threshold) are skipped with a note rather
+    than rewritten. Optionally publishes each reoptimized page to a Google Doc.
+
+    Backs the Reoptimization tab's single + bulk URL flows. The SERP analysis is
+    computed once and reused for both the score and the rewrite so neither
+    re-scrapes. Returns one of:
+
+      {"status": "skipped",     "page_url", "keyword", "score", "threshold", "reason"}
+      {"status": "reoptimized", "page_url", "keyword", "prev_score", "new_score",
+                                "page": {id, page_title, composite_score, ...},
+                                ["published": {...}] | ["publish_error": str]}
+    """
+    client = _get_client(client_id)
+    fields = _business_fields(client)
+    location, location_code = await locations_service.resolve_location(client, location, location_code)
+
+    # Shared SERP analysis (served from cache when fresh) — passed to both the
+    # score and the rewrite so neither re-scrapes. Optional: both degrade
+    # gracefully without it (required=False).
+    serp = await _get_or_compute_analysis(
+        keyword, location, location_code, force_refresh=False, user_id=user_id, required=False
+    )
+
+    score_result = await _post_nlp("/score-page", {
+        "keyword": keyword,
+        "location": location,
+        "location_code": location_code,
+        "page_url": page_url,
+        "page_content": None,
+        "business_name": fields["business_name"],
+        "gbp_category": fields["gbp_category"],
+        "address": fields["address"],
+        "serp_analysis": serp,
+    }, user_id=user_id)
+
+    composite = score_result.get("composite_score")
+    # Gate: a page already at/above the threshold is left untouched.
+    if composite is not None and composite >= score_threshold:
+        logger.info(
+            "local_seo.reoptimize_url_skipped",
+            extra={"client_id": client_id, "page_url": page_url, "score": composite},
+        )
+        return {
+            "status": "skipped",
+            "page_url": page_url,
+            "keyword": keyword,
+            "score": composite,
+            "threshold": score_threshold,
+            "reason": (
+                f"Already scores {round(composite)}/100 — at or above the "
+                f"{int(score_threshold)} threshold, so reoptimization was skipped."
+            ),
+        }
+
+    # Below threshold (or unscoreable) → reoptimize. Reuses the shared op, which
+    # rewrites + re-scores + persists the page as a mode='reoptimize' row.
+    page = await reoptimize_page(
+        client_id=client_id,
+        keyword=keyword,
+        location=location,
+        existing_page_html=None,
+        existing_page_url=page_url,
+        deficiencies=score_result.get("deficiencies") or [],
+        serp_analysis=serp,
+        user_id=user_id,
+    )
+
+    out: dict = {
+        "status": "reoptimized",
+        "page_url": page_url,
+        "keyword": keyword,
+        "prev_score": composite,
+        "new_score": page.get("composite_score"),
+        "page": {
+            "id": page["id"],
+            "page_title": page.get("page_title"),
+            "composite_score": page.get("composite_score"),
+            "composite_status": page.get("composite_status"),
+            "published_doc_url": page.get("published_doc_url"),
+        },
+    }
+
+    if publish_to_doc:
+        # The page is already saved in-app, so a publish failure is non-fatal —
+        # surface it per-row rather than losing the rewrite.
+        try:
+            pub = await publish_page(page["id"], user_id)
+            out["published"] = {"doc_url": pub.get("doc_url"), "doc_id": pub.get("doc_id")}
+            out["page"]["published_doc_url"] = pub.get("doc_url")
+        except HTTPException as exc:
+            out["publish_error"] = str(getattr(exc, "detail", "publish_failed"))
+
+    return out
+
+
 async def social_posts(
     client_id: str,
     keyword: str,

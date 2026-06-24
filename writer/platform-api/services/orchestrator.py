@@ -29,6 +29,9 @@ EXPECTED_MODULE_VERSIONS: dict[str, str] = {
     "research": "1.1",
     "writer": "1.8",
     "sources_cited": "1.1",
+    # Service-page content type (content_type='service_page')
+    "service_brief": "1.0",
+    "service_writer": "1.0",
 }
 
 WRITER_ACCEPTED_VERSIONS = {"1.8", "1.8-no-context", "1.8-degraded"}
@@ -51,6 +54,11 @@ MODULE_TIMEOUTS: dict[str, int] = {
     "research": 130,
     "writer": 600,  # writer makes many sequential LLM calls; allow up to 10m
     "sources_cited": 20,
+    # service_brief runs its own SERP + competitor scrape/teardown + entity
+    # extraction + synthesis (similar cost profile to brief); service_writer
+    # makes several sequential LLM calls (like writer).
+    "service_brief": 240,
+    "service_writer": 600,
 }
 
 # Pipeline API endpoint paths
@@ -60,6 +68,8 @@ MODULE_PATHS: dict[str, str] = {
     "research": "/research",
     "writer": "/write",
     "sources_cited": "/sources-cited",
+    "service_brief": "/service-brief",
+    "service_writer": "/service-write",
 }
 
 
@@ -72,6 +82,8 @@ def _extract_schema_version(module: str, result: dict) -> str | None:
         return (result.get("metadata") or {}).get("schema_version")
     if module == "sources_cited":
         return (result.get("sources_cited_metadata") or {}).get("schema_version")
+    if module in ("service_brief", "service_writer"):
+        return (result.get("metadata") or {}).get("schema_version")
     # SIE returns it at the top level
     return result.get("schema_version")
 
@@ -82,6 +94,8 @@ NON_TERMINAL_STATUSES = {
     "research_running",
     "writer_running",
     "sources_cited_running",
+    "service_brief_running",
+    "service_writer_running",
 }
 
 
@@ -126,7 +140,7 @@ async def _set_run_status(
     error_message: Optional[str] = None,
 ) -> None:
     updates: dict[str, Any] = {"status": status, "updated_at": "now()"}
-    if status in {"brief_running", "sie_running"} and not error_stage:
+    if status in {"brief_running", "sie_running", "service_brief_running"} and not error_stage:
         updates["started_at"] = "now()"
     if status in ("complete", "failed", "cancelled"):
         updates["completed_at"] = "now()"
@@ -426,10 +440,10 @@ async def _call_module(
     cost = result.get("cost_usd") or result.get("metadata", {}).get("cost_usd")
     await _save_module_output(output_id, result, duration_ms, cost, actual_version)
 
-    # PRD v1.4 §8.5 — when a brief module_output transitions to complete,
-    # enqueue the silo_dedup async job. Best-effort: failures here log
-    # but do not affect the run.
-    if module == "brief":
+    # PRD v1.4 §8.5 — when a brief (or service_brief) module_output
+    # transitions to complete, enqueue the silo_dedup async job. Best-effort:
+    # failures here log but do not affect the run.
+    if module in ("brief", "service_brief"):
         try:
             run_row = (
                 _sb()
@@ -546,6 +560,69 @@ def _build_sources_cited_payload(
     }
 
 
+def _build_service_brief_payload(run: dict, snapshot: dict) -> dict:
+    """Service Page Brief payload. The brief runs its own research; client
+    context comes from the frozen snapshot. The snapshot's resolved icp_text
+    already folds in the client's differentiators (see icp_service), so the
+    wedge is available via icp_text even though structured differentiators
+    aren't snapshotted separately (a v1 limitation)."""
+    return {
+        "run_id": run["id"],
+        "attempt": 1,
+        "service": run.get("service") or run["keyword"],
+        "primary_query": run["keyword"],
+        "location": run.get("location"),
+        "location_code": run.get("location_code") or 2840,
+        "client_context": {
+            "brand_voice_text": snapshot.get("brand_guide_text") or "",
+            "icp_text": snapshot.get("icp_text") or "",
+            "website_analysis": snapshot.get("website_analysis"),
+        },
+    }
+
+
+def _build_service_writer_payload(
+    run: dict, service_brief_output: dict, snapshot: dict
+) -> dict:
+    return {
+        "run_id": run["id"],
+        "attempt": 1,
+        "service_brief_output": service_brief_output,
+        "client_context": {
+            "brand_guide_text": snapshot.get("brand_guide_text") or "",
+            "icp_text": snapshot.get("icp_text") or "",
+            "website_analysis": snapshot.get("website_analysis"),
+            "website_analysis_unavailable": snapshot.get("website_analysis_unavailable", False),
+        },
+    }
+
+
+async def _orchestrate_service_page(
+    run_id: str, run: dict, snapshot: dict, completed: dict[str, dict]
+) -> None:
+    """Service-page pipeline: service_brief -> service_writer. Reuses the
+    runs/module_outputs plumbing (silos + publish come for free). Resume-aware
+    via `completed`, mirroring the blog path."""
+    # Stage A: Service Page Brief
+    if await _is_cancelled(run_id):
+        raise CancellationError()
+    brief_result: Any = completed.get("service_brief")
+    if brief_result is None:
+        await _set_run_status(run_id, "service_brief_running")
+        brief_result = await _call_module(
+            "service_brief", run_id, _build_service_brief_payload(run, snapshot)
+        )
+
+    # Stage B: Service Page Writer
+    if await _is_cancelled(run_id):
+        raise CancellationError()
+    if completed.get("service_writer") is None:
+        await _set_run_status(run_id, "service_writer_running")
+        await _call_module(
+            "service_writer", run_id, _build_service_writer_payload(run, brief_result, snapshot)
+        )
+
+
 # ---------------------------------------------------------------------------
 # Main orchestrator
 # ---------------------------------------------------------------------------
@@ -565,6 +642,16 @@ async def orchestrate_run(run_id: str) -> None:
                 "resuming_run",
                 extra={"run_id": run_id, "completed_stages": list(completed.keys())},
             )
+
+        # Service-page content type runs a distinct two-stage pipeline
+        # (service_brief -> service_writer); the blog 5-module pipeline below
+        # is skipped entirely.
+        if run.get("content_type") == "service_page":
+            await _orchestrate_service_page(run_id, run, snapshot, completed)
+            await _set_run_status(run_id, "complete")
+            await _update_total_cost(run_id)
+            logger.info("run_complete", extra={"run_id": run_id})
+            return
 
         # Stage 1: Brief + SIE in parallel (skip whichever are already complete)
         if await _is_cancelled(run_id):

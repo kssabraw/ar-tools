@@ -11,6 +11,7 @@ import {
 import { sectionsToMarkdown, toTitleCase } from '../lib/sectionsToMarkdown'
 import { sectionsToHtml, escapeHtml } from '../lib/sectionsToHtml'
 import { FeedbackButton } from '../components/FeedbackButton'
+import { ServicePageRunView } from '../components/ServicePageRunView'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -110,6 +111,8 @@ function StatusChip({ status }: { status: RunStatus }) {
     research_running:        { bg: '#dbeafe', color: '#1e40af', label: 'Running' },
     writer_running:          { bg: '#dbeafe', color: '#1e40af', label: 'Running' },
     sources_cited_running:   { bg: '#dbeafe', color: '#1e40af', label: 'Running' },
+    service_brief_running:   { bg: '#dbeafe', color: '#1e40af', label: 'Running' },
+    service_writer_running:  { bg: '#dbeafe', color: '#1e40af', label: 'Running' },
     complete:                { bg: '#dcfce7', color: '#166534', label: 'Complete' },
     failed:                  { bg: '#fee2e2', color: '#991b1b', label: 'Failed' },
     cancelled:               { bg: '#f1f5f9', color: '#475569', label: 'Cancelled' },
@@ -301,6 +304,10 @@ export function RunDetail() {
 
   if (isLoading) return <div style={{ padding: 40, color: '#64748b' }}>Loading…</div>
   if (!run) return <div style={{ padding: 40, color: '#dc2626' }}>Run not found</div>
+
+  // Service pages run a distinct two-stage pipeline and carry their own
+  // renderings (markdown/html/wordpress) + JSON-LD — render a dedicated view.
+  if (run.content_type === 'service_page') return <ServicePageRunView run={run} />
 
   const canCancel = !TERMINAL.includes(run.status)
   const canResume = run.status === 'failed' || run.status === 'cancelled'

@@ -132,10 +132,18 @@ async def run_research(
             logger.warning("service_brief.research.entities_failed", extra={"error": str(exc)})
             notes.append("entity_extract_unavailable")
 
-    # ---- Stage 4: Question mining (PAA + autocomplete) ----
+    # ---- Stage 4: Question mining (PAA + related searches + autocomplete) ----
     questions: list[MinedQuestion] = [
         MinedQuestion(question=q, source="paa") for q in paa_questions
     ]
+    # Related searches come from the SERP we already fetched — no extra API call.
+    for item in items:
+        if item.get("type") != "related_searches":
+            continue
+        for rs in item.get("items") or []:
+            text = rs if isinstance(rs, str) else (rs.get("title") or rs.get("query") or "")
+            if text and text.strip():
+                questions.append(MinedQuestion(question=text.strip(), source="related_search"))
     try:
         for sug in await autocomplete(primary_query, location_code=location_code):
             if "?" in sug or sug.lower().startswith(("how", "what", "why", "can", "do", "is")):

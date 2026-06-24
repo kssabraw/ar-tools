@@ -22,6 +22,8 @@ from modules.brief.llm import (
     get_anthropic,
 )
 
+from .cost import record_usage
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,6 +59,13 @@ async def claude_json_model(
         text = "".join(
             block.text for block in message.content if getattr(block, "type", "") == "text"
         )
+        usage = getattr(message, "usage", None)
+        if usage is not None:
+            record_usage(
+                model,
+                getattr(usage, "input_tokens", 0) or 0,
+                getattr(usage, "output_tokens", 0) or 0,
+            )
         if getattr(message, "stop_reason", None) == "max_tokens":
             logger.warning(
                 "service_brief.llm.truncated",
