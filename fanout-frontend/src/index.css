@@ -516,6 +516,44 @@ body {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
+/* New-session content-type chooser: two equal cards, side by side. */
+.intent-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 18px;
+}
+@media (max-width: 560px) {
+  .intent-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.intent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  height: 100%;
+}
+.intent-card:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.intent-card-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.intent-card-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
 .toolbar {
   display: flex;
   justify-content: space-between;

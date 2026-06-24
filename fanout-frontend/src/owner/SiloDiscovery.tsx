@@ -13,6 +13,7 @@ import {
   getKeywords,
   getSession,
   getSummary,
+  isoForLocationCode,
   overrideAudience,
   planArticles,
   setDeepMine,
@@ -25,6 +26,7 @@ import {
 } from "../shared/api";
 import { CLIENT_SCOPE } from "../shared/clientScope";
 import { AppShell } from "../shared/AppShell";
+import { LocationAutocomplete } from "../shared/LocationAutocomplete";
 import {
   RELATIONSHIP_LABELS,
   RELATIONSHIP_OPTIONS,
@@ -32,14 +34,27 @@ import {
 
 // The pipeline steps run in the background; "pipeline" is a polling-driven view
 // that renders progress / results from the session summary.
-type Step = "form" | "disambiguation" | "review" | "finalized" | "pipeline";
+type Step = "intent" | "form" | "disambiguation" | "review" | "finalized" | "pipeline";
 type Phase = "expanding" | "planning";
+type ContentType = "blog_post" | "local_seo_page";
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : "Something went wrong");
 
-export function SiloDiscovery({ onExit }: { onExit: () => void }) {
+export function SiloDiscovery({
+  onExit,
+  initialContentType,
+}: {
+  onExit: () => void;
+  // When the flow is entered from a content-type card (sessions page), the type
+  // is preselected and we skip straight to the seed form. Otherwise the flow
+  // opens on the chooser so both outputs are visible up front.
+  initialContentType?: ContentType;
+}) {
   const qc = useQueryClient();
-  const [step, setStep] = useState<Step>("form");
+  const [step, setStep] = useState<Step>(initialContentType ? "form" : "intent");
+  const [contentType, setContentType] = useState<ContentType>(
+    initialContentType ?? "blog_post",
+  );
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   // Degraded-mode notes belong to the discovery run, so keep them in state —
@@ -55,6 +70,11 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
   const [mode, setMode] = useState<"standard" | "comprehensive">("standard");
   // Per-country locale (E1). Country -> DataForSEO location_code; default US.
   const [locationCode, setLocationCode] = useState<number>(DEFAULT_LOCATION_CODE);
+  // Local SEO target area (Service + location typeahead). `location` is the
+  // committed (picked) area name; `locationInput` is the raw field text. Carried
+  // on the session so the Schedule modal pre-fills it.
+  const [location, setLocation] = useState("");
+  const [locationInput, setLocationInput] = useState("");
   // §7.8 metrics enrichment toggle (default on; user can opt out per run).
   const [enrichMetrics, setEnrichMetrics] = useState(true);
   const [showOptional, setShowOptional] = useState(false);
@@ -133,6 +153,13 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
       disambiguation_hint: disambHint.trim() || undefined,
       topic_count: topicCount,
       coverage_mode: mode,
+      content_type: contentType,
+      // Only Local SEO runs carry a target area; prefer the picked suggestion,
+      // fall back to whatever was typed (free-text when no client scope).
+      location:
+        contentType === "local_seo_page"
+          ? (location || locationInput).trim() || undefined
+          : undefined,
       location_code: locationCode,
       enrich_with_metrics: enrichMetrics,
     });
@@ -157,6 +184,16 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
           />
         )}
 
+        {!busy && step === "intent" && (
+          <ContentTypeChooser
+            hasClient={!!CLIENT_SCOPE.clientId}
+            onPick={(c) => {
+              setContentType(c);
+              setStep("form");
+            }}
+          />
+        )}
+
         {!busy && step === "form" && (
           <SeedForm
             {...{
@@ -172,10 +209,17 @@ export function SiloDiscovery({ onExit }: { onExit: () => void }) {
               setMode,
               locationCode,
               setLocationCode,
+              location,
+              setLocation,
+              locationInput,
+              setLocationInput,
+              clientId: CLIENT_SCOPE.clientId,
               enrichMetrics,
               setEnrichMetrics,
               showOptional,
               setShowOptional,
+              contentType,
+              onChangeContentType: () => setStep("intent"),
               onSubmit: onSubmitSeed,
             }}
           />
@@ -573,30 +617,80 @@ function SeedForm(p: {
   setMode: (v: "standard" | "comprehensive") => void;
   locationCode: number;
   setLocationCode: (v: number) => void;
+  location: string;
+  setLocation: (v: string) => void;
+  locationInput: string;
+  setLocationInput: (v: string) => void;
+  clientId: string | null;
   enrichMetrics: boolean;
   setEnrichMetrics: (v: boolean) => void;
   showOptional: boolean;
   setShowOptional: (v: boolean) => void;
+  contentType: ContentType;
+  onChangeContentType: () => void;
   onSubmit: (e: FormEvent) => void;
 }) {
+  const isLocalSeo = p.contentType === "local_seo_page";
   return (
     <div className="card" style={{ maxWidth: 560 }}>
       <h1 className="page-title">New research session</h1>
+
+      <div className="banner" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <span>
+          Creating <strong>{isLocalSeo ? "Local SEO pages" : "blog content"}</strong>
+          {isLocalSeo
+            ? " — location-targeted pages with competitor analysis."
+            : " — SEO blog articles from your keyword map."}
+        </span>
+        <button type="button" className="link-btn" onClick={p.onChangeContentType}>
+          Change
+        </button>
+      </div>
+
       <form onSubmit={p.onSubmit}>
         <label className="field">
-          <span className="field-label">Seed keyword</span>
+          <span className="field-label">{isLocalSeo ? "Service" : "Seed keyword"}</span>
           <input
             className="input"
             value={p.seed}
             onChange={(e) => p.setSeed(e.target.value)}
-            placeholder="e.g. retatrutide"
+            placeholder={isLocalSeo ? "e.g. emergency plumber" : "e.g. retatrutide"}
             maxLength={200}
             required
           />
         </label>
 
+        {isLocalSeo && (
+          <label className="field">
+            <span className="field-label">Location</span>
+            <LocationAutocomplete
+              country={isoForLocationCode(p.locationCode)}
+              clientId={p.clientId}
+              value={p.location}
+              inputValue={p.locationInput}
+              placeholder="Start typing a city or area…"
+              onSelect={(loc) => {
+                p.setLocation(loc.location_name);
+                p.setLocationInput(loc.location_name);
+              }}
+              onInputChange={(raw) => {
+                p.setLocationInput(raw);
+                p.setLocation("");
+              }}
+              onClear={() => {
+                p.setLocation("");
+                p.setLocationInput("");
+              }}
+            />
+            <span className="field-hint">
+              The city/area these pages target. Suggestions match the selected market;
+              pre-fills when you schedule.
+            </span>
+          </label>
+        )}
+
         <label className="field">
-          <span className="field-label">Country</span>
+          <span className="field-label">{isLocalSeo ? "Search market" : "Country"}</span>
           <select
             className="select"
             value={p.locationCode}
@@ -683,6 +777,46 @@ function SeedForm(p: {
           Discover silos
         </button>
       </form>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// First step of the new-session flow: pick what you're creating. Both outputs
+// share the same keyword-research pipeline; the choice is carried on the session
+// so the Schedule step later defaults to it. Local SEO pages need a client-linked
+// session + a target area, so that card explains the requirement.
+function ContentTypeChooser(p: {
+  hasClient: boolean;
+  onPick: (c: ContentType) => void;
+}) {
+  return (
+    <div className="card" style={{ maxWidth: 620 }}>
+      <h1 className="page-title">What are you creating?</h1>
+      <p className="muted">
+        Both start from the same keyword research — pick the output so the writer and
+        scheduler default to it. You can still change it when you schedule.
+      </p>
+
+      <div className="intent-grid">
+        <button type="button" className="intent-card" onClick={() => p.onPick("blog_post")}>
+          <span className="intent-card-title">Blog content</span>
+          <span className="intent-card-desc">
+            SEO blog articles generated from your keyword map. Publish to your site, Google
+            Drive, or GitHub.
+          </span>
+        </button>
+
+        <button type="button" className="intent-card" onClick={() => p.onPick("local_seo_page")}>
+          <span className="intent-card-title">Local SEO content</span>
+          <span className="intent-card-desc">
+            Location-targeted Local SEO pages with competitor analysis and on-page scoring.
+            {p.hasClient
+              ? " Targets a client's service area."
+              : " Needs a client with a Google Business Profile — open from a client workspace to schedule these."}
+          </span>
+        </button>
+      </div>
     </div>
   );
 }

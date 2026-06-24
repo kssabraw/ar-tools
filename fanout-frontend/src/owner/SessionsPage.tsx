@@ -73,6 +73,34 @@ export function SessionsPage() {
           </div>
         </div>
 
+        {/* Both content types run on the same keyword research — signpost it so
+            the team knows a session can produce either. Each card starts a new
+            session with that output preselected. */}
+        <div className="intent-grid" style={{ marginBottom: 20 }}>
+          <button
+            type="button"
+            className="intent-card"
+            onClick={() => navigate("/session/new?type=blog_post")}
+          >
+            <span className="intent-card-title">Blog content</span>
+            <span className="intent-card-desc">
+              SEO blog articles generated from your keyword research. Publish to your
+              site, Google Drive, or GitHub.
+            </span>
+          </button>
+          <button
+            type="button"
+            className="intent-card"
+            onClick={() => navigate("/session/new?type=local_seo_page")}
+          >
+            <span className="intent-card-title">Local SEO content</span>
+            <span className="intent-card-desc">
+              Location-targeted Local SEO pages with competitor analysis and on-page
+              scoring, for a client's service area.
+            </span>
+          </button>
+        </div>
+
         <label className="archived-toggle">
           <input
             type="checkbox"
