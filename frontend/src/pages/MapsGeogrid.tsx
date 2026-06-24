@@ -591,6 +591,15 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
     mutationFn: () => api.delete(`/clients/${clientId}/maps/scans`),
     onSuccess: () => { invalidate(); queryClient.invalidateQueries({ queryKey: ['maps-latest', clientId] }) },
   })
+  const [queued, setQueued] = useState<string | null>(null)
+  const genMut = useMutation({
+    mutationFn: (id: string) => api.post(`/clients/${clientId}/maps/report?scan_id=${id}`, {}),
+    onSuccess: (_d, id) => setQueued(id),
+  })
+  const fmtScanDate = (s: MapsScanSummary) => {
+    const iso = s.completed_at || s.requested_at
+    return iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
+  }
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
@@ -618,35 +627,51 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {scans.map((s, i) => {
               const inFlight = s.status === 'polling' || s.status === 'pending'
+              const keywords = (s.search_terms ?? []).join(', ') || '—'
+              const triggerLabel = s.trigger === 'scheduled' ? 'Scheduled' : 'One-off'
+              const generating = genMut.isPending && genMut.variables === s.id
               return (
-                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
-                  <span style={statusDot(s.status)} />
-                  <span style={{ flex: 1, fontSize: 14, color: '#0f172a' }}>
-                    {s.radius_miles}-mile · {s.grid_size}×{s.grid_size}
-                    <span style={{ color: '#94a3b8', marginLeft: 8, fontSize: 12 }}>{s.trigger}</span>
-                  </span>
-                  <span style={{ fontSize: 12, color: '#64748b' }}>{cap(s.status)}</span>
-                  <span style={{ fontSize: 12, color: '#94a3b8', minWidth: 90, textAlign: 'right' }}>
-                    {relativeTime(s.completed_at || s.requested_at || '')}
-                  </span>
-                  {inFlight ? (
-                    <button style={{ ...outlineBtn, padding: '4px 7px', fontSize: 12, color: '#dc2626' }}
-                      onClick={() => stopMut.mutate(s.id)} disabled={stopMut.isPending} title="Stop this scan">
-                      <Square size={12} /> Stop
-                    </button>
-                  ) : (
-                    <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
-                      onClick={() => { if (confirm('Delete this scan and its results?')) delMut.mutate(s.id) }}
-                      disabled={delMut.isPending} title="Delete this scan">
-                      <Trash2 size={13} />
-                    </button>
-                  )}
+                <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 2px', borderTop: i ? '1px solid #f1f5f9' : 'none', flexWrap: 'wrap' }}>
+                  <span style={{ ...statusDot(s.status), alignSelf: 'flex-start', marginTop: 5 }} />
+                  <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>{keywords}</div>
+                    <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 1 }}>
+                      {fmtScanDate(s)} · {s.radius_miles}-mile · {triggerLabel}
+                    </div>
+                  </div>
+                  <span style={{ fontSize: 12, color: '#64748b', minWidth: 70 }}>{cap(s.status)}</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {s.status === 'complete' && (
+                      <>
+                        <button style={{ ...outlineBtn, padding: '4px 9px', fontSize: 12 }}
+                          onClick={() => genMut.mutate(s.id)} disabled={generating} title="Generate the Local Rank Analysis report for this scan">
+                          {generating ? 'Queuing…' : queued === s.id ? 'Report queued ✓' : 'Generate report'}
+                        </button>
+                        <Link to={`/clients/${clientId}/maps/report?scan_id=${s.id}`} target="_blank" rel="noreferrer"
+                          style={{ ...outlineBtn, padding: '4px 9px', fontSize: 12, textDecoration: 'none' }} title="Open this scan's report">
+                          Open ↗
+                        </Link>
+                      </>
+                    )}
+                    {inFlight ? (
+                      <button style={{ ...outlineBtn, padding: '4px 7px', fontSize: 12, color: '#dc2626' }}
+                        onClick={() => stopMut.mutate(s.id)} disabled={stopMut.isPending} title="Stop this scan">
+                        <Square size={12} /> Stop
+                      </button>
+                    ) : (
+                      <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
+                        onClick={() => { if (confirm('Delete this scan and its results?')) delMut.mutate(s.id) }}
+                        disabled={delMut.isPending} title="Delete this scan">
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
                 </div>
               )
             })}
           </div>
-          {(stopMut.error || delMut.error || clearMut.error) && (
-            <div style={{ ...errorBox, marginTop: 10 }}>{((stopMut.error || delMut.error || clearMut.error) as Error).message}</div>
+          {(stopMut.error || delMut.error || clearMut.error || genMut.error) && (
+            <div style={{ ...errorBox, marginTop: 10 }}>{((stopMut.error || delMut.error || clearMut.error || genMut.error) as Error).message}</div>
           )}
         </div>
       )}

@@ -24,14 +24,17 @@ export function MapsReport() {
   const [params] = useSearchParams()
   const focusKeyword = params.get('keyword')
   const autoPrint = params.get('print') === '1'
+  const scanId = params.get('scan_id')  // a specific past scan, else the latest
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', clientId],
     queryFn: () => api.get<Client>(`/clients/${clientId}`),
   })
   const { data: latest, error } = useQuery<MapsScanDetail>({
-    queryKey: ['maps-latest', clientId],
-    queryFn: () => api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest`),
+    queryKey: scanId ? ['maps-scan', scanId] : ['maps-latest', clientId],
+    queryFn: () => scanId
+      ? api.get<MapsScanDetail>(`/maps-scans/${scanId}`)
+      : api.get<MapsScanDetail>(`/clients/${clientId}/maps/latest`),
     retry: false,
   })
   const { data: trends } = useQuery<MapsTrendsResponse>({

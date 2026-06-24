@@ -80,6 +80,7 @@ class MapsScanSummary(BaseModel):
     trigger: str
     radius_miles: Optional[int] = None
     grid_size: Optional[int] = None
+    search_terms: Optional[list] = None  # keywords scanned (for the history list)
     requested_at: Optional[str] = None
     completed_at: Optional[str] = None
     error: Optional[str] = None

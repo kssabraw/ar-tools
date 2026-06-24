@@ -187,7 +187,7 @@ async def cancel_client_scan(client_id: UUID, auth: dict = Depends(require_auth)
 async def list_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> list[MapsScanSummary]:
     rows = (
         get_supabase().table("maps_scans")
-        .select("id, scan_uuid, status, trigger, radius_miles, grid_size, requested_at, completed_at, error")
+        .select("id, scan_uuid, status, trigger, radius_miles, grid_size, search_terms, requested_at, completed_at, error")
         .eq("client_id", str(client_id)).order("created_at", desc=True).limit(50).execute()
     ).data or []
     return [MapsScanSummary(**r) for r in rows]
