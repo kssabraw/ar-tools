@@ -172,7 +172,7 @@ export function ClientForm() {
           : "Fill in the client's details. The brand guide and ICP are used by the AI to match the client's voice and audience on every content run."}
       </p>
       <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 32px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <ParkedBadge /> Saved now and ready to use, but no module reads it yet — it activates when that feature ships.
+        <ParkedBadge /> marks a field that's saved now but not read by any module yet — it activates when that feature ships. Everything else is used as soon as you save.
       </p>
 
       <form onSubmit={handleSubmit}>
@@ -249,12 +249,9 @@ export function ClientForm() {
         </div>
 
         <div id="gbp" style={sectionStyle}>
-          <div style={titleRow}>
-            <h2 style={{ ...sectionTitle, margin: 0 }}>Google Business Profile</h2>
-            <ParkedBadge />
-          </div>
+          <h2 style={sectionTitle}>Google Business Profile</h2>
           <p style={descStyle}>
-            Optional. Search Google to attach this client's business listing — address, category, rating, and top reviews. Shown on the client's workspace today; it will feed local-SEO content and Maps rank tracking once those modules ship.
+            Optional. Search Google to attach this client's business listing — address, category, rating, and top reviews. Shown on the client's workspace and used today by local-SEO content generation, brand-voice distillation, and keyword market analysis.
           </p>
           <GbpPicker
             placeId={form.gbp_place_id}
@@ -305,23 +302,20 @@ export function ClientForm() {
         </div>
 
         <div style={sectionStyle}>
-          <div style={titleRow}>
-            <h2 style={{ ...sectionTitle, margin: 0 }}>Search Console &amp; Local Rankings</h2>
-            <ParkedBadge />
-          </div>
-          <p style={descStyle}>
-            Optional. Saved now and used automatically once the rank-tracking &amp; Search Console module ships — nothing reads these yet, so it's safe to fill them in early.
-          </p>
+          <h2 style={sectionTitle}>Search Console &amp; Local Rankings</h2>
           <div style={{ marginBottom: 16 }}>
-            <label style={labelStyle}>Search Console Property</label>
+            <div style={titleRow}>
+              <label style={{ ...labelStyle, margin: 0 }}>Search Console Property</label>
+              <ParkedBadge />
+            </div>
             <input
               value={form.gsc_property}
               onChange={set('gsc_property')}
               placeholder="sc-domain:acmehvac.com  (or  https://acmehvac.com/)"
-              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' }}
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', marginTop: 6 }}
             />
             <p style={hintStyle}>
-              The property exactly as it appears in Search Console. Make sure the agency service account is added as a user on that property so we can pull clicks &amp; impressions.
+              The property exactly as it appears in Search Console. Not read yet — the rank tracker registers GSC properties separately from each client's workspace. Make sure the agency service account is added as a user on that property so we can pull clicks &amp; impressions.
             </p>
           </div>
           <div>
@@ -332,7 +326,7 @@ export function ClientForm() {
               placeholder="e.g. 123 Main St, Austin, TX 78701"
               style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
             />
-            <p style={hintStyle}>Used to anchor the maps / local-pack rank-tracking grid for this client.</p>
+            <p style={hintStyle}>Used today as the business address for local-SEO page generation when no Google Business Profile is attached.</p>
           </div>
         </div>
 
@@ -354,9 +348,12 @@ export function ClientForm() {
         </div>
 
         <div style={sectionStyle}>
-          <h2 style={sectionTitle}>GitHub Publishing</h2>
+          <div style={titleRow}>
+            <h2 style={{ ...sectionTitle, margin: 0 }}>GitHub Publishing</h2>
+            <ParkedBadge />
+          </div>
           <p style={descStyle}>
-            Optional. Where this client's generated articles get committed when published to a repo (Astro content). Used by the Content Scheduler / Topic Fanout tool.
+            Optional. Where this client's generated articles get committed when published to a repo (Astro content). Saved on the client now, but the publish endpoints don't read it yet — it activates when GitHub publishing for the Content Scheduler / Topic Fanout tool ships.
           </p>
           <label style={labelStyle}>Repository</label>
           <input
@@ -385,9 +382,6 @@ export function ClientForm() {
               />
             </div>
           </div>
-          <p style={hintStyle}>
-            Scaffold — saved on the client now; the publish wiring comes later.
-          </p>
         </div>
 
         {error && (
