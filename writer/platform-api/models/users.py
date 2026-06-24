@@ -25,6 +25,15 @@ class UserInviteRequest(BaseModel):
     redirect_to: Optional[str] = None
 
 
+class UserCreateRequest(BaseModel):
+    # Direct create: admin sets the email + password themselves and relays the
+    # credentials out-of-band. No invite email is sent and the account is
+    # created already email-confirmed so the user can sign in immediately.
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)
+    role: Literal["admin", "team_member"] = "team_member"
+
+
 class UserRoleUpdateRequest(BaseModel):
     role: Literal["admin", "team_member"]
 

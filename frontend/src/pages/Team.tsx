@@ -18,7 +18,10 @@ export function Team() {
   const { user } = useAuth()
   const myId = user?.id
 
+  const [addMode, setAddMode] = useState<'invite' | 'direct'>('invite')
   const [inviteEmail, setInviteEmail] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [newRole, setNewRole] = useState<TeamUser['role']>('team_member')
   const [removeId, setRemoveId] = useState<string | null>(null)
   const [roleId, setRoleId] = useState<string | null>(null)
   const [pwOpenId, setPwOpenId] = useState<string | null>(null)
@@ -45,6 +48,20 @@ export function Team() {
       setError(null)
       qc.invalidateQueries({ queryKey: ['users'] })
       showFlash('invite', `Invite sent to ${email}`)
+    },
+    onError: (e: Error) => setError(e.message),
+  })
+
+  const createMutation = useMutation({
+    mutationFn: (vars: { email: string; password: string; role: TeamUser['role'] }) =>
+      api.post('/users', vars),
+    onSuccess: (_d, vars) => {
+      setInviteEmail('')
+      setNewPassword('')
+      setNewRole('team_member')
+      setError(null)
+      qc.invalidateQueries({ queryKey: ['users'] })
+      showFlash('invite', `User ${vars.email} created`)
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -85,7 +102,9 @@ export function Team() {
     onError: (e: Error) => setError(e.message),
   })
 
-  const canInvite = /\S+@\S+\.\S+/.test(inviteEmail)
+  const emailValid = /\S+@\S+\.\S+/.test(inviteEmail)
+  const canInvite = emailValid
+  const canCreate = emailValid && newPassword.length >= 8
 
   return (
     <div style={{ padding: 32, maxWidth: 900 }}>
@@ -96,30 +115,95 @@ export function Team() {
         </p>
       </div>
 
-      {/* Invite */}
+      {/* Add a VA */}
       <div style={cardStyle}>
         <div style={{ fontWeight: 600, fontSize: 14, color: '#0f172a', marginBottom: 12 }}>Add a VA</div>
-        <form
-          onSubmit={(e) => {
-            e.preventDefault()
-            if (canInvite) inviteMutation.mutate(inviteEmail.trim())
-          }}
-          style={{ display: 'flex', gap: 8, alignItems: 'center' }}
-        >
-          <input
-            type="email"
-            value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.target.value)}
-            placeholder="va@example.com"
-            style={inputStyle}
-          />
-          <button type="submit" disabled={!canInvite || inviteMutation.isPending} style={primaryBtn}>
-            <UserPlus size={15} /> {inviteMutation.isPending ? 'Sending…' : 'Send invite'}
+
+        {/* Mode toggle: email invite vs. direct create with password */}
+        <div style={{ display: 'flex', gap: 4, background: '#f1f5f9', borderRadius: 8, padding: 3, marginBottom: 14, width: 'fit-content' }}>
+          <button
+            type="button"
+            onClick={() => { setAddMode('invite'); setError(null) }}
+            style={addMode === 'invite' ? toggleBtnActive : toggleBtn}
+          >
+            Email invite
           </button>
-        </form>
-        <p style={{ color: '#94a3b8', fontSize: 12, margin: '10px 0 0' }}>
-          The VA receives an email invite to set their own password and sign in.
-        </p>
+          <button
+            type="button"
+            onClick={() => { setAddMode('direct'); setError(null) }}
+            style={addMode === 'direct' ? toggleBtnActive : toggleBtn}
+          >
+            Set password
+          </button>
+        </div>
+
+        {addMode === 'invite' ? (
+          <>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (canInvite) inviteMutation.mutate(inviteEmail.trim())
+              }}
+              style={{ display: 'flex', gap: 8, alignItems: 'center' }}
+            >
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="va@example.com"
+                style={inputStyle}
+              />
+              <button type="submit" disabled={!canInvite || inviteMutation.isPending} style={primaryBtn}>
+                <UserPlus size={15} /> {inviteMutation.isPending ? 'Sending…' : 'Send invite'}
+              </button>
+            </form>
+            <p style={{ color: '#94a3b8', fontSize: 12, margin: '10px 0 0' }}>
+              The VA receives an email invite to set their own password and sign in.
+            </p>
+          </>
+        ) : (
+          <>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                if (canCreate)
+                  createMutation.mutate({ email: inviteEmail.trim(), password: newPassword, role: newRole })
+              }}
+              style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
+            >
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="va@example.com"
+                style={inputStyle}
+              />
+              <input
+                type="text"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder="Password (min 8)"
+                style={{ ...inputStyle, minWidth: 180 }}
+              />
+              <select
+                value={newRole}
+                onChange={(e) => setNewRole(e.target.value as TeamUser['role'])}
+                style={{ ...inputStyle, flex: 'none', minWidth: 110, cursor: 'pointer' }}
+              >
+                <option value="team_member">VA</option>
+                <option value="admin">Admin</option>
+              </select>
+              <button type="submit" disabled={!canCreate || createMutation.isPending} style={primaryBtn}>
+                <UserPlus size={15} /> {createMutation.isPending ? 'Creating…' : 'Create user'}
+              </button>
+            </form>
+            <p style={{ color: '#94a3b8', fontSize: 12, margin: '10px 0 0' }}>
+              Creates the account immediately with this email + password — no email is sent. Share the
+              credentials with the VA directly.
+            </p>
+          </>
+        )}
+
         {flash?.id === 'invite' && (
           <div style={{ color: '#16a34a', fontSize: 13, marginTop: 8 }}>{flash.msg}</div>
         )}
@@ -289,6 +373,8 @@ export function Team() {
 const cardStyle: React.CSSProperties = { background: '#fff', borderRadius: 12, border: '1px solid #e2e8f0', padding: 24, marginBottom: 20 }
 const inputStyle: React.CSSProperties = { flex: 1, padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 13, color: '#0f172a', outline: 'none', minWidth: 220 }
 const primaryBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, padding: '8px 14px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, fontWeight: 600, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap' }
+const toggleBtn: React.CSSProperties = { padding: '5px 14px', background: 'transparent', color: '#64748b', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
+const toggleBtnActive: React.CSSProperties = { ...toggleBtn, background: '#fff', color: '#0f172a', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' }
 const iconBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', padding: '6px', background: '#fff', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer' }
 const textBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 500 }
 const vaBadge: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#4338ca', background: '#eef2ff', padding: '2px 8px', borderRadius: 999 }
