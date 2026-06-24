@@ -106,6 +106,31 @@ export interface SiloPlanResult {
   error?: string | null
 }
 
+// One outcome from the Reoptimization tab's per-URL flow (POST .../reoptimize-url).
+// A strong page (>= threshold) is 'skipped' with a reason; a weak one is
+// 'reoptimized' and saved as a new mode='reoptimize' page (optionally published).
+export interface ReoptimizeUrlResult {
+  status: 'reoptimized' | 'skipped'
+  page_url: string
+  keyword: string
+  // skipped:
+  score?: number | null
+  threshold?: number
+  reason?: string
+  // reoptimized:
+  prev_score?: number | null
+  new_score?: number | null
+  page?: {
+    id: string
+    page_title: string | null
+    composite_score: number | null
+    composite_status: string | null
+    published_doc_url: string | null
+  }
+  published?: { doc_url: string | null; doc_id: string | null }
+  publish_error?: string
+}
+
 export interface SocialPostsResult {
   gbp: string[]
   token_usage: Record<string, unknown>

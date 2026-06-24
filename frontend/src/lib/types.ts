@@ -9,6 +9,14 @@ export type RunStatus =
   | 'failed'
   | 'cancelled'
 
+export interface TeamUser {
+  id: string
+  email: string
+  full_name: string | null
+  role: 'admin' | 'team_member'
+  created_at: string
+}
+
 export interface ClientListItem {
   id: string
   name: string
@@ -698,4 +706,25 @@ export interface MapsClientThreats {
 
 export interface MapsThreatsResponse {
   clients: MapsClientThreats[]
+}
+
+// Dashboard ranking-health tile: average organic position + average maps rank,
+// latest run vs first. Lower rank numbers are better, so direction "up" = the
+// latest average is a smaller (better) number than the first.
+export interface RankingTrend {
+  first_avg: number | null
+  latest_avg: number | null
+  delta: number | null // first_avg - latest_avg; positive = improved
+  direction: 'up' | 'down' | 'flat' | null
+  sample_count: number
+}
+
+export interface ClientRankingHealth {
+  client_id: string
+  organic: RankingTrend
+  maps: RankingTrend
+}
+
+export interface RankingHealthResponse {
+  clients: ClientRankingHealth[]
 }

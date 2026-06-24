@@ -7,6 +7,7 @@ import type {
   LocationSuggestion,
   RankabilityResult,
   RelatedPagesResult,
+  ReoptimizeUrlResult,
   ScoreResult,
   SiloPlanJob,
   SiloPlanResult,
@@ -98,6 +99,23 @@ export const localSeoApi = {
       serp_analysis?: AnalysisResult | null
     },
   ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/reoptimize`, body),
+
+  // Reoptimization tab — score a live page by URL and rewrite it only if it
+  // scores below `score_threshold` (strong pages are skipped with a note). The
+  // single + bulk flows both loop one URL per call so progress + failures stay
+  // isolated per page (same pattern as bulk page creation).
+  reoptimizeUrl: (
+    clientId: string,
+    body: {
+      page_url: string
+      keyword: string
+      location: string
+      location_code?: number | null
+      score_threshold?: number
+      publish_to_doc?: boolean
+    },
+    signal?: AbortSignal,
+  ) => api.stream<ReoptimizeUrlResult>(`/clients/${clientId}/local-seo/reoptimize-url`, body, signal),
 
   socialPosts: (
     clientId: string,

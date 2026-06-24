@@ -30,6 +30,7 @@ from models.local_seo import (
     LocalSeoRankabilityResponse,
     LocalSeoRelatedPagesRequest,
     LocalSeoReoptimizeRequest,
+    LocalSeoReoptimizeUrlRequest,
     LocalSeoScoreRequest,
     LocalSeoSiloPlanJob,
     LocalSeoSiloPlanRequest,
@@ -187,6 +188,31 @@ async def reoptimize_local_seo_page(
         return LocalSeoPageDetail(**page).model_dump(mode="json")
 
     return sse_response(_run())
+
+
+@router.post("/clients/{client_id}/local-seo/reoptimize-url")
+async def reoptimize_local_seo_url(
+    client_id: UUID,
+    body: LocalSeoReoptimizeUrlRequest,
+    auth: dict = Depends(require_auth),
+) -> StreamingResponse:
+    """Score a live page by URL and reoptimize it only if it falls below the
+    threshold (strong pages are skipped with a note). Backs the Reoptimization
+    tab's single + bulk URL flows. SSE because score + rewrite can take minutes.
+
+    Returns a `{status: 'reoptimized' | 'skipped', ...}` payload rather than a
+    bare page, so the caller can render skip notes alongside rewrites.
+    """
+    return sse_response(local_seo_service.reoptimize_url(
+        client_id=str(client_id),
+        page_url=body.page_url,
+        keyword=body.keyword,
+        location=body.location,
+        location_code=body.location_code,
+        user_id=auth["user_id"],
+        score_threshold=body.score_threshold,
+        publish_to_doc=body.publish_to_doc,
+    ))
 
 
 @router.post("/clients/{client_id}/local-seo/social-posts")
