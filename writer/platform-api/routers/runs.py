@@ -64,7 +64,7 @@ async def list_runs(
 ) -> RunListResponse:
     supabase = get_supabase()
     query = supabase.table("runs").select(
-        "id, keyword, client_id, status, sie_cache_hit, total_cost_usd, "
+        "id, keyword, client_id, content_type, status, sie_cache_hit, total_cost_usd, "
         "created_at, started_at, completed_at, clients(name)",
         count="exact",
     )
@@ -111,6 +111,7 @@ async def list_runs(
                 title=titles_by_run_id.get(r["id"]),
                 client_id=r["client_id"],
                 client_name=client_name,
+                content_type=r.get("content_type") or "blog_post",
                 status=r["status"],
                 sie_cache_hit=r.get("sie_cache_hit"),
                 total_cost_usd=r.get("total_cost_usd"),
@@ -212,6 +213,7 @@ async def get_run(
         title=article_title,
         h1=article_h1,
         client_id=run["client_id"],
+        content_type=run.get("content_type") or "blog_post",
         status=run["status"],
         sie_cache_hit=run.get("sie_cache_hit"),
         error_stage=run.get("error_stage"),
@@ -262,6 +264,10 @@ async def create_run(
             "sie_outlier_mode": body.sie_outlier_mode,
             "sie_force_refresh": body.sie_force_refresh,
             "brief_force_refresh": body.brief_force_refresh,
+            "content_type": body.content_type,
+            "service": body.service or (body.keyword if body.content_type == "service_page" else None),
+            "location": body.location,
+            "location_code": body.location_code,
             "status": "queued",
             "created_by": auth["user_id"],
         }

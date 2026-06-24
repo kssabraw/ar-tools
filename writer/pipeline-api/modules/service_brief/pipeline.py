@@ -13,7 +13,7 @@ import logging
 
 from models.service_brief import SCHEMA_VERSION, ResearchBundle, ServiceBriefRequest, ServiceBriefResponse
 
-from . import cache
+from . import cache, cost
 from .assembly import assemble
 from .errors import ServiceBriefError
 from .research import run_research
@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 async def run_service_brief(request: ServiceBriefRequest) -> ServiceBriefResponse:
     """Generate a service-page brief for a single (service, primary_query)."""
+    cost.start_accounting()
     cache_hit = False
     bundle: ResearchBundle | None = None
 
@@ -69,7 +70,7 @@ async def run_service_brief(request: ServiceBriefRequest) -> ServiceBriefRespons
             "synthesis_failed", f"Synthesis failed: {exc}"
         ) from exc
 
-    response = assemble(request, bundle, synthesis, cache_hit=cache_hit)
+    response = assemble(request, bundle, synthesis, cache_hit=cache_hit, cost_usd=cost.total_cost())
     logger.info(
         "service_brief.complete",
         extra={
