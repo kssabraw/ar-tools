@@ -44,6 +44,9 @@ export interface SiloDiscovery {
   // Intended content type chosen at session creation; the Schedule modal seeds
   // from it. Absent -> treat as blog_post.
   content_type?: "blog_post" | "local_seo_page" | null;
+  // Local SEO target area chosen at session creation; the Schedule modal pre-fills
+  // its location from it. Null/absent for blog runs.
+  location?: string | null;
   publish_config?: {
     github?: { repo?: string; branch?: string; content_path?: string };
     drive?: { folder_id?: string };
@@ -137,6 +140,9 @@ export interface CreateSessionBody {
   // Carried on the session so the Schedule modal defaults to it. Omit ->
   // backend defaults to 'blog_post'.
   content_type?: "blog_post" | "local_seo_page";
+  // Local SEO target area (Service + location typeahead). Carried on the session
+  // so the Schedule modal pre-fills it. Omit for blog runs.
+  location?: string;
   // Per-country locale (E1). DataForSEO location_code for the session's market.
   // Omit -> backend defaults to US (2840).
   location_code?: number;
@@ -150,6 +156,21 @@ export const createSession = (body: CreateSessionBody) =>
   request<SiloDiscovery>("/sessions", { method: "POST", body: JSON.stringify(body) });
 
 export const getSession = (id: string) => request<SiloDiscovery>(`/sessions/${id}`);
+
+// Service-area typeahead for the Local SEO new-session form. DataForSEO location
+// suggestions scoped to the client's country, served by a thin /fanout wrapper.
+export interface LocationSuggestion {
+  location_name: string;
+  location_code: number;
+  location_type?: string;
+  country_iso_code?: string;
+}
+
+export const searchLocations = (clientId: string, query: string, country?: string) =>
+  request<LocationSuggestion[]>(
+    `/locations?client_id=${encodeURIComponent(clientId)}&query=${encodeURIComponent(query)}` +
+      (country ? `&country=${encodeURIComponent(country)}` : ""),
+  );
 
 export const disambiguateSession = (id: string, choice: string) =>
   request<SiloDiscovery>(`/sessions/${id}/disambiguate`, {

@@ -25,6 +25,7 @@ import {
 } from "../shared/api";
 import { CLIENT_SCOPE } from "../shared/clientScope";
 import { AppShell } from "../shared/AppShell";
+import { LocationAutocomplete } from "../shared/LocationAutocomplete";
 import {
   RELATIONSHIP_LABELS,
   RELATIONSHIP_OPTIONS,
@@ -68,6 +69,11 @@ export function SiloDiscovery({
   const [mode, setMode] = useState<"standard" | "comprehensive">("standard");
   // Per-country locale (E1). Country -> DataForSEO location_code; default US.
   const [locationCode, setLocationCode] = useState<number>(DEFAULT_LOCATION_CODE);
+  // Local SEO target area (Service + location typeahead). `location` is the
+  // committed (picked) area name; `locationInput` is the raw field text. Carried
+  // on the session so the Schedule modal pre-fills it.
+  const [location, setLocation] = useState("");
+  const [locationInput, setLocationInput] = useState("");
   // §7.8 metrics enrichment toggle (default on; user can opt out per run).
   const [enrichMetrics, setEnrichMetrics] = useState(true);
   const [showOptional, setShowOptional] = useState(false);
@@ -147,6 +153,12 @@ export function SiloDiscovery({
       topic_count: topicCount,
       coverage_mode: mode,
       content_type: contentType,
+      // Only Local SEO runs carry a target area; prefer the picked suggestion,
+      // fall back to whatever was typed (free-text when no client scope).
+      location:
+        contentType === "local_seo_page"
+          ? (location || locationInput).trim() || undefined
+          : undefined,
       location_code: locationCode,
       enrich_with_metrics: enrichMetrics,
     });
@@ -196,6 +208,11 @@ export function SiloDiscovery({
               setMode,
               locationCode,
               setLocationCode,
+              location,
+              setLocation,
+              locationInput,
+              setLocationInput,
+              clientId: CLIENT_SCOPE.clientId,
               enrichMetrics,
               setEnrichMetrics,
               showOptional,
@@ -599,6 +616,11 @@ function SeedForm(p: {
   setMode: (v: "standard" | "comprehensive") => void;
   locationCode: number;
   setLocationCode: (v: number) => void;
+  location: string;
+  setLocation: (v: string) => void;
+  locationInput: string;
+  setLocationInput: (v: string) => void;
+  clientId: string | null;
   enrichMetrics: boolean;
   setEnrichMetrics: (v: boolean) => void;
   showOptional: boolean;
@@ -626,19 +648,48 @@ function SeedForm(p: {
 
       <form onSubmit={p.onSubmit}>
         <label className="field">
-          <span className="field-label">Seed keyword</span>
+          <span className="field-label">{isLocalSeo ? "Service" : "Seed keyword"}</span>
           <input
             className="input"
             value={p.seed}
             onChange={(e) => p.setSeed(e.target.value)}
-            placeholder="e.g. retatrutide"
+            placeholder={isLocalSeo ? "e.g. emergency plumber" : "e.g. retatrutide"}
             maxLength={200}
             required
           />
         </label>
 
+        {isLocalSeo && (
+          <label className="field">
+            <span className="field-label">Service area</span>
+            <LocationAutocomplete
+              clientId={p.clientId}
+              value={p.location}
+              inputValue={p.locationInput}
+              placeholder="e.g. Round Rock, TX"
+              onSelect={(loc) => {
+                p.setLocation(loc.location_name);
+                p.setLocationInput(loc.location_name);
+              }}
+              onInputChange={(raw) => {
+                p.setLocationInput(raw);
+                p.setLocation("");
+              }}
+              onClear={() => {
+                p.setLocation("");
+                p.setLocationInput("");
+              }}
+            />
+            <span className="field-hint">
+              {p.clientId
+                ? "The city/area these pages target. Pre-fills when you schedule; you can change it then."
+                : "Open from a client workspace for area suggestions. You can set this when you schedule."}
+            </span>
+          </label>
+        )}
+
         <label className="field">
-          <span className="field-label">Country</span>
+          <span className="field-label">{isLocalSeo ? "Search market" : "Country"}</span>
           <select
             className="select"
             value={p.locationCode}

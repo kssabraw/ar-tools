@@ -34,7 +34,7 @@ const INTENTS = ["informational", "commercial", "transactional", "comparison", "
 // All edits write straight to Postgres and the orchestrator never re-runs on its
 // own (§9.2). "Re-run orchestrator" is an explicit, destructive action.
 export function ClusterView() {
-  const { sessionId, topics, role, contentType } = useSession();
+  const { sessionId, topics, role, contentType, location } = useSession();
   const isVA = role === "va";
   const qc = useQueryClient();
   const clustersQ = useQuery({ queryKey: ["clusters", sessionId], queryFn: () => getClusters(sessionId) });
@@ -282,6 +282,7 @@ export function ClusterView() {
           sessionId={sessionId}
           clusterIds={scheduleSel}
           defaultContentType={contentType}
+          defaultLocation={location}
           onClose={() => setScheduleSel(null)}
           onScheduled={(n) => { setScheduleSel(null); setGenSel(new Set()); alert(`Scheduled ${n} article(s).`); }}
         />

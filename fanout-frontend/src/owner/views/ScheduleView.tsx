@@ -67,6 +67,7 @@ export function ScheduleView() {
           sessionId={sessionId}
           baseUrl={session.data?.site_base_url}
           defaultContentType={session.data?.content_type}
+          defaultLocation={session.data?.location}
           onClose={() => setShowModal(false)}
           onScheduled={(n) => { invalidate(); alert(`Scheduled ${n} article(s).`); }}
         />
