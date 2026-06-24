@@ -564,9 +564,30 @@ export interface MapsScanResultRow {
   report_weak_directions: string | null
   report_top_competitors: string[] | null
   report_octant_pins: MapsOctantPins | null
-  report_analytics: Record<string, unknown> | null
+  report_analytics: MapsReportAnalytics | null
   report_doc_url: string | null
   report_generated_at: string | null
+}
+
+export interface MapsDirectionStat {
+  sector: string
+  sector_full?: string
+  avg_rank: number | null
+  coverage_pct_top3: number
+}
+
+export interface MapsReportAnalytics {
+  overall?: {
+    avg_rank: number | null
+    coverage_pct_top3: number
+    coverage_pct_top10: number
+    ranked: number
+    not_ranked: number
+    cells: number
+  }
+  performance_horizon?: { ring: number; radius_mi: number; coverage_pct_top3: number } | null
+  best_directions?: MapsDirectionStat[]
+  weakest_directions?: MapsDirectionStat[]
 }
 
 export interface MapsOctantPin {
