@@ -199,6 +199,12 @@ tool, following EXACTLY this structure and order (omit any "source/map link"):
 
 **Keyword:** “{keyword}”
 
+## Overview
+2–3 plain-English sentences for a non-technical reader: the overall local visibility picture — where the business is strong, where it fades, and the single biggest competitive pressure. No jargon, no numbers-dump.
+
+## Key Strengths Recap
+Bullets: proximity performance, directional patterns, review signals, category relevance, visibility baseline, anchor opportunities. Then a short summarizing paragraph of the positives.
+
 ## Executive Summary
 * **Average Rank (overall)**
 * **Top-3 Coverage** (overall coverage_pct_top3)
@@ -235,9 +241,6 @@ A table: # | Competitor | SAB/Physical | GBP Name Keyword? | Main Category | Rat
 
 ## Review Profile Comparison
 Client rating + total reviews vs the Top-5 competitor review min–max. Then 2–4 sentences on quality vs quantity in contested areas.
-
-## Key Strengths Recap
-Bullets: proximity performance, directional patterns, review signals, category relevance, visibility baseline, anchor opportunities. Then a short summarizing paragraph.
 
 Also populate:
 - `weak_directions`: a concise paragraph or short bullet list naming the weakest sectors and the ring(s) where degradation begins.

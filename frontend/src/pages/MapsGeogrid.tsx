@@ -202,7 +202,12 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
 function ResultView({ r, scan, clientId }: { r: MapsScanResultRow; scan: MapsScanDetail; clientId: string }) {
   return (
     <div style={{ marginTop: 12 }}>
-      <GeoGridMap grid={r.rank_grid} centerLat={scan.center_lat} centerLng={scan.center_lng} />
+      <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 360px', maxWidth: 480 }}>
+          <GeoGridMap grid={r.rank_grid} centerLat={scan.center_lat} centerLng={scan.center_lng} />
+        </div>
+        <AtAGlance r={r} />
+      </div>
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 10 }}>
         {r.dynamic_url && (
           <a href={r.dynamic_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', textDecoration: 'none' }}>
@@ -215,6 +220,38 @@ function ResultView({ r, scan, clientId }: { r: MapsScanResultRow; scan: MapsSca
         </details>
       </div>
       <LocalRankAnalysis r={r} clientId={clientId} scanId={scan.id} />
+    </div>
+  )
+}
+
+// At-a-glance panel beside the map — fills the whitespace with the headline
+// coverage metrics plus the strongest/weakest directions and performance
+// horizon (from the report analytics, when available).
+function GlanceRow({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, padding: '5px 0', borderTop: '1px solid #f1f5f9' }}>
+      <span style={{ fontSize: 12, color: '#64748b' }}>{label}</span>
+      <span style={{ fontSize: 12, color: '#0f172a', fontWeight: 600, textAlign: 'right' }}>{value}</span>
+    </div>
+  )
+}
+
+function AtAGlance({ r }: { r: MapsScanResultRow }) {
+  const a = r.report_analytics
+  const dirs = (list?: { sector: string }[]) => (list ?? []).map(d => d.sector).join(' · ') || '—'
+  const horizon = a?.performance_horizon
+  const topThreat = r.report_top_competitors?.[0] ?? r.competitors?.[0]?.name ?? null
+  return (
+    <div style={{ flex: '1 1 240px', minWidth: 220, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px' }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 2 }}>At a glance</div>
+      <GlanceRow label="Average rank" value={r.average_rank ?? '—'} />
+      <GlanceRow label="Top-3 coverage" value={pct(r.top3_pins, r.total_pins)} />
+      <GlanceRow label="Top-10 coverage" value={pct(r.top10_pins, r.total_pins)} />
+      <GlanceRow label="Found" value={`${r.found_pins}/${r.total_pins} pins`} />
+      {horizon && <GlanceRow label="Visibility horizon" value={`~${horizon.radius_mi} mi`} />}
+      <GlanceRow label="Strongest" value={<span style={{ color: '#16a34a' }}>{dirs(a?.best_directions)}</span>} />
+      <GlanceRow label="Weakest" value={<span style={{ color: '#dc2626' }}>{dirs(a?.weakest_directions)}</span>} />
+      {topThreat && <GlanceRow label="Top competitor" value={topThreat} />}
     </div>
   )
 }
@@ -235,13 +272,25 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
     <div style={{ marginTop: 16, borderTop: '1px solid #f1f5f9', paddingTop: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
         <h4 style={{ fontSize: 14, fontWeight: 700, color: '#0f172a', margin: 0 }}>Local Rank Analysis</h4>
-        <button
-          style={{ ...outlineBtn, padding: '6px 10px', fontSize: 12 }}
-          onClick={() => regenMut.mutate()}
-          disabled={regenMut.isPending}
-        >
-          {regenMut.isPending ? 'Queuing…' : 'Regenerate report'}
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {r.report_status === 'complete' && r.report_md && (
+            <Link
+              to={`/clients/${clientId}/maps/report?keyword=${encodeURIComponent(r.keyword)}&print=1`}
+              target="_blank"
+              rel="noreferrer"
+              style={{ ...outlineBtn, padding: '6px 10px', fontSize: 12, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+            >
+              <Download size={13} /> Download report
+            </Link>
+          )}
+          <button
+            style={{ ...outlineBtn, padding: '6px 10px', fontSize: 12 }}
+            onClick={() => regenMut.mutate()}
+            disabled={regenMut.isPending}
+          >
+            {regenMut.isPending ? 'Queuing…' : 'Regenerate report'}
+          </button>
+        </div>
       </div>
 
       {r.report_status === 'complete' && r.report_md ? (
