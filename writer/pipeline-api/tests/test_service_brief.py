@@ -133,7 +133,7 @@ def _make_synthesis_stub():
             "internal_links": ["water heater repair"],
             "faq_targets": ["How much does drain cleaning cost?"],
             "paa_targets": ["Is professional drain cleaning safe?"],
-            "silo_candidates": [{"suggested_keyword": "hydro jetting service", "recommended_intent": "commercial"}],
+            "silo_candidates": [{"suggested_keyword": "hydro jetting service", "estimated_intent": "commercial"}],
         }
     return AsyncMock(side_effect=_fake)
 
@@ -181,6 +181,9 @@ async def test_happy_path_complete_brief():
     assert result.strategy.objections, "must surface objections"
     assert result.conversion.cta_strategy.strip()
     assert result.metadata.competitors_analyzed == 2  # yelp + listicle filtered out
+    # Silo candidates carry an estimated_intent (consumed by silo_dedup).
+    assert result.silo_candidates
+    assert result.silo_candidates[0].estimated_intent == "commercial"
 
 
 # ----------------------------------------------------------------------

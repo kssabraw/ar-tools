@@ -203,11 +203,14 @@ class ConversionLayer(BaseModel):
 
 class ServiceSiloCandidate(BaseModel):
     """Lightweight silo candidate. Shaped to feed the existing silo_dedup
-    consumer in Phase 2 (`suggested_keyword` + `viable_as_standalone_article`)."""
+    consumer in Phase 2, which reads `suggested_keyword`,
+    `viable_as_standalone_article`, and `estimated_intent`."""
     model_config = ConfigDict(extra="ignore")
 
     suggested_keyword: str
-    recommended_intent: str = "commercial"
+    # silo_dedup persists this to silo_candidates.estimated_intent. Service
+    # pages are commercial-intent; default accordingly.
+    estimated_intent: str = "commercial"
     viable_as_standalone_article: bool = True
     source: str = "service_brief"
 
