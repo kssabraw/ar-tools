@@ -26,7 +26,12 @@ async function request<T>(
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail ?? res.statusText)
   }
-  return res.json()
+  // 204 No Content (and any empty body, e.g. DELETE endpoints) has nothing to
+  // parse — calling res.json() on it throws, which would reject the mutation
+  // even though the request succeeded (leaving the UI stale until a refresh).
+  if (res.status === 204) return undefined as T
+  const text = await res.text()
+  return (text ? JSON.parse(text) : undefined) as T
 }
 
 // POST to a heartbeat-SSE endpoint and resolve with the final `done` result.
