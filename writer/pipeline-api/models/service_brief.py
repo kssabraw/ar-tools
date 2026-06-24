@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # Bumped independently of the blog brief. Echoed in metadata + cache rows and
 # validated by the orchestrator (Phase 2). Keep in sync with any output change.
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"  # 1.1: optional reference_page_structure mirroring
 
 ServiceMode = Literal["local_service", "national_b2b"]
 LengthBand = Literal["short", "medium", "long"]
@@ -54,6 +54,11 @@ class ClientContextInput(BaseModel):
     website_analysis: Optional[dict[str, Any]] = None
     gbp: Optional[dict[str, Any]] = None
     business_name: Optional[str] = None
+    # Pre-rendered "mirror this layout" block from the client's reference
+    # service page (clients.page_structures.service). Optional — when present,
+    # synthesis is told to match its section layout/order. See platform-api's
+    # services/page_structure_render.render_reference_structure.
+    reference_page_structure: Optional[str] = None
 
 
 class ServiceBriefRequest(BaseModel):
@@ -218,7 +223,7 @@ class ServiceSiloCandidate(BaseModel):
 class ServiceBriefMetadata(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.1", "1.0"] = "1.1"
     mode: ServiceMode
     length_band: LengthBand
     cost_usd: float = 0.0

@@ -43,7 +43,13 @@ _SYNTHESIS_SYSTEM = (
     "divergence_note explaining WHY (tie it to the differentiator/ICP).\n"
     "5. Directives are SECTION-LEVEL ONLY: purpose, what to cover, which proof "
     "asset, length target. NEVER write sentence-level prose, taglines, or "
-    "headlines-as-copy. 'heading' is a working label, not finished copy.\n\n"
+    "headlines-as-copy. 'heading' is a working label, not finished copy.\n"
+    "6. If a `client_reference_page_structure` is provided, mirror its section "
+    "layout, ordering, and heading hierarchy as the page's structural baseline — "
+    "then still apply rules 1-4 (the differentiator may reshape it). The "
+    "reference shows how this client structures their own service pages; match "
+    "that shape while adapting all wording to this service. If no reference is "
+    "provided, design the structure from the research as usual.\n\n"
     "Return ONLY this JSON object:\n"
     "{\n"
     '  "positioning_angle": "...",\n'
@@ -186,6 +192,12 @@ async def synthesize(
         "client_icp": _render_icp(client_context),
         "client_business_context": _render_business_context(client_context),
     }
+
+    # Optional: mirror the client's own service-page layout. Additive — when the
+    # client hasn't configured a reference service page this key is omitted and
+    # synthesis behaves exactly as before.
+    if (client_context.reference_page_structure or "").strip():
+        payload["client_reference_page_structure"] = client_context.reference_page_structure
 
     user = (
         "Produce the service-page brief JSON for the following. Remember: the "
