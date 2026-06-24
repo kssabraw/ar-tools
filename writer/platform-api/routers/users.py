@@ -12,6 +12,7 @@ from middleware.auth import require_admin
 from models.users import (
     PasswordResetEmailRequest,
     PasswordSetRequest,
+    UserCreateRequest,
     UserInviteRequest,
     UserResponse,
     UserRoleUpdateRequest,
@@ -62,6 +63,46 @@ async def invite_user(
 
     # Set role in profile
     supabase.table("profiles").update({"role": body.role}).eq("id", user_id).execute()
+
+    return UserResponse(
+        id=user_id,
+        email=body.email,
+        full_name=None,
+        role=body.role,
+        created_at=resp.user.created_at.isoformat() if resp.user.created_at else "",
+    )
+
+
+@router.post("/users", response_model=UserResponse, status_code=201)
+async def create_user(
+    body: UserCreateRequest,
+    auth: dict = Depends(require_admin),
+) -> UserResponse:
+    """Create a user directly with an email + password (no invite email).
+
+    The account is created already email-confirmed so the user can sign in
+    immediately with the credentials the admin sets and relays out-of-band.
+    """
+    supabase = get_supabase()
+    try:
+        resp = supabase.auth.admin.create_user(
+            {
+                "email": body.email,
+                "password": body.password,
+                "email_confirm": True,
+            }
+        )
+        user_id = str(resp.user.id)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"create_failed: {exc}") from exc
+
+    # The on_auth_user_created trigger inserts the profile row; set the role.
+    supabase.table("profiles").update({"role": body.role}).eq("id", user_id).execute()
+
+    logger.info(
+        "user_created_direct",
+        extra={"target_user_id": user_id, "user_id": auth["user_id"]},
+    )
 
     return UserResponse(
         id=user_id,

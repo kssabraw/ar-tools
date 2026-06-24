@@ -50,6 +50,18 @@ class GbpProfile(BaseModel):
     reviews: list[GbpReview] = Field(default_factory=list)
 
 
+class PageStructureUrls(BaseModel):
+    """The four reference page URLs whose structure the writing modules mirror.
+
+    Each is optional; an empty/omitted value clears that page type. Keys match
+    the `clients.page_structures` JSONB shape.
+    """
+    local_landing: Optional[str] = None
+    service: Optional[str] = None
+    location: Optional[str] = None
+    blog_post: Optional[str] = None
+
+
 class ClientDetail(BaseModel):
     id: UUID
     name: str
@@ -78,6 +90,10 @@ class ClientDetail(BaseModel):
     gbp_place_id: Optional[str] = None
     gbp: Optional[GbpProfile] = None
     local_seo_page_template_url: Optional[str] = None
+    # Reference page structures the writing modules mirror (#page-structures).
+    # JSONB keyed by page type: {local_landing|service|location|blog_post:
+    #   {url, status, error, analysis, analyzed_at}}.
+    page_structures: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClientCreateRequest(BaseModel):
@@ -100,9 +116,12 @@ class ClientCreateRequest(BaseModel):
     business_location: Optional[str] = None
     gbp_place_id: Optional[str] = None
     gbp: Optional[GbpProfile] = None
+    # Reference page URLs to scrape + analyze for structure mirroring.
+    page_structure_urls: Optional[PageStructureUrls] = None
 
 
 class ClientUpdateRequest(BaseModel):
+    page_structure_urls: Optional[PageStructureUrls] = None
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     website_url: Optional[str] = None
     brand_guide_source_type: Optional[Literal["text", "file"]] = None

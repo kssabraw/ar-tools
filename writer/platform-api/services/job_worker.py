@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -16,6 +17,7 @@ from services.rank_materialize import run_gsc_materialize_job
 from services.serp_snapshot import run_serp_snapshot_job
 from services.local_dominator import run_maps_scan_job
 from services.maps_report import run_maps_report_job
+from services.page_structure_scraper import analyze_page_structure
 from services.silo_dedup import process_silo_dedup_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
 
@@ -121,10 +123,85 @@ async def _run_website_scrape(job: dict) -> None:
         ).eq("id", job_id).execute()
 
 
+async def _run_page_structure_scrape(job: dict) -> None:
+    """Execute a page_structure_scrape job for one of a client's reference pages.
+
+    Fetches the page, strips chrome, analyzes its structure, and merges the
+    result into clients.page_structures[page_type]. The merge is a read-modify-
+    write of the JSONB column — safe because the worker processes one job per
+    tick (no concurrent writers to the same client row)."""
+    payload = job.get("payload") or {}
+    client_id = payload.get("client_id")
+    page_type = payload.get("page_type")
+    url = payload.get("url")
+    job_id = job["id"]
+
+    logger.info(
+        "page_structure_scrape_started",
+        extra={"job_id": job_id, "client_id": client_id, "page_type": page_type, "url": url},
+    )
+
+    supabase = get_supabase()
+
+    def _store(entry: dict) -> None:
+        """Merge `entry` into page_structures[page_type] without clobbering siblings."""
+        current = (
+            supabase.table("clients")
+            .select("page_structures")
+            .eq("id", client_id)
+            .single()
+            .execute()
+        )
+        structures = (current.data or {}).get("page_structures") or {}
+        existing = structures.get(page_type) or {}
+        existing.update(entry)
+        structures[page_type] = existing
+        supabase.table("clients").update({"page_structures": structures}).eq("id", client_id).execute()
+
+    try:
+        html = await scrapeowl_fetch(url, timeout=45)
+        if not html:
+            raise ValueError("ScrapeOwl returned empty HTML")
+
+        analysis = await analyze_page_structure(html, page_type)
+
+        _store(
+            {
+                "url": url,
+                "status": "complete",
+                "error": None,
+                "analysis": analysis,
+                "analyzed_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": analysis, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+        logger.info(
+            "page_structure_scrape_complete",
+            extra={"job_id": job_id, "client_id": client_id, "page_type": page_type},
+        )
+    except Exception as exc:
+        logger.warning(
+            "page_structure_scrape_failed",
+            extra={"job_id": job_id, "client_id": client_id, "page_type": page_type, "error": str(exc)},
+        )
+        try:
+            _store({"url": url, "status": "failed", "error": str(exc)[:500]})
+        except Exception:
+            logger.error("page_structure_scrape_store_failed", extra={"job_id": job_id})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+
 async def _process_job(job: dict) -> None:
     job_type = job.get("job_type")
     if job_type == "website_scrape":
         await _run_website_scrape(job)
+    elif job_type == "page_structure_scrape":
+        await _run_page_structure_scrape(job)
     elif job_type == "silo_dedup":
         await process_silo_dedup_job(job)
     elif job_type == "gsc_ingest":

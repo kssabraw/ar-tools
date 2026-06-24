@@ -13,6 +13,7 @@ import httpx
 
 from config import settings
 from db.supabase_client import get_supabase
+from services.page_structure_render import render_reference_structure
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +28,18 @@ EXPECTED_MODULE_VERSIONS: dict[str, str] = {
     "brief": "2.7",
     "sie": "1.4",
     "research": "1.1",
-    "writer": "1.8",
+    "writer": "1.9",
     "sources_cited": "1.1",
     # Service-page content type (content_type='service_page')
-    "service_brief": "1.0",
+    "service_brief": "1.1",
     "service_writer": "1.0",
 }
 
-WRITER_ACCEPTED_VERSIONS = {"1.8", "1.8-no-context", "1.8-degraded"}
+WRITER_ACCEPTED_VERSIONS = {
+    "1.9", "1.9-no-context", "1.9-degraded",
+    # 1.8 kept accepted for in-flight / cached outputs from before the bump.
+    "1.8", "1.8-no-context", "1.8-degraded",
+}
 
 # Per-module HTTP timeouts in seconds
 MODULE_TIMEOUTS: dict[str, int] = {
@@ -533,6 +538,11 @@ def _build_writer_payload(
     icp_format = snapshot.get("icp_format") or "text"
     website_analysis = snapshot.get("website_analysis")
     website_unavailable = snapshot.get("website_analysis_unavailable", False)
+    # Blog posts mirror the client's own blog-post OPENING when one is configured
+    # (the cached, client-agnostic brief can't carry the full heading layout).
+    reference_page_structure = render_reference_structure(
+        (snapshot.get("page_structures") or {}).get("blog_post"), "blog_post", mode="opening"
+    )
 
     return {
         "run_id": run["id"],
@@ -547,6 +557,7 @@ def _build_writer_payload(
             "icp_format": icp_format,
             "website_analysis": website_analysis,
             "website_analysis_unavailable": website_unavailable,
+            "reference_page_structure": reference_page_structure,
         },
     }
 
@@ -579,6 +590,10 @@ def _build_service_brief_payload(run: dict, snapshot: dict) -> dict:
             "brand_voice_text": snapshot.get("brand_guide_text") or "",
             "icp_text": snapshot.get("icp_text") or "",
             "website_analysis": snapshot.get("website_analysis"),
+            # Service pages mirror the client's own service-page layout.
+            "reference_page_structure": render_reference_structure(
+                (snapshot.get("page_structures") or {}).get("service"), "service"
+            ),
         },
     }
 
