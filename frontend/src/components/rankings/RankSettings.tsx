@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Clock, Copy, Globe, History, MapPin, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import type {
-  GscProperty, IngestResponse, RankLocation, SyncRun, VerifyAccessResponse,
+  FetchMode, FetchSchedule, GscProperty, IngestResponse, RankLocation, SyncRun, VerifyAccessResponse,
 } from '../../lib/types'
 import { LocationAutocomplete } from '../localseo/LocationAutocomplete'
 import { Spinner } from '../localseo/Spinner'
@@ -63,6 +63,7 @@ export function RankSettings({ clientId }: { clientId: string }) {
   return (
     <>
       <TrackingLocationCard clientId={clientId} />
+      <RankFetchScheduleCard clientId={clientId} />
 
       <div style={{ ...card, marginBottom: 20 }}>
         <h2 style={sectionTitle}>1 · Grant the service account access</h2>
@@ -197,6 +198,107 @@ function TrackingLocationCard({ clientId }: { clientId: string }) {
   )
 }
 
+const FETCH_WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+const FETCH_MODE_LABELS: Record<FetchMode, string> = {
+  weekly: 'Weekly, on a chosen day',
+  monthly: 'Monthly, on a chosen day',
+  interval: 'Every N days',
+  off: 'Manual only (no schedule)',
+}
+const FETCH_MODE_ORDER: FetchMode[] = ['weekly', 'monthly', 'interval', 'off']
+
+// Per-client cadence for the DataForSEO live-rank pull. Independent of the
+// global default weekday; lets the team track low-priority clients monthly (or
+// only on demand) to bound DataForSEO cost.
+function RankFetchScheduleCard({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data: schedule } = useQuery<FetchSchedule>({
+    queryKey: ['rank-fetch-schedule', clientId],
+    queryFn: () => api.get<FetchSchedule>(`/clients/${clientId}/rank/fetch-schedule`),
+  })
+
+  const [mode, setMode] = useState<FetchMode>('weekly')
+  const [dow, setDow] = useState(0)
+  const [dom, setDom] = useState(1)
+  const [interval, setIntervalDays] = useState(7)
+  useEffect(() => {
+    if (!schedule) return
+    setMode(schedule.mode)
+    setDow(schedule.day_of_week ?? 0)
+    setDom(schedule.day_of_month ?? 1)
+    setIntervalDays(schedule.interval_days ?? 7)
+  }, [schedule])
+
+  const saveMut = useMutation({
+    mutationFn: () => api.put<FetchSchedule>(`/clients/${clientId}/rank/fetch-schedule`, {
+      mode,
+      day_of_week: mode === 'weekly' ? dow : null,
+      day_of_month: mode === 'monthly' ? dom : null,
+      interval_days: mode === 'interval' ? interval : null,
+      last_fetched_at: null,
+    }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rank-fetch-schedule', clientId] }),
+  })
+
+  return (
+    <div style={{ ...card, marginBottom: 20 }}>
+      <h2 style={sectionTitle}>Rank-data refresh schedule</h2>
+      <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 14px', lineHeight: 1.6 }}>
+        How often fresh <strong>DataForSEO live ranks</strong> are pulled for this client’s keywords
+        (those Search Console can’t cover). Pick a weekday, a day of the month, or a custom interval —
+        or <strong>Manual only</strong> to pull on demand. The <strong>Refresh live ranks</strong> button
+        on the Keywords tab always works regardless of this schedule.
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {FETCH_MODE_ORDER.map(m => (
+          <label key={m} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 14, color: '#0f172a', cursor: 'pointer' }}>
+            <input type="radio" name="fetch-mode" checked={mode === m} onChange={() => setMode(m)} />
+            {FETCH_MODE_LABELS[m]}
+            {m === 'weekly' && mode === 'weekly' && (
+              <select value={dow} onChange={e => setDow(Number(e.target.value))} style={selectStyle}>
+                {FETCH_WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+              </select>
+            )}
+            {m === 'monthly' && mode === 'monthly' && (
+              <select value={dom} onChange={e => setDom(Number(e.target.value))} style={selectStyle}>
+                {Array.from({ length: 31 }, (_, i) => i + 1).map(d => <option key={d} value={d}>{ordinal(d)}</option>)}
+              </select>
+            )}
+            {m === 'interval' && mode === 'interval' && (
+              <select value={interval} onChange={e => setIntervalDays(Number(e.target.value))} style={selectStyle}>
+                {[7, 14, 30].map(n => <option key={n} value={n}>every {n} days</option>)}
+              </select>
+            )}
+          </label>
+        ))}
+      </div>
+
+      {mode === 'monthly' && dom > 28 && (
+        <p style={{ fontSize: 12, color: '#b45309', margin: '8px 0 0' }}>
+          Days after the 28th fall on the last day of shorter months.
+        </p>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
+        <button style={primaryBtn} onClick={() => saveMut.mutate()} disabled={saveMut.isPending}>
+          {saveMut.isPending ? 'Saving…' : 'Save schedule'}
+        </button>
+        {schedule?.last_fetched_at && (
+          <span style={{ fontSize: 12, color: '#94a3b8', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <Clock size={12} /> last pulled {relativeTime(schedule.last_fetched_at)}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ordinal(n: number): string {
+  const s = ['th', 'st', 'nd', 'rd'], v = n % 100
+  return n + (s[(v - 20) % 10] || s[v] || s[0])
+}
+
 function PropertyRow({
   property, verifying, detail, onVerify, onDelete, children,
 }: {
@@ -309,6 +411,9 @@ function pill(bg: string, color: string): React.CSSProperties {
 const sectionTitle: React.CSSProperties = {
   fontSize: 13, fontWeight: 700, color: '#0f172a', margin: '0 0 8px',
   textTransform: 'uppercase', letterSpacing: '0.04em',
+}
+const selectStyle: React.CSSProperties = {
+  fontSize: 13, padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5e1', marginLeft: 4,
 }
 const code: React.CSSProperties = {
   fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',

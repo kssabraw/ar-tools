@@ -73,12 +73,18 @@ def enqueue_due_ingests() -> int:
 
 
 def enqueue_due_dataforseo() -> int:
-    """Weekly: enqueue a DataForSEO rank job for each client with active keywords.
+    """Daily: enqueue a DataForSEO rank job for each client whose per-client
+    fetch schedule is due today.
 
-    The job itself skips keywords GSC already covers, so this is cheap for
-    GSC-connected clients and the sole rank source for clients without GSC.
+    Each client with active keywords has an optional rank_fetch_config row
+    (mode off/weekly/monthly/interval). A client with no row defaults to the
+    legacy cadence — weekly on the global `dataforseo_rank_weekday` — so existing
+    clients are unchanged. The job itself skips keywords GSC already covers, so
+    this is cheap for GSC-connected clients and the sole rank source otherwise.
     """
-    from services.dataforseo_rank import enqueue_dataforseo_rank
+    from datetime import date
+
+    from services.dataforseo_rank import enqueue_dataforseo_rank, is_fetch_due
 
     supabase = get_supabase()
     rows = (
@@ -88,11 +94,26 @@ def enqueue_due_dataforseo() -> int:
         .execute()
     )
     client_ids = {r["client_id"] for r in (rows.data or [])}
+    if not client_ids:
+        return 0
+
+    configs = (
+        supabase.table("rank_fetch_config").select("*")
+        .in_("client_id", list(client_ids)).execute()
+    ).data or []
+    config_by_client = {c["client_id"]: c for c in configs}
+
+    today = date.today()
+    default_weekday = settings.dataforseo_rank_weekday
+    due = 0
     for client_id in client_ids:
-        enqueue_dataforseo_rank(client_id)
-    if client_ids:
-        logger.info("gsc_scheduler.dataforseo_enqueued", extra={"clients": len(client_ids)})
-    return len(client_ids)
+        cfg = config_by_client.get(client_id, {})
+        if is_fetch_due(cfg, today, default_weekday):
+            enqueue_dataforseo_rank(client_id)
+            due += 1
+    if due:
+        logger.info("gsc_scheduler.dataforseo_enqueued", extra={"clients": due})
+    return due
 
 
 def enqueue_due_serp_snapshots() -> int:
@@ -188,11 +209,15 @@ async def gsc_scheduler() -> None:
                 enqueue_due_ingests()
                 enqueue_due_market()
                 enqueue_due_reports()
-                last_run_date = now.date()
-            # Weekly DataForSEO fallback + query×page ingest, same daily-hour
-            # guard but only on the configured weekday.
-            if now.weekday() == weekday and should_run(now, last_df_date, hour):
+                # DataForSEO rank pull is now per-client scheduled (weekly/
+                # monthly/interval/off); the enqueue helper decides who is due
+                # today, so it runs daily rather than on one global weekday.
                 enqueue_due_dataforseo()
+                last_run_date = now.date()
+            # Weekly query×page ingest + competitive SERP snapshots still
+            # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,
+            # not the per-client tracked rank).
+            if now.weekday() == weekday and should_run(now, last_df_date, hour):
                 enqueue_due_page_ingest()
                 enqueue_due_serp_snapshots()
                 last_df_date = now.date()

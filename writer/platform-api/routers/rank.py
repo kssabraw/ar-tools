@@ -23,6 +23,7 @@ from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from models.rank import (
     DataForSeoRefreshResponse,
+    FetchSchedule,
     KeywordSummary,
     KeywordTrendline,
     KeywordPagesResponse,
@@ -472,6 +473,42 @@ async def trigger_dataforseo(client_id: UUID, auth: dict = Depends(require_auth)
     if result.get("status") == "ok" and result.get("fetched"):
         rank_materialize.materialize_client(str(client_id))
     return DataForSeoRefreshResponse(client_id=client_id, **result)
+
+
+# ---- Per-client rank-data refresh schedule -----------------------------------
+@router.get("/clients/{client_id}/rank/fetch-schedule", response_model=FetchSchedule)
+async def get_fetch_schedule(client_id: UUID, auth: dict = Depends(require_auth)) -> FetchSchedule:
+    """The client's DataForSEO rank-pull cadence. No row = the legacy default
+    (weekly on the global weekday), surfaced so the UI reflects what runs today."""
+    res = (
+        get_supabase().table("rank_fetch_config").select("*").eq("client_id", str(client_id)).limit(1).execute()
+    )
+    if not res.data:
+        return FetchSchedule(mode="weekly", day_of_week=settings.dataforseo_rank_weekday)
+    r = res.data[0]
+    return FetchSchedule(
+        mode=r["mode"], day_of_week=r.get("day_of_week"), day_of_month=r.get("day_of_month"),
+        interval_days=r.get("interval_days"), last_fetched_at=r.get("last_fetched_at"),
+    )
+
+
+@router.put("/clients/{client_id}/rank/fetch-schedule", response_model=FetchSchedule)
+async def set_fetch_schedule(
+    client_id: UUID, body: FetchSchedule, auth: dict = Depends(require_auth)
+) -> FetchSchedule:
+    """Set the client's rank-pull cadence. Only the field for the chosen mode is
+    kept; last_fetched_at is owned by the fetch path and never set here."""
+    supabase = get_supabase()
+    row = {
+        "client_id": str(client_id),
+        "mode": body.mode,
+        "day_of_week": body.day_of_week if body.mode == "weekly" else None,
+        "day_of_month": body.day_of_month if body.mode == "monthly" else None,
+        "interval_days": body.interval_days if body.mode == "interval" else None,
+        "updated_at": "now()",
+    }
+    supabase.table("rank_fetch_config").upsert(row, on_conflict="client_id").execute()
+    return await get_fetch_schedule(client_id, auth)
 
 
 # ---- Scheduled reports + in-app archive --------------------------------------

@@ -185,6 +185,20 @@ class RankLocation(BaseModel):
     location_code: Optional[int] = None
 
 
+# Per-client DataForSEO rank-DATA refresh cadence. 'off' = manual only (the
+# "Refresh live ranks" button still works); absent row = the legacy default
+# (weekly on the global dataforseo_rank_weekday), surfaced by the GET endpoint.
+FetchMode = Literal["off", "weekly", "monthly", "interval"]
+
+
+class FetchSchedule(BaseModel):
+    mode: FetchMode = "weekly"
+    day_of_week: Optional[int] = Field(None, ge=0, le=6)      # weekly (0=Mon)
+    day_of_month: Optional[int] = Field(None, ge=1, le=31)    # monthly
+    interval_days: Optional[int] = Field(None, gt=0)          # every N days
+    last_fetched_at: Optional[str] = None
+
+
 class DataForSeoRefreshResponse(BaseModel):
     client_id: UUID
     status: str
