@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     # cross-client `maps_geocode_cache` makes repeats free.
     google_maps_api_key: str = ""
     maps_weak_rank_threshold: int = 10
-    maps_geocode_max_cells: int = 60
+    maps_geocode_max_cells: int = 100
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
