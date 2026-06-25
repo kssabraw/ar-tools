@@ -172,10 +172,20 @@ async def run_silo_plan_job(job: dict) -> None:
             raise ValueError("keyword_required")
 
         plan = await asyncio.to_thread(_run_pipeline, keyword, location, location_code)
-        # Append a geocoding-verified "Neighborhoods" silo (within-city only).
-        neigh_entry, neigh_notes = await _discover_neighborhood_silo(
-            keyword, location, plan["per_silo"], supabase
-        )
+        # Append a geocoding-verified "Neighborhoods" silo (within-city only). It's
+        # an additive best-effort step, so a defensive failure here must never sink
+        # an otherwise-good plan — belt-and-suspenders around its own internal
+        # guards.
+        try:
+            neigh_entry, neigh_notes = await _discover_neighborhood_silo(
+                keyword, location, plan["per_silo"], supabase
+            )
+        except Exception as exc:  # noqa: BLE001 — neighborhoods are non-critical
+            logger.warning(
+                "local_seo_silo.neighborhoods_unexpected_error",
+                extra={"job_id": job_id, "client_id": client_id, "error": str(exc)},
+            )
+            neigh_entry, neigh_notes = None, ["Neighborhood pages skipped — unexpected error."]
         if neigh_entry:
             plan["per_silo"].append(neigh_entry)
         plan["degraded_notes"] = [*plan.get("degraded_notes", []), *neigh_notes]
@@ -341,12 +351,18 @@ def _norm(value: Optional[str]) -> str:
 
 
 def _parse_area(location: str) -> tuple[str, str, str]:
-    """Split a DataForSEO canonical area ("City,State,Country") into its parts.
-    Degrades gracefully when fewer segments are present (typed-through areas)."""
+    """Split a DataForSEO canonical area into (city, state, country). The US
+    canonical is "City,State,Country" (3 segments); a 2-segment area is
+    "City,Country" (e.g. "London,United Kingdom"), so the second segment is the
+    country — not a state. Degrades gracefully for a bare city."""
     parts = [p.strip() for p in (location or "").split(",") if p.strip()]
     city = parts[0] if parts else ""
-    state = parts[1] if len(parts) >= 2 else ""
-    country = parts[-1] if len(parts) >= 3 else ""
+    if len(parts) >= 3:
+        state, country = parts[1], parts[-1]
+    elif len(parts) == 2:
+        state, country = "", parts[1]
+    else:
+        state, country = "", ""
     return city, state, country
 
 
