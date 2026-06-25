@@ -45,6 +45,17 @@ _CCTLD_TO_ISO = {
 _TYPE_PRIORITY = {"City": 0, "Municipality": 0, "Town": 0, "Region": 1,
                   "State": 1, "Province": 1, "County": 2}
 
+# DataForSEO/Google COUNTRY-level location codes (geo target IDs). Used as a
+# fallback for `resolve_country_code` when the fetched location list has no
+# Country-typed row. Stable Google codes — extend as new client countries appear.
+_COUNTRY_LOCATION_CODE = {
+    "US": 2840, "AU": 2036, "GB": 2826, "CA": 2124, "NZ": 2554, "IE": 2372,
+    "ZA": 2710, "IN": 2356, "SG": 2702, "PH": 2608, "MY": 2458, "HK": 2344,
+    "AE": 2784, "DE": 2276, "FR": 2250, "ES": 2724, "IT": 2380, "NL": 2528,
+    "SE": 2752, "NO": 2578, "DK": 2208, "FI": 2246, "CH": 2756, "AT": 2040,
+    "BE": 2056, "PT": 2620, "PL": 2616, "BR": 2076, "MX": 2484, "JP": 2392,
+}
+
 # country_iso → (fetched_at, slim_locations)
 _cache: dict[str, tuple[float, list[dict]]] = {}
 
@@ -147,6 +158,24 @@ async def search_locations(
     ranked.sort(key=lambda x: x[0])
     logger.info(f"locations.search country={iso} query={q!r} pool={len(locations)} matched={len(ranked)}")
     return [loc for _, loc in ranked[:limit]]
+
+
+async def resolve_country_code(client: dict, country_iso: Optional[str] = None) -> Optional[int]:
+    """The DataForSEO COUNTRY-level `location_code` for the client's (or given)
+    country.
+
+    DataForSEO **Labs** keyword endpoints (keyword_ideas / suggestions / related /
+    ranked_keywords) only accept country-level location codes — a city/region SERP
+    code (e.g. Sydney `1000286`) is rejected with a task error and degrades the
+    whole expansion. The silo planner therefore drives its Labs calls with this
+    country code (the city stays in the seed/SERP). Resolved from the fetched
+    location list (the row whose `location_type == "Country"`), falling back to the
+    static `_COUNTRY_LOCATION_CODE` map, then None when the country is unknown."""
+    iso = (country_iso or infer_country_iso(client)).upper()
+    for loc in await _fetch_country_locations(iso):
+        if (loc.get("location_type") or "").strip().lower() == "country":
+            return loc["location_code"]
+    return _COUNTRY_LOCATION_CODE.get(iso)
 
 
 async def resolve_location(
