@@ -163,18 +163,22 @@ def build_scope_gate(
 ):
     """Faithful string-filter port: returns an async `list[str] -> list[str]` that
     drops headings closer to a `must_not_cover` topic than to any `must_cover` topic.
-    No-op (identity) when the contract has no exclusions. Used in tests; the pipeline
-    uses `partition_candidates_by_scope` to reuse pre-computed candidate embeddings."""
-    if not contract.must_not_cover:
+    No-op (identity) when the contract lacks BOTH exclusion topics AND cover anchors —
+    the comparison is meaningless without cover anchors, and without it every candidate
+    with any positive similarity to an avoid topic would be dropped. Used in tests; the
+    pipeline uses `partition_candidates_by_scope` to reuse candidate embeddings."""
+    if not (contract.must_not_cover and contract.must_cover):
         async def _identity(cands: list[str]) -> list[str]:
             return cands
         return _identity
 
+    n_cover = len(contract.must_cover)
+
     async def gate(cands: list[str]) -> list[str]:
         if not cands:
             return cands
-        cover_vecs = await embed_fn(contract.must_cover) if contract.must_cover else []
-        avoid_vecs = await embed_fn(contract.must_not_cover)
+        topic_vecs = await embed_fn(contract.must_cover + contract.must_not_cover)
+        cover_vecs, avoid_vecs = topic_vecs[:n_cover], topic_vecs[n_cover:]
         vecs = await embed_fn(cands)
         kept: list[str] = []
         for h, hv in zip(cands, vecs):
@@ -205,14 +209,20 @@ async def partition_candidates_by_scope(
 ) -> tuple[list, list]:
     """Split candidate objects into (kept, excluded) using the contract's
     must_not_cover gate, reusing each candidate's pre-computed `.embedding` (no
-    re-embed of candidates — only the contract's cover/avoid topics are embedded).
-    No-op (returns all kept) when the contract has no exclusions. A candidate
-    missing an embedding is conservatively kept."""
-    if not contract.must_not_cover:
+    re-embed of candidates — only the contract's cover/avoid topics are embedded,
+    in a single batched call).
+
+    No-op (returns all kept) unless the contract has BOTH must_not_cover topics AND
+    must_cover anchors: without cover anchors the "closer to avoid than to cover"
+    test collapses to "any positive similarity to an avoid topic" and would wrongly
+    drop nearly the whole pool. A candidate missing an embedding is conservatively
+    kept."""
+    if not (contract.must_not_cover and contract.must_cover):
         return list(candidates), []
     embed = embed_fn or embed_batch_large
-    cover_vecs = await embed(contract.must_cover) if contract.must_cover else []
-    avoid_vecs = await embed(contract.must_not_cover)
+    n_cover = len(contract.must_cover)
+    topic_vecs = await embed(contract.must_cover + contract.must_not_cover)
+    cover_vecs, avoid_vecs = topic_vecs[:n_cover], topic_vecs[n_cover:]
     kept: list = []
     excluded: list = []
     for c in candidates:

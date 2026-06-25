@@ -133,6 +133,52 @@ def test_fanout_sources_trimmed_to_chatgpt_and_gemini():
     assert all("claude" not in s and "perplexity" not in s for s in LLM_RESPONSE_SOURCES)
 
 
+# ---- Fix #4: lead-H2 injection keeps the global cap a hard ceiling ----
+
+def test_enforce_heading_cap_trims_last_content_group():
+    from models.brief import HeadingItem
+    from modules.brief.pipeline import _enforce_heading_cap
+
+    def _h(level, text, type="content"):
+        return HeadingItem(level=level, text=text, type=type, source="serp")
+
+    # H1 (exempt) + 3 content H2 groups (4 capped items) + FAQ block (exempt).
+    hs = [
+        _h("H1", "Title"),
+        _h("H2", "Lead"),            # injected lead
+        _h("H2", "Body A"),
+        _h("H3", "Body A sub"),      # belongs to Body A
+        _h("H2", "Body B"),
+        _h("H2", "Frequently Asked Questions", type="faq-header"),
+        _h("H3", "A question?", type="faq-question"),
+    ]
+    # 4 capped content items (Lead, Body A, Body A sub, Body B); cap at 3.
+    _enforce_heading_cap(hs, cap=3)
+
+    texts = [h.text for h in hs]
+    # The last content H2 group (Body B) is dropped; the lead + earlier groups stay.
+    assert "Body B" not in texts
+    assert "Lead" in texts and "Body A" in texts and "Body A sub" in texts
+    # H1 and the FAQ block are never trimmed (exempt from the cap).
+    assert "Title" in texts and "Frequently Asked Questions" in texts and "A question?" in texts
+    capped = sum(1 for h in hs if h.level in ("H2", "H3") and h.type == "content")
+    assert capped == 3
+
+
+def test_enforce_heading_cap_noop_when_within_cap():
+    from models.brief import HeadingItem
+    from modules.brief.pipeline import _enforce_heading_cap
+
+    hs = [
+        HeadingItem(level="H1", text="T", type="content", source="serp"),
+        HeadingItem(level="H2", text="A", type="content", source="serp"),
+        HeadingItem(level="H2", text="B", type="content", source="serp"),
+    ]
+    before = list(hs)
+    _enforce_heading_cap(hs, cap=15)
+    assert hs == before
+
+
 def test_consensus_normalized_by_live_source_count():
     from modules.brief.scoring import HeadingCandidate, LLM_FANOUT_SOURCES, compute_priority
 
