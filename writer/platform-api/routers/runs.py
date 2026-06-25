@@ -22,6 +22,8 @@ from models.runs import (
     RunListItem,
     RunListResponse,
     RunPollResponse,
+    ServicePagePlanJob,
+    ServicePagePlanResult,
     ServicePageReoptimizeRequest,
     SIETermsByCategory,
     bucket_sie_required_terms,
@@ -29,7 +31,12 @@ from models.runs import (
 from services.orchestrator import NON_TERMINAL_STATUSES, orchestrate_run
 from services.run_dispatch import create_run_and_snapshot
 from services.file_parser import detect_format
-from services import brand_voice_service, icp_service, service_page_score
+from services import (
+    brand_voice_service,
+    icp_service,
+    service_page_plan,
+    service_page_score,
+)
 from sse import sse_response
 
 logger = logging.getLogger(__name__)
@@ -359,6 +366,39 @@ async def create_runs_bulk(
         extra={"count": len(run_ids), "content_type": body.content_type, "user_id": auth["user_id"]},
     )
     return RunBulkCreateResponse(run_ids=run_ids, created=len(run_ids), skipped=skipped)
+
+
+@router.post(
+    "/clients/{client_id}/service-page-plan",
+    response_model=ServicePagePlanJob,
+    status_code=202,
+)
+async def start_service_page_plan(
+    client_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> ServicePagePlanJob:
+    """Enqueue a Fanout-powered service-page completeness plan (seeded by the
+    client's business category; runs minutes, poll for the result)."""
+    job_id = await service_page_plan.start_service_plan(
+        client_id=str(client_id), user_id=auth["user_id"]
+    )
+    return ServicePagePlanJob(job_id=job_id, status="pending")
+
+
+@router.get(
+    "/clients/{client_id}/service-page-plan/{job_id}",
+    response_model=ServicePagePlanResult,
+)
+async def get_service_page_plan(
+    client_id: UUID,
+    job_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> ServicePagePlanResult:
+    """Poll a service-page plan job; returns its status and (when complete) the
+    candidate service pages grouped by silo, each marked found/missing."""
+    return ServicePagePlanResult(
+        **service_page_plan.get_service_plan(str(job_id), str(client_id))
+    )
 
 
 @router.post("/runs/{run_id}/score")
