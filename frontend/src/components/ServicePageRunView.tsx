@@ -57,6 +57,15 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
   const [fmt, setFmt] = useState<Fmt>('wordpress')
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
 
+  // A location page is the multi-service hub variant — same pipeline + view,
+  // only the labels + scoring mode differ (local engines, incl. geo).
+  const isLocation = run.content_type === 'location_page'
+  const kindLabel = isLocation ? 'Location Page' : 'Service Page'
+  const backPath = isLocation
+    ? `/clients/${run.client_id}/location-pages`
+    : `/clients/${run.client_id}/service-pages`
+  const scoreNote = isLocation ? 'local engines, incl. geo' : 'location-agnostic'
+
   const publishMutation = useMutation({
     mutationFn: () => api.post<{ doc_url: string }>(`/runs/${run.id}/publish`, {}),
     onSuccess: (data) => {
@@ -103,12 +112,12 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
 
   return (
     <div style={{ padding: 32, maxWidth: 900 }}>
-      <Link to={`/clients/${run.client_id}/service-pages`} style={backLinkStyle}>
-        <ArrowLeft size={14} /> Back to Service Pages
+      <Link to={backPath} style={backLinkStyle}>
+        <ArrowLeft size={14} /> Back to {isLocation ? 'Location Pages' : 'Service Pages'}
       </Link>
 
       <div style={{ marginTop: 16, marginBottom: 8 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#6366f1', textTransform: 'uppercase', letterSpacing: 0.5 }}>Service Page</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#6366f1', textTransform: 'uppercase', letterSpacing: 0.5 }}>{kindLabel}</span>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '4px 0 0' }}>
           {sw?.title || run.title || run.keyword}
         </h1>
@@ -176,7 +185,7 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
             </details>
           )}
 
-          {/* Score + reoptimize (location-agnostic engines) */}
+          {/* Score + reoptimize ({scoreNote} engines) */}
           <div style={{ marginTop: 28, borderTop: '1px solid #e2e8f0', paddingTop: 18 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <h3 style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', margin: 0 }}>Page score</h3>
@@ -238,7 +247,7 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
             ) : (
               !scoreMutation.isPending && (
                 <p style={{ fontSize: 13, color: '#64748b', marginTop: 10 }}>
-                  Score this page against the SEO/AEO engines (location-agnostic) to see per-engine deficiencies, then reoptimize.
+                  Score this page against the SEO/AEO engines ({scoreNote}) to see per-engine deficiencies, then reoptimize.
                 </p>
               )
             )}

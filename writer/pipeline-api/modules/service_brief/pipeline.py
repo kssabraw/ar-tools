@@ -16,7 +16,7 @@ from models.service_brief import SCHEMA_VERSION, ResearchBundle, ServiceBriefReq
 from . import cache, cost
 from .assembly import assemble
 from .errors import ServiceBriefError
-from .research import run_research
+from .research import _anchor_query, run_research
 from .synthesis import synthesize
 
 logger = logging.getLogger(__name__)
@@ -28,9 +28,22 @@ async def run_service_brief(request: ServiceBriefRequest) -> ServiceBriefRespons
     cache_hit = False
     bundle: ResearchBundle | None = None
 
+    # The cache is keyed on the SERP anchor query (for a location page that's the
+    # first service in the target location, not the bare primary_query) so two
+    # location hubs for the same location but different lead services don't
+    # collide. `_anchor_query` is the same resolver run_research uses internally.
+    cache_key = _anchor_query(
+        page_type=request.page_type,
+        primary_query=request.primary_query,
+        services=request.services,
+        location=request.location,
+    )
+
     # ---- Research cache (client-agnostic) ----
     if not request.force_refresh:
-        cached_payload = await cache.get_cached(request.primary_query, request.location_code)
+        cached_payload = await cache.get_cached(
+            cache_key, request.location_code, request.page_type
+        )
         if cached_payload:
             try:
                 bundle = ResearchBundle(**cached_payload)
@@ -49,12 +62,15 @@ async def run_service_brief(request: ServiceBriefRequest) -> ServiceBriefRespons
             primary_query=request.primary_query,
             location=request.location,
             location_code=request.location_code,
+            page_type=request.page_type,
+            services=request.services,
         )
         await cache.write_cache(
-            keyword=request.primary_query,
+            keyword=cache_key,
             location_code=request.location_code,
             schema_version=SCHEMA_VERSION,
             output_payload=bundle.model_dump(),
+            page_type=request.page_type,
         )
 
     # ---- Synthesis (per-client) ----
@@ -64,6 +80,9 @@ async def run_service_brief(request: ServiceBriefRequest) -> ServiceBriefRespons
             primary_query=request.primary_query,
             bundle=bundle,
             client_context=request.client_context,
+            page_type=request.page_type,
+            services=request.services,
+            location=request.location,
         )
     except Exception as exc:
         raise ServiceBriefError(

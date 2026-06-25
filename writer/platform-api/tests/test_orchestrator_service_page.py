@@ -12,7 +12,7 @@ import services.orchestrator as orch
 # ----------------------------------------------------------------------
 
 def test_registries_include_service_modules():
-    assert orch.EXPECTED_MODULE_VERSIONS["service_brief"] == "1.1"
+    assert orch.EXPECTED_MODULE_VERSIONS["service_brief"] == "1.2"
     assert orch.EXPECTED_MODULE_VERSIONS["service_writer"] == "1.0"
     for m in ("service_brief", "service_writer"):
         assert m in orch.MODULE_PATHS

@@ -27,12 +27,21 @@ logger = logging.getLogger(__name__)
 _TABLE = "service_brief_cache"
 
 
-def _normalize_keyword(keyword: str) -> str:
-    """Lowercase + strip — keeps the cache key resilient to surface variation."""
-    return keyword.strip().lower()
+def _normalize_keyword(keyword: str, page_type: str = "service") -> str:
+    """Lowercase + strip — keeps the cache key resilient to surface variation.
+
+    Location pages namespace the key (`location::<anchor>`) so a multi-service
+    location hub never collides with a single-service page that happens to share
+    the anchor query; service pages keep the bare keyword for backward compat
+    with existing cache rows.
+    """
+    norm = keyword.strip().lower()
+    return f"location::{norm}" if page_type == "location" else norm
 
 
-async def get_cached(keyword: str, location_code: int) -> Optional[dict]:
+async def get_cached(
+    keyword: str, location_code: int, page_type: str = "service"
+) -> Optional[dict]:
     """Return the cached research_bundle payload if a fresh row exists, else None."""
     threshold = datetime.now(timezone.utc) - timedelta(
         days=settings.service_brief_cache_ttl_days
@@ -43,7 +52,7 @@ async def get_cached(keyword: str, location_code: int) -> Optional[dict]:
         return (
             client.table(_TABLE)
             .select("output_payload, created_at")
-            .eq("keyword", _normalize_keyword(keyword))
+            .eq("keyword", _normalize_keyword(keyword, page_type))
             .eq("location_code", location_code)
             .gte("created_at", threshold.isoformat())
             .order("created_at", desc=True)
@@ -87,6 +96,7 @@ async def write_cache(
     location_code: int,
     schema_version: str,
     output_payload: dict,
+    page_type: str = "service",
     cost_usd: Optional[float] = None,
     duration_ms: Optional[int] = None,
 ) -> None:
@@ -98,7 +108,7 @@ async def write_cache(
     `output_payload` by the caller for the same robustness reason.
     """
     row: dict = {
-        "keyword": _normalize_keyword(keyword),
+        "keyword": _normalize_keyword(keyword, page_type),
         "location_code": location_code,
         "schema_version": schema_version,
         "output_payload": output_payload,

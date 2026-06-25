@@ -25,13 +25,13 @@ run_id_ctx: ContextVar[str] = ContextVar("run_id", default="")
 # ---------------------------------------------------------------------------
 
 EXPECTED_MODULE_VERSIONS: dict[str, str] = {
-    "brief": "2.7",
+    "brief": "2.8",
     "sie": "1.4",
     "research": "1.1",
     "writer": "1.9",
     "sources_cited": "1.1",
     # Service-page content type (content_type='service_page')
-    "service_brief": "1.1",
+    "service_brief": "1.2",
     "service_writer": "1.0",
 }
 
@@ -573,26 +573,48 @@ def _build_sources_cited_payload(
     }
 
 
+def _page_type_for(run: dict) -> str:
+    """Map the run's content_type to the pipeline page_type. A location_page run
+    drives the multi-service location-hub mode; everything else is 'service'."""
+    return "location" if run.get("content_type") == "location_page" else "service"
+
+
+def _run_services(run: dict) -> list[str]:
+    """The services a location page must cover (persisted on the run)."""
+    raw = run.get("services") or []
+    return [str(s).strip() for s in raw if isinstance(raw, list) and str(s).strip()]
+
+
 def _build_service_brief_payload(run: dict, snapshot: dict) -> dict:
-    """Service Page Brief payload. The brief runs its own research; client
-    context comes from the frozen snapshot. The snapshot's resolved icp_text
-    already folds in the client's differentiators (see icp_service), so the
-    wedge is available via icp_text even though structured differentiators
-    aren't snapshotted separately (a v1 limitation)."""
+    """Service / location Page Brief payload. The brief runs its own research;
+    client context comes from the frozen snapshot. The snapshot's resolved
+    icp_text already folds in the client's differentiators (see icp_service), so
+    the wedge is available via icp_text even though structured differentiators
+    aren't snapshotted separately (a v1 limitation).
+
+    For a location page, `service` carries the location label, `page_type` is
+    'location', `services` lists the services to cover, and the mirrored layout
+    comes from the client's reference *location* page (not the service page)."""
+    page_type = _page_type_for(run)
+    is_location = page_type == "location"
+    structures = snapshot.get("page_structures") or {}
     return {
         "run_id": run["id"],
         "attempt": 1,
-        "service": run.get("service") or run["keyword"],
+        "service": (run.get("location") or run["keyword"]) if is_location else (run.get("service") or run["keyword"]),
         "primary_query": run["keyword"],
         "location": run.get("location"),
         "location_code": run.get("location_code") or 2840,
+        "page_type": page_type,
+        "services": _run_services(run),
         "client_context": {
             "brand_voice_text": snapshot.get("brand_guide_text") or "",
             "icp_text": snapshot.get("icp_text") or "",
             "website_analysis": snapshot.get("website_analysis"),
-            # Service pages mirror the client's own service-page layout.
+            # Mirror the client's own layout for this page type.
             "reference_page_structure": render_reference_structure(
-                (snapshot.get("page_structures") or {}).get("service"), "service"
+                structures.get("location" if is_location else "service"),
+                "location" if is_location else "service",
             ),
         },
     }
@@ -605,6 +627,9 @@ def _build_service_writer_payload(
         "run_id": run["id"],
         "attempt": 1,
         "service_brief_output": service_brief_output,
+        "page_type": _page_type_for(run),
+        "location": run.get("location"),
+        "services": _run_services(run),
         "client_context": {
             "brand_guide_text": snapshot.get("brand_guide_text") or "",
             "icp_text": snapshot.get("icp_text") or "",
@@ -683,7 +708,7 @@ async def orchestrate_run(run_id: str) -> None:
         # Service-page content type runs a distinct two-stage pipeline
         # (service_brief -> service_writer); the blog 5-module pipeline below
         # is skipped entirely.
-        if run.get("content_type") == "service_page":
+        if run.get("content_type") in ("service_page", "location_page"):
             await _orchestrate_service_page(run_id, run, snapshot, completed)
             await _set_run_status(run_id, "complete")
             await _update_total_cost(run_id)

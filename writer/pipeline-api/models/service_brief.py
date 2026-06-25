@@ -21,11 +21,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 # Bumped independently of the blog brief. Echoed in metadata + cache rows and
 # validated by the orchestrator (Phase 2). Keep in sync with any output change.
-SCHEMA_VERSION = "1.1"  # 1.1: optional reference_page_structure mirroring
+SCHEMA_VERSION = "1.2"  # 1.1: reference_page_structure mirroring; 1.2: optional decision_fit
 
 ServiceMode = Literal["local_service", "national_b2b"]
 LengthBand = Literal["short", "medium", "long"]
 HeadingLevel = Literal["H1", "H2", "H3"]
+# A `service` page targets one service; a `location` page is a multi-service
+# hub targeting one location (a section per major service). Both run through
+# this same brief→writer→scoring stack — only synthesis / title / JSON-LD branch.
+PageType = Literal["service", "location"]
 
 
 # ----------------------------------------------------------------------
@@ -73,6 +77,11 @@ class ServiceBriefRequest(BaseModel):
     # Influences research + mode classification.
     location: Optional[str] = None
     location_code: int = 2840  # United States
+    # `service` (default) = single-service page; `location` = a multi-service
+    # location hub. For a location page, `services` lists the major services to
+    # cover (one section each) and `service` carries the location label.
+    page_type: PageType = "service"
+    services: list[str] = Field(default_factory=list)
     force_refresh: bool = False
     client_context: ClientContextInput = Field(default_factory=ClientContextInput)
 
@@ -206,6 +215,28 @@ class ConversionLayer(BaseModel):
     paa_targets: list[str] = Field(default_factory=list)
 
 
+class DecisionFitBranch(BaseModel):
+    """One `condition -> recommended option` branch of a decision-fit map."""
+    model_config = ConfigDict(extra="ignore")
+
+    condition: str
+    option: str
+
+
+class DecisionFit(BaseModel):
+    """Optional decision-fit map (schema 1.2). Present only when the page genuinely
+    serves a situational choice ("which service/tier/urgency level fits the buyer").
+    Synthesis emits it folded into its existing call; the writer weaves the branches
+    into prose (condition-first). Dropped by assembly unless `applies` and there are
+    at least two distinct, non-empty branches.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    applies: bool = False
+    branches: list[DecisionFitBranch] = Field(default_factory=list)
+    default_statement: str = ""
+
+
 class ServiceSiloCandidate(BaseModel):
     """Lightweight silo candidate. Shaped to feed the existing silo_dedup
     consumer in Phase 2, which reads `suggested_keyword`,
@@ -223,7 +254,7 @@ class ServiceSiloCandidate(BaseModel):
 class ServiceBriefMetadata(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    schema_version: Literal["1.1", "1.0"] = "1.1"
+    schema_version: Literal["1.2", "1.1", "1.0"] = "1.2"
     mode: ServiceMode
     length_band: LengthBand
     cost_usd: float = 0.0
@@ -244,6 +275,9 @@ class ServiceBriefResponse(BaseModel):
     architecture: list[BriefSection] = Field(default_factory=list)
     conversion: ConversionLayer
     silo_candidates: list[ServiceSiloCandidate] = Field(default_factory=list)
+    # Optional situational-choice map (schema 1.2). None unless the page serves a
+    # genuine "which one fits me" decision — the writer weaves it into prose.
+    decision_fit: Optional[DecisionFit] = None
     # The research bundle is echoed for observability/debugging (and Phase 2's
     # writer); it is optional so cached/degraded paths can omit it.
     research_bundle: Optional[ResearchBundle] = None

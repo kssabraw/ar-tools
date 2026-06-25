@@ -14,6 +14,8 @@ from models.service_brief import (
     SCHEMA_VERSION,
     BriefSection,
     ConversionLayer,
+    DecisionFit,
+    DecisionFitBranch,
     Objection,
     ResearchBundle,
     ServiceBriefMetadata,
@@ -105,6 +107,35 @@ def _build_silos(raw: list, primary_query: str) -> list[ServiceSiloCandidate]:
     return out
 
 
+def _build_decision_fit(raw: Any) -> DecisionFit | None:
+    """Coerce synthesis's optional `decision_fit` into the model. Kept only when it
+    applies AND there are >=2 distinct, non-empty condition->option branches (mirrors
+    the fanout decision_fit gate); otherwise None so the writer skips it entirely."""
+    if not isinstance(raw, dict) or not raw.get("applies"):
+        return None
+    branches: list[DecisionFitBranch] = []
+    seen: set[str] = set()
+    for b in (raw.get("branches") or []):
+        if not isinstance(b, dict):
+            continue
+        condition = str(b.get("condition", "")).strip()
+        option = str(b.get("option", "")).strip()
+        if not condition or not option:
+            continue
+        key = condition.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        branches.append(DecisionFitBranch(condition=condition, option=option))
+    if len(branches) < 2:
+        return None
+    return DecisionFit(
+        applies=True,
+        branches=branches,
+        default_statement=str(raw.get("default_statement", "")).strip(),
+    )
+
+
 def assemble(
     request: ServiceBriefRequest,
     bundle: ResearchBundle,
@@ -147,6 +178,7 @@ def assemble(
     )
 
     silo_candidates = _build_silos(synthesis.get("silo_candidates"), primary_query)
+    decision_fit = _build_decision_fit(synthesis.get("decision_fit"))
 
     metadata = ServiceBriefMetadata(
         schema_version=SCHEMA_VERSION,
@@ -167,6 +199,7 @@ def assemble(
         architecture=architecture,
         conversion=conversion,
         silo_candidates=silo_candidates,
+        decision_fit=decision_fit,
         research_bundle=bundle,
         metadata=metadata,
     )

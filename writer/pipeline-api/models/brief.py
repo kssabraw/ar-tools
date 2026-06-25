@@ -105,6 +105,9 @@ DiscardReason = Literal[
     # AIO Heading Optimization §X.3 - candidate is a bare restatement of the
     # main entity (empty residual after stripping the entity).
     "bare_entity_restatement",
+    # Answer contract (schema v2.8) - candidate is closer to a must_not_cover
+    # exclusion topic than to any must_cover topic.
+    "answer_contract_excluded",
 ]
 
 SiloRoutedFrom = Literal[
@@ -242,6 +245,29 @@ class StructuralConstants(BaseModel):
     conclusion: _Conclusion = _Conclusion()
 
 
+class DecisionFitBranch(BaseModel):
+    """One `condition -> recommended option` branch of a decision-fit directive."""
+    model_config = _FORBID_EXTRA
+
+    condition: str
+    option: str
+    source: str = "llm"  # persona_gap | paa | reddit | llm
+
+
+class DecisionFitDirective(BaseModel):
+    """Typed answer-engine directive: the best answer depends on the reader's
+    situation, so the Writer should weave these condition->option branches (and the
+    overarching default) into the anchor section. Present only when the query
+    qualifies (A1) AND a partner factor co-occurs (A4)."""
+    model_config = _FORBID_EXTRA
+
+    type: Literal["decision_fit"] = "decision_fit"
+    anchor_h2_text: str = ""
+    branches: list[DecisionFitBranch] = []
+    default_statement: str = ""
+    partner_factor: str = ""  # comparative_depth | edge_case_detail | direct_definitions
+
+
 class FormatDirectives(BaseModel):
     model_config = _FORBID_EXTRA
 
@@ -259,6 +285,9 @@ class FormatDirectives(BaseModel):
     # `intent_format_template`; the schema default below is used only by
     # legacy callers / fixtures that don't supply a template.
     min_h2_body_words: int = 100
+    # Answer-engine decision-fit directive (schema v2.8). None unless the query
+    # serves a genuine situational choice (A1 qualifies + A4 partner factor).
+    decision_fit: Optional[DecisionFitDirective] = None
 
 
 # ---- Intent format template (Phase 1 / Brief PRD v2.1 Step 7.5 + Step 11) ----
@@ -581,7 +610,7 @@ class BriefMetadata(BaseModel):
     # §X.3 - candidates discarded as bare restatements of the main entity.
     bare_entity_restatement_count: int = 0
 
-    schema_version: Literal["2.7"] = "2.7"
+    schema_version: Literal["2.8"] = "2.8"
 
 
 # ---- Reddit research (PRD v2.4) ----
@@ -671,6 +700,19 @@ class EditorialCritiqueModel(BaseModel):
 
 # ---- Top-level response ----
 
+class AnswerContractModel(BaseModel):
+    """The query-understanding contract (schema v2.8). The answer_heading is the
+    guaranteed lead H2; must_not_cover drives the candidate scope gate."""
+    model_config = _FORBID_EXTRA
+
+    explicit_question: str = ""
+    implied_need: str = ""
+    direct_answer: str = ""
+    answer_heading: str = ""
+    must_cover: list[str] = []
+    must_not_cover: list[str] = []
+
+
 class BriefResponse(BaseModel):
     """Brief Generator output (schema v2.0, see PRD §6)."""
     model_config = _FORBID_EXTRA
@@ -712,4 +754,7 @@ class BriefResponse(BaseModel):
     # non-gating capture side-channel.
     main_entity: Optional[MainEntity] = None
     aio_insights: Optional[AioInsights] = None
+    # Answer contract (schema v2.8). Optional so cached <2.8 rows still
+    # deserialize; populated in the live pipeline (empty contract on LLM failure).
+    answer_contract: Optional[AnswerContractModel] = None
     metadata: BriefMetadata

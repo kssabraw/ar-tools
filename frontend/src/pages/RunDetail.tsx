@@ -305,9 +305,11 @@ export function RunDetail() {
   if (isLoading) return <div style={{ padding: 40, color: '#64748b' }}>Loading…</div>
   if (!run) return <div style={{ padding: 40, color: '#dc2626' }}>Run not found</div>
 
-  // Service pages run a distinct two-stage pipeline and carry their own
-  // renderings (markdown/html/wordpress) + JSON-LD — render a dedicated view.
-  if (run.content_type === 'service_page') return <ServicePageRunView run={run} />
+  // Service + location pages run the same distinct two-stage pipeline and
+  // carry their own renderings (markdown/html/wordpress) + JSON-LD + score —
+  // render the dedicated view for both.
+  if (run.content_type === 'service_page' || run.content_type === 'location_page')
+    return <ServicePageRunView run={run} />
 
   const canCancel = !TERMINAL.includes(run.status)
   const canResume = run.status === 'failed' || run.status === 'cancelled'

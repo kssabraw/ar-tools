@@ -23,6 +23,7 @@ def create_run_and_snapshot(
     service: Optional[str] = None,
     location: Optional[str] = None,
     location_code: Optional[int] = None,
+    services: Optional[list[str]] = None,
     intent_override: Optional[str] = None,
     sie_outlier_mode: str = "safe",
     sie_force_refresh: bool = False,
@@ -50,6 +51,7 @@ def create_run_and_snapshot(
             "service": service or (keyword if content_type == "service_page" else None),
             "location": location,
             "location_code": location_code,
+            "services": services or [],
             "status": "queued",
             "created_by": created_by,
         }

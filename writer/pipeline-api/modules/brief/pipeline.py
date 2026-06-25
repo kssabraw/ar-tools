@@ -33,6 +33,7 @@ from urllib.parse import urlparse
 from config import settings
 from models.brief import (
     BriefMetadata,
+    AnswerContractModel,
     BriefRequest,
     BriefResponse,
     ContestedTopicModel,
@@ -40,6 +41,7 @@ from models.brief import (
     DiscardedHeading,
     EditorialCritiqueModel,
     FormatDirectives,
+    HeadingItem,
     LLMDisagreementModel,
     LLMFanoutCounts,
     LLMUnavailable,
@@ -49,6 +51,12 @@ from models.brief import (
 
 from . import dataforseo
 from .aggregation import aggregate_candidates
+from .answer_contract import generate_answer_contract, partition_candidates_by_scope
+from .decision_fit import (
+    build_decision_fit_directive,
+    decision_fit_qualifies,
+    detect_partner_factor,
+)
 from .errors import BriefError
 from .assembly import (
     assemble_structure,
@@ -104,7 +112,7 @@ from .title_scope import generate_title_and_scope
 logger = logging.getLogger(__name__)
 
 
-SCHEMA_VERSION = "2.7"
+SCHEMA_VERSION = "2.8"
 
 
 # PRD v2.3 / Phase 3 - per-intent-pattern minimum-words floor for H2
@@ -148,13 +156,13 @@ def _min_h2_body_words_for_template(template) -> int:
 __all__ = ["BriefError", "SCHEMA_VERSION", "run_brief"]
 
 
-# Map LLM identifier → (model_name, force_web_search_capable). Mirrors v1.7
-# until we wire upgraded models centrally.
+# Map LLM identifier → (model_name, force_web_search_capable). Trimmed to
+# ChatGPT + Gemini (Claude + Perplexity dropped from the fan-out source set to
+# match the fanout brief generator). NOTE: the separate Perplexity *research
+# synthesis* (reddit_research / customer_review_research) is unrelated and stays.
 FANOUT_LLMS: list[tuple[str, str, bool]] = [
     ("chatgpt", "gpt-4o", True),
-    ("claude", "claude-3-5-sonnet-latest", True),
     ("gemini", "gemini-1.5-pro", False),
-    ("perplexity", "sonar", False),
 ]
 
 
@@ -345,6 +353,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     response_counts = LLMFanoutCounts()
     unavailable = LLMUnavailable()
     raw_fanout_bodies: list[str] = []  # for Step 3.5
+    fanout_bodies_by_id: dict[str, str] = {}  # for the answer contract (chatgpt evidence)
 
     extraction_tasks: list[tuple[str, asyncio.Task]] = []
     for llm_id, result in fanout_results:
@@ -362,6 +371,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         text_body = result.get("text", "")
         if text_body:
             raw_fanout_bodies.append(text_body)
+            fanout_bodies_by_id[llm_id] = text_body
         extraction_tasks.append(
             (llm_id, asyncio.create_task(_extract_subtopics(text_body)))
         )
@@ -404,6 +414,20 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         aio_answer_text=aio_insights.answer_text,
         aio_cited_domains=aio_insights.cited_domains,
         aio_present=aio_insights.available,
+    )
+
+    # ---- Step 3.7 - answer contract (additive guardrail) ----
+    # One Opus call distils the query into explicit_question / direct_answer /
+    # answer_heading (the guaranteed lead H2) + must_cover/must_not_cover (the
+    # candidate scope gate), and folds in the decision-fit detection. Degrades
+    # to an empty contract on failure, so the pipeline runs exactly as before.
+    answer_contract = await generate_answer_contract(
+        keyword=keyword,
+        title=title_scope.title,
+        scope_statement=title_scope.scope_statement,
+        intent_type=intent,
+        aio_answer=aio_insights.answer_text,
+        chatgpt_answer=fanout_bodies_by_id.get("chatgpt", ""),
     )
 
     # ---- Step 4 (pass 1) - aggregate without persona gap ----
@@ -516,6 +540,28 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             "above_restatement_ceiling",
         )
     ]
+
+    # ---- Answer-contract scope gate (additive) ----
+    # Drop candidates closer to a must_not_cover exclusion topic than to any
+    # must_cover topic, reusing the embeddings just computed. No-op when the
+    # contract has no exclusions. Excluded candidates are surfaced as discarded.
+    answer_contract_excluded: list[Candidate] = []
+    if answer_contract.must_not_cover and eligible_pool:
+        eligible_pool, answer_contract_excluded = await partition_candidates_by_scope(
+            answer_contract, eligible_pool, embed_fn=embed_batch_large,
+        )
+        for c in answer_contract_excluded:
+            c.discard_reason = "answer_contract_excluded"
+        if not eligible_pool:
+            # Never let the guardrail empty the pool — fall back to the gated set.
+            logger.warning(
+                "brief.answer_contract.all_excluded_falling_back",
+                extra={"excluded": len(answer_contract_excluded)},
+            )
+            eligible_pool = answer_contract_excluded
+            answer_contract_excluded = []
+            for c in eligible_pool:
+                c.discard_reason = None
 
     # ---- Step 5.3 / 5.4 / 5.5 - graph construction + regions ----
     graph = build_coverage_graph(
@@ -928,6 +974,39 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         title=title_scope.title,
     )
 
+    # ---- Answer contract: guaranteed lead H2 (additive) ----
+    # Ensure the page leads with the direct-answer section. Insert answer_heading
+    # as the first content H2 unless the assembled outline already leads with a
+    # near-duplicate (normalized-text match), so we never double up the lead.
+    answer_heading = (answer_contract.answer_heading or "").strip()
+    if answer_heading:
+        norm_answer = normalize_text(answer_heading)
+        first_content_h2 = next(
+            (h for h in heading_structure if h.level == "H2" and h.type == "content"),
+            None,
+        )
+        already_leads = (
+            first_content_h2 is not None
+            and (
+                normalize_text(first_content_h2.text) == norm_answer
+                or norm_answer in normalize_text(first_content_h2.text)
+                or normalize_text(first_content_h2.text) in norm_answer
+            )
+        )
+        if not already_leads:
+            lead = HeadingItem(
+                level="H2",
+                text=answer_heading,
+                type="content",
+                source="synthesized",
+                exempt=True,
+            )
+            # Insert after a leading H1 if present, else at the very front.
+            insert_at = 1 if (heading_structure and heading_structure[0].level == "H1") else 0
+            heading_structure.insert(insert_at, lead)
+            for idx, h in enumerate(heading_structure):
+                h.order = idx
+
     # ---- Step 11 - advisory AIO proximity (§X.5) ----
     # Observability only; reads heading text, writes only to aio_insights -
     # heading_structure is untouched. No-op when no AIO block was captured.
@@ -1001,6 +1080,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         ):
             discarded.append(c)
 
+    discarded.extend(answer_contract_excluded)
     discarded.extend(region_eliminated)
     # selection.not_selected: include only those NOT promoted to H3
     discarded.extend(
@@ -1162,8 +1242,34 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     # PRD v2.3 / Phase 3 - derive the per-H2 body floor from the
     # template's pattern so the Writer's Step 6.7 validator can apply
     # an intent-appropriate minimum without re-deriving from the brief.
+    # ---- Decision-fit directive (A1 qualify → A4 partner factor → A3 build) ----
+    # Additive answer-engine directive. Detection rides the answer-contract Opus
+    # call (A1); emit only when a partner factor co-occurs among the selected
+    # sections (A4) and >=2 distinct branches can be sourced (A3). Degrades to
+    # None on any failure, so the brief is unaffected otherwise.
+    decision_fit_directive = None
+    detection = answer_contract.decision_fit_detection
+    if decision_fit_qualifies(detection):
+        partner_factor = detect_partner_factor(
+            intent,
+            [{"text": c.text, "source": c.source} for c in selected_h2s],
+        )
+        if partner_factor:
+            anchor_h2_text = answer_contract.answer_heading or (
+                selected_h2s[0].text if selected_h2s else ""
+            )
+            decision_fit_directive = await build_decision_fit_directive(
+                detection,
+                anchor_h2_text=anchor_h2_text,
+                persona_gaps=persona_questions,
+                paa=paa_questions,
+                reddit=reddit_titles,
+                partner_factor=partner_factor,
+            )
+
     format_directives = FormatDirectives(
         min_h2_body_words=_min_h2_body_words_for_template(intent_template),
+        decision_fit=decision_fit_directive,
     )
 
     # ---- PRD v2.6 - Industry-blind-spot mitigation outputs ----
@@ -1217,6 +1323,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         editorial_critique=EditorialCritiqueModel(**critique_result.to_dict()),
         main_entity=main_entity,
         aio_insights=aio_insights,
+        answer_contract=AnswerContractModel(**answer_contract.as_metadata()),
         metadata=metadata,
     )
 

@@ -37,6 +37,35 @@ def _brand_directive(brand_card: Optional[dict]) -> str:
     return " ".join(lines)
 
 
+def decision_fit_directive(decision_fit: Optional[dict]) -> str:
+    """Render a brief `decision_fit` map into section-prompt guidance: the best answer
+    depends on the buyer's situation, so the prose must weave the condition->option
+    branches in naturally (condition-first), plus the overarching default. No forced
+    "which is right for you" subheading — woven into the body. Empty string when the
+    map is absent or has fewer than 2 usable branches (mirrors fanout's gate)."""
+    if not isinstance(decision_fit, dict) or not decision_fit.get("applies"):
+        return ""
+    branches = [
+        b for b in (decision_fit.get("branches") or [])
+        if isinstance(b, dict)
+        and str(b.get("condition", "")).strip()
+        and str(b.get("option", "")).strip()
+    ]
+    if len(branches) < 2:
+        return ""
+    lines = "\n".join(
+        f"- If {str(b['condition']).strip()}: {str(b['option']).strip()}" for b in branches
+    )
+    default = str(decision_fit.get("default_statement", "")).strip()
+    return (
+        "\n\nDECISION-FIT — the best answer here depends on the reader's situation. Work the "
+        "following condition->recommendation branches into the prose naturally, stating the "
+        "condition first in each; do NOT add a separate subheading or a 'which is right for "
+        "you' label, and do not present them as a verbatim bulleted list:\n" + lines + "\n"
+        + (f"Across all cases, the overarching guidance is: {default}\n" if default else "")
+    )
+
+
 def reopt_directive(deficiencies: list[dict], prior_sections: Optional[list[dict]] = None) -> str:
     """Build a reoptimization directive from the scorer's deficiencies (appended to
     the per-call brand_directive so every generation call addresses them). Empty
@@ -115,18 +144,37 @@ def _block_text(blocks: list[Block]) -> str:
 
 async def generate_title_meta_cta(
     *, service: str, primary_query: str, positioning_angle: str, brand_name: str, brand_directive: str,
+    page_type: str = "service", location: Optional[str] = None, services: Optional[list[str]] = None,
 ) -> dict[str, str]:
-    system = (
-        "You write SEO metadata + a primary CTA for a commercial service page. "
-        "Return ONLY this JSON: {\"title\": \"<=60 chars, includes the query\", "
-        "\"meta_description\": \"<=155 chars, benefit + CTA\", "
-        "\"cta_text\": \"a short button label, <=5 words\"}. " + brand_directive
-    )
-    user = (
-        f"Service: {service}\nPrimary query: {primary_query}\n"
-        f"Positioning angle (the wedge): {positioning_angle}\n"
-        f"Brand: {brand_name or '(unknown)'}\nProduce the JSON now."
-    )
+    is_location = page_type == "location"
+    services = [s.strip() for s in (services or []) if s and s.strip()]
+    if is_location:
+        loc = location or service
+        system = (
+            "You write SEO metadata + a primary CTA for a LOCATION landing page "
+            "that covers multiple services in one area. "
+            "Return ONLY this JSON: {\"title\": \"<=60 chars, leads with the "
+            "location\", \"meta_description\": \"<=155 chars, names the area + a "
+            "couple of services + a CTA\", \"cta_text\": \"a short button label, "
+            "<=5 words\"}. " + brand_directive
+        )
+        user = (
+            f"Location: {loc}\nServices covered: {services[:12]}\n"
+            f"Positioning angle (the wedge): {positioning_angle}\n"
+            f"Brand: {brand_name or '(unknown)'}\nProduce the JSON now."
+        )
+    else:
+        system = (
+            "You write SEO metadata + a primary CTA for a commercial service page. "
+            "Return ONLY this JSON: {\"title\": \"<=60 chars, includes the query\", "
+            "\"meta_description\": \"<=155 chars, benefit + CTA\", "
+            "\"cta_text\": \"a short button label, <=5 words\"}. " + brand_directive
+        )
+        user = (
+            f"Service: {service}\nPrimary query: {primary_query}\n"
+            f"Positioning angle (the wedge): {positioning_angle}\n"
+            f"Brand: {brand_name or '(unknown)'}\nProduce the JSON now."
+        )
     try:
         result = await claude_json_model(system, user, model=synthesis_model(), max_tokens=400, temperature=0.4)
         if isinstance(result, dict):
@@ -138,6 +186,14 @@ async def generate_title_meta_cta(
     except Exception as exc:
         logger.warning("service_writer.title_meta_failed", extra={"error": str(exc)})
     # Deterministic fallback.
+    if is_location:
+        loc = location or service
+        title = (f"{loc} {(services[0] + ' & More') if services else 'Services'} | {brand_name}"
+                 ).strip(" |")[:60] or (primary_query[:60])
+        meta = (f"{brand_name or 'We'} serve {loc}"
+                + (f": {', '.join(services[:3])}." if services else ".")
+                + " Contact us today.")[:155]
+        return {"title": title, "meta_description": meta, "cta_text": "Get a Free Quote"}
     return {
         "title": (f"{service} | {brand_name}".strip(" |") or primary_query)[:60],
         "meta_description": (positioning_angle or service)[:155],

@@ -241,6 +241,7 @@ async def get_run(
         client_context_snapshot=snapshot,
         module_outputs=module_outputs,
         sie_terms_by_category=sie_terms_by_category,
+        services=run.get("services") or [],
     )
 
 
@@ -271,6 +272,15 @@ async def create_run(
         raise HTTPException(status_code=404, detail="client_not_found")
     client = client_result.data
 
+    # A location page is a multi-service hub for one area — both the target
+    # location and at least one service to cover are required.
+    services = [s.strip() for s in (body.services or []) if s and s.strip()]
+    if body.content_type == "location_page":
+        if not (body.location or "").strip():
+            raise HTTPException(status_code=400, detail="location_required")
+        if not services:
+            raise HTTPException(status_code=400, detail="services_required")
+
     run_id = create_run_and_snapshot(
         client=client,
         keyword=body.keyword,
@@ -278,6 +288,7 @@ async def create_run(
         service=body.service,
         location=body.location,
         location_code=body.location_code,
+        services=services,
         intent_override=body.intent_override,
         sie_outlier_mode=body.sie_outlier_mode,
         sie_force_refresh=body.sie_force_refresh,

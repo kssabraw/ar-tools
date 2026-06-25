@@ -27,15 +27,11 @@ logger = logging.getLogger(__name__)
 
 LLM_FANOUT_SOURCES = {
     "llm_fanout_chatgpt",
-    "llm_fanout_claude",
     "llm_fanout_gemini",
-    "llm_fanout_perplexity",
 }
 LLM_RESPONSE_SOURCES = {
     "llm_response_chatgpt",
-    "llm_response_claude",
     "llm_response_gemini",
-    "llm_response_perplexity",
 }
 
 
@@ -244,7 +240,10 @@ def compute_priority(candidates: list[HeadingCandidate]) -> None:
             position_weight = max(1.0 - ((c.avg_serp_position - 1) / 20), 0.0)
         else:
             position_weight = 0.0
-        norm_consensus = (c.llm_fanout_consensus or 0) / 4
+        # Normalize by the live fan-out source count so full cross-LLM agreement
+        # still maps to 1.0 (a hardcoded /4 would silently halve the signal now
+        # that the fan-out set is two providers).
+        norm_consensus = (c.llm_fanout_consensus or 0) / max(1, len(LLM_FANOUT_SOURCES))
         c.heading_priority = (
             0.4 * c.semantic_score
             + 0.25 * norm_freq

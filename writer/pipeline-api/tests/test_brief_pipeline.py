@@ -206,6 +206,8 @@ async def test_run_brief_happy_path():
         patch("modules.brief.faqs.claude_json", fake_claude_json),
         patch("modules.brief.pipeline.claude_json", fake_claude_json),
         patch("modules.brief.assembly.claude_json", fake_claude_json),
+        patch("modules.brief.answer_contract.claude_json", fake_claude_json),
+        patch("modules.brief.decision_fit.claude_json", fake_claude_json),
     ):
         result = await run_brief(req)
 

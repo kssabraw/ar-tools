@@ -23,8 +23,10 @@ def test_build_scoring_html_wraps_title_and_h1():
 
 
 def test_business_fields_prefers_gbp_then_name():
-    assert sps._business_fields({"gbp": {"business_name": "Acme Co", "gbp_category": "Plumber"}}) == ("Acme Co", "Plumber")
-    assert sps._business_fields({"name": "Bob LLC"}) == ("Bob LLC", "")
+    assert sps._business_fields(
+        {"gbp": {"business_name": "Acme Co", "gbp_category": "Plumber", "address": "1 Main St"}}
+    ) == ("Acme Co", "Plumber", "1 Main St")
+    assert sps._business_fields({"name": "Bob LLC", "business_location": "Austin, TX"}) == ("Bob LLC", "", "Austin, TX")
 
 
 # ---- fake supabase (query-builder shim) ----
@@ -96,6 +98,49 @@ async def test_score_run_calls_nlp_national_and_persists():
     assert "emergency plumber" in args[1]["keyword"]
     # a service_score row was persisted
     assert any(t == "module_outputs" and r["module"] == "service_score" for t, r in store["inserts"])
+
+
+def _location_store():
+    store = _store()
+    store["select"]["runs"] = {
+        "id": "r1", "content_type": "location_page", "client_id": "c1",
+        "keyword": "Austin, TX", "location": "Austin, TX", "location_code": 2840,
+        "services": ["Emergency Plumbing", "Drain Cleaning"],
+    }
+    store["select"]["clients"] = {
+        "name": "Acme Co", "gbp": {"gbp_category": "Plumber", "address": "1 Main St, Austin, TX"},
+    }
+    return store
+
+
+async def test_location_page_scores_in_local_mode_with_location_and_address():
+    store = _location_store()
+    with patch(f"{_PFX}._sb", return_value=_FakeSB(store)), \
+         patch(f"{_PFX}._post_nlp", AsyncMock(return_value=_SCORE)) as post_nlp:
+        await sps.score_run("r1", user_id="u1")
+
+    args, _ = post_nlp.call_args
+    payload = args[1]
+    # Location pages score with the geo engines on + the location/address present.
+    assert payload["geo_mode"] == "local"
+    assert payload["location"] == "Austin, TX"
+    assert payload["location_code"] == 2840
+    assert payload["address"] == "1 Main St, Austin, TX"
+
+
+async def test_location_page_reoptimize_threads_page_type_and_services():
+    store = _location_store()
+    page = {"title": "Austin Plumbing | Acme", "renderings": {"html": "<h2>x</h2>"},
+            "metadata": {"cost_usd": 0.07, "schema_version": "1.0"}}
+    with patch(f"{_PFX}._sb", return_value=_FakeSB(store)), \
+         patch(f"{_PFX}._post_pipeline", AsyncMock(return_value=page)) as post_pipeline, \
+         patch(f"{_PFX}._post_nlp", AsyncMock(return_value=_SCORE)):
+        await sps.reoptimize_run("r1", [], user_id="u1")
+
+    args, _ = post_pipeline.call_args
+    assert args[1]["page_type"] == "location"
+    assert args[1]["location"] == "Austin, TX"
+    assert args[1]["services"] == ["Emergency Plumbing", "Drain Cleaning"]
 
 
 async def test_reoptimize_run_regenerates_then_rescores():

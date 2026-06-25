@@ -57,7 +57,8 @@ def _business_fields(client: dict) -> dict:
 
 
 def _gbp_to_generate_payload(
-    client: dict, keyword: str, location: str, location_code: Optional[int] = None
+    client: dict, keyword: str, location: str, location_code: Optional[int] = None,
+    include_decision_map: bool = True,
 ) -> dict:
     """Map a suite client row (with its `gbp` JSONB) to the nlp service's
     GeneratePageRequest. The converged brand_voice / detected_icp /
@@ -80,6 +81,9 @@ def _gbp_to_generate_payload(
         "reviews": gbp.get("reviews") or None,
         # Analysis always runs first; nlp only skips it if we degrade below.
         "run_analysis": True,
+        # Decision-fit "which is right for you" block is on by default (every
+        # local page); callers can suppress it for a purely transactional page.
+        "include_decision_map": include_decision_map,
         "brand_voice": client.get("brand_voice"),
         "detected_icp": client.get("detected_icp"),
         "differentiators": client.get("differentiators") or [],
@@ -308,6 +312,7 @@ async def generate_page(
     client_id: str, keyword: str, location: str, location_code: Optional[int],
     user_id: str, force_refresh: bool = False,
     page_template_url: Optional[str] = None,
+    include_decision_map: bool = True,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
@@ -321,7 +326,9 @@ async def generate_page(
     scrape."""
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
-    payload = _gbp_to_generate_payload(client, keyword, location, location_code)
+    payload = _gbp_to_generate_payload(
+        client, keyword, location, location_code, include_decision_map=include_decision_map
+    )
     # Page template: per-page value wins; otherwise the client's saved default.
     template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
     if template_url:
@@ -480,6 +487,8 @@ async def reoptimize_page(
         "address": fields["address"],
         "phone": fields["phone"],
         "serp_analysis": serp_analysis,
+        # Keep the decision-fit treatment on reoptimization (parity with generate).
+        "include_decision_map": True,
     })
 
     # Newer nlp builds surface the score the reoptimize loop already computed.

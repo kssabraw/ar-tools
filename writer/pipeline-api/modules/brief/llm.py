@@ -30,12 +30,17 @@ from typing import Any, Optional
 
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
+import httpx
 
 from config import settings
 
 logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
+# Opus for the single reasoning step (answer contract): it sets the whole
+# brief's direction and must be willing to contradict a false premise. Opus 4.8
+# rejects a `temperature` param, so callers pass temperature=None for it.
+CLAUDE_OPUS_MODEL = "claude-opus-4-8"
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_MODEL_LARGE = "text-embedding-3-large"
 
@@ -137,29 +142,37 @@ async def claude_json(
     system: str,
     user: str,
     max_tokens: int = 1500,
-    temperature: float = 0.2,
+    temperature: Optional[float] = 0.2,
+    model: Optional[str] = None,
 ) -> Any:
     """Call Claude and parse the response as JSON.
 
     Tolerates fenced/prose-wrapped responses. On parse failure, retries
     once with a stricter "JSON only" addendum to the system prompt and
     logs a snippet of the offending response for diagnosis.
+
+    `model` defaults to CLAUDE_MODEL (Sonnet); pass CLAUDE_OPUS_MODEL for the
+    answer-contract reasoning step. `temperature=None` omits the param entirely
+    (Opus 4.8 rejects `temperature`).
     """
     client = get_anthropic()
+    use_model = model or CLAUDE_MODEL
 
     last_error: Optional[Exception] = None
     last_text: str = ""
     semaphore = _get_anthropic_semaphore()
     for attempt in range(2):
         sys_prompt = system if attempt == 0 else system + _STRICT_JSON_SUFFIX
+        create_kwargs: dict[str, Any] = {
+            "model": use_model,
+            "max_tokens": max_tokens,
+            "system": sys_prompt,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if temperature is not None:
+            create_kwargs["temperature"] = temperature
         async with semaphore:
-            message = await client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=sys_prompt,
-                messages=[{"role": "user", "content": user}],
-            )
+            message = await client.messages.create(**create_kwargs)
         text = "".join(
             block.text for block in message.content if getattr(block, "type", "") == "text"
         )
@@ -176,7 +189,7 @@ async def claude_json(
                 extra={
                     "attempt": attempt + 1,
                     "max_tokens": max_tokens,
-                    "model": CLAUDE_MODEL,
+                    "model": use_model,
                     "response_chars": len(text),
                     "tail": text[-200:],
                 },
@@ -268,6 +281,69 @@ def _unit_normalize(v: list[float]) -> list[float]:
     if norm == 0.0:
         return v
     return [x / norm for x in v]
+
+
+# ---- Gemini embeddings (dual-space AIO proximity, advisory) ----
+#
+# Asymmetric retrieval embeddings: headings embed as RETRIEVAL_QUERY, the AIO
+# answer + fan-out questions embed as RETRIEVAL_DOCUMENT. This matches how Google
+# scores AI Overview retrieval better than OpenAI's symmetric space. Used ONLY by
+# aio_proximity.py (observability); it never feeds a gate or selection. Falls back
+# to OpenAI 3-large when no GEMINI_API_KEY is configured.
+_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
+_GEMINI_BATCH_LIMIT = 100  # Gemini batchEmbedContents caps inputs per request
+
+
+def gemini_configured() -> bool:
+    return bool(settings.gemini_api_key)
+
+
+async def embed_gemini(texts: list[str], *, task_type: str) -> list[list[float]]:
+    """Embed texts with Gemini in the given retrieval space (RETRIEVAL_QUERY or
+    RETRIEVAL_DOCUMENT), L2-normalized so cosine == dot product. Raises on a missing
+    key or any API error so callers can fall back. Returns one vector per input."""
+    if not texts:
+        return []
+    if not settings.gemini_api_key:
+        raise RuntimeError("gemini_api_key_not_configured")
+
+    model = settings.gemini_embedding_model
+    model_path = model if model.startswith("models/") else f"models/{model}"
+    url = f"{_GEMINI_BASE}/{model_path}:batchEmbedContents"
+    headers = {"x-goog-api-key": settings.gemini_api_key}
+
+    out: list[list[float]] = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for start in range(0, len(texts), _GEMINI_BATCH_LIMIT):
+            chunk = texts[start:start + _GEMINI_BATCH_LIMIT]
+            payload = {
+                "requests": [
+                    {
+                        "model": model_path,
+                        "content": {"parts": [{"text": t}]},
+                        "taskType": task_type,
+                        "outputDimensionality": settings.gemini_embedding_dim,
+                    }
+                    for t in chunk
+                ]
+            }
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            embeddings = data.get("embeddings") or []
+            if len(embeddings) != len(chunk):
+                raise RuntimeError("gemini_embed_count_mismatch")
+            # Gemini does not L2-normalize truncated (<3072-dim) outputs.
+            out.extend(_unit_normalize([float(x) for x in e.get("values") or []]) for e in embeddings)
+    return out
+
+
+async def embed_gemini_query(texts: list[str]) -> list[list[float]]:
+    return await embed_gemini(texts, task_type="RETRIEVAL_QUERY")
+
+
+async def embed_gemini_document(texts: list[str]) -> list[list[float]]:
+    return await embed_gemini(texts, task_type="RETRIEVAL_DOCUMENT")
 
 
 def cosine(a: list[float], b: list[float]) -> float:

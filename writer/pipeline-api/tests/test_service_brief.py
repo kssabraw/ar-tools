@@ -170,7 +170,7 @@ async def _run_pipeline(request, *, local_pack=False, cached_bundle=None):
 async def test_happy_path_complete_brief():
     result, _ = await _run_pipeline(_request([{"claim": "24-hour response guarantee", "mechanism": "on-call crews", "type": "speed"}]))
 
-    assert result.metadata.schema_version == "1.1"
+    assert result.metadata.schema_version == "1.2"
     assert result.strategy.positioning_angle.strip()
     assert result.strategy.primary_query == "emergency drain cleaning austin"
     assert result.architecture, "architecture must have sections"
@@ -297,3 +297,150 @@ async def test_research_bundle_round_trips():
     # Reconstructing from the cached dict must not raise.
     rebuilt = ResearchBundle(**payload)
     assert rebuilt.mode == first.research_bundle.mode
+
+
+# ----------------------------------------------------------------------
+# Location-page mode: section-per-service hub, location-anchored research
+# ----------------------------------------------------------------------
+
+def _location_request() -> ServiceBriefRequest:
+    return ServiceBriefRequest(
+        run_id="run-loc-1",
+        service="Austin, TX",          # location carried as the service label
+        primary_query="Austin, TX",    # keyword == location display
+        location="Austin, TX",
+        page_type="location",
+        services=["Emergency Plumbing", "Drain Cleaning", "Water Heater Repair"],
+        client_context=ClientContextInput(
+            differentiators=[{"claim": "24-hour response guarantee", "type": "speed"}]
+        ),
+    )
+
+
+def _location_synthesis_spy(captured: dict):
+    """Records the system + user prompts and returns one section per service."""
+    async def _fake(system, user, **kwargs):
+        captured["system"] = system
+        captured["user"] = user
+        return {
+            "positioning_angle": "the Austin team that answers within the hour",
+            "secondary_queries": ["austin emergency plumber"],
+            "objections": [{"objection": "Are they local?", "where_addressed": "Serving Austin"}],
+            "sections": [
+                {"heading": "Serving Austin", "level": "H2", "purpose": "Local intro",
+                 "must_cover": ["Austin"], "length_target": 0},
+                {"heading": "Emergency Plumbing in Austin", "level": "H2",
+                 "purpose": "Service 1", "must_cover": ["emergency"], "length_target": 0},
+                {"heading": "Drain Cleaning in Austin", "level": "H2",
+                 "purpose": "Service 2", "must_cover": ["drains"], "length_target": 0},
+                {"heading": "Water Heater Repair in Austin", "level": "H2",
+                 "purpose": "Service 3", "must_cover": ["water heater"], "length_target": 0},
+            ],
+            "cta_strategy": "Call now",
+            "cta_placement": ["end"],
+            "faq_targets": ["Do you serve all of Austin?"],
+            "silo_candidates": [],
+        }
+    return AsyncMock(side_effect=_fake)
+
+
+async def test_location_mode_anchors_serp_and_uses_location_prompt():
+    captured: dict = {}
+    serp_mock = AsyncMock(return_value={"items": _serp_items(local_pack=True)})
+    with patch(f"{_PREFIX}.research.serp_organic_advanced", serp_mock), \
+         patch(f"{_PREFIX}.research.autocomplete", AsyncMock(return_value=[])), \
+         patch(f"{_PREFIX}.research.extract_entities", AsyncMock(side_effect=_fake_entities)), \
+         patch(f"{_PREFIX}.competitor.scrape_many", side_effect=_fake_scrape_many), \
+         patch(f"{_PREFIX}.competitor.claude_json_model", AsyncMock(side_effect=_fake_teardown_extract)), \
+         patch(f"{_PREFIX}.synthesis.claude_json_model", _location_synthesis_spy(captured)), \
+         patch(f"{_PREFIX}.cache.get_cached", AsyncMock(return_value=None)) as get_cached, \
+         patch(f"{_PREFIX}.cache.write_cache", AsyncMock()) as write_cache:
+        result = await run_service_brief(_location_request())
+
+    # Research is anchored on "<first service> <location>", not the bare keyword.
+    assert serp_mock.call_args.args[0] == "Emergency Plumbing Austin, TX"
+    # The location-hub synthesis prompt was used + carried the services list.
+    assert "LOCATION landing page" in captured["system"]
+    assert "services_to_cover" in captured["user"]
+    assert "Drain Cleaning" in captured["user"]
+    # Cache key is namespaced for location pages + uses the anchor query.
+    assert get_cached.call_args.args == ("Emergency Plumbing Austin, TX", 2840, "location")
+    assert write_cache.call_args.kwargs["page_type"] == "location"
+    # One section per service (plus the local intro) is preserved in the brief.
+    headings = [s.heading for s in result.architecture]
+    assert "Emergency Plumbing in Austin" in headings
+    assert "Water Heater Repair in Austin" in headings
+
+
+# ----------------------------------------------------------------------
+# Decision-fit (schema 1.2): assembly keeps a usable map, drops weak ones
+# ----------------------------------------------------------------------
+
+def test_build_decision_fit_keeps_valid_map():
+    from modules.service_brief.assembly import _build_decision_fit
+
+    df = _build_decision_fit({
+        "applies": True,
+        "branches": [
+            {"condition": "it's an active leak", "option": "emergency same-day service"},
+            {"condition": "it's a planned upgrade", "option": "scheduled installation"},
+        ],
+        "default_statement": "When unsure, call and we'll triage.",
+    })
+    assert df is not None
+    assert df.applies is True
+    assert len(df.branches) == 2
+    assert df.branches[0].condition == "it's an active leak"
+    assert df.default_statement.startswith("When unsure")
+
+
+def test_build_decision_fit_drops_when_not_applicable_or_thin():
+    from modules.service_brief.assembly import _build_decision_fit
+
+    # applies=False -> dropped entirely.
+    assert _build_decision_fit({"applies": False, "branches": [
+        {"condition": "a", "option": "x"}, {"condition": "b", "option": "y"}]}) is None
+    # Fewer than 2 usable branches -> dropped.
+    assert _build_decision_fit({"applies": True, "branches": [
+        {"condition": "only one", "option": "x"}]}) is None
+    # Duplicate conditions collapse to <2 distinct -> dropped.
+    assert _build_decision_fit({"applies": True, "branches": [
+        {"condition": "same", "option": "x"}, {"condition": "Same", "option": "y"}]}) is None
+    # Empty option drops the branch -> dropped.
+    assert _build_decision_fit({"applies": True, "branches": [
+        {"condition": "a", "option": ""}, {"condition": "b", "option": "y"}]}) is None
+    assert _build_decision_fit(None) is None
+
+
+def _decision_fit_synthesis_stub():
+    """Synthesis stub that emits a valid decision_fit map alongside the brief."""
+    async def _fake(system, user, **kwargs):
+        base = await _make_synthesis_stub().side_effect(system, user, **kwargs)
+        base["decision_fit"] = {
+            "applies": True,
+            "branches": [
+                {"condition": "the drain is fully blocked now", "option": "emergency clearing"},
+                {"condition": "it's slow but draining", "option": "scheduled maintenance"},
+            ],
+            "default_statement": "Call us and we'll advise.",
+        }
+        return base
+    return AsyncMock(side_effect=_fake)
+
+
+async def test_pipeline_surfaces_decision_fit():
+    request = _request([{"claim": "24-hour response guarantee", "type": "speed"}])
+    serp_mock = AsyncMock(return_value={"items": _serp_items()})
+    with patch(f"{_PREFIX}.research.serp_organic_advanced", serp_mock), \
+         patch(f"{_PREFIX}.research.autocomplete", AsyncMock(return_value=[])), \
+         patch(f"{_PREFIX}.research.extract_entities", AsyncMock(side_effect=_fake_entities)), \
+         patch(f"{_PREFIX}.competitor.scrape_many", side_effect=_fake_scrape_many), \
+         patch(f"{_PREFIX}.competitor.claude_json_model", AsyncMock(side_effect=_fake_teardown_extract)), \
+         patch(f"{_PREFIX}.synthesis.claude_json_model", _decision_fit_synthesis_stub()), \
+         patch(f"{_PREFIX}.cache.get_cached", AsyncMock(return_value=None)), \
+         patch(f"{_PREFIX}.cache.write_cache", AsyncMock()):
+        result = await run_service_brief(request)
+
+    assert result.decision_fit is not None
+    assert result.decision_fit.applies is True
+    assert len(result.decision_fit.branches) == 2

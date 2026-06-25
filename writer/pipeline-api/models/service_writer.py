@@ -24,6 +24,7 @@ from models.writer import ClientContextInput  # noqa: E402
 
 HeadingLevel = Literal["H1", "H2", "H3"]
 BlockType = Literal["paragraph", "list", "subheading", "cta"]
+PageType = Literal["service", "location"]
 
 
 # ----------------------------------------------------------------------
@@ -38,6 +39,13 @@ class ServiceWriterRequest(BaseModel):
     # The ServiceBriefResponse dict (Strategy / Architecture / Conversion+SEO).
     service_brief_output: dict[str, Any]
     client_context: Optional[ClientContextInput] = None
+    # `service` (default) = single-service page; `location` = a multi-service
+    # location hub. For a location page, `location` carries the target area and
+    # `services` lists the services covered — both only shape the title/meta and
+    # JSON-LD (the section bodies come from the brief's architecture either way).
+    page_type: PageType = "service"
+    location: Optional[str] = None
+    services: list[str] = Field(default_factory=list)
     # Reoptimization: when 'reoptimize', the writer regenerates guided by the
     # scorer's deficiencies, using the prior page's sections as the baseline.
     mode: Literal["generate", "reoptimize"] = "generate"
@@ -97,6 +105,9 @@ class ServiceWriterMetadata(BaseModel):
     brand_voice_card_used: Optional[dict] = None
     degraded_notes: list[str] = Field(default_factory=list)
     generation_time_ms: int = 0
+    # True when the brief carried a usable decision_fit map that was woven into the
+    # generation directive. Additive/observability only — output shape is unchanged.
+    decision_fit_rendered: bool = False
 
 
 class ServiceWriterResponse(BaseModel):

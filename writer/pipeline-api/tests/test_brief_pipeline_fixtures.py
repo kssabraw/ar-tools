@@ -372,6 +372,10 @@ def _fixture_mocks(
         patch("modules.brief.intent.claude_json", router),
         # Step 12.4 viability lives in silos.py
         patch("modules.brief.silos.claude_json", router),
+        # v2.8 - answer contract (Opus) + decision_fit
+        patch("modules.brief.answer_contract.claude_json", router),
+        patch("modules.brief.answer_contract.embed_batch_large", embed),
+        patch("modules.brief.decision_fit.claude_json", router),
         patch("modules.brief.pipeline.get_cached", cache_miss),
         patch("modules.brief.pipeline.write_cache", cache_write),
     ]

@@ -37,7 +37,7 @@ def _get_run(run_id: str) -> dict:
     run = (_sb().table("runs").select("*").eq("id", run_id).single().execute()).data or {}
     if not run:
         raise HTTPException(status_code=404, detail="run_not_found")
-    if run.get("content_type") != "service_page":
+    if run.get("content_type") not in ("service_page", "location_page"):
         raise HTTPException(status_code=400, detail="not_a_service_page_run")
     return run
 
@@ -96,30 +96,43 @@ def build_scoring_html(sw_output: dict) -> str:
     return f"<!doctype html><html><head><title>{title}</title></head><body><h1>{h1}</h1>\n{body}</body></html>"
 
 
-def _business_fields(client: dict) -> tuple[str, str]:
+def _business_fields(client: dict) -> tuple[str, str, str]:
     gbp = client.get("gbp") if isinstance(client.get("gbp"), dict) else {}
     business_name = (gbp or {}).get("business_name") or client.get("name") or "Business"
     gbp_category = (gbp or {}).get("gbp_category") or ""
-    return business_name, gbp_category
+    address = (gbp or {}).get("address") or client.get("business_location") or ""
+    return business_name, gbp_category, address
 
 
 async def score_run(run_id: str, user_id: Optional[str] = None) -> dict:
-    """Score the run's latest service_writer page (national / no-location mode),
-    persist a `service_score` module_output, and return the ScoreResult."""
+    """Score the run's latest service_writer page, persist a `service_score`
+    module_output, and return the ScoreResult.
+
+    A `service_page` run scores in location-agnostic `national` mode (geo engines
+    don't apply). A `location_page` run is location-targeted, so it scores in
+    `local` mode — the geo engines count and the page's location + the client's
+    business address are passed through.
+    """
     run = _get_run(run_id)
     sw = _latest_output(run_id, "service_writer")
     if not sw:
         raise HTTPException(status_code=422, detail="page_not_available")
     sw_out = sw.get("output_payload") or {}
     client = _get_client(run["client_id"])
-    business_name, gbp_category = _business_fields(client)
+    business_name, gbp_category, address = _business_fields(client)
     payload = {
         "keyword": run.get("keyword") or sw_out.get("primary_query") or "",
-        "geo_mode": "national",
         "page_content": build_scoring_html(sw_out),
         "business_name": business_name,
         "gbp_category": gbp_category,
     }
+    if run.get("content_type") == "location_page":
+        payload["geo_mode"] = "local"
+        payload["location"] = run.get("location") or ""
+        payload["location_code"] = run.get("location_code")
+        payload["address"] = address
+    else:
+        payload["geo_mode"] = "national"
     result = await _post_nlp("/score-page", payload, user_id=user_id)
     cost = (result.get("token_usage") or {}).get("cost_usd")
     _insert_output(run_id, "service_score", result, cost)
@@ -164,6 +177,7 @@ async def reoptimize_run(
     if not sb_out or not sw_out:
         raise HTTPException(status_code=422, detail="page_not_available")
     snapshot = _get_snapshot(run_id)
+    services = run.get("services") or []
     payload = {
         "run_id": run_id,
         "attempt": _next_attempt(run_id, "service_writer"),
@@ -172,6 +186,10 @@ async def reoptimize_run(
         "mode": "reoptimize",
         "prior_sections": (sw_out.get("output_payload") or {}).get("sections") or [],
         "deficiencies": deficiencies or [],
+        # Preserve the page's location framing across the reoptimize pass.
+        "page_type": "location" if run.get("content_type") == "location_page" else "service",
+        "location": run.get("location"),
+        "services": [str(s).strip() for s in services if isinstance(services, list) and str(s).strip()],
     }
     page = await _post_pipeline(_SERVICE_WRITE_PATH, payload)
     cost = (page.get("metadata") or {}).get("cost_usd")
