@@ -69,6 +69,15 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
     brand_name = (brand_card or {}).get("brand_name", "") or ""
     brand_directive = generation._brand_directive(brand_card)
 
+    # Decision-fit: when the brief carried a usable situational-choice map, fold it
+    # into the per-call directive so every section weaves the branches in (condition-
+    # first). Appended like reopt_directive; empty/absent maps are a no-op.
+    decision_fit_text = generation.decision_fit_directive(brief.get("decision_fit"))
+    decision_fit_rendered = bool(decision_fit_text)
+    if decision_fit_rendered:
+        brand_directive += decision_fit_text
+        notes.append("decision_fit_rendered")
+
     # Reoptimization: fold the scorer's deficiencies into the per-call directive
     # so every section/title/FAQ generation addresses them. Same output shape.
     if request.mode == "reoptimize":
@@ -177,6 +186,7 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
         brand_voice_card_used=brand_card,
         degraded_notes=notes,
         generation_time_ms=int((time.perf_counter() - started) * 1000),
+        decision_fit_rendered=decision_fit_rendered,
     )
 
     logger.info(

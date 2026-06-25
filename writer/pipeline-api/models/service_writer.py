@@ -105,6 +105,9 @@ class ServiceWriterMetadata(BaseModel):
     brand_voice_card_used: Optional[dict] = None
     degraded_notes: list[str] = Field(default_factory=list)
     generation_time_ms: int = 0
+    # True when the brief carried a usable decision_fit map that was woven into the
+    # generation directive. Additive/observability only — output shape is unchanged.
+    decision_fit_rendered: bool = False
 
 
 class ServiceWriterResponse(BaseModel):

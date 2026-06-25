@@ -31,7 +31,7 @@ EXPECTED_MODULE_VERSIONS: dict[str, str] = {
     "writer": "1.9",
     "sources_cited": "1.1",
     # Service-page content type (content_type='service_page')
-    "service_brief": "1.1",
+    "service_brief": "1.2",
     "service_writer": "1.0",
 }
 

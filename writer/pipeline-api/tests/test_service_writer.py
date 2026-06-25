@@ -255,6 +255,86 @@ async def test_location_mode_title_meta_leads_with_location():
     assert result.schema_jsonld.count('"Service"') == 2
 
 
+def test_decision_fit_directive_renders_branches():
+    from modules.service_writer.generation import decision_fit_directive
+
+    out = decision_fit_directive({
+        "applies": True,
+        "branches": [
+            {"condition": "the drain is fully blocked", "option": "emergency clearing"},
+            {"condition": "it's draining slowly", "option": "scheduled maintenance"},
+        ],
+        "default_statement": "Call us and we'll triage.",
+    })
+    assert "DECISION-FIT" in out
+    assert "If the drain is fully blocked: emergency clearing" in out
+    assert "If it's draining slowly: scheduled maintenance" in out
+    assert "Call us and we'll triage." in out
+    # No map / fewer than 2 usable branches -> empty (no-op directive).
+    assert decision_fit_directive(None) == ""
+    assert decision_fit_directive({"applies": False, "branches": [
+        {"condition": "a", "option": "x"}, {"condition": "b", "option": "y"}]}) == ""
+    assert decision_fit_directive({"applies": True, "branches": [
+        {"condition": "only one", "option": "x"}]}) == ""
+
+
+async def test_decision_fit_woven_into_section_prompts():
+    """A brief carrying a usable decision_fit map feeds the branches into every
+    section's generation prompt and stamps decision_fit_rendered."""
+    captured: list[str] = []
+
+    async def fake(system, user, **kwargs):
+        if "ONE section body" in system:
+            captured.append(user)
+            return {"blocks": [{"type": "paragraph", "text": "We serve Austin fast."}]}
+        if "SEO metadata" in system:
+            return {"title": "t", "meta_description": "m", "cta_text": "Call"}
+        if "answer FAQs" in system:
+            return {"faqs": []}
+        return {}
+
+    brief = _brief()
+    brief["decision_fit"] = {
+        "applies": True,
+        "branches": [
+            {"condition": "the drain is fully blocked", "option": "emergency clearing"},
+            {"condition": "it's draining slowly", "option": "scheduled maintenance"},
+        ],
+        "default_statement": "Call us and we'll triage.",
+    }
+    req = ServiceWriterRequest(
+        run_id="run-df", service_brief_output=brief,
+        client_context=ClientContextInput(brand_guide_text="x"),
+    )
+    with patch(_GEN, AsyncMock(side_effect=fake)), patch(_DISTILL, AsyncMock(return_value=BrandVoiceCard(brand_name="Acme"))):
+        result = await run_service_writer(req)
+
+    assert result.metadata.decision_fit_rendered is True
+    assert "decision_fit_rendered" in result.metadata.degraded_notes
+    assert captured, "at least one section body was generated"
+    assert all("If the drain is fully blocked: emergency clearing" in u for u in captured)
+
+
+async def test_decision_fit_absent_when_brief_has_none():
+    captured: list[str] = []
+
+    async def fake(system, user, **kwargs):
+        if "ONE section body" in system:
+            captured.append(user)
+            return {"blocks": [{"type": "paragraph", "text": "We serve Austin fast."}]}
+        if "SEO metadata" in system:
+            return {"title": "t", "meta_description": "m", "cta_text": "Call"}
+        if "answer FAQs" in system:
+            return {"faqs": []}
+        return {}
+
+    with patch(_GEN, AsyncMock(side_effect=fake)), patch(_DISTILL, AsyncMock(return_value=BrandVoiceCard(brand_name="Acme"))):
+        result = await run_service_writer(_request(ClientContextInput(brand_guide_text="x")))
+
+    assert result.metadata.decision_fit_rendered is False
+    assert all("DECISION-FIT" not in u for u in captured)
+
+
 def test_coerce_blocks_tolerates_bad_level():
     """A non-numeric `level` from the LLM must not discard the section's blocks."""
     from modules.service_writer.generation import _coerce_blocks

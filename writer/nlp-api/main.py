@@ -383,6 +383,22 @@ Generate 3 schema blocks as a single JSON-LD array inside one <script type="appl
 2. Service
 3. FAQPage (auto-extracted from Section 12)
 
+DECISION-FIT / HOW TO CHOOSE (when the user prompt includes a DECISION-FIT directive)
+Local buyers often face a situational choice — which of your services, tier, or urgency level
+fits their specific situation (e.g. emergency vs scheduled, repair vs replacement, residential
+vs commercial). When the DECISION-FIT directive is present, the page MUST help the reader self-
+select, ANSWER-FIRST and CONDITION-FIRST:
+- Preferred: add 1–2 FAQ entries in Section 12 phrased as a choice ("Should I repair or replace
+  my [X]?" / "Which [service] do I need for [situation]?"), each answer leading with the
+  recommendation, then the condition: "If [condition], choose [option]. If [other condition],
+  choose [other option]." OR add a short "which is right for you" passage inside the Main Service
+  Body (Section 6) covering the same condition→option mapping.
+- Only map conditions to options the business ACTUALLY offers (per GBP category, description,
+  reviews, or the services listed in the business data) — never invent tiers, services, or
+  guarantees. This is subject to all FACTUAL ACCURACY rules below.
+- Keep it concise and genuinely decision-useful; do not add a gimmicky standalone marketing
+  heading and do not pad with vague "it depends" filler.
+
 HARD RULES — NEVER:
 - Start with "Welcome to [Brand]"
 - Use "We are a [city] [service] company" as first sentence
@@ -2899,7 +2915,7 @@ SCORING CRITERIA — score each engine 0–100:
 
 4. icp_alignment (weight 5%): detect ICP from keyword modifier (emergency→urgent tone; commercial→B2B tone; general→professional/reliable); CTA tone matches ICP (e.g. emergency ICP requires urgency/fear-based CTA, not generic "call for a free estimate"); pain points addressed; emotional register of copy matches searcher intent.
 
-5. aeo_llm_retrieval (weight 20%): answer-first formatting (direct claim before explanation); FAQ with 4–7 entries (penalise if fewer than 4 or more than 7), each opening with a direct yes/no or factual statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets; ≥1 numbered list for a process or steps; tables used where content is genuinely comparative (service tiers, response times, inclusions) — penalise only if comparative data is present but no table was used; specific operational facts (numbers, timeframes, named places) rather than generic filler.
+5. aeo_llm_retrieval (weight 20%): answer-first formatting (direct claim before explanation); FAQ with 4–7 entries (penalise if fewer than 4 or more than 7), each opening with a direct yes/no or factual statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets; ≥1 numbered list for a process or steps; tables used where content is genuinely comparative (service tiers, response times, inclusions) — penalise only if comparative data is present but no table was used; specific operational facts (numbers, timeframes, named places) rather than generic filler; DECISION-FIT: when the buyer faces a real situational choice (which service/tier/urgency fits them), credit a clear answer-first condition→option treatment ("if X, choose A; if Y, choose B") in the FAQ or service body, and penalise only when such a choice plainly exists but the page leaves the decision criteria vague or buried — do NOT penalise a genuinely single-purpose page that has no such choice.
 
 6. geographic_legitimacy (weight 10%): city in title+H1+opening ¶; ≥2 neighborhood references in sentence context; ≥1 landmark reference; ≥3 zip codes in visible content; geo signals in ≥3 page sections.
 
@@ -5075,6 +5091,11 @@ class GeneratePageRequest(BaseModel):
     # attempt already failed, so nlp must not re-scrape the same failing SERP);
     # a direct caller that omits this still gets the full competitor analysis.
     run_analysis: bool = True
+    # Decision-fit: when True (default, always-on), the page includes a concise
+    # condition->option "which is right for you" treatment for the buyer's
+    # situational choice (woven into the FAQ or service body). Set False to
+    # suppress for transactional pages where no real choice exists.
+    include_decision_map: bool = True
 
 class GeneratePageResponse(BaseModel):
     content_html: str
@@ -5298,6 +5319,23 @@ async def generate_page(request: Request, body: GeneratePageRequest):
             "GBP Description: Not provided"
         )
 
+        # Decision-fit: default-on. The system prompt's DECISION-FIT rule fires only
+        # when this directive is present, so a True flag activates the condition->option
+        # treatment and a False flag explicitly suppresses it for transactional pages.
+        if body.include_decision_map:
+            decision_map_text = (
+                "DECISION-FIT directive: include a concise condition->option "
+                "\"which is right for you\" treatment per the DECISION-FIT rule — map the "
+                "buyer's likely situations to the right service/tier this business offers "
+                "(answer-first, condition-first), woven into the FAQ or the service body. "
+                "Only use services/tiers supported by the business data above."
+            )
+        else:
+            decision_map_text = (
+                "DECISION-FIT directive: OMIT decision-fit content — do not add a "
+                "\"which is right for you\" / condition->option choice treatment for this page."
+            )
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -5316,6 +5354,8 @@ Full location: {body.location}
 {reviews_text}
 {website_text}
 {serp_ctx}
+
+{decision_map_text}
 
 {seo_checklist}
 
@@ -5446,6 +5486,9 @@ class ReoptimizePageRequest(BaseModel):
     address: Optional[str] = None
     phone: Optional[str] = None
     serp_analysis: Optional[dict] = None
+    # Mirror of GeneratePageRequest — keep the condition->option decision-fit
+    # treatment (default) or suppress it on reoptimization.
+    include_decision_map: bool = True
 
 class ReoptimizePageResponse(BaseModel):
     content_html: str
@@ -5507,6 +5550,22 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
             for d in body.deficiencies
         )
 
+        # Decision-fit: keep the condition->option treatment on reoptimization unless
+        # explicitly suppressed (mirrors /generate-page).
+        if body.include_decision_map:
+            decision_map_text = (
+                "DECISION-FIT directive: include a concise condition->option "
+                "\"which is right for you\" treatment per the DECISION-FIT rule — map the "
+                "buyer's likely situations to the right service/tier this business offers "
+                "(answer-first, condition-first), woven into the FAQ or the service body. "
+                "Only use services/tiers supported by the business facts above."
+            )
+        else:
+            decision_map_text = (
+                "DECISION-FIT directive: OMIT decision-fit content — do not add a "
+                "\"which is right for you\" / condition->option choice treatment for this page."
+            )
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -5517,6 +5576,8 @@ Target city: {city}
 Full location: {body.location}
 
 {serp_ctx}
+
+{decision_map_text}
 
 SEO DEFICIENCIES TO FIX — address ALL of these in the new page:
 {deficiency_text}

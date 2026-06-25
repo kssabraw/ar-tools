@@ -37,6 +37,35 @@ def _brand_directive(brand_card: Optional[dict]) -> str:
     return " ".join(lines)
 
 
+def decision_fit_directive(decision_fit: Optional[dict]) -> str:
+    """Render a brief `decision_fit` map into section-prompt guidance: the best answer
+    depends on the buyer's situation, so the prose must weave the condition->option
+    branches in naturally (condition-first), plus the overarching default. No forced
+    "which is right for you" subheading — woven into the body. Empty string when the
+    map is absent or has fewer than 2 usable branches (mirrors fanout's gate)."""
+    if not isinstance(decision_fit, dict) or not decision_fit.get("applies"):
+        return ""
+    branches = [
+        b for b in (decision_fit.get("branches") or [])
+        if isinstance(b, dict)
+        and str(b.get("condition", "")).strip()
+        and str(b.get("option", "")).strip()
+    ]
+    if len(branches) < 2:
+        return ""
+    lines = "\n".join(
+        f"- If {str(b['condition']).strip()}: {str(b['option']).strip()}" for b in branches
+    )
+    default = str(decision_fit.get("default_statement", "")).strip()
+    return (
+        "\n\nDECISION-FIT — the best answer here depends on the reader's situation. Work the "
+        "following condition->recommendation branches into the prose naturally, stating the "
+        "condition first in each; do NOT add a separate subheading or a 'which is right for "
+        "you' label, and do not present them as a verbatim bulleted list:\n" + lines + "\n"
+        + (f"Across all cases, the overarching guidance is: {default}\n" if default else "")
+    )
+
+
 def reopt_directive(deficiencies: list[dict], prior_sections: Optional[list[dict]] = None) -> str:
     """Build a reoptimization directive from the scorer's deficiencies (appended to
     the per-call brand_directive so every generation call addresses them). Empty

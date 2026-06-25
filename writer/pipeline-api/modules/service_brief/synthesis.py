@@ -49,7 +49,16 @@ _SYNTHESIS_SYSTEM = (
     "then still apply rules 1-4 (the differentiator may reshape it). The "
     "reference shows how this client structures their own service pages; match "
     "that shape while adapting all wording to this service. If no reference is "
-    "provided, design the structure from the research as usual.\n\n"
+    "provided, design the structure from the research as usual.\n"
+    "7. DECISION-FIT: if (and only if) this page genuinely serves a situational "
+    "choice — the right answer depends on the buyer's situation (which "
+    "tier/option/urgency level fits them, e.g. emergency vs scheduled, "
+    "repair vs replace, residential vs commercial) — emit `decision_fit` with "
+    "`applies:true` and 2+ DISTINCT condition->option branches grounded in what "
+    "this business actually offers (never invent options). Otherwise emit "
+    "`decision_fit` with `applies:false` and an empty branches list. Branches are "
+    "condition-first; the writer weaves them into prose, so keep them plan-level "
+    "(condition + which option), not finished copy.\n\n"
     "Return ONLY this JSON object:\n"
     "{\n"
     '  "positioning_angle": "...",\n'
@@ -65,7 +74,9 @@ _SYNTHESIS_SYSTEM = (
     '  "internal_links": ["related service slug/topic"],\n'
     '  "faq_targets": ["question"],\n'
     '  "paa_targets": ["question"],\n'
-    '  "silo_candidates": [{"suggested_keyword": "...", "estimated_intent": "commercial"}]\n'
+    '  "silo_candidates": [{"suggested_keyword": "...", "estimated_intent": "commercial"}],\n'
+    '  "decision_fit": {"applies": true|false, "branches": '
+    '[{"condition": "...", "option": "..."}], "default_statement": "..."}\n'
     "}"
 )
 
@@ -102,7 +113,15 @@ _LOCATION_SYNTHESIS_SYSTEM = (
     "headlines-as-copy. 'heading' is a working label, not finished copy.\n"
     "6. If a `client_reference_page_structure` is provided, mirror its section "
     "layout, ordering, and heading hierarchy as the structural baseline — then "
-    "still apply rules 1-4 (the per-service sections are required regardless).\n\n"
+    "still apply rules 1-4 (the per-service sections are required regardless).\n"
+    "7. DECISION-FIT: a location hub usually DOES serve a situational choice — "
+    "'which of our services does your situation need here'. When that holds, emit "
+    "`decision_fit` with `applies:true` and 2+ DISTINCT condition->option branches "
+    "mapping a local buyer's situation to the right service/tier (grounded in "
+    "services_to_cover — never invent options). If the page is single-purpose "
+    "enough that no real choice exists, emit `applies:false` with an empty branches "
+    "list. Branches are condition-first and plan-level (condition + which option), "
+    "not finished copy.\n\n"
     "Return ONLY this JSON object:\n"
     "{\n"
     '  "positioning_angle": "...",\n'
@@ -118,7 +137,9 @@ _LOCATION_SYNTHESIS_SYSTEM = (
     '  "internal_links": ["related service slug/topic"],\n'
     '  "faq_targets": ["question"],\n'
     '  "paa_targets": ["question"],\n'
-    '  "silo_candidates": [{"suggested_keyword": "...", "estimated_intent": "commercial"}]\n'
+    '  "silo_candidates": [{"suggested_keyword": "...", "estimated_intent": "commercial"}],\n'
+    '  "decision_fit": {"applies": true|false, "branches": '
+    '[{"condition": "...", "option": "..."}], "default_statement": "..."}\n'
     "}"
 )
 
