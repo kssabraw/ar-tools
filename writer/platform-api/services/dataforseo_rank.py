@@ -13,8 +13,9 @@ gsc_position — the two columns are never reconciled (PRD §2/§5).
 from __future__ import annotations
 
 import base64
+import calendar
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -100,6 +101,38 @@ def is_gsc_covered(rows: list[dict], today: date, days: int) -> bool:
         d_ord = (d if isinstance(d, date) else date.fromisoformat(d)).toordinal()
         if d_ord >= cutoff:
             return True
+    return False
+
+
+def is_fetch_due(config: dict, today: date, default_weekday: int) -> bool:
+    """Whether a client's scheduled DataForSEO rank pull should fire today.
+
+    `config` is a rank_fetch_config row (or {} for a client with no explicit
+    schedule, which defaults to the legacy weekly-on-`default_weekday` cadence).
+    Mirrors rank_report.is_report_due; 'off' never auto-fires, and a fetch never
+    fires twice on the same day. `default_weekday` is config.dataforseo_rank_weekday.
+    """
+    mode = config.get("mode", "weekly")
+    if mode == "off":
+        return False
+
+    last_raw = config.get("last_fetched_at")
+    last_date = date.fromisoformat(last_raw[:10]) if last_raw else None
+    if last_date == today:
+        return False
+
+    if mode == "weekly":
+        dow = config.get("day_of_week")
+        if dow is None:
+            dow = default_weekday
+        return today.weekday() == dow
+    if mode == "monthly":
+        dom = config.get("day_of_month") or 1
+        last_day = calendar.monthrange(today.year, today.month)[1]
+        return today.day == min(dom, last_day)  # clamp e.g. 31 → month end
+    if mode == "interval":
+        n = config.get("interval_days") or 7
+        return last_date is None or (today.toordinal() - last_date.toordinal()) >= n
     return False
 
 
@@ -205,6 +238,15 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
             on_conflict="keyword_id,date",
         ).execute()
         fetched += 1
+
+    # Advance the per-client fetch clock so interval schedules measure "days
+    # since the last actual pull" and a weekly/monthly fetch can't double-fire
+    # the same day — whether triggered by the scheduler or a manual refresh.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    supabase.table("rank_fetch_config").upsert(
+        {"client_id": client_id, "last_fetched_at": now_iso, "updated_at": now_iso},
+        on_conflict="client_id",
+    ).execute()
 
     logger.info(
         "dataforseo_rank_complete",

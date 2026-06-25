@@ -213,6 +213,16 @@ export interface RankLocation {
   location_code: number | null
 }
 
+export type FetchMode = 'off' | 'weekly' | 'monthly' | 'interval'
+
+export interface FetchSchedule {
+  mode: FetchMode
+  day_of_week: number | null
+  day_of_month: number | null
+  interval_days: number | null
+  last_fetched_at: string | null
+}
+
 export type ReportMode = 'as_needed' | 'weekly' | 'monthly' | 'interval'
 
 export interface ReportSchedule {
