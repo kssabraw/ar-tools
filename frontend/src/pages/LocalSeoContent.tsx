@@ -91,6 +91,16 @@ export function LocalSeoContent() {
   const planResults = siloPlan.items
   const planNotes = siloPlan.notes
   const planError = siloPlan.error
+  // Elapsed-time ticker for the planning spinner — restarts whenever a plan
+  // begins and clears when it finishes (the run is a background job; this just
+  // reassures the user it's still working).
+  const [planElapsed, setPlanElapsed] = useState(0)
+  useEffect(() => {
+    if (!planScanning) return
+    setPlanElapsed(0)
+    const id = setInterval(() => setPlanElapsed(s => s + 1), 1000)
+    return () => clearInterval(id)
+  }, [planScanning])
 
   // Bulk creation — generate the selected missing silo pages sequentially.
   const [selectedForCreate, setSelectedForCreate] = useState<Set<string>>(new Set())
@@ -465,7 +475,10 @@ export function LocalSeoContent() {
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 32, color: '#64748b' }}>
               <Spinner size={22} />
               <p style={{ fontSize: 14, margin: 0 }}>Discovering silos, expanding keywords, and clustering demand…</p>
-              <p style={{ fontSize: 12, opacity: 0.7, margin: 0 }}>This usually takes 1–3 minutes. You can keep this tab open.</p>
+              <p style={{ fontSize: 15, fontWeight: 600, color: '#475569', fontVariantNumeric: 'tabular-nums', margin: 0 }}>
+                {Math.floor(planElapsed / 60)}:{String(planElapsed % 60).padStart(2, '0')} elapsed
+              </p>
+              <p style={{ fontSize: 12, opacity: 0.7, margin: 0 }}>This usually takes 4–6 minutes. You can keep this tab open.</p>
             </div>
           )}
 
