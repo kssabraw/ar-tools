@@ -68,6 +68,9 @@ class MapsScanResultRow(BaseModel):
     report_weak_directions: Optional[str] = None
     report_top_competitors: Optional[list] = None
     report_octant_pins: Optional[dict] = None  # hyper-local pin suggestions {ok, points, debug}
+    # Geocoded weak zones: octant pins labelled with their nearest city + weak
+    # grid cells aggregated into nearby localities ({geocoded, octant_pins, weak_areas}).
+    report_weak_locations: Optional[dict] = None
     report_analytics: Optional[dict] = None    # ring/sector rollups (for the printable report)
     report_doc_url: Optional[str] = None
     report_generated_at: Optional[str] = None

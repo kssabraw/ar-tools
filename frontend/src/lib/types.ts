@@ -604,6 +604,7 @@ export interface MapsScanResultRow {
   report_weak_directions: string | null
   report_top_competitors: string[] | null
   report_octant_pins: MapsOctantPins | null
+  report_weak_locations: MapsWeakLocations | null
   report_analytics: MapsReportAnalytics | null
   report_doc_url: string | null
   report_generated_at: string | null
@@ -640,6 +641,10 @@ export interface MapsOctantPin {
   lat: number
   lng: number
   strength: string
+  // Present once the weak zone has been reverse-geocoded.
+  city?: string | null
+  admin_area?: string | null
+  formatted?: string | null
 }
 
 export interface MapsOctantPins {
@@ -648,6 +653,29 @@ export interface MapsOctantPins {
   reason: string
   points: MapsOctantPin[]
   debug?: Record<string, unknown>
+}
+
+// A nearby city/locality the geo-grid is weak in: the unique place that a cluster
+// of weak (unranked / poorly-ranked) pins falls in, with a representative point.
+export interface MapsWeakArea {
+  city: string | null
+  admin_area: string | null
+  pins: number
+  not_ranked: number
+  octants: string[]
+  worst_rank: number | null
+  avg_rank: number | null
+  lat: number
+  lng: number
+}
+
+export interface MapsWeakLocations {
+  geocoded: boolean
+  capped: boolean
+  weak_threshold: number
+  weak_cell_count: number
+  octant_pins: MapsOctantPin[]
+  weak_areas: MapsWeakArea[]
 }
 
 export interface MapsScanSummary {

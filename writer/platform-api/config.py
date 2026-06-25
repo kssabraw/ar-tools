@@ -89,6 +89,18 @@ class Settings(BaseSettings):
     maps_report_max_tokens: int = 8192
     maps_report_competitor_min_rating: float = 4.7
     maps_report_octant_rule: str = "R1"
+    # Weak-zone geocoding (turns the geo-grid's weakest pins into real city names
+    # for SEO targeting). Reverse-geocodes via the Google Geocoding web service —
+    # set `google_maps_api_key` to a key with the Geocoding API enabled (a
+    # server-side key, NOT the referer-restricted frontend Maps JS key). Absent a
+    # key the report still generates; it just carries no place names. A pin is
+    # "weak" when it ranks worse than `maps_weak_rank_threshold` (or doesn't rank
+    # at all); at most `maps_geocode_max_cells` unique weak cells per keyword are
+    # geocoded (the rest are summarized but not named) to bound API cost — the
+    # cross-client `maps_geocode_cache` makes repeats free.
+    google_maps_api_key: str = ""
+    maps_weak_rank_threshold: int = 10
+    maps_geocode_max_cells: int = 60
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
