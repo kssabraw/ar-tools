@@ -6,9 +6,11 @@ there. Two layers, matching the user's ask:
 
   - every hyper-local octant pin (the priority GBP-page targets) is labelled with
     its nearest city; and
-  - all the weak grid cells (not ranked, or ranked worse than a threshold) are
-    aggregated into the unique nearby localities they fall in — a ranked list of
-    "weak coverage areas" with pin counts, directions, and worst/avg rank.
+  - all the "opportunity" grid cells (not ranked, or ranked outside the pack) are
+    scored for targeting priority (severity × proximity × beatability) and
+    aggregated into the unique nearby localities they fall in — a 0-100,
+    target-first list of "weak coverage areas" with tier, pin counts, directions,
+    and worst/avg rank.
 
 Reverse geocoding uses the Google Geocoding web service. Results are cached
 cross-client by rounded lat/lng (`maps_geocode_cache`) so regenerating a report
@@ -68,45 +70,122 @@ def _cell_latlng(ri: int, ci: int, n: int, center_lat: float, center_lng: float)
     return center_lat + north * deg_lat_per_mile, center_lng + east * deg_lng_per_mile
 
 
+# Tier labels by rank band, most→least severe (drives the badge + cap ordering).
+_TIER_ORDER = {"critical": 3, "weak": 2, "watch": 1}
+
+
+def _tier(rank: Optional[float], weak_threshold: int) -> str:
+    """Critical = unranked dead zone; Weak = ranked but >= the weak boundary;
+    Watch = the low-priority band just outside the pack (floor < rank < weak)."""
+    if rank is None:
+        return "critical"
+    return "weak" if rank >= weak_threshold else "watch"
+
+
+def _severity(rank: Optional[float], floor: int, unranked_eff: int) -> float:
+    """0-1 weakness, anchored at the pack edge (`floor`) and topping out at
+    `unranked_eff`. Rank just past the pack ≈ 0 (barely weak), unranked = 1.0."""
+    eff = unranked_eff if rank is None else rank
+    span = max(1e-9, unranked_eff - floor)
+    return max(0.0, min(1.0, (eff - floor) / span))
+
+
+def _proximity(ring: int, max_ring: int) -> float:
+    """0-1 closeness weight: innermost ring = 1.0, outer edge → ~1/max_ring.
+    Closer pins matter more (own your backyard; more realistically rankable)."""
+    if max_ring <= 0:
+        return 1.0
+    return max(0.0, (max_ring - ring + 1) / max_ring)
+
+
+def _beatability(comp_reviews: Optional[float], client_reviews: Optional[float],
+                 bmin: float, bmax: float) -> float:
+    """Multiplier in [bmin, bmax]: > 1 where the strongest competitor outranking
+    us has FEWER reviews than the client (easy to overtake), < 1 where an
+    entrenched, review-rich competitor holds the spot. Neutral (1.0) without data."""
+    if comp_reviews is None or client_reviews is None:
+        return 1.0
+    ratio = (client_reviews + 1.0) / (comp_reviews + 1.0)
+    return max(bmin, min(bmax, 1.0 + 0.4 * math.log10(ratio)))
+
+
+def _strongest_competitor_reviews(
+    competitors_above: Optional[dict], ri: int, ci: int,
+) -> Optional[float]:
+    """Reviews of the most review-rich competitor ranking above the client at
+    grid cell [ri][ci] (the toughest one to displace). None when unknown."""
+    if not competitors_above:
+        return None
+    grid = competitors_above.get("grid") or []
+    directory = competitors_above.get("directory") or {}
+    if ri >= len(grid):
+        return None
+    row = grid[ri] or []
+    if ci >= len(row) or not row[ci]:
+        return None
+    revs: list[float] = []
+    for entry in row[ci]:
+        pid = entry[0] if isinstance(entry, (list, tuple)) and entry else None
+        rv = (directory.get(pid) or {}).get("reviews") if pid else None
+        if isinstance(rv, (int, float)) and not isinstance(rv, bool):
+            revs.append(float(rv))
+    return max(revs) if revs else None
+
+
 def extract_weak_cells(
     rank_grid: list[list], center_lat: Optional[float], center_lng: Optional[float],
-    threshold: int, azimuth_offset_deg: float = 0.0,
+    floor: int, *, weak_threshold: Optional[int] = None,
+    unranked_effective_rank: Optional[int] = None,
+    competitors_above: Optional[dict] = None, client_reviews: Optional[float] = None,
+    beatability_bounds: Optional[tuple[float, float]] = None,
+    azimuth_offset_deg: float = 0.0,
 ) -> list[dict]:
-    """In-circle pins that rank worse than `threshold` (or not at all), each with
-    its real lat/lng + ring + compass octant. Excludes the business's own pin."""
+    """In-circle "opportunity" pins (unranked or ranked worse than `floor`), each
+    scored for targeting priority. Excludes the business's own pin and pins in the
+    pack (rank <= floor). Every cell carries its real lat/lng, ring, octant, tier,
+    and an `opportunity` score (severity × proximity × beatability)."""
+    weak_threshold = settings.maps_weak_rank_threshold if weak_threshold is None else weak_threshold
+    unranked_eff = settings.maps_unranked_effective_rank if unranked_effective_rank is None else unranked_effective_rank
+    bmin, bmax = beatability_bounds or (settings.maps_beatability_min, settings.maps_beatability_max)
     n = max((len(r) for r in (rank_grid or [])), default=0)
     if n == 0 or center_lat is None or center_lng is None:
         return []
     center = (n - 1) / 2
     radius_sq = (n / 2) ** 2
+    max_ring = max(1, (n - 1) // 2)
     out: list[dict] = []
     for ri, row in enumerate(rank_grid or []):
         for ci, cell in enumerate(row or []):
             if (ri - center) ** 2 + (ci - center) ** 2 > radius_sq:
                 continue  # outside the inscribed circle — not shown/counted
             rank = float(cell) if isinstance(cell, (int, float)) and not isinstance(cell, bool) else None
-            if rank is not None and rank <= threshold:
-                continue  # ranks well enough here — not a weak spot
+            if rank is not None and rank <= floor:
+                continue  # in the local pack here — not an opportunity
             north = center - ri
             east = ci - center
             if north == 0 and east == 0:
                 continue  # the business's own location — not a target zone
             lat, lng = _cell_latlng(ri, ci, n, center_lat, center_lng)
+            ring = max(1, round(math.hypot(north, east)))
+            sev = _severity(rank, floor, unranked_eff)
+            prox = _proximity(ring, max_ring)
+            beat = _beatability(
+                _strongest_competitor_reviews(competitors_above, ri, ci),
+                client_reviews, bmin, bmax,
+            )
             out.append({
                 "row": ri, "col": ci,
                 "lat": round(lat, 6), "lng": round(lng, 6),
                 "rank": rank,
-                "ring": max(1, round(math.hypot(north, east))),
+                "ring": ring,
                 "octant": maps_analytics._octant_for(north, east, azimuth_offset_deg),
+                "tier": _tier(rank, weak_threshold),
+                "severity": round(sev, 4),
+                "proximity": round(prox, 4),
+                "beatability": round(beat, 4),
+                "opportunity": round(sev * prox * beat, 6),
             })
     return out
-
-
-def _weakness_sort_key(cell: dict) -> tuple:
-    """Weakest-first ordering: unranked pins, then worst rank, then outer rings —
-    so capping keeps the most important weak cells."""
-    ranked = cell.get("rank") is not None
-    return (ranked, -(cell["rank"] if ranked else 999), -(cell.get("ring") or 0))
 
 
 def parse_geocode_results(results: Optional[list]) -> dict:
@@ -133,11 +212,12 @@ def parse_geocode_results(results: Optional[list]) -> dict:
     }
 
 
-def aggregate_weak_areas(geocoded_cells: list[dict], top_n: int = 12) -> list[dict]:
-    """Group geocoded weak cells into unique localities, ranked weakest/biggest
-    first. Each area carries its pin count, the octants it spans, worst/avg rank,
-    and a representative lat/lng (the single weakest pin — the most actionable
-    point to drop a map link on)."""
+def aggregate_weak_areas(geocoded_cells: list[dict], top_n: Optional[int] = None) -> list[dict]:
+    """Group geocoded opportunity cells into unique localities, ranked by targeting
+    priority (highest first). Each area carries a 0-100 `priority` (normalized
+    per keyword), a `tier` (the most severe pin in it), its pin count, the octants
+    it spans, worst/avg rank, and a representative lat/lng (the highest-priority
+    pin — the most actionable point to drop a map link on). `top_n=None` = all."""
     groups: dict[str, dict] = {}
     for cell in geocoded_cells:
         key = cell.get("city") or cell.get("formatted") or f"{cell['lat']:.3f},{cell['lng']:.3f}"
@@ -149,10 +229,10 @@ def aggregate_weak_areas(geocoded_cells: list[dict], top_n: int = 12) -> list[di
         cells = g["cells"]
         ranks = [c["rank"] for c in cells if c["rank"] is not None]
         not_ranked = sum(1 for c in cells if c["rank"] is None)
-        # Representative = the single weakest pin (an unranked one if present,
-        # otherwise the worst rank).
-        rep = max(cells, key=lambda c: (c["rank"] is None, c["rank"] if c["rank"] is not None else 0))
+        # Representative = the highest-priority pin (most actionable point).
+        rep = max(cells, key=lambda c: c.get("opportunity", 0))
         octants = sorted({c["octant"] for c in cells if c.get("octant")})
+        tier = max((c.get("tier") for c in cells), key=lambda t: _TIER_ORDER.get(t, 0))
         areas.append({
             "city": g["city"],
             "admin_area": g["admin_area"],
@@ -161,12 +241,18 @@ def aggregate_weak_areas(geocoded_cells: list[dict], top_n: int = 12) -> list[di
             "octants": octants,
             "worst_rank": None if not_ranked else (max(ranks) if ranks else None),
             "avg_rank": round(mean(ranks), 1) if ranks else None,
+            "tier": tier,
+            "score_raw": round(sum(c.get("opportunity", 0) for c in cells), 6),
             "lat": rep["lat"],
             "lng": rep["lng"],
         })
-    # Biggest dead-zones first: most weak pins, then most unranked pins.
-    areas.sort(key=lambda a: (-a["pins"], -a["not_ranked"]))
-    return areas[:top_n]
+    # Normalize to a 0-100 priority within this keyword (worst area = 100), then
+    # rank highest-priority first — the team's work order.
+    max_raw = max((a["score_raw"] for a in areas), default=0.0) or 1.0
+    for a in areas:
+        a["priority"] = round(100 * a["score_raw"] / max_raw)
+    areas.sort(key=lambda a: -a["score_raw"])
+    return areas if top_n is None else areas[:top_n]
 
 
 # ----------------------------------------------------------------------------
@@ -267,27 +353,37 @@ async def reverse_geocode_points(
 async def build_weak_locations(
     rank_grid: Optional[list], center_lat: Optional[float], center_lng: Optional[float],
     octant_points: Optional[list[dict]] = None, *,
-    threshold: Optional[int] = None, max_cells: Optional[int] = None,
+    floor: Optional[int] = None, weak_threshold: Optional[int] = None,
+    max_cells: Optional[int] = None, competitors_above: Optional[dict] = None,
+    client_reviews: Optional[float] = None,
     azimuth_offset_deg: float = 0.0, api_key: Optional[str] = None, supabase=None,
 ) -> dict:
     """The `report_weak_locations` payload for one keyword: octant pins labelled
-    with their nearest city, plus weak grid cells aggregated into nearby
-    localities. Geocoding is best-effort — a missing key/quota yields the same
-    shape minus place names (`geocoded=False`)."""
-    threshold = settings.maps_weak_rank_threshold if threshold is None else threshold
+    with their nearest city, plus opportunity grid cells scored for priority and
+    aggregated into nearby localities (a 0-100, target-first ranking). Geocoding
+    is best-effort — a missing key/quota yields the same shape minus place names
+    (`geocoded=False`)."""
+    floor = settings.maps_strong_rank_threshold if floor is None else floor
+    weak_threshold = settings.maps_weak_rank_threshold if weak_threshold is None else weak_threshold
     max_cells = settings.maps_geocode_max_cells if max_cells is None else max_cells
     api_key = settings.google_maps_api_key if api_key is None else api_key
     octant_points = octant_points or []
 
-    weak_cells = extract_weak_cells(rank_grid, center_lat, center_lng, threshold, azimuth_offset_deg)
-    weak_cells.sort(key=_weakness_sort_key)
+    weak_cells = extract_weak_cells(
+        rank_grid, center_lat, center_lng, floor, weak_threshold=weak_threshold,
+        competitors_above=competitors_above, client_reviews=client_reviews,
+        azimuth_offset_deg=azimuth_offset_deg,
+    )
+    # Highest-priority first, so a cap only ever drops the lowest "Watch" cells.
+    weak_cells.sort(key=lambda c: -c.get("opportunity", 0))
     capped = len(weak_cells) > max_cells
     kept = weak_cells[:max_cells]
 
     base = {
         "geocoded": bool(api_key),
         "capped": capped,
-        "weak_threshold": threshold,
+        "opportunity_floor": floor,
+        "weak_threshold": weak_threshold,
         "weak_cell_count": len(weak_cells),
     }
     if not api_key:

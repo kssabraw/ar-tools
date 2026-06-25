@@ -272,6 +272,15 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
   const pins = (loc?.octant_pins?.length ? loc.octant_pins : r.report_octant_pins?.points) ?? []
   const weakAreas = loc?.weak_areas ?? []
   const gmapsLink = (lat: number, lng: number) => `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+  const TIER_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
+    critical: { bg: '#fee2e2', fg: '#b91c1c', label: 'Critical' },
+    weak: { bg: '#fef3c7', fg: '#b45309', label: 'Weak' },
+    watch: { bg: '#f1f5f9', fg: '#64748b', label: 'Watch' },
+  }
+  const tierBadge = (tier?: string) => {
+    const t = TIER_STYLE[tier ?? ''] ?? TIER_STYLE.watch
+    return <span style={{ display: 'inline-block', padding: '1px 7px', borderRadius: 10, fontSize: 10.5, fontWeight: 700, background: t.bg, color: t.fg }}>{t.label}</span>
+  }
 
   return (
     <div style={{ marginTop: 16, borderTop: '1px solid #f1f5f9', paddingTop: 14 }}>
@@ -305,22 +314,24 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
             <div style={{ marginTop: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 2 }}>Weak coverage areas (nearby cities)</div>
               <p style={{ fontSize: 11.5, color: '#94a3b8', margin: '0 0 6px' }}>
-                The towns/cities the grid is weakest in — where {r.keyword ? `“${r.keyword}”` : 'this keyword'} ranks poorly or not at all. Open a point on Google Maps to scope local SEO work there.
+                The towns/cities the grid is weakest in — where {r.keyword ? `“${r.keyword}”` : 'this keyword'} ranks poorly or not at all, ordered by <strong>priority</strong> (severity × proximity × beatability) so the top rows are where to work first. <em>Watch</em> = ranks 5–9 (lowest priority); <em>Weak</em> = 10+; <em>Critical</em> = unranked. Open a point on Google Maps to scope local SEO work there.
               </p>
               <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
                 <thead>
                   <tr>
-                    {['City', 'Weak pins', 'Directions', 'Worst rank', 'Map'].map((h, hi) => (
-                      <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 0 || hi === 2 ? 'left' : hi === 4 ? 'center' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
+                    {['Priority', 'City', 'Tier', 'Weak pins', 'Directions', 'Worst rank', 'Map'].map((h, hi) => (
+                      <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 1 || hi === 4 ? 'left' : hi === 2 || hi === 6 ? 'center' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {weakAreas.map((a, ai) => (
                     <tr key={ai}>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: '#0f172a' }}>{a.priority}</td>
                       <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>
                         {a.city ?? '—'}{a.admin_area ? <span style={{ color: '#94a3b8' }}>, {a.admin_area}</span> : null}
                       </td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'center' }}>{tierBadge(a.tier)}</td>
                       <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>
                         {a.pins}{a.not_ranked > 0 ? <span style={{ color: '#dc2626' }}> ({a.not_ranked} unranked)</span> : null}
                       </td>

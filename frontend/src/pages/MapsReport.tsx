@@ -210,11 +210,11 @@ export function MapsReport() {
                 )}
                 {(r.report_weak_locations?.weak_areas?.length ?? 0) > 0 && (
                   <div style={{ marginTop: 10, borderTop: '1px solid #f1f5f9', paddingTop: 10 }}>
-                    <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>Weakest nearby areas</div>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }}>Weakest nearby areas <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: '#94a3b8' }}>(target-first by priority)</span></div>
                     <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: '#334155' }}>
                       {r.report_weak_locations!.weak_areas.map((a, ai) => (
                         <li key={ai}>
-                          {a.city ?? '—'}{a.admin_area ? `, ${a.admin_area}` : ''} — {a.pins} weak pin{a.pins === 1 ? '' : 's'}
+                          <strong>P{a.priority}</strong>{a.tier ? ` · ${a.tier}` : ''} — {a.city ?? '—'}{a.admin_area ? `, ${a.admin_area}` : ''} — {a.pins} weak pin{a.pins === 1 ? '' : 's'}
                           {a.not_ranked > 0 ? ` (${a.not_ranked} unranked)` : ''}{a.octants.length ? ` · ${a.octants.join(', ')}` : ''}
                         </li>
                       ))}
