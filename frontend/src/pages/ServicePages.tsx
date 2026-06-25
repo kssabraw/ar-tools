@@ -1,11 +1,15 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, FileText, ArrowRight, Loader } from 'lucide-react'
+import { ArrowLeft, FileText, ArrowRight, Loader, Sparkles, Check } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, RunListResponse, RunStatus } from '../lib/types'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
+
+type PlanStatus = 'pending' | 'running' | 'complete' | 'failed'
+interface PlanItem { keyword: string; group: string; status: 'found' | 'missing'; url: string | null }
+interface PlanResult { status: PlanStatus; items: PlanItem[]; degraded_notes: string[]; error: string | null }
 
 function statusColor(status: RunStatus): string {
   if (status === 'complete') return '#16a34a'
@@ -18,6 +22,11 @@ export function ServicePages() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
   const [text, setText] = useState('')
+
+  // Service-page planner state.
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [createdNote, setCreatedNote] = useState<string | null>(null)
 
   const BULK_MAX = 20
   // One service per line; trimmed, de-duped (case-insensitive), capped.
@@ -61,6 +70,60 @@ export function ServicePages() {
     },
   })
 
+  // ── Planner: enqueue → poll → render found/missing → bulk-create ──
+  const startPlan = useMutation({
+    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/service-page-plan`, {}),
+    onSuccess: (res) => { setJobId(res.job_id); setSelected(new Set()); setCreatedNote(null) },
+  })
+
+  const { data: plan } = useQuery<PlanResult>({
+    queryKey: ['service-page-plan', id, jobId],
+    queryFn: () => api.get<PlanResult>(`/clients/${id}/service-page-plan/${jobId}`),
+    enabled: Boolean(id && jobId),
+    refetchInterval: (query) => {
+      const s = query.state.data?.status
+      return s === 'pending' || s === 'running' ? 3000 : false
+    },
+  })
+
+  const planRunning = startPlan.isPending || plan?.status === 'pending' || plan?.status === 'running'
+  const silos = useMemo(() => {
+    const groups = new Map<string, PlanItem[]>()
+    for (const it of plan?.items ?? []) {
+      if (!groups.has(it.group)) groups.set(it.group, [])
+      groups.get(it.group)!.push(it)
+    }
+    return [...groups.entries()]
+  }, [plan])
+  const missing = useMemo(() => (plan?.items ?? []).filter((i) => i.status === 'missing'), [plan])
+  const foundCount = (plan?.items.length ?? 0) - missing.length
+
+  function toggle(keyword: string) {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(keyword)) next.delete(keyword); else next.add(keyword)
+      return next
+    })
+  }
+  function selectAllMissing() {
+    setSelected(new Set(missing.slice(0, BULK_MAX).map((i) => i.keyword)))
+  }
+
+  const createSelected = useMutation({
+    mutationFn: (keywords: string[]) =>
+      api.post<{ created: number }>('/runs/bulk', { client_id: id, content_type: 'service_page', keywords }),
+    onSuccess: (res, keywords) => {
+      qc.invalidateQueries({ queryKey: ['service-page-runs', id] })
+      setSelected(new Set())
+      setCreatedNote(`Started ${res.created} page${res.created === 1 ? '' : 's'} — see Generated pages below.`)
+      // Mark just-created items found locally so they don't read as missing.
+      qc.setQueryData<PlanResult>(['service-page-plan', id, jobId], (prev) =>
+        prev ? { ...prev, items: prev.items.map((i) => (keywords.includes(i.keyword) ? { ...i, status: 'found' } : i)) } : prev,
+      )
+    },
+  })
+  const selectedList = [...selected]
+
   const canSubmit = services.length > 0 && services.length <= BULK_MAX && !createRuns.isPending
   function submit() {
     if (canSubmit) createRuns.mutate(services)
@@ -84,7 +147,113 @@ export function ServicePages() {
         service per line to bulk-create several at once.
       </p>
 
-      {/* Create */}
+      {/* Planner */}
+      <div style={plannerCardStyle}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Sparkles size={16} color="#6366f1" />
+              <span style={{ fontWeight: 600, color: '#0f172a', fontSize: 14 }}>Plan service pages</span>
+            </div>
+            <div style={{ color: '#64748b', fontSize: 13, marginTop: 2 }}>
+              Discover the full set of service pages this business should have — grouped by silo, with the
+              ones you already have marked. Seeded from the client’s business category.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => startPlan.mutate()}
+            disabled={planRunning}
+            style={{ ...btnStyle, color: '#fff', background: '#6366f1', borderColor: '#6366f1', opacity: planRunning ? 0.6 : 1, whiteSpace: 'nowrap' }}
+          >
+            {planRunning ? <><Loader size={14} /> Analyzing…</> : 'Suggest pages'}
+          </button>
+        </div>
+
+        {startPlan.isError && (
+          <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>
+            Could not start the plan. {(startPlan.error as Error)?.message}
+          </div>
+        )}
+        {plan?.status === 'failed' && (
+          <div style={{ color: '#dc2626', fontSize: 13, marginTop: 10 }}>Plan failed. {plan.error}</div>
+        )}
+
+        {plan?.status === 'complete' && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 13, color: '#334155', marginBottom: 8 }}>
+              {plan.items.length} candidate{plan.items.length === 1 ? '' : 's'} across {silos.length} silo
+              {silos.length === 1 ? '' : 's'} · <span style={{ color: '#16a34a' }}>{foundCount} exist</span> ·{' '}
+              <span style={{ color: '#b45309' }}>{missing.length} missing</span>
+            </div>
+            {plan.degraded_notes.map((n, i) => (
+              <div key={i} style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>{n}</div>
+            ))}
+
+            {plan.items.length === 0 ? (
+              <div style={{ fontSize: 13, color: '#94a3b8', padding: '8px 0' }}>
+                No candidates could be derived. Make sure the client has a GBP category or a scanned website.
+              </div>
+            ) : (
+              <>
+                {missing.length > 0 && (
+                  <button type="button" onClick={selectAllMissing} style={{ ...linkBtnStyle, marginBottom: 8 }}>
+                    Select all missing{missing.length > BULK_MAX ? ` (first ${BULK_MAX})` : ''}
+                  </button>
+                )}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  {silos.map(([group, items]) => (
+                    <div key={group}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 6 }}>{group}</div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {items.map((it) => {
+                          const isMissing = it.status === 'missing'
+                          const checked = selected.has(it.keyword)
+                          return (
+                            <label key={it.keyword} style={{ ...planRowStyle, cursor: isMissing ? 'pointer' : 'default', opacity: isMissing ? 1 : 0.7 }}>
+                              {isMissing ? (
+                                <input type="checkbox" checked={checked} onChange={() => toggle(it.keyword)} style={{ accentColor: '#6366f1' }} />
+                              ) : (
+                                <Check size={14} color="#16a34a" />
+                              )}
+                              <span style={{ flex: 1, fontSize: 13.5, color: '#0f172a' }}>{it.keyword}</span>
+                              <span style={{ fontSize: 11.5, color: isMissing ? '#b45309' : '#16a34a' }}>{isMissing ? 'missing' : 'exists'}</span>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {selectedList.length > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
+                    <button
+                      type="button"
+                      onClick={() => createSelected.mutate(selectedList.slice(0, BULK_MAX))}
+                      disabled={createSelected.isPending}
+                      style={{ ...btnStyle, color: '#fff', background: '#16a34a', borderColor: '#16a34a', opacity: createSelected.isPending ? 0.6 : 1 }}
+                    >
+                      {createSelected.isPending ? 'Creating…' : `Create ${Math.min(selectedList.length, BULK_MAX)} selected`}
+                    </button>
+                    {selectedList.length > BULK_MAX && (
+                      <span style={{ fontSize: 12, color: '#dc2626' }}>Up to {BULK_MAX} at a time.</span>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+            {createdNote && <div style={{ fontSize: 13, color: '#16a34a', marginTop: 10 }}>{createdNote}</div>}
+            {createSelected.isError && (
+              <div style={{ color: '#dc2626', fontSize: 13, marginTop: 8 }}>
+                Could not start the runs. {(createSelected.error as Error)?.message}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Manual create */}
       <div style={{ display: 'flex', gap: 8, margin: '16px 0 6px', alignItems: 'flex-start' }}>
         <textarea
           className="input"
@@ -151,4 +320,7 @@ export function ServicePages() {
 const backLinkStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, color: '#6366f1', textDecoration: 'none', fontSize: 13 }
 const inputStyle: React.CSSProperties = { flex: 1, fontSize: 14, padding: '9px 12px', border: '1px solid #e2e8f0', borderRadius: 8, outline: 'none' }
 const btnStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 14, padding: '9px 16px', border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#334155', cursor: 'pointer', fontWeight: 600 }
+const linkBtnStyle: React.CSSProperties = { background: 'none', border: 'none', color: '#6366f1', fontSize: 13, cursor: 'pointer', padding: 0, fontWeight: 600 }
 const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '12px 14px', border: '1px solid #e2e8f0', borderRadius: 10, background: '#fff', textDecoration: 'none' }
+const plannerCardStyle: React.CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 12, background: '#fafafe', padding: 16, margin: '8px 0 4px' }
+const planRowStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 9, padding: '6px 8px', borderRadius: 8 }

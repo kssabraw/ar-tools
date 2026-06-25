@@ -170,6 +170,33 @@ class RunBulkCreateResponse(BaseModel):
     skipped: int = 0
 
 
+# ── Service-page planner (Fanout completeness discovery) ──────────────────────
+
+class ServicePagePlanJob(BaseModel):
+    """Handle returned when a service-page plan job is enqueued."""
+
+    job_id: str
+    status: str
+
+
+class ServicePagePlanItem(BaseModel):
+    """One candidate service page (a Fanout cluster representative) under its silo."""
+
+    keyword: str
+    group: str  # the silo this target belongs to (free-form label)
+    status: str  # 'found' (a service_page run already exists) | 'missing'
+    url: Optional[str] = None
+
+
+class ServicePagePlanResult(BaseModel):
+    """Polled state of a service-page plan job."""
+
+    status: str  # async_jobs status: pending | running | complete | failed
+    items: list[ServicePagePlanItem] = Field(default_factory=list)
+    degraded_notes: list[str] = Field(default_factory=list)
+    error: Optional[str] = None
+
+
 class ServicePageReoptimizeRequest(BaseModel):
     # Scorer deficiencies the writer should fix; empty = reoptimize against all.
     deficiencies: list[dict[str, Any]] = []
