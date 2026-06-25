@@ -92,6 +92,19 @@ def test_severity_proximity_beatability_helpers():
     assert mg._beatability(10, None, 0.6, 1.4) == 1.0
 
 
+def test_beatability_coerces_non_numeric_review_counts():
+    # gbp_review_count / ratingCount can arrive as a numeric string or junk —
+    # must never raise, and a numeric string behaves like the number.
+    assert mg._to_float("77") == 77.0
+    assert mg._to_float(None) is None
+    assert mg._to_float(True) is None        # bool is not a review count
+    assert mg._to_float("n/a") is None
+    # A string client_reviews must not raise (the pre-fix bug) and must match the int.
+    assert mg._beatability(10, "100", 0.6, 1.4) == mg._beatability(10, 100, 0.6, 1.4) > 1.0
+    assert mg._beatability("1000", 100, 0.6, 1.4) < 1.0
+    assert mg._beatability(10, "junk", 0.6, 1.4) == 1.0   # unparseable → neutral, no crash
+
+
 def test_beatability_uses_competitor_reviews_above_cell():
     # A competitor with few reviews ranks above us at (0,1); we have many → beatable.
     competitors_above = {
