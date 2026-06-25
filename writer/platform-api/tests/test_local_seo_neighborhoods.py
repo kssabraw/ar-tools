@@ -45,6 +45,25 @@ def test_parse_forward_result_blank_on_no_results():
     assert parsed["city"] is None and parsed["result_types"] == []
 
 
+def test_parse_forward_result_city_is_locality_only_not_neighborhood():
+    # No `locality` component → the city is None (NOT the neighborhood's own name),
+    # so a coincidental name can never pass the within-city gate.
+    results = [
+        {
+            "address_components": [
+                {"long_name": "Downtown", "types": ["neighborhood", "political"]},
+                {"long_name": "Orange County", "types": ["administrative_area_level_3"]},
+                {"long_name": "California", "types": ["administrative_area_level_1"]},
+            ],
+            "types": ["neighborhood", "political"],
+            "geometry": {"location": {"lat": 1.0, "lng": 2.0}},
+        }
+    ]
+    parsed = mg.parse_forward_result(results)
+    assert parsed["city"] is None
+    assert silo.neighborhood_is_in_city(parsed, "Downtown") is False
+
+
 # ── neighborhood_is_in_city (the verification gate) ───────────────────────────
 def test_in_city_accepts_neighborhood_in_target_city():
     parsed = {"matched": True, "city": "Anaheim", "result_types": ["neighborhood", "political"]}
@@ -80,6 +99,12 @@ def test_parse_area_full_and_partial():
     assert silo._parse_area("Anaheim, California, United States") == ("Anaheim", "California", "United States")
     assert silo._parse_area("Anaheim") == ("Anaheim", "", "")
     assert silo._parse_area("") == ("", "", "")
+
+
+def test_parse_area_two_segments_is_city_country_not_state():
+    # A 2-segment area is "City,Country" — the second segment is the country, not
+    # a state (so it isn't mis-slotted into `state`).
+    assert silo._parse_area("London,United Kingdom") == ("London", "", "United Kingdom")
 
 
 # ── _discover_neighborhood_silo (orchestration, mocked) ───────────────────────

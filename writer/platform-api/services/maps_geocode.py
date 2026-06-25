@@ -390,6 +390,14 @@ async def reverse_geocode_points(
 # ----------------------------------------------------------------------------
 # Forward geocoding (Google) + cross-client cache — place-name verification.
 # ----------------------------------------------------------------------------
+# For forward (place-name) verification the "city" must be the CONTAINING
+# municipality only. Unlike the reverse parser's `_CITY_TYPES`, this does NOT
+# fall back to `sublocality` / `neighborhood` (which would be the place itself,
+# not its city) or `administrative_area_level_3` — so a neighborhood's own name
+# can never leak in as the city and produce a coincidental match.
+_FORWARD_CITY_TYPES = ("locality", "postal_town")
+
+
 def parse_forward_result(results: Optional[list]) -> dict:
     """Pull {matched, city, admin_area, formatted, place_id, result_types, lat,
     lng} from a Google *forward*-geocode response. Unlike `parse_geocode_results`
@@ -415,7 +423,7 @@ def parse_forward_result(results: Optional[list]) -> dict:
     loc = ((first.get("geometry") or {}).get("location")) or {}
     return {
         "matched": True,
-        "city": _find(*_CITY_TYPES),
+        "city": _find(*_FORWARD_CITY_TYPES),
         "admin_area": _find("administrative_area_level_1"),
         "formatted": first.get("formatted_address"),
         "place_id": first.get("place_id"),
@@ -447,7 +455,13 @@ def _load_forward_cache(supabase, norms: list[str]) -> dict[str, dict]:
         return {}
     out: dict[str, dict] = {}
     for r in rows:
-        out[r["query_norm"]] = {f: (r.get(f) if f != "result_types" else (r.get(f) or [])) for f in _FWD_FIELDS}
+        loc = {f: r.get(f) for f in _FWD_FIELDS}
+        # Defensive: guarantee result_types is always a list regardless of how the
+        # text[] column round-trips (list, scalar, or null) so downstream set ops
+        # never iterate a string's characters.
+        rt = loc.get("result_types")
+        loc["result_types"] = rt if isinstance(rt, list) else ([] if rt in (None, "") else [rt])
+        out[r["query_norm"]] = loc
     return out
 
 
@@ -497,6 +511,11 @@ async def forward_geocode_places(
 
     keyed = [(q, _norm_query(q)) for q in queries]
     cache = _load_forward_cache(supabase, [n for _, n in keyed])
+    # A representative original-cased query per normalized key — sent to Google so
+    # the address keeps its casing (cleaner logs; the cache still keys by `norm`).
+    norm_to_query: dict[str, str] = {}
+    for q, n in keyed:
+        norm_to_query.setdefault(n, q)
     misses = sorted({n for _, n in keyed if n not in cache})
 
     if misses:
@@ -504,7 +523,7 @@ async def forward_geocode_places(
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             async def _run(norm: str):
                 async with sem:
-                    return norm, await _forward_geocode_one(client, norm, api_key)
+                    return norm, await _forward_geocode_one(client, norm_to_query[norm], api_key)
             results = await asyncio.gather(*(_run(n) for n in misses))
         fresh = {n: loc for n, loc in results if loc is not None}
         cache.update(fresh)
