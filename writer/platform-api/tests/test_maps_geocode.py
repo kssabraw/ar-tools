@@ -50,26 +50,56 @@ def test_extract_weak_cells_includes_rank_5_to_9_as_low_severity():
     assert by_rc[(0, 1)]["opportunity"] < by_rc[(0, 0)]["opportunity"]
 
 
-def test_cohesion_downweights_isolated_weak_pin():
-    # The SAME unranked pin at (1,2): once ringed by in-pack rank-1 pins (isolated
-    # → likely noise), once inside a patch of other weak pins (a real dead zone).
-    iso = [[1, 1, 1, 1, 1],
-           [1, 1, None, 1, 1],
-           [1, 1, 1, 1, 1],
-           [1, 1, 1, 1, 1],
-           [1, 1, 1, 1, 1]]
-    clu = [[1, None, None, None, 1],
-           [1, None, None, None, 1],
-           [1, None, 1, None, 1],
-           [1, 1, 1, 1, 1],
-           [1, 1, 1, 1, 1]]
-    o_iso = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(iso, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
-    o_clu = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(clu, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
-    # Same severity/proximity; only cohesion differs → isolated pin scores far lower.
-    assert o_iso["cohesion"] < o_clu["cohesion"]
-    assert o_iso["opportunity"] < o_clu["opportunity"] * 0.5
-    # Fully isolated → cohesion bottoms out at the floor (default 0.3).
-    assert o_iso["cohesion"] == 0.3
+def test_core_adjacency_downweights_pins_bordering_strong():
+    # The SAME unranked pin at (1,2): once ringed entirely by in-pack rank-1 pins
+    # (a fringe of strong coverage), once with weak neighbours (a real pocket).
+    bordering = [[1, 1, 1, 1, 1],
+                 [1, 1, None, 1, 1],
+                 [1, 1, 1, 1, 1],
+                 [1, 1, 1, 1, 1],
+                 [1, 1, 1, 1, 1]]
+    pocket = [[1, None, None, None, 1],
+              [1, None, None, None, 1],
+              [1, None, 1, None, 1],
+              [1, 1, 1, 1, 1],
+              [1, 1, 1, 1, 1]]
+    b = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(bordering, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
+    p = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(pocket, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
+    # Same severity/proximity; only core_adjacency differs.
+    assert b["core_adjacency"] < p["core_adjacency"]
+    assert b["core_adjacency"] == 0.5   # all 8 neighbours in the pack → floor
+    assert b["opportunity"] < p["opportunity"]
+
+
+def test_filter_clustered_cells_drops_small_blobs():
+    cells = [
+        {"row": 0, "col": 0}, {"row": 0, "col": 1}, {"row": 1, "col": 1},  # a 3-blob
+        {"row": 5, "col": 5}, {"row": 5, "col": 6},                        # a 2-blip
+        {"row": 9, "col": 0},                                              # a singleton
+    ]
+    survivors, dropped = mg.filter_clustered_cells(cells, 3)
+    assert {(c["row"], c["col"]) for c in survivors} == {(0, 0), (0, 1), (1, 1)}
+    assert dropped == 3
+    # min_cluster_size <= 1 is a no-op.
+    keep_all, d0 = mg.filter_clustered_cells(cells, 1)
+    assert len(keep_all) == 6 and d0 == 0
+
+
+def test_build_weak_locations_isolation_gate_drops_singletons():
+    # A SE 3-blob of unranked pins survives; a lone unranked pin at (0,2) is dropped.
+    grid = [
+        [1, 1, None, 1, 1],
+        [1, 1, 1, 1, 1],
+        [1, 1, 1, None, 1],
+        [1, 1, None, None, 1],
+        [1, 1, 1, 1, 1],
+    ]
+    out = asyncio.run(mg.build_weak_locations(
+        grid, CENTER_LAT, CENTER_LNG, [], floor=4, min_cluster_pins=3, api_key="",
+    ))
+    assert out["weak_cell_count"] == 4        # all opportunity pins found
+    assert out["clustered_cell_count"] == 3   # the SE blob
+    assert out["dropped_isolated"] == 1       # the lone (0,2) pin
 
 
 def test_extract_weak_cells_empty_grid():

@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     # `maps_strong_rank_threshold` (ranks at/inside that are "in the pack" and
     # excluded). Each opportunity pin is scored for priority so the team knows
     # which cities to target FIRST:
-    #     opportunity = severity × proximity × beatability
+    #     opportunity = severity × proximity × beatability × core_adjacency
     #   - severity: how bad the rank is, anchored at the pack edge and scaling to
     #     `maps_unranked_effective_rank` for unranked pins (so rank 5-9 score low,
     #     unranked dead zones score highest);
@@ -107,12 +107,18 @@ class Settings(BaseSettings):
     #   - beatability: areas where weaker competitors (fewer reviews than the
     #     client) outrank us score higher — bounded to
     #     [`maps_beatability_min`, `maps_beatability_max`].
-    #   - cohesion: a weak pin surrounded by strong pins is likely noise, so its
-    #     score is scaled by the average weakness of its 8 immediate neighbors,
-    #     floored at `maps_cohesion_floor` (an isolated pin keeps that fraction;
-    #     a pin inside a genuine weak patch keeps ~full weight).
+    #   - core_adjacency: a weak pin bordering STRONG (in-pack) coverage is a fringe
+    #     of an area we already own, so it's down-weighted in proportion to how many
+    #     of its 8 neighbors are in the pack, floored at `maps_core_adjacency_floor`.
     # A city's priority is the sum of its pins' opportunity, normalized 0-100 per
     # keyword. `maps_weak_rank_threshold` is the Weak/Watch tier boundary.
+    #
+    # ISOLATION GATE: an area is only flagged when it's part of a contiguous blob
+    # of >= `maps_min_cluster_pins` opportunity pins (8-way grid adjacency, computed
+    # BEFORE geocoding). A lone weak/missing pin (or a 2-pin blip) is dropped from
+    # the flagged areas — it still feeds the octant pins / analytics, it's just not
+    # called out as a weak neighborhood. Robust to suburb boundaries: a big blob
+    # spanning several suburbs survives even if no single suburb clears the bar.
     #
     # At most `maps_geocode_max_cells` cells per keyword are geocoded (highest
     # priority first, so a cap only drops the lowest "Watch" cells); the rest are
@@ -124,7 +130,8 @@ class Settings(BaseSettings):
     maps_unranked_effective_rank: int = 25  # rank an unranked pin stands in for, when scaling severity
     maps_beatability_min: float = 0.6
     maps_beatability_max: float = 1.4
-    maps_cohesion_floor: float = 0.3  # score an isolated weak pin keeps when all 8 neighbors are strong
+    maps_core_adjacency_floor: float = 0.5  # score a weak pin keeps when ALL 8 neighbors are in the pack
+    maps_min_cluster_pins: int = 3  # an area needs a contiguous blob of >= this many weak pins to be flagged
     maps_geocode_max_cells: int = 100
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse

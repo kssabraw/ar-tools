@@ -6,10 +6,11 @@ there. Two layers, matching the user's ask:
 
   - every hyper-local octant pin (the priority GBP-page targets) is labelled with
     its nearest city; and
-  - all the "opportunity" grid cells (not ranked, or ranked outside the pack) are
-    scored for targeting priority (severity × proximity × beatability × cohesion,
-    the last down-weighting weak pins isolated among strong neighbors) and
-    aggregated into the unique nearby localities they fall in — a 0-100,
+  - the "opportunity" grid cells (not ranked, or ranked outside the pack), gated
+    to contiguous blobs of >= `maps_min_cluster_pins` so a lone weak/missing pin is
+    never flagged, scored for targeting priority (severity × proximity × beatability
+    × core_adjacency, the last down-weighting weak pins bordering strong coverage)
+    and aggregated into the unique nearby localities they fall in — a 0-100,
     target-first list of "weak coverage areas" with tier, pin counts, directions,
     and worst/avg rank.
 
@@ -137,15 +138,17 @@ def _cell_rank(rank_grid: list[list], ri: int, ci: int) -> Optional[float]:
     return float(cell) if isinstance(cell, (int, float)) and not isinstance(cell, bool) else None
 
 
-def _cohesion_factor(
+def _core_adjacency_factor(
     rank_grid: list[list], ri: int, ci: int, center: float, radius_sq: float,
-    floor: int, unranked_eff: int, c_floor: float,
+    floor: int, ca_floor: float,
 ) -> float:
-    """How weak a pin's 8 immediate (in-circle) neighbors are, scaled to
-    [c_floor, 1.0]. A weak pin ringed by strong (in-pack) pins → near c_floor
-    (likely noise — down-weighted); a pin inside a real weak patch → near 1.0.
-    Pins with no in-circle neighbors are treated as fully isolated (c_floor)."""
-    sevs: list[float] = []
+    """Down-weight a weak pin that BORDERS strong (in-pack) coverage — a fringe of
+    an area we already own. Scales to [ca_floor, 1.0] by the fraction of a pin's 8
+    in-circle neighbors that are in the pack (rank <= floor): no strong neighbors →
+    1.0 (full weight); all strong → ca_floor. Pins with no in-circle neighbors get
+    1.0 (nothing to border)."""
+    strong = 0
+    total = 0
     for dr in (-1, 0, 1):
         for dc in (-1, 0, 1):
             if dr == 0 and dc == 0:
@@ -155,9 +158,46 @@ def _cohesion_factor(
                 continue  # neighbor outside the scanned circle — doesn't count
             if nr < 0 or nr >= len(rank_grid) or nc < 0 or nc >= len(rank_grid[nr] or []):
                 continue
-            sevs.append(_severity(_cell_rank(rank_grid, nr, nc), floor, unranked_eff))
-    cohesion = (sum(sevs) / len(sevs)) if sevs else 0.0
-    return c_floor + (1.0 - c_floor) * cohesion
+            total += 1
+            r = _cell_rank(rank_grid, nr, nc)
+            if r is not None and r <= floor:
+                strong += 1
+    if total == 0:
+        return 1.0
+    return 1.0 - (1.0 - ca_floor) * (strong / total)
+
+
+def filter_clustered_cells(cells: list[dict], min_cluster_size: int) -> tuple[list[dict], int]:
+    """Keep only opportunity cells that belong to a contiguous blob of at least
+    `min_cluster_size` (8-way adjacency on grid row/col), so a lone weak/missing
+    pin (or a small blip) isn't flagged as a weak area. Operates on grid geography,
+    NOT on geocoded suburbs, so a real blob spanning several suburbs survives even
+    when no single suburb clears the bar. Returns (survivors, dropped_count)."""
+    if min_cluster_size <= 1 or not cells:
+        return list(cells), 0
+    by_rc = {(c["row"], c["col"]): c for c in cells}
+    seen: set[tuple[int, int]] = set()
+    survivors: list[dict] = []
+    for start in by_rc:
+        if start in seen:
+            continue
+        comp: list[tuple[int, int]] = []
+        stack = [start]
+        seen.add(start)
+        while stack:
+            r, cc = stack.pop()
+            comp.append((r, cc))
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nb = (r + dr, cc + dc)
+                    if nb in by_rc and nb not in seen:
+                        seen.add(nb)
+                        stack.append(nb)
+        if len(comp) >= min_cluster_size:
+            survivors.extend(by_rc[k] for k in comp)
+    return survivors, len(cells) - len(survivors)
 
 
 def _strongest_competitor_reviews(
@@ -189,18 +229,19 @@ def extract_weak_cells(
     unranked_effective_rank: Optional[int] = None,
     competitors_above: Optional[dict] = None, client_reviews: Optional[float] = None,
     beatability_bounds: Optional[tuple[float, float]] = None,
-    cohesion_floor: Optional[float] = None,
+    core_adjacency_floor: Optional[float] = None,
     azimuth_offset_deg: float = 0.0,
 ) -> list[dict]:
     """In-circle "opportunity" pins (unranked or ranked worse than `floor`), each
     scored for targeting priority. Excludes the business's own pin and pins in the
     pack (rank <= floor). Every cell carries its real lat/lng, ring, octant, tier,
-    and an `opportunity` score (severity × proximity × beatability × cohesion —
-    the last down-weights weak pins isolated among strong neighbors)."""
+    and an `opportunity` score (severity × proximity × beatability × core_adjacency
+    — the last down-weights weak pins bordering strong coverage). Does NOT apply the
+    isolation gate — that runs in `build_weak_locations` via `filter_clustered_cells`."""
     weak_threshold = settings.maps_weak_rank_threshold if weak_threshold is None else weak_threshold
     unranked_eff = settings.maps_unranked_effective_rank if unranked_effective_rank is None else unranked_effective_rank
     bmin, bmax = beatability_bounds or (settings.maps_beatability_min, settings.maps_beatability_max)
-    c_floor = settings.maps_cohesion_floor if cohesion_floor is None else cohesion_floor
+    ca_floor = settings.maps_core_adjacency_floor if core_adjacency_floor is None else core_adjacency_floor
     n = max((len(r) for r in (rank_grid or [])), default=0)
     if n == 0 or center_lat is None or center_lng is None:
         return []
@@ -227,7 +268,7 @@ def extract_weak_cells(
                 _strongest_competitor_reviews(competitors_above, ri, ci),
                 client_reviews, bmin, bmax,
             )
-            cohesion = _cohesion_factor(rank_grid, ri, ci, center, radius_sq, floor, unranked_eff, c_floor)
+            core_adj = _core_adjacency_factor(rank_grid, ri, ci, center, radius_sq, floor, ca_floor)
             out.append({
                 "row": ri, "col": ci,
                 "lat": round(lat, 6), "lng": round(lng, 6),
@@ -238,8 +279,8 @@ def extract_weak_cells(
                 "severity": round(sev, 4),
                 "proximity": round(prox, 4),
                 "beatability": round(beat, 4),
-                "cohesion": round(cohesion, 4),
-                "opportunity": round(sev * prox * beat * cohesion, 6),
+                "core_adjacency": round(core_adj, 4),
+                "opportunity": round(sev * prox * beat * core_adj, 6),
             })
     return out
 
@@ -555,26 +596,32 @@ async def build_weak_locations(
     rank_grid: Optional[list], center_lat: Optional[float], center_lng: Optional[float],
     octant_points: Optional[list[dict]] = None, *,
     floor: Optional[int] = None, weak_threshold: Optional[int] = None,
-    max_cells: Optional[int] = None, competitors_above: Optional[dict] = None,
-    client_reviews: Optional[float] = None,
+    max_cells: Optional[int] = None, min_cluster_pins: Optional[int] = None,
+    competitors_above: Optional[dict] = None, client_reviews: Optional[float] = None,
     azimuth_offset_deg: float = 0.0, api_key: Optional[str] = None, supabase=None,
 ) -> dict:
     """The `report_weak_locations` payload for one keyword: octant pins labelled
-    with their nearest city, plus opportunity grid cells scored for priority and
-    aggregated into nearby localities (a 0-100, target-first ranking). Geocoding
-    is best-effort — a missing key/quota yields the same shape minus place names
-    (`geocoded=False`)."""
+    with their nearest city, plus opportunity grid cells — gated to contiguous
+    blobs of >= `min_cluster_pins` so lone/blip pins aren't flagged — scored for
+    priority and aggregated into nearby localities (a 0-100, target-first ranking).
+    Geocoding is best-effort — a missing key/quota yields the same shape minus place
+    names (`geocoded=False`)."""
     floor = settings.maps_strong_rank_threshold if floor is None else floor
     weak_threshold = settings.maps_weak_rank_threshold if weak_threshold is None else weak_threshold
     max_cells = settings.maps_geocode_max_cells if max_cells is None else max_cells
+    min_cluster_pins = settings.maps_min_cluster_pins if min_cluster_pins is None else min_cluster_pins
     api_key = settings.google_maps_api_key if api_key is None else api_key
     octant_points = octant_points or []
 
-    weak_cells = extract_weak_cells(
+    all_cells = extract_weak_cells(
         rank_grid, center_lat, center_lng, floor, weak_threshold=weak_threshold,
         competitors_above=competitors_above, client_reviews=client_reviews,
         azimuth_offset_deg=azimuth_offset_deg,
     )
+    # Isolation gate (grid geography): drop pins not in a blob of >= min_cluster_pins
+    # BEFORE geocoding, so a lone weak/missing pin is never flagged as a weak area
+    # (and never billed a geocode). Dropped pins still feed octants/analytics.
+    weak_cells, dropped_isolated = filter_clustered_cells(all_cells, min_cluster_pins)
     # Highest-priority first, so a cap only ever drops the lowest "Watch" cells.
     weak_cells.sort(key=lambda c: -c.get("opportunity", 0))
     capped = len(weak_cells) > max_cells
@@ -585,7 +632,10 @@ async def build_weak_locations(
         "capped": capped,
         "opportunity_floor": floor,
         "weak_threshold": weak_threshold,
-        "weak_cell_count": len(weak_cells),
+        "min_cluster_pins": min_cluster_pins,
+        "weak_cell_count": len(all_cells),
+        "clustered_cell_count": len(weak_cells),
+        "dropped_isolated": dropped_isolated,
     }
     if not api_key:
         # No geocoding: surface the octant pins (no city) so the UI degrades to
