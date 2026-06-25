@@ -50,6 +50,28 @@ def test_extract_weak_cells_includes_rank_5_to_9_as_low_severity():
     assert by_rc[(0, 1)]["opportunity"] < by_rc[(0, 0)]["opportunity"]
 
 
+def test_cohesion_downweights_isolated_weak_pin():
+    # The SAME unranked pin at (1,2): once ringed by in-pack rank-1 pins (isolated
+    # → likely noise), once inside a patch of other weak pins (a real dead zone).
+    iso = [[1, 1, 1, 1, 1],
+           [1, 1, None, 1, 1],
+           [1, 1, 1, 1, 1],
+           [1, 1, 1, 1, 1],
+           [1, 1, 1, 1, 1]]
+    clu = [[1, None, None, None, 1],
+           [1, None, None, None, 1],
+           [1, None, 1, None, 1],
+           [1, 1, 1, 1, 1],
+           [1, 1, 1, 1, 1]]
+    o_iso = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(iso, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
+    o_clu = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(clu, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
+    # Same severity/proximity; only cohesion differs → isolated pin scores far lower.
+    assert o_iso["cohesion"] < o_clu["cohesion"]
+    assert o_iso["opportunity"] < o_clu["opportunity"] * 0.5
+    # Fully isolated → cohesion bottoms out at the floor (default 0.3).
+    assert o_iso["cohesion"] == 0.3
+
+
 def test_extract_weak_cells_empty_grid():
     assert mg.extract_weak_cells([], CENTER_LAT, CENTER_LNG, floor=10) == []
     assert mg.extract_weak_cells(GRID, None, None, floor=10) == []

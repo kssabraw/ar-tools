@@ -7,7 +7,8 @@ there. Two layers, matching the user's ask:
   - every hyper-local octant pin (the priority GBP-page targets) is labelled with
     its nearest city; and
   - all the "opportunity" grid cells (not ranked, or ranked outside the pack) are
-    scored for targeting priority (severity × proximity × beatability) and
+    scored for targeting priority (severity × proximity × beatability × cohesion,
+    the last down-weighting weak pins isolated among strong neighbors) and
     aggregated into the unique nearby localities they fall in — a 0-100,
     target-first list of "weak coverage areas" with tier, pin counts, directions,
     and worst/avg rank.
@@ -109,6 +110,40 @@ def _beatability(comp_reviews: Optional[float], client_reviews: Optional[float],
     return max(bmin, min(bmax, 1.0 + 0.4 * math.log10(ratio)))
 
 
+def _cell_rank(rank_grid: list[list], ri: int, ci: int) -> Optional[float]:
+    """Parsed rank at [ri][ci], or None (unranked / non-numeric / out of bounds)."""
+    if ri < 0 or ri >= len(rank_grid):
+        return None
+    row = rank_grid[ri] or []
+    if ci < 0 or ci >= len(row):
+        return None
+    cell = row[ci]
+    return float(cell) if isinstance(cell, (int, float)) and not isinstance(cell, bool) else None
+
+
+def _cohesion_factor(
+    rank_grid: list[list], ri: int, ci: int, center: float, radius_sq: float,
+    floor: int, unranked_eff: int, c_floor: float,
+) -> float:
+    """How weak a pin's 8 immediate (in-circle) neighbors are, scaled to
+    [c_floor, 1.0]. A weak pin ringed by strong (in-pack) pins → near c_floor
+    (likely noise — down-weighted); a pin inside a real weak patch → near 1.0.
+    Pins with no in-circle neighbors are treated as fully isolated (c_floor)."""
+    sevs: list[float] = []
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if dr == 0 and dc == 0:
+                continue
+            nr, nc = ri + dr, ci + dc
+            if (nr - center) ** 2 + (nc - center) ** 2 > radius_sq:
+                continue  # neighbor outside the scanned circle — doesn't count
+            if nr < 0 or nr >= len(rank_grid) or nc < 0 or nc >= len(rank_grid[nr] or []):
+                continue
+            sevs.append(_severity(_cell_rank(rank_grid, nr, nc), floor, unranked_eff))
+    cohesion = (sum(sevs) / len(sevs)) if sevs else 0.0
+    return c_floor + (1.0 - c_floor) * cohesion
+
+
 def _strongest_competitor_reviews(
     competitors_above: Optional[dict], ri: int, ci: int,
 ) -> Optional[float]:
@@ -138,15 +173,18 @@ def extract_weak_cells(
     unranked_effective_rank: Optional[int] = None,
     competitors_above: Optional[dict] = None, client_reviews: Optional[float] = None,
     beatability_bounds: Optional[tuple[float, float]] = None,
+    cohesion_floor: Optional[float] = None,
     azimuth_offset_deg: float = 0.0,
 ) -> list[dict]:
     """In-circle "opportunity" pins (unranked or ranked worse than `floor`), each
     scored for targeting priority. Excludes the business's own pin and pins in the
     pack (rank <= floor). Every cell carries its real lat/lng, ring, octant, tier,
-    and an `opportunity` score (severity × proximity × beatability)."""
+    and an `opportunity` score (severity × proximity × beatability × cohesion —
+    the last down-weights weak pins isolated among strong neighbors)."""
     weak_threshold = settings.maps_weak_rank_threshold if weak_threshold is None else weak_threshold
     unranked_eff = settings.maps_unranked_effective_rank if unranked_effective_rank is None else unranked_effective_rank
     bmin, bmax = beatability_bounds or (settings.maps_beatability_min, settings.maps_beatability_max)
+    c_floor = settings.maps_cohesion_floor if cohesion_floor is None else cohesion_floor
     n = max((len(r) for r in (rank_grid or [])), default=0)
     if n == 0 or center_lat is None or center_lng is None:
         return []
@@ -173,6 +211,7 @@ def extract_weak_cells(
                 _strongest_competitor_reviews(competitors_above, ri, ci),
                 client_reviews, bmin, bmax,
             )
+            cohesion = _cohesion_factor(rank_grid, ri, ci, center, radius_sq, floor, unranked_eff, c_floor)
             out.append({
                 "row": ri, "col": ci,
                 "lat": round(lat, 6), "lng": round(lng, 6),
@@ -183,7 +222,8 @@ def extract_weak_cells(
                 "severity": round(sev, 4),
                 "proximity": round(prox, 4),
                 "beatability": round(beat, 4),
-                "opportunity": round(sev * prox * beat, 6),
+                "cohesion": round(cohesion, 4),
+                "opportunity": round(sev * prox * beat * cohesion, 6),
             })
     return out
 
