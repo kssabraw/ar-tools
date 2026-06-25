@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     google_nlp_api_key: str = ""
     perplexity_api_key: str = ""
+    # Gemini embeddings — dual-space AIO proximity (Brief v2.8, advisory only).
+    # The asymmetric RETRIEVAL_QUERY/RETRIEVAL_DOCUMENT spaces match how Google
+    # scores AI Overview retrieval better than OpenAI's symmetric space. Empty
+    # key → the AIO-proximity metric silently falls back to OpenAI 3-large.
+    gemini_api_key: str = ""
+    gemini_embedding_model: str = "gemini-embedding-001"
+    gemini_embedding_dim: int = 1536
     # SIE v1.2 - TextRazor entity extraction (parallel to Google NLP).
     # Free tier: 500 requests/day. A brief calls TextRazor once per
     # scraped page (typically ~10), so the free tier supports ~50 briefs
