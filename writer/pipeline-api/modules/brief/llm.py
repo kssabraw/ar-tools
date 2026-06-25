@@ -36,6 +36,10 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
+# Opus for the single reasoning step (answer contract): it sets the whole
+# brief's direction and must be willing to contradict a false premise. Opus 4.8
+# rejects a `temperature` param, so callers pass temperature=None for it.
+CLAUDE_OPUS_MODEL = "claude-opus-4-8"
 EMBEDDING_MODEL = "text-embedding-3-small"
 EMBEDDING_MODEL_LARGE = "text-embedding-3-large"
 
@@ -137,29 +141,37 @@ async def claude_json(
     system: str,
     user: str,
     max_tokens: int = 1500,
-    temperature: float = 0.2,
+    temperature: Optional[float] = 0.2,
+    model: Optional[str] = None,
 ) -> Any:
     """Call Claude and parse the response as JSON.
 
     Tolerates fenced/prose-wrapped responses. On parse failure, retries
     once with a stricter "JSON only" addendum to the system prompt and
     logs a snippet of the offending response for diagnosis.
+
+    `model` defaults to CLAUDE_MODEL (Sonnet); pass CLAUDE_OPUS_MODEL for the
+    answer-contract reasoning step. `temperature=None` omits the param entirely
+    (Opus 4.8 rejects `temperature`).
     """
     client = get_anthropic()
+    use_model = model or CLAUDE_MODEL
 
     last_error: Optional[Exception] = None
     last_text: str = ""
     semaphore = _get_anthropic_semaphore()
     for attempt in range(2):
         sys_prompt = system if attempt == 0 else system + _STRICT_JSON_SUFFIX
+        create_kwargs: dict[str, Any] = {
+            "model": use_model,
+            "max_tokens": max_tokens,
+            "system": sys_prompt,
+            "messages": [{"role": "user", "content": user}],
+        }
+        if temperature is not None:
+            create_kwargs["temperature"] = temperature
         async with semaphore:
-            message = await client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                system=sys_prompt,
-                messages=[{"role": "user", "content": user}],
-            )
+            message = await client.messages.create(**create_kwargs)
         text = "".join(
             block.text for block in message.content if getattr(block, "type", "") == "text"
         )
@@ -176,7 +188,7 @@ async def claude_json(
                 extra={
                     "attempt": attempt + 1,
                     "max_tokens": max_tokens,
-                    "model": CLAUDE_MODEL,
+                    "model": use_model,
                     "response_chars": len(text),
                     "tail": text[-200:],
                 },

@@ -25,7 +25,7 @@ run_id_ctx: ContextVar[str] = ContextVar("run_id", default="")
 # ---------------------------------------------------------------------------
 
 EXPECTED_MODULE_VERSIONS: dict[str, str] = {
-    "brief": "2.7",
+    "brief": "2.8",
     "sie": "1.4",
     "research": "1.1",
     "writer": "1.9",

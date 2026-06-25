@@ -129,13 +129,15 @@ def test_search_demand_score_no_signals():
 
 
 def test_search_demand_score_partial():
-    """SERP source with frequency=10 + consensus=2; no other signals.
-    Expected: 0.30 * 0.5 + 0.25 * 0.5 = 0.275 - below 0.30 floor."""
+    """SERP source with frequency=10 + consensus=2 (full agreement across the
+    trimmed 2-source fan-out); no other signals.
+    Expected: 0.30 * 0.5 + 0.25 * 1.0 = 0.40 (consensus normalized by the live
+    source count, so both LLMs agreeing maxes the consensus term)."""
     cands = [
         _cand("a", [1.0, 0], source="serp",
               serp_frequency=10, llm_fanout_consensus=2),
     ]
-    assert _search_demand_score(cands) == pytest.approx(0.275)
+    assert _search_demand_score(cands) == pytest.approx(0.40)
 
 
 def test_global_cap_exceeded_in_contributing_region_becomes_singleton():

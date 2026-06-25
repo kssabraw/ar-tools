@@ -321,6 +321,10 @@ class _AllMocks:
             patch("modules.brief.h3_parent_fit.claude_json", fake_claude_json),
             patch("modules.brief.faq_intent_gate.claude_json", fake_claude_json),
             patch("modules.brief.faq_intent_gate.embed_batch_large", fake_embed_batch_large),
+            # v2.8 - answer contract (Opus) + decision_fit LLM/embed bindings
+            patch("modules.brief.answer_contract.claude_json", fake_claude_json),
+            patch("modules.brief.answer_contract.embed_batch_large", fake_embed_batch_large),
+            patch("modules.brief.decision_fit.claude_json", fake_claude_json),
             patch("modules.brief.pipeline.get_cached", fake_get_cached),
             patch("modules.brief.pipeline.write_cache", fake_write_cache),
         ]
@@ -349,7 +353,7 @@ async def test_pipeline_produces_schema_v2_response():
         result = await run_brief(req)
 
     # ---- Schema contract ----
-    assert result.metadata.schema_version == "2.7"
+    assert result.metadata.schema_version == "2.8"
     assert result.metadata.embedding_model == "text-embedding-3-large"
 
     # ---- Step 3.5 outputs surface on the response ----
@@ -533,7 +537,7 @@ async def test_cache_hit_short_circuits_pipeline():
         "discarded_headings": [],
         "silo_candidates": [],
         "metadata": {
-            "schema_version": "2.7",
+            "schema_version": "2.8",
             "word_budget": 2500,
             "faq_count": 0,
             "h2_count": 0,
@@ -630,7 +634,7 @@ async def test_pipeline_writes_to_cache_after_generation():
     args = write_called["args"]
     assert args["keyword"] == "what is tiktok shop"
     assert args["location_code"] == 2840
-    assert args["schema_version"] == "2.7"
+    assert args["schema_version"] == "2.8"
     assert args["triggered_by_client_id"] == "client-uuid-123"
     assert args["duration_ms"] >= 0
 

@@ -34,6 +34,7 @@ from models.brief import (
 
 from .graph import Candidate, RegionInfo
 from .llm import claude_json
+from .scoring import LLM_FANOUT_SOURCES
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +260,9 @@ def _search_demand_score(members: list[Candidate]) -> float:
 
     return (
         0.30 * min(max_freq / 20.0, 1.0)
-        + 0.25 * min(max_consensus / 4.0, 1.0)
+        # Normalize by the live fan-out source count (matches priority scoring) so
+        # full cross-LLM agreement maps to 1.0 now that the fan-out set is smaller.
+        + 0.25 * min(max_consensus / max(1, len(LLM_FANOUT_SOURCES)), 1.0)
         + 0.20 * (1.0 if has_paa else 0.0)
         + 0.15 * (1.0 if has_autocomplete else 0.0)
         + 0.10 * (1.0 if has_reddit else 0.0)
