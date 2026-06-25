@@ -151,6 +151,14 @@ class Settings(BaseSettings):
     # unverified names.
     local_seo_neighborhood_model: str = "claude-haiku-4-5-20251001"
     local_seo_max_neighborhoods: int = 20
+    # Verification is geographic + country-agnostic: a proposed sub-area is kept
+    # only if it geocodes to a place INSIDE the target city's footprint (its
+    # geocoded bounds), which works for US neighborhoods and AU/UK suburbs alike.
+    # `local_seo_city_bounds_pad` expands the city box by this fraction on each
+    # side (slack for edge suburbs); `local_seo_neighborhood_radius_km` is the
+    # fallback containment radius when a city has no bounds/viewport (rare).
+    local_seo_city_bounds_pad: float = 0.1
+    local_seo_neighborhood_radius_km: float = 30.0
 
     # Service Page scoring: after a service_page run generates, it auto-scores
     # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below
