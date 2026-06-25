@@ -113,12 +113,10 @@ class Settings(BaseSettings):
     # A city's priority is the sum of its pins' opportunity, normalized 0-100 per
     # keyword. `maps_weak_rank_threshold` is the Weak/Watch tier boundary.
     #
-    # ISOLATION GATE: an area is only flagged when it's part of a contiguous blob
-    # of >= `maps_min_cluster_pins` opportunity pins (8-way grid adjacency, computed
-    # BEFORE geocoding). A lone weak/missing pin (or a 2-pin blip) is dropped from
-    # the flagged areas — it still feeds the octant pins / analytics, it's just not
-    # called out as a weak neighborhood. Robust to suburb boundaries: a big blob
-    # spanning several suburbs survives even if no single suburb clears the bar.
+    # THIN-AREA FILTER: a suburb is only flagged as a weak coverage area when it
+    # holds >= `maps_min_area_pins` weak/missing pins. A neighborhood with just one
+    # or two stray weak pins is dropped from the flagged list — its pins still feed
+    # the octant pins / analytics, they're just not called out as a weak suburb.
     #
     # At most `maps_geocode_max_cells` cells per keyword are geocoded (highest
     # priority first, so a cap only drops the lowest "Watch" cells); the rest are
@@ -131,7 +129,7 @@ class Settings(BaseSettings):
     maps_beatability_min: float = 0.6
     maps_beatability_max: float = 1.4
     maps_core_adjacency_floor: float = 0.5  # score a weak pin keeps when ALL 8 neighbors are in the pack
-    maps_min_cluster_pins: int = 3  # an area needs a contiguous blob of >= this many weak pins to be flagged
+    maps_min_area_pins: int = 3  # a suburb needs >= this many weak pins to be flagged as a weak area
     maps_geocode_max_cells: int = 100
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse

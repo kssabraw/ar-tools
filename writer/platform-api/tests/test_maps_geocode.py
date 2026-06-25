@@ -71,35 +71,20 @@ def test_core_adjacency_downweights_pins_bordering_strong():
     assert b["opportunity"] < p["opportunity"]
 
 
-def test_filter_clustered_cells_drops_small_blobs():
+def test_aggregate_weak_areas_drops_thin_suburbs():
+    # Springfield has 3 pins, Lincoln 1 — with min_pins=3 only Springfield is flagged.
     cells = [
-        {"row": 0, "col": 0}, {"row": 0, "col": 1}, {"row": 1, "col": 1},  # a 3-blob
-        {"row": 5, "col": 5}, {"row": 5, "col": 6},                        # a 2-blip
-        {"row": 9, "col": 0},                                              # a singleton
+        {"city": "Springfield", "admin_area": "IL", "rank": None, "octant": "N", "lat": 40.1, "lng": -75.0, "tier": "critical", "opportunity": 1.0},
+        {"city": "Springfield", "admin_area": "IL", "rank": 12, "octant": "N", "lat": 40.1, "lng": -75.0, "tier": "weak", "opportunity": 0.5},
+        {"city": "Springfield", "admin_area": "IL", "rank": 14, "octant": "N", "lat": 40.1, "lng": -75.0, "tier": "weak", "opportunity": 0.4},
+        {"city": "Lincoln", "admin_area": "IL", "rank": 7, "octant": "S", "lat": 39.9, "lng": -75.0, "tier": "watch", "opportunity": 0.1},
     ]
-    survivors, dropped = mg.filter_clustered_cells(cells, 3)
-    assert {(c["row"], c["col"]) for c in survivors} == {(0, 0), (0, 1), (1, 1)}
-    assert dropped == 3
-    # min_cluster_size <= 1 is a no-op.
-    keep_all, d0 = mg.filter_clustered_cells(cells, 1)
-    assert len(keep_all) == 6 and d0 == 0
-
-
-def test_build_weak_locations_isolation_gate_drops_singletons():
-    # A SE 3-blob of unranked pins survives; a lone unranked pin at (0,2) is dropped.
-    grid = [
-        [1, 1, None, 1, 1],
-        [1, 1, 1, 1, 1],
-        [1, 1, 1, None, 1],
-        [1, 1, None, None, 1],
-        [1, 1, 1, 1, 1],
-    ]
-    out = asyncio.run(mg.build_weak_locations(
-        grid, CENTER_LAT, CENTER_LNG, [], floor=4, min_cluster_pins=3, api_key="",
-    ))
-    assert out["weak_cell_count"] == 4        # all opportunity pins found
-    assert out["clustered_cell_count"] == 3   # the SE blob
-    assert out["dropped_isolated"] == 1       # the lone (0,2) pin
+    areas, dropped = mg.aggregate_weak_areas(cells, min_pins=3)
+    assert [a["city"] for a in areas] == ["Springfield"]   # Lincoln (1 pin) dropped
+    assert dropped == 1
+    # min_pins=1 keeps both.
+    areas_all, dropped0 = mg.aggregate_weak_areas(cells, min_pins=1)
+    assert {a["city"] for a in areas_all} == {"Springfield", "Lincoln"} and dropped0 == 0
 
 
 def test_extract_weak_cells_empty_grid():
@@ -186,7 +171,7 @@ def test_aggregate_weak_areas_priority_and_tier():
         {"city": "Lincoln", "admin_area": "IL", "rank": 7, "octant": "S",
          "lat": 39.9, "lng": -75.0, "tier": "watch", "opportunity": 0.1},
     ]
-    areas = mg.aggregate_weak_areas(cells)
+    areas, _dropped = mg.aggregate_weak_areas(cells)
     # Ranked by summed opportunity (priority), not pin count.
     assert [a["city"] for a in areas] == ["Springfield", "Lincoln"]
     spr = areas[0]
