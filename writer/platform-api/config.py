@@ -140,6 +140,18 @@ class Settings(BaseSettings):
     silo_embedding_dimensions: int = 1536
     silo_embedding_model: str = "text-embedding-3-large"
 
+    # Local SEO silo planner — neighborhood discovery. After the Fanout pipeline
+    # builds the service silos, the planner proposes neighborhoods within the
+    # target city (Haiku tool-use), then forward-geocodes each and keeps only
+    # those that resolve to a neighborhood-level place inside that city — adjacent
+    # towns and bogus names are dropped — offering "<service> <neighborhood>" page
+    # targets as a dedicated "Neighborhoods" silo. Verification needs
+    # `google_maps_api_key` (Geocoding-enabled); absent it (or the Anthropic key),
+    # the neighborhood silo is skipped with a degraded note rather than offering
+    # unverified names.
+    local_seo_neighborhood_model: str = "claude-haiku-4-5-20251001"
+    local_seo_max_neighborhoods: int = 20
+
     # Service Page scoring: after a service_page run generates, it auto-scores
     # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below
     # this threshold. Manual Score/Reoptimize controls remain available in the UI.

@@ -388,6 +388,132 @@ async def reverse_geocode_points(
 
 
 # ----------------------------------------------------------------------------
+# Forward geocoding (Google) + cross-client cache — place-name verification.
+# ----------------------------------------------------------------------------
+def parse_forward_result(results: Optional[list]) -> dict:
+    """Pull {matched, city, admin_area, formatted, place_id, result_types, lat,
+    lng} from a Google *forward*-geocode response. Unlike `parse_geocode_results`
+    (reverse) this keeps the top result's `types` and geometry so the caller can
+    verify a candidate is neighborhood-specific (not a fallback to the city
+    centroid) and inside the expected city."""
+    blank = {
+        "matched": False, "city": None, "admin_area": None, "formatted": None,
+        "place_id": None, "result_types": [], "lat": None, "lng": None,
+    }
+    if not results:
+        return blank
+    first = results[0] or {}
+    comps: list[dict] = first.get("address_components") or []
+
+    def _find(*types: str) -> Optional[str]:
+        for t in types:
+            for c in comps:
+                if t in (c.get("types") or []):
+                    return c.get("long_name")
+        return None
+
+    loc = ((first.get("geometry") or {}).get("location")) or {}
+    return {
+        "matched": True,
+        "city": _find(*_CITY_TYPES),
+        "admin_area": _find("administrative_area_level_1"),
+        "formatted": first.get("formatted_address"),
+        "place_id": first.get("place_id"),
+        "result_types": list(first.get("types") or []),
+        "lat": loc.get("lat"),
+        "lng": loc.get("lng"),
+    }
+
+
+def _norm_query(query: str) -> str:
+    """Cache key: lower-cased, whitespace-collapsed query string."""
+    return " ".join((query or "").lower().split())
+
+
+_FWD_FIELDS = ("matched", "city", "admin_area", "formatted", "place_id", "result_types", "lat", "lng")
+
+
+def _load_forward_cache(supabase, norms: list[str]) -> dict[str, dict]:
+    if not supabase or not norms:
+        return {}
+    try:
+        rows = (
+            supabase.table("geocode_forward_cache")
+            .select("query_norm, matched, city, admin_area, formatted, place_id, result_types, lat, lng")
+            .in_("query_norm", sorted(set(norms))).execute()
+        ).data or []
+    except Exception as exc:  # cache is best-effort — never sink geocoding
+        logger.warning("geocode_forward_cache_read_failed", extra={"error": str(exc)})
+        return {}
+    out: dict[str, dict] = {}
+    for r in rows:
+        out[r["query_norm"]] = {f: (r.get(f) if f != "result_types" else (r.get(f) or [])) for f in _FWD_FIELDS}
+    return out
+
+
+def _write_forward_cache(supabase, fresh: dict[str, dict]) -> None:
+    if not supabase or not fresh:
+        return
+    rows = [{"query_norm": norm, **{f: loc.get(f) for f in _FWD_FIELDS}} for norm, loc in fresh.items()]
+    try:
+        supabase.table("geocode_forward_cache").upsert(rows, on_conflict="query_norm").execute()
+    except Exception as exc:
+        logger.warning("geocode_forward_cache_write_failed", extra={"error": str(exc)})
+
+
+async def _forward_geocode_one(client: httpx.AsyncClient, query: str, api_key: str) -> Optional[dict]:
+    """One forward-geocode call. Returns the parsed result on a definitive answer
+    (OK / ZERO_RESULTS — both cacheable), or None on a transient error (not
+    cached, so it retries next time)."""
+    try:
+        resp = await client.get(_GEOCODE_URL, params={"address": query, "key": api_key})
+        resp.raise_for_status()
+        body = resp.json()
+    except Exception as exc:
+        logger.warning("geocode_forward_request_failed", extra={"query": query, "error": str(exc)})
+        return None
+    status = body.get("status")
+    if status == "OK":
+        return parse_forward_result(body.get("results"))
+    if status == "ZERO_RESULTS":
+        return parse_forward_result(None)  # definitive "no such place" — cache the miss
+    logger.warning("geocode_forward_status", extra={"status": status, "error": body.get("error_message")})
+    return None
+
+
+async def forward_geocode_places(
+    queries: list[str], *, api_key: Optional[str] = None, supabase=None,
+) -> dict[str, dict]:
+    """Forward-geocode each query string, returning {original_query: parsed} where
+    parsed carries {matched, city, admin_area, result_types, lat, lng, ...}. Dedups
+    by normalized key, serves hits from `geocode_forward_cache`, calls Google for
+    misses (bounded concurrency), and writes them back (negatives included). With
+    no API key, every query maps to an unmatched blank so the caller degrades to
+    skipping verification rather than trusting an unverified name."""
+    api_key = settings.google_maps_api_key if api_key is None else api_key
+    blank = {f: ([] if f == "result_types" else (False if f == "matched" else None)) for f in _FWD_FIELDS}
+    if not queries or not api_key:
+        return {q: dict(blank) for q in queries}
+
+    keyed = [(q, _norm_query(q)) for q in queries]
+    cache = _load_forward_cache(supabase, [n for _, n in keyed])
+    misses = sorted({n for _, n in keyed if n not in cache})
+
+    if misses:
+        sem = asyncio.Semaphore(_GEOCODE_CONCURRENCY)
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            async def _run(norm: str):
+                async with sem:
+                    return norm, await _forward_geocode_one(client, norm, api_key)
+            results = await asyncio.gather(*(_run(n) for n in misses))
+        fresh = {n: loc for n, loc in results if loc is not None}
+        cache.update(fresh)
+        _write_forward_cache(supabase, fresh)
+
+    return {q: dict(cache.get(n) or blank) for q, n in keyed}
+
+
+# ----------------------------------------------------------------------------
 # Orchestration — the full per-keyword weak-locations payload.
 # ----------------------------------------------------------------------------
 async def build_weak_locations(
