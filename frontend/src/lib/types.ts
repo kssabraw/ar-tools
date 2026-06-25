@@ -656,7 +656,10 @@ export interface MapsOctantPins {
 }
 
 // A nearby city/locality the geo-grid is weak in: the unique place that a cluster
-// of weak (unranked / poorly-ranked) pins falls in, with a representative point.
+// of opportunity (unranked / poorly-ranked) pins falls in, scored for targeting
+// priority, with a representative point.
+export type MapsWeakTier = 'critical' | 'weak' | 'watch'
+
 export interface MapsWeakArea {
   city: string | null
   admin_area: string | null
@@ -665,6 +668,9 @@ export interface MapsWeakArea {
   octants: string[]
   worst_rank: number | null
   avg_rank: number | null
+  tier: MapsWeakTier
+  priority: number       // 0-100, normalized per keyword (highest = target first)
+  score_raw?: number
   lat: number
   lng: number
 }
@@ -672,6 +678,7 @@ export interface MapsWeakArea {
 export interface MapsWeakLocations {
   geocoded: boolean
   capped: boolean
+  opportunity_floor?: number
   weak_threshold: number
   weak_cell_count: number
   octant_pins: MapsOctantPin[]

@@ -135,8 +135,9 @@ def weak_sector_competitors(
 
 
 def weak_area_names(weak_locations: Optional[dict], top_n: int = 8) -> list[str]:
-    """Short "City, ST — N weak pins (octants)" lines from the geocoded weak areas,
-    for naming real places in the narrative. Empty when geocoding is unavailable."""
+    """Short, priority-ordered "City, ST — priority N (tier): M weak pins (octants)"
+    lines from the geocoded weak areas, for naming real places in the narrative in
+    target-first order. Empty when geocoding is unavailable."""
     out: list[str] = []
     for a in (weak_locations or {}).get("weak_areas", [])[:top_n]:
         city = a.get("city")
@@ -144,7 +145,8 @@ def weak_area_names(weak_locations: Optional[dict], top_n: int = 8) -> list[str]
             continue
         where = f"{city}, {a['admin_area']}" if a.get("admin_area") else city
         octs = f" — {', '.join(a['octants'])}" if a.get("octants") else ""
-        out.append(f"{where}: {a.get('pins', 0)} weak pins{octs}")
+        tier = f" {a['tier']}" if a.get("tier") else ""
+        out.append(f"{where}: priority {a.get('priority', 0)}{tier}, {a.get('pins', 0)} weak pins{octs}")
     return out
 
 
@@ -343,6 +345,8 @@ async def generate_report_for_result(client: dict, scan_row: dict, result_row: d
             result_row.get("rank_grid") or [],
             scan_row.get("center_lat"), scan_row.get("center_lng"),
             octant_pins.get("points") or [],
+            competitors_above=result_row.get("competitors_above"),
+            client_reviews=(client.get("gbp") or {}).get("gbp_review_count"),
             azimuth_offset_deg=analytics.get("azimuth_offset_deg", 0.0),
             supabase=get_supabase(),
         )

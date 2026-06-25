@@ -93,13 +93,33 @@ class Settings(BaseSettings):
     # for SEO targeting). Reverse-geocodes via the Google Geocoding web service —
     # set `google_maps_api_key` to a key with the Geocoding API enabled (a
     # server-side key, NOT the referer-restricted frontend Maps JS key). Absent a
-    # key the report still generates; it just carries no place names. A pin is
-    # "weak" when it ranks worse than `maps_weak_rank_threshold` (or doesn't rank
-    # at all); at most `maps_geocode_max_cells` unique weak cells per keyword are
-    # geocoded (the rest are summarized but not named) to bound API cost — the
-    # cross-client `maps_geocode_cache` makes repeats free.
+    # key the report still generates; it just carries no place names.
+    #
+    # A pin is an "opportunity" when it's unranked or ranks worse than
+    # `maps_strong_rank_threshold` (ranks at/inside that are "in the pack" and
+    # excluded). Each opportunity pin is scored for priority so the team knows
+    # which cities to target FIRST:
+    #     opportunity = severity × proximity × beatability
+    #   - severity: how bad the rank is, anchored at the pack edge and scaling to
+    #     `maps_unranked_effective_rank` for unranked pins (so rank 5-9 score low,
+    #     unranked dead zones score highest);
+    #   - proximity: closer-to-business pins weighted higher (own your backyard);
+    #   - beatability: areas where weaker competitors (fewer reviews than the
+    #     client) outrank us score higher — bounded to
+    #     [`maps_beatability_min`, `maps_beatability_max`].
+    # A city's priority is the sum of its pins' opportunity, normalized 0-100 per
+    # keyword. `maps_weak_rank_threshold` is the Weak/Watch tier boundary.
+    #
+    # At most `maps_geocode_max_cells` cells per keyword are geocoded (highest
+    # priority first, so a cap only drops the lowest "Watch" cells); the rest are
+    # counted but not named. The cross-client `maps_geocode_cache` makes repeats
+    # free.
     google_maps_api_key: str = ""
-    maps_weak_rank_threshold: int = 10
+    maps_strong_rank_threshold: int = 4  # ranks <= this are "in the pack" — not an opportunity
+    maps_weak_rank_threshold: int = 10   # rank >= this (ranked) is "Weak"; between is "Watch"
+    maps_unranked_effective_rank: int = 25  # rank an unranked pin stands in for, when scaling severity
+    maps_beatability_min: float = 0.6
+    maps_beatability_max: float = 1.4
     maps_geocode_max_cells: int = 100
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
