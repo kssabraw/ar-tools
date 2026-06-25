@@ -99,14 +99,30 @@ def _proximity(ring: int, max_ring: int) -> float:
     return max(0.0, (max_ring - ring + 1) / max_ring)
 
 
-def _beatability(comp_reviews: Optional[float], client_reviews: Optional[float],
-                 bmin: float, bmax: float) -> float:
+def _to_float(v) -> Optional[float]:
+    """Coerce a review count to float, or None if it isn't a usable number.
+    Accepts ints/floats and numeric strings (e.g. "77"); rejects bools, None,
+    and non-numeric junk — so a malformed `gbp_review_count` degrades to neutral
+    rather than raising."""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _beatability(comp_reviews, client_reviews, bmin: float, bmax: float) -> float:
     """Multiplier in [bmin, bmax]: > 1 where the strongest competitor outranking
     us has FEWER reviews than the client (easy to overtake), < 1 where an
-    entrenched, review-rich competitor holds the spot. Neutral (1.0) without data."""
-    if comp_reviews is None or client_reviews is None:
+    entrenched, review-rich competitor holds the spot. Neutral (1.0) when either
+    review count is missing or non-numeric."""
+    comp, client = _to_float(comp_reviews), _to_float(client_reviews)
+    if comp is None or client is None:
         return 1.0
-    ratio = (client_reviews + 1.0) / (comp_reviews + 1.0)
+    ratio = (client + 1.0) / (comp + 1.0)
     return max(bmin, min(bmax, 1.0 + 0.4 * math.log10(ratio)))
 
 
