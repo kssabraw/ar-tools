@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from typing import Optional
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -113,6 +114,23 @@ async def test_partition_no_exclusions_is_noop():
     assert len(kept) == 1
 
 
+async def test_partition_noop_when_must_cover_empty():
+    # Regression: with must_not_cover present but NO cover anchors, the gate must
+    # be a no-op — otherwise (cover defaults to 0.0) every candidate with any
+    # positive similarity to an avoid topic is wrongly excluded, decimating the pool.
+    contract = AnswerContract(must_cover=[], must_not_cover=["avoid topic"])
+    cands = [
+        _Cand("avoid-aligned heading", _VECS["avoid"]),
+        _Cand("neutral heading", _VECS["other"]),
+        _Cand("cover-aligned heading", _VECS["cover"]),
+    ]
+    # Guard against an accidental embed call (a true no-op embeds nothing).
+    embed = AsyncMock(side_effect=AssertionError("gate must not embed when must_cover empty"))
+    kept, excluded = await partition_candidates_by_scope(contract, cands, embed_fn=embed)
+    assert excluded == []
+    assert len(kept) == 3
+
+
 async def test_build_scope_gate_string_filter():
     contract = AnswerContract(must_cover=["cover"], must_not_cover=["avoid"])
     gate = build_scope_gate(contract, _fake_embed)
@@ -123,3 +141,9 @@ async def test_build_scope_gate_string_filter():
     # No exclusions → identity.
     identity = build_scope_gate(AnswerContract(must_not_cover=[]), _fake_embed)
     assert await identity(["an avoid heading"]) == ["an avoid heading"]
+
+    # must_not_cover present but no cover anchors → also identity (Fix #1).
+    no_cover = build_scope_gate(
+        AnswerContract(must_cover=[], must_not_cover=["avoid"]), _fake_embed,
+    )
+    assert await no_cover(["an avoid heading"]) == ["an avoid heading"]

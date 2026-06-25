@@ -159,7 +159,6 @@ async def claude_json(
     use_model = model or CLAUDE_MODEL
 
     last_error: Optional[Exception] = None
-    last_text: str = ""
     semaphore = _get_anthropic_semaphore()
     for attempt in range(2):
         sys_prompt = system if attempt == 0 else system + _STRICT_JSON_SUFFIX
@@ -176,7 +175,6 @@ async def claude_json(
         text = "".join(
             block.text for block in message.content if getattr(block, "type", "") == "text"
         )
-        last_text = text
 
         # Detect response truncation. When stop_reason == "max_tokens" the
         # JSON value is almost certainly incomplete (cut off mid-string),

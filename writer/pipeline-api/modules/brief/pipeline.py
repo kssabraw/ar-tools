@@ -59,6 +59,9 @@ from .decision_fit import (
 )
 from .errors import BriefError
 from .assembly import (
+    GLOBAL_CAP_CAPPED,
+    GLOBAL_CAP_UNCAPPED,
+    UNCAPPED_INTENTS,
     assemble_structure,
     attach_authority_h3s_with_displacement,
     reorder_how_to,
@@ -139,6 +142,35 @@ _MIN_H2_BODY_WORDS_BY_PATTERN: dict[str, int] = {
     "place_bound_topics": 150,      # local-seo
     "news_lede": 100,               # news
 }
+
+
+def _enforce_heading_cap(heading_structure: list, cap: int) -> None:
+    """Keep the global heading cap a hard ceiling after the answer-heading lead is
+    inserted. The cap counts content H2+H3 items (H1 and the FAQ block are exempt,
+    matching assemble_structure). While over the cap, drop the LAST content-H2 group
+    (its H2 plus the contiguous content H3s that follow it). Mutates in place."""
+    def _capped_count() -> int:
+        return sum(
+            1 for h in heading_structure
+            if h.level in ("H2", "H3") and h.type == "content"
+        )
+
+    while _capped_count() > cap:
+        last_h2 = next(
+            (i for i in range(len(heading_structure) - 1, -1, -1)
+             if heading_structure[i].level == "H2" and heading_structure[i].type == "content"),
+            None,
+        )
+        if last_h2 is None:
+            break
+        end = last_h2 + 1
+        while (
+            end < len(heading_structure)
+            and heading_structure[end].level == "H3"
+            and heading_structure[end].type == "content"
+        ):
+            end += 1
+        del heading_structure[last_h2:end]
 
 
 def _min_h2_body_words_for_template(template) -> int:
@@ -546,7 +578,10 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     # must_cover topic, reusing the embeddings just computed. No-op when the
     # contract has no exclusions. Excluded candidates are surfaced as discarded.
     answer_contract_excluded: list[Candidate] = []
-    if answer_contract.must_not_cover and eligible_pool:
+    # Require BOTH exclusion topics and cover anchors — the gate is a relative
+    # "closer to avoid than to cover" test, meaningless (and over-eager) without
+    # cover anchors. partition_candidates_by_scope enforces the same guard.
+    if answer_contract.must_not_cover and answer_contract.must_cover and eligible_pool:
         eligible_pool, answer_contract_excluded = await partition_candidates_by_scope(
             answer_contract, eligible_pool, embed_fn=embed_batch_large,
         )
@@ -985,13 +1020,13 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             (h for h in heading_structure if h.level == "H2" and h.type == "content"),
             None,
         )
-        already_leads = (
-            first_content_h2 is not None
-            and (
-                normalize_text(first_content_h2.text) == norm_answer
-                or norm_answer in normalize_text(first_content_h2.text)
-                or normalize_text(first_content_h2.text) in norm_answer
-            )
+        # Skip only when the assembled outline already leads with the answer:
+        # exact normalized match, or the first H2 already fully contains the
+        # answer_heading. (We deliberately do NOT skip when the answer_heading
+        # merely contains a short first-H2 — that would drop a richer lead.)
+        norm_first = normalize_text(first_content_h2.text) if first_content_h2 else ""
+        already_leads = first_content_h2 is not None and (
+            norm_first == norm_answer or (norm_answer and norm_answer in norm_first)
         )
         if not already_leads:
             lead = HeadingItem(
@@ -1004,6 +1039,10 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
             # Insert after a leading H1 if present, else at the very front.
             insert_at = 1 if (heading_structure and heading_structure[0].level == "H1") else 0
             heading_structure.insert(insert_at, lead)
+            # Keep the global cap a hard ceiling — the lead must displace a tail
+            # H2 group, not grow the outline past the cap.
+            cap = GLOBAL_CAP_UNCAPPED if intent in UNCAPPED_INTENTS else GLOBAL_CAP_CAPPED
+            _enforce_heading_cap(heading_structure, cap)
             for idx, h in enumerate(heading_structure):
                 h.order = idx
 
@@ -1250,10 +1289,15 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     decision_fit_directive = None
     detection = answer_contract.decision_fit_detection
     if decision_fit_qualifies(detection):
-        partner_factor = detect_partner_factor(
-            intent,
-            [{"text": c.text, "source": c.source} for c in selected_h2s],
-        )
+        # Use the final assembled sections (H2s AND H3s, incl. the answer-heading
+        # lead) so the partner-factor A4 check can see authority-gap H3s — which
+        # carry the edge_case_detail signal but never appear in selected_h2s.
+        section_dicts = [
+            {"text": h.text, "source": h.source}
+            for h in heading_structure
+            if h.type == "content" and h.level in ("H2", "H3")
+        ]
+        partner_factor = detect_partner_factor(intent, section_dicts)
         if partner_factor:
             anchor_h2_text = answer_contract.answer_heading or (
                 selected_h2s[0].text if selected_h2s else ""
