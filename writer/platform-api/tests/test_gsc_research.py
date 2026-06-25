@@ -22,6 +22,16 @@ def test_aggregate_sums_and_impression_weights_position():
     assert out[("ac repair", "/b")]["position"] == 8.0
 
 
+def test_parse_live_page_rows_maps_keys_and_skips_incomplete():
+    raw = [
+        {"keys": ["ac repair", "/a"], "clicks": 3, "impressions": 100, "position": 7.2},
+        {"keys": ["only-query"], "clicks": 1, "impressions": 5, "position": 9.0},  # no page → skip
+        {"keys": ["", "/b"], "clicks": 1, "impressions": 5, "position": 9.0},       # blank query → skip
+    ]
+    out = gsc_research.parse_live_page_rows(raw)
+    assert out == [{"query": "ac repair", "page": "/a", "clicks": 3, "impressions": 100, "position": 7.2}]
+
+
 def test_aggregate_skips_blank_query_or_page():
     rows = [
         {"query": "", "page": "/a", "clicks": 1, "impressions": 10, "position": 5.0},

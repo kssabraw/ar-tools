@@ -127,7 +127,7 @@ export function GscResearch() {
         <EmptyState title="Analyzing…" body="Crunching Search Console data and enriching keywords with market data. This usually takes under a minute." />
       ) : run && !run.gsc_connected ? (
         <Banner kind="warn">
-          Search Console isn’t connected for this client yet. Connect a verified property in the Organic Rank Tracker, let it ingest data, then run this analysis.
+          Search Console isn’t connected for this client yet. Connect a verified property in the Organic Rank Tracker, then run this analysis — it pulls fresh GSC data live.
         </Banner>
       ) : (
         <>

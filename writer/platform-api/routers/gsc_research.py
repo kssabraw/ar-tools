@@ -1,10 +1,10 @@
 """GSC Research module router.
 
-On-demand opportunity analysis off the client's ingested GSC query×page data:
-keyword cannibalization, quick wins, and hidden wins. Runs are computed by an
-async job (DataForSEO enrichment runs out of band); the UI polls run detail
-while a run is pending/running. All DB access uses the service-role client; any
-authenticated user can operate it.
+On-demand opportunity analysis from a live GSC query×page pull: keyword
+cannibalization, quick wins, and hidden wins. Runs are computed by an async job
+(the live GSC fetch + DataForSEO enrichment run out of band); the UI polls run
+detail while a run is pending/running. All DB access uses the service-role
+client; any authenticated user can operate it.
 """
 
 from __future__ import annotations

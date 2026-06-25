@@ -118,6 +118,12 @@ def classify_access_error(status_code: Optional[int]) -> VerifyResult:
 # ----------------------------------------------------------------------------
 # Service-account identity
 # ----------------------------------------------------------------------------
+def is_configured() -> bool:
+    """Whether the agency service-account key is present (live GSC calls work)."""
+    raw = settings.google_service_account_key
+    return bool(raw and raw.strip())
+
+
 def _load_key() -> dict:
     raw = settings.google_service_account_key
     if not raw or not raw.strip():

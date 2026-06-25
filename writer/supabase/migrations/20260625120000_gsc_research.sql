@@ -1,6 +1,6 @@
 -- Migration: 20260625120000_gsc_research.sql
--- Purpose: GSC Research module — on-demand opportunity analysis off the already-
---          ingested GSC query×page data. One run surfaces three opportunity sets:
+-- Purpose: GSC Research module — on-demand opportunity analysis from a LIVE
+--          Search Console query×page pull. One run surfaces three opportunity sets:
 --            1. Keyword cannibalization — a query split across multiple URLs that
 --               all rank well, with impressions NOT clustered (Google can't decide).
 --            2. Quick wins — query×page at position 6–10 (small push → page 1).

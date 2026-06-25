@@ -1,8 +1,9 @@
 """GSC Research — on-demand opportunity analysis off ingested GSC data.
 
-Ported from the "GSC Research" n8n workflow. One run reads the client's
-already-ingested query×page data (gsc_query_page_daily) for a lookback window
-and produces three opportunity sets:
+Ported from the "GSC Research" n8n workflow. One run does a LIVE Search Console
+pull (query×page dimensions over a lookback window, like the n8n flow's
+"last 3 months") for the client's verified property and produces three
+opportunity sets:
 
   1. Keyword cannibalization — a query split across >1 URL where every URL
      ranks well (≤ pos 30) AND their impressions are clustered (within 50% of
@@ -26,13 +27,14 @@ the quick- and hidden-win bands — replicated here intentionally for fidelity.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import defaultdict
 from datetime import date, timedelta
 from typing import Optional
 
 from db.supabase_client import get_supabase
-from services import keyword_market, rank_materialize
+from services import gsc_service, keyword_market, rank_materialize
 from services.dataforseo_rank import location_code_for
 
 logger = logging.getLogger(__name__)
@@ -204,26 +206,37 @@ def enrich_with_market(rows: list[dict], market: dict[str, dict]) -> None:
 # ----------------------------------------------------------------------------
 # Data access
 # ----------------------------------------------------------------------------
-def _fetch_page_rows(supabase, property_id: str, date_from: date) -> list[dict]:
-    """All query×page rows for a property since date_from, paged past the 1000-row
-    PostgREST default."""
-    rows: list[dict] = []
-    page_size = 1000
-    offset = 0
-    while True:
-        batch = (
-            supabase.table("gsc_query_page_daily")
-            .select("query, page, clicks, impressions, position")
-            .eq("property_id", property_id)
-            .gte("date", date_from.isoformat())
-            .range(offset, offset + page_size - 1)
-            .execute()
-        ).data or []
-        rows.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += page_size
-    return rows
+def parse_live_page_rows(raw: list[dict]) -> list[dict]:
+    """Map raw GSC query×page rows (keys = [query, page], no date dimension —
+    already aggregated for the period) to analysis rows."""
+    out = []
+    for row in raw or []:
+        keys = row.get("keys") or []
+        if len(keys) < 2 or not keys[0] or not keys[1]:
+            continue
+        out.append(
+            {
+                "query": keys[0],
+                "page": keys[1],
+                "clicks": int(row.get("clicks") or 0),
+                "impressions": int(row.get("impressions") or 0),
+                "position": row.get("position"),
+            }
+        )
+    return out
+
+
+def _fetch_live_page_rows(site_url: str, date_from: date, date_to: date) -> list[dict]:
+    """Live Search Console pull of query×page rows for a property + window.
+
+    Blocking (googleapiclient) — run via asyncio.to_thread from the async job so
+    it doesn't stall the event loop. Raises on API error (e.g. 403) so the caller
+    can fail the run with a real cause.
+    """
+    raw = gsc_service.fetch_search_analytics(
+        site_url, ["query", "page"], date_from.isoformat(), date_to.isoformat()
+    )
+    return parse_live_page_rows(raw)
 
 
 async def _fetch_market_for(supabase, keywords: list[str], location_code: int) -> dict[str, dict]:
@@ -365,11 +378,14 @@ async def _compute_research(supabase, client_id: str) -> dict:
         "hidden_wins": [],
     }
 
-    property_id = rank_materialize._verified_property_id(supabase, client_id)
-    if not property_id:
+    # Live GSC fetch needs both a verified property AND the agency service-account
+    # key. Missing either → complete with gsc_connected=false + empty results (the
+    # UI shows a "connect Search Console" state rather than erroring).
+    property = rank_materialize._verified_property(supabase, client_id)
+    if not property or not gsc_service.is_configured():
         return empty
 
-    rows = _fetch_page_rows(supabase, property_id, date_from)
+    rows = await asyncio.to_thread(_fetch_live_page_rows, property["site_url"], date_from, today)
     aggregated = aggregate_query_pages(rows)
 
     cannibalization = find_cannibalization(aggregated)
