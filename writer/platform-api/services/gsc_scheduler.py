@@ -82,7 +82,7 @@ def enqueue_due_dataforseo() -> int:
     clients are unchanged. The job itself skips keywords GSC already covers, so
     this is cheap for GSC-connected clients and the sole rank source otherwise.
     """
-    from datetime import date
+    from datetime import datetime, timezone
 
     from services.dataforseo_rank import enqueue_dataforseo_rank, is_fetch_due
 
@@ -97,16 +97,28 @@ def enqueue_due_dataforseo() -> int:
     if not client_ids:
         return 0
 
+    # Only schedule clients with a website — DataForSEO finds the rank by matching
+    # the client's domain in the SERP, so a websiteless client can never produce
+    # one. Skipping them here (rather than enqueuing a job that always fails)
+    # avoids daily re-enqueue churn for interval schedules and keeps
+    # last_fetched_at meaning "last real pull". Once a website is added the next
+    # tick picks the client up immediately.
+    client_rows = (
+        supabase.table("clients").select("id, website_url")
+        .in_("id", list(client_ids)).execute()
+    ).data or []
+    fetchable = {c["id"] for c in client_rows if (c.get("website_url") or "").strip()}
+
     configs = (
         supabase.table("rank_fetch_config").select("*")
         .in_("client_id", list(client_ids)).execute()
     ).data or []
     config_by_client = {c["client_id"]: c for c in configs}
 
-    today = date.today()
+    today = datetime.now(timezone.utc).date()
     default_weekday = settings.dataforseo_rank_weekday
     due = 0
-    for client_id in client_ids:
+    for client_id in client_ids & fetchable:
         cfg = config_by_client.get(client_id, {})
         if is_fetch_due(cfg, today, default_weekday):
             enqueue_dataforseo_rank(client_id)
@@ -189,8 +201,9 @@ def enqueue_due_reports() -> int:
 
 
 async def gsc_scheduler() -> None:
-    """Background loop: daily GSC ingest enqueue + weekly DataForSEO rank enqueue
-    + weekly Maps geo-grid scans, and a per-tick poll of in-flight Maps scans."""
+    """Background loop: daily GSC ingest enqueue + per-client-scheduled DataForSEO
+    rank enqueue (evaluated daily) + weekly Maps geo-grid scans, and a per-tick
+    poll of in-flight Maps scans."""
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
 
     interval = settings.gsc_scheduler_poll_interval_seconds

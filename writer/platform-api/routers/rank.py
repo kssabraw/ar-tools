@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -480,14 +480,20 @@ async def trigger_dataforseo(client_id: UUID, auth: dict = Depends(require_auth)
 async def get_fetch_schedule(client_id: UUID, auth: dict = Depends(require_auth)) -> FetchSchedule:
     """The client's DataForSEO rank-pull cadence. No row = the legacy default
     (weekly on the global weekday), surfaced so the UI reflects what runs today."""
+    default_weekday = settings.dataforseo_rank_weekday
     res = (
         get_supabase().table("rank_fetch_config").select("*").eq("client_id", str(client_id)).limit(1).execute()
     )
     if not res.data:
-        return FetchSchedule(mode="weekly", day_of_week=settings.dataforseo_rank_weekday)
+        return FetchSchedule(mode="weekly", day_of_week=default_weekday)
     r = res.data[0]
+    day_of_week = r.get("day_of_week")
+    # A weekly row with no explicit day falls back to the global weekday at
+    # scheduling time; surface that effective day so the UI matches what runs.
+    if r["mode"] == "weekly" and day_of_week is None:
+        day_of_week = default_weekday
     return FetchSchedule(
-        mode=r["mode"], day_of_week=r.get("day_of_week"), day_of_month=r.get("day_of_month"),
+        mode=r["mode"], day_of_week=day_of_week, day_of_month=r.get("day_of_month"),
         interval_days=r.get("interval_days"), last_fetched_at=r.get("last_fetched_at"),
     )
 
@@ -505,7 +511,7 @@ async def set_fetch_schedule(
         "day_of_week": body.day_of_week if body.mode == "weekly" else None,
         "day_of_month": body.day_of_month if body.mode == "monthly" else None,
         "interval_days": body.interval_days if body.mode == "interval" else None,
-        "updated_at": "now()",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     supabase.table("rank_fetch_config").upsert(row, on_conflict="client_id").execute()
     return await get_fetch_schedule(client_id, auth)

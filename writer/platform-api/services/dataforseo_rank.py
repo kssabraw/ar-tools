@@ -240,13 +240,18 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
         fetched += 1
 
     # Advance the per-client fetch clock so interval schedules measure "days
-    # since the last actual pull" and a weekly/monthly fetch can't double-fire
-    # the same day — whether triggered by the scheduler or a manual refresh.
-    now_iso = datetime.now(timezone.utc).isoformat()
-    supabase.table("rank_fetch_config").upsert(
-        {"client_id": client_id, "last_fetched_at": now_iso, "updated_at": now_iso},
-        on_conflict="client_id",
-    ).execute()
+    # since the last real pull" and a weekly/monthly fetch can't double-fire the
+    # same day — whether triggered by the scheduler or a manual refresh. Skip the
+    # stamp when EVERY attempt errored (transient DataForSEO outage — nothing
+    # fetched): leaving last_fetched_at unchanged lets the next interval tick
+    # retry instead of waiting a full cycle on a bad day. (fetched>0, or a pull
+    # with nothing to do because all keywords are GSC-covered, both stamp.)
+    if not (fetched == 0 and failed > 0):
+        now_iso = datetime.now(timezone.utc).isoformat()
+        supabase.table("rank_fetch_config").upsert(
+            {"client_id": client_id, "last_fetched_at": now_iso, "updated_at": now_iso},
+            on_conflict="client_id",
+        ).execute()
 
     logger.info(
         "dataforseo_rank_complete",
