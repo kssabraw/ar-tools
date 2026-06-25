@@ -266,7 +266,12 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['maps-latest', clientId] }),
   })
 
-  const pins = r.report_octant_pins?.points ?? []
+  // Prefer the geocoded octant pins (they carry the nearest-city label); fall
+  // back to the raw pin generator output for pre-geocoding scans.
+  const loc = r.report_weak_locations
+  const pins = (loc?.octant_pins?.length ? loc.octant_pins : r.report_octant_pins?.points) ?? []
+  const weakAreas = loc?.weak_areas ?? []
+  const gmapsLink = (lat: number, lng: number) => `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
 
   return (
     <div style={{ marginTop: 16, borderTop: '1px solid #f1f5f9', paddingTop: 14 }}>
@@ -296,14 +301,49 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
       {r.report_status === 'complete' && r.report_md ? (
         <div>
           <Markdown>{r.report_md}</Markdown>
+          {weakAreas.length > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 2 }}>Weak coverage areas (nearby cities)</div>
+              <p style={{ fontSize: 11.5, color: '#94a3b8', margin: '0 0 6px' }}>
+                The towns/cities the grid is weakest in — where {r.keyword ? `“${r.keyword}”` : 'this keyword'} ranks poorly or not at all. Open a point on Google Maps to scope local SEO work there.
+              </p>
+              <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
+                <thead>
+                  <tr>
+                    {['City', 'Weak pins', 'Directions', 'Worst rank', 'Map'].map((h, hi) => (
+                      <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 0 || hi === 2 ? 'left' : hi === 4 ? 'center' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {weakAreas.map((a, ai) => (
+                    <tr key={ai}>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>
+                        {a.city ?? '—'}{a.admin_area ? <span style={{ color: '#94a3b8' }}>, {a.admin_area}</span> : null}
+                      </td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>
+                        {a.pins}{a.not_ranked > 0 ? <span style={{ color: '#dc2626' }}> ({a.not_ranked} unranked)</span> : null}
+                      </td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{a.octants.join(' · ') || '—'}</td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>{a.worst_rank ?? 'Not ranked'}</td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'center' }}>
+                        <a href={gmapsLink(a.lat, a.lng)} target="_blank" rel="noreferrer" style={{ color: '#6366f1', textDecoration: 'none' }}>Open ↗</a>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
           {pins.length > 0 && (
             <div style={{ marginTop: 14 }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 6 }}>Suggested hyper-local pins (weak zones)</div>
               <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 12.5 }}>
                 <thead>
                   <tr>
-                    {['Octant', 'Ring (mi)', 'Strength', 'Lat', 'Lng'].map((h, hi) => (
-                      <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 0 || hi === 2 ? 'left' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
+                    {['Octant', 'Nearby city', 'Ring (mi)', 'Strength', 'Lat', 'Lng', 'Map'].map((h, hi) => (
+                      <th key={h} style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: hi === 0 || hi === 1 || hi === 3 ? 'left' : hi === 6 ? 'center' : 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', background: '#f8fafc' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -311,14 +351,23 @@ function LocalRankAnalysis({ r, clientId, scanId }: { r: MapsScanResultRow; clie
                   {pins.map((p, pi) => (
                     <tr key={pi}>
                       <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.octant}</td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.city ?? '—'}</td>
                       <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155' }}>{p.radius_mi.toFixed(1)}</td>
                       <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', color: '#334155' }}>{p.strength}</td>
                       <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>{p.lat.toFixed(5)}</td>
                       <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'right', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>{p.lng.toFixed(5)}</td>
+                      <td style={{ border: '1px solid #e2e8f0', padding: '6px 10px', textAlign: 'center' }}>
+                        <a href={gmapsLink(p.lat, p.lng)} target="_blank" rel="noreferrer" style={{ color: '#6366f1', textDecoration: 'none' }}>Open ↗</a>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              {loc && !loc.geocoded && (
+                <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
+                  City names unavailable — set a Google Geocoding API key to label these weak zones with their nearest town.
+                </p>
+              )}
             </div>
           )}
           <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 10 }}>

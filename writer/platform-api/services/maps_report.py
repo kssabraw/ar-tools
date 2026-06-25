@@ -24,7 +24,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import maps_analytics, maps_octants
+from services import maps_analytics, maps_geocode, maps_octants
 from services.google_docs import GoogleDocError, create_google_doc
 
 logger = logging.getLogger(__name__)
@@ -134,7 +134,23 @@ def weak_sector_competitors(
     return out
 
 
-def build_snapshot(client: dict, result_row: dict, analytics: dict) -> dict:
+def weak_area_names(weak_locations: Optional[dict], top_n: int = 8) -> list[str]:
+    """Short "City, ST — N weak pins (octants)" lines from the geocoded weak areas,
+    for naming real places in the narrative. Empty when geocoding is unavailable."""
+    out: list[str] = []
+    for a in (weak_locations or {}).get("weak_areas", [])[:top_n]:
+        city = a.get("city")
+        if not city:
+            continue
+        where = f"{city}, {a['admin_area']}" if a.get("admin_area") else city
+        octs = f" — {', '.join(a['octants'])}" if a.get("octants") else ""
+        out.append(f"{where}: {a.get('pins', 0)} weak pins{octs}")
+    return out
+
+
+def build_snapshot(
+    client: dict, result_row: dict, analytics: dict, weak_locations: Optional[dict] = None,
+) -> dict:
     """The full data snapshot handed to the LLM (and reused for the Doc)."""
     gbp = client.get("gbp") or {}
     keyword = result_row.get("keyword")
@@ -148,6 +164,7 @@ def build_snapshot(client: dict, result_row: dict, analytics: dict) -> dict:
         result_row.get("competitors_above"), weak, analytics.get("azimuth_offset_deg", 0.0),
     )
     return {
+        "weak_area_locations": weak_area_names(weak_locations),
         "client": {
             "name": client.get("name"),
             "keyword": keyword,
@@ -227,6 +244,7 @@ Top 2–3 strongest sectors (lowest avg_rank) from sectors_overall, as bullets w
 
 ## Geographic Weaknesses (Directions & Distance)
 Weakest sectors (highest avg_rank) from sectors_overall; flag any with Top-3 coverage < 20%. Note the ring(s) where performance degrades most, with simple decay bullets per direction.
+If `weak_area_locations` is non-empty, add a short "Weakest nearby areas" bullet list naming those real towns/cities (with their weak-pin counts) so the weak zones are concrete places, not just compass directions. If it's empty, omit that list entirely (do not invent place names).
 
 ### Competitor Notes (Who Beats You Here)
 For each weak sector, the competitors that consistently rank higher (from weak_sector_competitors), as a scannable bullet list. Then 3–5 sentences tying weak zones to those competitors' advantages (review volume, category, name keywords).
@@ -318,7 +336,21 @@ async def generate_report_for_result(client: dict, scan_row: dict, result_row: d
         logger.warning("maps_octant_pins_failed", extra={"error": str(exc)})
         octant_pins = {"ok": False, "reason": f"octant_error: {exc}", "points": []}
 
-    snapshot = build_snapshot(client, result_row, analytics)
+    # Reverse-geocode the weak zones (octant pins + weak grid cells) to real city
+    # names. Best-effort: a missing key/quota leaves the report otherwise intact.
+    try:
+        weak_locations = await maps_geocode.build_weak_locations(
+            result_row.get("rank_grid") or [],
+            scan_row.get("center_lat"), scan_row.get("center_lng"),
+            octant_pins.get("points") or [],
+            azimuth_offset_deg=analytics.get("azimuth_offset_deg", 0.0),
+            supabase=get_supabase(),
+        )
+    except Exception as exc:  # geocoding must never sink the report
+        logger.warning("maps_weak_locations_failed", extra={"error": str(exc)})
+        weak_locations = {"geocoded": False, "octant_pins": octant_pins.get("points") or [], "weak_areas": []}
+
+    snapshot = build_snapshot(client, result_row, analytics, weak_locations)
     llm = await _call_llm(snapshot)
 
     return {
@@ -328,6 +360,7 @@ async def generate_report_for_result(client: dict, scan_row: dict, result_row: d
         "report_weak_directions": llm.get("weak_directions"),
         "report_top_competitors": llm.get("top_competitors"),
         "report_octant_pins": octant_pins,
+        "report_weak_locations": weak_locations,
         "report_analytics": analytics,
         "report_generated_at": "now()",
     }
