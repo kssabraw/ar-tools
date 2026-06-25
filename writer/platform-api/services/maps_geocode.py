@@ -414,15 +414,29 @@ async def reverse_geocode_points(
 _FORWARD_CITY_TYPES = ("locality", "postal_town")
 
 
+def _extract_bounds(geometry: dict) -> Optional[dict]:
+    """A place's footprint as {ne_lat, ne_lng, sw_lat, sw_lng}. Prefers the real
+    `bounds`; falls back to the always-present `viewport`. None if neither parses."""
+    for key in ("bounds", "viewport"):
+        box = geometry.get(key) or {}
+        ne, sw = box.get("northeast") or {}, box.get("southwest") or {}
+        if {"lat", "lng"} <= ne.keys() and {"lat", "lng"} <= sw.keys():
+            return {"ne_lat": ne["lat"], "ne_lng": ne["lng"],
+                    "sw_lat": sw["lat"], "sw_lng": sw["lng"]}
+    return None
+
+
 def parse_forward_result(results: Optional[list]) -> dict:
-    """Pull {matched, city, admin_area, formatted, place_id, result_types, lat,
-    lng} from a Google *forward*-geocode response. Unlike `parse_geocode_results`
-    (reverse) this keeps the top result's `types` and geometry so the caller can
-    verify a candidate is neighborhood-specific (not a fallback to the city
-    centroid) and inside the expected city."""
+    """Pull {matched, city, admin_area, country, formatted, place_id, result_types,
+    lat, lng, bounds} from a Google *forward*-geocode response. Unlike
+    `parse_geocode_results` (reverse) this keeps the top result's `types`, country,
+    centre, and footprint so the caller can verify a candidate is a real sub-area
+    geographically INSIDE the target city (country-agnostic — see
+    `local_seo_silo.place_is_within_city`)."""
     blank = {
-        "matched": False, "city": None, "admin_area": None, "formatted": None,
-        "place_id": None, "result_types": [], "lat": None, "lng": None,
+        "matched": False, "city": None, "admin_area": None, "country": None,
+        "formatted": None, "place_id": None, "result_types": [],
+        "lat": None, "lng": None, "bounds": None,
     }
     if not results:
         return blank
@@ -436,17 +450,44 @@ def parse_forward_result(results: Optional[list]) -> dict:
                     return c.get("long_name")
         return None
 
-    loc = ((first.get("geometry") or {}).get("location")) or {}
+    geometry = first.get("geometry") or {}
+    loc = geometry.get("location") or {}
     return {
         "matched": True,
         "city": _find(*_FORWARD_CITY_TYPES),
         "admin_area": _find("administrative_area_level_1"),
+        "country": _find("country"),
         "formatted": first.get("formatted_address"),
         "place_id": first.get("place_id"),
         "result_types": list(first.get("types") or []),
         "lat": loc.get("lat"),
         "lng": loc.get("lng"),
+        "bounds": _extract_bounds(geometry),
     }
+
+
+def point_in_bounds(lat: float, lng: float, bounds: Optional[dict], pad: float = 0.0) -> bool:
+    """Is (lat, lng) inside the {ne_lat, ne_lng, sw_lat, sw_lng} box? `pad` expands
+    the box by that fraction of its own span on each side (slack for sub-areas
+    right at the edge). Pure; unit-tested."""
+    if not bounds or lat is None or lng is None:
+        return False
+    sw_lat, ne_lat = bounds["sw_lat"], bounds["ne_lat"]
+    sw_lng, ne_lng = bounds["sw_lng"], bounds["ne_lng"]
+    dlat = (ne_lat - sw_lat) * pad
+    dlng = (ne_lng - sw_lng) * pad
+    return (sw_lat - dlat) <= lat <= (ne_lat + dlat) and (sw_lng - dlng) <= lng <= (ne_lng + dlng)
+
+
+def haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """Great-circle distance in km — the containment fallback when a city has no
+    bounds/viewport (rare). Pure; unit-tested."""
+    r = 6371.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlmb = math.radians(lng2 - lng1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
+    return 2 * r * math.asin(min(1.0, math.sqrt(a)))
 
 
 def _norm_query(query: str) -> str:
@@ -454,7 +495,10 @@ def _norm_query(query: str) -> str:
     return " ".join((query or "").lower().split())
 
 
-_FWD_FIELDS = ("matched", "city", "admin_area", "formatted", "place_id", "result_types", "lat", "lng")
+_FWD_FIELDS = ("matched", "city", "admin_area", "country", "formatted",
+               "place_id", "result_types", "lat", "lng", "bounds")
+# Subset persisted to / read from the geocode_forward_cache columns (1:1 column names).
+_FWD_CACHE_COLUMNS = "query_norm, " + ", ".join(_FWD_FIELDS)
 
 
 def _load_forward_cache(supabase, norms: list[str]) -> dict[str, dict]:
@@ -463,7 +507,7 @@ def _load_forward_cache(supabase, norms: list[str]) -> dict[str, dict]:
     try:
         rows = (
             supabase.table("geocode_forward_cache")
-            .select("query_norm, matched, city, admin_area, formatted, place_id, result_types, lat, lng")
+            .select(_FWD_CACHE_COLUMNS)
             .in_("query_norm", sorted(set(norms))).execute()
         ).data or []
     except Exception as exc:  # cache is best-effort — never sink geocoding
