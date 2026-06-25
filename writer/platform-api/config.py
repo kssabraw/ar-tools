@@ -107,6 +107,10 @@ class Settings(BaseSettings):
     #   - beatability: areas where weaker competitors (fewer reviews than the
     #     client) outrank us score higher — bounded to
     #     [`maps_beatability_min`, `maps_beatability_max`].
+    #   - cohesion: a weak pin surrounded by strong pins is likely noise, so its
+    #     score is scaled by the average weakness of its 8 immediate neighbors,
+    #     floored at `maps_cohesion_floor` (an isolated pin keeps that fraction;
+    #     a pin inside a genuine weak patch keeps ~full weight).
     # A city's priority is the sum of its pins' opportunity, normalized 0-100 per
     # keyword. `maps_weak_rank_threshold` is the Weak/Watch tier boundary.
     #
@@ -120,6 +124,7 @@ class Settings(BaseSettings):
     maps_unranked_effective_rank: int = 25  # rank an unranked pin stands in for, when scaling severity
     maps_beatability_min: float = 0.6
     maps_beatability_max: float = 1.4
+    maps_cohesion_floor: float = 0.3  # score an isolated weak pin keeps when all 8 neighbors are strong
     maps_geocode_max_cells: int = 100
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
