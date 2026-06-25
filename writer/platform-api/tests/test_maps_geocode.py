@@ -50,26 +50,41 @@ def test_extract_weak_cells_includes_rank_5_to_9_as_low_severity():
     assert by_rc[(0, 1)]["opportunity"] < by_rc[(0, 0)]["opportunity"]
 
 
-def test_cohesion_downweights_isolated_weak_pin():
-    # The SAME unranked pin at (1,2): once ringed by in-pack rank-1 pins (isolated
-    # → likely noise), once inside a patch of other weak pins (a real dead zone).
-    iso = [[1, 1, 1, 1, 1],
-           [1, 1, None, 1, 1],
-           [1, 1, 1, 1, 1],
-           [1, 1, 1, 1, 1],
-           [1, 1, 1, 1, 1]]
-    clu = [[1, None, None, None, 1],
-           [1, None, None, None, 1],
-           [1, None, 1, None, 1],
-           [1, 1, 1, 1, 1],
-           [1, 1, 1, 1, 1]]
-    o_iso = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(iso, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
-    o_clu = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(clu, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
-    # Same severity/proximity; only cohesion differs → isolated pin scores far lower.
-    assert o_iso["cohesion"] < o_clu["cohesion"]
-    assert o_iso["opportunity"] < o_clu["opportunity"] * 0.5
-    # Fully isolated → cohesion bottoms out at the floor (default 0.3).
-    assert o_iso["cohesion"] == 0.3
+def test_core_adjacency_downweights_pins_bordering_strong():
+    # The SAME unranked pin at (1,2): once ringed entirely by in-pack rank-1 pins
+    # (a fringe of strong coverage), once with weak neighbours (a real pocket).
+    bordering = [[1, 1, 1, 1, 1],
+                 [1, 1, None, 1, 1],
+                 [1, 1, 1, 1, 1],
+                 [1, 1, 1, 1, 1],
+                 [1, 1, 1, 1, 1]]
+    pocket = [[1, None, None, None, 1],
+              [1, None, None, None, 1],
+              [1, None, 1, None, 1],
+              [1, 1, 1, 1, 1],
+              [1, 1, 1, 1, 1]]
+    b = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(bordering, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
+    p = {(c["row"], c["col"]): c for c in mg.extract_weak_cells(pocket, CENTER_LAT, CENTER_LNG, floor=4)}[(1, 2)]
+    # Same severity/proximity; only core_adjacency differs.
+    assert b["core_adjacency"] < p["core_adjacency"]
+    assert b["core_adjacency"] == 0.5   # all 8 neighbours in the pack → floor
+    assert b["opportunity"] < p["opportunity"]
+
+
+def test_aggregate_weak_areas_drops_thin_suburbs():
+    # Springfield has 3 pins, Lincoln 1 — with min_pins=3 only Springfield is flagged.
+    cells = [
+        {"city": "Springfield", "admin_area": "IL", "rank": None, "octant": "N", "lat": 40.1, "lng": -75.0, "tier": "critical", "opportunity": 1.0},
+        {"city": "Springfield", "admin_area": "IL", "rank": 12, "octant": "N", "lat": 40.1, "lng": -75.0, "tier": "weak", "opportunity": 0.5},
+        {"city": "Springfield", "admin_area": "IL", "rank": 14, "octant": "N", "lat": 40.1, "lng": -75.0, "tier": "weak", "opportunity": 0.4},
+        {"city": "Lincoln", "admin_area": "IL", "rank": 7, "octant": "S", "lat": 39.9, "lng": -75.0, "tier": "watch", "opportunity": 0.1},
+    ]
+    areas, dropped = mg.aggregate_weak_areas(cells, min_pins=3)
+    assert [a["city"] for a in areas] == ["Springfield"]   # Lincoln (1 pin) dropped
+    assert dropped == 1
+    # min_pins=1 keeps both.
+    areas_all, dropped0 = mg.aggregate_weak_areas(cells, min_pins=1)
+    assert {a["city"] for a in areas_all} == {"Springfield", "Lincoln"} and dropped0 == 0
 
 
 def test_extract_weak_cells_empty_grid():
@@ -156,7 +171,7 @@ def test_aggregate_weak_areas_priority_and_tier():
         {"city": "Lincoln", "admin_area": "IL", "rank": 7, "octant": "S",
          "lat": 39.9, "lng": -75.0, "tier": "watch", "opportunity": 0.1},
     ]
-    areas = mg.aggregate_weak_areas(cells)
+    areas, _dropped = mg.aggregate_weak_areas(cells)
     # Ranked by summed opportunity (priority), not pin count.
     assert [a["city"] for a in areas] == ["Springfield", "Lincoln"]
     spr = areas[0]
