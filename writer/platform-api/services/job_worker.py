@@ -10,6 +10,7 @@ from config import settings
 from db.supabase_client import get_supabase
 from services.dataforseo_rank import run_dataforseo_rank_job
 from services.gsc_ingest import run_gsc_ingest_job, run_gsc_page_ingest_job
+from services.gsc_research import run_gsc_research_job
 from services.keyword_market import run_keyword_market_job
 from services.local_seo_silo import run_silo_plan_job
 from services.rank_report import run_rank_report_job
@@ -214,6 +215,8 @@ async def _process_job(job: dict) -> None:
         await run_dataforseo_rank_job(job)
     elif job_type == "keyword_market":
         await run_keyword_market_job(job)
+    elif job_type == "gsc_research":
+        await run_gsc_research_job(job)
     elif job_type == "rank_report":
         await run_rank_report_job(job)
     elif job_type == "serp_snapshot":

@@ -170,6 +170,13 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/maps` : undefined}
           cta="Open"
         />
+        <ActionCard
+          icon={<FileSearch size={22} />}
+          label="GSC Research"
+          description="Mine Search Console for opportunities — keyword cannibalization, quick wins (pos 6–10) & hidden wins (pos 11–30), enriched with CPC & volume."
+          to={id ? `/clients/${id}/gsc-research` : undefined}
+          cta="Open"
+        />
       </Section>
 
       {/* ── More tools (de-emphasized roadmap) ──────────────────────── */}
