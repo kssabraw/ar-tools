@@ -89,3 +89,34 @@ async def test_resolve_location_passes_through_when_lookup_unavailable():
             {"website_url": "x.com.au"}, "Melbourne, VIC", None
         )
     assert (name, code) == ("Melbourne, VIC", None)
+
+
+@pytest.mark.asyncio
+async def test_resolve_country_code_from_country_row():
+    # When the fetched list carries the country itself, use its code.
+    rows = [*_AU_LOCATIONS,
+            {"location_name": "Australia", "location_code": 2036,
+             "location_type": "Country", "country_iso_code": "AU"}]
+    with patch.object(locations_service, "_fetch_country_locations",
+                      new=AsyncMock(return_value=rows)):
+        code = await locations_service.resolve_country_code({"website_url": "x.com.au"})
+    assert code == 2036
+
+
+@pytest.mark.asyncio
+async def test_resolve_country_code_falls_back_to_static_map():
+    # No Country-typed row → fall back to the static map (AU → 2036).
+    with patch.object(locations_service, "_fetch_country_locations",
+                      new=AsyncMock(return_value=_AU_LOCATIONS)):
+        code = await locations_service.resolve_country_code({"website_url": "x.com.au"})
+    assert code == 2036
+
+
+@pytest.mark.asyncio
+async def test_resolve_country_code_unknown_country_is_none():
+    # Unknown ISO, empty list, not in the static map → None (caller keeps the
+    # city code rather than guessing a wrong country).
+    with patch.object(locations_service, "_fetch_country_locations",
+                      new=AsyncMock(return_value=[])):
+        code = await locations_service.resolve_country_code({}, country_iso="ZZ")
+    assert code is None

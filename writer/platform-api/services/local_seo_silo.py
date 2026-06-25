@@ -95,6 +95,11 @@ async def start_silo_plan(
     canonical_location, resolved_code = await locations_service.resolve_location(
         client, location, location_code
     )
+    # DataForSEO Labs (keyword expansion + competitor mining) only accepts a
+    # COUNTRY-level location code; the city code drives degraded task errors. Pin
+    # the country once at enqueue time so the worker uses it for the Labs calls
+    # (the city stays in the seed/SERP).
+    country_code = await locations_service.resolve_country_code(client)
 
     supabase = get_supabase()
     existing = (
@@ -120,6 +125,7 @@ async def start_silo_plan(
                     "keyword": keyword.strip(),
                     "location": canonical_location,
                     "location_code": resolved_code,
+                    "country_location_code": country_code,
                     "user_id": user_id,
                 },
             }
@@ -166,6 +172,7 @@ async def run_silo_plan_job(job: dict) -> None:
     keyword = (payload.get("keyword") or "").strip()
     location = (payload.get("location") or "").strip()
     location_code = payload.get("location_code")
+    country_location_code = payload.get("country_location_code")
     job_id = job["id"]
     supabase = get_supabase()
 
@@ -177,7 +184,9 @@ async def run_silo_plan_job(job: dict) -> None:
         if not keyword:
             raise ValueError("keyword_required")
 
-        plan = await asyncio.to_thread(_run_pipeline, keyword, location, location_code)
+        plan = await asyncio.to_thread(
+            _run_pipeline, keyword, location, location_code, country_location_code
+        )
         # Append a geocoding-verified "Neighborhoods" silo (within-city only). It's
         # an additive best-effort step, so a defensive failure here must never sink
         # an otherwise-good plan — belt-and-suspenders around its own internal
@@ -218,7 +227,10 @@ async def run_silo_plan_job(job: dict) -> None:
         ).eq("id", job_id).execute()
 
 
-def _run_pipeline(keyword: str, location: str, location_code: Optional[int]) -> dict:
+def _run_pipeline(
+    keyword: str, location: str, location_code: Optional[int],
+    country_location_code: Optional[int] = None,
+) -> dict:
     """Blocking: silo discovery + refinement via the Fanout pipeline.
 
     Returns {"per_silo": [{"silo": name, "pages": [keyword, ...]}],
@@ -233,7 +245,11 @@ def _run_pipeline(keyword: str, location: str, location_code: Optional[int]) -> 
     # geographically anchored and surface geo-modified keywords directly.
     seed = f"{keyword} {location}".strip() if location else keyword
     llm = get_llm()
-    dfs = get_dataforseo(location_code or _DEFAULT_LOCATION_CODE)
+    # DataForSEO Labs (keyword expansion + competitor mining) only accepts a
+    # country-level location code — a city/region code degrades every Labs call —
+    # so drive the client with the country code; the city stays in the seed. Fall
+    # back to the city code, then US, only when the country can't be resolved.
+    dfs = get_dataforseo(country_location_code or location_code or _DEFAULT_LOCATION_CODE)
 
     notes: list[str] = []
     disc = run_silo_discovery(
