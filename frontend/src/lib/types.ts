@@ -215,6 +215,7 @@ export interface HeroPoint {
 export interface RankLocation {
   location: string | null
   location_code: number | null
+  source?: 'auto' | 'manual' | null
 }
 
 export type FetchMode = 'off' | 'weekly' | 'monthly' | 'interval'

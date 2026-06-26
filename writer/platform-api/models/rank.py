@@ -183,6 +183,10 @@ class RankLocation(BaseModel):
     # detected from the client's website TLD).
     location: Optional[str] = None
     location_code: Optional[int] = None
+    # Provenance (response-only; the PUT body ignores it). 'manual' = a user
+    # picked it (never auto-overwritten); 'auto' = derived from the client's GBP;
+    # None = never set / national fallback.
+    source: Optional[Literal["auto", "manual"]] = None
 
 
 # Per-client DataForSEO rank-DATA refresh cadence. 'off' = manual only (the

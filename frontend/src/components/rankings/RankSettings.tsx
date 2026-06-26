@@ -163,9 +163,10 @@ function TrackingLocationCard({ clientId }: { clientId: string }) {
     <div style={{ ...card, marginBottom: 20 }}>
       <h2 style={sectionTitle}>Tracking location</h2>
       <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 12px', lineHeight: 1.6 }}>
-        The area used for <strong>DataForSEO live ranks</strong> and CPC/volume. Pick a city, region,
-        or country. Search Console metrics stay national (Google’s limitation). Leave it on
-        <strong> National</strong> to auto-detect the country from the client’s website.
+        The area used for <strong>DataForSEO live ranks</strong> and CPC/volume. It’s
+        <strong> auto-set from the client’s Google Business Profile</strong> when one is connected;
+        pick a city or region below to override. Search Console metrics stay national (Google’s
+        limitation).
       </p>
       <LocationAutocomplete
         clientId={clientId}
@@ -178,21 +179,29 @@ function TrackingLocationCard({ clientId }: { clientId: string }) {
       />
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10, fontSize: 12, color: '#64748b' }}>
         <MapPin size={13} color="#6366f1" />
-        {data?.location
-          ? <>Tracking in <strong style={{ color: '#0f172a' }}>{data.location}</strong>.</>
-          : <>National — auto-detected from the client’s website.</>}
-        {data?.location && (
+        {data?.location ? (
+          <>
+            Tracking in <strong style={{ color: '#0f172a' }}>{data.location}</strong>
+            {data.source === 'auto'
+              ? <span style={{ color: '#94a3b8' }}> · auto from Business Profile</span>
+              : <span style={{ color: '#94a3b8' }}> · set manually</span>}
+          </>
+        ) : (
+          <>National — no Business Profile location found; using the client’s website country.</>
+        )}
+        {data?.location && data.source === 'manual' && (
           <button style={{ ...outlineBtn, padding: '3px 9px', fontSize: 12 }}
             onClick={() => { setDraft(''); setMut.mutate({ location: null, location_code: null }) }}
-            disabled={setMut.isPending}>
-            Use national
+            disabled={setMut.isPending}
+            title="Clear the manual override and revert to the Business Profile location">
+            Reset to auto
           </button>
         )}
         {setMut.isPending && <span style={{ color: '#94a3b8' }}>saving…</span>}
       </div>
       <p style={{ fontSize: 11, color: '#94a3b8', margin: '8px 0 0' }}>
-        Pick a suggestion so the area is recognized. Changing it re-fetches ranks &amp; market data for
-        the new location in the background.
+        Pick a suggestion so the area is recognized. Setting one here pins it (it won’t be
+        auto-changed); it re-fetches ranks &amp; market data for the new location in the background.
       </p>
     </div>
   )
