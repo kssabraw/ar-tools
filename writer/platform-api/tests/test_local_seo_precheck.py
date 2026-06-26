@@ -53,6 +53,27 @@ def test_canonical_url_key_normalizes():
 
 
 # ---------------------------------------------------------------------------
+# _ranking_queries — bare term + geo-modified term
+# ---------------------------------------------------------------------------
+def test_ranking_queries_appends_geo_term():
+    assert p._ranking_queries("roof restoration", "Melbourne,Victoria,Australia") == [
+        "roof restoration",
+        "roof restoration Melbourne",
+    ]
+
+
+def test_ranking_queries_no_duplicate_when_city_already_in_keyword():
+    assert p._ranking_queries("roof restoration melbourne", "Melbourne,Victoria,Australia") == [
+        "roof restoration melbourne"
+    ]
+
+
+def test_ranking_queries_handles_missing_pieces():
+    assert p._ranking_queries("plumber", "") == ["plumber"]
+    assert p._ranking_queries("", "Melbourne") == []
+
+
+# ---------------------------------------------------------------------------
 # _build_variants
 # ---------------------------------------------------------------------------
 def test_build_variants_trims_and_drops_empty():
