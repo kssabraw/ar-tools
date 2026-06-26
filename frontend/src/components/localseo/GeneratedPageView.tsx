@@ -7,6 +7,7 @@ import type { LocalSeoPageDetail, SocialPostsResult } from './types'
 import { RelatedPagesList } from './RelatedPagesList'
 import { useSiloPlan } from './useSiloPlan'
 import { Spinner } from './Spinner'
+import { FeaturedImagePicker } from '../FeaturedImagePicker'
 import {
   backLink, card, downloadFile, errorBox, formatHtml, htmlToText, outlineBtn,
   primaryBtn, relativeTime, scoreBg, scoreBorder, scoreColor, statusLabel, wordCount,
@@ -43,6 +44,12 @@ export function GeneratedPageView({
   const [wpPublishing, setWpPublishing] = useState(false)
   const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
   const [wpUrl, setWpUrl] = useState<string | null>(page.published_url ?? null)
+  const [featuredImageUrl, setFeaturedImageUrl] = useState<string | null>(page.featured_image_url ?? null)
+
+  const handleFeaturedImage = async (url: string | null) => {
+    await localSeoApi.setFeaturedImage(page.id, url)
+    setFeaturedImageUrl(url)
+  }
 
   const handlePublish = async () => {
     setPublishing(true)
@@ -384,6 +391,10 @@ export function GeneratedPageView({
             {copiedHtml ? <><Check size={14} /> Copied</> : <><Copy size={14} /> Copy HTML</>}
           </button>
           <button style={{ ...outlineBtn, flex: 1 }} onClick={downloadHtml}><Download size={14} /> Download</button>
+        </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>Featured image</span>
+          <FeaturedImagePicker value={featuredImageUrl} onChange={handleFeaturedImage} />
         </div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <button style={outlineBtn} onClick={handlePublish} disabled={publishing}>

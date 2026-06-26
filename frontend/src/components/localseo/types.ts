@@ -40,6 +40,7 @@ export interface LocalSeoPageDetail extends LocalSeoPageListItem {
   published_doc_id: string | null
   published_url: string | null
   published_at: string | null
+  featured_image_url: string | null
   updated_at: string
 }
 

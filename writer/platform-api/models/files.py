@@ -17,3 +17,7 @@ class FileUploadResponse(BaseModel):
 
 class LogoUploadResponse(BaseModel):
     logo_url: str
+
+
+class ImageUploadResponse(BaseModel):
+    url: str

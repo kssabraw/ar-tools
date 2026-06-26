@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunListResponse } from '../lib/types'
 import { Download, Copy, FileText, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 import { sectionsToMarkdown } from '../lib/sectionsToMarkdown'
 import { sectionsToHtml } from '../lib/sectionsToHtml'
 import { FeedbackButton } from '../components/FeedbackButton'
+import { FeaturedImagePicker } from '../components/FeaturedImagePicker'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -42,6 +43,13 @@ function ArticleCard({ run }: { run: any }) {
       setWpUrl(link)
       if (link) window.open(link, '_blank')
     },
+  })
+
+  const qc = useQueryClient()
+  const featuredImageMutation = useMutation({
+    mutationFn: (url: string | null) =>
+      api.put<{ featured_image_url: string | null }>(`/runs/${run.id}/featured-image`, { url }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['run', run.id] }),
   })
 
   const { data: detail, isLoading } = useQuery({
@@ -193,6 +201,15 @@ function ArticleCard({ run }: { run: any }) {
         <div style={{ marginTop: 16 }}>
           {isLoading && <div style={{ color: '#94a3b8', fontSize: 13 }}>Loading article…</div>}
           {!isLoading && !markdown && <div style={{ color: '#94a3b8', fontSize: 13 }}>Article content not available.</div>}
+          {!isLoading && detail && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>Featured image</span>
+              <FeaturedImagePicker
+                value={detail.featured_image_url ?? null}
+                onChange={(url) => featuredImageMutation.mutateAsync(url).then(() => undefined)}
+              />
+            </div>
+          )}
           {markdown && (
             <pre style={{
               background: '#f8fafc',

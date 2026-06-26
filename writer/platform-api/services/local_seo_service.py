@@ -688,6 +688,20 @@ def delete_page(page_id: str) -> None:
     logger.info("local_seo.page_deleted", extra={"page_id": page_id})
 
 
+def set_featured_image(page_id: str, url: Optional[str]) -> dict:
+    """Attach (or clear, when url is falsy) a page's featured/hero image."""
+    supabase = get_supabase()
+    res = (
+        supabase.table("local_seo_pages")
+        .update({"featured_image_url": url or None})
+        .eq("id", page_id)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="local_seo_page_not_found")
+    return {"featured_image_url": url or None}
+
+
 async def _publish_page_to_wordpress(
     page: dict, client: dict, user_id: str, status: str
 ) -> dict:
@@ -703,6 +717,7 @@ async def _publish_page_to_wordpress(
             html=html,
             status=status,
             content_type="local_seo_page",
+            featured_image_url=page.get("featured_image_url"),
         )
     except WordPressPublishError as exc:
         client_errors = {
@@ -781,6 +796,12 @@ async def publish_page(
     markdown = html_to_markdown(page.get("content_html") or "")
     if not markdown.strip():
         raise HTTPException(status_code=422, detail="page_is_empty")
+
+    # Render the hero image at the top of the doc (the WordPress path handles it
+    # as the post's featured image instead).
+    featured = page.get("featured_image_url")
+    if featured:
+        markdown = f"![]({featured})\n\n{markdown}"
 
     title = page.get("page_title") or f"{page.get('keyword', '')} — {client_res.data['name']}"
     body = {"folder_id": folder_id, "title": title, "content": markdown}

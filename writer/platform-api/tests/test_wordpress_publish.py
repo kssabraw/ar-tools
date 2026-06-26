@@ -223,3 +223,20 @@ async def test_sideload_disabled_skips_media(monkeypatch):
     await publish_to_wordpress(client=_CLIENT, title="T", html=html, sideload_images=False)
     assert "fetched" not in capture
     assert "cdn.example.com" in capture["json"]["content"]
+
+
+@pytest.mark.asyncio
+async def test_explicit_featured_image_is_uploaded_and_set(monkeypatch):
+    capture = {}
+    monkeypatch.setattr(
+        wordpress_publish.httpx, "AsyncClient", lambda *a, **k: _SideloadClient(capture)
+    )
+    # Body has no images; the explicit featured image is fetched + set.
+    await publish_to_wordpress(
+        client=_CLIENT,
+        title="T",
+        html="<p>no imgs</p>",
+        featured_image_url="https://cdn.example.com/hero.jpg",
+    )
+    assert capture["fetched"] == ["https://cdn.example.com/hero.jpg"]
+    assert capture["json"]["featured_media"] == 99

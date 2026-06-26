@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from typing import Literal
+from typing import Literal, Optional
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -28,6 +28,30 @@ class PublishRequest(BaseModel):
     destination: Literal["google_docs", "wordpress"] = "google_docs"
     # WordPress only: draft (default, safe) or publish (live).
     status: Literal["draft", "publish"] = "draft"
+
+
+class FeaturedImageRequest(BaseModel):
+    # The public wordpress_images URL to attach, or null/empty to clear it.
+    url: Optional[str] = None
+
+
+@router.put("/runs/{run_id}/featured-image", response_model=dict)
+async def set_run_featured_image(
+    run_id: UUID,
+    body: FeaturedImageRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Attach (or clear) a run's featured/hero image."""
+    supabase = get_supabase()
+    result = (
+        supabase.table("runs")
+        .update({"featured_image_url": body.url or None})
+        .eq("id", str(run_id))
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="run_not_found")
+    return {"featured_image_url": body.url or None}
 
 
 def _sections_to_markdown(article: list[dict]) -> str:
@@ -112,7 +136,7 @@ async def publish_run(
 
     run_result = (
         supabase.table("runs")
-        .select("id, client_id, keyword, status, content_type")
+        .select("id, client_id, keyword, status, content_type, featured_image_url")
         .eq("id", str(run_id))
         .single()
         .execute()
@@ -141,6 +165,7 @@ async def publish_run(
 
     markdown, html = _resolve_content(supabase, run_id, content_type)
     title = f"{run['keyword']} — {client['name']}"
+    featured_image_url = run.get("featured_image_url")
 
     if body.destination == "wordpress":
         try:
@@ -150,6 +175,7 @@ async def publish_run(
                 html=html,
                 status=body.status,
                 content_type=content_type,
+                featured_image_url=featured_image_url,
             )
         except WordPressPublishError as exc:
             # Client-fixable config/validation errors are 422; upstream/transport
@@ -193,8 +219,11 @@ async def publish_run(
             status_code=422,
             detail="missing_google_drive_folder_id: client has no Drive folder configured",
         )
+    # Render the hero image at the top of the doc (WordPress handles it as the
+    # post's featured image instead, so it's only injected on the Docs path).
+    doc_markdown = f"![]({featured_image_url})\n\n{markdown}" if featured_image_url else markdown
     try:
-        result = await create_google_doc(folder_id, title, markdown)
+        result = await create_google_doc(folder_id, title, doc_markdown)
     except GoogleDocError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

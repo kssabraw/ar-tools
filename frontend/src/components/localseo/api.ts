@@ -146,4 +146,11 @@ export const localSeoApi = {
       edit_url?: string | null
       status?: string
     }>(`/local-seo/pages/${pageId}/publish`, opts),
+
+  // Attach (or clear) a page's featured/hero image (public wordpress_images URL).
+  setFeaturedImage: (pageId: string, url: string | null) =>
+    api.put<{ featured_image_url: string | null }>(
+      `/local-seo/pages/${pageId}/featured-image`,
+      { url },
+    ),
 }

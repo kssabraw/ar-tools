@@ -115,6 +115,28 @@ async def _upload_media(
     return {"id": data.get("id"), "source_url": data.get("source_url")}
 
 
+async def _sideload_one(
+    http: httpx.AsyncClient, rest_base: str, auth: str, url: str
+) -> Optional[dict]:
+    """Download a single external image URL and upload it to the WP media
+    library; returns {id, source_url} or None on any failure (best-effort)."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    try:
+        resp = await http.get(url, follow_redirects=True)
+        resp.raise_for_status()
+        img_bytes = resp.content
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.warning("wordpress_image_fetch_failed", extra={"src": url, "error": str(exc)})
+        return None
+    if len(img_bytes) > settings.wordpress_media_max_bytes:
+        logger.warning("wordpress_image_too_large", extra={"src": url, "bytes": len(img_bytes)})
+        return None
+    filename, mime = _filename_and_mime(url, resp.headers.get("content-type"))
+    return await _upload_media(http, rest_base, auth, img_bytes, filename, mime)
+
+
 async def _sideload_images(
     http: httpx.AsyncClient, rest_base: str, auth: str, html: str, site_host: str
 ) -> tuple[str, Optional[int]]:
@@ -194,6 +216,7 @@ async def publish_to_wordpress(
     status: str = "draft",
     content_type: str = "blog_post",
     sideload_images: bool = True,
+    featured_image_url: Optional[str] = None,
 ) -> dict:
     """Create a post/page on the client's WordPress site; returns
     {post_id, link, status, edit_link, featured_media}.
@@ -201,9 +224,11 @@ async def publish_to_wordpress(
     `client` is the clients row (must carry wordpress_site_url/username/
     app_password). `html` is the rendered post body. When `sideload_images` is
     set, any images the content references are uploaded to the WP media library,
-    the <img> srcs rewritten to the WP-hosted URLs, and the first becomes the
-    post's featured image. Raises WordPressPublishError on missing config, a bad
-    status, or a transport/API failure."""
+    the <img> srcs rewritten to the WP-hosted URLs, and (absent an explicit
+    `featured_image_url`) the first becomes the post's featured image. An explicit
+    `featured_image_url` is uploaded and set as the featured image regardless of
+    body images. Raises WordPressPublishError on missing config, a bad status, or
+    a transport/API failure."""
     if status not in ALLOWED_STATUSES:
         raise WordPressPublishError("invalid_status")
     if not client_is_configured(client):
@@ -224,9 +249,16 @@ async def publish_to_wordpress(
             if sideload_images:
                 # Best-effort: never let a media failure abort the publish.
                 try:
-                    html, featured_id = await _sideload_images(
+                    # An explicit featured image takes precedence over body images.
+                    if featured_image_url:
+                        media = await _sideload_one(http, rest_base, auth, featured_image_url)
+                        if media:
+                            featured_id = media.get("id")
+                    html, body_featured = await _sideload_images(
                         http, rest_base, auth, html, site_host
                     )
+                    if featured_id is None:
+                        featured_id = body_featured
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("wordpress_sideload_failed", extra={"error": str(exc)})
 

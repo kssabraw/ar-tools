@@ -144,6 +144,9 @@ class RunDetail(BaseModel):
     # module_output is available. None for runs that haven't reached
     # the SIE stage yet.
     sie_terms_by_category: Optional[SIETermsByCategory] = None
+    # Manually-attached featured/hero image (public wordpress_images URL), set on
+    # the article view and used as the WP featured image at publish time.
+    featured_image_url: Optional[str] = None
 
 
 class RunCreateResponse(BaseModel):

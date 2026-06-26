@@ -12,6 +12,7 @@ import { sectionsToMarkdown, toTitleCase } from '../lib/sectionsToMarkdown'
 import { sectionsToHtml, escapeHtml } from '../lib/sectionsToHtml'
 import { FeedbackButton } from '../components/FeedbackButton'
 import { ServicePageRunView } from '../components/ServicePageRunView'
+import { FeaturedImagePicker } from '../components/FeaturedImagePicker'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -312,6 +313,11 @@ export function RunDetail() {
       setWpUrl(link)
       if (link) window.open(link, '_blank')
     },
+  })
+  const featuredImageMutation = useMutation({
+    mutationFn: (url: string | null) =>
+      api.put<{ featured_image_url: string | null }>(`/runs/${id}/featured-image`, { url }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['run', id] }),
   })
 
   if (isLoading) return <div style={{ padding: 40, color: '#64748b' }}>Loading…</div>
@@ -642,6 +648,13 @@ export function RunDetail() {
                 </div>
               )}
             </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid #f1f5f9' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>Featured image</span>
+            <FeaturedImagePicker
+              value={run.featured_image_url ?? null}
+              onChange={(url) => featuredImageMutation.mutateAsync(url).then(() => undefined)}
+            />
           </div>
           {(publishMutation.isError || wpPublishMutation.isError) && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>

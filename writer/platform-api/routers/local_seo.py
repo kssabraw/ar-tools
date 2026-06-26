@@ -14,7 +14,7 @@ GET / DELETE routes are instant and stay plain JSON.
 from __future__ import annotations
 
 import logging
-from typing import Literal
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -305,3 +305,17 @@ async def publish_local_seo_page(
     return await local_seo_service.publish_page(
         str(page_id), auth["user_id"], destination=body.destination, status=body.status
     )
+
+
+class FeaturedImageRequest(BaseModel):
+    url: Optional[str] = None  # null/empty clears the featured image
+
+
+@router.put("/local-seo/pages/{page_id}/featured-image")
+async def set_local_seo_featured_image(
+    page_id: UUID,
+    body: FeaturedImageRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Attach (or clear) a Local SEO page's featured/hero image."""
+    return local_seo_service.set_featured_image(str(page_id), body.url)

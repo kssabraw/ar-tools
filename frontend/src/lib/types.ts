@@ -460,6 +460,8 @@ export interface RunDetail {
     // Latest score (nlp-api national mode) for a service_page run.
     service_score?: ModuleOutput | null
   }
+  // Manually-attached featured/hero image (public wordpress_images URL).
+  featured_image_url?: string | null
 }
 
 export interface Profile {

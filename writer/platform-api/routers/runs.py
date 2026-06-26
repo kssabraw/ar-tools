@@ -250,6 +250,7 @@ async def get_run(
         module_outputs=module_outputs,
         sie_terms_by_category=sie_terms_by_category,
         services=run.get("services") or [],
+        featured_image_url=run.get("featured_image_url"),
     )
 
 
