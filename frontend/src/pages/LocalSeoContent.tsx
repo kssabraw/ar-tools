@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowRight, Building2, CheckCircle2, ChevronDown, ChevronRight, MapPin, Search, Sparkles, Trash2,
+  ArrowLeft, ArrowRight, Building2, CheckCircle2, ChevronDown, ChevronRight, MapPin, RotateCcw, Search, Sparkles, Trash2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
@@ -47,11 +47,18 @@ export function LocalSeoContent() {
     enabled: Boolean(clientId),
   })
 
-  const [tab, setTab] = useState<'new' | 'plan' | 'reopt' | 'saved'>(
-    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / reopt).
+  const { data: draftPages, isLoading: loadingDrafts } = useQuery<LocalSeoPageListItem[]>({
+    queryKey: ['local-seo-drafts', clientId],
+    queryFn: () => localSeoApi.listDrafts(clientId),
+    enabled: Boolean(clientId),
+  })
+
+  const [tab, setTab] = useState<'new' | 'plan' | 'reopt' | 'saved' | 'drafts'>(
+    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / reopt / drafts).
     searchParams.get('tab') === 'saved' ? 'saved'
       : searchParams.get('tab') === 'plan' ? 'plan'
       : searchParams.get('tab') === 'reopt' ? 'reopt'
+      : searchParams.get('tab') === 'drafts' ? 'drafts'
       : 'new',
   )
   const [view, setView] = useState<View>({ kind: 'form' })
@@ -139,7 +146,10 @@ export function LocalSeoContent() {
     bulkAbortRef.current?.abort()
   }, [])
 
-  const refreshSaved = () => queryClient.invalidateQueries({ queryKey: ['local-seo-pages', clientId] })
+  const refreshSaved = () => {
+    queryClient.invalidateQueries({ queryKey: ['local-seo-pages', clientId] })
+    queryClient.invalidateQueries({ queryKey: ['local-seo-drafts', clientId] })
+  }
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -428,7 +438,7 @@ export function LocalSeoContent() {
 
       {/* Tabs */}
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-        {(['new', 'plan', 'reopt', 'saved'] as const).map(t => (
+        {(['new', 'plan', 'reopt', 'saved', 'drafts'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -437,7 +447,7 @@ export function LocalSeoContent() {
               background: tab === t ? '#fff' : 'transparent', color: tab === t ? '#0f172a' : '#64748b',
               boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
             }}
-          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'reopt' ? 'Reoptimize' : 'Saved Pages'}</button>
+          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}`}</button>
         ))}
       </div>
 
@@ -447,6 +457,15 @@ export function LocalSeoContent() {
           loading={loadingSaved}
           onOpen={openSaved}
           onDelete={async (pid) => { await localSeoApi.deletePage(pid); refreshSaved() }}
+        />
+      ) : tab === 'drafts' ? (
+        <DraftsList
+          pages={draftPages ?? []}
+          loading={loadingDrafts}
+          onOpen={openSaved}
+          onRestore={async (pid) => { await localSeoApi.restorePage(pid); refreshSaved() }}
+          onPurge={async (pid) => { await localSeoApi.purgePage(pid); refreshSaved() }}
+          onPurgeAll={async () => { await localSeoApi.purgeDrafts(clientId); refreshSaved() }}
         />
       ) : tab === 'reopt' ? (
         <ReoptimizeView
@@ -812,7 +831,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
           <button style={outlineBtn} onClick={() => onOpen(p.id)}>View <ArrowRight size={13} /></button>
           {confirmId === p.id ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#64748b' }}>
-              Delete?
+              Move to Drafts?
               <button onClick={() => handleDelete(p.id)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', fontWeight: 600 }}>Yes</button>
               <button onClick={() => setConfirmId(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}>No</button>
             </span>
@@ -820,7 +839,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
             <button
               onClick={() => setConfirmId(p.id)}
               disabled={deletingId === p.id}
-              title="Delete"
+              title="Move to Drafts"
               style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', display: 'inline-flex', alignItems: 'center' }}
             >
               {deletingId === p.id ? <Spinner size={14} /> : <Trash2 size={15} />}
@@ -828,6 +847,107 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
           )}
         </div>
       ))}
+    </div>
+  )
+}
+
+// The Drafts (recycle bin) tab: soft-deleted pages, each restorable or
+// permanently deletable, plus an "Empty drafts" action for the whole bin.
+function DraftsList({ pages, loading, onOpen, onRestore, onPurge, onPurgeAll }: {
+  pages: LocalSeoPageListItem[]
+  loading: boolean
+  onOpen: (id: string) => void
+  onRestore: (id: string) => Promise<void>
+  onPurge: (id: string) => Promise<void>
+  onPurgeAll: () => Promise<void>
+}) {
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [confirmAll, setConfirmAll] = useState(false)
+  const [purgingAll, setPurgingAll] = useState(false)
+
+  const run = async (pid: string, fn: (id: string) => Promise<void>) => {
+    setConfirmId(null)
+    setBusyId(pid)
+    try { await fn(pid) } finally { setBusyId(null) }
+  }
+  const handlePurgeAll = async () => {
+    setConfirmAll(false)
+    setPurgingAll(true)
+    try { await onPurgeAll() } finally { setPurgingAll(false) }
+  }
+
+  if (loading) {
+    return <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#64748b', fontSize: 14, padding: 16 }}><Spinner size={16} /> Loading drafts…</div>
+  }
+  if (pages.length === 0) {
+    return <p style={{ fontSize: 14, color: '#94a3b8', textAlign: 'center', padding: 32 }}>No drafts. Deleting a page from Saved Pages moves it here, where you can restore it or delete it for good.</p>
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
+          {pages.length} draft{pages.length === 1 ? '' : 's'} — deleted pages you can restore or permanently remove.
+        </p>
+        {confirmAll ? (
+          <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#64748b' }}>
+            Permanently delete all {pages.length}?
+            <button onClick={handlePurgeAll} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', fontWeight: 600 }}>Yes, delete all</button>
+            <button onClick={() => setConfirmAll(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}>No</button>
+          </span>
+        ) : (
+          <button
+            onClick={() => setConfirmAll(true)}
+            disabled={purgingAll}
+            style={{ marginLeft: 'auto', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#dc2626', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+          >
+            {purgingAll ? <Spinner size={12} /> : <Trash2 size={13} />} Empty drafts
+          </button>
+        )}
+      </div>
+
+      <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+        {pages.map((p, i) => (
+          <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: '#fff', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.page_title || p.keyword}</span>
+                {p.composite_score != null && (
+                  <span style={{ fontSize: 11, fontWeight: 700, color: scoreColor(p.composite_score) }}>{Math.round(p.composite_score)}/100</span>
+                )}
+              </div>
+              <p style={{ fontSize: 12, color: '#94a3b8', margin: '2px 0 0' }}>
+                {p.keyword} · {p.location.split(',')[0]}
+                <span style={{ marginLeft: 6, opacity: 0.7 }}>deleted {p.deleted_at ? relativeTime(p.deleted_at) : ''}</span>
+              </p>
+            </div>
+            <button style={outlineBtn} onClick={() => onOpen(p.id)}>View <ArrowRight size={13} /></button>
+            <button
+              style={{ ...outlineBtn, color: '#16a34a', borderColor: '#bbf7d0' }}
+              onClick={() => run(p.id, onRestore)}
+              disabled={busyId === p.id}
+            >
+              {busyId === p.id ? <Spinner size={13} /> : <RotateCcw size={13} />} Restore
+            </button>
+            {confirmId === p.id ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#64748b' }}>
+                Delete forever?
+                <button onClick={() => run(p.id, onPurge)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#dc2626', fontWeight: 600 }}>Yes</button>
+                <button onClick={() => setConfirmId(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}>No</button>
+              </span>
+            ) : (
+              <button
+                onClick={() => setConfirmId(p.id)}
+                disabled={busyId === p.id}
+                title="Delete permanently"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', display: 'inline-flex', alignItems: 'center' }}
+              >
+                <Trash2 size={15} />
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

@@ -753,6 +753,7 @@ def _to_items(
             supabase.table("local_seo_pages")
             .select("keyword, published_doc_url")
             .eq("client_id", client_id)
+            .is_("deleted_at", "null")  # drafted/trashed pages don't count as "found"
             .execute()
             .data
             or []
