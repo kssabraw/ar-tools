@@ -15,6 +15,10 @@ interface FormData {
   github_repo: string
   github_branch: string
   github_content_path: string
+  wordpress_site_url: string
+  wordpress_username: string
+  wordpress_app_password: string
+  wordpress_app_password_set: boolean
   logo_url: string
   gsc_property: string
   business_location: string
@@ -32,6 +36,7 @@ interface FormData {
 const empty: FormData = {
   name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
   github_repo: '', github_branch: '', github_content_path: '',
+  wordpress_site_url: '', wordpress_username: '', wordpress_app_password: '', wordpress_app_password_set: false,
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
 }
@@ -108,6 +113,10 @@ export function ClientForm() {
         github_repo: existing.github_repo ?? '',
         github_branch: existing.github_branch ?? '',
         github_content_path: existing.github_content_path ?? '',
+        wordpress_site_url: existing.wordpress_site_url ?? '',
+        wordpress_username: existing.wordpress_username ?? '',
+        wordpress_app_password: '',
+        wordpress_app_password_set: existing.wordpress_app_password_set ?? false,
         logo_url: existing.logo_url ?? '',
         gsc_property: existing.gsc_property ?? '',
         business_location: existing.business_location ?? '',
@@ -168,6 +177,11 @@ export function ClientForm() {
         github_repo: form.github_repo || null,
         github_branch: form.github_branch || null,
         github_content_path: form.github_content_path || null,
+        wordpress_site_url: form.wordpress_site_url.trim() || null,
+        wordpress_username: form.wordpress_username.trim() || null,
+        // Only send the password when the user typed a new one; an empty field
+        // leaves the stored secret untouched (omit the key entirely).
+        ...(form.wordpress_app_password ? { wordpress_app_password: form.wordpress_app_password } : {}),
         logo_url: form.logo_url || null,
         gsc_property: form.gsc_property || null,
         business_location: form.business_location || null,
@@ -441,6 +455,51 @@ export function ClientForm() {
           />
           <p style={hintStyle}>
             Find the ID in the folder's URL — the part after <code>/folders/</code>. Make sure your Apps Script account has Editor access.
+          </p>
+        </div>
+
+        <div style={sectionStyle}>
+          <h2 style={sectionTitle}>WordPress Publishing</h2>
+          <p style={descStyle}>
+            Optional. Publish finished articles and pages straight to this client's WordPress site using an{' '}
+            <strong>Application Password</strong> (WordPress 5.6+, no plugin). In WP admin go to{' '}
+            <code>Users → Profile → Application Passwords</code>, create one, and paste it below.
+          </p>
+          <label style={labelStyle}>Site URL</label>
+          <input
+            type="url"
+            value={form.wordpress_site_url}
+            onChange={set('wordpress_site_url')}
+            placeholder="https://acmehvac.com"
+            style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+          />
+          <p style={hintStyle}>The site root (must be HTTPS). The REST endpoint <code>/wp-json/wp/v2</code> is derived from it.</p>
+          <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Username</label>
+              <input
+                value={form.wordpress_username}
+                onChange={set('wordpress_username')}
+                placeholder="editor"
+                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Application Password</label>
+              <input
+                type="password"
+                value={form.wordpress_app_password}
+                onChange={set('wordpress_app_password')}
+                placeholder={form.wordpress_app_password_set ? '•••• stored — type to replace' : 'xxxx xxxx xxxx xxxx xxxx xxxx'}
+                autoComplete="new-password"
+                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' }}
+              />
+            </div>
+          </div>
+          <p style={hintStyle}>
+            {form.wordpress_app_password_set
+              ? 'A password is stored. Leave blank to keep it, or type a new one to replace it.'
+              : 'Stored securely and never shown again. Spaces are fine — paste it exactly as WordPress displays it.'}
           </p>
         </div>
 

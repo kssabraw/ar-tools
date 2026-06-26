@@ -23,6 +23,7 @@ from config import settings
 from db.supabase_client import get_supabase
 from services import analysis_cache, locations_service
 from services.html_to_markdown import html_to_markdown
+from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
 
 logger = logging.getLogger(__name__)
 
@@ -687,16 +688,82 @@ def delete_page(page_id: str) -> None:
     logger.info("local_seo.page_deleted", extra={"page_id": page_id})
 
 
-async def publish_page(page_id: str, user_id: str) -> dict:
+async def _publish_page_to_wordpress(
+    page: dict, client: dict, user_id: str, status: str
+) -> dict:
+    """Publish a Local SEO page straight to the client's WordPress site as a
+    page (the content_html is already valid HTML — no conversion needed)."""
+    supabase = get_supabase()
+    title = page.get("page_title") or f"{page.get('keyword', '')} — {client.get('name', '')}"
+    html = page.get("content_html") or ""
+    try:
+        result = await publish_to_wordpress(
+            client=client,
+            title=title,
+            html=html,
+            status=status,
+            content_type="local_seo_page",
+        )
+    except WordPressPublishError as exc:
+        client_errors = {
+            "wordpress_not_configured",
+            "invalid_wordpress_site_url",
+            "wordpress_site_url_must_be_https",
+            "invalid_status",
+            "content_is_empty",
+        }
+        code = 422 if str(exc) in client_errors else 502
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+
+    supabase.table("local_seo_pages").update({
+        "published_url": result.get("link"),
+        "published_at": "now()",
+    }).eq("id", page["id"]).execute()
+    logger.info(
+        "local_seo.page_published_wordpress",
+        extra={"page_id": page["id"], "post_id": result.get("post_id"), "user_id": user_id},
+    )
+    return {
+        "success": True,
+        "destination": "wordpress",
+        "post_id": result.get("post_id"),
+        "url": result.get("link"),
+        "edit_url": result.get("edit_link"),
+        "status": result.get("status"),
+    }
+
+
+async def publish_page(
+    page_id: str,
+    user_id: str,
+    destination: str = "google_docs",
+    status: str = "draft",
+) -> dict:
     """Publish a saved Local SEO page to a Google Doc in the client's Drive folder
-    via the Apps Script webhook (same path as the blog writer). The page's HTML is
-    converted to Markdown (the webhook's expected `content` format), and the Doc
-    id/url are persisted on the row."""
-    if not settings.google_apps_script_url:
+    via the Apps Script webhook (same path as the blog writer), or directly to the
+    client's WordPress site (destination='wordpress'). For Google Docs the page's
+    HTML is converted to Markdown (the webhook's expected `content` format); for
+    WordPress the HTML is posted as-is. The publish target is persisted on the row."""
+    # Fail fast on unconfigured Google Docs before any DB work.
+    if destination != "wordpress" and not settings.google_apps_script_url:
         raise HTTPException(status_code=503, detail="publish_not_configured")
 
     supabase = get_supabase()
     page = get_page(page_id)  # 404s if missing
+
+    if destination == "wordpress":
+        client_res = (
+            supabase.table("clients")
+            .select(
+                "name, wordpress_site_url, wordpress_username, wordpress_app_password"
+            )
+            .eq("id", page["client_id"])
+            .single()
+            .execute()
+        )
+        if not client_res.data:
+            raise HTTPException(status_code=404, detail="client_not_found")
+        return await _publish_page_to_wordpress(page, client_res.data, user_id, status)
 
     client_res = (
         supabase.table("clients")

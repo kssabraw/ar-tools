@@ -14,10 +14,12 @@ GET / DELETE routes are instant and stay plain JSON.
 from __future__ import annotations
 
 import logging
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from middleware.auth import require_auth
 from models.local_seo import (
@@ -287,10 +289,19 @@ async def delete_local_seo_page(
     return {"deleted": True}
 
 
+class PublishPageRequest(BaseModel):
+    destination: Literal["google_docs", "wordpress"] = "google_docs"
+    status: Literal["draft", "publish"] = "draft"
+
+
 @router.post("/local-seo/pages/{page_id}/publish")
 async def publish_local_seo_page(
     page_id: UUID,
+    body: PublishPageRequest = PublishPageRequest(),
     auth: dict = Depends(require_auth),
 ) -> dict:
-    """Publish a saved page to a Google Doc in the client's Drive folder."""
-    return await local_seo_service.publish_page(str(page_id), auth["user_id"])
+    """Publish a saved page to a Google Doc in the client's Drive folder, or
+    directly to the client's WordPress site (destination='wordpress')."""
+    return await local_seo_service.publish_page(
+        str(page_id), auth["user_id"], destination=body.destination, status=body.status
+    )

@@ -21,6 +21,8 @@ function downloadFile(content: string, filename: string, mime: string) {
 function ArticleCard({ run }: { run: any }) {
   const [expanded, setExpanded] = useState(false)
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [wpUrl, setWpUrl] = useState<string | null>(null)
+  const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
 
   const publishMutation = useMutation({
@@ -28,6 +30,17 @@ function ArticleCard({ run }: { run: any }) {
     onSuccess: (data) => {
       setPublishedUrl(data.doc_url)
       window.open(data.doc_url, '_blank')
+    },
+  })
+
+  const wpPublishMutation = useMutation({
+    mutationFn: () => api.post<{ url: string; edit_url: string }>(
+      `/runs/${run.id}/publish`, { destination: 'wordpress', status: wpStatus },
+    ),
+    onSuccess: (data) => {
+      const link = data.edit_url || data.url
+      setWpUrl(link)
+      if (link) window.open(link, '_blank')
     },
   })
 
@@ -133,6 +146,32 @@ function ArticleCard({ run }: { run: any }) {
                   <ExternalLink size={13} /> {publishMutation.isPending ? 'Publishing…' : 'Publish to Google Docs'}
                 </button>
               )}
+              {wpUrl ? (
+                <a href={wpUrl} target="_blank" rel="noreferrer"
+                  style={{ ...ghostBtn, textDecoration: 'none', color: '#16a34a', borderColor: '#bbf7d0' }}>
+                  <ExternalLink size={13} /> Open in WP
+                </a>
+              ) : (
+                <div style={{ display: 'inline-flex', border: '1px solid #c7d2fe', borderRadius: 8, overflow: 'hidden' }}>
+                  <select
+                    value={wpStatus}
+                    onChange={e => setWpStatus(e.target.value as 'draft' | 'publish')}
+                    style={{ border: 'none', background: '#fff', color: '#6366f1', fontSize: 12, fontWeight: 600, padding: '0 6px', cursor: 'pointer' }}
+                    title="Draft saves to WordPress unpublished; Publish goes live"
+                  >
+                    <option value="draft">Draft</option>
+                    <option value="publish">Publish</option>
+                  </select>
+                  <button
+                    onClick={() => wpPublishMutation.mutate()}
+                    disabled={wpPublishMutation.isPending}
+                    style={{ ...ghostBtn, border: 'none', borderLeft: '1px solid #c7d2fe', borderRadius: 0, color: '#6366f1' }}
+                    title="Publish directly to the client's WordPress site"
+                  >
+                    <ExternalLink size={13} /> {wpPublishMutation.isPending ? 'Publishing…' : 'Publish to WP'}
+                  </button>
+                </div>
+              )}
             </>
           )}
           <Link to={`/runs/${run.id}`} style={{ ...ghostBtn, textDecoration: 'none' }}>
@@ -144,9 +183,9 @@ function ArticleCard({ run }: { run: any }) {
         </div>
       </div>
 
-      {publishMutation.error && (
+      {(publishMutation.error || wpPublishMutation.error) && (
         <div style={{ marginTop: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
-          {(publishMutation.error as Error).message}
+          {((publishMutation.error || wpPublishMutation.error) as Error).message}
         </div>
       )}
 

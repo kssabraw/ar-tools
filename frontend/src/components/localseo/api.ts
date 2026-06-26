@@ -131,10 +131,19 @@ export const localSeoApi = {
   deletePage: (pageId: string) =>
     api.delete<void>(`/local-seo/pages/${pageId}`),
 
-  // Publish a saved page to a Google Doc in the client's Drive folder.
-  publishPage: (pageId: string) =>
-    api.post<{ success: boolean; doc_id: string | null; doc_url: string | null }>(
-      `/local-seo/pages/${pageId}/publish`,
-      {},
-    ),
+  // Publish a saved page to a Google Doc (default) or straight to the client's
+  // WordPress site (destination='wordpress').
+  publishPage: (
+    pageId: string,
+    opts: { destination?: 'google_docs' | 'wordpress'; status?: 'draft' | 'publish' } = {},
+  ) =>
+    api.post<{
+      success: boolean
+      destination?: string
+      doc_id?: string | null
+      doc_url?: string | null
+      url?: string | null
+      edit_url?: string | null
+      status?: string
+    }>(`/local-seo/pages/${pageId}/publish`, opts),
 }
