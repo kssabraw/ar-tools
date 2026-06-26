@@ -26,6 +26,7 @@ PAGE_TYPE_LABELS = {
     "service": "service",
     "location": "location",
     "blog_post": "blog post",
+    "product": "product",
 }
 
 _LEVEL_INDENT = {"H1": "", "H2": "  ", "H3": "    "}

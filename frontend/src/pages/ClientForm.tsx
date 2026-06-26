@@ -24,13 +24,14 @@ interface FormData {
   ps_service: string
   ps_location: string
   ps_blog_post: string
+  ps_product: string
 }
 
 const empty: FormData = {
   name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
   github_repo: '', github_branch: '', github_content_path: '',
   logo_url: '', gsc_property: '', business_location: '', gbp_place_id: null, gbp: null,
-  ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '',
+  ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '',
 }
 
 const PAGE_STRUCTURE_FIELDS: { key: keyof FormData; type: PageStructureType; label: string; placeholder: string; help: string }[] = [
@@ -38,6 +39,7 @@ const PAGE_STRUCTURE_FIELDS: { key: keyof FormData; type: PageStructureType; lab
   { key: 'ps_service', type: 'service', label: 'Service Page URL', placeholder: 'https://acmehvac.com/services/ac-repair', help: 'A core service page. Used by the Service Page writer.' },
   { key: 'ps_location', type: 'location', label: 'Location Page URL', placeholder: 'https://acmehvac.com/locations/austin', help: 'An area-served / location page. Used by Local SEO page generation.' },
   { key: 'ps_blog_post', type: 'blog_post', label: 'Blog Post URL', placeholder: 'https://acmehvac.com/blog/why-ac-fails', help: "A representative blog post. The Blog Writer mirrors its opening pattern." },
+  { key: 'ps_product', type: 'product', label: 'Product Page URL', placeholder: 'https://acmestore.com/products/widget', help: 'A representative product page (ecom). Scraped and stored for reference; not yet mirrored by a writer.' },
 ]
 
 export function ClientForm() {
@@ -112,6 +114,7 @@ export function ClientForm() {
         ps_service: existing.page_structures?.service?.url ?? '',
         ps_location: existing.page_structures?.location?.url ?? '',
         ps_blog_post: existing.page_structures?.blog_post?.url ?? '',
+        ps_product: existing.page_structures?.product?.url ?? '',
       })
     }
   }, [existing])
@@ -170,6 +173,7 @@ export function ClientForm() {
           service: form.ps_service.trim() || null,
           location: form.ps_location.trim() || null,
           blog_post: form.ps_blog_post.trim() || null,
+          product: form.ps_product.trim() || null,
         },
       }
       if (isEdit) {
