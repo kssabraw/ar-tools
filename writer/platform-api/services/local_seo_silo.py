@@ -367,7 +367,7 @@ def _run_pipeline(
         pages: Optional[list[dict]] = None
         if df_llm and pool:
             try:
-                pages = _decision_fit_pages(silo_names[t.id], pool, df_llm)
+                pages = _decision_fit_pages(keyword, _parse_area(location)[0], silo_names[t.id], pool, df_llm)
             except Exception as exc:  # noqa: BLE001 — fall back to representatives
                 logger.warning(
                     "local_seo_silo.decision_fit_failed",
@@ -415,18 +415,26 @@ def _dedupe_across_silos(
 # ── decision-fit topic mapping (page = primary keyword + same-intent variants) ─
 
 _DECISION_FIT_SYSTEM = (
-    "You are a local SEO strategist. Organize a group of related keywords for one "
-    "service area into PAGE TOPICS by the buyer's decision / search intent. Two "
-    "keywords belong on the SAME page when it's the same offer to the same buyer "
-    "and only the phrasing, urgency, or locality differs (e.g. 'emergency plumber "
-    "sydney' = '24 hour emergency plumber in sydney' = 'after hours plumber sydney'). "
-    "They need SEPARATE pages when a modifier changes the BUYER or the JOB — audience "
-    "(commercial vs residential), property type, problem type (gas, blocked drain, hot "
-    "water), or service stage (install vs repair). For each page pick the primary "
-    "keyword (the most natural head term real people search) and list the other "
-    "provided keywords that share its intent as supporting keywords. Use ONLY the "
-    "provided keywords — never invent new ones — and put each provided keyword in "
-    "exactly one page."
+    "You are a local SEO strategist. You are given a SEED SERVICE, its CITY, and a "
+    "list of candidate keywords for one silo. Do two steps.\n\n"
+    "STEP 1 — SCOPE. Keep only keywords for the SAME service as the seed, targeting "
+    "the CITY as a whole. DROP a keyword if it:\n"
+    "  • broadens to a more generic parent service — e.g. a bare 'plumber …' when the "
+    "seed is 'emergency plumber' — losing the seed's intent; or\n"
+    "  • targets a specific suburb / neighbourhood / sub-area rather than the whole "
+    "city (e.g. '… bondi', '… north sydney', '… eastern suburbs', '… randwick') — "
+    "those are handled separately. Only the city itself is in scope as a location.\n"
+    "Keep keywords that narrow the SEED service by audience (commercial vs "
+    "residential), property type, problem type (gas, blocked drain, hot water, burst "
+    "pipe), urgency, or phrasing.\n\n"
+    "STEP 2 — GROUP the kept keywords into PAGE TOPICS by the buyer's decision. Same "
+    "page when only phrasing, word order, plural, or urgency differs (e.g. 'emergency "
+    "plumber sydney' = '24 hour emergency plumber in sydney'); separate page when the "
+    "buyer or job changes (commercial vs residential, problem type, stage). For each "
+    "page pick the primary keyword (the most natural head term) and list the "
+    "same-intent keywords as supporting keywords.\n\n"
+    "Use ONLY the provided keywords — never invent new ones — and put each KEPT "
+    "keyword in exactly one page. Keywords you drop in step 1 simply don't appear."
 )
 
 _DECISION_FIT_SCHEMA = {
@@ -466,20 +474,25 @@ def _decision_fit_llm():
         return None
 
 
-def _decision_fit_pages(silo_name: str, keywords: list[str], llm) -> list[dict]:
-    """Haiku tool-use: organize a silo's keywords into page topics by intent.
-    Returns [{keyword, supporting_keywords}]. Validates the model only used the
-    provided keywords (no invented volume), keeps each keyword in one page, and
-    recovers any keyword the model dropped as its own page so demand isn't lost."""
+def _decision_fit_pages(seed_service: str, city: str, silo_name: str, keywords: list[str], llm) -> list[dict]:
+    """Haiku tool-use: scope a silo's keywords to the seed service + city (dropping
+    parent-service and suburb-geo terms) and organize the survivors into page
+    topics by intent. Returns [{keyword, supporting_keywords}]. Validates the model
+    only used the provided keywords (no invented volume) and keeps each in one
+    page; keywords the model drops (off-scope) are intentionally omitted —
+    suburbs are covered by the Neighborhoods silo instead."""
     allowed: dict[str, str] = {}
     for k in keywords:
         allowed.setdefault(k.strip().lower(), k.strip())
     try:
         data = llm.call_tool(
             system=_DECISION_FIT_SYSTEM,
-            user=(f"Silo: {silo_name}\nKeywords:\n" + "\n".join(f"- {v}" for v in allowed.values())),
+            user=(
+                f"Seed service: {seed_service}\nCity: {city}\nSilo: {silo_name}\n"
+                "Keywords:\n" + "\n".join(f"- {v}" for v in allowed.values())
+            ),
             tool_name="map_page_topics",
-            tool_description="Group the keywords into page topics by the buyer's decision / search intent.",
+            tool_description="Scope to the seed service + city, then group into page topics by the buyer's decision.",
             input_schema=_DECISION_FIT_SCHEMA,
             purpose="local_seo_silo/decision_fit",
             temperature=0.0,
@@ -501,12 +514,6 @@ def _decision_fit_pages(silo_name: str, keywords: list[str], llm) -> list[dict]:
                 used.add(sk)
                 supporting.append(allowed[sk])
         out.append({"keyword": allowed[pk], "supporting_keywords": supporting})
-
-    # Any keyword the model omitted becomes its own page (never drop real demand).
-    for kl, kw in allowed.items():
-        if kl not in used:
-            used.add(kl)
-            out.append({"keyword": kw, "supporting_keywords": []})
     return out
 
 

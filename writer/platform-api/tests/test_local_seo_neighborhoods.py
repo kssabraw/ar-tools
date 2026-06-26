@@ -240,7 +240,7 @@ def test_decision_fit_groups_variants_and_splits_decisions():
         {"primary_keyword": "commercial emergency plumber sydney",
          "supporting_keywords": ["24 hour commercial emergency plumber sydney"]},
     ])
-    pages = silo._decision_fit_pages("Emergencies", pool, llm)
+    pages = silo._decision_fit_pages("emergency plumber", "sydney", "Emergencies", pool, llm)
     assert pages == [
         {"keyword": "emergency plumber sydney",
          "supporting_keywords": ["24 hour emergency plumber in sydney"]},
@@ -249,18 +249,17 @@ def test_decision_fit_groups_variants_and_splits_decisions():
     ]
 
 
-def test_decision_fit_rejects_invented_keywords_and_recovers_dropped():
-    pool = ["plumber sydney", "blocked drain sydney"]
+def test_decision_fit_drops_off_scope_and_invented_keywords():
+    # The model (mocked) scopes out the parent-service "plumber bondi" (suburb)
+    # and "plumber sydney" (parent), keeping only the seed-service page. An
+    # omitted keyword is NOT recovered (strict scoping), and an invented
+    # supporting keyword (not in pool) is rejected.
+    pool = ["emergency plumber sydney", "plumber sydney", "plumber bondi"]
     llm = _FakeLLM([
-        # invented supporting keyword (not in pool) is dropped; "blocked drain
-        # sydney" was omitted by the model → recovered as its own page.
-        {"primary_keyword": "plumber sydney", "supporting_keywords": ["plumber melbourne"]},
+        {"primary_keyword": "emergency plumber sydney", "supporting_keywords": ["plumber melbourne"]},
     ])
-    pages = silo._decision_fit_pages("S", pool, llm)
-    assert pages == [
-        {"keyword": "plumber sydney", "supporting_keywords": []},
-        {"keyword": "blocked drain sydney", "supporting_keywords": []},
-    ]
+    pages = silo._decision_fit_pages("emergency plumber", "sydney", "S", pool, llm)
+    assert pages == [{"keyword": "emergency plumber sydney", "supporting_keywords": []}]
 
 
 # ── _discover_neighborhood_silo (orchestration, mocked) ───────────────────────
