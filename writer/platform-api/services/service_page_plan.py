@@ -70,6 +70,18 @@ _MATCH_STOPWORDS = {
     "php", "aspx",
 }
 
+# A path segment from this set marks a URL as non-service content — a blog post,
+# taxonomy/archive, store, account, or legal page. Such pages *mention* services
+# without being the service's landing page, so they must never suppress a candidate
+# (e.g. `/blog/signs-you-need-drain-cleaning/` is not the "drain cleaning" page).
+_NON_SERVICE_SEGMENTS = {
+    "blog", "blogs", "post", "posts", "article", "articles", "news", "story",
+    "stories", "tag", "tags", "category", "categories", "topic", "topics",
+    "author", "authors", "product", "products", "shop", "store", "cart",
+    "checkout", "account", "feed", "rss", "search", "privacy", "terms",
+    "cookie", "cookies", "sitemap", "wp-content", "wp-json", "wp-admin", "page",
+}
+
 
 def _get_client(client_id: str) -> dict:
     supabase = get_supabase()
@@ -380,32 +392,48 @@ def _content_tokens(text: str) -> set[str]:
     }
 
 
-def _url_tokens(url: str) -> set[str]:
-    """Content tokens drawn from a URL's path (the part that names the page)."""
-    return _content_tokens(unquote(urlsplit(url or "").path))
+def _page_slug_tokens(url: str) -> set[str] | None:
+    """Content tokens of a URL's **final path segment** (its page slug), or None when
+    the URL is non-service content (blog/taxonomy/store/…) or has no usable slug.
+
+    Only the last segment is considered, so parent directories like `/services/` and
+    unrelated words elsewhere in the path can't trigger a match — a blog post at
+    `/blog/...-drain-cleaning/` is excluded outright by its `blog` segment."""
+    path = unquote(urlsplit(url or "").path)
+    segments = [seg for seg in path.split("/") if seg]
+    if not segments:
+        return None
+    if any(seg.lower() in _NON_SERVICE_SEGMENTS for seg in segments):
+        return None
+    tokens = _content_tokens(segments[-1])
+    return tokens or None
 
 
 def _build_url_index(site_urls: list[str]) -> list[tuple[str, set[str]]]:
-    """Pre-tokenize site URLs once so matching is O(candidates × urls) on sets."""
+    """Pre-tokenize site URLs once (final-segment slugs only) so matching is
+    O(candidates × urls) on sets. Non-service / slug-less URLs are dropped."""
     index: list[tuple[str, set[str]]] = []
     for url in site_urls:
-        toks = _url_tokens(url)
+        toks = _page_slug_tokens(url)
         if toks:
             index.append((url, toks))
     return index
 
 
 def _match_existing_url(keyword: str, url_index: list[tuple[str, set[str]]]) -> str | None:
-    """Return a live URL whose path slug covers every content token of `keyword`,
-    else None. Requiring full token containment keeps qualifiers honest — "drain
-    cleaning" won't match a bare "/plumbing" page, and "emergency drain cleaning"
-    needs the `emergency` slug too — while tolerating extra path words like
-    `/services/`."""
+    """Return a live URL whose page slug is the *same* service as `keyword`, else
+    None. Matching is exact token-set equality against the final path segment, which
+    keeps qualifiers honest in both directions — "drain cleaning" won't match
+    "/emergency-drain-cleaning/" (the page is more specific) and "plumbing" won't
+    match "/commercial-plumbing/" (a narrower variant). Stopwords ("services", "the",
+    …) are ignored, so "/drain-cleaning-services/" still equals "drain cleaning".
+    Erring toward keeping a candidate (a missed match just re-surfaces a real page)
+    is the safe direction for a gap finder."""
     kw_tokens = _content_tokens(keyword)
     if not kw_tokens:
         return None
     for url, toks in url_index:
-        if kw_tokens <= toks:
+        if kw_tokens == toks:
             return url
     return None
 
