@@ -347,9 +347,9 @@ async def update_client(
         _enqueue_website_scrape(str(client_id), body.website_url)
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(str(client_id), page_type, url)
-    # Re-derive the rank-tracking location when the GBP is (re)set — the job
-    # skips clients whose location is manually set and only re-pulls on a change.
-    if body.gbp is not None:
+    # Re-derive the rank-tracking location only when the GBP actually changed
+    # (the job still skips manually-set clients and only re-pulls on a change).
+    if body.gbp is not None and updates.get("gbp") != existing.get("gbp"):
         rank_location.enqueue_location_derive(str(client_id))
 
     logger.info("client_updated", extra={"client_id": str(client_id), "user_id": auth["user_id"]})

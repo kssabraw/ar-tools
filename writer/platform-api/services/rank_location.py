@@ -121,8 +121,13 @@ async def derive_location_from_gbp(client: dict) -> tuple[Optional[str], Optiona
     return None, None
 
 
-def enqueue_location_derive(client_id: str) -> None:
-    """Enqueue a best-effort GBP→location derivation for a client (deduped)."""
+def enqueue_location_derive(client_id: str, refresh_always: bool = False) -> None:
+    """Enqueue a best-effort GBP→location derivation for a client (deduped).
+
+    ``refresh_always`` (set by the manual "reset to auto" clear) makes the job
+    refresh ranks/market data even when the derivation changes nothing, so the
+    client isn't left on stale numbers from the cleared location.
+    """
     supabase = get_supabase()
     existing = (
         supabase.table("async_jobs")
@@ -136,7 +141,11 @@ def enqueue_location_derive(client_id: str) -> None:
     if existing.data:
         return
     supabase.table("async_jobs").insert(
-        {"job_type": "rank_location_derive", "entity_id": client_id, "payload": {"client_id": client_id}}
+        {
+            "job_type": "rank_location_derive",
+            "entity_id": client_id,
+            "payload": {"client_id": client_id, "refresh_always": refresh_always},
+        }
     ).execute()
 
 
@@ -151,6 +160,7 @@ async def run_rank_location_derive_job(job: dict) -> None:
 
     payload = job.get("payload") or {}
     client_id = payload.get("client_id")
+    refresh_always = bool(payload.get("refresh_always"))
     job_id = job["id"]
     supabase = get_supabase()
     if not client_id:
@@ -191,7 +201,10 @@ async def run_rank_location_derive_job(job: dict) -> None:
                     "updated_at": "now()",
                 }
             ).eq("id", client_id).execute()
-            # Re-fetch ranks + market data for the new area.
+        # Re-fetch ranks + market data for the new area — or, when a clear
+        # resolved nothing/no change, refresh anyway so the (national) numbers
+        # aren't left stale. Otherwise leave existing data untouched.
+        if applied or refresh_always:
             dataforseo_rank.enqueue_dataforseo_rank(client_id)
             keyword_market.enqueue_keyword_market(client_id)
 

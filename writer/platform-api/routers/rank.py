@@ -469,12 +469,14 @@ async def set_tracking_location(
         }
     ).eq("id", str(client_id)).execute()
 
-    # Cleared → re-derive the location from the client's GBP (which re-pulls if it
-    # resolves an area). Either way, refresh ranks + market data now.
-    if location is None:
-        rank_location.enqueue_location_derive(str(client_id))
-    dataforseo_rank.enqueue_dataforseo_rank(str(client_id))
-    keyword_market.enqueue_keyword_market(str(client_id))
+    if location is not None:
+        # Manual pin — refresh ranks + market data for the chosen area now.
+        dataforseo_rank.enqueue_dataforseo_rank(str(client_id))
+        keyword_market.enqueue_keyword_market(str(client_id))
+    else:
+        # Cleared → revert to GBP-auto. The derive job does the single refresh at
+        # the resolved (or national) area, so there's no separate pull here.
+        rank_location.enqueue_location_derive(str(client_id), refresh_always=True)
     return RankLocation(location=location, location_code=code, source=source)
 
 
