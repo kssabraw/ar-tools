@@ -177,6 +177,92 @@ def test_parse_area_two_segments_is_city_country_not_state():
     assert silo._parse_area("London,United Kingdom") == ("London", "", "United Kingdom")
 
 
+def _pg(*keywords):
+    return [{"keyword": k, "supporting_keywords": []} for k in keywords]
+
+
+def _kw(entry):
+    return [p["keyword"] for p in entry["pages"]]
+
+
+# ── _dedupe_across_silos (each page in its best silo only) ────────────────────
+def test_dedupe_across_silos_keeps_best_and_drops_emptied():
+    raw = [
+        {"id": "silo-0", "silo": "Emergencies", "pages": _pg("plumber sydney", "burst pipe sydney")},
+        {"id": "silo-1", "silo": "Pricing", "pages": _pg("plumber sydney")},
+    ]
+    rel = {
+        "silo-0": {"plumber sydney": 0.6, "burst pipe sydney": 0.8},
+        "silo-1": {"plumber sydney": 0.9},  # stronger here
+    }
+    out = silo._dedupe_across_silos(raw, rel)
+    by = {e["silo"]: _kw(e) for e in out}
+    assert by == {"Emergencies": ["burst pipe sydney"], "Pricing": ["plumber sydney"]}
+
+
+def test_dedupe_across_silos_ties_go_to_first_silo():
+    raw = [
+        {"id": "silo-0", "silo": "A", "pages": _pg("x")},
+        {"id": "silo-1", "silo": "B", "pages": _pg("x")},  # tie → emptied → dropped
+    ]
+    rel = {"silo-0": {"x": 0.5}, "silo-1": {"x": 0.5}}
+    out = silo._dedupe_across_silos(raw, rel)
+    assert [e["silo"] for e in out] == ["A"]
+
+
+def test_dedupe_across_silos_case_insensitive():
+    raw = [
+        {"id": "silo-0", "silo": "A", "pages": _pg("Plumber Sydney")},
+        {"id": "silo-1", "silo": "B", "pages": _pg("plumber sydney")},
+    ]
+    rel = {"silo-0": {"plumber sydney": 0.4}, "silo-1": {"plumber sydney": 0.7}}
+    out = silo._dedupe_across_silos(raw, rel)
+    assert [(e["silo"], _kw(e)) for e in out] == [("B", ["plumber sydney"])]
+
+
+# ── _decision_fit_pages (intent grouping, mocked LLM) ─────────────────────────
+class _FakeLLM:
+    def __init__(self, pages):
+        self._pages = pages
+
+    def call_tool(self, **kw):
+        return {"pages": self._pages}
+
+
+def test_decision_fit_groups_variants_and_splits_decisions():
+    pool = [
+        "emergency plumber sydney", "24 hour emergency plumber in sydney",
+        "commercial emergency plumber sydney", "24 hour commercial emergency plumber sydney",
+    ]
+    llm = _FakeLLM([
+        {"primary_keyword": "emergency plumber sydney",
+         "supporting_keywords": ["24 hour emergency plumber in sydney"]},
+        {"primary_keyword": "commercial emergency plumber sydney",
+         "supporting_keywords": ["24 hour commercial emergency plumber sydney"]},
+    ])
+    pages = silo._decision_fit_pages("Emergencies", pool, llm)
+    assert pages == [
+        {"keyword": "emergency plumber sydney",
+         "supporting_keywords": ["24 hour emergency plumber in sydney"]},
+        {"keyword": "commercial emergency plumber sydney",
+         "supporting_keywords": ["24 hour commercial emergency plumber sydney"]},
+    ]
+
+
+def test_decision_fit_rejects_invented_keywords_and_recovers_dropped():
+    pool = ["plumber sydney", "blocked drain sydney"]
+    llm = _FakeLLM([
+        # invented supporting keyword (not in pool) is dropped; "blocked drain
+        # sydney" was omitted by the model → recovered as its own page.
+        {"primary_keyword": "plumber sydney", "supporting_keywords": ["plumber melbourne"]},
+    ])
+    pages = silo._decision_fit_pages("S", pool, llm)
+    assert pages == [
+        {"keyword": "plumber sydney", "supporting_keywords": []},
+        {"keyword": "blocked drain sydney", "supporting_keywords": []},
+    ]
+
+
 # ── _discover_neighborhood_silo (orchestration, mocked) ───────────────────────
 _CITY_Q = "Anaheim, California, United States"
 _GEO = {
@@ -220,7 +306,7 @@ def test_discover_keeps_only_verified_within_city(monkeypatch):
     entry, notes = _run(silo._discover_neighborhood_silo("plumber", _CITY_Q, [], supabase=None))
     assert entry["silo"] == silo._NEIGHBORHOOD_SILO
     # Garden Grove (outside), Fakeville (centroid), Orange County (too big) all dropped.
-    assert entry["pages"] == ["plumber Anaheim Hills", "plumber West Anaheim"]
+    assert _kw(entry) == ["plumber Anaheim Hills", "plumber West Anaheim"]
     assert notes == []
 
 
@@ -232,9 +318,9 @@ def test_discover_dedupes_against_existing_silos(monkeypatch):
     )
     _patch_geo(monkeypatch, _GEO)
 
-    per_silo = [{"silo": "Emergency Plumbing", "pages": ["Plumber Anaheim Hills"]}]
+    per_silo = [{"silo": "Emergency Plumbing", "pages": _pg("Plumber Anaheim Hills")}]
     entry, _ = _run(silo._discover_neighborhood_silo("plumber", _CITY_Q, per_silo, supabase=None))
-    assert entry["pages"] == ["plumber West Anaheim"]
+    assert _kw(entry) == ["plumber West Anaheim"]
 
 
 def test_discover_skipped_without_maps_key(monkeypatch):

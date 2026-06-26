@@ -64,6 +64,14 @@ export function RelatedPagesList({ items, onAction, selection }: Props) {
                           <span style={{ fontSize: 12, fontWeight: 600, color: scoreColor(item.composite_score) }}>{Math.round(item.composite_score)}/100</span>
                         )}
                       </div>
+                      {item.supporting_keywords && item.supporting_keywords.length > 0 && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                          <span style={{ fontSize: 11, color: '#94a3b8' }}>also targets</span>
+                          {item.supporting_keywords.map((sk, i) => (
+                            <span key={i} style={{ fontSize: 11, color: '#475569', background: '#f1f5f9', borderRadius: 4, padding: '1px 6px' }}>{sk}</span>
+                          ))}
+                        </div>
+                      )}
                       {item.status === 'found' && item.url && (
                         <a href={item.url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#64748b', marginTop: 2, maxWidth: '100%' }}>
                           <ExternalLink size={12} style={{ flexShrink: 0 }} />

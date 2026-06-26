@@ -86,6 +86,8 @@ export interface RelatedPageItem {
   composite_score?: number | null
   composite_status?: string | null
   deficiencies?: Deficiency[] | null
+  // Same-intent variant keywords this page should also target (decision-fit map).
+  supporting_keywords?: string[] | null
 }
 
 export interface RelatedPagesResult {

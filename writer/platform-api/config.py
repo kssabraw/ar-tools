@@ -156,6 +156,15 @@ class Settings(BaseSettings):
     # unverified names.
     local_seo_neighborhood_model: str = "claude-haiku-4-5-20251001"
     local_seo_max_neighborhoods: int = 20
+    # Decision-fit topic mapping: after clustering, a Haiku pass organizes each
+    # silo's keywords into page topics by the buyer's decision — same-intent
+    # variants (phrasing / urgency / locality) become one page's supporting
+    # keywords, while decision-splitting modifiers (commercial vs residential,
+    # problem type, …) get their own page. `local_seo_max_pool_per_silo` caps the
+    # keywords fed to the LLM per silo. Best-effort + gated on the Anthropic key;
+    # absent it (or on failure) the planner falls back to cluster representatives.
+    local_seo_decision_fit_model: str = "claude-haiku-4-5-20251001"
+    local_seo_max_pool_per_silo: int = 40
     # Verification is geographic + country-agnostic: a proposed sub-area is kept
     # only if it geocodes to a place INSIDE the target city's footprint (its
     # geocoded bounds), which works for US neighborhoods and AU/UK suburbs alike.
