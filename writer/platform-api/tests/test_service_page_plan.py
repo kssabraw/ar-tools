@@ -105,3 +105,45 @@ def test_to_items_degrades_on_lookup_error():
         items = spp._to_items(per_silo, "client-1")
     # Lookup failure → everything reported missing rather than raising.
     assert items[0]["status"] == "missing"
+
+
+# ── filter_existing_on_site (sitemap duplicate removal) ───────────────────────
+
+def _items(*keywords: str) -> list[dict]:
+    return [{"keyword": k, "group": "Drains", "status": "missing", "url": None} for k in keywords]
+
+
+def test_match_existing_url_full_token_containment():
+    index = spp._build_url_index(["https://acme.com/services/drain-cleaning/"])
+    # All keyword tokens present in the slug → match (extra "/services/" tolerated).
+    assert spp._match_existing_url("Drain Cleaning", index) == "https://acme.com/services/drain-cleaning/"
+    # Missing a qualifier token → no match (qualifiers stay honest).
+    assert spp._match_existing_url("Emergency Drain Cleaning", index) is None
+    # Unrelated service → no match.
+    assert spp._match_existing_url("Water Heater Repair", index) is None
+
+
+def test_match_existing_url_ignores_query_and_case():
+    index = spp._build_url_index(["https://acme.com/Hydro-Jetting?ref=nav"])
+    assert spp._match_existing_url("hydro jetting", index) == "https://acme.com/Hydro-Jetting?ref=nav"
+
+
+def test_filter_existing_on_site_removes_published_pages():
+    items = _items("Drain Cleaning", "Hydro Jetting", "Sewer Repair")
+    site_urls = [
+        "https://acme.com/",
+        "https://acme.com/services/drain-cleaning/",
+        "https://acme.com/services/hydro-jetting/",
+    ]
+    kept, removed = spp.filter_existing_on_site(items, site_urls)
+    assert {i["keyword"] for i in kept} == {"Sewer Repair"}
+    assert {i["keyword"] for i in removed} == {"Drain Cleaning", "Hydro Jetting"}
+    # Removed items carry the matched live URL for observability.
+    assert all(i["url"] for i in removed)
+
+
+def test_filter_existing_on_site_no_sitemap_keeps_everything():
+    items = _items("Drain Cleaning", "Hydro Jetting")
+    kept, removed = spp.filter_existing_on_site(items, [])
+    assert len(kept) == 2
+    assert removed == []

@@ -8,6 +8,12 @@ services scraped from the site) and surfaces the full set of candidate service p
 grouped by silo. Each candidate is marked found (a service_page run already exists) vs
 missing, so the team can bulk-create the gaps via `POST /runs/bulk`.
 
+After discovery, candidates the client **already publishes** are removed: the planner
+reads the live site's sitemap (`services/sitemap.py`) and drops any candidate whose
+slug already exists on the site, so the plan only ever surfaces genuine gaps. The
+check is best-effort — if the sitemap can't be read the full list is kept with a
+degraded note.
+
 It mirrors `services/local_seo_silo.py` (same Fanout pipeline, by import) with three
 deliberate differences for service pages:
   - **Seed = business category**, not a single "<service> <area>" keyword — so the
@@ -27,10 +33,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from urllib.parse import unquote, urlsplit
 
 from fastapi import HTTPException
 
 from db.supabase_client import get_supabase
+from services.sitemap import fetch_sitemap_urls
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +60,15 @@ _MAX_PAGES_PER_SILO = 10
 _DEFAULT_LOCATION_CODE = 2840
 # How many scraped services to carry as relevance-anchor terms.
 _MAX_SEED_TERMS = 10
+
+# Tokens stripped before matching a candidate keyword against a site's URL slugs —
+# connectors plus the generic "service(s)" wrapper that shows up as a sitemap
+# directory (`/services/...`) rather than a distinguishing term.
+_MATCH_STOPWORDS = {
+    "the", "a", "an", "and", "or", "for", "of", "in", "on", "to", "your", "our",
+    "near", "me", "service", "services", "page", "pages", "index", "html", "htm",
+    "php", "aspx",
+}
 
 
 def _get_client(client_id: str) -> dict:
@@ -173,6 +191,31 @@ async def run_service_plan_job(job: dict) -> None:
         plan = await asyncio.to_thread(_run_pipeline, seed, seed_terms)
         plan["degraded_notes"] = [*notes, *plan.get("degraded_notes", [])]
         items = _to_items(plan["per_silo"], client_id)
+
+        # Drop candidates the client already publishes — match the discovered pages
+        # against the live site's sitemap and remove any that already exist.
+        website_url = (client.get("website_url") or "").strip()
+        if website_url and items:
+            site_urls = await fetch_sitemap_urls(website_url)
+            if site_urls:
+                items, removed = filter_existing_on_site(items, site_urls)
+                if removed:
+                    plan["degraded_notes"].append(
+                        f"Removed {len(removed)} candidate page(s) already published on the site."
+                    )
+                logger.info(
+                    "service_page_plan.site_filter",
+                    extra={
+                        "job_id": job_id,
+                        "client_id": client_id,
+                        "site_urls": len(site_urls),
+                        "removed": len(removed),
+                    },
+                )
+            else:
+                plan["degraded_notes"].append(
+                    "Could not read the site's sitemap — skipped the on-site duplicate check."
+                )
 
         supabase.table("async_jobs").update(
             {
@@ -324,3 +367,62 @@ def _to_items(per_silo: list[dict], client_id: str) -> list[dict]:
                 }
             )
     return items
+
+
+# ── on-site duplicate removal (sitemap match) ─────────────────────────────────
+
+def _content_tokens(text: str) -> set[str]:
+    """Lowercase alphanumeric tokens with stopwords (and 1-char noise) dropped."""
+    return {
+        tok
+        for tok in re.split(r"[^a-z0-9]+", (text or "").lower())
+        if len(tok) > 1 and tok not in _MATCH_STOPWORDS
+    }
+
+
+def _url_tokens(url: str) -> set[str]:
+    """Content tokens drawn from a URL's path (the part that names the page)."""
+    return _content_tokens(unquote(urlsplit(url or "").path))
+
+
+def _build_url_index(site_urls: list[str]) -> list[tuple[str, set[str]]]:
+    """Pre-tokenize site URLs once so matching is O(candidates × urls) on sets."""
+    index: list[tuple[str, set[str]]] = []
+    for url in site_urls:
+        toks = _url_tokens(url)
+        if toks:
+            index.append((url, toks))
+    return index
+
+
+def _match_existing_url(keyword: str, url_index: list[tuple[str, set[str]]]) -> str | None:
+    """Return a live URL whose path slug covers every content token of `keyword`,
+    else None. Requiring full token containment keeps qualifiers honest — "drain
+    cleaning" won't match a bare "/plumbing" page, and "emergency drain cleaning"
+    needs the `emergency` slug too — while tolerating extra path words like
+    `/services/`."""
+    kw_tokens = _content_tokens(keyword)
+    if not kw_tokens:
+        return None
+    for url, toks in url_index:
+        if kw_tokens <= toks:
+            return url
+    return None
+
+
+def filter_existing_on_site(
+    items: list[dict], site_urls: list[str]
+) -> tuple[list[dict], list[dict]]:
+    """Split planner items into (kept, removed) by matching each against the site's
+    published URLs. A candidate already on the site is dropped from the plan so the
+    team isn't offered a page that already exists. Pure; unit-tested."""
+    url_index = _build_url_index(site_urls)
+    kept: list[dict] = []
+    removed: list[dict] = []
+    for item in items:
+        match = _match_existing_url(item.get("keyword", ""), url_index)
+        if match:
+            removed.append({**item, "url": match})
+        else:
+            kept.append(item)
+    return kept, removed
