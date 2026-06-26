@@ -97,7 +97,15 @@ async def derive_location_from_gbp(client: dict) -> tuple[Optional[str], Optiona
             logger.warning("rank_location.search_failed", extra={"candidate": candidate, "error": str(exc)})
             continue
         if matches:
-            best = matches[0]
+            # Prefer an exact first-segment match over the top-ranked one. The
+            # ranker prioritises Cities above Regions, so a state candidate like
+            # "Victoria" would otherwise pick the city "Victoria Point" over the
+            # State of Victoria; an exact match corrects that.
+            cand_key = candidate.strip().lower()
+            best = next(
+                (m for m in matches if m["location_name"].split(",")[0].strip().lower() == cand_key),
+                matches[0],
+            )
             logger.info(
                 "rank_location.derived",
                 extra={

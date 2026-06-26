@@ -16,6 +16,13 @@ alter table clients
   add column if not exists rank_tracking_location_source text
     check (rank_tracking_location_source in ('auto', 'manual'));
 
+-- Any location set before this feature was chosen by hand (the manual UI was the
+-- only way to set one), so mark it 'manual' — otherwise the new auto-derivation
+-- could overwrite a deliberate choice on the next GBP change.
+update clients set rank_tracking_location_source = 'manual'
+  where rank_tracking_location_code is not null
+    and rank_tracking_location_source is null;
+
 alter table async_jobs drop constraint async_jobs_job_type_check;
 alter table async_jobs add constraint async_jobs_job_type_check
   check (job_type in (

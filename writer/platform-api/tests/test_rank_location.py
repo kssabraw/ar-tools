@@ -64,6 +64,28 @@ def test_derive_falls_back_to_region_when_city_unmatched():
     assert (name, code) == ("Victoria,Australia", 2076)
 
 
+def test_derive_region_fallback_prefers_exact_over_prefix_city():
+    # The ranker puts Cities above Regions, so for a state candidate the exact
+    # "Victoria" (State) must be chosen over the prefix-matching city
+    # "Victoria Point" that would otherwise sort first.
+    client = {"gbp": {"latitude": 1.0, "longitude": 2.0}, "website_url": "https://x.com.au/"}
+
+    async def fake_search(_client, candidate, country=None, limit=10):
+        if candidate == "Victoria":
+            return [
+                _match("Victoria Point,Queensland,Australia", 111, "City"),
+                _match("Victoria,Australia", 2076, "Region"),
+            ]
+        return []  # city ("Carlton North") unmatched → falls back to region
+
+    with patch.object(rank_location, "get_supabase", return_value=MagicMock()), \
+         patch.object(rank_location.maps_geocode, "reverse_geocode_points",
+                      new=AsyncMock(return_value=[{"city": "Carlton North", "admin_area": "Victoria"}])), \
+         patch.object(rank_location.locations_service, "search_locations", new=AsyncMock(side_effect=fake_search)):
+        name, code = _run(rank_location.derive_location_from_gbp(client))
+    assert (name, code) == ("Victoria,Australia", 2076)
+
+
 def test_derive_uses_address_when_no_coords():
     client = {"gbp": {"address": "117 Newry St, Carlton North VIC 3054, Australia"},
               "website_url": "https://x.com.au/"}
