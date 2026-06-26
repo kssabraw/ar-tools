@@ -11,8 +11,11 @@ candidate local page targets:
      (burst pipe, blocked drain, hot water…). The service's own qualifier is
      preserved — an "emergency plumber" stays an *emergency* service, never
      broadening to a bare "plumber" — and no suburb names appear here (that's the
-     Neighborhoods silo's job). Each page is `"<variation> <city>"` plus a few
-     same-intent supporting keywords.
+     Neighborhoods silo's job). The model returns only each variation's *modifier*
+     and the keyword is composed deterministically as
+     `"<modifier> <service> <city>"`, so the full service phrase is always present
+     (e.g. `"after hours emergency plumber Sydney"`, never `"after hours plumber
+     Sydney"`). Each page also carries a few same-intent supporting keywords.
 
   2. **Neighborhoods silo** — geocoding-verified. It proposes the city's
      sub-areas (Haiku — in whatever local term fits the country: neighborhoods,
@@ -243,21 +246,26 @@ def _run_pipeline(
 _SERVICE_SYSTEM = (
     "You are a local SEO strategist. Given a SERVICE and a CITY, produce the set of "
     "distinct service-variation landing pages a local business offering that service "
-    "should have, grouped into silos by the kind of variation. Apply only modifiers "
-    "that genuinely fit THIS service:\n"
-    "  - Availability / urgency: 24 hour, after hours, weekend, same day, emergency "
-    "(when not already in the service);\n"
+    "should have, grouped into silos by the kind of variation. For each page return "
+    "ONLY the MODIFIER -- the few words that distinguish the variation -- NOT the full "
+    "phrase. The service and city are attached automatically as "
+    "'<modifier> <service> <city>'. So for service 'emergency plumber' in 'Sydney', "
+    "the modifier 'after hours' becomes the page 'after hours emergency plumber "
+    "Sydney', and 'burst pipe' becomes 'burst pipe emergency plumber Sydney'. Apply "
+    "only modifiers that genuinely fit THIS service:\n"
+    "  - Availability / urgency: 24 hour, after hours, weekend, same day (only add "
+    "'emergency' if the service doesn't already say it);\n"
     "  - Audience / property: commercial, residential, strata, industrial;\n"
     "  - Job / problem type for the trade: e.g. for an emergency plumber -- burst "
     "pipe, blocked drain, hot water, gas leak, leaking tap; for a roofer -- leak "
     "repair, storm damage, re-roofing, gutter.\n"
-    "ALWAYS keep the service's own qualifier -- an 'emergency plumber' stays an "
-    "EMERGENCY service; never broaden to a bare 'plumber'. Do NOT add suburb / "
-    "neighbourhood names (handled separately) -- the only location is the CITY. Each "
-    "page's keyword is the natural search phrase '<variation> <city>'. Include the "
-    "base service ('<service> <city>') as one page. Give each page 0-3 "
-    "supporting_keywords that are close phrasings / plurals / word-order variants of "
-    "the same intent. Quality over quantity -- only real, distinct page topics."
+    "Rules for the modifier: it is JUST the variation words -- NEVER repeat the "
+    "service words (e.g. 'plumber', 'emergency'), the city, or any suburb / "
+    "neighbourhood name in it (suburbs are handled separately). Include ONE base page "
+    "with an empty modifier (\"\") for the service itself. Each page's "
+    "supporting_keywords are 0-3 full search phrases for the SAME page that DO include "
+    "the full service (close phrasings / plurals / word-order variants). Quality over "
+    "quantity -- only real, distinct page topics."
 )
 
 _SERVICE_SCHEMA = {
@@ -274,10 +282,13 @@ _SERVICE_SCHEMA = {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "keyword": {"type": "string"},
+                                "modifier": {
+                                    "type": "string",
+                                    "description": "Variation words ONLY (e.g. 'after hours', 'burst pipe', 'commercial'); empty for the base service page.",
+                                },
                                 "supporting_keywords": {"type": "array", "items": {"type": "string"}},
                             },
-                            "required": ["keyword", "supporting_keywords"],
+                            "required": ["modifier", "supporting_keywords"],
                         },
                     },
                 },
@@ -307,11 +318,33 @@ def _service_llm():
         return None
 
 
+def _compose_service_keyword(modifier: str, service: str, city: str) -> str:
+    """Splice a service-silo page keyword as "<modifier> <service> <city>", always
+    keeping the FULL service phrase. The model returns only the variation modifier
+    (e.g. "after hours", "burst pipe", "commercial"); composing the service in
+    deterministically means the qualifier can never be dropped (Haiku kept dropping
+    it when asked to emit whole phrases — "after hours plumber" instead of "after
+    hours emergency plumber"). Modifier words already present in the service are
+    stripped so a redundant modifier (e.g. "emergency" for "emergency plumber", or
+    "hot water emergency") doesn't duplicate them; an empty modifier yields the base
+    "<service> <city>" page."""
+    service = (service or "").strip()
+    city = (city or "").strip()
+    service_words = {w.lower() for w in service.split()}
+    mod_words = [w for w in (modifier or "").split() if w.lower() not in service_words]
+    modifier = " ".join(mod_words).strip()
+    head = f"{modifier} {service}".strip() if modifier else service
+    return f"{head} {city}".strip()
+
+
 def _generate_service_pages(service: str, city: str, llm) -> list[dict]:
     """Haiku tool-use: the service-variation landing pages for "<service> <city>",
-    grouped into silos. Returns [{"silo": name, "pages": [{keyword,
-    supporting_keywords}]}], deduped across silos by keyword (first silo wins).
-    The LLM is injected so this is unit-testable without the network."""
+    grouped into silos. The model returns only each page's MODIFIER (the variation
+    words); the full keyword is composed deterministically as
+    "<modifier> <service> <city>" so the service qualifier is always present.
+    Returns [{"silo": name, "pages": [{keyword, supporting_keywords}]}], deduped
+    across silos by composed keyword (first silo wins). The LLM is injected so this
+    is unit-testable without the network."""
     try:
         data = llm.call_tool(
             system=_SERVICE_SYSTEM,
@@ -326,14 +359,14 @@ def _generate_service_pages(service: str, city: str, llm) -> list[dict]:
         raise ValueError(f"service_gen_failed: {exc}") from exc
 
     per_silo: list[dict] = []
-    seen: set[str] = set()  # dedupe page keywords across all silos (first wins)
+    seen: set[str] = set()  # dedupe composed page keywords across all silos (first wins)
     for silo in data.get("silos") or []:
         name = (silo.get("name") or "").strip()
         if not name:
             continue
         pages: list[dict] = []
         for page in silo.get("pages") or []:
-            kw = (page.get("keyword") or "").strip()
+            kw = _compose_service_keyword(page.get("modifier") or "", service, city)
             key = kw.lower()
             if not kw or key in seen:
                 continue
@@ -348,6 +381,12 @@ def _generate_service_pages(service: str, city: str, llm) -> list[dict]:
             pages.append({"keyword": kw, "supporting_keywords": supporting})
         if pages:
             per_silo.append({"silo": name, "pages": pages})
+
+    # Safety net: guarantee the base "<service> <city>" page exists even if the
+    # model omitted the empty-modifier page.
+    base_kw = _compose_service_keyword("", service, city)
+    if base_kw and base_kw.lower() not in seen and per_silo:
+        per_silo[0]["pages"].insert(0, {"keyword": base_kw, "supporting_keywords": []})
     return per_silo
 
 

@@ -194,30 +194,64 @@ class _FakeLLM:
         return self._payload
 
 
-def test_generate_service_pages_groups_and_dedupes():
+def test_compose_service_keyword_keeps_full_service_and_dedupes_words():
+    # modifier-first splice keeps the full service phrase.
+    assert silo._compose_service_keyword("after hours", "emergency plumber", "Sydney") == \
+        "after hours emergency plumber Sydney"
+    assert silo._compose_service_keyword("burst pipe", "emergency plumber", "Sydney") == \
+        "burst pipe emergency plumber Sydney"
+    # words already in the service are stripped from the modifier (no duplication).
+    assert silo._compose_service_keyword("hot water emergency", "emergency plumber", "Sydney") == \
+        "hot water emergency plumber Sydney"
+    assert silo._compose_service_keyword("emergency", "emergency plumber", "Sydney") == \
+        "emergency plumber Sydney"
+    # empty modifier → the base service page.
+    assert silo._compose_service_keyword("", "emergency plumber", "Sydney") == "emergency plumber Sydney"
+
+
+def test_generate_service_pages_composes_groups_and_dedupes():
     llm = _FakeLLM({"silos": [
         {"name": "Availability", "pages": [
-            {"keyword": "24 hour emergency plumber sydney",
+            {"modifier": "", "supporting_keywords": []},  # base service page
+            {"modifier": "24 hour",
              "supporting_keywords": ["24/7 emergency plumber sydney", "24 hour emergency plumber sydney"]},
-            {"keyword": "after hours emergency plumber sydney", "supporting_keywords": []},
+            {"modifier": "after hours", "supporting_keywords": []},
+        ]},
+        {"name": "Problem Type", "pages": [
+            {"modifier": "burst pipe", "supporting_keywords": []},
+            # model dropped the service qualifier in the modifier — composed back in.
+            {"modifier": "blocked drain plumber", "supporting_keywords": []},
         ]},
         {"name": "Audience", "pages": [
-            {"keyword": "commercial emergency plumber sydney", "supporting_keywords": []},
-            {"keyword": "24 Hour Emergency Plumber Sydney", "supporting_keywords": []},  # cross-silo dup → dropped
+            {"modifier": "commercial", "supporting_keywords": []},
+            {"modifier": "24 Hour", "supporting_keywords": []},  # cross-silo dup → dropped
         ]},
         {"name": "Empty", "pages": []},  # no pages → silo dropped
     ]})
     per_silo = silo._generate_service_pages("emergency plumber", "Sydney", llm)
-    assert [s["silo"] for s in per_silo] == ["Availability", "Audience"]
-    # supporting de-duped against the page's own keyword; plurals/phrasings kept.
-    assert per_silo[0]["pages"][0] == {
-        "keyword": "24 hour emergency plumber sydney",
+    assert [s["silo"] for s in per_silo] == ["Availability", "Problem Type", "Audience"]
+    # every composed keyword carries the full "emergency plumber Sydney".
+    assert per_silo[0]["pages"][1] == {
+        "keyword": "24 hour emergency plumber Sydney",
         "supporting_keywords": ["24/7 emergency plumber sydney"],
     }
-    assert [p["keyword"] for p in per_silo[0]["pages"]] == [
-        "24 hour emergency plumber sydney", "after hours emergency plumber sydney"]
-    # the case-insensitive cross-silo duplicate dropped → Audience keeps only commercial.
-    assert [p["keyword"] for p in per_silo[1]["pages"]] == ["commercial emergency plumber sydney"]
+    assert _kw(per_silo[0]) == [
+        "emergency plumber Sydney", "24 hour emergency plumber Sydney",
+        "after hours emergency plumber Sydney"]
+    # "blocked drain plumber" → "plumber" stripped (already in service) → clean compose.
+    assert _kw(per_silo[1]) == [
+        "burst pipe emergency plumber Sydney", "blocked drain emergency plumber Sydney"]
+    # the case-insensitive cross-silo duplicate ("24 hour") dropped → only commercial.
+    assert _kw(per_silo[2]) == ["commercial emergency plumber Sydney"]
+
+
+def test_generate_service_pages_adds_missing_base_page():
+    # No empty-modifier page from the model → base "<service> <city>" is prepended.
+    llm = _FakeLLM({"silos": [
+        {"name": "Availability", "pages": [{"modifier": "after hours", "supporting_keywords": []}]},
+    ]})
+    per_silo = silo._generate_service_pages("emergency plumber", "Sydney", llm)
+    assert _kw(per_silo[0]) == ["emergency plumber Sydney", "after hours emergency plumber Sydney"]
 
 
 # ── _discover_neighborhood_silo (orchestration, mocked) ───────────────────────
