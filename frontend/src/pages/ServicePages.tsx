@@ -116,7 +116,9 @@ export function ServicePages() {
       api.post<{ created: number }>('/runs/bulk', { client_id: id, content_type: 'service_page', keywords }),
     onSuccess: (res, keywords) => {
       qc.invalidateQueries({ queryKey: ['service-page-runs', id] })
-      setSelected(new Set())
+      // Deselect only what was just created — anything beyond the 20-cap stays
+      // checked for a follow-up batch rather than being silently dropped.
+      setSelected((prev) => new Set([...prev].filter((k) => !keywords.includes(k))))
       setCreatedNote(`Started ${res.created} page${res.created === 1 ? '' : 's'} — see Generated pages below.`)
       // Mark just-created items found locally so they don't read as missing.
       qc.setQueryData<PlanResult>(['service-page-plan', id, jobId], (prev) =>

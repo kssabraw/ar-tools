@@ -202,3 +202,57 @@ def test_classify_on_site_boundary_top_n_inclusive():
     # rank == top_n is "ranking well" → dropped, not offered.
     reopt, removed_top, unchecked = spp.classify_on_site(on_site, [5], top_n=5)
     assert reopt == [] and removed_top == 1 and unchecked == 0
+
+
+# ── start_service_plan (reuse / insert / race) ────────────────────────────────
+
+async def test_start_service_plan_reuses_existing_active_job():
+    with patch.object(spp, "_get_client", return_value={"id": "c1"}), \
+         patch.object(spp, "get_supabase", return_value=MagicMock()), \
+         patch.object(spp, "_active_plan_id", return_value="existing-job"):
+        assert await spp.start_service_plan("c1", "u1") == "existing-job"
+
+
+async def test_start_service_plan_inserts_when_none_active():
+    sb = MagicMock()
+    sb.table.return_value.insert.return_value.execute.return_value.data = [{"id": "new-job"}]
+    with patch.object(spp, "_get_client", return_value={"id": "c1"}), \
+         patch.object(spp, "get_supabase", return_value=sb), \
+         patch.object(spp, "_active_plan_id", return_value=None):
+        assert await spp.start_service_plan("c1", "u1") == "new-job"
+
+
+async def test_start_service_plan_returns_winner_on_insert_conflict():
+    # Concurrent insert loses the partial-unique-index race → return the winner.
+    sb = MagicMock()
+    sb.table.return_value.insert.return_value.execute.side_effect = RuntimeError("duplicate key")
+    with patch.object(spp, "_get_client", return_value={"id": "c1"}), \
+         patch.object(spp, "get_supabase", return_value=sb), \
+         patch.object(spp, "_active_plan_id", side_effect=[None, "winner-job"]):
+        assert await spp.start_service_plan("c1", "u1") == "winner-job"
+
+
+async def test_start_service_plan_reraises_when_conflict_has_no_winner():
+    sb = MagicMock()
+    sb.table.return_value.insert.return_value.execute.side_effect = RuntimeError("real db error")
+    with patch.object(spp, "_get_client", return_value={"id": "c1"}), \
+         patch.object(spp, "get_supabase", return_value=sb), \
+         patch.object(spp, "_active_plan_id", side_effect=[None, None]):
+        try:
+            await spp.start_service_plan("c1", "u1")
+            assert False, "expected the original error to propagate"
+        except RuntimeError as exc:
+            assert "real db error" in str(exc)
+
+
+# ── run_service_plan_job guard ────────────────────────────────────────────────
+
+async def test_run_job_fails_cleanly_without_client_id():
+    sb = MagicMock()
+    # _get_client must never be reached when client_id is missing.
+    with patch.object(spp, "get_supabase", return_value=sb), \
+         patch.object(spp, "_get_client", side_effect=AssertionError("must not be called")):
+        await spp.run_service_plan_job({"id": "job-1", "payload": {}})
+    update_arg = sb.table.return_value.update.call_args[0][0]
+    assert update_arg["status"] == "failed"
+    assert "client_id" in update_arg["error"]

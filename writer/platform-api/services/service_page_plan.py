@@ -134,13 +134,9 @@ def derive_seed(client: dict) -> tuple[str, list[str], list[str]]:
     return "", [], notes
 
 
-async def start_service_plan(client_id: str, user_id: str) -> str:
-    """Enqueue a `service_page_plan` job. Returns the job id. One plan in flight per
-    client — a pending/running job is reused rather than stacking another run."""
-    _get_client(client_id)  # validate existence/ownership
-
-    supabase = get_supabase()
-    existing = (
+def _active_plan_id(supabase, client_id: str) -> str | None:
+    """The id of this client's pending/running service_page_plan job, or None."""
+    res = (
         supabase.table("async_jobs")
         .select("id")
         .eq("job_type", "service_page_plan")
@@ -149,20 +145,43 @@ async def start_service_plan(client_id: str, user_id: str) -> str:
         .limit(1)
         .execute()
     )
-    if existing.data:
-        return existing.data[0]["id"]
+    return res.data[0]["id"] if res.data else None
 
-    res = (
-        supabase.table("async_jobs")
-        .insert(
-            {
-                "job_type": "service_page_plan",
-                "entity_id": client_id,
-                "payload": {"client_id": client_id, "user_id": user_id},
-            }
+
+async def start_service_plan(client_id: str, user_id: str) -> str:
+    """Enqueue a `service_page_plan` job. Returns the job id. One plan in flight per
+    client — a pending/running job is reused rather than stacking another run.
+
+    The reuse check + insert is not atomic, so two concurrent requests could both
+    pass the check; the DB's partial unique index
+    (async_jobs_service_page_plan_active_uniq) rejects the loser's insert, and we
+    return the winner rather than failing the click (each plan bills a full Fanout
+    run)."""
+    _get_client(client_id)  # validate existence/ownership
+
+    supabase = get_supabase()
+    existing = _active_plan_id(supabase, client_id)
+    if existing:
+        return existing
+
+    try:
+        res = (
+            supabase.table("async_jobs")
+            .insert(
+                {
+                    "job_type": "service_page_plan",
+                    "entity_id": client_id,
+                    "payload": {"client_id": client_id, "user_id": user_id},
+                }
+            )
+            .execute()
         )
-        .execute()
-    )
+    except Exception:
+        # Lost the unique-index race to a concurrent insert — return the winner.
+        winner = _active_plan_id(supabase, client_id)
+        if winner:
+            return winner
+        raise
     return res.data[0]["id"]
 
 
@@ -201,12 +220,17 @@ async def run_service_plan_job(job: dict) -> None:
 
     logger.info("service_page_plan.started", extra={"job_id": job_id, "client_id": client_id})
     try:
+        if not client_id:
+            raise ValueError("client_id_required")
         client = _get_client(client_id)
         seed, seed_terms, notes = derive_seed(client)
         if not seed:
             raise ValueError("no_seed: client has no GBP category, scraped services, or name")
 
-        plan = await asyncio.to_thread(_run_pipeline, seed, seed_terms)
+        # Used to re-anchor discovery if the bare category seed reads as ambiguous.
+        gbp = client.get("gbp") or {}
+        hint = (gbp.get("business_name") or client.get("name") or "").strip()
+        plan = await asyncio.to_thread(_run_pipeline, seed, seed_terms, hint)
         plan["degraded_notes"] = [*notes, *plan.get("degraded_notes", [])]
         items = _to_items(plan["per_silo"], client_id)
 
@@ -258,7 +282,7 @@ async def run_service_plan_job(job: dict) -> None:
         ).eq("id", job_id).execute()
 
 
-def _run_pipeline(seed: str, seed_terms: list[str]) -> dict:
+def _run_pipeline(seed: str, seed_terms: list[str], disambiguation_hint: str = "") -> dict:
     """Blocking: silo discovery + refinement via the Fanout pipeline, seeded by the
     business category. Returns {"per_silo": [{"silo": name, "pages": [kw, ...]}],
     "degraded_notes": [...]}. Fanout modules are imported lazily so the spaCy/networkx
@@ -280,6 +304,18 @@ def _run_pipeline(seed: str, seed_terms: list[str]) -> dict:
         llm=llm,
         dfs=dfs,
     )
+    # A bare category seed ("Contractor", "Studio") can read as ambiguous; re-anchor
+    # on the business name so discovery resolves to this business rather than
+    # dead-ending on the disambiguation gate (mirrors local_seo_silo's re-anchor).
+    if disc.needs_disambiguation and disambiguation_hint:
+        disc = run_silo_discovery(
+            seed=seed,
+            topic_count=_TOPIC_COUNT,
+            audience_hint=None,
+            disambiguation_hint=disambiguation_hint,
+            llm=llm,
+            dfs=dfs,
+        )
     notes.extend(disc.degraded_notes)
     if not disc.silos:
         return {
