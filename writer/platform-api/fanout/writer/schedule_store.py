@@ -60,6 +60,12 @@ def get_schedule(schedule_id: str) -> dict | None:
     return res.data[0] if res.data else None
 
 
+def get_run(run_id: str) -> dict | None:
+    res = (get_service_client().table("scheduled_article_runs").select("*")
+           .eq("id", run_id).limit(1).execute())
+    return res.data[0] if res.data else None
+
+
 _STATUSES = ("queued", "running", "complete", "failed", "cancelled")
 
 
@@ -134,3 +140,28 @@ def cancel_schedule(schedule_id: str) -> int:
            .eq("content_schedule_id", schedule_id)
            .in_("status", ["queued", "running"]).execute())
     return len(res.data or [])
+
+
+def cancel_run(run_id: str) -> bool:
+    """Cancel a single still-queued run, leaving the rest of its schedule intact. The update is
+    conditional on `status = 'queued'`, so it no-ops (returns False) if the worker has already
+    claimed the run (running) or it has otherwise moved on — too late to stop it."""
+    res = (get_service_client().table("scheduled_article_runs")
+           .update({"status": "cancelled"})
+           .eq("id", run_id).eq("status", "queued").execute())
+    return bool(res.data)
+
+
+def complete_if_drained(schedule_id: str) -> None:
+    """Mirror the worker's auto-complete: if an active schedule has no queued/running runs left,
+    flip it to `complete`. Called after an API cancel of a single run so cancelling the last
+    pending one settles the parent instead of leaving it stuck `active`."""
+    client = get_service_client()
+    pending = (client.table("scheduled_article_runs").select("id")
+               .eq("content_schedule_id", schedule_id)
+               .in_("status", ["queued", "running"]).limit(1).execute().data or [])
+    if pending:
+        return
+    sched = get_schedule(schedule_id)
+    if sched and sched["status"] == "active":
+        set_schedule_status(schedule_id, "complete")
