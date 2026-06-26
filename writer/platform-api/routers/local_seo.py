@@ -25,6 +25,8 @@ from middleware.auth import require_auth
 from models.local_seo import (
     LocalSeoAnalyzeRequest,
     LocalSeoFindPageRequest,
+    LocalSeoGenerateJob,
+    LocalSeoGenerateJobResult,
     LocalSeoGenerateRequest,
     LocalSeoPageDetail,
     LocalSeoPageListItem,
@@ -70,6 +72,40 @@ async def generate_local_seo_page(
         return LocalSeoPageDetail(**page).model_dump(mode="json")
 
     return sse_response(_run())
+
+
+@router.post("/clients/{client_id}/local-seo/generate-async", response_model=LocalSeoGenerateJob)
+async def generate_local_seo_page_async(
+    client_id: UUID,
+    body: LocalSeoGenerateRequest,
+    auth: dict = Depends(require_auth),
+) -> LocalSeoGenerateJob:
+    """Kick off page generation as a background job (runs minutes; poll for the
+    result). Lets the UI navigate away — even to other clients — while it runs."""
+    job_id = await local_seo_service.enqueue_generate(
+        client_id=str(client_id),
+        keyword=body.keyword,
+        location=body.location,
+        location_code=body.location_code,
+        user_id=auth["user_id"],
+        page_template_url=body.page_template_url,
+        force_refresh=body.force_refresh,
+    )
+    return LocalSeoGenerateJob(job_id=job_id, status="pending")
+
+
+@router.get(
+    "/clients/{client_id}/local-seo/generate/{job_id}",
+    response_model=LocalSeoGenerateJobResult,
+)
+async def get_local_seo_generate_job(
+    client_id: UUID,
+    job_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> LocalSeoGenerateJobResult:
+    """Poll a background generation job; returns its status and (when complete) the
+    new page id."""
+    return LocalSeoGenerateJobResult(**local_seo_service.get_generate_job(str(job_id), str(client_id)))
 
 
 @router.post("/clients/{client_id}/local-seo/precheck")

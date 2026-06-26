@@ -113,10 +113,17 @@ export function LocalSeoContent() {
   const bulkCancelledRef = useRef(false)
   const bulkAbortRef = useRef<AbortController | null>(null)
 
-  // Creating-progress ticker (the generate POST blocks until done, so progress
-  // is time-based rather than streamed).
+  // Creating-progress ticker. Generation runs as a background job; progress is
+  // time-based and we poll the job for completion.
   const [elapsed, setElapsed] = useState(0)
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Background-generation poll. Cancelling stops the polling only — the job keeps
+  // running server-side, so the page still lands in Saved Pages.
+  const genPollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const genCancelledRef = useRef(false)
+  // Detached = the user left the creating screen but the poll keeps running so
+  // Saved Pages updates live when it finishes (without yanking them back).
+  const genDetachedRef = useRef(false)
 
   const hasGbp = Boolean(client?.gbp?.business_name)
   const hasWebsite = Boolean(client?.website_url || client?.gbp?.website)
@@ -140,10 +147,13 @@ export function LocalSeoContent() {
     tickRef.current = setInterval(() => setElapsed(s => s + 1), 1000)
   }
   useEffect(() => () => stopTicker(), [])
-  // Stop the bulk timer and abort any in-flight generate if the page unmounts mid-run.
+  // Stop the bulk timer, the generate poll, and abort any in-flight bulk generate
+  // if the page unmounts mid-run. The background generate job itself keeps running.
   useEffect(() => () => {
     if (bulkTickRef.current) clearInterval(bulkTickRef.current)
     bulkAbortRef.current?.abort()
+    genCancelledRef.current = true
+    if (genPollRef.current) clearTimeout(genPollRef.current)
   }, [])
 
   const refreshSaved = () => {
@@ -154,24 +164,69 @@ export function LocalSeoContent() {
   // ── Actions ────────────────────────────────────────────────────────────────
 
   // Actually write the page (no precheck). Used after the user opts past the
-  // existing-page gate, and by the bulk-create flow which already filtered to
-  // pages that don't exist.
+  // existing-page gate. Runs as a background job: we kick it off, then poll —
+  // but the user can leave at any time (even switch clients) and it keeps going
+  // server-side, landing in Saved Pages when done.
   const runGenerate = async (kwOverride?: string) => {
     const kw = (typeof kwOverride === 'string' ? kwOverride : keyword).trim()
     if (!kw || !location.trim()) return
     setError('')
     setView({ kind: 'creating' })
     startTicker()
+    genCancelledRef.current = false
+    genDetachedRef.current = false
+    if (genPollRef.current) clearTimeout(genPollRef.current)
     try {
-      const page = await localSeoApi.generate(clientId, { keyword: kw, location: location.trim(), location_code: locationCode, force_refresh: forceRefresh, page_template_url: pageTemplateUrl.trim() || null })
-      refreshSaved()
-      setView({ kind: 'generated', page, isNew: true, prevScore: null })
+      const { job_id } = await localSeoApi.generateAsync(clientId, {
+        keyword: kw, location: location.trim(), location_code: locationCode,
+        force_refresh: forceRefresh, page_template_url: pageTemplateUrl.trim() || null,
+      })
+      const poll = async () => {
+        if (genCancelledRef.current) return
+        try {
+          const res = await localSeoApi.getGenerateJob(clientId, job_id)
+          if (genCancelledRef.current) return
+          if (res.status === 'complete' && res.page_id) {
+            stopTicker()
+            refreshSaved() // page appears in Saved Pages even if the user left
+            if (!genDetachedRef.current) {
+              const page = await localSeoApi.getPage(res.page_id)
+              if (!genCancelledRef.current && !genDetachedRef.current) {
+                setView({ kind: 'generated', page, isNew: true, prevScore: null })
+              }
+            }
+            return
+          }
+          if (res.status === 'failed') {
+            stopTicker()
+            if (!genDetachedRef.current) {
+              setError(res.error || 'Generation failed')
+              setView({ kind: 'form' })
+            }
+            return
+          }
+        } catch {
+          // transient poll error — keep trying
+        }
+        genPollRef.current = setTimeout(poll, 3000)
+      }
+      genPollRef.current = setTimeout(poll, 3000)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Generation failed')
-      setView({ kind: 'form' })
-    } finally {
       stopTicker()
+      setError(e instanceof Error ? e.message : 'Could not start generation')
+      setView({ kind: 'form' })
     }
+  }
+
+  // Leave the creating screen without cancelling the job. The poll keeps running
+  // (detached), so the finished page drops into Saved Pages live; navigating to
+  // another client unmounts the page and stops the poll, but the job still
+  // completes server-side and the page is there on return.
+  const leaveGenerating = () => {
+    genDetachedRef.current = true
+    stopTicker()
+    setView({ kind: 'form' })
+    setTab('saved')
   }
 
   // Primary "Create new page" action: gate on the existing-page precheck. If the
@@ -349,7 +404,7 @@ export function LocalSeoContent() {
 
   // ── Sub-view routing ─────────────────────────────────────────────────────
 
-  if (view.kind === 'creating') return <CreatingView elapsed={elapsed} />
+  if (view.kind === 'creating') return <CreatingView elapsed={elapsed} onLeave={leaveGenerating} />
 
   if (view.kind === 'prechecking') {
     return (
@@ -417,7 +472,7 @@ export function LocalSeoContent() {
           serpAnalysis={view.serpAnalysis}
           onBack={() => setView({ kind: 'form' })}
           onReoptimized={(page, prevScore) => { refreshSaved(); setView({ kind: 'generated', page, isNew: true, prevScore }) }}
-          onCreateNew={() => handleGenerate()}
+          onCreateNew={() => runGenerate()}
         />
       </div>
     )
@@ -1043,7 +1098,7 @@ function ExistingPageChoiceView({
   )
 }
 
-function CreatingView({ elapsed }: { elapsed: number }) {
+function CreatingView({ elapsed, onLeave }: { elapsed: number; onLeave?: () => void }) {
   const pct = Math.min(95, Math.round((elapsed / 180) * 100))
   // Analysis always runs first, so the progress steps always include it.
   const steps = [
@@ -1077,6 +1132,18 @@ function CreatingView({ elapsed }: { elapsed: number }) {
         <div style={{ width: '100%', height: 6, background: '#f1f5f9', borderRadius: 999, overflow: 'hidden' }}>
           <div style={{ height: '100%', background: '#6366f1', borderRadius: 999, width: `${pct}%`, transition: 'width 0.5s' }} />
         </div>
+      </div>
+
+      {/* Generation runs server-side as a background job, so leaving is safe. */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: 16 }}>
+        <p style={{ fontSize: 12, color: '#64748b', textAlign: 'center', margin: 0 }}>
+          You can leave this page — generation continues in the background and the finished page appears in <b>Saved Pages</b>. Feel free to work on other clients meanwhile.
+        </p>
+        {onLeave && (
+          <button style={outlineBtn} onClick={onLeave}>
+            Leave &amp; finish in the background
+          </button>
+        )}
       </div>
     </div>
   )

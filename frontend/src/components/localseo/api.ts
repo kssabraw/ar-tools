@@ -34,6 +34,25 @@ export const localSeoApi = {
     signal?: AbortSignal,
   ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body, signal),
 
+  // Background generation — enqueue a job and poll, so the UI can navigate away
+  // (even to other clients) while the page generates server-side. The page lands
+  // in the client's pages when done.
+  generateAsync: (
+    clientId: string,
+    body: {
+      keyword: string
+      location: string
+      location_code?: number | null
+      force_refresh?: boolean
+      page_template_url?: string | null
+    },
+  ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/generate-async`, body),
+
+  getGenerateJob: (clientId: string, jobId: string) =>
+    api.get<{ status: string; page_id?: string | null; error?: string | null }>(
+      `/clients/${clientId}/local-seo/generate/${jobId}`,
+    ),
+
   // Pre-write existing-page detection (in-tool + live site + GSC/DataForSEO
   // ranking). The New Page flow runs this first and, when it returns matches,
   // offers reoptimize-vs-write-new before generating. SSE — the live scan + SERP

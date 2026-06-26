@@ -357,6 +357,90 @@ async def generate_page(
     return _persist_page(client_id, keyword, location, True, "generate", result, user_id)
 
 
+# ── background generation (async job) ────────────────────────────────────────
+# Generation takes minutes; running it as an async_jobs job (rather than a
+# blocking SSE stream) lets the UI kick it off and navigate away — even to other
+# clients — while it runs server-side. The page lands in the client's pages when
+# done; the UI polls get_generate_job for status.
+
+async def enqueue_generate(
+    client_id: str, keyword: str, location: str, location_code: Optional[int],
+    user_id: str, page_template_url: Optional[str] = None, force_refresh: bool = False,
+) -> str:
+    """Validate the area, then enqueue a `local_seo_generate` job. Returns the job
+    id. The location is resolved up front so a mistyped area fails fast (400) before
+    the job is created, instead of failing silently in the background."""
+    client = _get_client(client_id)
+    location, location_code = await locations_service.resolve_location(client, location, location_code)
+    supabase = get_supabase()
+    res = (
+        supabase.table("async_jobs")
+        .insert(
+            {
+                "job_type": "local_seo_generate",
+                "entity_id": client_id,
+                "payload": {
+                    "client_id": client_id,
+                    "keyword": keyword.strip(),
+                    "location": location,
+                    "location_code": location_code,
+                    "user_id": user_id,
+                    "page_template_url": (page_template_url or "").strip() or None,
+                    "force_refresh": bool(force_refresh),
+                },
+            }
+        )
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+async def run_generate_job(job: dict) -> None:
+    """async_jobs handler for job_type='local_seo_generate'. Runs generate_page
+    (which persists the page) and stores the new page id in the job result."""
+    payload = job.get("payload") or {}
+    job_id = job["id"]
+    supabase = get_supabase()
+    try:
+        page = await generate_page(
+            client_id=payload["client_id"],
+            keyword=payload["keyword"],
+            location=payload["location"],
+            location_code=payload.get("location_code"),
+            user_id=payload["user_id"],
+            force_refresh=bool(payload.get("force_refresh")),
+            page_template_url=payload.get("page_template_url"),
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.info("local_seo.generate_job_complete", extra={"job_id": job_id, "page_id": page["id"]})
+    except Exception as exc:  # noqa: BLE001 — record the failure for the poller
+        detail = getattr(exc, "detail", None) or str(exc)
+        logger.warning("local_seo.generate_job_failed", extra={"job_id": job_id, "error": str(detail)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+
+def get_generate_job(job_id: str, client_id: str) -> dict:
+    """Poll a generate job (scoped to the client). Returns
+    {status, page_id, error}."""
+    supabase = get_supabase()
+    res = (
+        supabase.table("async_jobs")
+        .select("status, result, error, entity_id")
+        .eq("id", job_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data or res.data[0].get("entity_id") != client_id:
+        raise HTTPException(status_code=404, detail="generate_job_not_found")
+    row = res.data[0]
+    result = row.get("result") or {}
+    return {"status": row["status"], "page_id": result.get("page_id"), "error": row.get("error")}
+
+
 async def analyze(
     client_id: str, keyword: str, location: str, location_code: Optional[int], force_refresh: bool = False,
 ) -> dict:

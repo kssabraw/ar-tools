@@ -31,6 +31,21 @@ class PageTemplateDefaultRequest(BaseModel):
     page_template_url: Optional[str] = None
 
 
+class LocalSeoGenerateJob(BaseModel):
+    """Handle for a backgrounded page generation (enqueued async job)."""
+
+    job_id: UUID
+    status: str
+
+
+class LocalSeoGenerateJobResult(BaseModel):
+    """Poll result for a backgrounded page generation."""
+
+    status: str  # pending | running | complete | failed
+    page_id: Optional[UUID] = None
+    error: Optional[str] = None
+
+
 class LocalSeoPrecheckRequest(BaseModel):
     """Detect existing/ranking pages for a keyword before writing a new page."""
 
