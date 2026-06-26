@@ -3,8 +3,12 @@
 Replaces the shallow single-keyword `/related-pages` lookup behind the
 "Plan Silo" tab with the Topic Fanout keyword-research pipeline: silo discovery
 (LLM grounding + DataForSEO demand / competitor signals) → keyword expansion →
-relevance gating → Louvain clustering. Each cluster representative becomes one
-candidate local page target, grouped under its silo.
+relevance gating → Louvain clustering. The clustered keywords then run through a
+Haiku **decision-fit** pass that organizes them into page topics by the buyer's
+decision: same-intent variants (phrasing / urgency / locality) become one page's
+supporting keywords, while decision-splitting modifiers (commercial vs
+residential, problem type, …) get their own page. Each page topic is a candidate
+local page target, grouped under its silo (and deduped across silos).
 
 On top of the Fanout service silos, the planner adds a geocoding-verified
 "Neighborhoods" silo. It proposes the target city's sub-areas (Haiku — in
@@ -313,38 +317,69 @@ def _run_pipeline(
     )
     notes.extend(pipe.degraded_notes)
 
-    # Each Louvain cluster representative = one candidate page, grouped by silo.
-    # If a silo had too few keywords to cluster, fall back to its strongest
-    # active keywords so the silo isn't silently dropped.
+    # Each silo's clustered keywords → page topics. A Haiku decision-fit pass
+    # organizes them by the buyer's decision (same-intent variants become one
+    # page's supporting keywords; decision-splitting modifiers get their own
+    # page); absent the key or on failure we fall back to cluster representatives.
     clusters = (pipe.clustering_log or {}).get("topics", {})
     # Per-(silo, keyword) relevance, to assign a duplicate keyword to its single
-    # best-fitting silo below.
+    # best-fitting silo below and to rank a silo's page topics.
     rel_by_topic: dict[str, dict[str, float]] = {
         t.id: {k.keyword.strip().lower(): (k.relevance_score or 0.0)
                for k in pipe.per_topic_gated.get(t.id, [])}
         for t in topics
     }
+    df_llm = _decision_fit_llm()
+
     raw_silos: list[dict] = []
     for t in topics:
-        groupings = (clusters.get(t.id) or {}).get("groupings", [])
-        pages: list[str] = []
+        groupings = sorted(
+            (clusters.get(t.id) or {}).get("groupings", []),
+            key=lambda g: g.get("size", 0), reverse=True,
+        )
+        # Pool = the silo's clustered keywords (deduped); reps = the per-cluster
+        # representatives, used as the decision-fit fallback.
+        pool: list[str] = []
+        reps: list[str] = []
         seen: set[str] = set()
-        for g in sorted(groupings, key=lambda g: g.get("size", 0), reverse=True):
+        rep_seen: set[str] = set()
+        for g in groupings:
             rep = (g.get("representative") or "").strip()
-            key = rep.lower()
-            if rep and key not in seen:
-                seen.add(key)
-                pages.append(rep)
-            if len(pages) >= _MAX_PAGES_PER_SILO:
-                break
-        if not pages:
+            if rep and rep.lower() not in rep_seen:
+                rep_seen.add(rep.lower())
+                reps.append(rep)
+            for kw in (g.get("keywords") or ([rep] if rep else [])):
+                k = (kw or "").strip()
+                if k and k.lower() not in seen:
+                    seen.add(k.lower())
+                    pool.append(k)
+        if not pool:  # too few keywords to cluster — use the strongest actives
             actives = [k for k in pipe.per_topic_gated.get(t.id, []) if k.status == "active"]
             actives.sort(key=lambda k: (k.relevance_score or 0.0), reverse=True)
-            for k in actives[:_MAX_PAGES_PER_SILO]:
-                key = k.keyword.strip().lower()
-                if key not in seen:
-                    seen.add(key)
-                    pages.append(k.keyword.strip())
+            for k in actives:
+                kk = k.keyword.strip()
+                if kk and kk.lower() not in seen:
+                    seen.add(kk.lower())
+                    pool.append(kk)
+                    reps.append(kk)
+        pool = pool[: settings.local_seo_max_pool_per_silo]
+
+        pages: Optional[list[dict]] = None
+        if df_llm and pool:
+            try:
+                pages = _decision_fit_pages(silo_names[t.id], pool, df_llm)
+            except Exception as exc:  # noqa: BLE001 — fall back to representatives
+                logger.warning(
+                    "local_seo_silo.decision_fit_failed",
+                    extra={"silo": silo_names[t.id], "error": str(exc)},
+                )
+                pages = None
+        if not pages:
+            pages = [{"keyword": r, "supporting_keywords": []} for r in reps]
+        # Strongest page topics first, then cap.
+        rel = rel_by_topic.get(t.id, {})
+        pages.sort(key=lambda p: rel.get(p["keyword"].strip().lower(), 0.0), reverse=True)
+        pages = pages[:_MAX_PAGES_PER_SILO]
         if pages:
             raw_silos.append({"id": t.id, "silo": silo_names[t.id], "pages": pages})
 
@@ -354,25 +389,124 @@ def _run_pipeline(
 def _dedupe_across_silos(
     raw_silos: list[dict], rel_by_topic: dict[str, dict[str, float]],
 ) -> list[dict]:
-    """Keep each candidate keyword in only ONE silo — the one where it's most
-    relevant. The relevance gate routes a generic head term (e.g. "plumber
-    sydney") into several silos, so without this the same page target appears
-    under each. Highest per-silo relevance wins; ties go to the earlier
-    (discovery-order) silo; a silo left empty is dropped. Pure; unit-tested."""
+    """Keep each candidate page (by its primary keyword) in only ONE silo — the
+    one where it's most relevant. The relevance gate routes a generic head term
+    (e.g. "plumber sydney") into several silos, so without this the same page
+    target appears under each. Highest per-silo relevance wins; ties go to the
+    earlier (discovery-order) silo; a silo left empty is dropped. Pure;
+    unit-tested."""
     best: dict[str, tuple[float, str]] = {}  # keyword_lower -> (score, topic_id)
     for entry in raw_silos:
         rel = rel_by_topic.get(entry["id"], {})
-        for kw in entry["pages"]:
-            key = kw.strip().lower()
+        for page in entry["pages"]:
+            key = page["keyword"].strip().lower()
             score = rel.get(key, 0.0)
             if key not in best or score > best[key][0]:
                 best[key] = (score, entry["id"])
 
     out: list[dict] = []
     for entry in raw_silos:
-        kept = [kw for kw in entry["pages"] if best[kw.strip().lower()][1] == entry["id"]]
+        kept = [p for p in entry["pages"] if best[p["keyword"].strip().lower()][1] == entry["id"]]
         if kept:
             out.append({"silo": entry["silo"], "pages": kept})
+    return out
+
+
+# ── decision-fit topic mapping (page = primary keyword + same-intent variants) ─
+
+_DECISION_FIT_SYSTEM = (
+    "You are a local SEO strategist. Organize a group of related keywords for one "
+    "service area into PAGE TOPICS by the buyer's decision / search intent. Two "
+    "keywords belong on the SAME page when it's the same offer to the same buyer "
+    "and only the phrasing, urgency, or locality differs (e.g. 'emergency plumber "
+    "sydney' = '24 hour emergency plumber in sydney' = 'after hours plumber sydney'). "
+    "They need SEPARATE pages when a modifier changes the BUYER or the JOB — audience "
+    "(commercial vs residential), property type, problem type (gas, blocked drain, hot "
+    "water), or service stage (install vs repair). For each page pick the primary "
+    "keyword (the most natural head term real people search) and list the other "
+    "provided keywords that share its intent as supporting keywords. Use ONLY the "
+    "provided keywords — never invent new ones — and put each provided keyword in "
+    "exactly one page."
+)
+
+_DECISION_FIT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "pages": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "primary_keyword": {"type": "string"},
+                    "supporting_keywords": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["primary_keyword", "supporting_keywords"],
+            },
+        }
+    },
+    "required": ["pages"],
+}
+
+
+def _decision_fit_llm():
+    """Construct the Haiku decision-fit client, or None when the Anthropic key is
+    absent (the planner then falls back to cluster representatives)."""
+    if not settings.anthropic_api_key:
+        return None
+    try:
+        from fanout.llm.anthropic_client import AnthropicLLM
+
+        return AnthropicLLM(
+            api_key=settings.anthropic_api_key,
+            model=settings.local_seo_decision_fit_model,
+            max_tokens=2048,
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort; fall back to reps
+        logger.warning("local_seo_silo.decision_fit_client_failed", extra={"error": str(exc)})
+        return None
+
+
+def _decision_fit_pages(silo_name: str, keywords: list[str], llm) -> list[dict]:
+    """Haiku tool-use: organize a silo's keywords into page topics by intent.
+    Returns [{keyword, supporting_keywords}]. Validates the model only used the
+    provided keywords (no invented volume), keeps each keyword in one page, and
+    recovers any keyword the model dropped as its own page so demand isn't lost."""
+    allowed: dict[str, str] = {}
+    for k in keywords:
+        allowed.setdefault(k.strip().lower(), k.strip())
+    try:
+        data = llm.call_tool(
+            system=_DECISION_FIT_SYSTEM,
+            user=(f"Silo: {silo_name}\nKeywords:\n" + "\n".join(f"- {v}" for v in allowed.values())),
+            tool_name="map_page_topics",
+            tool_description="Group the keywords into page topics by the buyer's decision / search intent.",
+            input_schema=_DECISION_FIT_SCHEMA,
+            purpose="local_seo_silo/decision_fit",
+            temperature=0.0,
+        )
+    except Exception as exc:  # noqa: BLE001 — caller falls back to cluster reps
+        raise ValueError(f"decision_fit_llm_failed: {exc}") from exc
+
+    out: list[dict] = []
+    used: set[str] = set()
+    for page in data.get("pages") or []:
+        pk = (page.get("primary_keyword") or "").strip().lower()
+        if not pk or pk not in allowed or pk in used:
+            continue
+        used.add(pk)
+        supporting: list[str] = []
+        for s in page.get("supporting_keywords") or []:
+            sk = (s or "").strip().lower()
+            if sk in allowed and sk != pk and sk not in used:
+                used.add(sk)
+                supporting.append(allowed[sk])
+        out.append({"keyword": allowed[pk], "supporting_keywords": supporting})
+
+    # Any keyword the model omitted becomes its own page (never drop real demand).
+    for kl, kw in allowed.items():
+        if kl not in used:
+            used.add(kl)
+            out.append({"keyword": kw, "supporting_keywords": []})
     return out
 
 
@@ -548,17 +682,17 @@ async def _discover_neighborhood_silo(
 
     # Keywords already planned in other silos — don't re-surface a sub-area page
     # the Fanout expansion already produced.
-    existing = {p.strip().lower() for g in per_silo for p in g.get("pages", [])}
-    pages: list[str] = []
+    existing = {p["keyword"].strip().lower() for g in per_silo for p in g.get("pages", [])}
+    pages: list[dict] = []
     seen: set[str] = set()
     for name in names:
         if not place_is_within_city(geo.get(queries[name]) or {}, city_geo):
             continue
-        page = f"{keyword} {name}".strip()
-        key = page.lower()
+        page_kw = f"{keyword} {name}".strip()
+        key = page_kw.lower()
         if key not in existing and key not in seen:
             seen.add(key)
-            pages.append(page)
+            pages.append({"keyword": page_kw, "supporting_keywords": []})
 
     if not pages:
         return None, ["No sub-areas could be verified within the city."]
@@ -592,7 +726,8 @@ def _to_items(per_silo: list[dict], client_id: str) -> list[dict]:
     items: list[dict] = []
     for group in per_silo:
         silo = group["silo"]
-        for kw in group["pages"]:
+        for page in group["pages"]:
+            kw = page["keyword"]
             match = existing.get(kw.strip().lower())
             items.append(
                 {
@@ -600,6 +735,7 @@ def _to_items(per_silo: list[dict], client_id: str) -> list[dict]:
                     "group": silo,
                     "status": "found" if match else "missing",
                     "url": (match or {}).get("published_doc_url"),
+                    "supporting_keywords": page.get("supporting_keywords", []),
                 }
             )
     return items

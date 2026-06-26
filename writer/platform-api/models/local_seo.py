@@ -97,13 +97,17 @@ class LocalSeoSiloPlanJob(BaseModel):
 
 
 class LocalSeoSiloPlanItem(BaseModel):
-    """One candidate page target (a cluster representative) under its silo."""
+    """One candidate page topic under its silo: a primary keyword plus the
+    same-intent supporting keywords the page should also target (from the
+    decision-fit mapping)."""
 
     keyword: str
     # The silo this target belongs to (free-form label from silo discovery).
     group: str
     status: str  # 'found' (a page already exists) | 'missing'
     url: Optional[str] = None
+    # Same-decision variants (phrasing / urgency / locality) the page covers.
+    supporting_keywords: list[str] = Field(default_factory=list)
 
 
 class LocalSeoSiloPlanResult(BaseModel):
