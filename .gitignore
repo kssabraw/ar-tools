@@ -123,3 +123,6 @@ venv.bak/
 
 # Local working directory for ad-hoc files (n8n exports, sample payloads, etc.)
 scratch/
+
+# Claude Code local (personal) settings — not shared
+.claude/settings.local.json
