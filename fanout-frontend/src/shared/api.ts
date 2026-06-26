@@ -1103,3 +1103,6 @@ export const resumeSchedule = (sessionId: string, scheduleId: string) =>
 export const cancelSchedule = (sessionId: string, scheduleId: string) =>
   request<{ status: string; cancelled_runs: number }>(
     `/sessions/${sessionId}/schedules/${scheduleId}/cancel`, { method: "POST" });
+export const cancelScheduleRun = (sessionId: string, runId: string) =>
+  request<{ status: string; run_id: string }>(
+    `/sessions/${sessionId}/schedule-runs/${runId}/cancel`, { method: "POST" });

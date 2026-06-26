@@ -232,6 +232,32 @@ def list_schedule_runs(session_id: str, user: AuthedUser = Depends(require_user)
     return {"runs": schedule_store.list_runs(session_id)}
 
 
+@router.post("/sessions/{session_id}/schedule-runs/{run_id}/cancel")
+def cancel_schedule_run(
+    session_id: str, run_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Cancel a single still-queued article run, leaving the rest of its schedule running. A run
+    that's already writing (running) or finished (complete/failed/cancelled) can't be stopped."""
+    _require_session(user, session_id)
+    run = schedule_store.get_run(run_id)
+    if not run or run["session_id"] != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if run["status"] != "queued":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This article is already {run['status']} — too late to cancel.",
+        )
+    if not schedule_store.cancel_run(run_id):
+        # Lost the race with the worker between the read and the conditional update.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This article just started writing — too late to cancel.",
+        )
+    if run.get("content_schedule_id"):
+        schedule_store.complete_if_drained(run["content_schedule_id"])
+    return {"status": "cancelled", "run_id": run_id}
+
+
 def _require_schedule(user: AuthedUser, session_id: str, schedule_id: str) -> dict:
     _require_session(user, session_id)
     sched = schedule_store.get_schedule(schedule_id)

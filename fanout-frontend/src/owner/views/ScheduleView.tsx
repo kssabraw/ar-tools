@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelSchedule,
+  cancelScheduleRun,
   getClusters,
   getSession,
   listScheduleRuns,
@@ -92,10 +93,10 @@ export function ScheduleView() {
 
       {runs.length > 0 && (
         <div className="card">
-          <h3 style={{ marginTop: 0 }}>Runs ({runs.length})</h3>
+          <h3 style={{ marginTop: 0 }}>Scheduled articles ({runs.length})</h3>
           <table className="kw-table">
             <thead>
-              <tr><th>Article</th><th>Scheduled</th><th>Status</th><th>Note</th></tr>
+              <tr><th>Article</th><th>Scheduled</th><th>Status</th><th>Note</th><th></th></tr>
             </thead>
             <tbody>
               {runs.slice(0, 500).map((r) => (
@@ -105,6 +106,20 @@ export function ScheduleView() {
                   <td><span className={"badge " + statusBadge(r.status)}>{r.status}</span></td>
                   <td className="cell-muted" style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis" }}>
                     {r.error ?? ""}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    {r.status === "queued" && (
+                      <button
+                        className="link-btn link-danger"
+                        disabled={act.isPending}
+                        onClick={() => {
+                          if (confirm(`Cancel “${clusterName(r.cluster_id)}”? It won’t be written.`))
+                            act.mutate(() => cancelScheduleRun(sessionId, r.id));
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
