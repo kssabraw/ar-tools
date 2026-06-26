@@ -1,35 +1,34 @@
-"""Local SEO silo planner (#2) — Fanout-powered page-target discovery.
+"""Local SEO silo planner (#2) — service-variation + neighborhood page targets.
 
-Replaces the shallow single-keyword `/related-pages` lookup behind the
-"Plan Silo" tab with the Topic Fanout keyword-research pipeline: silo discovery
-(LLM grounding + DataForSEO demand / competitor signals) → keyword expansion →
-relevance gating → Louvain clustering. The clustered keywords then run through a
-Haiku **decision-fit** pass that organizes them into page topics by the buyer's
-decision: same-intent variants (phrasing / urgency / locality) become one page's
-supporting keywords, while decision-splitting modifiers (commercial vs
-residential, problem type, …) get their own page. Each page topic is a candidate
-local page target, grouped under its silo (and deduped across silos).
+Behind the "Plan Silo" tab. Given a **service + city** it produces two kinds of
+candidate local page targets:
 
-On top of the Fanout service silos, the planner adds a geocoding-verified
-"Neighborhoods" silo. It proposes the target city's sub-areas (Haiku — in
-whatever local term fits the country: neighborhoods, suburbs, districts), then
-geocodes the city + each candidate and keeps only those whose centre falls inside
-the city's geocoded footprint (`place_is_within_city`). This is country-agnostic
-— it works for a US neighborhood nested in the city's locality and an AU/UK
-suburb that is its own locality alike, because it verifies geography, not name
-nesting — and drops adjacent towns, oversized regions, and centroid-fallback
-bogus names. Best-effort and gated on the Anthropic + Google Maps keys; without
-them the rest of the plan is unaffected (a degraded note explains why).
+  1. **Service silos** — a single Haiku call (`_generate_service_pages`) expands
+     the input service into the distinct service-variation landing pages a local
+     business should have, grouped into silos by the kind of variation:
+     availability/urgency (24 hour, after hours, weekend), audience/property
+     (commercial, residential, strata), and trade-specific job/problem types
+     (burst pipe, blocked drain, hot water…). The service's own qualifier is
+     preserved — an "emergency plumber" stays an *emergency* service, never
+     broadening to a bare "plumber" — and no suburb names appear here (that's the
+     Neighborhoods silo's job). Each page is `"<variation> <city>"` plus a few
+     same-intent supporting keywords.
 
-The pipeline is reused *by import* from the vendored Fanout backend
-(`writer/platform-api/fanout/`); we inject Fanout's own DataForSEO client, LLM,
-and embedding fn via its factories (`get_dataforseo` / `get_llm`). Tuning
-differs from Fanout's session defaults so local-intent (geo-modified) keywords
-survive: the relevance threshold is relaxed and the language gate is skipped —
-the "let Fanout surface geo keywords" decision.
+  2. **Neighborhoods silo** — geocoding-verified. It proposes the city's
+     sub-areas (Haiku — in whatever local term fits the country: neighborhoods,
+     suburbs, districts), then geocodes the city + each candidate and keeps only
+     those whose centre falls inside the city's geocoded footprint
+     (`place_is_within_city`). Country-agnostic — it works for a US neighborhood
+     nested in the city's locality and an AU/UK suburb that is its own locality
+     alike, because it verifies geography, not name nesting — and drops adjacent
+     towns, oversized regions, and centroid-fallback bogus names.
 
-The full pipeline runs for minutes and bills DataForSEO/LLM, so it executes as
-an `async_jobs` job (job_type='local_seo_silo'); the route enqueues + polls.
+Both steps are best-effort and gated on the Anthropic (+ Google Maps for
+neighborhoods) keys; without them the rest of the plan is unaffected (a degraded
+note explains why). It runs as an `async_jobs` job (job_type='local_seo_silo');
+the route enqueues + polls. (The earlier Topic-Fanout keyword-expansion pipeline
+was dropped here — it broadened too far and surfaced generic-service + suburb
+noise the service silos kept having to filter out.)
 """
 
 from __future__ import annotations
@@ -44,21 +43,6 @@ from config import settings
 from db.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
-
-# Tuning for the local-SEO use of the Fanout pipeline. Smaller than Fanout's
-# full-session defaults (this is a focused per-service plan, not a research
-# session) to bound cost/latency; the relevance threshold is relaxed below
-# Fanout's 0.62 so geo-modified variants ("…near me", "… <city>") survive.
-_TOPIC_COUNT = 5
-_RELEVANCE_THRESHOLD = 0.50
-_KEYWORD_IDEAS_LIMIT = 300
-_AUTOCOMPLETE_MAX = 300
-_PAA_TIER1_SEEDS = 6
-_PAA_TIER2_CAP = 24
-# Cap candidate pages surfaced per silo so the bulk-create list stays usable.
-_MAX_PAGES_PER_SILO = 12
-# US fallback market when the area didn't resolve to a DataForSEO location_code.
-_DEFAULT_LOCATION_CODE = 2840
 
 # Neighborhood discovery. The seed service is paired with each verified
 # neighborhood ("<service> <neighborhood>") as a page target under this silo.
@@ -232,233 +216,82 @@ async def run_silo_plan_job(job: dict) -> None:
 
 
 def _run_pipeline(
-    keyword: str, location: str, location_code: Optional[int],
+    keyword: str, location: str, location_code: Optional[int] = None,
     country_location_code: Optional[int] = None,
 ) -> dict:
-    """Blocking: silo discovery + refinement via the Fanout pipeline.
+    """Blocking: generate the service-variation page topics for "<service> <city>"
+    with one Haiku call (no keyword-expansion tool). Returns
+    {"per_silo": [{"silo": name, "pages": [{keyword, supporting_keywords}, ...]}],
+    "degraded_notes": [...]}; the Neighborhoods silo is appended by the job handler.
 
-    Returns {"per_silo": [{"silo": name, "pages": [keyword, ...]}],
-    "degraded_notes": [...]}. Fanout modules are imported lazily so the
-    spaCy/networkx stack only loads when a plan actually runs."""
-    from fanout.dataforseo import get_dataforseo
-    from fanout.llm import LLMError, get_llm
-    from fanout.pipeline.orchestrate import PipelineTopic, run_refinement_pipeline
-    from fanout.pipeline.silo_discovery import run_silo_discovery
-
-    # Seed discovery with "<service> <area>" so grounding + expansion are
-    # geographically anchored and surface geo-modified keywords directly.
-    seed = f"{keyword} {location}".strip() if location else keyword
-    llm = get_llm()
-    # DataForSEO Labs (keyword expansion + competitor mining) only accepts a
-    # country-level location code — a city/region code degrades every Labs call —
-    # so drive the client with the country code; the city stays in the seed. Fall
-    # back to the city code, then US, only when the country can't be resolved.
-    dfs = get_dataforseo(country_location_code or location_code or _DEFAULT_LOCATION_CODE)
-
-    notes: list[str] = []
-    disc = run_silo_discovery(
-        seed=seed,
-        topic_count=_TOPIC_COUNT,
-        audience_hint=None,
-        disambiguation_hint=None,
-        llm=llm,
-        dfs=dfs,
-    )
-    # A "<service> <city>" seed is rarely ambiguous; if it is, re-anchor on the
-    # area to resolve it locally rather than dead-ending on a disambiguation gate.
-    if disc.needs_disambiguation and location:
-        disc = run_silo_discovery(
-            seed=seed,
-            topic_count=_TOPIC_COUNT,
-            audience_hint=None,
-            disambiguation_hint=location,
-            llm=llm,
-            dfs=dfs,
-        )
-    notes.extend(disc.degraded_notes)
-    if not disc.silos:
-        return {
-            "per_silo": [],
-            "degraded_notes": notes or ["No silos could be derived for this service / area."],
-        }
-
-    audience = disc.detected_audience or ""
-    # Rationale anchor per Fanout PRD §7.1.4 (seed + rationale + audience), embedded
-    # to give each silo a routing vector for the relevance gate + clustering.
-    rationale_texts = [
-        " ".join(part for part in (seed, s.rationale or "", audience) if part).strip()
-        for s in disc.silos
-    ]
+    `location_code` / `country_location_code` are accepted for signature
+    compatibility but unused — the planner no longer drives DataForSEO."""
+    city = _parse_area(location)[0] or location.strip()
+    llm = _service_llm()
+    if not llm:
+        return {"per_silo": [], "degraded_notes": ["Service pages skipped — content model not configured."]}
     try:
-        vectors = llm.embed(rationale_texts)
-    except LLMError as exc:
-        raise ValueError(f"embedding_failed: {exc}") from exc
-
-    topics = [
-        PipelineTopic(id=f"silo-{i}", name=s.name, embedding=vectors[i], gated=False)
-        for i, s in enumerate(disc.silos)
-    ]
-    silo_names = {t.id: disc.silos[i].name for i, t in enumerate(topics)}
-
-    pipe = run_refinement_pipeline(
-        seed=seed,
-        topics=topics,
-        dfs=dfs,
-        embed_fn=llm.embed,
-        relevance_threshold=_RELEVANCE_THRESHOLD,
-        keyword_ideas_limit=_KEYWORD_IDEAS_LIMIT,
-        autocomplete_max=_AUTOCOMPLETE_MAX,
-        paa_tier1_seeds=_PAA_TIER1_SEEDS,
-        paa_tier2_cap=_PAA_TIER2_CAP,
-        seed_terms=[seed, keyword, *disc.aliases],
-        peer_terms=disc.peer_entities,
-        # No language gate — geo/local-intent keywords stay (per the decision).
-        language_filter=None,
-    )
-    notes.extend(pipe.degraded_notes)
-
-    # Each silo's clustered keywords → page topics. A Haiku decision-fit pass
-    # organizes them by the buyer's decision (same-intent variants become one
-    # page's supporting keywords; decision-splitting modifiers get their own
-    # page); absent the key or on failure we fall back to cluster representatives.
-    clusters = (pipe.clustering_log or {}).get("topics", {})
-    # Per-(silo, keyword) relevance, to assign a duplicate keyword to its single
-    # best-fitting silo below and to rank a silo's page topics.
-    rel_by_topic: dict[str, dict[str, float]] = {
-        t.id: {k.keyword.strip().lower(): (k.relevance_score or 0.0)
-               for k in pipe.per_topic_gated.get(t.id, [])}
-        for t in topics
-    }
-    df_llm = _decision_fit_llm()
-
-    raw_silos: list[dict] = []
-    for t in topics:
-        groupings = sorted(
-            (clusters.get(t.id) or {}).get("groupings", []),
-            key=lambda g: g.get("size", 0), reverse=True,
-        )
-        # Pool = the silo's clustered keywords (deduped); reps = the per-cluster
-        # representatives, used as the decision-fit fallback.
-        pool: list[str] = []
-        reps: list[str] = []
-        seen: set[str] = set()
-        rep_seen: set[str] = set()
-        for g in groupings:
-            rep = (g.get("representative") or "").strip()
-            if rep and rep.lower() not in rep_seen:
-                rep_seen.add(rep.lower())
-                reps.append(rep)
-            for kw in (g.get("keywords") or ([rep] if rep else [])):
-                k = (kw or "").strip()
-                if k and k.lower() not in seen:
-                    seen.add(k.lower())
-                    pool.append(k)
-        if not pool:  # too few keywords to cluster — use the strongest actives
-            actives = [k for k in pipe.per_topic_gated.get(t.id, []) if k.status == "active"]
-            actives.sort(key=lambda k: (k.relevance_score or 0.0), reverse=True)
-            for k in actives:
-                kk = k.keyword.strip()
-                if kk and kk.lower() not in seen:
-                    seen.add(kk.lower())
-                    pool.append(kk)
-                    reps.append(kk)
-        pool = pool[: settings.local_seo_max_pool_per_silo]
-
-        pages: Optional[list[dict]] = None
-        if df_llm and pool:
-            try:
-                pages = _decision_fit_pages(keyword, _parse_area(location)[0], silo_names[t.id], pool, df_llm)
-            except Exception as exc:  # noqa: BLE001 — fall back to representatives
-                logger.warning(
-                    "local_seo_silo.decision_fit_failed",
-                    extra={"silo": silo_names[t.id], "error": str(exc)},
-                )
-                pages = None
-        if not pages:
-            pages = [{"keyword": r, "supporting_keywords": []} for r in reps]
-        # Strongest page topics first, then cap.
-        rel = rel_by_topic.get(t.id, {})
-        pages.sort(key=lambda p: rel.get(p["keyword"].strip().lower(), 0.0), reverse=True)
-        pages = pages[:_MAX_PAGES_PER_SILO]
-        if pages:
-            raw_silos.append({"id": t.id, "silo": silo_names[t.id], "pages": pages})
-
-    return {"per_silo": _dedupe_across_silos(raw_silos, rel_by_topic), "degraded_notes": notes}
+        per_silo = _generate_service_pages(keyword, city, llm)
+    except Exception as exc:  # noqa: BLE001 — surface as a degraded note, not a crash
+        logger.warning("local_seo_silo.service_gen_failed", extra={"error": str(exc)})
+        return {"per_silo": [], "degraded_notes": ["Service pages unavailable — could not generate."]}
+    return {"per_silo": per_silo, "degraded_notes": []}
 
 
-def _dedupe_across_silos(
-    raw_silos: list[dict], rel_by_topic: dict[str, dict[str, float]],
-) -> list[dict]:
-    """Keep each candidate page (by its primary keyword) in only ONE silo — the
-    one where it's most relevant. The relevance gate routes a generic head term
-    (e.g. "plumber sydney") into several silos, so without this the same page
-    target appears under each. Highest per-silo relevance wins; ties go to the
-    earlier (discovery-order) silo; a silo left empty is dropped. Pure;
-    unit-tested."""
-    best: dict[str, tuple[float, str]] = {}  # keyword_lower -> (score, topic_id)
-    for entry in raw_silos:
-        rel = rel_by_topic.get(entry["id"], {})
-        for page in entry["pages"]:
-            key = page["keyword"].strip().lower()
-            score = rel.get(key, 0.0)
-            if key not in best or score > best[key][0]:
-                best[key] = (score, entry["id"])
+# ── service-variation generation (LLM — replaces the keyword-expansion tool) ───
 
-    out: list[dict] = []
-    for entry in raw_silos:
-        kept = [p for p in entry["pages"] if best[p["keyword"].strip().lower()][1] == entry["id"]]
-        if kept:
-            out.append({"silo": entry["silo"], "pages": kept})
-    return out
-
-
-# ── decision-fit topic mapping (page = primary keyword + same-intent variants) ─
-
-_DECISION_FIT_SYSTEM = (
-    "You are a local SEO strategist. You are given a SEED SERVICE, its CITY, and a "
-    "list of candidate keywords for one silo. Do two steps.\n\n"
-    "STEP 1 — SCOPE. Keep only keywords for the SAME service as the seed, targeting "
-    "the CITY as a whole. DROP a keyword if it:\n"
-    "  • broadens to a more generic parent service — e.g. a bare 'plumber …' when the "
-    "seed is 'emergency plumber' — losing the seed's intent; or\n"
-    "  • targets a specific suburb / neighbourhood / sub-area rather than the whole "
-    "city (e.g. '… bondi', '… north sydney', '… eastern suburbs', '… randwick') — "
-    "those are handled separately. Only the city itself is in scope as a location.\n"
-    "Keep keywords that narrow the SEED service by audience (commercial vs "
-    "residential), property type, problem type (gas, blocked drain, hot water, burst "
-    "pipe), urgency, or phrasing.\n\n"
-    "STEP 2 — GROUP the kept keywords into PAGE TOPICS by the buyer's decision. Same "
-    "page when only phrasing, word order, plural, or urgency differs (e.g. 'emergency "
-    "plumber sydney' = '24 hour emergency plumber in sydney'); separate page when the "
-    "buyer or job changes (commercial vs residential, problem type, stage). For each "
-    "page pick the primary keyword (the most natural head term) and list the "
-    "same-intent keywords as supporting keywords.\n\n"
-    "Use ONLY the provided keywords — never invent new ones — and put each KEPT "
-    "keyword in exactly one page. Keywords you drop in step 1 simply don't appear."
+_SERVICE_SYSTEM = (
+    "You are a local SEO strategist. Given a SERVICE and a CITY, produce the set of "
+    "distinct service-variation landing pages a local business offering that service "
+    "should have, grouped into silos by the kind of variation. Apply only modifiers "
+    "that genuinely fit THIS service:\n"
+    "  - Availability / urgency: 24 hour, after hours, weekend, same day, emergency "
+    "(when not already in the service);\n"
+    "  - Audience / property: commercial, residential, strata, industrial;\n"
+    "  - Job / problem type for the trade: e.g. for an emergency plumber -- burst "
+    "pipe, blocked drain, hot water, gas leak, leaking tap; for a roofer -- leak "
+    "repair, storm damage, re-roofing, gutter.\n"
+    "ALWAYS keep the service's own qualifier -- an 'emergency plumber' stays an "
+    "EMERGENCY service; never broaden to a bare 'plumber'. Do NOT add suburb / "
+    "neighbourhood names (handled separately) -- the only location is the CITY. Each "
+    "page's keyword is the natural search phrase '<variation> <city>'. Include the "
+    "base service ('<service> <city>') as one page. Give each page 0-3 "
+    "supporting_keywords that are close phrasings / plurals / word-order variants of "
+    "the same intent. Quality over quantity -- only real, distinct page topics."
 )
 
-_DECISION_FIT_SCHEMA = {
+_SERVICE_SCHEMA = {
     "type": "object",
     "properties": {
-        "pages": {
+        "silos": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "primary_keyword": {"type": "string"},
-                    "supporting_keywords": {"type": "array", "items": {"type": "string"}},
+                    "name": {"type": "string"},
+                    "pages": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "keyword": {"type": "string"},
+                                "supporting_keywords": {"type": "array", "items": {"type": "string"}},
+                            },
+                            "required": ["keyword", "supporting_keywords"],
+                        },
+                    },
                 },
-                "required": ["primary_keyword", "supporting_keywords"],
+                "required": ["name", "pages"],
             },
         }
     },
-    "required": ["pages"],
+    "required": ["silos"],
 }
 
 
-def _decision_fit_llm():
-    """Construct the Haiku decision-fit client, or None when the Anthropic key is
-    absent (the planner then falls back to cluster representatives)."""
+def _service_llm():
+    """Construct the Haiku service-generation client, or None when the Anthropic
+    key is absent."""
     if not settings.anthropic_api_key:
         return None
     try:
@@ -466,55 +299,56 @@ def _decision_fit_llm():
 
         return AnthropicLLM(
             api_key=settings.anthropic_api_key,
-            model=settings.local_seo_decision_fit_model,
+            model=settings.local_seo_service_model,
             max_tokens=2048,
         )
-    except Exception as exc:  # noqa: BLE001 — best-effort; fall back to reps
-        logger.warning("local_seo_silo.decision_fit_client_failed", extra={"error": str(exc)})
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        logger.warning("local_seo_silo.service_client_failed", extra={"error": str(exc)})
         return None
 
 
-def _decision_fit_pages(seed_service: str, city: str, silo_name: str, keywords: list[str], llm) -> list[dict]:
-    """Haiku tool-use: scope a silo's keywords to the seed service + city (dropping
-    parent-service and suburb-geo terms) and organize the survivors into page
-    topics by intent. Returns [{keyword, supporting_keywords}]. Validates the model
-    only used the provided keywords (no invented volume) and keeps each in one
-    page; keywords the model drops (off-scope) are intentionally omitted —
-    suburbs are covered by the Neighborhoods silo instead."""
-    allowed: dict[str, str] = {}
-    for k in keywords:
-        allowed.setdefault(k.strip().lower(), k.strip())
+def _generate_service_pages(service: str, city: str, llm) -> list[dict]:
+    """Haiku tool-use: the service-variation landing pages for "<service> <city>",
+    grouped into silos. Returns [{"silo": name, "pages": [{keyword,
+    supporting_keywords}]}], deduped across silos by keyword (first silo wins).
+    The LLM is injected so this is unit-testable without the network."""
     try:
         data = llm.call_tool(
-            system=_DECISION_FIT_SYSTEM,
-            user=(
-                f"Seed service: {seed_service}\nCity: {city}\nSilo: {silo_name}\n"
-                "Keywords:\n" + "\n".join(f"- {v}" for v in allowed.values())
-            ),
-            tool_name="map_page_topics",
-            tool_description="Scope to the seed service + city, then group into page topics by the buyer's decision.",
-            input_schema=_DECISION_FIT_SCHEMA,
-            purpose="local_seo_silo/decision_fit",
-            temperature=0.0,
+            system=_SERVICE_SYSTEM,
+            user=f"Service: {service}\nCity: {city}",
+            tool_name="service_pages",
+            tool_description="Service-variation landing pages for the service in the city, grouped into silos.",
+            input_schema=_SERVICE_SCHEMA,
+            purpose="local_seo_silo/service_pages",
+            temperature=0.3,
         )
-    except Exception as exc:  # noqa: BLE001 — caller falls back to cluster reps
-        raise ValueError(f"decision_fit_llm_failed: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"service_gen_failed: {exc}") from exc
 
-    out: list[dict] = []
-    used: set[str] = set()
-    for page in data.get("pages") or []:
-        pk = (page.get("primary_keyword") or "").strip().lower()
-        if not pk or pk not in allowed or pk in used:
+    per_silo: list[dict] = []
+    seen: set[str] = set()  # dedupe page keywords across all silos (first wins)
+    for silo in data.get("silos") or []:
+        name = (silo.get("name") or "").strip()
+        if not name:
             continue
-        used.add(pk)
-        supporting: list[str] = []
-        for s in page.get("supporting_keywords") or []:
-            sk = (s or "").strip().lower()
-            if sk in allowed and sk != pk and sk not in used:
-                used.add(sk)
-                supporting.append(allowed[sk])
-        out.append({"keyword": allowed[pk], "supporting_keywords": supporting})
-    return out
+        pages: list[dict] = []
+        for page in silo.get("pages") or []:
+            kw = (page.get("keyword") or "").strip()
+            key = kw.lower()
+            if not kw or key in seen:
+                continue
+            seen.add(key)
+            supporting: list[str] = []
+            sup_seen: set[str] = {key}
+            for s in page.get("supporting_keywords") or []:
+                sk = (s or "").strip()
+                if sk and sk.lower() not in sup_seen:
+                    sup_seen.add(sk.lower())
+                    supporting.append(sk)
+            pages.append({"keyword": kw, "supporting_keywords": supporting})
+        if pages:
+            per_silo.append({"silo": name, "pages": pages})
+    return per_silo
 
 
 # ── neighborhood discovery (geocoding-verified, within-city) ──────────────────

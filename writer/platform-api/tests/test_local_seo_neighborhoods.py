@@ -185,81 +185,39 @@ def _kw(entry):
     return [p["keyword"] for p in entry["pages"]]
 
 
-# ── _dedupe_across_silos (each page in its best silo only) ────────────────────
-def test_dedupe_across_silos_keeps_best_and_drops_emptied():
-    raw = [
-        {"id": "silo-0", "silo": "Emergencies", "pages": _pg("plumber sydney", "burst pipe sydney")},
-        {"id": "silo-1", "silo": "Pricing", "pages": _pg("plumber sydney")},
-    ]
-    rel = {
-        "silo-0": {"plumber sydney": 0.6, "burst pipe sydney": 0.8},
-        "silo-1": {"plumber sydney": 0.9},  # stronger here
-    }
-    out = silo._dedupe_across_silos(raw, rel)
-    by = {e["silo"]: _kw(e) for e in out}
-    assert by == {"Emergencies": ["burst pipe sydney"], "Pricing": ["plumber sydney"]}
-
-
-def test_dedupe_across_silos_ties_go_to_first_silo():
-    raw = [
-        {"id": "silo-0", "silo": "A", "pages": _pg("x")},
-        {"id": "silo-1", "silo": "B", "pages": _pg("x")},  # tie → emptied → dropped
-    ]
-    rel = {"silo-0": {"x": 0.5}, "silo-1": {"x": 0.5}}
-    out = silo._dedupe_across_silos(raw, rel)
-    assert [e["silo"] for e in out] == ["A"]
-
-
-def test_dedupe_across_silos_case_insensitive():
-    raw = [
-        {"id": "silo-0", "silo": "A", "pages": _pg("Plumber Sydney")},
-        {"id": "silo-1", "silo": "B", "pages": _pg("plumber sydney")},
-    ]
-    rel = {"silo-0": {"plumber sydney": 0.4}, "silo-1": {"plumber sydney": 0.7}}
-    out = silo._dedupe_across_silos(raw, rel)
-    assert [(e["silo"], _kw(e)) for e in out] == [("B", ["plumber sydney"])]
-
-
-# ── _decision_fit_pages (intent grouping, mocked LLM) ─────────────────────────
+# ── _generate_service_pages (service-variation generation, mocked LLM) ────────
 class _FakeLLM:
-    def __init__(self, pages):
-        self._pages = pages
+    def __init__(self, payload):
+        self._payload = payload
 
     def call_tool(self, **kw):
-        return {"pages": self._pages}
+        return self._payload
 
 
-def test_decision_fit_groups_variants_and_splits_decisions():
-    pool = [
-        "emergency plumber sydney", "24 hour emergency plumber in sydney",
-        "commercial emergency plumber sydney", "24 hour commercial emergency plumber sydney",
-    ]
-    llm = _FakeLLM([
-        {"primary_keyword": "emergency plumber sydney",
-         "supporting_keywords": ["24 hour emergency plumber in sydney"]},
-        {"primary_keyword": "commercial emergency plumber sydney",
-         "supporting_keywords": ["24 hour commercial emergency plumber sydney"]},
-    ])
-    pages = silo._decision_fit_pages("emergency plumber", "sydney", "Emergencies", pool, llm)
-    assert pages == [
-        {"keyword": "emergency plumber sydney",
-         "supporting_keywords": ["24 hour emergency plumber in sydney"]},
-        {"keyword": "commercial emergency plumber sydney",
-         "supporting_keywords": ["24 hour commercial emergency plumber sydney"]},
-    ]
-
-
-def test_decision_fit_drops_off_scope_and_invented_keywords():
-    # The model (mocked) scopes out the parent-service "plumber bondi" (suburb)
-    # and "plumber sydney" (parent), keeping only the seed-service page. An
-    # omitted keyword is NOT recovered (strict scoping), and an invented
-    # supporting keyword (not in pool) is rejected.
-    pool = ["emergency plumber sydney", "plumber sydney", "plumber bondi"]
-    llm = _FakeLLM([
-        {"primary_keyword": "emergency plumber sydney", "supporting_keywords": ["plumber melbourne"]},
-    ])
-    pages = silo._decision_fit_pages("emergency plumber", "sydney", "S", pool, llm)
-    assert pages == [{"keyword": "emergency plumber sydney", "supporting_keywords": []}]
+def test_generate_service_pages_groups_and_dedupes():
+    llm = _FakeLLM({"silos": [
+        {"name": "Availability", "pages": [
+            {"keyword": "24 hour emergency plumber sydney",
+             "supporting_keywords": ["24/7 emergency plumber sydney", "24 hour emergency plumber sydney"]},
+            {"keyword": "after hours emergency plumber sydney", "supporting_keywords": []},
+        ]},
+        {"name": "Audience", "pages": [
+            {"keyword": "commercial emergency plumber sydney", "supporting_keywords": []},
+            {"keyword": "24 Hour Emergency Plumber Sydney", "supporting_keywords": []},  # cross-silo dup → dropped
+        ]},
+        {"name": "Empty", "pages": []},  # no pages → silo dropped
+    ]})
+    per_silo = silo._generate_service_pages("emergency plumber", "Sydney", llm)
+    assert [s["silo"] for s in per_silo] == ["Availability", "Audience"]
+    # supporting de-duped against the page's own keyword; plurals/phrasings kept.
+    assert per_silo[0]["pages"][0] == {
+        "keyword": "24 hour emergency plumber sydney",
+        "supporting_keywords": ["24/7 emergency plumber sydney"],
+    }
+    assert [p["keyword"] for p in per_silo[0]["pages"]] == [
+        "24 hour emergency plumber sydney", "after hours emergency plumber sydney"]
+    # the case-insensitive cross-silo duplicate dropped → Audience keeps only commercial.
+    assert [p["keyword"] for p in per_silo[1]["pages"]] == ["commercial emergency plumber sydney"]
 
 
 # ── _discover_neighborhood_silo (orchestration, mocked) ───────────────────────
