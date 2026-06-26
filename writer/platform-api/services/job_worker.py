@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -70,6 +70,70 @@ async def _claim_next_job() -> dict | None:
     except Exception as exc:
         logger.error("job_worker.claim_failed", extra={"error": str(exc)})
         return None
+
+
+def _plan_reap(attempts: int, max_attempts: int) -> tuple[dict, str]:
+    """Decide how to reap a job stuck in 'running': re-queue (back to pending) while
+    retry attempts remain, else mark it failed. In-process jobs aren't resumable, so
+    a re-queued orphan is simply re-claimed and retried — self-healing the common
+    redeploy-mid-run case. Pure; unit-tested."""
+    if attempts < max_attempts:
+        return {"status": "pending", "started_at": None}, "requeued"
+    return {
+        "status": "failed",
+        "error": "stale_timeout: orphaned mid-run (likely a worker restart) and reaped",
+        "completed_at": "now()",
+    }, "failed"
+
+
+async def _reap_stale_jobs() -> None:
+    """Sweep jobs stuck in 'running' past the stale timeout and re-queue or fail
+    them (see `_plan_reap`). Guards each update on status='running' so a job that
+    finished between the read and write is never stomped. Best-effort — a failure
+    here must never break the worker loop."""
+    timeout_min = settings.job_stale_timeout_minutes
+    if timeout_min <= 0:
+        return
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=timeout_min)).isoformat()
+    supabase = get_supabase()
+    try:
+        stale = (
+            supabase.table("async_jobs")
+            .select("id, job_type, attempts, max_attempts")
+            .eq("status", "running")
+            .lt("started_at", cutoff)
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.error("job_worker.reap_query_failed", extra={"error": str(exc)})
+        return
+
+    for job in stale:
+        update, outcome = _plan_reap(job.get("attempts", 0), job.get("max_attempts", 2))
+        try:
+            result = (
+                supabase.table("async_jobs")
+                .update(update)
+                .eq("id", job["id"])
+                .eq("status", "running")  # don't stomp a job that just completed
+                .execute()
+            )
+            if result.data:
+                logger.warning(
+                    "job_worker.reaped_stale_job",
+                    extra={
+                        "job_id": job["id"],
+                        "job_type": job.get("job_type"),
+                        "outcome": outcome,
+                        "attempts": job.get("attempts", 0),
+                        "timeout_min": timeout_min,
+                    },
+                )
+        except Exception as exc:
+            logger.error(
+                "job_worker.reap_update_failed",
+                extra={"job_id": job["id"], "error": str(exc)},
+            )
 
 
 async def _run_website_scrape(job: dict) -> None:
@@ -241,6 +305,7 @@ async def job_worker() -> None:
     while True:
         await asyncio.sleep(interval)
         try:
+            await _reap_stale_jobs()
             job = await _claim_next_job()
             if job:
                 logger.info(

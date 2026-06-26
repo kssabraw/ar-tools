@@ -14,6 +14,14 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     max_concurrent_runs: int = 5
     job_worker_poll_interval_seconds: int = 10
+    # Stale-job reaper. In-process jobs (asyncio.to_thread) aren't resumable, so a
+    # redeploy or crash mid-run orphans them as status='running' forever. Each
+    # worker tick sweeps jobs stuck 'running' longer than this many minutes:
+    # re-queued (back to pending) while retry attempts remain, else marked failed.
+    # Must exceed the longest legitimate job (the GSC backfill / silo plan run a
+    # few minutes; maps_scan's 30-min poll lives on a separate table, not here).
+    # Set to 0 to disable the reaper.
+    job_stale_timeout_minutes: int = 30
     allowed_origins: List[str] = ["*"]
     log_level: str = "INFO"
     google_apps_script_url: str = ""
