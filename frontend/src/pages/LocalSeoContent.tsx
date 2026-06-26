@@ -8,7 +8,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import { localSeoApi } from '../components/localseo/api'
 import { LocationAutocomplete } from '../components/localseo/LocationAutocomplete'
-import type { AnalysisResult, LocalSeoPageDetail, LocalSeoPageListItem, RankabilityResult, RelatedPageItem } from '../components/localseo/types'
+import type { AnalysisResult, ExistingMatch, LocalSeoPageDetail, LocalSeoPageListItem, PrecheckResult, RankabilityResult, RelatedPageItem } from '../components/localseo/types'
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
 import { useSiloPlan } from '../components/localseo/useSiloPlan'
@@ -22,6 +22,8 @@ import {
 
 type View =
   | { kind: 'form' }
+  | { kind: 'prechecking' }
+  | { kind: 'choice'; result: PrecheckResult; kw: string }
   | { kind: 'creating' }
   | { kind: 'loading' }
   | { kind: 'generated'; page: LocalSeoPageDetail; isNew: boolean; prevScore: number | null }
@@ -152,7 +154,10 @@ export function LocalSeoContent() {
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
-  const handleGenerate = async (kwOverride?: string) => {
+  // Actually write the page (no precheck). Used after the user opts past the
+  // existing-page gate, and by the bulk-create flow which already filtered to
+  // pages that don't exist.
+  const runGenerate = async (kwOverride?: string) => {
     const kw = (typeof kwOverride === 'string' ? kwOverride : keyword).trim()
     if (!kw || !location.trim()) return
     setError('')
@@ -167,6 +172,42 @@ export function LocalSeoContent() {
       setView({ kind: 'form' })
     } finally {
       stopTicker()
+    }
+  }
+
+  // Primary "Create new page" action: gate on the existing-page precheck. If the
+  // client already has (or ranks for) a page on this topic, pause and let the
+  // user reoptimize it instead of writing a duplicate. No matches → write straight
+  // away. A precheck failure is non-fatal — we fall through to generation so the
+  // check can never block page creation.
+  const handleGenerate = async (kwOverride?: string) => {
+    const kw = (typeof kwOverride === 'string' ? kwOverride : keyword).trim()
+    if (!kw || !location.trim()) return
+    setError('')
+    setView({ kind: 'prechecking' })
+    try {
+      const result = await localSeoApi.precheck(clientId, {
+        keyword: kw, location: location.trim(), location_code: locationCode,
+      })
+      if (result.matches.length > 0) {
+        setView({ kind: 'choice', result, kw })
+        return
+      }
+    } catch {
+      // best-effort — don't block page creation on a precheck failure
+    }
+    await runGenerate(kw)
+  }
+
+  // Reoptimize an existing match: an in-tool page opens in its detail view (with
+  // Score & Improve); a live-site / ranking page goes straight to the score →
+  // reoptimize pipeline by URL.
+  const handleReoptimizeMatch = (match: ExistingMatch) => {
+    if (match.matched_keyword) setKeyword(match.matched_keyword)
+    if (match.page_id) {
+      void openSaved(match.page_id)
+    } else if (match.url) {
+      setView({ kind: 'score', pageUrl: match.url })
     }
   }
 
@@ -334,6 +375,31 @@ export function LocalSeoContent() {
   // ── Sub-view routing ─────────────────────────────────────────────────────
 
   if (view.kind === 'creating') return <CreatingView elapsed={elapsed} />
+
+  if (view.kind === 'prechecking') {
+    return (
+      <div style={{ padding: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: '#64748b', minHeight: 280 }}>
+        <Spinner size={22} />
+        <p style={{ fontSize: 14, margin: 0 }}>Checking for an existing or ranking page for “{keyword}”…</p>
+        <p style={{ fontSize: 12, opacity: 0.7, margin: 0 }}>Scanning saved pages, the live site, and search rankings.</p>
+      </div>
+    )
+  }
+
+  if (view.kind === 'choice') {
+    return (
+      <div style={{ padding: 32 }}>
+        <ExistingPageChoiceView
+          result={view.result}
+          keyword={view.kw}
+          location={location}
+          onReoptimize={handleReoptimizeMatch}
+          onWriteNew={() => runGenerate(view.kw)}
+          onBack={() => setView({ kind: 'form' })}
+        />
+      </div>
+    )
+  }
 
   if (view.kind === 'loading') {
     return (
@@ -843,6 +909,97 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
           )}
         </div>
       ))}
+    </div>
+  )
+}
+
+// The automatic gate: shown when the precheck finds the client already has — or
+// ranks for — a page on this topic. The user reoptimizes one of the listed pages
+// (picking among several when multiple rank) or writes a new page anyway.
+function ExistingPageChoiceView({
+  result, keyword, location, onReoptimize, onWriteNew, onBack,
+}: {
+  result: PrecheckResult
+  keyword: string
+  location: string
+  onReoptimize: (m: ExistingMatch) => void
+  onWriteNew: () => void
+  onBack: () => void
+}) {
+  const { matches, degraded_notes } = result
+  const rankingCount = matches.filter(m => m.signals.includes('ranking')).length
+  const sourceLabel = (s?: string | null) =>
+    s === 'gsc' ? 'Search Console' : s === 'dataforseo' ? 'Google SERP' : ''
+
+  const signalChip = (m: ExistingMatch) => {
+    if (m.signals.includes('ranking')) {
+      const pos = m.rank_position
+      return { text: pos != null ? `Ranking #${pos}` : 'Ranking', bg: '#fef3c7', color: '#92400e' }
+    }
+    if (m.signals.includes('in_tool')) return { text: 'Generated in tool', bg: '#f0fdf4', color: '#166534' }
+    return { text: 'On live site', bg: '#dbeafe', color: '#1e40af' }
+  }
+
+  return (
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+      <button onClick={onBack} style={backLink}><ArrowLeft size={14} /> Back</button>
+
+      <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 4px' }}>
+        A page for “{keyword}” may already exist
+      </h1>
+      <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 20px' }}>
+        {rankingCount > 1
+          ? `${rankingCount} of this client's pages are ranking for this keyword in ${location.split(',')[0]}. `
+          : ''}
+        Reoptimizing an existing page usually beats publishing a competing duplicate. Pick a page to improve, or write a new one.
+      </p>
+
+      {degraded_notes.length > 0 && (
+        <div style={{ display: 'flex', gap: 10, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12, color: '#92400e', marginBottom: 16 }}>
+          <Building2 size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>Some checks ran in degraded mode — results may be partial: {degraded_notes.join(' · ')}</span>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+        {matches.map((m, i) => {
+          const chip = signalChip(m)
+          return (
+            <div key={m.page_id || m.url || i} style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 5, background: chip.bg, color: chip.color }}>{chip.text}</span>
+                {m.signals.includes('ranking') && sourceLabel(m.rank_source) && (
+                  <span style={{ fontSize: 11, color: '#94a3b8' }}>via {sourceLabel(m.rank_source)}</span>
+                )}
+                {m.is_blog_post && (
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 5, background: '#fef2f2', color: '#dc2626' }} title="Looks like a blog post, not a dedicated service page">Blog post</span>
+                )}
+              </div>
+              {m.title && <p style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', margin: 0 }}>{m.title}</p>}
+              {m.url && (
+                <a href={m.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', wordBreak: 'break-all' }}>
+                  {m.url}
+                </a>
+              )}
+              {!m.url && m.page_id && (
+                <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>Saved in this client's Local SEO pages.</p>
+              )}
+              <button style={{ ...primaryBtn, alignSelf: 'flex-start' }} onClick={() => onReoptimize(m)}>
+                <ArrowRight size={15} /> Reoptimize this page
+              </button>
+            </div>
+          )
+        })}
+      </div>
+
+      <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10, background: '#f8fafc' }}>
+        <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
+          None of these are the right page? Write a brand-new page for “{keyword}”.
+        </p>
+        <button style={{ ...outlineBtn, alignSelf: 'flex-start' }} onClick={onWriteNew}>
+          <Sparkles size={15} /> Write a new page anyway
+        </button>
+      </div>
     </div>
   )
 }

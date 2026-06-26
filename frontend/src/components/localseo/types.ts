@@ -74,6 +74,27 @@ export interface FindPageResult {
   is_blog_post: boolean
 }
 
+// One existing/ranking page surfaced by the pre-write precheck. Carries
+// whichever handles apply: page_id (an already-generated in-tool page — open it),
+// url (a live-site or ranking page — score → reoptimize).
+export interface ExistingMatch {
+  url?: string | null
+  page_id?: string | null
+  title?: string | null
+  is_blog_post: boolean
+  rank_position?: number | null
+  rank_source?: string | null // 'gsc' | 'dataforseo'
+  matched_keyword?: string | null
+  signals: string[] // subset of 'in_tool' | 'live_site' | 'ranking'
+}
+
+export interface PrecheckResult {
+  matches: ExistingMatch[]
+  rank_source: string // 'gsc' | 'dataforseo' | 'none'
+  checked_variants: string[]
+  degraded_notes: string[]
+}
+
 export interface RelatedPageItem {
   keyword: string
   // The /related-pages flow uses 'parents'|'siblings'|'children'; the

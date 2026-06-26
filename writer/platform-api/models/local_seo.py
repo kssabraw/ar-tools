@@ -31,6 +31,40 @@ class PageTemplateDefaultRequest(BaseModel):
     page_template_url: Optional[str] = None
 
 
+class LocalSeoPrecheckRequest(BaseModel):
+    """Detect existing/ranking pages for a keyword before writing a new page."""
+
+    keyword: str = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    location_code: Optional[int] = None
+
+
+class LocalSeoExistingMatch(BaseModel):
+    """One existing/ranking page found for the keyword.
+
+    Carries whichever handles apply: ``page_id`` for an already-generated in-tool
+    page (open it → Score & Improve), ``url`` for a live-site/ranking page (score
+    → reoptimize). ``signals`` records which checks matched it."""
+
+    url: Optional[str] = None
+    page_id: Optional[UUID] = None
+    title: Optional[str] = None
+    is_blog_post: bool = False
+    rank_position: Optional[int] = None
+    rank_source: Optional[str] = None  # "gsc" | "dataforseo"
+    matched_keyword: Optional[str] = None
+    signals: list[str] = Field(default_factory=list)  # subset of in_tool/live_site/ranking
+
+
+class LocalSeoPrecheckResult(BaseModel):
+    """Result of the pre-write existing-page detection."""
+
+    matches: list[LocalSeoExistingMatch] = Field(default_factory=list)
+    rank_source: str = "none"  # "gsc" | "dataforseo" | "none"
+    checked_variants: list[str] = Field(default_factory=list)
+    degraded_notes: list[str] = Field(default_factory=list)
+
+
 class LocationSuggestion(BaseModel):
     """One DataForSEO location suggestion for the area typeahead."""
 
