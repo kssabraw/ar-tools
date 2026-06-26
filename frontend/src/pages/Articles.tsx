@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery, useMutation } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunListResponse } from '../lib/types'
 import { Download, Copy, FileText, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react'
 import { sectionsToMarkdown } from '../lib/sectionsToMarkdown'
 import { sectionsToHtml } from '../lib/sectionsToHtml'
 import { FeedbackButton } from '../components/FeedbackButton'
+import { FeaturedImagePicker } from '../components/FeaturedImagePicker'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -21,6 +22,8 @@ function downloadFile(content: string, filename: string, mime: string) {
 function ArticleCard({ run }: { run: any }) {
   const [expanded, setExpanded] = useState(false)
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [wpUrl, setWpUrl] = useState<string | null>(null)
+  const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
 
   const publishMutation = useMutation({
@@ -29,6 +32,24 @@ function ArticleCard({ run }: { run: any }) {
       setPublishedUrl(data.doc_url)
       window.open(data.doc_url, '_blank')
     },
+  })
+
+  const wpPublishMutation = useMutation({
+    mutationFn: () => api.post<{ url: string; edit_url: string }>(
+      `/runs/${run.id}/publish`, { destination: 'wordpress', status: wpStatus },
+    ),
+    onSuccess: (data) => {
+      const link = data.edit_url || data.url
+      setWpUrl(link)
+      if (link) window.open(link, '_blank')
+    },
+  })
+
+  const qc = useQueryClient()
+  const featuredImageMutation = useMutation({
+    mutationFn: (url: string | null) =>
+      api.put<{ featured_image_url: string | null }>(`/runs/${run.id}/featured-image`, { url }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['run', run.id] }),
   })
 
   const { data: detail, isLoading } = useQuery({
@@ -133,6 +154,32 @@ function ArticleCard({ run }: { run: any }) {
                   <ExternalLink size={13} /> {publishMutation.isPending ? 'Publishing…' : 'Publish to Google Docs'}
                 </button>
               )}
+              {wpUrl ? (
+                <a href={wpUrl} target="_blank" rel="noreferrer"
+                  style={{ ...ghostBtn, textDecoration: 'none', color: '#16a34a', borderColor: '#bbf7d0' }}>
+                  <ExternalLink size={13} /> Open in WP
+                </a>
+              ) : (
+                <div style={{ display: 'inline-flex', border: '1px solid #c7d2fe', borderRadius: 8, overflow: 'hidden' }}>
+                  <select
+                    value={wpStatus}
+                    onChange={e => setWpStatus(e.target.value as 'draft' | 'publish')}
+                    style={{ border: 'none', background: '#fff', color: '#6366f1', fontSize: 12, fontWeight: 600, padding: '0 6px', cursor: 'pointer' }}
+                    title="Draft saves to WordPress unpublished; Publish goes live"
+                  >
+                    <option value="draft">Draft</option>
+                    <option value="publish">Publish</option>
+                  </select>
+                  <button
+                    onClick={() => wpPublishMutation.mutate()}
+                    disabled={wpPublishMutation.isPending}
+                    style={{ ...ghostBtn, border: 'none', borderLeft: '1px solid #c7d2fe', borderRadius: 0, color: '#6366f1' }}
+                    title="Publish directly to the client's WordPress site"
+                  >
+                    <ExternalLink size={13} /> {wpPublishMutation.isPending ? 'Publishing…' : 'Publish to WP'}
+                  </button>
+                </div>
+              )}
             </>
           )}
           <Link to={`/runs/${run.id}`} style={{ ...ghostBtn, textDecoration: 'none' }}>
@@ -144,9 +191,9 @@ function ArticleCard({ run }: { run: any }) {
         </div>
       </div>
 
-      {publishMutation.error && (
+      {(publishMutation.error || wpPublishMutation.error) && (
         <div style={{ marginTop: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
-          {(publishMutation.error as Error).message}
+          {((publishMutation.error || wpPublishMutation.error) as Error).message}
         </div>
       )}
 
@@ -154,6 +201,15 @@ function ArticleCard({ run }: { run: any }) {
         <div style={{ marginTop: 16 }}>
           {isLoading && <div style={{ color: '#94a3b8', fontSize: 13 }}>Loading article…</div>}
           {!isLoading && !markdown && <div style={{ color: '#94a3b8', fontSize: 13 }}>Article content not available.</div>}
+          {!isLoading && detail && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>Featured image</span>
+              <FeaturedImagePicker
+                value={detail.featured_image_url ?? null}
+                onChange={(url) => featuredImageMutation.mutateAsync(url).then(() => undefined)}
+              />
+            </div>
+          )}
           {markdown && (
             <pre style={{
               background: '#f8fafc',

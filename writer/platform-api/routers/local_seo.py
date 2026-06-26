@@ -14,10 +14,12 @@ GET / DELETE routes are instant and stay plain JSON.
 from __future__ import annotations
 
 import logging
+from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from middleware.auth import require_auth
 from models.local_seo import (
@@ -315,10 +317,33 @@ async def delete_local_seo_page(
     return {"deleted": True}
 
 
+class PublishPageRequest(BaseModel):
+    destination: Literal["google_docs", "wordpress"] = "google_docs"
+    status: Literal["draft", "publish"] = "draft"
+
+
 @router.post("/local-seo/pages/{page_id}/publish")
 async def publish_local_seo_page(
     page_id: UUID,
+    body: PublishPageRequest = PublishPageRequest(),
     auth: dict = Depends(require_auth),
 ) -> dict:
-    """Publish a saved page to a Google Doc in the client's Drive folder."""
-    return await local_seo_service.publish_page(str(page_id), auth["user_id"])
+    """Publish a saved page to a Google Doc in the client's Drive folder, or
+    directly to the client's WordPress site (destination='wordpress')."""
+    return await local_seo_service.publish_page(
+        str(page_id), auth["user_id"], destination=body.destination, status=body.status
+    )
+
+
+class FeaturedImageRequest(BaseModel):
+    url: Optional[str] = None  # null/empty clears the featured image
+
+
+@router.put("/local-seo/pages/{page_id}/featured-image")
+async def set_local_seo_featured_image(
+    page_id: UUID,
+    body: FeaturedImageRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Attach (or clear) a Local SEO page's featured/hero image."""
+    return local_seo_service.set_featured_image(str(page_id), body.url)

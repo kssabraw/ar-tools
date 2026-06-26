@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["clients"])
 
 
+def _to_client_detail(row: dict) -> ClientDetail:
+    """Build a ClientDetail, replacing the secret WP app password with a boolean
+    so it never leaves the backend."""
+    safe = dict(row)
+    safe["wordpress_app_password_set"] = bool(safe.pop("wordpress_app_password", None))
+    return ClientDetail(**safe)
+
+
 def _enqueue_website_scrape(client_id: str, website_url: str) -> None:
     supabase = get_supabase()
     supabase.table("async_jobs").insert(
@@ -166,7 +174,7 @@ async def get_client(
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="client_not_found")
-    return ClientDetail(**result.data)
+    return _to_client_detail(result.data)
 
 
 @router.post("/clients", response_model=ClientDetail, status_code=201)
@@ -215,6 +223,9 @@ async def create_client(
         "github_repo": body.github_repo,
         "github_branch": body.github_branch,
         "github_content_path": body.github_content_path,
+        "wordpress_site_url": body.wordpress_site_url,
+        "wordpress_username": body.wordpress_username,
+        "wordpress_app_password": body.wordpress_app_password or None,
         "logo_url": body.logo_url,
         "gsc_property": body.gsc_property,
         "business_location": body.business_location,
@@ -250,7 +261,7 @@ async def create_client(
         rank_location.enqueue_location_derive(client["id"])
     logger.info("client_created", extra={"client_id": client["id"], "user_id": auth["user_id"]})
 
-    return ClientDetail(**client)
+    return _to_client_detail(client)
 
 
 @router.patch("/clients/{client_id}", response_model=ClientDetail)
@@ -318,6 +329,14 @@ async def update_client(
         updates["github_branch"] = body.github_branch
     if body.github_content_path is not None:
         updates["github_content_path"] = body.github_content_path
+    if body.wordpress_site_url is not None:
+        updates["wordpress_site_url"] = body.wordpress_site_url or None
+    if body.wordpress_username is not None:
+        updates["wordpress_username"] = body.wordpress_username or None
+    # app_password: omitted (None) leaves the stored secret untouched; an empty
+    # string clears it; a value replaces it.
+    if body.wordpress_app_password is not None:
+        updates["wordpress_app_password"] = body.wordpress_app_password or None
     if body.logo_url is not None:
         updates["logo_url"] = body.logo_url
     if body.gsc_property is not None:
@@ -353,7 +372,7 @@ async def update_client(
         rank_location.enqueue_location_derive(str(client_id))
 
     logger.info("client_updated", extra={"client_id": str(client_id), "user_id": auth["user_id"]})
-    return ClientDetail(**result.data[0])
+    return _to_client_detail(result.data[0])
 
 
 @router.post("/clients/{client_id}/archive", response_model=dict)

@@ -91,6 +91,12 @@ class ClientDetail(BaseModel):
     github_repo: Optional[str] = None
     github_branch: Optional[str] = None
     github_content_path: Optional[str] = None
+    # WordPress direct-publish target (#3). The site URL + username are safe to
+    # surface; the Application Password is a secret and is NEVER returned — only
+    # `wordpress_app_password_set` indicates whether one is stored.
+    wordpress_site_url: Optional[str] = None
+    wordpress_username: Optional[str] = None
+    wordpress_app_password_set: bool = False
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None
@@ -121,6 +127,10 @@ class ClientCreateRequest(BaseModel):
     github_repo: Optional[str] = None
     github_branch: Optional[str] = None
     github_content_path: Optional[str] = None
+    # WordPress direct-publish target (#3). app_password is write-only.
+    wordpress_site_url: Optional[str] = None
+    wordpress_username: Optional[str] = None
+    wordpress_app_password: Optional[str] = None
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None
@@ -148,6 +158,11 @@ class ClientUpdateRequest(BaseModel):
     github_repo: Optional[str] = None
     github_branch: Optional[str] = None
     github_content_path: Optional[str] = None
+    # WordPress direct-publish target (#3). app_password is write-only; pass an
+    # empty string to clear a stored password, or omit the field to leave it.
+    wordpress_site_url: Optional[str] = None
+    wordpress_username: Optional[str] = None
+    wordpress_app_password: Optional[str] = None
     logo_url: Optional[str] = None
     gsc_property: Optional[str] = None
     business_location: Optional[str] = None

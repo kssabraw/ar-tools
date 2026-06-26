@@ -69,6 +69,11 @@ export interface Client extends ClientListItem {
   github_repo: string | null
   github_branch: string | null
   github_content_path: string | null
+  // WordPress direct-publish target. app_password is never returned — only the
+  // boolean flag indicates whether one is stored.
+  wordpress_site_url: string | null
+  wordpress_username: string | null
+  wordpress_app_password_set: boolean
   gsc_property: string | null
   business_location: string | null
   gbp_place_id: string | null
@@ -455,6 +460,8 @@ export interface RunDetail {
     // Latest score (nlp-api national mode) for a service_page run.
     service_score?: ModuleOutput | null
   }
+  // Manually-attached featured/hero image (public wordpress_images URL).
+  featured_image_url?: string | null
 }
 
 export interface Profile {

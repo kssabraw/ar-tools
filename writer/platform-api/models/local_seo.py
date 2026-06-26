@@ -265,7 +265,9 @@ class LocalSeoPageDetail(BaseModel):
     cost_breakdown: Optional[dict[str, Any]] = None
     published_doc_url: Optional[str] = None
     published_doc_id: Optional[str] = None
+    published_url: Optional[str] = None  # WordPress published page URL
     published_at: Optional[str] = None
+    featured_image_url: Optional[str] = None
     created_at: str
     updated_at: str
 

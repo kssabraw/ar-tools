@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     allowed_origins: List[str] = ["*"]
     log_level: str = "INFO"
     google_apps_script_url: str = ""
+    # WordPress direct publishing (#3) — media sideload. When a published post's
+    # content references images, each is uploaded to the client's WP media
+    # library (/wp-json/wp/v2/media) and the <img> src rewritten to the WP-hosted
+    # URL; the first becomes the post's featured image. Best-effort and bounded:
+    # at most `wordpress_media_max_images` images, each up to
+    # `wordpress_media_max_bytes`. Images already on the client's WP host are left
+    # as-is. Set max_images to 0 to disable sideloading entirely.
+    wordpress_media_max_images: int = 20
+    wordpress_media_max_bytes: int = 15_000_000  # 15 MB per image
     outscraper_api_key: str = ""
     # Google Search Console — Organic Rank Tracker (Module #4).
     # The service-account key JSON (the entire downloaded key file, as a single

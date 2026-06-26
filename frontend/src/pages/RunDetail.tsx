@@ -12,6 +12,7 @@ import { sectionsToMarkdown, toTitleCase } from '../lib/sectionsToMarkdown'
 import { sectionsToHtml, escapeHtml } from '../lib/sectionsToHtml'
 import { FeedbackButton } from '../components/FeedbackButton'
 import { ServicePageRunView } from '../components/ServicePageRunView'
+import { FeaturedImagePicker } from '../components/FeaturedImagePicker'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -293,6 +294,8 @@ export function RunDetail() {
   })
 
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [wpUrl, setWpUrl] = useState<string | null>(null)
+  const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
   const publishMutation = useMutation({
     mutationFn: () => api.post<{ doc_url: string }>(`/runs/${id}/publish`, {}),
@@ -300,6 +303,21 @@ export function RunDetail() {
       setPublishedUrl(data.doc_url)
       window.open(data.doc_url, '_blank')
     },
+  })
+  const wpPublishMutation = useMutation({
+    mutationFn: () => api.post<{ url: string; edit_url: string }>(
+      `/runs/${id}/publish`, { destination: 'wordpress', status: wpStatus },
+    ),
+    onSuccess: (data) => {
+      const link = data.edit_url || data.url
+      setWpUrl(link)
+      if (link) window.open(link, '_blank')
+    },
+  })
+  const featuredImageMutation = useMutation({
+    mutationFn: (url: string | null) =>
+      api.put<{ featured_image_url: string | null }>(`/runs/${id}/featured-image`, { url }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['run', id] }),
   })
 
   if (isLoading) return <div style={{ padding: 40, color: '#64748b' }}>Loading…</div>
@@ -603,11 +621,44 @@ export function RunDetail() {
                   <ExternalLink size={13} /> {publishMutation.isPending ? 'Publishing…' : 'Publish to Google Docs'}
                 </button>
               )}
+              {wpUrl ? (
+                <a href={wpUrl} target="_blank" rel="noreferrer"
+                  style={{ ...ghostBtn, textDecoration: 'none', color: '#16a34a', borderColor: '#bbf7d0' }}>
+                  <ExternalLink size={13} /> Open in WP
+                </a>
+              ) : (
+                <div style={{ display: 'inline-flex', border: '1px solid #c7d2fe', borderRadius: 8, overflow: 'hidden' }}>
+                  <select
+                    value={wpStatus}
+                    onChange={e => setWpStatus(e.target.value as 'draft' | 'publish')}
+                    style={{ border: 'none', background: '#fff', color: '#6366f1', fontSize: 12, fontWeight: 600, padding: '0 6px', cursor: 'pointer' }}
+                    title="Draft saves to WordPress unpublished; Publish goes live"
+                  >
+                    <option value="draft">Draft</option>
+                    <option value="publish">Publish</option>
+                  </select>
+                  <button
+                    onClick={() => wpPublishMutation.mutate()}
+                    disabled={wpPublishMutation.isPending}
+                    style={{ ...ghostBtn, border: 'none', borderLeft: '1px solid #c7d2fe', borderRadius: 0, color: '#6366f1' }}
+                    title="Publish directly to the client's WordPress site"
+                  >
+                    <ExternalLink size={13} /> {wpPublishMutation.isPending ? 'Publishing…' : 'Publish to WP'}
+                  </button>
+                </div>
+              )}
             </div>
           </div>
-          {publishMutation.isError && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid #f1f5f9' }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>Featured image</span>
+            <FeaturedImagePicker
+              value={run.featured_image_url ?? null}
+              onChange={(url) => featuredImageMutation.mutateAsync(url).then(() => undefined)}
+            />
+          </div>
+          {(publishMutation.isError || wpPublishMutation.isError) && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
-              Failed to publish: {publishMutation.error instanceof Error ? publishMutation.error.message : 'unknown error'}
+              Failed to publish: {(publishMutation.error || wpPublishMutation.error) instanceof Error ? ((publishMutation.error || wpPublishMutation.error) as Error).message : 'unknown error'}
             </div>
           )}
           <pre style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, overflowX: 'auto', fontSize: 13, lineHeight: 1.7, color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 600, overflowY: 'auto' }}>

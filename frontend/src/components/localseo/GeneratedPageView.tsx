@@ -10,6 +10,7 @@ import { BulkCreateBar } from './BulkCreateBar'
 import { useSiloPlan } from './useSiloPlan'
 import { useBulkCreate } from './useBulkCreate'
 import { Spinner } from './Spinner'
+import { FeaturedImagePicker } from '../FeaturedImagePicker'
 import {
   backLink, card, downloadFile, errorBox, formatHtml, htmlToText, outlineBtn,
   primaryBtn, relativeTime, scoreBg, scoreBorder, scoreColor, statusLabel, wordCount,
@@ -39,17 +40,26 @@ export function GeneratedPageView({
   const [copiedHtml, setCopiedHtml] = useState(false)
   const [copiedSchema, setCopiedSchema] = useState(false)
 
-  // Publish to Google Doc (client's Drive folder).
+  // Publish to Google Doc (client's Drive folder) or WordPress (client's site).
   const [publishing, setPublishing] = useState(false)
   const [publishError, setPublishError] = useState('')
   const [publishedUrl, setPublishedUrl] = useState<string | null>(page.published_doc_url)
+  const [wpPublishing, setWpPublishing] = useState(false)
+  const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
+  const [wpUrl, setWpUrl] = useState<string | null>(page.published_url ?? null)
+  const [featuredImageUrl, setFeaturedImageUrl] = useState<string | null>(page.featured_image_url ?? null)
+
+  const handleFeaturedImage = async (url: string | null) => {
+    await localSeoApi.setFeaturedImage(page.id, url)
+    setFeaturedImageUrl(url)
+  }
 
   const handlePublish = async () => {
     setPublishing(true)
     setPublishError('')
     try {
       const res = await localSeoApi.publishPage(page.id)
-      setPublishedUrl(res.doc_url)
+      setPublishedUrl(res.doc_url ?? null)
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Publish failed'
       setPublishError(
@@ -61,6 +71,28 @@ export function GeneratedPageView({
       )
     } finally {
       setPublishing(false)
+    }
+  }
+
+  const handleWpPublish = async () => {
+    setWpPublishing(true)
+    setPublishError('')
+    try {
+      const res = await localSeoApi.publishPage(page.id, { destination: 'wordpress', status: wpStatus })
+      const link = res.edit_url || res.url || null
+      setWpUrl(link)
+      if (link) window.open(link, '_blank')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Publish failed'
+      setPublishError(
+        msg.includes('wordpress_not_configured')
+          ? 'Add this client’s WordPress site + Application Password first (Client → Edit), then publish.'
+          : msg.includes('wordpress_auth_failed')
+            ? 'WordPress rejected the credentials — check the username and Application Password.'
+            : msg,
+      )
+    } finally {
+      setWpPublishing(false)
     }
   }
 
@@ -372,6 +404,10 @@ export function GeneratedPageView({
           <button style={{ ...outlineBtn, flex: 1 }} onClick={downloadHtml}><Download size={14} /> Download</button>
         </div>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>Featured image</span>
+          <FeaturedImagePicker value={featuredImageUrl} onChange={handleFeaturedImage} />
+        </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
           <button style={outlineBtn} onClick={handlePublish} disabled={publishing}>
             <ExternalLink size={14} /> {publishing ? 'Publishing…' : publishedUrl ? 'Re-publish to Google Doc' : 'Publish to Google Doc'}
           </button>
@@ -379,6 +415,32 @@ export function GeneratedPageView({
             <a href={publishedUrl} target="_blank" rel="noreferrer"
               style={{ fontSize: 13, fontWeight: 600, color: '#16a34a', display: 'inline-flex', alignItems: 'center', gap: 4, textDecoration: 'none' }}>
               <Check size={14} /> View Google Doc
+            </a>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'inline-flex', border: '1px solid #cbd5e1', borderRadius: 8, overflow: 'hidden' }}>
+            <select
+              value={wpStatus}
+              onChange={e => setWpStatus(e.target.value as 'draft' | 'publish')}
+              style={{ border: 'none', background: '#fff', color: '#334155', fontSize: 13, fontWeight: 600, padding: '0 8px', cursor: 'pointer' }}
+              title="Draft saves to WordPress unpublished; Publish goes live"
+            >
+              <option value="draft">Draft</option>
+              <option value="publish">Publish</option>
+            </select>
+            <button
+              style={{ ...outlineBtn, border: 'none', borderLeft: '1px solid #cbd5e1', borderRadius: 0 }}
+              onClick={handleWpPublish}
+              disabled={wpPublishing}
+            >
+              <ExternalLink size={14} /> {wpPublishing ? 'Publishing…' : wpUrl ? 'Re-publish to WordPress' : 'Publish to WordPress'}
+            </button>
+          </div>
+          {wpUrl && (
+            <a href={wpUrl} target="_blank" rel="noreferrer"
+              style={{ fontSize: 13, fontWeight: 600, color: '#16a34a', display: 'inline-flex', alignItems: 'center', gap: 4, textDecoration: 'none' }}>
+              <Check size={14} /> Open in WordPress
             </a>
           )}
         </div>
