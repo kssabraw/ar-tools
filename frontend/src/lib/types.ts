@@ -52,6 +52,8 @@ export interface GbpProfile {
   hours: Record<string, unknown> | null
   google_maps_uri: string | null
   reviews: GbpReview[]
+  // Service-area places Google lists for a service-area business (best-effort).
+  service_area_places?: string[]
 }
 
 export interface Client extends ClientListItem {
@@ -76,6 +78,8 @@ export interface Client extends ClientListItem {
   differentiators: Differentiator[] | null
   local_seo_page_template_url: string | null
   page_structures: Record<string, PageStructureEntry> | null
+  // Manual extra cities to plan location pages for (silo planner target-city source).
+  target_cities: string[] | null
   updated_at: string
 }
 

@@ -57,9 +57,9 @@ export function RelatedPagesList({ items, onAction, selection }: Props) {
                         <span style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>{item.keyword}</span>
                         <span style={{
                           fontSize: 11, borderRadius: 4, padding: '1px 6px',
-                          background: item.status === 'found' ? '#dcfce7' : '#f1f5f9',
-                          color: item.status === 'found' ? '#166534' : '#64748b',
-                        }}>{item.status === 'found' ? 'Found' : 'Missing'}</span>
+                          background: item.status === 'found' ? '#dcfce7' : item.status === 'on_site' ? '#dbeafe' : '#f1f5f9',
+                          color: item.status === 'found' ? '#166534' : item.status === 'on_site' ? '#1e40af' : '#64748b',
+                        }}>{item.status === 'found' ? 'Found' : item.status === 'on_site' ? 'On site' : 'Missing'}</span>
                         {item.composite_score != null && (
                           <span style={{ fontSize: 12, fontWeight: 600, color: scoreColor(item.composite_score) }}>{Math.round(item.composite_score)}/100</span>
                         )}
@@ -72,10 +72,10 @@ export function RelatedPagesList({ items, onAction, selection }: Props) {
                           ))}
                         </div>
                       )}
-                      {item.status === 'found' && item.url && (
+                      {(item.status === 'found' || item.status === 'on_site') && item.url && (
                         <a href={item.url} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#64748b', marginTop: 2, maxWidth: '100%' }}>
                           <ExternalLink size={12} style={{ flexShrink: 0 }} />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.page_title || item.url}</span>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.status === 'on_site' ? `Live page — ${item.url}` : (item.page_title || item.url)}</span>
                         </a>
                       )}
                       {item.deficiencies && item.deficiencies.length > 0 && (
@@ -96,6 +96,10 @@ export function RelatedPagesList({ items, onAction, selection }: Props) {
                           style={{ width: 16, height: 16, cursor: selection.disabled ? 'not-allowed' : 'pointer', accentColor: '#6366f1' }}
                         />
                       </label>
+                    ) : item.status === 'on_site' ? (
+                      // Already a generic location page on the live site — nothing to
+                      // create; the live page is linked above.
+                      <span style={{ flexShrink: 0, fontSize: 12, color: '#1e40af', fontWeight: 600 }}>Already on site</span>
                     ) : (
                       <button
                         style={{ ...outlineBtn, flexShrink: 0, padding: '6px 12px', fontSize: 12 }}

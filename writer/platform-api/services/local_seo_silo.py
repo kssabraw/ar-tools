@@ -44,6 +44,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import site_page_index, target_cities
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,42 @@ async def run_silo_plan_job(job: dict) -> None:
         if neigh_entry:
             plan["per_silo"].append(neigh_entry)
         plan["degraded_notes"] = [*plan.get("degraded_notes", []), *neigh_notes]
-        items = _to_items(plan["per_silo"], client_id)
+
+        # Expand beyond the seed city to the other cities the business targets —
+        # its GBP service area, a manual list, place-names on its own site, and
+        # cities within ~10 miles (Overpass). Each becomes its own silo: a
+        # "<service> <city>" page plus that city's verified neighborhoods. Threads
+        # the running keyword set so a place shared across cities isn't planned
+        # twice. Best-effort — its own guards keep a failure from sinking the plan.
+        try:
+            existing_keys = {
+                p["keyword"].strip().lower()
+                for g in plan["per_silo"] for p in g.get("pages", [])
+            }
+            client = _get_client(client_id)
+            cities, city_notes = await target_cities.resolve_target_cities(
+                client, location, location_code, supabase
+            )
+            city_silos, sub_notes = await _build_target_city_silos(
+                keyword, cities, existing_keys, supabase
+            )
+            plan["per_silo"].extend(city_silos)
+            plan["degraded_notes"].extend([*city_notes, *sub_notes])
+        except Exception as exc:  # noqa: BLE001 — extra cities are non-critical
+            logger.warning(
+                "local_seo_silo.target_cities_failed",
+                extra={"job_id": job_id, "client_id": client_id, "error": str(exc)},
+            )
+            plan["degraded_notes"].append("Additional target cities skipped — discovery error.")
+
+        # Check the client's live site for generic location pages (e.g.
+        # /inner-west/) so areas that already have one are flagged `on_site`
+        # rather than offered for creation. Best-effort — its own guards keep a
+        # failure from sinking the plan.
+        site_index, site_note = await _build_site_location_index(client_id, location_code)
+        if site_note:
+            plan["degraded_notes"].append(site_note)
+        items = _to_items(plan["per_silo"], client_id, site_index)
 
         supabase.table("async_jobs").update(
             {
@@ -508,14 +544,59 @@ def _propose_neighborhoods(city: str, state: str, country: str, max_n: int) -> l
     return names[:max_n]
 
 
+def _query_area(*parts: str) -> str:
+    return ", ".join(p for p in parts if p)
+
+
+async def _neighborhoods_for_city(
+    keyword: str, city: str, state: str, country: str, city_geo: dict,
+    existing: set[str], supabase,
+) -> tuple[list[dict], list[str]]:
+    """Core sub-area discovery for ONE already-geocoded city: propose its sub-areas,
+    keep those that geocode-verify inside `city_geo`'s footprint, and return
+    "<service> <sub-area>" page dicts (each carrying its bare `location_name`),
+    skipping any keyword already in `existing`. Pure best-effort; reused for the
+    seed city and every additional target city."""
+    try:
+        names = await asyncio.to_thread(
+            _propose_neighborhoods, city, state, country, settings.local_seo_max_neighborhoods
+        )
+    except Exception as exc:
+        logger.warning("local_seo_silo.neighborhoods_propose_failed", extra={"city": city, "error": str(exc)})
+        return [], [f"Sub-areas for {city} skipped — could not list them."]
+    if not names:
+        return [], []
+
+    from services import maps_geocode
+
+    queries = {name: _query_area(name, city, state, country) for name in names}
+    try:
+        geo = await maps_geocode.forward_geocode_places(list(queries.values()), supabase=supabase)
+    except Exception as exc:
+        logger.warning("local_seo_silo.neighborhoods_geocode_failed", extra={"city": city, "error": str(exc)})
+        return [], [f"Sub-areas for {city} skipped — geocoding lookup failed."]
+
+    pages: list[dict] = []
+    for name in names:
+        if not place_is_within_city(geo.get(queries[name]) or {}, city_geo):
+            continue
+        page_kw = f"{keyword} {name}".strip()
+        key = page_kw.lower()
+        if key not in existing:
+            existing.add(key)
+            # `location_name` (the bare sub-area) lets the existing-page check match
+            # a generic location page on the client's site (e.g. /inner-west/) by
+            # place, independent of the service prefix in the keyword.
+            pages.append({"keyword": page_kw, "supporting_keywords": [], "location_name": name})
+    return pages, []
+
+
 async def _discover_neighborhood_silo(
     keyword: str, location: str, per_silo: list[dict], supabase,
 ) -> tuple[Optional[dict], list[str]]:
-    """Propose sub-areas of the target city, geocode-verify each falls inside the
-    city's footprint, and return a "Neighborhoods" silo of "<service> <sub-area>"
-    page targets (deduped against the silos already planned). Country-agnostic and
-    best-effort: any failure or missing prerequisite yields no silo + a degraded
-    note, never an aborted plan."""
+    """Seed-city "Neighborhoods" silo: geocode the seed city for its footprint, then
+    run `_neighborhoods_for_city`. Country-agnostic and best-effort — any failure or
+    missing prerequisite yields no silo + a degraded note, never an aborted plan."""
     city, state, country = _parse_area(location)
     if not city:
         return None, ["Neighborhood pages skipped — no city in the area."]
@@ -527,29 +608,11 @@ async def _discover_neighborhood_silo(
             "can't be verified as within the city."
         ]
 
-    try:
-        names = await asyncio.to_thread(
-            _propose_neighborhoods, city, state, country, settings.local_seo_max_neighborhoods
-        )
-    except Exception as exc:
-        logger.warning("local_seo_silo.neighborhoods_propose_failed", extra={"error": str(exc)})
-        return None, ["Neighborhood pages skipped — could not list sub-areas."]
-    if not names:
-        return None, []
-
     from services import maps_geocode
 
-    def _query(*parts: str) -> str:
-        return ", ".join(p for p in parts if p)
-
-    # Geocode the city itself (for its footprint) alongside the candidates, in one
-    # cached batch.
-    city_query = _query(city, state, country)
-    queries = {name: _query(name, city, state, country) for name in names}
+    city_query = _query_area(city, state, country)
     try:
-        geo = await maps_geocode.forward_geocode_places(
-            [city_query, *queries.values()], supabase=supabase
-        )
+        geo = await maps_geocode.forward_geocode_places([city_query], supabase=supabase)
     except Exception as exc:
         logger.warning("local_seo_silo.neighborhoods_geocode_failed", extra={"error": str(exc)})
         return None, ["Neighborhood pages skipped — geocoding lookup failed."]
@@ -558,29 +621,71 @@ async def _discover_neighborhood_silo(
     if not city_geo.get("matched") or (not city_geo.get("bounds") and city_geo.get("lat") is None):
         return None, ["Neighborhood pages skipped — couldn't resolve the city to verify sub-areas."]
 
-    # Keywords already planned in other silos — don't re-surface a sub-area page
-    # the Fanout expansion already produced.
     existing = {p["keyword"].strip().lower() for g in per_silo for p in g.get("pages", [])}
-    pages: list[dict] = []
-    seen: set[str] = set()
-    for name in names:
-        if not place_is_within_city(geo.get(queries[name]) or {}, city_geo):
-            continue
-        page_kw = f"{keyword} {name}".strip()
-        key = page_kw.lower()
-        if key not in existing and key not in seen:
-            seen.add(key)
-            pages.append({"keyword": page_kw, "supporting_keywords": []})
-
+    pages, notes = await _neighborhoods_for_city(
+        keyword, city, state, country, city_geo, existing, supabase
+    )
     if not pages:
-        return None, ["No sub-areas could be verified within the city."]
-    return {"silo": _NEIGHBORHOOD_SILO, "pages": pages}, []
+        return None, notes or ["No sub-areas could be verified within the city."]
+    return {"silo": _NEIGHBORHOOD_SILO, "pages": pages}, notes
 
 
-def _to_items(per_silo: list[dict], client_id: str) -> list[dict]:
-    """Flatten silos → page targets, marking each found/missing against the
-    client's already-generated `local_seo_pages` (matched on keyword)."""
+async def _build_target_city_silos(
+    keyword: str, additional_cities: list[dict], existing: set[str], supabase,
+) -> tuple[list[dict], list[str]]:
+    """One silo per additional target city: a "<service> <city>" location page plus
+    that city's geocode-verified neighborhoods (full sub-division). `existing` is
+    threaded across cities so a place shared between them isn't planned twice.
+    Best-effort per city — a city that fails sub-division still contributes its own
+    location page."""
+    silos: list[dict] = []
+    notes: list[str] = []
+    for city in additional_cities:
+        name = city["name"]
+        # The city itself as a location page (carries location_name for the
+        # live-site existing-page check, like a neighborhood does).
+        city_pages: list[dict] = []
+        city_kw = f"{keyword} {name}".strip()
+        if city_kw.lower() not in existing:
+            existing.add(city_kw.lower())
+            city_pages.append({"keyword": city_kw, "supporting_keywords": [], "location_name": name})
+
+        city_geo = {
+            "matched": True,
+            "place_id": city.get("place_id"),
+            "lat": city.get("lat"),
+            "lng": city.get("lng"),
+            "bounds": city.get("bounds"),
+        }
+        if settings.anthropic_api_key and (city_geo["bounds"] or city_geo["lat"] is not None):
+            sub_pages, sub_notes = await _neighborhoods_for_city(
+                keyword, name, city.get("state", ""), city.get("country", ""),
+                city_geo, existing, supabase,
+            )
+            city_pages.extend(sub_pages)
+            notes.extend(sub_notes)
+        if city_pages:
+            silos.append({"silo": name, "pages": city_pages})
+    return silos, notes
+
+
+def _to_items(
+    per_silo: list[dict], client_id: str, site_index: Optional[dict[str, str]] = None,
+) -> list[dict]:
+    """Flatten silos → page targets, marking each:
+
+      - ``found``   — a page already generated in the tool (`local_seo_pages`,
+                      matched on keyword); ``url`` is its published doc, and
+      - ``on_site`` — a generic location page for this place already exists on the
+                      client's live site (`site_index`, matched on the page's bare
+                      `location_name`); ``url`` is the live page, else
+      - ``missing`` — nothing yet; offer it for creation.
+
+    `found` wins over `on_site` (a page we built and track is the more actionable
+    record). Only location targets carry a `location_name`, so the live-site check
+    applies to area/location pages — not service-variation pages."""
     supabase = get_supabase()
+    site_index = site_index or {}
     existing: dict[str, dict] = {}
     try:
         rows = (
@@ -607,13 +712,75 @@ def _to_items(per_silo: list[dict], client_id: str) -> list[dict]:
         for page in group["pages"]:
             kw = page["keyword"]
             match = existing.get(kw.strip().lower())
+            if match:
+                status, url = "found", match.get("published_doc_url")
+            else:
+                site_url = (
+                    site_page_index.match_site_location_page(
+                        page.get("location_name") or "", site_index
+                    )
+                    if page.get("location_name")
+                    else None
+                )
+                status, url = ("on_site", site_url) if site_url else ("missing", None)
             items.append(
                 {
                     "keyword": kw,
                     "group": silo,
-                    "status": "found" if match else "missing",
-                    "url": (match or {}).get("published_doc_url"),
+                    "status": status,
+                    "url": url,
                     "supporting_keywords": page.get("supporting_keywords", []),
                 }
             )
     return items
+
+
+async def _build_site_location_index(
+    client_id: str, location_code: Optional[int],
+) -> tuple[dict[str, str], Optional[str]]:
+    """Discover the client's existing location pages from their live site. Returns
+    ``(slug→url index, degraded_note)`` — the note is set only when the check is
+    skipped or had to fall back, never on a clean sitemap read. Best-effort: any
+    failure yields an empty index + an explanatory note, never an aborted plan."""
+    try:
+        client = _get_client(client_id)
+    except HTTPException:
+        return {}, None
+    website = (client.get("gbp") or {}).get("website") or client.get("website_url") or ""
+    if not website.strip():
+        return {}, (
+            "Existing-page check skipped — no website on file, so every area shows "
+            "as missing. Add the client's website to detect location pages already "
+            "on the site."
+        )
+
+    code = location_code
+    if not code:
+        try:
+            from services.dataforseo_rank import location_code_for
+
+            code = location_code_for(client)
+        except Exception:  # noqa: BLE001 — only needed for the DataForSEO fallback
+            code = settings.dataforseo_default_location_code
+
+    try:
+        urls, source = await site_page_index.discover_site_urls(website, code)
+    except Exception as exc:  # noqa: BLE001 — discovery is non-critical
+        logger.warning(
+            "local_seo_silo.site_discovery_failed",
+            extra={"client_id": client_id, "error": str(exc)},
+        )
+        return {}, "Existing-page check skipped — couldn't read the client's site."
+
+    if source == "none":
+        return {}, (
+            "Existing-page check skipped — couldn't read the site's sitemap or "
+            "find it in Google's index, so existing location pages may be missed."
+        )
+    note = None
+    if source == "google_index":
+        note = (
+            "No sitemap found — checked Google's index for existing location pages "
+            "instead (may be less complete)."
+        )
+    return site_page_index.build_location_slug_index(urls), note

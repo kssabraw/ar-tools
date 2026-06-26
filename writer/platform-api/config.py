@@ -180,6 +180,29 @@ class Settings(BaseSettings):
     # fallback containment radius when a city has no bounds/viewport (rare).
     local_seo_city_bounds_pad: float = 0.1
     local_seo_neighborhood_radius_km: float = 30.0
+    # Existing-page detection: the silo planner checks the client's live site for
+    # generic location pages (e.g. site.com/los-angeles/) so an area that already
+    # has a location page is flagged `on_site` instead of `missing` and isn't
+    # re-created. Discovery reads the site's sitemap(s) first, falling back to a
+    # DataForSEO `site:` query of Google's index. Caps keep a large sitemap from
+    # ballooning the scan; the DataForSEO fallback uses its own SERP depth.
+    local_seo_sitemap_max_urls: int = 5000
+    local_seo_sitemap_max_files: int = 30
+    local_seo_site_index_dataforseo_depth: int = 100
+    # Target-city discovery: the silo planner serves the seed city plus the other
+    # cities a business targets — from its GBP service area, a manual list on the
+    # client, place-names on its own site, and cities within
+    # `local_seo_nearby_city_radius_km` (10 miles) enumerated from OpenStreetMap via
+    # Overpass (free/keyless). Discovered (website/nearby) candidates must geocode
+    # to a city-level locality; website candidates are bounded to this radius times
+    # `local_seo_website_city_radius_mult`. The whole set is capped at
+    # `local_seo_max_target_cities` so a dense metro can't explode the plan.
+    local_seo_nearby_city_radius_km: float = 16.09  # 10 miles
+    local_seo_max_target_cities: int = 12
+    local_seo_website_city_radius_mult: float = 5.0
+    local_seo_overpass_url: str = "https://overpass-api.de/api/interpreter"
+    local_seo_overpass_mirror_url: str = "https://overpass.kumi.systems/api/interpreter"
+    local_seo_overpass_place_types: str = "city,town"
 
     # Service Page scoring: after a service_page run generates, it auto-scores
     # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below

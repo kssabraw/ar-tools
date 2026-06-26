@@ -495,6 +495,7 @@ export function LocalSeoContent() {
 
           {!planScanning && planResults && planResults.length > 0 && (() => {
             const found = planResults.filter(r => r.status === 'found').length
+            const onSite = planResults.filter(r => r.status === 'on_site').length
             const missingKws = planResults.filter(r => r.status === 'missing').map(r => r.keyword)
             const siloCount = new Set(planResults.map(r => r.group)).size
             const allMissingSelected = missingKws.length > 0 && missingKws.every(kw => selectedForCreate.has(kw))
@@ -504,6 +505,9 @@ export function LocalSeoContent() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#64748b', flexWrap: 'wrap' }}>
                   <span style={{ fontWeight: 600, color: '#0f172a' }}>{planResults.length} candidate pages across {siloCount} silo{siloCount === 1 ? '' : 's'}</span>
                   <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#dcfce7', color: '#166534' }}>{found} exist</span>
+                  {onSite > 0 && (
+                    <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#dbeafe', color: '#1e40af' }} title="Generic location pages already on the client's site">{onSite} on site</span>
+                  )}
                   <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#fef3c7', color: '#92400e' }}>{missingKws.length} missing</span>
                   {missingKws.length > 0 && !bulkCreating && (
                     <button

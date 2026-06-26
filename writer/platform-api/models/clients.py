@@ -48,6 +48,9 @@ class GbpProfile(BaseModel):
     hours: Optional[dict[str, Any]] = None
     google_maps_uri: Optional[str] = None
     reviews: list[GbpReview] = Field(default_factory=list)
+    # Service-area places Google lists for a service-area business (best-effort;
+    # empty when the listing doesn't publish them). Feeds target-city discovery.
+    service_area_places: list[str] = Field(default_factory=list)
 
 
 class PageStructureUrls(BaseModel):
@@ -98,6 +101,9 @@ class ClientDetail(BaseModel):
     # JSONB keyed by page type: {local_landing|service|location|blog_post|product|solution:
     #   {url, status, error, analysis, analyzed_at}}.
     page_structures: dict[str, Any] = Field(default_factory=dict)
+    # Cities the team explicitly wants location pages for, beyond the primary —
+    # one source feeding the silo planner's target-city discovery.
+    target_cities: list[str] = Field(default_factory=list)
 
 
 class ClientCreateRequest(BaseModel):
@@ -120,12 +126,14 @@ class ClientCreateRequest(BaseModel):
     business_location: Optional[str] = None
     gbp_place_id: Optional[str] = None
     gbp: Optional[GbpProfile] = None
+    target_cities: Optional[list[str]] = None
     # Reference page URLs to scrape + analyze for structure mirroring.
     page_structure_urls: Optional[PageStructureUrls] = None
 
 
 class ClientUpdateRequest(BaseModel):
     page_structure_urls: Optional[PageStructureUrls] = None
+    target_cities: Optional[list[str]] = None
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     website_url: Optional[str] = None
     brand_guide_source_type: Optional[Literal["text", "file"]] = None
