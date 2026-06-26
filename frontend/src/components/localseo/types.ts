@@ -80,7 +80,11 @@ export interface RelatedPageItem {
   // Fanout-powered Plan Silo flow uses free-form silo labels — so this is a
   // string, with the known relationship groups still rendered/ordered first.
   group: string
-  status: 'found' | 'missing'
+  // 'found'   — already generated in the tool (url = published doc)
+  // 'on_site' — a generic location page for this place already exists on the
+  //             client's live site (url = that live page); not offered for create
+  // 'missing' — nothing yet; selectable for bulk creation
+  status: 'found' | 'missing' | 'on_site'
   url?: string | null
   page_title?: string | null
   composite_score?: number | null
