@@ -26,6 +26,8 @@ from models.local_seo import (
     LocalSeoGenerateRequest,
     LocalSeoPageDetail,
     LocalSeoPageListItem,
+    LocalSeoPrecheckRequest,
+    LocalSeoPrecheckResult,
     LocalSeoRankabilityRequest,
     LocalSeoRankabilityResponse,
     LocalSeoRelatedPagesRequest,
@@ -39,7 +41,7 @@ from models.local_seo import (
     LocationSuggestion,
     PageTemplateDefaultRequest,
 )
-from services import local_seo_service, local_seo_silo
+from services import local_seo_precheck, local_seo_service, local_seo_silo
 from sse import sse_response
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,32 @@ async def generate_local_seo_page(
             page_template_url=body.page_template_url,
         )
         return LocalSeoPageDetail(**page).model_dump(mode="json")
+
+    return sse_response(_run())
+
+
+@router.post("/clients/{client_id}/local-seo/precheck")
+async def precheck_local_seo_page(
+    client_id: UUID,
+    body: LocalSeoPrecheckRequest,
+    auth: dict = Depends(require_auth),
+) -> StreamingResponse:
+    """Detect existing/ranking pages for a keyword before generating a new one.
+
+    Backs the New Page flow's automatic gate: the frontend runs this first and,
+    when matches come back, lets the user reoptimize an existing page (or pick one
+    of several ranking pages) instead of writing a duplicate. SSE because the
+    live-site scan + SERP lookup can take tens of seconds.
+    """
+    async def _run() -> dict:
+        result = await local_seo_precheck.detect_existing_pages(
+            client_id=str(client_id),
+            keyword=body.keyword,
+            location=body.location,
+            location_code=body.location_code,
+            user_id=auth["user_id"],
+        )
+        return LocalSeoPrecheckResult(**result).model_dump(mode="json")
 
     return sse_response(_run())
 

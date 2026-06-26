@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2,
 } from 'lucide-react'
 import { localSeoApi } from './api'
 import type { LocalSeoPageDetail, SocialPostsResult } from './types'
 import { RelatedPagesList } from './RelatedPagesList'
+import { BulkCreateBar } from './BulkCreateBar'
 import { useSiloPlan } from './useSiloPlan'
+import { useBulkCreate } from './useBulkCreate'
 import { Spinner } from './Spinner'
 import {
   backLink, card, downloadFile, errorBox, formatHtml, htmlToText, outlineBtn,
@@ -74,6 +77,12 @@ export function GeneratedPageView({
   // is first opened; it runs as an async job, so we poll via the shared hook.
   const relatedPlan = useSiloPlan(clientId)
   const relatedRequested = useRef(false)
+  // Multi-select bulk creation of the missing related pages (same flow as the
+  // Plan Silo tab). Refresh the saved-pages list as pages land.
+  const queryClient = useQueryClient()
+  const bulk = useBulkCreate(clientId, () =>
+    queryClient.invalidateQueries({ queryKey: ['local-seo-pages', clientId] }),
+  )
 
   const fetchSocial = async () => {
     setSocialLoading(true)
@@ -90,7 +99,7 @@ export function GeneratedPageView({
     }
   }
 
-  const fetchRelated = () => void relatedPlan.run(keyword, location)
+  const fetchRelated = () => { bulk.reset(); void relatedPlan.run(keyword, location) }
 
   useEffect(() => {
     if (tab === 'social' && !socialRequested.current) {
@@ -335,9 +344,11 @@ export function GeneratedPageView({
                     ? { mode: 'reoptimize', keyword: item.keyword, existingUrl: item.url ?? undefined }
                     : { mode: 'new', keyword: item.keyword },
                 )}
+                selection={{ selected: bulk.selected, onToggle: bulk.toggle, disabled: bulk.creating }}
               />
+              <BulkCreateBar items={relatedPlan.items} bulk={bulk} location={location} locationCode={null} />
               <p style={{ fontSize: 12, color: '#94a3b8', margin: 0, textAlign: 'center' }}>
-                Acting on a page opens it — you'll come back here to pick the next one.
+                Tick missing pages to create them in one batch, or reoptimize a found page individually (that opens it).
               </p>
             </>
           )}

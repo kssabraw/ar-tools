@@ -5,6 +5,7 @@ import type {
   LocalSeoPageDetail,
   LocalSeoPageListItem,
   LocationSuggestion,
+  PrecheckResult,
   RankabilityResult,
   RelatedPagesResult,
   ReoptimizeUrlResult,
@@ -32,6 +33,16 @@ export const localSeoApi = {
     },
     signal?: AbortSignal,
   ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body, signal),
+
+  // Pre-write existing-page detection (in-tool + live site + GSC/DataForSEO
+  // ranking). The New Page flow runs this first and, when it returns matches,
+  // offers reoptimize-vs-write-new before generating. SSE — the live scan + SERP
+  // lookup can take tens of seconds.
+  precheck: (
+    clientId: string,
+    body: { keyword: string; location: string; location_code?: number | null },
+    signal?: AbortSignal,
+  ) => api.stream<PrecheckResult>(`/clients/${clientId}/local-seo/precheck`, body, signal),
 
   // Phase 3 — save (or clear) the client's default page-template URL.
   setPageTemplateDefault: (clientId: string, page_template_url: string | null) =>

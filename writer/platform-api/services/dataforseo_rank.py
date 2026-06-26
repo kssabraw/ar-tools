@@ -91,6 +91,33 @@ def find_rank_in_items(items: list[dict], domain: str) -> Optional[int]:
     return None
 
 
+def find_all_ranks_in_items(items: list[dict], domain: str) -> list[dict]:
+    """Every organic result whose domain matches `domain`, as ``{url, position}``.
+
+    Unlike :func:`find_rank_in_items` (first hit only), this returns *all* of the
+    client's ranking URLs in the SERP — so the existing-page precheck can surface
+    multiple pages competing for the same keyword (cannibalization) and let the
+    user pick which to reoptimize. Ordered by position (best first).
+    """
+    if not domain:
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in items:
+        if item.get("type") != "organic":
+            continue
+        item_domain = (item.get("domain") or "").lower()
+        if item_domain == domain or item_domain.endswith("." + domain):
+            url = item.get("url")
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            rank = item.get("rank_absolute") or item.get("rank_group")
+            out.append({"url": url, "position": int(rank) if rank is not None else None})
+    out.sort(key=lambda r: (r["position"] is None, r["position"] or 0))
+    return out
+
+
 def is_gsc_covered(rows: list[dict], today: date, days: int) -> bool:
     """True if the keyword has a non-null GSC position within the last `days`."""
     cutoff = today.toordinal() - days + 1
@@ -160,6 +187,35 @@ async def fetch_serp_rank(keyword: str, domain: str, location_code: int) -> Opti
         raise RuntimeError(f"dataforseo_serp_error: {tasks[0].get('status_message') if tasks else 'no tasks'}")
     items = (tasks[0].get("result") or [{}])[0].get("items") or []
     return find_rank_in_items(items, domain)
+
+
+async def fetch_serp_rank_urls(keyword: str, domain: str, location_code: int) -> list[dict]:
+    """Live organic SERP: ALL of `domain`'s ranking URLs for `keyword`.
+
+    Returns ``[{url, position}, ...]`` (possibly empty), best position first.
+    Used by the existing-page precheck to detect one *or several* of the client's
+    pages already ranking for the keyword. Raises on a DataForSEO task error so
+    the caller can degrade.
+    """
+    payload = [
+        {
+            "keyword": keyword,
+            "language_code": settings.dataforseo_default_language_code,
+            "location_code": location_code,
+            "depth": settings.dataforseo_serp_depth,
+            "calculate_rectangles": False,
+        }
+    ]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(f"{_BASE_URL}{_SERP_PATH}", headers=_auth_header(), json=payload)
+        resp.raise_for_status()
+        body = resp.json()
+
+    tasks = body.get("tasks") or []
+    if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
+        raise RuntimeError(f"dataforseo_serp_error: {tasks[0].get('status_message') if tasks else 'no tasks'}")
+    items = (tasks[0].get("result") or [{}])[0].get("items") or []
+    return find_all_ranks_in_items(items, domain)
 
 
 # ----------------------------------------------------------------------------
