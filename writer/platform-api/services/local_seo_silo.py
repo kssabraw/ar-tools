@@ -86,11 +86,6 @@ async def start_silo_plan(
     canonical_location, resolved_code = await locations_service.resolve_location(
         client, location, location_code
     )
-    # DataForSEO Labs (keyword expansion + competitor mining) only accepts a
-    # COUNTRY-level location code; the city code drives degraded task errors. Pin
-    # the country once at enqueue time so the worker uses it for the Labs calls
-    # (the city stays in the seed/SERP).
-    country_code = await locations_service.resolve_country_code(client)
 
     supabase = get_supabase()
     existing = (
@@ -116,7 +111,6 @@ async def start_silo_plan(
                     "keyword": keyword.strip(),
                     "location": canonical_location,
                     "location_code": resolved_code,
-                    "country_location_code": country_code,
                     "user_id": user_id,
                 },
             }
@@ -163,7 +157,6 @@ async def run_silo_plan_job(job: dict) -> None:
     keyword = (payload.get("keyword") or "").strip()
     location = (payload.get("location") or "").strip()
     location_code = payload.get("location_code")
-    country_location_code = payload.get("country_location_code")
     job_id = job["id"]
     supabase = get_supabase()
 
@@ -175,9 +168,7 @@ async def run_silo_plan_job(job: dict) -> None:
         if not keyword:
             raise ValueError("keyword_required")
 
-        plan = await asyncio.to_thread(
-            _run_pipeline, keyword, location, location_code, country_location_code
-        )
+        plan = await asyncio.to_thread(_run_pipeline, keyword, location, location_code)
         # Append a geocoding-verified "Neighborhoods" silo (within-city only). It's
         # an additive best-effort step, so a defensive failure here must never sink
         # an otherwise-good plan — belt-and-suspenders around its own internal
@@ -218,17 +209,14 @@ async def run_silo_plan_job(job: dict) -> None:
         ).eq("id", job_id).execute()
 
 
-def _run_pipeline(
-    keyword: str, location: str, location_code: Optional[int] = None,
-    country_location_code: Optional[int] = None,
-) -> dict:
+def _run_pipeline(keyword: str, location: str, location_code: Optional[int] = None) -> dict:
     """Blocking: generate the service-variation page topics for "<service> <city>"
     with one Haiku call (no keyword-expansion tool). Returns
     {"per_silo": [{"silo": name, "pages": [{keyword, supporting_keywords}, ...]}],
     "degraded_notes": [...]}; the Neighborhoods silo is appended by the job handler.
 
-    `location_code` / `country_location_code` are accepted for signature
-    compatibility but unused — the planner no longer drives DataForSEO."""
+    `location_code` is accepted for signature compatibility but unused — the planner
+    no longer drives DataForSEO (the city is parsed from `location`)."""
     city = _parse_area(location)[0] or location.strip()
     llm = _service_llm()
     if not llm:
@@ -238,7 +226,8 @@ def _run_pipeline(
     except Exception as exc:  # noqa: BLE001 — surface as a degraded note, not a crash
         logger.warning("local_seo_silo.service_gen_failed", extra={"error": str(exc)})
         return {"per_silo": [], "degraded_notes": ["Service pages unavailable — could not generate."]}
-    return {"per_silo": per_silo, "degraded_notes": []}
+    notes = [] if per_silo else ["No service-variation pages were generated."]
+    return {"per_silo": per_silo, "degraded_notes": notes}
 
 
 # ── service-variation generation (LLM — replaces the keyword-expansion tool) ───
@@ -324,14 +313,16 @@ def _compose_service_keyword(modifier: str, service: str, city: str) -> str:
     (e.g. "after hours", "burst pipe", "commercial"); composing the service in
     deterministically means the qualifier can never be dropped (Haiku kept dropping
     it when asked to emit whole phrases — "after hours plumber" instead of "after
-    hours emergency plumber"). Modifier words already present in the service are
-    stripped so a redundant modifier (e.g. "emergency" for "emergency plumber", or
-    "hot water emergency") doesn't duplicate them; an empty modifier yields the base
+    hours emergency plumber"). Any service- OR city-word the model echoed into the
+    modifier is stripped so a redundant qualifier or a leaked city/suburb doesn't
+    duplicate (e.g. modifier "emergency"/"hot water emergency" for service
+    "emergency plumber", or modifier "plumber sydney" which must not yield
+    "sydney emergency plumber Sydney"); an empty modifier yields the base
     "<service> <city>" page."""
     service = (service or "").strip()
     city = (city or "").strip()
-    service_words = {w.lower() for w in service.split()}
-    mod_words = [w for w in (modifier or "").split() if w.lower() not in service_words]
+    drop_words = {w.lower() for w in service.split()} | {w.lower() for w in city.split()}
+    mod_words = [w for w in (modifier or "").split() if w.lower() not in drop_words]
     modifier = " ".join(mod_words).strip()
     head = f"{modifier} {service}".strip() if modifier else service
     return f"{head} {city}".strip()
@@ -358,6 +349,7 @@ def _generate_service_pages(service: str, city: str, llm) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         raise ValueError(f"service_gen_failed: {exc}") from exc
 
+    service_words = {w.lower() for w in service.split()}
     per_silo: list[dict] = []
     seen: set[str] = set()  # dedupe composed page keywords across all silos (first wins)
     for silo in data.get("silos") or []:
@@ -375,9 +367,15 @@ def _generate_service_pages(service: str, city: str, llm) -> list[dict]:
             sup_seen: set[str] = {key}
             for s in page.get("supporting_keywords") or []:
                 sk = (s or "").strip()
-                if sk and sk.lower() not in sup_seen:
-                    sup_seen.add(sk.lower())
-                    supporting.append(sk)
+                if not sk or sk.lower() in sup_seen:
+                    continue
+                # Keep only chips that carry the full service (every service word
+                # present, any order) so a supporting variant can't quietly drop the
+                # qualifier the way the page keyword used to.
+                if not service_words.issubset({w.lower() for w in sk.split()}):
+                    continue
+                sup_seen.add(sk.lower())
+                supporting.append(sk)
             pages.append({"keyword": kw, "supporting_keywords": supporting})
         if pages:
             per_silo.append({"silo": name, "pages": pages})
