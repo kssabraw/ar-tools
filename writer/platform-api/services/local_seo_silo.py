@@ -3,12 +3,21 @@
 Behind the "Plan Silo" tab. Given a **service + city** it produces two kinds of
 candidate local page targets:
 
-  1. **Service silos** — a single Haiku call (`_generate_service_pages`) expands
-     the input service into the distinct service-variation landing pages a local
-     business should have, grouped into silos by the kind of variation:
-     availability/urgency (24 hour, after hours, weekend), audience/property
-     (commercial, residential, strata), and trade-specific job/problem types
-     (burst pipe, blocked drain, hot water…). The service's own qualifier is
+  1. **Service silos** — a single LLM call (Sonnet — `_generate_service_pages`,
+     `local_seo_service_model`) expands the input service into the distinct
+     service-variation landing pages a local business should have, grouped into
+     silos by the kind of variation. The model first decides which silos genuinely
+     fit the service and includes only those (relevance-gated, not a fixed set):
+     availability/urgency (24 hour, after hours, same day — only for breakdown /
+     time-pressure services, never planned work like roof restoration),
+     audience/property (commercial, residential, strata — only the audiences a
+     trade actually splits by), and trade-specific job/problem types generated from
+     the service itself (roof restoration → leak repair, tile replacement,
+     storm damage…; an emergency plumber → burst pipe, blocked drain, hot water…).
+     Sonnet rather than Haiku: the silo-relevance judgement and trade-specific
+     job modifiers need stronger world knowledge — Haiku stamped generic
+     urgency/audience buckets onto non-urgency services and anchored on the
+     prompt's plumber example. The service's own qualifier is
      preserved — an "emergency plumber" stays an *emergency* service, never
      broadening to a bare "plumber" — and no suburb names appear here (that's the
      Neighborhoods silo's job). The model returns only each variation's *modifier*
@@ -247,7 +256,7 @@ async def run_silo_plan_job(job: dict) -> None:
 
 def _run_pipeline(keyword: str, location: str, location_code: Optional[int] = None) -> dict:
     """Blocking: generate the service-variation page topics for "<service> <city>"
-    with one Haiku call (no keyword-expansion tool). Returns
+    with one LLM call (Sonnet — no keyword-expansion tool). Returns
     {"per_silo": [{"silo": name, "pages": [{keyword, supporting_keywords}, ...]}],
     "degraded_notes": [...]}; the Neighborhoods silo is appended by the job handler.
 
@@ -274,23 +283,39 @@ _SERVICE_SYSTEM = (
     "should have, grouped into silos by the kind of variation. For each page return "
     "ONLY the MODIFIER -- the few words that distinguish the variation -- NOT the full "
     "phrase. The service and city are attached automatically as "
-    "'<modifier> <service> <city>'. So for service 'emergency plumber' in 'Sydney', "
-    "the modifier 'after hours' becomes the page 'after hours emergency plumber "
-    "Sydney', and 'burst pipe' becomes 'burst pipe emergency plumber Sydney'. Apply "
-    "only modifiers that genuinely fit THIS service:\n"
-    "  - Availability / urgency: 24 hour, after hours, weekend, same day (only add "
-    "'emergency' if the service doesn't already say it);\n"
-    "  - Audience / property: commercial, residential, strata, industrial;\n"
-    "  - Job / problem type for the trade: e.g. for an emergency plumber -- burst "
-    "pipe, blocked drain, hot water, gas leak, leaking tap; for a roofer -- leak "
-    "repair, storm damage, re-roofing, gutter.\n"
-    "Rules for the modifier: it is JUST the variation words -- NEVER repeat the "
-    "service words (e.g. 'plumber', 'emergency'), the city, or any suburb / "
+    "'<modifier> <service> <city>'. So a modifier 'storm damage' for service 'roof "
+    "restoration' in 'Melbourne' becomes the page 'storm damage roof restoration "
+    "Melbourne'.\n"
+    "FIRST decide which silos genuinely apply to THIS service, and INCLUDE ONLY those "
+    "-- omit a silo entirely when it doesn't fit. Do NOT force a silo just because it "
+    "is listed here:\n"
+    "  - Availability / urgency (e.g. 24 hour, after hours, weekend, same day, "
+    "emergency): include ONLY for services people buy under time pressure or when "
+    "something has broken -- e.g. emergency plumber, 24/7 locksmith, blocked drains, "
+    "electrical faults, hot water repair, HVAC breakdown. DO NOT include for "
+    "planned / project work -- e.g. roof restoration, renovations, landscaping, "
+    "painting, fit-outs, installations (nobody searches 'after hours roof "
+    "restoration').\n"
+    "  - Audience / property (e.g. commercial, residential, strata, industrial): "
+    "include ONLY the audiences that are real, separately-searched markets for THIS "
+    "trade -- not all of them every time, and none if the trade doesn't split that "
+    "way.\n"
+    "  - Job / problem type: the variations of the actual work, SPECIFIC to THIS "
+    "service. Generate these from your own knowledge of the trade. For illustration "
+    "only (do NOT copy these -- they are different trades): an emergency plumber "
+    "splits into burst pipe / blocked drain / hot water / gas leak; roof restoration "
+    "splits into leak repair / tile replacement / re-roofing / storm damage / gutter; "
+    "an electrician splits into switchboard upgrade / rewiring / safety switch / "
+    "downlights. Produce the equivalent job/problem variations that fit the GIVEN "
+    "service.\n"
+    "You may add another silo if the service has a meaningful variation axis not "
+    "covered above. Rules for the modifier: it is JUST the variation words -- NEVER "
+    "repeat the service words (e.g. 'plumber', 'emergency'), the city, or any suburb / "
     "neighbourhood name in it (suburbs are handled separately). Include ONE base page "
     "with an empty modifier (\"\") for the service itself. Each page's "
     "supporting_keywords are 0-3 full search phrases for the SAME page that DO include "
     "the full service (close phrasings / plurals / word-order variants). Quality over "
-    "quantity -- only real, distinct page topics."
+    "quantity -- only real, distinct page topics a customer would actually search."
 )
 
 _SERVICE_SCHEMA = {
@@ -326,8 +351,8 @@ _SERVICE_SCHEMA = {
 
 
 def _service_llm():
-    """Construct the Haiku service-generation client, or None when the Anthropic
-    key is absent."""
+    """Construct the service-generation LLM client (Sonnet — `local_seo_service_model`),
+    or None when the Anthropic key is absent."""
     if not settings.anthropic_api_key:
         return None
     try:
@@ -365,7 +390,7 @@ def _compose_service_keyword(modifier: str, service: str, city: str) -> str:
 
 
 def _generate_service_pages(service: str, city: str, llm) -> list[dict]:
-    """Haiku tool-use: the service-variation landing pages for "<service> <city>",
+    """Sonnet tool-use: the service-variation landing pages for "<service> <city>",
     grouped into silos. The model returns only each page's MODIFIER (the variation
     words); the full keyword is composed deterministically as
     "<modifier> <service> <city>" so the service qualifier is always present.

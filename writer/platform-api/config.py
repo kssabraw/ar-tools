@@ -166,12 +166,16 @@ class Settings(BaseSettings):
     # unverified names.
     local_seo_neighborhood_model: str = "claude-haiku-4-5-20251001"
     local_seo_max_neighborhoods: int = 20
-    # Service-variation generation: a Haiku pass expands the input service into
+    # Service-variation generation: an LLM pass expands the input service into
     # the distinct service-variation landing pages (availability / audience /
     # problem-type modifiers) grouped into silos, keeping the service's qualifier
     # and excluding suburbs (the Neighborhoods silo's job). Best-effort + gated on
-    # the Anthropic key.
-    local_seo_service_model: str = "claude-haiku-4-5-20251001"
+    # the Anthropic key. Sonnet (not Haiku) here: the silo-relevance judgement
+    # (which buckets genuinely fit the service) and the trade-specific job/problem
+    # modifiers need stronger world knowledge + instruction-following than Haiku —
+    # Haiku stamped generic urgency/audience buckets onto non-urgency services
+    # (e.g. "after hours roof restoration") and anchored on the prompt's examples.
+    local_seo_service_model: str = "claude-sonnet-4-6"
     # Verification is geographic + country-agnostic: a proposed sub-area is kept
     # only if it geocodes to a place INSIDE the target city's footprint (its
     # geocoded bounds), which works for US neighborhoods and AU/UK suburbs alike.
