@@ -205,6 +205,10 @@ def test_compose_service_keyword_keeps_full_service_and_dedupes_words():
         "hot water emergency plumber Sydney"
     assert silo._compose_service_keyword("emergency", "emergency plumber", "Sydney") == \
         "emergency plumber Sydney"
+    # a city word leaked into the modifier is stripped (no duplicated city) —
+    # "plumber sydney" must not yield "sydney emergency plumber Sydney".
+    assert silo._compose_service_keyword("plumber sydney", "emergency plumber", "Sydney") == \
+        "emergency plumber Sydney"
     # empty modifier → the base service page.
     assert silo._compose_service_keyword("", "emergency plumber", "Sydney") == "emergency plumber Sydney"
 
@@ -214,7 +218,11 @@ def test_generate_service_pages_composes_groups_and_dedupes():
         {"name": "Availability", "pages": [
             {"modifier": "", "supporting_keywords": []},  # base service page
             {"modifier": "24 hour",
-             "supporting_keywords": ["24/7 emergency plumber sydney", "24 hour emergency plumber sydney"]},
+             "supporting_keywords": [
+                 "24/7 emergency plumber sydney",        # kept (full service present)
+                 "24/7 plumber sydney",                  # dropped (missing "emergency")
+                 "24 hour emergency plumber sydney",     # dropped (== composed keyword)
+             ]},
             {"modifier": "after hours", "supporting_keywords": []},
         ]},
         {"name": "Problem Type", "pages": [
