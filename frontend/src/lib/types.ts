@@ -79,7 +79,7 @@ export interface Client extends ClientListItem {
   updated_at: string
 }
 
-export type PageStructureType = 'local_landing' | 'service' | 'location' | 'blog_post'
+export type PageStructureType = 'local_landing' | 'service' | 'location' | 'blog_post' | 'product' | 'solution'
 
 export interface PageStructureEntry {
   url: string
