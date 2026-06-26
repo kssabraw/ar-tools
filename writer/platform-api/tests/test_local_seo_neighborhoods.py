@@ -177,6 +177,41 @@ def test_parse_area_two_segments_is_city_country_not_state():
     assert silo._parse_area("London,United Kingdom") == ("London", "", "United Kingdom")
 
 
+# ── _dedupe_across_silos (each keyword in its best silo only) ─────────────────
+def test_dedupe_across_silos_keeps_best_and_drops_emptied():
+    raw = [
+        {"id": "silo-0", "silo": "Emergencies", "pages": ["plumber sydney", "burst pipe sydney"]},
+        {"id": "silo-1", "silo": "Pricing", "pages": ["plumber sydney"]},
+    ]
+    rel = {
+        "silo-0": {"plumber sydney": 0.6, "burst pipe sydney": 0.8},
+        "silo-1": {"plumber sydney": 0.9},  # stronger here
+    }
+    out = silo._dedupe_across_silos(raw, rel)
+    by = {e["silo"]: e["pages"] for e in out}
+    assert by == {"Emergencies": ["burst pipe sydney"], "Pricing": ["plumber sydney"]}
+
+
+def test_dedupe_across_silos_ties_go_to_first_silo():
+    raw = [
+        {"id": "silo-0", "silo": "A", "pages": ["x"]},
+        {"id": "silo-1", "silo": "B", "pages": ["x"]},  # tie → emptied → dropped
+    ]
+    rel = {"silo-0": {"x": 0.5}, "silo-1": {"x": 0.5}}
+    out = silo._dedupe_across_silos(raw, rel)
+    assert [e["silo"] for e in out] == ["A"]
+
+
+def test_dedupe_across_silos_case_insensitive():
+    raw = [
+        {"id": "silo-0", "silo": "A", "pages": ["Plumber Sydney"]},
+        {"id": "silo-1", "silo": "B", "pages": ["plumber sydney"]},
+    ]
+    rel = {"silo-0": {"plumber sydney": 0.4}, "silo-1": {"plumber sydney": 0.7}}
+    out = silo._dedupe_across_silos(raw, rel)
+    assert [(e["silo"], e["pages"]) for e in out] == [("B", ["plumber sydney"])]
+
+
 # ── _discover_neighborhood_silo (orchestration, mocked) ───────────────────────
 _CITY_Q = "Anaheim, California, United States"
 _GEO = {

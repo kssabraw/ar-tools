@@ -317,7 +317,14 @@ def _run_pipeline(
     # If a silo had too few keywords to cluster, fall back to its strongest
     # active keywords so the silo isn't silently dropped.
     clusters = (pipe.clustering_log or {}).get("topics", {})
-    per_silo: list[dict] = []
+    # Per-(silo, keyword) relevance, to assign a duplicate keyword to its single
+    # best-fitting silo below.
+    rel_by_topic: dict[str, dict[str, float]] = {
+        t.id: {k.keyword.strip().lower(): (k.relevance_score or 0.0)
+               for k in pipe.per_topic_gated.get(t.id, [])}
+        for t in topics
+    }
+    raw_silos: list[dict] = []
     for t in topics:
         groupings = (clusters.get(t.id) or {}).get("groupings", [])
         pages: list[str] = []
@@ -339,9 +346,34 @@ def _run_pipeline(
                     seen.add(key)
                     pages.append(k.keyword.strip())
         if pages:
-            per_silo.append({"silo": silo_names[t.id], "pages": pages})
+            raw_silos.append({"id": t.id, "silo": silo_names[t.id], "pages": pages})
 
-    return {"per_silo": per_silo, "degraded_notes": notes}
+    return {"per_silo": _dedupe_across_silos(raw_silos, rel_by_topic), "degraded_notes": notes}
+
+
+def _dedupe_across_silos(
+    raw_silos: list[dict], rel_by_topic: dict[str, dict[str, float]],
+) -> list[dict]:
+    """Keep each candidate keyword in only ONE silo — the one where it's most
+    relevant. The relevance gate routes a generic head term (e.g. "plumber
+    sydney") into several silos, so without this the same page target appears
+    under each. Highest per-silo relevance wins; ties go to the earlier
+    (discovery-order) silo; a silo left empty is dropped. Pure; unit-tested."""
+    best: dict[str, tuple[float, str]] = {}  # keyword_lower -> (score, topic_id)
+    for entry in raw_silos:
+        rel = rel_by_topic.get(entry["id"], {})
+        for kw in entry["pages"]:
+            key = kw.strip().lower()
+            score = rel.get(key, 0.0)
+            if key not in best or score > best[key][0]:
+                best[key] = (score, entry["id"])
+
+    out: list[dict] = []
+    for entry in raw_silos:
+        kept = [kw for kw in entry["pages"] if best[kw.strip().lower()][1] == entry["id"]]
+        if kept:
+            out.append({"silo": entry["silo"], "pages": kept})
+    return out
 
 
 # ── neighborhood discovery (geocoding-verified, within-city) ──────────────────
