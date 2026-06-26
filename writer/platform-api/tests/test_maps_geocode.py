@@ -87,6 +87,23 @@ def test_aggregate_weak_areas_drops_thin_suburbs():
     assert {a["city"] for a in areas_all} == {"Springfield", "Lincoln"} and dropped0 == 0
 
 
+def test_aggregate_weak_areas_unnamed_cluster_survives_singleton_dropped():
+    # Cells with NO geocoded city (e.g. ZERO_RESULTS / geocode outage) must group by
+    # grid contiguity: a real 3-pin contiguous blob survives; a lone unnamed pin drops.
+    cells = [
+        # contiguous 3-blob (rows/cols adjacent), no city
+        {"city": None, "rank": None, "octant": "S", "lat": 40.1, "lng": -75.0, "tier": "critical", "opportunity": 1.0, "row": 0, "col": 0},
+        {"city": None, "rank": 12, "octant": "S", "lat": 40.1, "lng": -75.0, "tier": "weak", "opportunity": 0.5, "row": 0, "col": 1},
+        {"city": None, "rank": 13, "octant": "S", "lat": 40.1, "lng": -75.0, "tier": "weak", "opportunity": 0.4, "row": 1, "col": 1},
+        # a lone unnamed pin far away
+        {"city": None, "rank": None, "octant": "N", "lat": 41.0, "lng": -76.0, "tier": "critical", "opportunity": 0.9, "row": 9, "col": 9},
+    ]
+    areas, dropped = mg.aggregate_weak_areas(cells, min_pins=3)
+    assert len(areas) == 1                 # the 3-blob survives as ONE unnamed area
+    assert areas[0]["city"] is None and areas[0]["pins"] == 3
+    assert dropped == 1                    # the lone (9,9) pin dropped
+
+
 def test_extract_weak_cells_empty_grid():
     assert mg.extract_weak_cells([], CENTER_LAT, CENTER_LNG, floor=10) == []
     assert mg.extract_weak_cells(GRID, None, None, floor=10) == []
@@ -218,3 +235,5 @@ def test_build_weak_locations_without_key_passes_octants_through():
     assert out["weak_cell_count"] == 7
     assert out["weak_areas"] == []            # no geocoding → no named areas
     assert out["octant_pins"] == octants      # pins surface unenriched
+    # Payload shape matches the geocoded branch (counts simply zero here).
+    assert out["flagged_area_count"] == 0 and out["dropped_thin_areas"] == 0

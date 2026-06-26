@@ -276,6 +276,42 @@ def parse_geocode_results(results: Optional[list]) -> dict:
     }
 
 
+def _contiguous_components(cells: list[dict]) -> list[list[dict]]:
+    """Group cells into 8-adjacency connected components by grid (row, col), so a
+    real cluster of pins that lack a geocoded city name still forms ONE area
+    instead of fragmenting into singletons. Cells without row/col each become
+    their own component (a safe fallback)."""
+    by_rc: dict[tuple[int, int], dict] = {}
+    loose: list[dict] = []
+    for c in cells:
+        if c.get("row") is not None and c.get("col") is not None:
+            by_rc[(c["row"], c["col"])] = c
+        else:
+            loose.append(c)
+    seen: set[tuple[int, int]] = set()
+    comps: list[list[dict]] = []
+    for start in by_rc:
+        if start in seen:
+            continue
+        comp: list[dict] = []
+        stack = [start]
+        seen.add(start)
+        while stack:
+            r, cc = stack.pop()
+            comp.append(by_rc[(r, cc)])
+            for dr in (-1, 0, 1):
+                for dc in (-1, 0, 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nb = (r + dr, cc + dc)
+                    if nb in by_rc and nb not in seen:
+                        seen.add(nb)
+                        stack.append(nb)
+        comps.append(comp)
+    comps.extend([c] for c in loose)
+    return comps
+
+
 def aggregate_weak_areas(
     geocoded_cells: list[dict], *, min_pins: int = 1, top_n: Optional[int] = None,
 ) -> tuple[list[dict], int]:
@@ -288,11 +324,21 @@ def aggregate_weak_areas(
     a representative lat/lng (the highest-priority pin). Returns
     `(areas, dropped_thin)` where `dropped_thin` is the number of sub-threshold
     suburbs dropped. `top_n=None` = all flagged areas."""
+    # Named cells group by their geocoded city; un-named cells (no city — e.g.
+    # ZERO_RESULTS for remote coords, or a transient geocode outage) group by grid
+    # contiguity so a real unnamed cluster forms ONE area and survives the min_pins
+    # filter, instead of fragmenting into singletons that all get dropped.
     groups: dict[str, dict] = {}
+    unnamed: list[dict] = []
     for cell in geocoded_cells:
-        key = cell.get("city") or cell.get("formatted") or f"{cell['lat']:.3f},{cell['lng']:.3f}"
-        g = groups.setdefault(key, {"city": cell.get("city"), "admin_area": cell.get("admin_area"), "cells": []})
-        g["cells"].append(cell)
+        city = cell.get("city")
+        if city:
+            g = groups.setdefault(city, {"city": city, "admin_area": cell.get("admin_area"), "cells": []})
+            g["cells"].append(cell)
+        else:
+            unnamed.append(cell)
+    for i, comp in enumerate(_contiguous_components(unnamed)):
+        groups[f"__unnamed_{i}"] = {"city": None, "admin_area": None, "cells": comp}
 
     areas: list[dict] = []
     dropped_thin = 0
@@ -640,8 +686,16 @@ async def build_weak_locations(
         azimuth_offset_deg=azimuth_offset_deg,
     )
     # Highest-priority first, so a cap only ever drops the lowest "Watch" cells.
+    # max_cells is a safety bound set above any real grid's cell count, so it does
+    # not bite in practice; if it ever does, suburb pin-counts become approximate
+    # for that report — log it rather than truncate silently.
     weak_cells.sort(key=lambda c: -c.get("opportunity", 0))
     capped = len(weak_cells) > max_cells
+    if capped:
+        logger.warning(
+            "maps_weak_cells_capped",
+            extra={"total": len(weak_cells), "max_cells": max_cells},
+        )
     kept = weak_cells[:max_cells]
 
     base = {
@@ -654,8 +708,12 @@ async def build_weak_locations(
     }
     if not api_key:
         # No geocoding: surface the octant pins (no city) so the UI degrades to
-        # raw coordinates rather than hiding them.
-        return {**base, "octant_pins": [dict(p) for p in octant_points], "weak_areas": []}
+        # raw coordinates rather than hiding them. Keep the payload shape identical
+        # to the geocoded branch (the area counts are simply zero here).
+        return {
+            **base, "flagged_area_count": 0, "dropped_thin_areas": 0,
+            "octant_pins": [dict(p) for p in octant_points], "weak_areas": [],
+        }
 
     combined = await reverse_geocode_points(
         [dict(c) for c in kept] + [dict(p) for p in octant_points],
