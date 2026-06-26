@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowRight, Building2, CheckCircle2, ChevronDown, ChevronRight, FilePlus, FileSearch, MapPin, Search, Sparkles, Trash2,
+  ArrowLeft, ArrowRight, Building2, CheckCircle2, ChevronDown, ChevronRight, MapPin, Search, Sparkles, Trash2,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
@@ -28,12 +28,6 @@ type View =
   | { kind: 'loading' }
   | { kind: 'generated'; page: LocalSeoPageDetail; isNew: boolean; prevScore: number | null }
   | { kind: 'score'; pageUrl?: string; pageHtml?: string; serpAnalysis?: AnalysisResult | null }
-
-type CheckState =
-  | { status: 'idle' }
-  | { status: 'scanning' }
-  | { status: 'found'; page: { url: string; title: string; h1?: string }; isBlogPost: boolean }
-  | { status: 'not_found' }
 
 export function LocalSeoContent() {
   const { id } = useParams<{ id: string }>()
@@ -71,11 +65,8 @@ export function LocalSeoContent() {
   const [pageTemplateUrl, setPageTemplateUrl] = useState('')
   const [savingTemplateDefault, setSavingTemplateDefault] = useState(false)
   const [error, setError] = useState('')
-  const [check, setCheck] = useState<CheckState>({ status: 'idle' })
-  const [scanning, setScanning] = useState(false)
   // Advanced options (page template + cache refresh) collapse, hidden by default.
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [manualUrl, setManualUrl] = useState('')
 
   // Map-pack rankability check (single point-in-time report).
   const [rankability, setRankability] = useState<RankabilityResult | null>(null)
@@ -129,8 +120,6 @@ export function LocalSeoContent() {
   // Reset transient form state when the service/area inputs change (called from
   // the input handlers — avoids a setState-in-effect cascade).
   const resetTransient = () => {
-    setCheck({ status: 'idle' })
-    setManualUrl('')
     setError('')
     setRankability(null)
   }
@@ -208,30 +197,6 @@ export function LocalSeoContent() {
       void openSaved(match.page_id)
     } else if (match.url) {
       setView({ kind: 'score', pageUrl: match.url })
-    }
-  }
-
-  const handleCheckSite = async () => {
-    if (!keyword.trim() || !location.trim()) return
-    if (!client?.website_url && !client?.gbp?.website) {
-      setError('This client has no website on file. Add one to scan for existing pages.')
-      return
-    }
-    setError('')
-    setScanning(true)
-    setCheck({ status: 'scanning' })
-    try {
-      const data = await localSeoApi.findPage(clientId, { keyword: keyword.trim(), location: location.trim() })
-      if (data.found && data.page) {
-        setCheck({ status: 'found', page: data.page, isBlogPost: data.is_blog_post })
-      } else {
-        setCheck({ status: 'not_found' })
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Site scan failed')
-      setCheck({ status: 'idle' })
-    } finally {
-      setScanning(false)
     }
   }
 
@@ -424,7 +389,7 @@ export function LocalSeoContent() {
             if (mode === 'reoptimize' && existingUrl) setView({ kind: 'score', pageUrl: existingUrl })
             else handleGenerate(kw)
           }}
-          onNewPage={() => { setView({ kind: 'form' }); setKeyword(''); setCheck({ status: 'idle' }) }}
+          onNewPage={() => { setView({ kind: 'form' }); setKeyword('') }}
         />
       </div>
     )
@@ -769,11 +734,10 @@ export function LocalSeoContent() {
             </div>
           )}
 
-          {/* Optional pre-checks */}
+          {/* Optional pre-check — the existing-page scan now runs automatically as
+              part of "Create new page" (the precheck gate), so only the map-pack
+              check remains here. */}
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button style={outlineBtn} onClick={handleCheckSite} disabled={scanning || !keyword.trim() || !location.trim()}>
-              {scanning ? <Spinner size={14} /> : <FileSearch size={14} />} {scanning ? 'Checking site…' : 'Check site for existing page'}
-            </button>
             <button style={outlineBtn} onClick={handleCheckRankability} disabled={rankabilityLoading || !keyword.trim() || !location.trim()}>
               {rankabilityLoading ? <Spinner size={14} /> : <MapPin size={14} />} {rankabilityLoading ? 'Checking map pack…' : 'Check map pack'}
             </button>
@@ -786,45 +750,6 @@ export function LocalSeoContent() {
             </div>
           )}
           {!rankabilityLoading && rankability && <RankabilityReport result={rankability} />}
-
-          {/* Site-scan results */}
-          {check.status === 'scanning' && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#f8fafc', borderRadius: 8, fontSize: 13, color: '#64748b' }}>
-              <Spinner size={14} /> Scanning the client site for a "{keyword}" page…
-            </div>
-          )}
-
-          {check.status === 'found' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'flex', gap: 8, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12, color: '#92400e' }}>
-                <FileSearch size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-                <div style={{ minWidth: 0 }}>
-                  <p style={{ margin: 0, fontWeight: 600 }}>Existing page found:</p>
-                  <a href={check.page.url} target="_blank" rel="noreferrer" style={{ color: '#92400e', wordBreak: 'break-all' }}>{check.page.url}</a>
-                  {check.isBlogPost && <p style={{ margin: '4px 0 0' }}>⚠ This looks like a blog post, not a dedicated service page.</p>}
-                </div>
-              </div>
-              <button style={{ ...primaryBtn, width: '100%' }} onClick={() => setView({ kind: 'score', pageUrl: check.page.url })}>
-                View &amp; score this page
-              </button>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input style={{ ...input, flex: 1 }} placeholder="Or score a different URL…" value={manualUrl}
-                  onChange={e => setManualUrl(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter' && manualUrl.trim()) setView({ kind: 'score', pageUrl: normalizeUrl(manualUrl) }) }} />
-                <button style={outlineBtn} disabled={!manualUrl.trim()} onClick={() => setView({ kind: 'score', pageUrl: normalizeUrl(manualUrl) })}>Score</button>
-              </div>
-              <button style={{ ...backLink, alignSelf: 'center', marginBottom: 0 }} onClick={() => setCheck({ status: 'not_found' })}>
-                No suitable page — create a new one instead
-              </button>
-            </div>
-          )}
-
-          {check.status === 'not_found' && (
-            <div style={{ display: 'flex', gap: 8, padding: '10px 14px', background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, fontSize: 13, color: '#166534' }}>
-              <FilePlus size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-              <span>No existing page found for "{keyword}" — creating a new page is recommended.</span>
-            </div>
-          )}
 
           {/* Primary action */}
           <button
@@ -843,12 +768,6 @@ export function LocalSeoContent() {
       )}
     </div>
   )
-}
-
-function normalizeUrl(u: string): string {
-  const t = u.trim()
-  if (!/^https?:\/\//i.test(t)) return `https://${t}`
-  return t
 }
 
 function SavedPagesList({ pages, loading, onOpen, onDelete }: {
