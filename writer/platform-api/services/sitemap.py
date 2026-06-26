@@ -28,6 +28,21 @@ _UA = "Mozilla/5.0 (compatible; AR-Tools-SitemapBot/1.0)"
 # XML-expansion bomb to the stdlib parser (clients' own sites, but still untrusted).
 _MAX_BYTES = 10 * 1024 * 1024
 
+# Conventional sitemap paths tried (in order) only when robots.txt declares none.
+# A wider net than the bare spec default, covering the common CMS/plugin layouts —
+# WordPress core (`/wp-sitemap.xml`), Yoast/Rank Math indexes, gzipped variants, and
+# nested `/sitemap/` dirs. Unreachable candidates 404 and are skipped cheaply; the
+# walker dedupes and is bounded by `max_sitemaps`, so an over-broad list is safe.
+_DEFAULT_SITEMAP_PATHS = (
+    "/sitemap.xml",
+    "/sitemap_index.xml",
+    "/sitemap-index.xml",
+    "/wp-sitemap.xml",
+    "/sitemap/sitemap.xml",
+    "/sitemap.xml.gz",
+    "/sitemap_index.xml.gz",
+)
+
 
 def _base_url(website_url: str) -> str | None:
     """Reduce a website URL to its `scheme://host` origin. Defaults to https when no
@@ -106,7 +121,7 @@ async def _discover_sitemaps(client: httpx.AsyncClient, base: str) -> list[str]:
                     found.append(loc)
     if found:
         return found
-    return [f"{base}/sitemap.xml", f"{base}/sitemap_index.xml"]
+    return [f"{base}{path}" for path in _DEFAULT_SITEMAP_PATHS]
 
 
 async def fetch_sitemap_urls(
