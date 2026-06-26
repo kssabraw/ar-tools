@@ -1,30 +1,27 @@
 """Existing-page precheck for the Local SEO "New Page" flow (#2).
 
 Before the writer creates a brand-new page, this detects whether the client
-already has a page for that topic — so the user can reoptimize the existing page
-instead of silently producing a duplicate. It mirrors the Plan Silo flow's
-existing-page logic, but for a single on-demand keyword, and adds a ranking
-signal the silo planner doesn't use.
+already has — or already ranks for — a **live page on their own site** for that
+topic, so the user can reoptimize the existing page instead of silently producing
+a duplicate. It is deliberately about *site* pages, not the tool's own generated
+drafts: in-tool ``local_seo_pages`` rows are NOT surfaced here (an unpublished
+draft has no site URL and isn't what "does a page already exist" means).
 
-Three best-effort sources are merged (any one failing degrades to a note, never
-an error):
+Two best-effort sources are merged (either failing degrades to a note, never an
+error):
 
-  1. **In-tool pages** — rows in ``local_seo_pages`` for this client whose
-     keyword matches the input *or a close variant* (plural / word-order), so a
-     near-duplicate generated page is caught. The actionable handle is the
-     page's id (open it → Score & Improve).
-  2. **Live site** — the nlp ``/find-page-for-keyword`` scan (sitemap + site
+  1. **Live site** — the nlp ``/find-page-for-keyword`` scan (sitemap + site
      search + Haiku selection, with blog-post detection) returns the best live
      page targeting the keyword. The handle is its URL (score → reoptimize).
-  3. **Ranking** — is the client already ranking for the keyword? Prefers a
-     verified GSC property (live query×page pull, all of the client's URLs for
-     a matching query); falls back to a DataForSEO live SERP that finds every
-     ranking URL on the client's domain. Either can surface *several* pages
-     (cannibalization), each offered as a reoptimize target.
+  2. **Ranking** — is the client already ranking for the keyword? Prefers a
+     verified GSC property (live query×page pull, all of the client's URLs for a
+     matching query); falls back to a DataForSEO live SERP. The SERP is queried
+     for the geo-modified term ("<service> <city>" — a local page ranks on the
+     geo term, not the bare head term), and every ranking URL on the client's
+     domain within the cutoff is returned, so *several* pages (cannibalization)
+     can surface, each a reoptimize target.
 
-Matches are deduped by URL (signals merged) and ordered ranking → in-tool →
-live-site. "Close variants" is deliberately cheap (token-set comparison, no LLM,
-no geocoding) so the precheck adds seconds, not minutes, to the New Page flow.
+Matches are deduped by URL (signals merged) and ordered ranking → live-site.
 """
 
 from __future__ import annotations
@@ -44,9 +41,11 @@ from services.dataforseo_rank import extract_domain, fetch_serp_rank_urls, locat
 
 logger = logging.getLogger(__name__)
 
-# Organic position cutoff for "already ranking" — a page beyond this isn't worth
-# flagging as an existing ranker to reoptimize.
-_RANK_CUTOFF = 30
+# Organic position cutoff for "already ranking". Generous on purpose: the goal is
+# to surface an existing live page the client *has* for this service (to reoptimize
+# instead of duplicating), so a page ranking even on page 5–10 still counts — it
+# exists. Bounded by the SERP fetch depth (dataforseo_serp_depth = 100).
+_RANK_CUTOFF = 100
 # GSC lookback for the ranking signal — same ~90-day window the GSC Research
 # module uses for its live query×page pull.
 _GSC_LOOKBACK_DAYS = 90
@@ -162,25 +161,50 @@ async def _gsc_ranking_urls(
     return sorted(best.values(), key=lambda r: r["position"])
 
 
-async def _dataforseo_ranking_urls(client: dict, keyword: str, location_code: Optional[int]) -> list[dict]:
+def _ranking_queries(keyword: str, location: str) -> list[str]:
+    """The SERP query to check for an existing ranking page: the geo-modified term
+    "<service> <city>". A local business's page is optimized for and ranks on the
+    geo term, so the city is always attached. Falls back to the bare keyword only
+    when there's no city to attach, or when the city is already in the keyword."""
+    kw = (keyword or "").strip()
+    if not kw:
+        return []
+    city = (location or "").split(",")[0].strip()
+    if city and city.lower() not in kw.lower():
+        return [f"{kw} {city}"]
+    return [kw]
+
+
+async def _dataforseo_ranking_urls(
+    client: dict, keyword: str, location: str, location_code: Optional[int],
+) -> list[dict]:
     """Ranking URLs from a live DataForSEO SERP (the fallback rank source).
 
-    Finds every URL on the client's domain ranking for the keyword, within the
-    cutoff. Best-effort — returns [] if the client has no domain or the SERP call
+    Queries the geo-modified term ("<service> <city>"), finding every URL on the
+    client's domain ranking within the cutoff, deduped by URL (best position
+    kept). Best-effort — returns [] if the client has no domain or the SERP call
     errors.
     """
     domain = extract_domain(client.get("website_url") or (client.get("gbp") or {}).get("website") or "")
-    if not domain:
-        return []
-    if not settings.dataforseo_login:
+    if not domain or not settings.dataforseo_login:
         return []
     code = location_code or location_code_for(client)
-    try:
-        ranks = await fetch_serp_rank_urls(keyword, domain, code)
-    except Exception as exc:  # noqa: BLE001 — ranking is an enhancement, not a gate
-        logger.warning("local_seo_precheck.dataforseo_failed", extra={"keyword": keyword, "error": str(exc)})
-        return []
-    return [r for r in ranks if r.get("position") is not None and r["position"] <= _RANK_CUTOFF]
+    best: dict[str, dict] = {}
+    for query in _ranking_queries(keyword, location):
+        try:
+            ranks = await fetch_serp_rank_urls(query, domain, code)
+        except Exception as exc:  # noqa: BLE001 — ranking is an enhancement, not a gate
+            logger.warning("local_seo_precheck.dataforseo_failed", extra={"keyword": query, "error": str(exc)})
+            continue
+        for r in ranks:
+            pos = r.get("position")
+            if pos is None or pos > _RANK_CUTOFF:
+                continue
+            key = canonical_url_key(r["url"])
+            prev = best.get(key)
+            if prev is None or pos < prev["position"]:
+                best[key] = {"url": r["url"], "position": pos}
+    return sorted(best.values(), key=lambda r: r["position"])
 
 
 # ── orchestration ────────────────────────────────────────────────────────────
@@ -209,8 +233,11 @@ async def detect_existing_pages(
     variants = _build_variants(keyword)
     notes: list[str] = []
 
-    # matches keyed for dedup: a URL by canonical key, an in-tool page by id.
+    # matches keyed for dedup by canonical URL. Both sources are live pages on the
+    # client's site (with a real URL); in-tool generated drafts are deliberately
+    # NOT surfaced here — the gate is about existing site pages to reoptimize.
     matches: dict[str, dict] = {}
+    supabase = get_supabase()
 
     def _merge(key: str, data: dict, signal: str) -> None:
         existing = matches.get(key)
@@ -227,35 +254,7 @@ async def detect_existing_pages(
         if signal not in existing["signals"]:
             existing["signals"].append(signal)
 
-    # 1. In-tool pages (free) — close-variant token match.
-    supabase = get_supabase()
-    try:
-        rows = (
-            supabase.table("local_seo_pages")
-            .select("id, keyword, page_title, published_doc_url, mode")
-            .eq("client_id", client_id)
-            .execute()
-            .data
-            or []
-        )
-        for r in rows:
-            if not any(keywords_match(r.get("keyword", ""), v) for v in variants):
-                continue
-            url = r.get("published_doc_url")
-            key = canonical_url_key(url) if url else f"intool:{r['id']}"
-            _merge(
-                key,
-                {
-                    "page_id": r["id"], "url": url, "title": r.get("page_title"),
-                    "matched_keyword": r.get("keyword"),
-                },
-                "in_tool",
-            )
-    except Exception as exc:  # noqa: BLE001 — best-effort
-        logger.warning("local_seo_precheck.intool_failed", extra={"client_id": client_id, "error": str(exc)})
-        notes.append("Couldn't check this client's already-generated pages.")
-
-    # 2. Live site — nlp find-page-for-keyword (best single live match + blog flag).
+    # 1. Live site — nlp find-page-for-keyword (best single live match + blog flag).
     website = (client.get("gbp") or {}).get("website") or client.get("website_url")
     if website:
         try:
@@ -280,7 +279,7 @@ async def detect_existing_pages(
     else:
         notes.append("No website on file — skipped the live-site existing-page check.")
 
-    # 3. Ranking — GSC if a verified property exists, else DataForSEO.
+    # 2. Ranking — GSC if a verified property exists, else DataForSEO.
     rank_source = "none"
     ranking: list[dict] = []
     try:
@@ -288,7 +287,7 @@ async def detect_existing_pages(
         if gsc is not None:
             rank_source, ranking = "gsc", gsc
         else:
-            df = await _dataforseo_ranking_urls(client, keyword, location_code)
+            df = await _dataforseo_ranking_urls(client, keyword, location, location_code)
             if df:
                 rank_source, ranking = "dataforseo", df
             elif extract_domain(client.get("website_url") or (client.get("gbp") or {}).get("website") or ""):
@@ -308,9 +307,8 @@ async def detect_existing_pages(
     def _sort_key(m: dict) -> tuple:
         is_ranking = "ranking" in m["signals"]
         pos = m["rank_position"] if m["rank_position"] is not None else 999
-        # ranking (by position) → in_tool → live-site only.
-        tier = 0 if is_ranking else (1 if "in_tool" in m["signals"] else 2)
-        return (tier, pos)
+        # ranking pages first (by position), then live-site-only matches.
+        return (0 if is_ranking else 1, pos)
 
     ordered = sorted(matches.values(), key=_sort_key)
     return {
