@@ -38,10 +38,16 @@ from urllib.parse import unquote, urlsplit
 
 from fastapi import HTTPException
 
+from config import settings
 from db.supabase_client import get_supabase
+from services import dataforseo_rank
 from services.sitemap import fetch_sitemap_urls
 
 logger = logging.getLogger(__name__)
+
+# Sentinel rank: the DataForSEO check couldn't run (error or not configured), as
+# distinct from None (ran, domain not in the SERP → genuinely not ranking).
+_RANK_UNKNOWN = -1
 
 # Tuning for the service-page use of the Fanout pipeline. A touch broader than the
 # local-silo planner (services fan out wider than a single geo service) but bounded
@@ -204,24 +210,26 @@ async def run_service_plan_job(job: dict) -> None:
         plan["degraded_notes"] = [*notes, *plan.get("degraded_notes", [])]
         items = _to_items(plan["per_silo"], client_id)
 
-        # Drop candidates the client already publishes — match the discovered pages
-        # against the live site's sitemap and remove any that already exist.
+        # Reconcile candidates against the client's live site: match discovered
+        # pages to the sitemap, then rank-check each match. A page ranking in the top
+        # N for its keyword is dropped (the site already covers it); one ranking
+        # worse (or not at all) is surfaced for reoptimization instead.
         website_url = (client.get("website_url") or "").strip()
         if website_url and items:
             site_urls = await fetch_sitemap_urls(website_url)
             if site_urls:
-                items, removed = filter_existing_on_site(items, site_urls)
-                if removed:
-                    plan["degraded_notes"].append(
-                        f"Removed {len(removed)} candidate page(s) already published on the site."
-                    )
+                kept, on_site = filter_existing_on_site(items, site_urls)
+                reopt_items, rank_notes = await _rank_classify_on_site(on_site, client)
+                items = kept + reopt_items
+                plan["degraded_notes"].extend(rank_notes)
                 logger.info(
                     "service_page_plan.site_filter",
                     extra={
                         "job_id": job_id,
                         "client_id": client_id,
                         "site_urls": len(site_urls),
-                        "removed": len(removed),
+                        "on_site": len(on_site),
+                        "reoptimize": len(reopt_items),
                     },
                 )
             else:
@@ -441,16 +449,100 @@ def _match_existing_url(keyword: str, url_index: list[tuple[str, set[str]]]) -> 
 def filter_existing_on_site(
     items: list[dict], site_urls: list[str]
 ) -> tuple[list[dict], list[dict]]:
-    """Split planner items into (kept, removed) by matching each against the site's
-    published URLs. A candidate already on the site is dropped from the plan so the
-    team isn't offered a page that already exists. Pure; unit-tested."""
+    """Split planner items into (kept, on_site) by matching each against the site's
+    published URLs. `on_site` items (the candidate already exists on the live site,
+    `url` set to the match) are then rank-checked by the caller — ranking well →
+    dropped, ranking poorly → offered for reoptimization. Pure; unit-tested."""
     url_index = _build_url_index(site_urls)
     kept: list[dict] = []
-    removed: list[dict] = []
+    on_site: list[dict] = []
     for item in items:
         match = _match_existing_url(item.get("keyword", ""), url_index)
         if match:
-            removed.append({**item, "url": match})
+            on_site.append({**item, "url": match})
         else:
             kept.append(item)
-    return kept, removed
+    return kept, on_site
+
+
+def classify_on_site(
+    on_site: list[dict], ranks: list[int | None], top_n: int
+) -> tuple[list[dict], int, int]:
+    """Pure: split on-site matches by their domain's SERP rank. Returns
+    (reoptimize_items, removed_top_n, unchecked).
+
+    - rank within `top_n` → dropped (the site already ranks well for it).
+    - rank worse than `top_n`, or None (ran but not in the SERP) → a
+      status='reoptimize' item carrying its `url` + `rank` (None = not ranking).
+    - `_RANK_UNKNOWN` (the check couldn't run) → dropped + counted; we won't claim a
+      page underperforms when we couldn't measure it.
+
+    `ranks` is positional with `on_site`."""
+    reoptimize: list[dict] = []
+    removed_top = 0
+    unchecked = 0
+    for item, rank in zip(on_site, ranks):
+        if rank == _RANK_UNKNOWN:
+            unchecked += 1
+            continue
+        if rank is not None and rank <= top_n:
+            removed_top += 1
+            continue
+        reoptimize.append({**item, "status": "reoptimize", "rank": rank})
+    return reoptimize, removed_top, unchecked
+
+
+async def _safe_rank(keyword: str, domain: str, location_code: int) -> int | None:
+    """fetch_serp_rank, mapping any failure to the `_RANK_UNKNOWN` sentinel."""
+    try:
+        return await dataforseo_rank.fetch_serp_rank(keyword, domain, location_code)
+    except Exception as exc:
+        logger.warning(
+            "service_page_plan.rank_check_failed",
+            extra={"keyword": keyword, "error": str(exc)},
+        )
+        return _RANK_UNKNOWN
+
+
+async def _rank_classify_on_site(
+    on_site: list[dict], client: dict
+) -> tuple[list[dict], list[str]]:
+    """Rank-check on-site matches (bounded + concurrent) and classify them into
+    reoptimize candidates vs dropped. Returns (reoptimize_items, degraded_notes)."""
+    notes: list[str] = []
+    if not on_site:
+        return [], notes
+
+    top_n = settings.service_page_rank_top_n
+    if not (settings.dataforseo_login and settings.dataforseo_password):
+        notes.append(
+            f"Removed {len(on_site)} already-published page(s); DataForSEO isn't "
+            f"configured, so no top-{top_n} rank check ran."
+        )
+        return [], notes
+
+    domain = dataforseo_rank.extract_domain(client.get("website_url") or "")
+    location_code = dataforseo_rank.location_code_for(client)
+    cap = settings.service_page_plan_max_rank_checks
+    to_check, over_cap = on_site[:cap], on_site[cap:]
+
+    ranks = await asyncio.gather(
+        *(_safe_rank(it["keyword"], domain, location_code) for it in to_check)
+    )
+    reoptimize, removed_top, unchecked = classify_on_site(to_check, ranks, top_n)
+
+    if removed_top:
+        notes.append(f"Removed {removed_top} already-published page(s) ranking in the top {top_n}.")
+    if reoptimize:
+        notes.append(
+            f"{len(reoptimize)} already-published page(s) aren't ranking top {top_n} — "
+            "offered for reoptimization."
+        )
+    if unchecked:
+        notes.append(f"{unchecked} already-published page(s) couldn't be rank-checked and were removed.")
+    if over_cap:
+        notes.append(
+            f"Rank check capped at {cap}; {len(over_cap)} more already-published "
+            "page(s) were removed unchecked."
+        )
+    return reoptimize, notes

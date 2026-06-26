@@ -185,6 +185,12 @@ class Settings(BaseSettings):
     # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below
     # this threshold. Manual Score/Reoptimize controls remain available in the UI.
     service_page_score_threshold: float = 90.0
+    # Service-page planner: an already-published page is only dropped from the plan
+    # when it ranks within the top N for its keyword (domain-level, DataForSEO); a
+    # page ranking worse (or not at all) is surfaced for reoptimization instead.
+    # The rank check bills DataForSEO per page, so it's bounded per plan run.
+    service_page_rank_top_n: int = 5
+    service_page_plan_max_rank_checks: int = 25
 
     class Config:
         env_file = ".env"

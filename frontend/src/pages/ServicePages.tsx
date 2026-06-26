@@ -1,14 +1,14 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, FileText, ArrowRight, Loader, Sparkles, Check } from 'lucide-react'
+import { ArrowLeft, FileText, ArrowRight, Loader, Sparkles, Check, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, RunListResponse, RunStatus } from '../lib/types'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
 
 type PlanStatus = 'pending' | 'running' | 'complete' | 'failed'
-interface PlanItem { keyword: string; group: string; status: 'found' | 'missing'; url: string | null }
+interface PlanItem { keyword: string; group: string; status: 'found' | 'missing' | 'reoptimize'; url: string | null; rank: number | null }
 interface PlanResult { status: PlanStatus; items: PlanItem[]; degraded_notes: string[]; error: string | null }
 
 function statusColor(status: RunStatus): string {
@@ -96,7 +96,9 @@ export function ServicePages() {
     return [...groups.entries()]
   }, [plan])
   const missing = useMemo(() => (plan?.items ?? []).filter((i) => i.status === 'missing'), [plan])
-  const foundCount = (plan?.items.length ?? 0) - missing.length
+  const reoptimizeItems = useMemo(() => (plan?.items ?? []).filter((i) => i.status === 'reoptimize'), [plan])
+  const foundCount = (plan?.items.length ?? 0) - missing.length - reoptimizeItems.length
+  const [reoptStarted, setReoptStarted] = useState<Set<string>>(new Set())
 
   function toggle(keyword: string) {
     setSelected((prev) => {
@@ -122,6 +124,25 @@ export function ServicePages() {
       )
     },
   })
+  // Reoptimize a page already published on the live site that isn't ranking top 5.
+  // Spawns a service_page run (scrape + score the live page → deficiency-guided
+  // regenerate); it shows up under "Generated pages" below.
+  const reoptimizeExisting = useMutation({
+    mutationFn: (item: PlanItem) =>
+      api.post<{ run_id: string }>('/service-pages/reoptimize-existing', {
+        client_id: id,
+        keyword: item.keyword,
+        source_url: item.url,
+      }),
+    onMutate: (item) => setReoptStarted((prev) => new Set(prev).add(item.keyword)),
+    onSuccess: (_res, item) => {
+      qc.invalidateQueries({ queryKey: ['service-page-runs', id] })
+      setCreatedNote(`Reoptimizing “${item.keyword}” — see Generated pages below.`)
+    },
+    onError: (_err, item) =>
+      setReoptStarted((prev) => { const n = new Set(prev); n.delete(item.keyword); return n }),
+  })
+
   const selectedList = [...selected]
 
   const canSubmit = services.length > 0 && services.length <= BULK_MAX && !createRuns.isPending
@@ -185,6 +206,9 @@ export function ServicePages() {
               {plan.items.length} candidate{plan.items.length === 1 ? '' : 's'} across {silos.length} silo
               {silos.length === 1 ? '' : 's'} · <span style={{ color: '#16a34a' }}>{foundCount} exist</span> ·{' '}
               <span style={{ color: '#b45309' }}>{missing.length} missing</span>
+              {reoptimizeItems.length > 0 && (
+                <> · <span style={{ color: '#2563eb' }}>{reoptimizeItems.length} to reoptimize</span></>
+              )}
             </div>
             {plan.degraded_notes.map((n, i) => (
               <div key={i} style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>{n}</div>
@@ -208,17 +232,43 @@ export function ServicePages() {
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                         {items.map((it) => {
                           const isMissing = it.status === 'missing'
+                          const isReopt = it.status === 'reoptimize'
                           const checked = selected.has(it.keyword)
+                          const Row = (isMissing ? 'label' : 'div') as 'label' | 'div'
+                          const started = reoptStarted.has(it.keyword)
                           return (
-                            <label key={it.keyword} style={{ ...planRowStyle, cursor: isMissing ? 'pointer' : 'default', opacity: isMissing ? 1 : 0.7 }}>
+                            <Row key={it.keyword} style={{ ...planRowStyle, cursor: isMissing ? 'pointer' : 'default', opacity: isMissing || isReopt ? 1 : 0.7 }}>
                               {isMissing ? (
                                 <input type="checkbox" checked={checked} onChange={() => toggle(it.keyword)} style={{ accentColor: '#6366f1' }} />
+                              ) : isReopt ? (
+                                <RefreshCw size={14} color="#2563eb" />
                               ) : (
                                 <Check size={14} color="#16a34a" />
                               )}
-                              <span style={{ flex: 1, fontSize: 13.5, color: '#0f172a' }}>{it.keyword}</span>
-                              <span style={{ fontSize: 11.5, color: isMissing ? '#b45309' : '#16a34a' }}>{isMissing ? 'missing' : 'exists'}</span>
-                            </label>
+                              <span style={{ flex: 1, fontSize: 13.5, color: '#0f172a' }}>
+                                {it.keyword}
+                                {isReopt && it.url && (
+                                  <a href={it.url} target="_blank" rel="noreferrer" style={{ marginLeft: 8, fontSize: 11.5, color: '#94a3b8', textDecoration: 'none' }}>live page ↗</a>
+                                )}
+                              </span>
+                              {isReopt ? (
+                                <>
+                                  <span style={{ fontSize: 11.5, color: '#2563eb' }}>
+                                    {it.rank != null ? `ranks #${it.rank}` : 'not ranking'}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    onClick={() => reoptimizeExisting.mutate(it)}
+                                    disabled={started}
+                                    style={{ ...linkBtnStyle, color: started ? '#94a3b8' : '#2563eb' }}
+                                  >
+                                    {started ? 'Reoptimizing…' : 'Reoptimize'}
+                                  </button>
+                                </>
+                              ) : (
+                                <span style={{ fontSize: 11.5, color: isMissing ? '#b45309' : '#16a34a' }}>{isMissing ? 'missing' : 'exists'}</span>
+                              )}
+                            </Row>
                           )
                         })}
                       </div>

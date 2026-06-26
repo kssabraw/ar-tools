@@ -170,6 +170,35 @@ def test_filter_existing_on_site_removes_published_pages():
 
 def test_filter_existing_on_site_no_sitemap_keeps_everything():
     items = _items("Drain Cleaning", "Hydro Jetting")
-    kept, removed = spp.filter_existing_on_site(items, [])
+    kept, on_site = spp.filter_existing_on_site(items, [])
     assert len(kept) == 2
-    assert removed == []
+    assert on_site == []
+
+
+# ── classify_on_site (rank → reoptimize vs drop) ──────────────────────────────
+
+def test_classify_on_site_buckets_by_rank():
+    on_site = [
+        {"keyword": "drain cleaning", "group": "Drains", "status": "missing", "url": "u1"},   # rank 3
+        {"keyword": "hydro jetting", "group": "Drains", "status": "missing", "url": "u2"},     # rank 12
+        {"keyword": "sewer repair", "group": "Sewers", "status": "found", "url": "u3"},        # None
+        {"keyword": "pipe relining", "group": "Pipes", "status": "missing", "url": "u4"},      # unknown
+    ]
+    ranks = [3, 12, None, spp._RANK_UNKNOWN]
+    reopt, removed_top, unchecked = spp.classify_on_site(on_site, ranks, top_n=5)
+
+    assert removed_top == 1            # drain cleaning (rank 3) dropped
+    assert unchecked == 1             # pipe relining couldn't be checked → dropped
+    by_kw = {i["keyword"]: i for i in reopt}
+    assert set(by_kw) == {"hydro jetting", "sewer repair"}
+    assert by_kw["hydro jetting"]["status"] == "reoptimize"
+    assert by_kw["hydro jetting"]["rank"] == 12
+    assert by_kw["sewer repair"]["rank"] is None      # ranks somewhere past the SERP depth
+    assert by_kw["hydro jetting"]["url"] == "u2"      # live URL preserved
+
+
+def test_classify_on_site_boundary_top_n_inclusive():
+    on_site = [{"keyword": "x", "group": "g", "status": "missing", "url": "u"}]
+    # rank == top_n is "ranking well" → dropped, not offered.
+    reopt, removed_top, unchecked = spp.classify_on_site(on_site, [5], top_n=5)
+    assert reopt == [] and removed_top == 1 and unchecked == 0
