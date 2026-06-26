@@ -1,9 +1,16 @@
 """Google Docs publishing — shared helper around the Apps Script webhook.
 
-Creates a Google Doc from Markdown in a client's Drive folder. Used by the Blog
-Writer publish route and the Maps Local Rank Analysis report. The Apps Script
-endpoint takes `{folder_id, title, content}` and returns `{success, doc_id,
-doc_url}`.
+Creates a Google Doc in a client's Drive folder. Used by the Blog Writer publish
+route, the Local SEO page publish, and the Maps/rank reports. The Apps Script
+endpoint takes `{folder_id, title, content, format}` and returns `{success,
+doc_id, doc_url}`.
+
+`format` is `"markdown"` (default) or `"html"`. The HTML format makes the Apps
+Script build the Doc with **native** Google Docs formatting (real heading
+styles, bold runs, bullet/numbered lists, hyperlinks) via Drive's HTML import,
+so the content modules' Docs copy-paste cleanly into the WordPress block editor.
+Reports keep the default markdown format (they don't need WordPress paste), so
+older Apps Script deployments that ignore `format` stay unaffected.
 """
 
 from __future__ import annotations
@@ -21,9 +28,12 @@ class GoogleDocError(RuntimeError):
     """Raised when the Apps Script webhook is unconfigured or fails."""
 
 
-async def create_google_doc(folder_id: str, title: str, markdown: str) -> dict:
+async def create_google_doc(
+    folder_id: str, title: str, content: str, *, content_format: str = "markdown"
+) -> dict:
     """Create a Google Doc in `folder_id`; returns {doc_id, doc_url}.
 
+    `content_format` is "markdown" (default) or "html" — see the module docstring.
     Raises GoogleDocError on missing config or a webhook/transport failure so
     callers can map it to their own error envelope (HTTP route vs. async job)."""
     if not settings.google_apps_script_url:
@@ -31,7 +41,7 @@ async def create_google_doc(folder_id: str, title: str, markdown: str) -> dict:
     if not folder_id:
         raise GoogleDocError("missing_google_drive_folder_id")
 
-    body = {"folder_id": folder_id, "title": title, "content": markdown}
+    body = {"folder_id": folder_id, "title": title, "content": content, "format": content_format}
     try:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
             response = await http.post(settings.google_apps_script_url, json=body)

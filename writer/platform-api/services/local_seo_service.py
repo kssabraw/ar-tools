@@ -22,7 +22,6 @@ from fastapi import HTTPException
 from config import settings
 from db.supabase_client import get_supabase
 from services import analysis_cache, locations_service
-from services.html_to_markdown import html_to_markdown
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
 
 logger = logging.getLogger(__name__)
@@ -793,18 +792,20 @@ async def publish_page(
     if not folder_id:
         raise HTTPException(status_code=422, detail="missing_google_drive_folder_id")
 
-    markdown = html_to_markdown(page.get("content_html") or "")
-    if not markdown.strip():
+    # Send the page's HTML (not markdown) with format="html" so the Apps Script
+    # builds a natively-formatted Doc that copy-pastes cleanly into WordPress.
+    content_html = page.get("content_html") or ""
+    if not content_html.strip():
         raise HTTPException(status_code=422, detail="page_is_empty")
 
     # Render the hero image at the top of the doc (the WordPress path handles it
     # as the post's featured image instead).
     featured = page.get("featured_image_url")
     if featured:
-        markdown = f"![]({featured})\n\n{markdown}"
+        content_html = f'<p><img src="{featured}" /></p>\n{content_html}'
 
     title = page.get("page_title") or f"{page.get('keyword', '')} — {client_res.data['name']}"
-    body = {"folder_id": folder_id, "title": title, "content": markdown}
+    body = {"folder_id": folder_id, "title": title, "content": content_html, "format": "html"}
 
     try:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
