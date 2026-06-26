@@ -16,10 +16,10 @@ error):
   2. **Ranking** — is the client already ranking for the keyword? Prefers a
      verified GSC property (live query×page pull, all of the client's URLs for a
      matching query); falls back to a DataForSEO live SERP. The SERP is queried
-     for both the bare service term AND the geo-modified term
-     ("<service> <city>") — a local page ranks far better on the geo term — and
-     every ranking URL on the client's domain within the cutoff is returned, so
-     *several* pages (cannibalization) can surface, each a reoptimize target.
+     for the geo-modified term ("<service> <city>" — a local page ranks on the
+     geo term, not the bare head term), and every ranking URL on the client's
+     domain within the cutoff is returned, so *several* pages (cannibalization)
+     can surface, each a reoptimize target.
 
 Matches are deduped by URL (signals merged) and ordered ranking → live-site.
 """
@@ -162,18 +162,17 @@ async def _gsc_ranking_urls(
 
 
 def _ranking_queries(keyword: str, location: str) -> list[str]:
-    """The SERP queries to check for an existing ranking page: the bare service term
-    PLUS the geo-modified term ("<service> <city>"). A local business's page is
-    optimized for and ranks far better on the geo term, so querying only the bare
-    head term ("roof restoration") can miss the page that ranks for "roof
-    restoration melbourne". Deduped; the city isn't appended when it's already in
-    the keyword."""
+    """The SERP query to check for an existing ranking page: the geo-modified term
+    "<service> <city>". A local business's page is optimized for and ranks on the
+    geo term, so the city is always attached. Falls back to the bare keyword only
+    when there's no city to attach, or when the city is already in the keyword."""
     kw = (keyword or "").strip()
-    queries = [kw] if kw else []
+    if not kw:
+        return []
     city = (location or "").split(",")[0].strip()
-    if kw and city and city.lower() not in kw.lower():
-        queries.append(f"{kw} {city}")
-    return queries
+    if city and city.lower() not in kw.lower():
+        return [f"{kw} {city}"]
+    return [kw]
 
 
 async def _dataforseo_ranking_urls(
@@ -181,10 +180,10 @@ async def _dataforseo_ranking_urls(
 ) -> list[dict]:
     """Ranking URLs from a live DataForSEO SERP (the fallback rank source).
 
-    Queries both the bare service term and the geo-modified term, finding every URL
-    on the client's domain ranking within the cutoff, unioned + deduped by URL
-    (best position kept). Best-effort — returns [] if the client has no domain or
-    every SERP call errors.
+    Queries the geo-modified term ("<service> <city>"), finding every URL on the
+    client's domain ranking within the cutoff, deduped by URL (best position
+    kept). Best-effort — returns [] if the client has no domain or the SERP call
+    errors.
     """
     domain = extract_domain(client.get("website_url") or (client.get("gbp") or {}).get("website") or "")
     if not domain or not settings.dataforseo_login:
