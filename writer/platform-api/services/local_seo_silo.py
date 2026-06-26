@@ -6,16 +6,22 @@ candidate local page targets:
   1. **Service silos** — a single LLM call (Sonnet — `_generate_service_pages`,
      `local_seo_service_model`) expands the input service into the distinct
      service-variation landing pages a local business should have, grouped into
-     silos by the kind of variation. The model first decides which silos genuinely
-     fit the service and includes only those (relevance-gated, not a fixed set):
+     silos. The model plans from the **ideal customer's** perspective: it's handed
+     the client's rendered ICP (+ differentiators) via
+     `icp_service.resolve_icp_text` when one is on file, and infers the realistic
+     ideal customer for the service/city itself when it isn't — then enumerates the
+     customer's distinct buying situations and maps each to a commercial landing
+     page. The variation kinds are *examples it picks from*, not a fixed taxonomy:
      availability/urgency (24 hour, after hours, same day — only for breakdown /
      time-pressure services, never planned work like roof restoration),
      audience/property (commercial, residential, strata — only the audiences a
-     trade actually splits by), and trade-specific job/problem types generated from
-     the service itself (roof restoration → leak repair, tile replacement,
-     storm damage…; an emergency plumber → burst pipe, blocked drain, hot water…).
-     Sonnet rather than Haiku: the silo-relevance judgement and trade-specific
-     job modifiers need stronger world knowledge — Haiku stamped generic
+     trade actually splits by), trade-specific job/problem types generated from the
+     service itself (roof restoration → leak repair, tile replacement, storm
+     damage…; an emergency plumber → burst pipe, blocked drain, hot water…), and
+     customer trigger/situation silos (insurance claim, storm damage, pre-sale…).
+     Every page must stay commercial/transactional (no informational/blog topics).
+     Sonnet rather than Haiku: the customer reasoning + silo-relevance judgement and
+     trade-specific modifiers need stronger world knowledge — Haiku stamped generic
      urgency/audience buckets onto non-urgency services and anchored on the
      prompt's plumber example. The service's own qualifier is
      preserved — an "emergency plumber" stays an *emergency* service, never
@@ -178,7 +184,17 @@ async def run_silo_plan_job(job: dict) -> None:
         if not keyword:
             raise ValueError("keyword_required")
 
-        plan = await asyncio.to_thread(_run_pipeline, keyword, location, location_code)
+        # Ground the silo planning in the client's ideal customer. Best-effort: a
+        # missing/failed ICP fetch just means the model infers the customer instead.
+        icp_block = ""
+        try:
+            from services import icp_service
+
+            icp_block = icp_service.resolve_icp_text(_get_client(client_id))
+        except Exception as exc:  # noqa: BLE001 — ICP grounding is non-critical
+            logger.warning("local_seo_silo.icp_fetch_failed", extra={"client_id": client_id, "error": str(exc)})
+
+        plan = await asyncio.to_thread(_run_pipeline, keyword, location, location_code, icp_block)
         # Append a geocoding-verified "Neighborhoods" silo (within-city only). It's
         # an additive best-effort step, so a defensive failure here must never sink
         # an otherwise-good plan — belt-and-suspenders around its own internal
@@ -254,9 +270,13 @@ async def run_silo_plan_job(job: dict) -> None:
         ).eq("id", job_id).execute()
 
 
-def _run_pipeline(keyword: str, location: str, location_code: Optional[int] = None) -> dict:
+def _run_pipeline(
+    keyword: str, location: str, location_code: Optional[int] = None, icp_block: str = "",
+) -> dict:
     """Blocking: generate the service-variation page topics for "<service> <city>"
-    with one LLM call (Sonnet — no keyword-expansion tool). Returns
+    with one LLM call (Sonnet — no keyword-expansion tool), planned from the ideal
+    customer's perspective (`icp_block` = the client's rendered ICP, or "" to let the
+    model infer it). Returns
     {"per_silo": [{"silo": name, "pages": [{keyword, supporting_keywords}, ...]}],
     "degraded_notes": [...]}; the Neighborhoods silo is appended by the job handler.
 
@@ -267,7 +287,7 @@ def _run_pipeline(keyword: str, location: str, location_code: Optional[int] = No
     if not llm:
         return {"per_silo": [], "degraded_notes": ["Service pages skipped — content model not configured."]}
     try:
-        per_silo = _generate_service_pages(keyword, city, llm)
+        per_silo = _generate_service_pages(keyword, city, llm, icp_block)
     except Exception as exc:  # noqa: BLE001 — surface as a degraded note, not a crash
         logger.warning("local_seo_silo.service_gen_failed", extra={"error": str(exc)})
         return {"per_silo": [], "degraded_notes": ["Service pages unavailable — could not generate."]}
@@ -278,44 +298,47 @@ def _run_pipeline(keyword: str, location: str, location_code: Optional[int] = No
 # ── service-variation generation (LLM — replaces the keyword-expansion tool) ───
 
 _SERVICE_SYSTEM = (
-    "You are a local SEO strategist. Given a SERVICE and a CITY, produce the set of "
-    "distinct service-variation landing pages a local business offering that service "
-    "should have, grouped into silos by the kind of variation. For each page return "
-    "ONLY the MODIFIER -- the few words that distinguish the variation -- NOT the full "
-    "phrase. The service and city are attached automatically as "
-    "'<modifier> <service> <city>'. So a modifier 'storm damage' for service 'roof "
-    "restoration' in 'Melbourne' becomes the page 'storm damage roof restoration "
-    "Melbourne'.\n"
-    "FIRST decide which silos genuinely apply to THIS service, and INCLUDE ONLY those "
-    "-- omit a silo entirely when it doesn't fit. Do NOT force a silo just because it "
-    "is listed here:\n"
-    "  - Availability / urgency (e.g. 24 hour, after hours, weekend, same day, "
-    "emergency): include ONLY for services people buy under time pressure or when "
-    "something has broken -- e.g. emergency plumber, 24/7 locksmith, blocked drains, "
-    "electrical faults, hot water repair, HVAC breakdown. DO NOT include for "
-    "planned / project work -- e.g. roof restoration, renovations, landscaping, "
-    "painting, fit-outs, installations (nobody searches 'after hours roof "
-    "restoration').\n"
-    "  - Audience / property (e.g. commercial, residential, strata, industrial): "
-    "include ONLY the audiences that are real, separately-searched markets for THIS "
-    "trade -- not all of them every time, and none if the trade doesn't split that "
-    "way.\n"
-    "  - Job / problem type: the variations of the actual work, SPECIFIC to THIS "
-    "service. Generate these from your own knowledge of the trade. For illustration "
-    "only (do NOT copy these -- they are different trades): an emergency plumber "
-    "splits into burst pipe / blocked drain / hot water / gas leak; roof restoration "
-    "splits into leak repair / tile replacement / re-roofing / storm damage / gutter; "
-    "an electrician splits into switchboard upgrade / rewiring / safety switch / "
-    "downlights. Produce the equivalent job/problem variations that fit the GIVEN "
-    "service.\n"
-    "You may add another silo if the service has a meaningful variation axis not "
-    "covered above. Rules for the modifier: it is JUST the variation words -- NEVER "
-    "repeat the service words (e.g. 'plumber', 'emergency'), the city, or any suburb / "
-    "neighbourhood name in it (suburbs are handled separately). Include ONE base page "
-    "with an empty modifier (\"\") for the service itself. Each page's "
-    "supporting_keywords are 0-3 full search phrases for the SAME page that DO include "
-    "the full service (close phrasings / plurals / word-order variants). Quality over "
-    "quantity -- only real, distinct page topics a customer would actually search."
+    "You are a local SEO strategist who plans landing pages by thinking as the "
+    "business's IDEAL CUSTOMER. Given a SERVICE, a CITY, and (optionally) that "
+    "client's customer profile, produce the set of distinct service-variation landing "
+    "pages the business should have, grouped into silos.\n"
+    "HOW TO THINK:\n"
+    "1. Establish the ideal customer. If a CUSTOMER PROFILE is given below, treat it "
+    "as authoritative. If none is given, infer the realistic ideal customer(s) for "
+    "this service in this city yourself before planning.\n"
+    "2. As that customer, enumerate the DISTINCT buying situations that would make "
+    "them search for this service and expect a DIFFERENT page -- their reasons, "
+    "triggers, property types, and problems. Group these into silos by the kind of "
+    "distinction.\n"
+    "3. Turn each into a commercial landing page. Use ONLY the distinction kinds this "
+    "customer genuinely has -- the kinds below are EXAMPLES, not a required set; omit "
+    "any that don't fit and add others the customer clearly needs:\n"
+    "   - urgency / timing (24 hour, after hours, same day, emergency): ONLY when the "
+    "customer buys under time pressure or when something has broken -- NOT for "
+    "planned / project work like roof restoration, renovations, or installations "
+    "(nobody searches 'after hours roof restoration');\n"
+    "   - audience / property (commercial, residential, strata, industrial): only the "
+    "segments this customer base actually splits into, none if it doesn't;\n"
+    "   - job / problem type: the specific variations of the work this customer needs "
+    "(e.g. roof restoration -> leak repair, tile replacement, storm damage; emergency "
+    "plumber -> burst pipe, blocked drain, hot water) -- from your own knowledge of "
+    "the trade, NOT copied from these examples;\n"
+    "   - trigger / situation the customer is in (e.g. insurance claim, storm damage, "
+    "pre-sale, new purchase) when it drives a distinct search.\n"
+    "KEEP EVERY PAGE COMMERCIAL: each must be a transactional service page someone "
+    "would search to HIRE a provider -- NEVER informational or blog topics (no 'how "
+    "much does X cost', 'X vs Y', 'is X worth it', 'guide', 'tips').\n"
+    "OUTPUT RULES: for each page return ONLY the MODIFIER -- the few words that "
+    "distinguish the variation -- NOT the full phrase; the service and city are "
+    "attached automatically as '<modifier> <service> <city>' (so modifier 'storm "
+    "damage' for service 'roof restoration' in 'Melbourne' becomes 'storm damage roof "
+    "restoration Melbourne'). The modifier is JUST the variation words -- NEVER repeat "
+    "the service words (e.g. 'plumber', 'emergency'), the city, or any suburb / "
+    "neighbourhood name (suburbs are handled separately). Include ONE base page with "
+    "an empty modifier (\"\") for the service itself. Each page's supporting_keywords "
+    "are 0-3 full search phrases for the SAME page that DO include the full service "
+    "(close phrasings / plurals / word-order variants). Quality over quantity -- only "
+    "real, distinct, commercial page topics this customer would actually search."
 )
 
 _SERVICE_SCHEMA = {
@@ -389,18 +412,31 @@ def _compose_service_keyword(modifier: str, service: str, city: str) -> str:
     return f"{head} {city}".strip()
 
 
-def _generate_service_pages(service: str, city: str, llm) -> list[dict]:
+def _generate_service_pages(service: str, city: str, llm, icp_block: str = "") -> list[dict]:
     """Sonnet tool-use: the service-variation landing pages for "<service> <city>",
-    grouped into silos. The model returns only each page's MODIFIER (the variation
-    words); the full keyword is composed deterministically as
-    "<modifier> <service> <city>" so the service qualifier is always present.
-    Returns [{"silo": name, "pages": [{keyword, supporting_keywords}]}], deduped
-    across silos by composed keyword (first silo wins). The LLM is injected so this
-    is unit-testable without the network."""
+    grouped into silos, planned from the IDEAL CUSTOMER's perspective. `icp_block`
+    is the client's rendered ICP (+ differentiators) when available; absent it, the
+    model infers the ideal customer for the service/city itself. The model returns
+    only each page's MODIFIER (the variation words); the full keyword is composed
+    deterministically as "<modifier> <service> <city>" so the service qualifier is
+    always present. Returns [{"silo": name, "pages": [{keyword, supporting_keywords}]}],
+    deduped across silos by composed keyword (first silo wins). The LLM is injected so
+    this is unit-testable without the network."""
+    user = f"Service: {service}\nCity: {city}"
+    if icp_block.strip():
+        user += (
+            "\n\nCUSTOMER PROFILE (the client's ideal customer — plan the silos as this "
+            f"person, around their situations and needs):\n{icp_block.strip()}"
+        )
+    else:
+        user += (
+            "\n\nNo customer profile is on file — infer the realistic ideal customer for "
+            "this service in this city, then plan the silos around that customer."
+        )
     try:
         data = llm.call_tool(
             system=_SERVICE_SYSTEM,
-            user=f"Service: {service}\nCity: {city}",
+            user=user,
             tool_name="service_pages",
             tool_description="Service-variation landing pages for the service in the city, grouped into silos.",
             input_schema=_SERVICE_SCHEMA,
