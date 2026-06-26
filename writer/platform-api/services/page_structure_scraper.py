@@ -20,7 +20,7 @@ from bs4 import BeautifulSoup, Comment
 logger = logging.getLogger(__name__)
 
 # Valid reference page types (matches the keys in clients.page_structures).
-PAGE_TYPES = ("local_landing", "service", "location", "blog_post")
+PAGE_TYPES = ("local_landing", "service", "location", "blog_post", "product", "solution")
 
 # Tags that are never page content — drop wholesale.
 _DROP_TAGS = (

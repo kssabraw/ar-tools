@@ -144,7 +144,7 @@ def test_render_opening_mode_omits_outline():
 
 
 def test_page_types_constant():
-    assert set(PAGE_TYPES) == {"local_landing", "service", "location", "blog_post"}
+    assert set(PAGE_TYPES) == {"local_landing", "service", "location", "blog_post", "product", "solution"}
 
 
 # ── page_structure_eval (structural-fidelity scoring) ───────────────────────
