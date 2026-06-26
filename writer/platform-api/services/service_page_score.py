@@ -143,6 +143,47 @@ async def score_run(run_id: str, user_id: Optional[str] = None) -> dict:
     return result
 
 
+async def score_external_page(
+    run_id: str, source_url: str, user_id: Optional[str] = None
+) -> dict:
+    """Scrape a page already published on the client's live site and score it via
+    the nlp-api 8-engine scorer, persisting a `source_page_score` module_output.
+    Returns the ScoreResult (its `deficiencies` drive the reoptimize generation).
+
+    Mirrors `score_run`'s geo handling (national for service pages, local for
+    location pages) but scores the *scraped live HTML* rather than a generated page.
+    Raises on scrape/score failure; the orchestrator calls it best-effort."""
+    from services.website_scraper import scrapeowl_fetch
+
+    run = _get_run(run_id)
+    client = _get_client(run["client_id"])
+    business_name, gbp_category, address = _business_fields(client)
+    html = await scrapeowl_fetch(source_url)
+    if not (html or "").strip():
+        raise HTTPException(status_code=422, detail="source_page_empty")
+    payload = {
+        "keyword": run.get("keyword") or "",
+        "page_content": html,
+        "business_name": business_name,
+        "gbp_category": gbp_category,
+    }
+    if run.get("content_type") == "location_page":
+        payload["geo_mode"] = "local"
+        payload["location"] = run.get("location") or ""
+        payload["location_code"] = run.get("location_code")
+        payload["address"] = address
+    else:
+        payload["geo_mode"] = "national"
+    result = await _post_nlp("/score-page", payload, user_id=user_id)
+    cost = (result.get("token_usage") or {}).get("cost_usd")
+    _insert_output(run_id, "source_page_score", result, cost)
+    logger.info(
+        "service_page.source_scored",
+        extra={"run_id": run_id, "url": source_url, "composite": result.get("composite_score")},
+    )
+    return result
+
+
 async def _post_pipeline(path: str, payload: dict) -> dict:
     url = f"{settings.pipeline_api_url}{path}"
     async with httpx.AsyncClient(timeout=_PIPELINE_TIMEOUT) as client:

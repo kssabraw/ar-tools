@@ -621,9 +621,15 @@ def _build_service_brief_payload(run: dict, snapshot: dict) -> dict:
 
 
 def _build_service_writer_payload(
-    run: dict, service_brief_output: dict, snapshot: dict
+    run: dict, service_brief_output: dict, snapshot: dict,
+    source_deficiencies: list[dict] | None = None,
 ) -> dict:
-    return {
+    """Service/location writer payload. When `source_deficiencies` is provided (a
+    reoptimize-of-live run), the first pass runs in reoptimize mode fed those
+    deficiencies, so the generated page specifically fixes where the live page falls
+    short. There are no `prior_sections` — the live page has no structured ones — so
+    generation still follows the brief's architecture, just deficiency-guided."""
+    payload = {
         "run_id": run["id"],
         "attempt": 1,
         "service_brief_output": service_brief_output,
@@ -637,6 +643,11 @@ def _build_service_writer_payload(
             "website_analysis_unavailable": snapshot.get("website_analysis_unavailable", False),
         },
     }
+    if source_deficiencies:
+        payload["mode"] = "reoptimize"
+        payload["prior_sections"] = []
+        payload["deficiencies"] = source_deficiencies
+    return payload
 
 
 async def _orchestrate_service_page(
@@ -655,13 +666,32 @@ async def _orchestrate_service_page(
             "service_brief", run_id, _build_service_brief_payload(run, snapshot)
         )
 
+    # Stage B': for a reoptimize-of-live run, scrape + score the existing live page
+    # so the writer's first pass is fed its deficiencies. Best-effort — a
+    # scrape/score failure logs and falls back to a normal (non-reopt) generation.
+    source_deficiencies: list[dict] | None = None
+    source_url = run.get("reoptimize_source_url")
+    if source_url and completed.get("service_writer") is None:
+        try:
+            from services.service_page_score import score_external_page
+
+            await _set_run_status(run_id, "service_scoring_running")
+            source_score = await score_external_page(run_id, source_url)
+            source_deficiencies = source_score.get("deficiencies") or []
+        except Exception as exc:
+            logger.warning(
+                "service_page_source_score_failed",
+                extra={"run_id": run_id, "url": source_url, "error": str(exc)},
+            )
+
     # Stage B: Service Page Writer
     if await _is_cancelled(run_id):
         raise CancellationError()
     if completed.get("service_writer") is None:
         await _set_run_status(run_id, "service_writer_running")
         await _call_module(
-            "service_writer", run_id, _build_service_writer_payload(run, brief_result, snapshot)
+            "service_writer", run_id,
+            _build_service_writer_payload(run, brief_result, snapshot, source_deficiencies),
         )
 
     # Stage C: auto score + (≤1) reoptimize. Best-effort — scoring/reopt failure

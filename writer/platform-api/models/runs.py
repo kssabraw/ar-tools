@@ -184,8 +184,12 @@ class ServicePagePlanItem(BaseModel):
 
     keyword: str
     group: str  # the silo this target belongs to (free-form label)
-    status: str  # 'found' (a service_page run already exists) | 'missing'
+    # 'found' (a service_page run already exists) | 'missing' | 'reoptimize'
+    # ('reoptimize' = a page is already published on the live site but isn't ranking
+    # in the top N for the keyword — `url` is the live page, `rank` its position).
+    status: str
     url: Optional[str] = None
+    rank: Optional[int] = None  # live SERP position when status='reoptimize' (None = not ranking)
 
 
 class ServicePagePlanResult(BaseModel):
@@ -200,6 +204,18 @@ class ServicePagePlanResult(BaseModel):
 class ServicePageReoptimizeRequest(BaseModel):
     # Scorer deficiencies the writer should fix; empty = reoptimize against all.
     deficiencies: list[dict[str, Any]] = []
+
+
+class ServicePageReoptimizeExistingRequest(BaseModel):
+    """Reoptimize a page already published on the client's live site (surfaced by
+    the planner as not ranking top N). Spawns a service_page run tagged with the
+    live URL; the orchestrator scrapes + scores it and feeds the gaps to the writer."""
+
+    client_id: UUID
+    keyword: str
+    source_url: str  # the live page to reoptimize
+    location: Optional[str] = None
+    location_code: Optional[int] = None
 
 
 class RunPollResponse(BaseModel):

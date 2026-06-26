@@ -28,6 +28,7 @@ def create_run_and_snapshot(
     sie_outlier_mode: str = "safe",
     sie_force_refresh: bool = False,
     brief_force_refresh: bool = False,
+    reoptimize_source_url: Optional[str] = None,
     created_by: Optional[str] = None,
 ) -> str:
     """Insert a `runs` row + its frozen `client_context_snapshots` row.
@@ -52,6 +53,7 @@ def create_run_and_snapshot(
             "location": location,
             "location_code": location_code,
             "services": services or [],
+            "reoptimize_source_url": reoptimize_source_url,
             "status": "queued",
             "created_by": created_by,
         }

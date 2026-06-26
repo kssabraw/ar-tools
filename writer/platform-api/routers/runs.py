@@ -24,6 +24,7 @@ from models.runs import (
     RunPollResponse,
     ServicePagePlanJob,
     ServicePagePlanResult,
+    ServicePageReoptimizeExistingRequest,
     ServicePageReoptimizeRequest,
     SIETermsByCategory,
     bucket_sie_required_terms,
@@ -422,6 +423,49 @@ async def reoptimize_service_page(
     return sse_response(
         service_page_score.reoptimize_run(str(run_id), body.deficiencies, user_id=auth["user_id"])
     )
+
+
+@router.post(
+    "/service-pages/reoptimize-existing",
+    response_model=RunCreateResponse,
+    status_code=202,
+)
+async def reoptimize_existing_service_page(
+    body: ServicePageReoptimizeExistingRequest,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(require_auth),
+) -> RunCreateResponse:
+    """Reoptimize a page already published on the client's live site (the planner
+    surfaced it as not ranking top N). Spawns a service_page run tagged with the
+    live URL; the orchestrator scrapes + scores that page and feeds its deficiencies
+    into the writer's first pass. Poll the returned run like any other."""
+    supabase = get_supabase()
+    client_result = (
+        supabase.table("clients").select("*").eq("id", str(body.client_id)).single().execute()
+    )
+    if not client_result.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+
+    keyword = (body.keyword or "").strip()
+    source_url = (body.source_url or "").strip()
+    if not keyword or not source_url:
+        raise HTTPException(status_code=400, detail="keyword_and_source_url_required")
+
+    run_id = create_run_and_snapshot(
+        client=client_result.data,
+        keyword=keyword,
+        content_type="service_page",
+        location=body.location,
+        location_code=body.location_code,
+        reoptimize_source_url=source_url,
+        created_by=auth["user_id"],
+    )
+    background_tasks.add_task(orchestrate_run, run_id)
+    logger.info(
+        "service_page_reoptimize_existing_dispatched",
+        extra={"run_id": run_id, "keyword": keyword, "user_id": auth["user_id"]},
+    )
+    return RunCreateResponse(run_id=run_id, status="queued")
 
 
 @router.post("/runs/{run_id}/cancel", response_model=dict)

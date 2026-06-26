@@ -105,3 +105,100 @@ def test_to_items_degrades_on_lookup_error():
         items = spp._to_items(per_silo, "client-1")
     # Lookup failure → everything reported missing rather than raising.
     assert items[0]["status"] == "missing"
+
+
+# ── filter_existing_on_site (sitemap duplicate removal) ───────────────────────
+
+def _items(*keywords: str) -> list[dict]:
+    return [{"keyword": k, "group": "Drains", "status": "missing", "url": None} for k in keywords]
+
+
+def test_match_existing_url_exact_slug_equality():
+    index = spp._build_url_index(["https://acme.com/services/drain-cleaning/"])
+    # Slug equals the service (parent "/services/" dir ignored) → match.
+    assert spp._match_existing_url("Drain Cleaning", index) == "https://acme.com/services/drain-cleaning/"
+    # Page is more specific than the candidate → no match (qualifiers stay honest).
+    assert spp._match_existing_url("Emergency Drain Cleaning", index) is None
+    # Unrelated service → no match.
+    assert spp._match_existing_url("Water Heater Repair", index) is None
+
+
+def test_match_existing_url_ignores_query_and_case():
+    index = spp._build_url_index(["https://acme.com/Hydro-Jetting?ref=nav"])
+    assert spp._match_existing_url("hydro jetting", index) == "https://acme.com/Hydro-Jetting?ref=nav"
+
+
+def test_match_existing_url_stopwords_in_slug_still_match():
+    # "/drain-cleaning-services/" → slug tokens minus the "services" stopword.
+    index = spp._build_url_index(["https://acme.com/drain-cleaning-services/"])
+    assert spp._match_existing_url("drain cleaning", index) == "https://acme.com/drain-cleaning-services/"
+
+
+def test_match_ignores_non_service_pages():
+    # A blog post / taxonomy page mentioning the service must NOT suppress the
+    # candidate — these are excluded by their non-service path segment (#1).
+    index = spp._build_url_index([
+        "https://acme.com/blog/signs-you-need-drain-cleaning/",
+        "https://acme.com/category/drain-cleaning/",
+        "https://acme.com/tag/drain-cleaning/",
+    ])
+    assert index == []  # all excluded
+    assert spp._match_existing_url("Drain Cleaning", index) is None
+
+
+def test_match_generic_token_not_removed_by_narrower_variant():
+    # "plumbing" must not be removed just because "/commercial-plumbing/" exists (#2).
+    index = spp._build_url_index(["https://acme.com/commercial-plumbing/"])
+    assert spp._match_existing_url("plumbing", index) is None
+    # The narrower candidate that actually matches the page is still removed.
+    assert spp._match_existing_url("commercial plumbing", index) == "https://acme.com/commercial-plumbing/"
+
+
+def test_filter_existing_on_site_removes_published_pages():
+    items = _items("Drain Cleaning", "Hydro Jetting", "Sewer Repair")
+    site_urls = [
+        "https://acme.com/",
+        "https://acme.com/services/drain-cleaning/",
+        "https://acme.com/services/hydro-jetting/",
+    ]
+    kept, removed = spp.filter_existing_on_site(items, site_urls)
+    assert {i["keyword"] for i in kept} == {"Sewer Repair"}
+    assert {i["keyword"] for i in removed} == {"Drain Cleaning", "Hydro Jetting"}
+    # Removed items carry the matched live URL for observability.
+    assert all(i["url"] for i in removed)
+
+
+def test_filter_existing_on_site_no_sitemap_keeps_everything():
+    items = _items("Drain Cleaning", "Hydro Jetting")
+    kept, on_site = spp.filter_existing_on_site(items, [])
+    assert len(kept) == 2
+    assert on_site == []
+
+
+# ── classify_on_site (rank → reoptimize vs drop) ──────────────────────────────
+
+def test_classify_on_site_buckets_by_rank():
+    on_site = [
+        {"keyword": "drain cleaning", "group": "Drains", "status": "missing", "url": "u1"},   # rank 3
+        {"keyword": "hydro jetting", "group": "Drains", "status": "missing", "url": "u2"},     # rank 12
+        {"keyword": "sewer repair", "group": "Sewers", "status": "found", "url": "u3"},        # None
+        {"keyword": "pipe relining", "group": "Pipes", "status": "missing", "url": "u4"},      # unknown
+    ]
+    ranks = [3, 12, None, spp._RANK_UNKNOWN]
+    reopt, removed_top, unchecked = spp.classify_on_site(on_site, ranks, top_n=5)
+
+    assert removed_top == 1            # drain cleaning (rank 3) dropped
+    assert unchecked == 1             # pipe relining couldn't be checked → dropped
+    by_kw = {i["keyword"]: i for i in reopt}
+    assert set(by_kw) == {"hydro jetting", "sewer repair"}
+    assert by_kw["hydro jetting"]["status"] == "reoptimize"
+    assert by_kw["hydro jetting"]["rank"] == 12
+    assert by_kw["sewer repair"]["rank"] is None      # ranks somewhere past the SERP depth
+    assert by_kw["hydro jetting"]["url"] == "u2"      # live URL preserved
+
+
+def test_classify_on_site_boundary_top_n_inclusive():
+    on_site = [{"keyword": "x", "group": "g", "status": "missing", "url": "u"}]
+    # rank == top_n is "ranking well" → dropped, not offered.
+    reopt, removed_top, unchecked = spp.classify_on_site(on_site, [5], top_n=5)
+    assert reopt == [] and removed_top == 1 and unchecked == 0

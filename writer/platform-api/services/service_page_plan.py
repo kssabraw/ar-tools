@@ -8,6 +8,12 @@ services scraped from the site) and surfaces the full set of candidate service p
 grouped by silo. Each candidate is marked found (a service_page run already exists) vs
 missing, so the team can bulk-create the gaps via `POST /runs/bulk`.
 
+After discovery, candidates the client **already publishes** are removed: the planner
+reads the live site's sitemap (`services/sitemap.py`) and drops any candidate whose
+slug already exists on the site, so the plan only ever surfaces genuine gaps. The
+check is best-effort — if the sitemap can't be read the full list is kept with a
+degraded note.
+
 It mirrors `services/local_seo_silo.py` (same Fanout pipeline, by import) with three
 deliberate differences for service pages:
   - **Seed = business category**, not a single "<service> <area>" keyword — so the
@@ -27,12 +33,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from urllib.parse import unquote, urlsplit
 
 from fastapi import HTTPException
 
+from config import settings
 from db.supabase_client import get_supabase
+from services import dataforseo_rank
+from services.sitemap import fetch_sitemap_urls
 
 logger = logging.getLogger(__name__)
+
+# Sentinel rank: the DataForSEO check couldn't run (error or not configured), as
+# distinct from None (ran, domain not in the SERP → genuinely not ranking).
+_RANK_UNKNOWN = -1
 
 # Tuning for the service-page use of the Fanout pipeline. A touch broader than the
 # local-silo planner (services fan out wider than a single geo service) but bounded
@@ -51,6 +66,27 @@ _MAX_PAGES_PER_SILO = 10
 _DEFAULT_LOCATION_CODE = 2840
 # How many scraped services to carry as relevance-anchor terms.
 _MAX_SEED_TERMS = 10
+
+# Tokens stripped before matching a candidate keyword against a site's URL slugs —
+# connectors plus the generic "service(s)" wrapper that shows up as a sitemap
+# directory (`/services/...`) rather than a distinguishing term.
+_MATCH_STOPWORDS = {
+    "the", "a", "an", "and", "or", "for", "of", "in", "on", "to", "your", "our",
+    "near", "me", "service", "services", "page", "pages", "index", "html", "htm",
+    "php", "aspx",
+}
+
+# A path segment from this set marks a URL as non-service content — a blog post,
+# taxonomy/archive, store, account, or legal page. Such pages *mention* services
+# without being the service's landing page, so they must never suppress a candidate
+# (e.g. `/blog/signs-you-need-drain-cleaning/` is not the "drain cleaning" page).
+_NON_SERVICE_SEGMENTS = {
+    "blog", "blogs", "post", "posts", "article", "articles", "news", "story",
+    "stories", "tag", "tags", "category", "categories", "topic", "topics",
+    "author", "authors", "product", "products", "shop", "store", "cart",
+    "checkout", "account", "feed", "rss", "search", "privacy", "terms",
+    "cookie", "cookies", "sitemap", "wp-content", "wp-json", "wp-admin", "page",
+}
 
 
 def _get_client(client_id: str) -> dict:
@@ -173,6 +209,33 @@ async def run_service_plan_job(job: dict) -> None:
         plan = await asyncio.to_thread(_run_pipeline, seed, seed_terms)
         plan["degraded_notes"] = [*notes, *plan.get("degraded_notes", [])]
         items = _to_items(plan["per_silo"], client_id)
+
+        # Reconcile candidates against the client's live site: match discovered
+        # pages to the sitemap, then rank-check each match. A page ranking in the top
+        # N for its keyword is dropped (the site already covers it); one ranking
+        # worse (or not at all) is surfaced for reoptimization instead.
+        website_url = (client.get("website_url") or "").strip()
+        if website_url and items:
+            site_urls = await fetch_sitemap_urls(website_url)
+            if site_urls:
+                kept, on_site = filter_existing_on_site(items, site_urls)
+                reopt_items, rank_notes = await _rank_classify_on_site(on_site, client)
+                items = kept + reopt_items
+                plan["degraded_notes"].extend(rank_notes)
+                logger.info(
+                    "service_page_plan.site_filter",
+                    extra={
+                        "job_id": job_id,
+                        "client_id": client_id,
+                        "site_urls": len(site_urls),
+                        "on_site": len(on_site),
+                        "reoptimize": len(reopt_items),
+                    },
+                )
+            else:
+                plan["degraded_notes"].append(
+                    "Could not read the site's sitemap — skipped the on-site duplicate check."
+                )
 
         supabase.table("async_jobs").update(
             {
@@ -324,3 +387,162 @@ def _to_items(per_silo: list[dict], client_id: str) -> list[dict]:
                 }
             )
     return items
+
+
+# ── on-site duplicate removal (sitemap match) ─────────────────────────────────
+
+def _content_tokens(text: str) -> set[str]:
+    """Lowercase alphanumeric tokens with stopwords (and 1-char noise) dropped."""
+    return {
+        tok
+        for tok in re.split(r"[^a-z0-9]+", (text or "").lower())
+        if len(tok) > 1 and tok not in _MATCH_STOPWORDS
+    }
+
+
+def _page_slug_tokens(url: str) -> set[str] | None:
+    """Content tokens of a URL's **final path segment** (its page slug), or None when
+    the URL is non-service content (blog/taxonomy/store/…) or has no usable slug.
+
+    Only the last segment is considered, so parent directories like `/services/` and
+    unrelated words elsewhere in the path can't trigger a match — a blog post at
+    `/blog/...-drain-cleaning/` is excluded outright by its `blog` segment."""
+    path = unquote(urlsplit(url or "").path)
+    segments = [seg for seg in path.split("/") if seg]
+    if not segments:
+        return None
+    if any(seg.lower() in _NON_SERVICE_SEGMENTS for seg in segments):
+        return None
+    tokens = _content_tokens(segments[-1])
+    return tokens or None
+
+
+def _build_url_index(site_urls: list[str]) -> list[tuple[str, set[str]]]:
+    """Pre-tokenize site URLs once (final-segment slugs only) so matching is
+    O(candidates × urls) on sets. Non-service / slug-less URLs are dropped."""
+    index: list[tuple[str, set[str]]] = []
+    for url in site_urls:
+        toks = _page_slug_tokens(url)
+        if toks:
+            index.append((url, toks))
+    return index
+
+
+def _match_existing_url(keyword: str, url_index: list[tuple[str, set[str]]]) -> str | None:
+    """Return a live URL whose page slug is the *same* service as `keyword`, else
+    None. Matching is exact token-set equality against the final path segment, which
+    keeps qualifiers honest in both directions — "drain cleaning" won't match
+    "/emergency-drain-cleaning/" (the page is more specific) and "plumbing" won't
+    match "/commercial-plumbing/" (a narrower variant). Stopwords ("services", "the",
+    …) are ignored, so "/drain-cleaning-services/" still equals "drain cleaning".
+    Erring toward keeping a candidate (a missed match just re-surfaces a real page)
+    is the safe direction for a gap finder."""
+    kw_tokens = _content_tokens(keyword)
+    if not kw_tokens:
+        return None
+    for url, toks in url_index:
+        if kw_tokens == toks:
+            return url
+    return None
+
+
+def filter_existing_on_site(
+    items: list[dict], site_urls: list[str]
+) -> tuple[list[dict], list[dict]]:
+    """Split planner items into (kept, on_site) by matching each against the site's
+    published URLs. `on_site` items (the candidate already exists on the live site,
+    `url` set to the match) are then rank-checked by the caller — ranking well →
+    dropped, ranking poorly → offered for reoptimization. Pure; unit-tested."""
+    url_index = _build_url_index(site_urls)
+    kept: list[dict] = []
+    on_site: list[dict] = []
+    for item in items:
+        match = _match_existing_url(item.get("keyword", ""), url_index)
+        if match:
+            on_site.append({**item, "url": match})
+        else:
+            kept.append(item)
+    return kept, on_site
+
+
+def classify_on_site(
+    on_site: list[dict], ranks: list[int | None], top_n: int
+) -> tuple[list[dict], int, int]:
+    """Pure: split on-site matches by their domain's SERP rank. Returns
+    (reoptimize_items, removed_top_n, unchecked).
+
+    - rank within `top_n` → dropped (the site already ranks well for it).
+    - rank worse than `top_n`, or None (ran but not in the SERP) → a
+      status='reoptimize' item carrying its `url` + `rank` (None = not ranking).
+    - `_RANK_UNKNOWN` (the check couldn't run) → dropped + counted; we won't claim a
+      page underperforms when we couldn't measure it.
+
+    `ranks` is positional with `on_site`."""
+    reoptimize: list[dict] = []
+    removed_top = 0
+    unchecked = 0
+    for item, rank in zip(on_site, ranks):
+        if rank == _RANK_UNKNOWN:
+            unchecked += 1
+            continue
+        if rank is not None and rank <= top_n:
+            removed_top += 1
+            continue
+        reoptimize.append({**item, "status": "reoptimize", "rank": rank})
+    return reoptimize, removed_top, unchecked
+
+
+async def _safe_rank(keyword: str, domain: str, location_code: int) -> int | None:
+    """fetch_serp_rank, mapping any failure to the `_RANK_UNKNOWN` sentinel."""
+    try:
+        return await dataforseo_rank.fetch_serp_rank(keyword, domain, location_code)
+    except Exception as exc:
+        logger.warning(
+            "service_page_plan.rank_check_failed",
+            extra={"keyword": keyword, "error": str(exc)},
+        )
+        return _RANK_UNKNOWN
+
+
+async def _rank_classify_on_site(
+    on_site: list[dict], client: dict
+) -> tuple[list[dict], list[str]]:
+    """Rank-check on-site matches (bounded + concurrent) and classify them into
+    reoptimize candidates vs dropped. Returns (reoptimize_items, degraded_notes)."""
+    notes: list[str] = []
+    if not on_site:
+        return [], notes
+
+    top_n = settings.service_page_rank_top_n
+    if not (settings.dataforseo_login and settings.dataforseo_password):
+        notes.append(
+            f"Removed {len(on_site)} already-published page(s); DataForSEO isn't "
+            f"configured, so no top-{top_n} rank check ran."
+        )
+        return [], notes
+
+    domain = dataforseo_rank.extract_domain(client.get("website_url") or "")
+    location_code = dataforseo_rank.location_code_for(client)
+    cap = settings.service_page_plan_max_rank_checks
+    to_check, over_cap = on_site[:cap], on_site[cap:]
+
+    ranks = await asyncio.gather(
+        *(_safe_rank(it["keyword"], domain, location_code) for it in to_check)
+    )
+    reoptimize, removed_top, unchecked = classify_on_site(to_check, ranks, top_n)
+
+    if removed_top:
+        notes.append(f"Removed {removed_top} already-published page(s) ranking in the top {top_n}.")
+    if reoptimize:
+        notes.append(
+            f"{len(reoptimize)} already-published page(s) aren't ranking top {top_n} — "
+            "offered for reoptimization."
+        )
+    if unchecked:
+        notes.append(f"{unchecked} already-published page(s) couldn't be rank-checked and were removed.")
+    if over_cap:
+        notes.append(
+            f"Rank check capped at {cap}; {len(over_cap)} more already-published "
+            "page(s) were removed unchecked."
+        )
+    return reoptimize, notes
