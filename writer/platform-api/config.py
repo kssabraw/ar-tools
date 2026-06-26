@@ -126,10 +126,12 @@ class Settings(BaseSettings):
     # or two stray weak pins is dropped from the flagged list — its pins still feed
     # the octant pins / analytics, they're just not called out as a weak suburb.
     #
-    # At most `maps_geocode_max_cells` cells per keyword are geocoded (highest
-    # priority first, so a cap only drops the lowest "Watch" cells); the rest are
-    # counted but not named. The cross-client `maps_geocode_cache` makes repeats
-    # free.
+    # `maps_geocode_max_cells` is a SAFETY bound on geocode calls per keyword, set
+    # above any real grid's opportunity-cell count (a 15x15 grid's inscribed circle
+    # is < 180 cells) so it does not bite in practice — keeping suburb pin-counts
+    # exact. If a pathological grid ever exceeds it, the lowest-priority cells are
+    # dropped (logged, not silent) and counts become approximate. The cross-client
+    # `maps_geocode_cache` makes repeats free.
     google_maps_api_key: str = ""
     maps_strong_rank_threshold: int = 4  # ranks <= this are "in the pack" — not an opportunity
     maps_weak_rank_threshold: int = 10   # rank >= this (ranked) is "Weak"; between is "Watch"
@@ -138,7 +140,7 @@ class Settings(BaseSettings):
     maps_beatability_max: float = 1.4
     maps_core_adjacency_floor: float = 0.5  # score a weak pin keeps when ALL 8 neighbors are in the pack
     maps_min_area_pins: int = 3  # a suburb needs >= this many weak pins to be flagged as a weak area
-    maps_geocode_max_cells: int = 100
+    maps_geocode_max_cells: int = 250  # safety bound on geocode calls (above any real grid's cell count)
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
