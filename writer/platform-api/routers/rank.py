@@ -51,6 +51,7 @@ from services import (
     dataforseo_rank,
     gsc_service,
     keyword_market,
+    rank_location,
     rank_materialize,
     rank_report,
     rank_status,
@@ -434,7 +435,7 @@ async def trigger_materialize(client_id: UUID, auth: dict = Depends(require_auth
 async def get_tracking_location(client_id: UUID, auth: dict = Depends(require_auth)) -> RankLocation:
     res = (
         get_supabase().table("clients")
-        .select("rank_tracking_location, rank_tracking_location_code")
+        .select("rank_tracking_location, rank_tracking_location_code, rank_tracking_location_source")
         .eq("id", str(client_id)).limit(1).execute()
     )
     if not res.data:
@@ -443,6 +444,7 @@ async def get_tracking_location(client_id: UUID, auth: dict = Depends(require_au
     return RankLocation(
         location=row.get("rank_tracking_location"),
         location_code=row.get("rank_tracking_location_code"),
+        source=row.get("rank_tracking_location_source"),
     )
 
 
@@ -451,19 +453,29 @@ async def set_tracking_location(
     client_id: UUID, body: RankLocation, auth: dict = Depends(require_auth)
 ) -> RankLocation:
     """Set (or clear, with both fields null) the client's DataForSEO tracking
-    location. Clearing reverts to the auto-detected national area. Fresh ranks +
+    location. Setting one marks it 'manual' so GBP auto-derivation won't overwrite
+    it; clearing reverts to GBP-auto (re-derived in the background). Fresh ranks +
     market data for the new area are fetched in the background."""
     supabase = get_supabase()
     location = (body.location or "").strip() or None
     code = body.location_code if location else None
+    source = "manual" if location else None
     supabase.table("clients").update(
-        {"rank_tracking_location": location, "rank_tracking_location_code": code, "updated_at": "now()"}
+        {
+            "rank_tracking_location": location,
+            "rank_tracking_location_code": code,
+            "rank_tracking_location_source": source,
+            "updated_at": "now()",
+        }
     ).eq("id", str(client_id)).execute()
 
-    # Re-fetch DataForSEO ranks + market data for the new location.
+    # Cleared → re-derive the location from the client's GBP (which re-pulls if it
+    # resolves an area). Either way, refresh ranks + market data now.
+    if location is None:
+        rank_location.enqueue_location_derive(str(client_id))
     dataforseo_rank.enqueue_dataforseo_rank(str(client_id))
     keyword_market.enqueue_keyword_market(str(client_id))
-    return RankLocation(location=location, location_code=code)
+    return RankLocation(location=location, location_code=code, source=source)
 
 
 @router.post("/clients/{client_id}/rank/refresh-dataforseo", response_model=DataForSeoRefreshResponse)
