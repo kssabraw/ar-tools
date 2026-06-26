@@ -5013,11 +5013,91 @@ async def augment_page(request: Request, body: AugmentPageRequest):
 
 # ── /generate-page ────────────────────────────────────────────────────────────
 
+def _template_length_note(words: int, sentences: int) -> str:
+    """Bucket a section's body size into a short human note, so the writer mirrors
+    section DENSITY (a one-sentence section stays one sentence), not just headings."""
+    if words <= 0:
+        return "no body text"
+    if sentences <= 1 and words <= 25:
+        return f"~{words}w, 1 sentence"
+    if words <= 45:
+        return f"~{words}w, {max(sentences, 2)} sentences"
+    if words <= 130:
+        return f"~{words}w, short"
+    return f"~{words}w, long"
+
+
+def _outline_from_html(raw_html: str) -> str:
+    """Build the structure outline the writer mirrors: each H1/H2/H3 in document
+    order, annotated with its section's approximate body length (so short
+    one/two-sentence sections stay short) and the recurring block types under it
+    (list / table / quote), plus a hero-tagline signal (a short lead line before
+    the first heading, or a short one-line H1 subtitle). Structure only — no body
+    copy or tone is carried over. Returns '' when no headings are found."""
+    soup = BeautifulSoup(raw_html, "html.parser")
+    for t in soup(["script", "style", "nav", "footer", "head"]):
+        t.decompose()
+    body = soup.body or soup
+
+    text_tags = ("h1", "h2", "h3", "p", "ul", "ol", "table", "blockquote")
+    indent = {"h1": "", "h2": "  ", "h3": "    "}
+    block_for = {"ul": "list", "ol": "list", "table": "table", "blockquote": "quote"}
+    sections: List[dict] = []
+    lead_words = 0  # body text before the first heading (hero / tagline area)
+    current: Optional[dict] = None
+
+    for tag in body.find_all(text_tags):
+        # Skip blocks nested inside another counted block (avoid double counting).
+        if tag.find_parent(["ul", "ol", "table", "blockquote"]):
+            continue
+        name = tag.name
+        if name in ("h1", "h2", "h3"):
+            txt = tag.get_text(separator=" ", strip=True)
+            if not txt or len(txt) < 2:
+                continue
+            current = {"level": name, "heading": txt, "words": 0, "sentences": 0, "blocks": []}
+            sections.append(current)
+            if len(sections) >= 40:
+                break
+            continue
+        text = tag.get_text(separator=" ", strip=True)
+        if not text:
+            continue
+        wc = len(text.split())
+        sc = len(re.findall(r"[.!?]+", text)) or 1
+        block = block_for.get(name)
+        if current is None:
+            lead_words += wc
+            continue
+        if block and block not in current["blocks"]:
+            current["blocks"].append(block)
+        current["words"] += wc
+        current["sentences"] += sc
+
+    if not sections:
+        return ""
+
+    # Flag a hero tagline carried in a short one-line H1 subtitle (common pattern).
+    first = sections[0]
+    if first["level"] == "h1" and 0 < first["words"] <= 20 and first["sentences"] <= 1 and not first["blocks"]:
+        first["blocks"].append("hero tagline")
+
+    lines: List[str] = []
+    if 0 < lead_words <= 25:
+        lines.append(f"- hero: short tagline/lead line (~{lead_words}w) before the first heading")
+    for s in sections:
+        note = _template_length_note(s["words"], s["sentences"])
+        blocks_txt = f" [{', '.join(s['blocks'])}]" if s["blocks"] else ""
+        lines.append(f"{indent[s['level']]}- ({s['level']}) {s['heading']}  ({note}){blocks_txt}")
+    return "\n".join(lines)
+
+
 async def _extract_template_outline(url: Optional[str], html: Optional[str]) -> str:
     """Phase 3: fetch (or use supplied HTML of) a reference page and return a
-    compact heading outline (H1/H2/H3, in document order) for the writer to
-    mirror. Returns '' if unavailable so generation degrades to the default
-    structure rather than failing."""
+    compact structure outline (H1/H2/H3 in document order, each annotated with its
+    section length + block types + any hero tagline) for the writer to mirror.
+    Returns '' if unavailable so generation degrades to the default structure
+    rather than failing."""
     raw_html = html
     if not raw_html and url:
         try:
@@ -5042,20 +5122,7 @@ async def _extract_template_outline(url: Optional[str], html: Optional[str]) -> 
             return ""
     if not raw_html:
         return ""
-
-    soup = BeautifulSoup(raw_html, "html.parser")
-    for t in soup(["script", "style", "nav", "footer", "head"]):
-        t.decompose()
-    indent = {"h1": "", "h2": "  ", "h3": "    "}
-    lines: List[str] = []
-    for tag in soup.find_all(["h1", "h2", "h3"]):
-        txt = tag.get_text(separator=" ", strip=True)
-        if not txt or len(txt) < 2:
-            continue
-        lines.append(f"{indent[tag.name]}- ({tag.name}) {txt}")
-        if len(lines) >= 40:
-            break
-    return "\n".join(lines)
+    return _outline_from_html(raw_html)
 
 
 class GeneratePageRequest(BaseModel):
@@ -5279,11 +5346,16 @@ async def generate_page(request: Request, body: GeneratePageRequest):
             if _outline:
                 template_text = (
                     "STRUCTURE TO MIRROR — OVERRIDES THE DEFAULT 13-SECTION STRUCTURE:\n"
-                    "Ignore the default section structure in the system prompt. Instead, match the "
+                    "Ignore the default section structure in the system prompt. Instead, reproduce the "
                     "section layout, order, and heading hierarchy of the reference outline below — "
-                    "adapt all wording to this business, keyword, and city. STILL apply every AEO "
-                    "writing rule (answer-first, FAQ with 4–7 entries, entity triplets, geo signals, "
-                    "section length) and STILL emit the JSON-LD schema block. Reference outline:\n"
+                    "adapt all wording to this business, keyword, and city (do NOT copy the reference's "
+                    "wording or tone). Each line is annotated with that section's approximate length and "
+                    "its content blocks: MATCH them — keep a one/two-sentence section that short, keep a "
+                    "long section long, and reproduce the noted blocks in the same places (a 'hero "
+                    "tagline' → open with a short tagline line under the H1; '[list]' → use a list; "
+                    "'[table]' → use a table). STILL apply every AEO writing rule (answer-first, FAQ with "
+                    "4–7 entries, entity triplets, geo signals) and STILL emit the JSON-LD schema block. "
+                    "Reference outline:\n"
                     f"{_outline}"
                 )
                 logger.info(f"generate-page: mirroring template structure ({_outline.count(chr(10)) + 1} headings)")
