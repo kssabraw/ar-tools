@@ -54,14 +54,16 @@ class PageStructureUrls(BaseModel):
     """The reference page URLs whose structure the writing modules mirror.
 
     Each is optional; an empty/omitted value clears that page type. Keys match
-    the `clients.page_structures` JSONB shape. `product` is a capture-only
-    reference for ecom sites (scraped + stored, not yet consumed by a writer).
+    the `clients.page_structures` JSONB shape. `product` and `solution` are
+    capture-only references for ecom sites (scraped + stored, not yet consumed
+    by a writer).
     """
     local_landing: Optional[str] = None
     service: Optional[str] = None
     location: Optional[str] = None
     blog_post: Optional[str] = None
     product: Optional[str] = None
+    solution: Optional[str] = None
 
 
 class ClientDetail(BaseModel):
@@ -93,7 +95,7 @@ class ClientDetail(BaseModel):
     gbp: Optional[GbpProfile] = None
     local_seo_page_template_url: Optional[str] = None
     # Reference page structures the writing modules mirror (#page-structures).
-    # JSONB keyed by page type: {local_landing|service|location|blog_post|product:
+    # JSONB keyed by page type: {local_landing|service|location|blog_post|product|solution:
     #   {url, status, error, analysis, analyzed_at}}.
     page_structures: dict[str, Any] = Field(default_factory=dict)
 
