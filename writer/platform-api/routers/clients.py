@@ -224,6 +224,8 @@ async def create_client(
         row["gbp_place_id"] = body.gbp_place_id
     if body.gbp is not None:
         row["gbp"] = body.gbp.model_dump()
+    if body.target_cities is not None:
+        row["target_cities"] = body.target_cities
     # Reference page structures: seed the pending entries so the row reflects the
     # configured URLs immediately; the scrape jobs are enqueued after insert.
     page_structures, ps_to_enqueue = _sync_page_structures({}, body.page_structure_urls)
@@ -323,6 +325,8 @@ async def update_client(
         updates["gbp_place_id"] = body.gbp_place_id
     if body.gbp is not None:
         updates["gbp"] = body.gbp.model_dump()
+    if body.target_cities is not None:
+        updates["target_cities"] = body.target_cities
 
     # Reference page structures: diff submitted URLs vs stored, enqueue changed.
     ps_to_enqueue: list[tuple[str, str]] = []

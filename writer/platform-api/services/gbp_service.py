@@ -66,6 +66,44 @@ def _to_int(value: Any) -> Optional[int]:
         return None
 
 
+def _service_area_places(place: dict[str, Any]) -> list[str]:
+    """Best-effort list of service-area place names from an Outscraper place object.
+
+    Service-area businesses can publish the towns/areas they serve; Outscraper
+    surfaces this under varied keys (and shapes — a list of strings, a list of
+    dicts with a name, or a comma-joined string). Tolerant by design: anything
+    unrecognized yields []. The names are candidate cities only — the planner
+    geocodes + filters them, so a stray entry is harmless."""
+    raw = None
+    for key in ("service_area", "service_areas", "area_service", "places_served", "areas_served"):
+        if place.get(key):
+            raw = place[key]
+            break
+    if raw is None:
+        return []
+    # A nested dict (e.g. {"places": [...]}) — pull the first list value.
+    if isinstance(raw, dict):
+        raw = next((v for v in raw.values() if isinstance(v, list)), None) or []
+    if isinstance(raw, str):
+        items = [p.strip() for p in raw.split(",")]
+    elif isinstance(raw, list):
+        items = [
+            (x.get("name") if isinstance(x, dict) else str(x)).strip()
+            for x in raw
+            if (x.get("name") if isinstance(x, dict) else x)
+        ]
+    else:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for name in items:
+        key = name.lower()
+        if name and key not in seen:
+            seen.add(key)
+            out.append(name)
+    return out
+
+
 def _reviews_from_dataforseo(data: dict[str, Any]) -> list[dict]:
     """Map a DataForSEO reviews/live response to our review shape."""
     tasks = data.get("tasks") or []
@@ -340,6 +378,10 @@ async def get_business_details(query: str) -> dict:
         ),
         "hours": p.get("working_hours") or p.get("hours") or None,
         "google_maps_uri": p.get("location_link") or p.get("google_maps_url") or "",
+        # Service-area places Google lists for a service-area business (best-effort —
+        # not every listing publishes them). Feeds the silo planner's target-city
+        # discovery. See `_service_area_places`.
+        "service_area_places": _service_area_places(p),
     }
 
     resolved_place_id = p.get("place_id") or p.get("google_id") or query

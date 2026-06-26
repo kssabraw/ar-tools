@@ -18,6 +18,7 @@ interface FormData {
   logo_url: string
   gsc_property: string
   business_location: string
+  target_cities: string
   gbp_place_id: string | null
   gbp: GbpProfile | null
   ps_local_landing: string
@@ -29,7 +30,7 @@ interface FormData {
 const empty: FormData = {
   name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
   github_repo: '', github_branch: '', github_content_path: '',
-  logo_url: '', gsc_property: '', business_location: '', gbp_place_id: null, gbp: null,
+  logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '',
 }
 
@@ -106,6 +107,7 @@ export function ClientForm() {
         logo_url: existing.logo_url ?? '',
         gsc_property: existing.gsc_property ?? '',
         business_location: existing.business_location ?? '',
+        target_cities: (existing.target_cities ?? []).join(', '),
         gbp_place_id: existing.gbp_place_id,
         gbp: existing.gbp,
         ps_local_landing: existing.page_structures?.local_landing?.url ?? '',
@@ -163,6 +165,7 @@ export function ClientForm() {
         logo_url: form.logo_url || null,
         gsc_property: form.gsc_property || null,
         business_location: form.business_location || null,
+        target_cities: form.target_cities.split(',').map(s => s.trim()).filter(Boolean),
         gbp_place_id: form.gbp_place_id,
         gbp: form.gbp,
         page_structure_urls: {
@@ -357,6 +360,16 @@ export function ClientForm() {
               style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
             />
             <p style={hintStyle}>Used today as the business address for local-SEO page generation when no Google Business Profile is attached.</p>
+          </div>
+          <div>
+            <label style={labelStyle}>Target Cities</label>
+            <input
+              value={form.target_cities}
+              onChange={set('target_cities')}
+              placeholder="e.g. Parramatta, Penrith, Liverpool"
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+            />
+            <p style={hintStyle}>Comma-separated. Extra cities the Local SEO silo planner should build location pages for, beyond the seed city. The planner also pulls cities from the GBP service area, this client's own site, and a ~10-mile radius — these are added on top.</p>
           </div>
         </div>
 
