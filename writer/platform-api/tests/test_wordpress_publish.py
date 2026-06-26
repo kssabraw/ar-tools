@@ -142,3 +142,84 @@ async def test_auth_failure_maps_to_auth_error(monkeypatch):
     with pytest.raises(WordPressPublishError) as exc:
         await publish_to_wordpress(client=_CLIENT, title="T", html="<p>x</p>")
     assert str(exc.value) == "wordpress_auth_failed"
+
+
+# ── media sideload ───────────────────────────────────────────────────────────
+
+class _ImgResponse:
+    def __init__(self, content=b"\xff\xd8\xff", headers=None, status_code=200):
+        self.content = content
+        self.headers = headers or {"content-type": "image/jpeg"}
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError("err", request=None, response=self)
+
+
+class _SideloadClient:
+    """Fake client routing GET→image bytes, POST /media→attachment, POST→post."""
+
+    def __init__(self, capture):
+        self._capture = capture
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, url, follow_redirects=False):
+        self._capture.setdefault("fetched", []).append(url)
+        return _ImgResponse()
+
+    async def post(self, url, json=None, content=None, headers=None):
+        if url.endswith("/media"):
+            self._capture.setdefault("media_posts", []).append(headers)
+            return _FakeResponse(
+                201, {"id": 99, "source_url": "https://acmehvac.com/wp-content/x.jpg"}
+            )
+        self._capture["json"] = json
+        return _FakeResponse(201, {"id": 5, "link": "u", "status": "draft", "featured_media": 99})
+
+
+@pytest.mark.asyncio
+async def test_external_image_is_sideloaded_and_rewritten(monkeypatch):
+    capture = {}
+    monkeypatch.setattr(
+        wordpress_publish.httpx, "AsyncClient", lambda *a, **k: _SideloadClient(capture)
+    )
+    html = '<p>hi</p><img src="https://cdn.example.com/hero.jpg" alt="h" />'
+    result = await publish_to_wordpress(client=_CLIENT, title="T", html=html)
+
+    # The image was fetched + uploaded, the src rewritten to the WP URL, and the
+    # first upload became the featured image.
+    assert capture["fetched"] == ["https://cdn.example.com/hero.jpg"]
+    assert "https://acmehvac.com/wp-content/x.jpg" in capture["json"]["content"]
+    assert "cdn.example.com" not in capture["json"]["content"]
+    assert capture["json"]["featured_media"] == 99
+    assert result["featured_media"] == 99
+
+
+@pytest.mark.asyncio
+async def test_image_already_on_wp_host_is_not_sideloaded(monkeypatch):
+    capture = {}
+    monkeypatch.setattr(
+        wordpress_publish.httpx, "AsyncClient", lambda *a, **k: _SideloadClient(capture)
+    )
+    html = '<img src="https://acmehvac.com/wp-content/already.jpg" alt="x" />'
+    await publish_to_wordpress(client=_CLIENT, title="T", html=html)
+    assert "fetched" not in capture  # no fetch/upload for same-host images
+    assert "featured_media" not in capture["json"]
+
+
+@pytest.mark.asyncio
+async def test_sideload_disabled_skips_media(monkeypatch):
+    capture = {}
+    monkeypatch.setattr(
+        wordpress_publish.httpx, "AsyncClient", lambda *a, **k: _SideloadClient(capture)
+    )
+    html = '<img src="https://cdn.example.com/hero.jpg" alt="h" />'
+    await publish_to_wordpress(client=_CLIENT, title="T", html=html, sideload_images=False)
+    assert "fetched" not in capture
+    assert "cdn.example.com" in capture["json"]["content"]

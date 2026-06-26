@@ -42,6 +42,16 @@ def test_code_span_contents_not_emphasised():
     assert "<strong>" not in html
 
 
+def test_image_converted_to_img_tag():
+    html = markdown_to_html("![a hero](https://cdn.example.com/x.jpg)")
+    assert '<img src="https://cdn.example.com/x.jpg" alt="a hero" />' in html
+
+
+def test_image_is_not_double_rendered_as_link():
+    html = markdown_to_html("![alt](https://cdn.example.com/x.png)")
+    assert "<a " not in html
+
+
 def test_empty_input():
     assert markdown_to_html("") == ""
 

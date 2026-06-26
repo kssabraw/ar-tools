@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import re
 
-# Inline patterns, applied in order. Links first so their bracketed text isn't
-# mangled by the emphasis passes; code spans are extracted before emphasis so
-# `**literal**` inside backticks survives.
+# Inline patterns, applied in order. Images before links (they share the
+# `[...](...)` shape), links before the emphasis passes so their bracketed text
+# isn't mangled; code spans are extracted before emphasis so `**literal**`
+# inside backticks survives.
+_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\((https?://[^\s)]+)\)")
 _LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
 _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
 _ITALIC_RE = re.compile(r"(?<![\*\w])\*([^*\n]+)\*(?!\*)")
@@ -49,6 +51,10 @@ def _inline(text: str) -> str:
 
     text = _CODE_RE.sub(_stash_code, text)
     text = _escape(text)
+    text = _IMAGE_RE.sub(
+        lambda m: f'<img src="{m.group(2)}" alt="{m.group(1)}" />',
+        text,
+    )
     text = _LINK_RE.sub(
         lambda m: f'<a href="{m.group(2)}" rel="noopener" target="_blank">{m.group(1)}</a>',
         text,
