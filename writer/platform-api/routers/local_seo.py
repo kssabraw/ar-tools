@@ -297,7 +297,17 @@ async def list_local_seo_pages(
     client_id: UUID,
     auth: dict = Depends(require_auth),
 ) -> list[LocalSeoPageListItem]:
+    """Active (non-deleted) pages — the Saved Pages tab."""
     return [LocalSeoPageListItem(**row) for row in local_seo_service.list_pages(str(client_id))]
+
+
+@router.get("/clients/{client_id}/local-seo/drafts", response_model=list[LocalSeoPageListItem])
+async def list_local_seo_drafts(
+    client_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> list[LocalSeoPageListItem]:
+    """Soft-deleted pages — the Drafts tab (restore or permanently delete)."""
+    return [LocalSeoPageListItem(**row) for row in local_seo_service.list_pages(str(client_id), deleted=True)]
 
 
 @router.get("/local-seo/pages/{page_id}", response_model=LocalSeoPageDetail)
@@ -313,8 +323,38 @@ async def delete_local_seo_page(
     page_id: UUID,
     auth: dict = Depends(require_auth),
 ) -> dict[str, bool]:
+    """Soft-delete: move the page to Drafts (recoverable)."""
     local_seo_service.delete_page(str(page_id))
     return {"deleted": True}
+
+
+@router.post("/local-seo/pages/{page_id}/restore")
+async def restore_local_seo_page(
+    page_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict[str, bool]:
+    """Restore a drafted page back to Saved Pages."""
+    local_seo_service.restore_page(str(page_id))
+    return {"restored": True}
+
+
+@router.delete("/local-seo/pages/{page_id}/permanent")
+async def purge_local_seo_page(
+    page_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict[str, bool]:
+    """Permanently delete a page (from Drafts). Irreversible."""
+    local_seo_service.purge_page(str(page_id))
+    return {"purged": True}
+
+
+@router.delete("/clients/{client_id}/local-seo/drafts")
+async def purge_local_seo_drafts(
+    client_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict[str, int]:
+    """Permanently delete ALL of a client's drafts (empty the Drafts bin)."""
+    return {"purged": local_seo_service.purge_drafts(str(client_id))}
 
 
 class PublishPageRequest(BaseModel):

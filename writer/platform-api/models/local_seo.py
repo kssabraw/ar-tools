@@ -282,3 +282,5 @@ class LocalSeoPageListItem(BaseModel):
     composite_status: Optional[str] = None
     mode: str
     created_at: str
+    # Set when the page has been soft-deleted (moved to Drafts); null = active.
+    deleted_at: Optional[str] = None

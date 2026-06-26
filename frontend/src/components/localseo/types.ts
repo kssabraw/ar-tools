@@ -27,6 +27,8 @@ export interface LocalSeoPageListItem {
   composite_status: string | null
   mode: 'generate' | 'reoptimize'
   created_at: string
+  // Set when soft-deleted (moved to Drafts); null = active (Saved Pages).
+  deleted_at?: string | null
 }
 
 export interface LocalSeoPageDetail extends LocalSeoPageListItem {

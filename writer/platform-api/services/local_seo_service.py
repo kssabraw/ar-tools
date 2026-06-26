@@ -660,16 +660,28 @@ async def social_posts(
     })
 
 
-def list_pages(client_id: str) -> list[dict]:
+# Columns returned for the page-list views (Saved Pages + Drafts).
+_LIST_COLUMNS = (
+    "id, client_id, keyword, location, page_title, composite_score, "
+    "composite_status, mode, created_at, deleted_at"
+)
+
+
+def list_pages(client_id: str, deleted: bool = False) -> list[dict]:
+    """List a client's Local SEO pages. ``deleted=False`` → active (Saved Pages);
+    ``deleted=True`` → soft-deleted (Drafts). Drafts order by when they were
+    deleted (most recently binned first), active pages by creation."""
     supabase = get_supabase()
-    res = (
+    query = (
         supabase.table("local_seo_pages")
-        .select("id, client_id, keyword, location, page_title, composite_score, composite_status, mode, created_at")
+        .select(_LIST_COLUMNS)
         .eq("client_id", client_id)
-        .order("created_at", desc=True)
-        .execute()
     )
-    return res.data or []
+    if deleted:
+        query = query.not_.is_("deleted_at", "null").order("deleted_at", desc=True)
+    else:
+        query = query.is_("deleted_at", "null").order("created_at", desc=True)
+    return query.execute().data or []
 
 
 def get_page(page_id: str) -> dict:
@@ -681,11 +693,63 @@ def get_page(page_id: str) -> dict:
 
 
 def delete_page(page_id: str) -> None:
+    """Soft-delete: move the page to Drafts (set deleted_at). Recoverable via
+    restore_page; permanent removal is purge_page."""
+    supabase = get_supabase()
+    res = (
+        supabase.table("local_seo_pages")
+        .update({"deleted_at": "now()"})
+        .eq("id", page_id)
+        .is_("deleted_at", "null")  # idempotent: don't re-stamp an already-drafted page
+        .execute()
+    )
+    if not res.data:
+        # Either it doesn't exist, or it's already in Drafts — treat both as 404
+        # only when the row truly isn't there.
+        existing = supabase.table("local_seo_pages").select("id").eq("id", page_id).execute().data
+        if not existing:
+            raise HTTPException(status_code=404, detail="local_seo_page_not_found")
+    logger.info("local_seo.page_drafted", extra={"page_id": page_id})
+
+
+def restore_page(page_id: str) -> dict:
+    """Restore a drafted page back to Saved Pages (clear deleted_at)."""
+    supabase = get_supabase()
+    res = (
+        supabase.table("local_seo_pages")
+        .update({"deleted_at": None})
+        .eq("id", page_id)
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="local_seo_page_not_found")
+    logger.info("local_seo.page_restored", extra={"page_id": page_id})
+    return res.data[0]
+
+
+def purge_page(page_id: str) -> None:
+    """Permanently delete a page (from the Drafts tab). Irreversible."""
     supabase = get_supabase()
     res = supabase.table("local_seo_pages").delete().eq("id", page_id).execute()
     if not res.data:
         raise HTTPException(status_code=404, detail="local_seo_page_not_found")
-    logger.info("local_seo.page_deleted", extra={"page_id": page_id})
+    logger.info("local_seo.page_purged", extra={"page_id": page_id})
+
+
+def purge_drafts(client_id: str) -> int:
+    """Permanently delete ALL of a client's drafted pages. Returns the count
+    removed. Irreversible — only deleted_at-stamped rows are touched."""
+    supabase = get_supabase()
+    res = (
+        supabase.table("local_seo_pages")
+        .delete()
+        .eq("client_id", client_id)
+        .not_.is_("deleted_at", "null")
+        .execute()
+    )
+    count = len(res.data or [])
+    logger.info("local_seo.drafts_purged", extra={"client_id": client_id, "count": count})
+    return count
 
 
 def set_featured_image(page_id: str, url: Optional[str]) -> dict:

@@ -136,11 +136,28 @@ export const localSeoApi = {
   listPages: (clientId: string) =>
     api.get<LocalSeoPageListItem[]>(`/clients/${clientId}/local-seo/pages`),
 
+  // Soft-deleted pages — the Drafts tab.
+  listDrafts: (clientId: string) =>
+    api.get<LocalSeoPageListItem[]>(`/clients/${clientId}/local-seo/drafts`),
+
   getPage: (pageId: string) =>
     api.get<LocalSeoPageDetail>(`/local-seo/pages/${pageId}`),
 
+  // Soft-delete: move a page to Drafts (recoverable).
   deletePage: (pageId: string) =>
     api.delete<void>(`/local-seo/pages/${pageId}`),
+
+  // Restore a drafted page back to Saved Pages.
+  restorePage: (pageId: string) =>
+    api.post<{ restored: boolean }>(`/local-seo/pages/${pageId}/restore`, {}),
+
+  // Permanently delete a page (from Drafts). Irreversible.
+  purgePage: (pageId: string) =>
+    api.delete<void>(`/local-seo/pages/${pageId}/permanent`),
+
+  // Permanently delete ALL of a client's drafts (empty the bin).
+  purgeDrafts: (clientId: string) =>
+    api.delete<{ purged: number }>(`/clients/${clientId}/local-seo/drafts`),
 
   // Publish a saved page to a Google Doc (default) or straight to the client's
   // WordPress site (destination='wordpress').
