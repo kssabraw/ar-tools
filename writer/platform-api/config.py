@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
+    # AI Visibility module (Brand Strength) — the two scan engines whose keys
+    # aren't already shared. Absent either, that engine fails its scans with a
+    # "not configured" reason; the other engines (chatgpt/claude via the keys
+    # above, google_ai_* via DataForSEO) keep working.
+    perplexity_api_key: str = ""
+    gemini_api_key: str = ""
     max_concurrent_runs: int = 5
     job_worker_poll_interval_seconds: int = 10
     # Stale-job reaper. In-process jobs (asyncio.to_thread) aren't resumable, so a
@@ -216,6 +222,43 @@ class Settings(BaseSettings):
     local_seo_overpass_url: str = "https://overpass-api.de/api/interpreter"
     local_seo_overpass_mirror_url: str = "https://overpass.kumi.systems/api/interpreter"
     local_seo_overpass_place_types: str = "city,town"
+
+    # ── AI Visibility (Brand Strength) module ────────────────────────────────
+    # Mention classifier (post-processes each engine's answer into mention/type/
+    # sentiment via OpenAI function-calling). Runs once per keyword×engine plus
+    # once per competitor, so it uses the cost-efficient `mini` tier of the latest
+    # OpenAI model rather than the flagship. No web search needed here.
+    brand_classifier_model: str = "gpt-5.4-mini"
+    # Scan-engine models. Each engine measures its OWN assistant surface, so the
+    # provider is fixed per engine; only the model within it is tunable. The
+    # `claude` engine uses the suite default; `chatgpt` uses the latest OpenAI
+    # flagship; the others keep their provider's representative model.
+    brand_engine_claude_model: str = "claude-sonnet-4-6"
+    brand_engine_chatgpt_model: str = "gpt-5.4"
+    # OpenAI Responses API web-search tool type. GA name is "web_search";
+    # tunable (like the Fanout client) so it can be flipped to
+    # "web_search_preview" without a code change if the account needs it.
+    brand_chatgpt_web_search_tool: str = "web_search"
+    brand_engine_gemini_model: str = "gemini-2.0-flash"
+    brand_engine_perplexity_model: str = "sonar"
+    # Auxiliary OpenAI features: invisibility diagnosis + keyword suggestions.
+    # Use the latest OpenAI flagship (these are quality reasoning/generation
+    # tasks run on demand, not per-row, so flagship cost is fine).
+    brand_diagnose_model: str = "gpt-5.4"
+    brand_suggest_model: str = "gpt-5.4"
+    # Visibility report narrative (published as a Google Doc). Suite-default
+    # Claude, matching the Maps Local Rank Analysis report.
+    brand_report_model: str = "claude-sonnet-4-6"
+    # Per keyword×engine attempt budget for transient errors (matches the source
+    # app's 2 retries). Auth/quota/rate-limit errors are terminal (no retry).
+    brand_scan_max_retries: int = 2
+    # How many keyword×engine cells a scan processes concurrently. Bounds the
+    # network-bound LLM/SERP calls so a large scan doesn't monopolise the shared
+    # job worker for many minutes (each cell still awaits its providers).
+    brand_scan_concurrency: int = 6
+    # Max competitors classified against a single scan's response (no extra
+    # search calls — the same raw response is re-classified per competitor).
+    brand_scan_max_competitors: int = 5
 
     # Service Page scoring: after a service_page run generates, it auto-scores
     # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below

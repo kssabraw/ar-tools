@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye,
 } from 'lucide-react'
 
 export function ClientWorkspace() {
@@ -201,6 +201,13 @@ export function ClientWorkspace() {
           label="GSC Research"
           description="Mine Search Console for opportunities — keyword cannibalization, quick wins (pos 6–10) & hidden wins (pos 11–30), enriched with CPC & volume."
           to={id ? `/clients/${id}/gsc-research` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Eye size={22} />}
+          label="AI Visibility"
+          description="Track whether this brand shows up in AI assistant answers — ChatGPT, Claude, Gemini, Perplexity & Google AI Overviews — across your keywords, over time."
+          to={id ? `/clients/${id}/ai-visibility` : undefined}
           cta="Open"
         />
       </Section>

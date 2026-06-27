@@ -17,6 +17,7 @@ import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { GscResearch } from './pages/GscResearch'
+import { AiVisibility } from './pages/AiVisibility'
 import { MapsGeogrid } from './pages/MapsGeogrid'
 import { MapsReport } from './pages/MapsReport'
 import { RankReport } from './pages/RankReport'
@@ -58,6 +59,7 @@ export default function App() {
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
+                      <Route path="/clients/:id/ai-visibility" element={<AiVisibility />} />
                       <Route path="/clients/:id/maps" element={<MapsGeogrid />} />
                       <Route path="/clients/:id/maps/report" element={<MapsReport />} />
                       <Route path="/clients/:id/rankings/report" element={<RankReport />} />
