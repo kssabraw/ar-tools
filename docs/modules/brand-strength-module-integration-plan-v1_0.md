@@ -1,6 +1,8 @@
 # Brand Strength (AI Visibility) Module — Integration & Implementation Plan (v1.0)
 
-**Authored:** 2026-06-26 · **Status:** plan approved (Path B — full port); **Phase 0 in progress** · **New suite module — "AI Visibility"**
+**Authored:** 2026-06-26 · **Status:** Path B — **Phases 0–5 built** (notifications deferred) · **New suite module — "AI Visibility"**
+
+> **Build status (2026-06-27).** Phases 0–4 + the Phase-2 follow-up + Phase-5 reporting are implemented on branch `claude/brand-strength-ai-ar-tools-i4ziih` (PR #149): data model (live), six-engine scan engine, full REST API, shared-scheduler recurring scans, the "AI Visibility" frontend, invisibility diagnosis + keyword suggestions, and the visibility report → Google Doc. **Deferred:** the in-app/email **notifications** half of Phase 5, pending the suite notifications-service + channel decision (§6 item 1). v1 UI follow-ups: competitor-result visualization in the matrix, history CSV export. Models: `chatgpt`=gpt-5.4 (web search), classifier=gpt-5.4-mini, diagnose/suggest=gpt-5.4, report narrative=claude-sonnet-4-6.
 
 > **Decisions resolved (2026-06-27)** — see §6 for the original open items.
 > 1. **Engines:** ship **all six** in v1 (requires `PERPLEXITY_API_KEY` + `GEMINI_API_KEY` to be provisioned before Phase 1 live-testing).
