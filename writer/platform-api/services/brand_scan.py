@@ -38,10 +38,12 @@ from db.supabase_client import get_supabase
 
 logger = logging.getLogger("brand_scan")
 
-ENGINES = {
+# Canonical display/default order. ENGINES (the validation set) is derived from it.
+ENGINE_ORDER = [
     "chatgpt", "claude", "gemini", "perplexity",
     "google_ai_overview", "google_ai_mode",
-}
+]
+ENGINES = set(ENGINE_ORDER)
 
 # Provider HTTP statuses that are terminal for a scan (no point retrying):
 # auth, payment/quota, forbidden, and rate-limit.
