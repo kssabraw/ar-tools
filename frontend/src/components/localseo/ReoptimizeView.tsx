@@ -155,6 +155,14 @@ export function ReoptimizeView({ clientId, clientName, onOpenSaved }: Props) {
     }
     if (detachedRef.current) return
     if (!handles.length) { setRunning(false); return }
+    // Defensive: handles come back in target order, same length as `valid`. If the
+    // backend ever returns fewer, mark the unpaired trailing rows failed so they
+    // can't hang on "Queued" (the poll only tracks the handles we got).
+    if (handles.length < valid.length) {
+      setRows(prev => prev.map((r, idx) => (
+        idx < handles.length ? r : { ...r, state: { phase: 'failed', error: 'Could not enqueue this page.' } }
+      )))
+    }
     const jobIds = handles.map(h => h.job_id)
     setProgress({ current: 0, total: jobIds.length })
 

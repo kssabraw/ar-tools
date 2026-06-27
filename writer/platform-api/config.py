@@ -208,6 +208,15 @@ class Settings(BaseSettings):
     local_seo_sitemap_max_urls: int = 5000
     local_seo_sitemap_max_files: int = 30
     local_seo_site_index_dataforseo_depth: int = 100
+    # Bulk background jobs (bulk-create / bulk-reoptimize) enqueue one async_jobs
+    # row per item. The single worker claims the OLDEST pending scheduled_at and
+    # has no <=now gate, so staggering each bulk item's scheduled_at this many
+    # seconds into the future makes a now-dated interactive/scheduled job (and
+    # other clients' work) interleave ahead of the rest of the batch — bulk
+    # becomes background priority. There's no delay when the queue is otherwise
+    # empty (no gate). Keep ≳ a single item's runtime so an interactive job waits
+    # behind at most the currently-running bulk item.
+    local_seo_bulk_job_spacing_seconds: int = 180
     # Target-city discovery: the silo planner serves the seed city plus the other
     # cities a business targets — from its GBP service area, a manual list on the
     # client, place-names on its own site, and cities within

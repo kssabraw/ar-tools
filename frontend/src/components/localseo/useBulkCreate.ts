@@ -14,6 +14,7 @@ export function useBulkCreate(clientId: string, onCreated?: () => void) {
   const [done, setDone] = useState(0)
   const [failed, setFailed] = useState(0)
   const [elapsed, setElapsed] = useState(0)
+  const [error, setError] = useState('') // enqueue failed (e.g. bad area)
 
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -39,7 +40,7 @@ export function useBulkCreate(clientId: string, onCreated?: () => void) {
   const setSelection = (kws: string[]) => setSelected(new Set(kws))
   const clear = () => setSelected(new Set())
   // Clear selection + outcome counters (e.g. when a new plan is run).
-  const reset = () => { clear(); setTotal(0); setDone(0); setFailed(0); setDetached(false) }
+  const reset = () => { clear(); setTotal(0); setDone(0); setFailed(0); setDetached(false); setError('') }
 
   // Enqueue one background generate job per keyword, then poll. location/
   // locationCode are the seed area; each keyword already carries its own
@@ -49,6 +50,7 @@ export function useBulkCreate(clientId: string, onCreated?: () => void) {
     cancelledRef.current = false
     setCreating(true)
     setDetached(false)
+    setError('')
     setTotal(queue.length)
     setDone(0)
     setFailed(0)
@@ -63,10 +65,11 @@ export function useBulkCreate(clientId: string, onCreated?: () => void) {
         force_refresh: false, page_template_url: null,
       })
       jobIds = res.job_ids ?? []
-    } catch {
+    } catch (e) {
       stopTimers()
       setCreating(false)
-      setFailed(queue.length)
+      setTotal(0)
+      setError(e instanceof Error ? e.message : 'Could not start generation')
       return
     }
     if (cancelledRef.current) return
@@ -115,5 +118,5 @@ export function useBulkCreate(clientId: string, onCreated?: () => void) {
     onCreated?.()
   }
 
-  return { selected, toggle, setSelection, clear, reset, creating, detached, total, done, failed, elapsed, start, leave }
+  return { selected, toggle, setSelection, clear, reset, creating, detached, total, done, failed, elapsed, error, start, leave }
 }

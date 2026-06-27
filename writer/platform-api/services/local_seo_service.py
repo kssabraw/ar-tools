@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -442,15 +443,27 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
 
 
 # ── bulk background generation / reoptimization (per-item async jobs) ─────────
-# Bulk flows enqueue ONE job per item (not one big batch job). The worker claims
-# the OLDEST pending job each tick and runs it to completion one at a time, so a
-# batch DOES occupy the worker until it drains (delaying other async jobs) — that
-# tradeoff is accepted for "leave & walk away". The reason for per-item rather
-# than one batch job is the stale-job reaper (`job_stale_timeout_minutes`, 30m):
-# each item stays well under it, whereas a single ~90-min batch job would be
-# reaped mid-run and requeued, re-generating the items it had already finished.
+# Bulk flows enqueue ONE job per item (not one big batch job), for two reasons:
+#   1. the stale-job reaper (`job_stale_timeout_minutes`, 30m) — each item stays
+#      well under it, whereas a single ~90-min batch job would be reaped mid-run
+#      and requeued, re-generating the items it had already finished; and
+#   2. background priority — each item's `scheduled_at` is staggered into the
+#      future (`_bulk_scheduled_at`), so the worker (which claims the oldest
+#      `scheduled_at` with no <=now gate) interleaves now-dated interactive /
+#      scheduled jobs ahead of the rest of a batch instead of the batch
+#      monopolizing the single worker. Bulk still runs back-to-back when the
+#      queue is otherwise empty (no gate = no artificial delay).
 # The UI enqueues the set, polls get_jobs_status, and can leave at any time — the
 # jobs keep running server-side and the pages land in the client's pages.
+
+def _bulk_scheduled_at(index: int) -> str:
+    """Staggered `scheduled_at` for the `index`-th item of a bulk run, so the
+    worker (which claims the oldest scheduled_at, with no <=now gate) interleaves
+    now-dated interactive/scheduled jobs ahead of the rest of the batch. No delay
+    when the queue is otherwise empty. See `local_seo_bulk_job_spacing_seconds`."""
+    spacing = settings.local_seo_bulk_job_spacing_seconds
+    return (datetime.now(timezone.utc) + timedelta(seconds=index * spacing)).isoformat()
+
 
 async def enqueue_generate_bulk(
     client_id: str, keywords: list[str], location: str, location_code: Optional[int],
@@ -461,23 +474,26 @@ async def enqueue_generate_bulk(
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
     template = (page_template_url or "").strip() or None
-    rows = [
-        {
-            "job_type": "local_seo_generate",
-            "entity_id": client_id,
-            "payload": {
-                "client_id": client_id,
-                "keyword": kw.strip(),
-                "location": location,
-                "location_code": location_code,
-                "user_id": user_id,
-                "page_template_url": template,
-                "force_refresh": bool(force_refresh),
-            },
-        }
-        for kw in keywords
-        if (kw or "").strip()
-    ]
+    rows = []
+    for kw in keywords:
+        if not (kw or "").strip():
+            continue
+        rows.append(
+            {
+                "job_type": "local_seo_generate",
+                "entity_id": client_id,
+                "scheduled_at": _bulk_scheduled_at(len(rows)),
+                "payload": {
+                    "client_id": client_id,
+                    "keyword": kw.strip(),
+                    "location": location,
+                    "location_code": location_code,
+                    "user_id": user_id,
+                    "page_template_url": template,
+                    "force_refresh": bool(force_refresh),
+                },
+            }
+        )
     if not rows:
         return []
     res = get_supabase().table("async_jobs").insert(rows).execute()
@@ -503,6 +519,7 @@ async def enqueue_reoptimize_bulk(
             {
                 "job_type": "local_seo_reoptimize_url",
                 "entity_id": client_id,
+                "scheduled_at": _bulk_scheduled_at(len(rows)),
                 "payload": {
                     "client_id": client_id,
                     "page_url": page_url,

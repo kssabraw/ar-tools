@@ -2,7 +2,7 @@ import { Sparkles } from 'lucide-react'
 import type { RelatedPageItem } from './types'
 import type { useBulkCreate } from './useBulkCreate'
 import { Spinner } from './Spinner'
-import { card, primaryBtn } from './shared'
+import { card, errorBox, primaryBtn } from './shared'
 
 interface Props {
   items: RelatedPageItem[]
@@ -17,7 +17,7 @@ interface Props {
 // with a <RelatedPagesList selection={...}> (which renders the per-row
 // checkboxes). Shared by the Plan Silo and per-page Related Pages flows.
 export function BulkCreateBar({ items, bulk, location, locationCode, onViewSaved }: Props) {
-  const { selected, creating, detached, total, done, failed, start, leave, setSelection, clear } = bulk
+  const { selected, creating, detached, total, done, failed, error, start, leave, setSelection, clear } = bulk
   const missingKws = items.filter(r => r.status === 'missing').map(r => r.keyword)
   const allMissingSelected = missingKws.length > 0 && missingKws.every(kw => selected.has(kw))
   const selectedCount = selected.size
@@ -32,6 +32,7 @@ export function BulkCreateBar({ items, bulk, location, locationCode, onViewSaved
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {error && <div style={errorBox}>{error}</div>}
       {missingKws.length > 0 && !creating && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: '#94a3b8', flexWrap: 'wrap' }}>
           <span>Tick the missing pages you want, then create them in one batch.</span>
