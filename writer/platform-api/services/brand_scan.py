@@ -12,8 +12,9 @@ Six engines: `chatgpt` (OpenAI Responses API + web search), `claude` (Anthropic
 
 Differences from the source (per the integration plan):
   * No credits/billing, no snippet encryption, no inline alert trigger.
-  * The mention classifier uses the suite-default Claude model instead of
-    gpt-4o-mini (build decision: "suite defaults").
+  * The chatgpt engine and the mention classifier use the latest OpenAI models
+    (gpt-5.4 flagship for the engine, gpt-5.4-mini for the classifier) rather
+    than the source's gpt-4.1 / gpt-4o-mini (build decision).
 
 Runs as an `async_jobs` job (job_type='brand_scan'); the per-keyword×engine
 loop is fully async (SDK + httpx calls), so no worker-thread offload is needed.
@@ -23,6 +24,7 @@ See docs/modules/brand-strength-module-integration-plan-v1_0.md (Phase 1).
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import re
 import uuid
@@ -298,19 +300,22 @@ _CLASSIFIER_SYSTEM = (
 )
 
 _CLASSIFIER_TOOL = {
-    "name": "report_brand_visibility",
-    "description": "Report whether the brand was found in search results as an actual business listing",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "mention_found": {"type": "boolean", "description": "True ONLY if brand appears as an actual business result."},
-            "mention_type": {"type": "string", "enum": ["direct", "implied", "none"]},
-            "sentiment": {"type": "number", "description": "-1 (negative) to 1 (positive); 0 if neutral/absent."},
-            "confidence": {"type": "number", "description": "0 to 1"},
-            "evidence_snippet": {"type": "string", "description": "Text proving the brand was/wasn't found (max 300 chars)."},
-            "reasoning": {"type": "string", "description": "Brief explanation of the classification."},
+    "type": "function",
+    "function": {
+        "name": "report_brand_visibility",
+        "description": "Report whether the brand was found in search results as an actual business listing",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "mention_found": {"type": "boolean", "description": "True ONLY if brand appears as an actual business result."},
+                "mention_type": {"type": "string", "enum": ["direct", "implied", "none"]},
+                "sentiment": {"type": "number", "description": "-1 (negative) to 1 (positive); 0 if neutral/absent."},
+                "confidence": {"type": "number", "description": "0 to 1"},
+                "evidence_snippet": {"type": "string", "description": "Text proving the brand was/wasn't found (max 300 chars)."},
+                "reasoning": {"type": "string", "description": "Brief explanation of the classification."},
+            },
+            "required": ["mention_found", "mention_type", "sentiment", "confidence", "evidence_snippet", "reasoning"],
         },
-        "required": ["mention_found", "mention_type", "sentiment", "confidence", "evidence_snippet", "reasoning"],
     },
 }
 
@@ -323,35 +328,31 @@ def _clamp(value, lo, hi, default):
 
 
 async def analyze_mention(response_text: str, brand: str, citations: list[str], raw_response: str) -> dict:
-    """Classify whether `brand` appears in `response_text`. Uses the suite-default
-    Claude model with forced tool-use; falls back to regex on any failure."""
-    if not settings.anthropic_api_key:
+    """Classify whether `brand` appears in `response_text`. Uses the latest OpenAI
+    `mini` model with forced function-calling; falls back to regex on any failure."""
+    if not settings.openai_api_key:
         return _fallback_analysis(response_text, brand, citations, raw_response)
-    import anthropic
+    import openai
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
     try:
-        resp = await client.messages.create(
+        resp = await client.chat.completions.create(
             model=settings.brand_classifier_model,
-            max_tokens=1024,
-            system=_CLASSIFIER_SYSTEM,
-            tools=[_CLASSIFIER_TOOL],
-            tool_choice={"type": "tool", "name": "report_brand_visibility"},
-            messages=[{
-                "role": "user",
-                "content": (
+            messages=[
+                {"role": "system", "content": _CLASSIFIER_SYSTEM},
+                {"role": "user", "content": (
                     f'Brand to find: "{brand}"\n\nSearch response to analyze:\n"""\n'
                     f'{response_text[:4000]}\n"""\n\nDetermine if this brand appears as an '
                     "actual business result (not just mentioned in the query or methodology)."
-                ),
-            }],
+                )},
+            ],
+            tools=[_CLASSIFIER_TOOL],
+            tool_choice={"type": "function", "function": {"name": "report_brand_visibility"}},
         )
-        tool_input = next(
-            (b.get("input") for b in resp.model_dump().get("content") or [] if b.get("type") == "tool_use"),
-            None,
-        )
-        if not tool_input:
+        tool_calls = resp.choices[0].message.tool_calls
+        if not tool_calls or tool_calls[0].function.name != "report_brand_visibility":
             return _fallback_analysis(response_text, brand, citations, raw_response)
+        tool_input = json.loads(tool_calls[0].function.arguments)
         found = tool_input.get("mention_found") is True
         return {
             "mention_found": found,

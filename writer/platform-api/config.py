@@ -224,17 +224,17 @@ class Settings(BaseSettings):
     local_seo_overpass_place_types: str = "city,town"
 
     # ── AI Visibility (Brand Strength) module ────────────────────────────────
-    # Per the build decision, the auxiliary LLM calls (mention classification,
-    # invisibility diagnosis, keyword suggestions) use the suite-default Claude
-    # model. The mention classifier runs once per keyword×engine plus once per
-    # competitor — if cost becomes a concern, drop it to claude-haiku-4-5.
-    brand_classifier_model: str = "claude-sonnet-4-6"
+    # Mention classifier (post-processes each engine's answer into mention/type/
+    # sentiment via OpenAI function-calling). Runs once per keyword×engine plus
+    # once per competitor, so it uses the cost-efficient `mini` tier of the latest
+    # OpenAI model rather than the flagship. No web search needed here.
+    brand_classifier_model: str = "gpt-5.4-mini"
     # Scan-engine models. Each engine measures its OWN assistant surface, so the
     # provider is fixed per engine; only the model within it is tunable. The
-    # `claude` engine uses the suite default; the others keep their provider's
-    # representative model (no suite default exists for them).
+    # `claude` engine uses the suite default; `chatgpt` uses the latest OpenAI
+    # flagship; the others keep their provider's representative model.
     brand_engine_claude_model: str = "claude-sonnet-4-6"
-    brand_engine_chatgpt_model: str = "gpt-4.1"
+    brand_engine_chatgpt_model: str = "gpt-5.4"
     # OpenAI Responses API web-search tool type. GA name is "web_search";
     # tunable (like the Fanout client) so it can be flipped to
     # "web_search_preview" without a code change if the account needs it.

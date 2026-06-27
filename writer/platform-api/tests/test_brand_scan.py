@@ -94,6 +94,14 @@ def test_fallback_direct_mention_positive_sentiment():
     assert r["sentiment"] > 0
 
 
+def test_analyze_mention_without_openai_key_uses_fallback(monkeypatch):
+    # No OpenAI key configured → classifier short-circuits to the regex fallback.
+    monkeypatch.setattr(bs.settings, "openai_api_key", "")
+    r = asyncio.run(bs.analyze_mention("Acme does not appear in the results.", "Acme", [], "raw"))
+    assert r["mention_found"] is False
+    assert "[Fallback]" in r["reasoning"]
+
+
 # ── scan_keyword_engine orchestration ────────────────────────────────────────
 def _stub_analyze(found=True):
     async def _fn(response_text, brand, citations, raw_response):
