@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -78,14 +78,16 @@ export function AiVisibility() {
     enabled: Boolean(clientId && jobId),
     refetchInterval: (q) => {
       const s = q.state.data?.status
-      if (s === 'complete' || s === 'failed') {
-        qc.invalidateQueries({ queryKey: ['brand-history', clientId] })
-        qc.invalidateQueries({ queryKey: ['brand-trends', clientId] })
-        return false
-      }
-      return 3000
+      return s === 'complete' || s === 'failed' ? false : 3000
     },
   })
+  // Refresh the matrix/trends once a scan reaches a terminal state.
+  useEffect(() => {
+    if (jobStatus?.status === 'complete' || jobStatus?.status === 'failed') {
+      qc.invalidateQueries({ queryKey: ['brand-history', clientId] })
+      qc.invalidateQueries({ queryKey: ['brand-trends', clientId] })
+    }
+  }, [jobStatus?.status, clientId, qc])
   const running = Boolean(jobId) && jobStatus?.status !== 'complete' && jobStatus?.status !== 'failed'
 
   const activeKeywords = keywords.filter(k => k.is_active)
@@ -357,7 +359,10 @@ function Keywords({ clientId, keywords }: { clientId: string; keywords: Keyword[
     onSuccess: (r) => setSuggested(r.keywords),
   })
   const existing = new Set(keywords.map(k => k.keyword.toLowerCase()))
-  const addSuggestion = async (kw: string) => { await addMut.mutateAsync(kw); setSuggested(s => (s ? s.filter(x => x !== kw) : s)) }
+  const addSuggestion = async (kw: string) => {
+    try { await addMut.mutateAsync(kw); setSuggested(s => (s ? s.filter(x => x !== kw) : s)) }
+    catch { /* surfaced via addMut.isError banner */ }
+  }
 
   return (
     <div>

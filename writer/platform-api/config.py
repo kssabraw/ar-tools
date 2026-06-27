@@ -252,6 +252,10 @@ class Settings(BaseSettings):
     # Per keyword×engine attempt budget for transient errors (matches the source
     # app's 2 retries). Auth/quota/rate-limit errors are terminal (no retry).
     brand_scan_max_retries: int = 2
+    # How many keyword×engine cells a scan processes concurrently. Bounds the
+    # network-bound LLM/SERP calls so a large scan doesn't monopolise the shared
+    # job worker for many minutes (each cell still awaits its providers).
+    brand_scan_concurrency: int = 6
     # Max competitors classified against a single scan's response (no extra
     # search calls — the same raw response is re-classified per competitor).
     brand_scan_max_competitors: int = 5

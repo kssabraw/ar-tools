@@ -76,6 +76,11 @@ def build_snapshot(rows: list[dict], keyword_labels: dict[str, str]) -> dict:
     }
 
 
+def _cell(s) -> str:
+    """Make a value safe inside a Markdown table cell (escape pipes, flatten newlines)."""
+    return str(s).replace("|", "\\|").replace("\n", " ").strip()
+
+
 def render_markdown(client_name: str, date_str: str, snapshot: dict, narrative: str = "") -> str:
     """Render the snapshot as the Google Doc's Markdown body. Pure."""
     o = snapshot["overall"]
@@ -105,7 +110,7 @@ def render_markdown(client_name: str, date_str: str, snapshot: dict, narrative: 
         for e in ENGINE_ORDER:
             v = cells.get(e)
             marks.append("✅" if v == "found" else "❌" if v == "not" else "—")
-        lines.append(f"| {kw} | " + " | ".join(marks) + " |")
+        lines.append(f"| {_cell(kw)} | " + " | ".join(marks) + " |")
     lines.append("")
 
     if snapshot["invisible"]:
@@ -116,9 +121,9 @@ def render_markdown(client_name: str, date_str: str, snapshot: dict, narrative: 
 
     if snapshot["competitors"]:
         lines += ["## Competitor comparison", "", "| Competitor | Visibility |", "|---|---|"]
-        lines.append(f"| **{client_name} (you)** | {o['pct']}% |")
+        lines.append(f"| **{_cell(client_name)} (you)** | {o['pct']}% |")
         for name, s in sorted(snapshot["competitors"].items(), key=lambda kv: -kv[1]["pct"]):
-            lines.append(f"| {name} | {s['pct']}% |")
+            lines.append(f"| {_cell(name)} | {s['pct']}% |")
         lines.append("")
 
     return "\n".join(lines)

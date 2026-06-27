@@ -153,6 +153,38 @@ def test_scan_keyword_engine_retries_then_succeeds(monkeypatch):
     assert result["retry_count"] == 1
 
 
+def test_scan_keyword_engine_retries_on_transient_exception(monkeypatch):
+    # A connection reset / timeout (not a ProviderError) should be retried, not
+    # fail the cell outright.
+    calls = {"n": 0}
+
+    async def flaky(engine, keyword, brand):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("connection reset by peer")
+        return ("Acme is listed.", [])
+
+    monkeypatch.setattr(bs, "_dispatch", flaky)
+    monkeypatch.setattr(bs, "analyze_mention", _stub_analyze(found=True))
+    result = asyncio.run(bs.scan_keyword_engine("kw", "Acme", "gemini", []))
+    assert calls["n"] == 2
+    assert result["retry_count"] == 1
+
+
+def test_scan_keyword_engine_config_error_is_terminal(monkeypatch):
+    # ScanFailed (e.g. missing API key) must NOT be retried.
+    calls = {"n": 0}
+
+    async def cfg(engine, keyword, brand):
+        calls["n"] += 1
+        raise ScanFailed("Gemini API not configured")
+
+    monkeypatch.setattr(bs, "_dispatch", cfg)
+    with pytest.raises(ScanFailed):
+        asyncio.run(bs.scan_keyword_engine("kw", "Acme", "gemini", []))
+    assert calls["n"] == 1
+
+
 def test_scan_keyword_engine_empty_responses_fail(monkeypatch):
     async def empty_dispatch(engine, keyword, brand):
         return ("", [])

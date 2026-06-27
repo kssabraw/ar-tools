@@ -45,6 +45,16 @@ def test_render_markdown_has_sections_and_marks():
     assert "## Competitor comparison" in md and "Rival" in md
 
 
+def test_cell_escapes_pipes_and_flattens_newlines():
+    assert br._cell("a|b\nc") == "a\\|b c"
+
+
+def test_render_markdown_escapes_pipe_in_keyword():
+    snap = br.build_snapshot([_row("k1", "chatgpt", True)], {"k1": "a|b plumbing"})
+    md = br.render_markdown("Acme", "1 Jul 2026", snap)
+    assert "a\\|b plumbing" in md and "| a|b plumbing |" not in md
+
+
 def test_render_markdown_omits_optional_sections_when_empty():
     snap = br.build_snapshot([], {})
     md = br.render_markdown("Acme", "1 Jul 2026", snap)

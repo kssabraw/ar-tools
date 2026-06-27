@@ -23,6 +23,7 @@ See docs/modules/brand-strength-module-integration-plan-v1_0.md (Phase 1).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -457,11 +458,19 @@ async def scan_keyword_engine(
     while retry_count <= max_retries and result is None:
         try:
             response_text, citations = await _dispatch(engine, keyword, brand)
+        except ScanFailed:
+            # Config errors (no API key / unknown engine) — terminal, don't retry.
+            raise
         except ProviderError as exc:
             if exc.status in _TERMINAL_STATUSES:
                 raise ScanFailed(
                     "Rate limit exceeded" if exc.status == 429 else "AI service authentication/quota issue"
                 )
+            retry_count += 1
+            continue
+        except Exception:
+            # Connection resets / timeouts (httpx / openai / anthropic) are
+            # transient — retry rather than failing the cell outright.
             retry_count += 1
             continue
         if not response_text:
@@ -579,70 +588,96 @@ async def run_brand_scan_job(job: dict) -> None:
             ).data or []
             competitor_names = [r["competitor_name"] for r in comp_rows if r.get("competitor_name")]
 
-        # Pre-create queued rows (one per keyword×engine present).
-        rows_to_process = []
-        for keyword_id in keyword_ids:
-            keyword = keyword_by_id.get(keyword_id)
-            if not keyword:
-                continue
-            for engine in engines:
-                inserted = (
-                    supabase.table("brand_mention_history")
-                    .insert({
-                        "client_id": client_id,
-                        "keyword_id": keyword_id,
-                        "scan_batch_id": scan_batch_id,
-                        "engine": engine,
-                        "scanned_brand_name": brand,
-                        "is_competitor_scan": False,
-                        "status": "queued",
-                        "created_by": user_id,
-                    })
-                    .execute()
-                ).data[0]
-                rows_to_process.append((inserted["id"], keyword, engine))
+        # Build the work list. On a re-run (e.g. a stale-reap requeue after a
+        # worker restart) rows for this batch already exist — reuse the not-yet-
+        # completed ones instead of pre-creating duplicates (idempotent resume).
+        existing = (
+            supabase.table("brand_mention_history")
+            .select("id, keyword_id, engine, status")
+            .eq("scan_batch_id", scan_batch_id)
+            .eq("is_competitor_scan", False)
+            .execute()
+        ).data or []
 
-        completed = failed = 0
-        for row_id, keyword, engine in rows_to_process:
-            supabase.table("brand_mention_history").update(
-                {"status": "processing"}
-            ).eq("id", row_id).execute()
-            try:
-                result = await scan_keyword_engine(keyword, brand, engine, competitor_names)
-                supabase.table("brand_mention_history").update({
-                    "status": "completed",
-                    "mention_found": result["mention_found"],
-                    "mention_type": result["mention_type"],
-                    "sentiment": result["sentiment"],
-                    "confidence_score": result["confidence_score"],
-                    "snippet": result["snippet"],
-                    "citations": result["citations"],
-                    "reasoning": result["reasoning"],
-                    "raw_response": result["raw_response"],
-                    "competitor_results": result["competitor_results"],
-                    "retry_count": result["retry_count"],
-                    "updated_at": "now()",
-                }).eq("id", row_id).execute()
-                completed += 1
-            except ScanFailed as exc:
+        rows_to_process: list[tuple[str, str, str]] = []
+        if existing:
+            for r in existing:
+                if r.get("status") == "completed":
+                    continue
+                kw = keyword_by_id.get(r.get("keyword_id"))
+                if kw:
+                    rows_to_process.append((r["id"], kw, r["engine"]))
+        else:
+            for keyword_id in keyword_ids:
+                keyword = keyword_by_id.get(keyword_id)
+                if not keyword:
+                    continue
+                for engine in engines:
+                    inserted = (
+                        supabase.table("brand_mention_history")
+                        .insert({
+                            "client_id": client_id,
+                            "keyword_id": keyword_id,
+                            "scan_batch_id": scan_batch_id,
+                            "engine": engine,
+                            "scanned_brand_name": brand,
+                            "is_competitor_scan": False,
+                            "status": "queued",
+                            "created_by": user_id,
+                        })
+                        .execute()
+                    ).data
+                    if inserted:
+                        rows_to_process.append((inserted[0]["id"], keyword, engine))
+
+        # Process cells with bounded concurrency so a large scan overlaps its
+        # network-bound provider calls instead of monopolising the worker.
+        counts = {"completed": 0, "failed": 0}
+        sem = asyncio.Semaphore(max(1, settings.brand_scan_concurrency))
+
+        async def _process_cell(row_id: str, keyword: str, engine: str) -> None:
+            async with sem:
                 supabase.table("brand_mention_history").update(
-                    {"status": "failed", "failure_reason": exc.reason, "updated_at": "now()"}
+                    {"status": "processing"}
                 ).eq("id", row_id).execute()
-                failed += 1
-            except Exception as exc:
-                logger.warning("brand_scan.row_error", extra={"row_id": row_id, "error": str(exc)})
-                supabase.table("brand_mention_history").update(
-                    {"status": "failed", "failure_reason": "internal_error", "updated_at": "now()"}
-                ).eq("id", row_id).execute()
-                failed += 1
+                try:
+                    result = await scan_keyword_engine(keyword, brand, engine, competitor_names)
+                    supabase.table("brand_mention_history").update({
+                        "status": "completed",
+                        "mention_found": result["mention_found"],
+                        "mention_type": result["mention_type"],
+                        "sentiment": result["sentiment"],
+                        "confidence_score": result["confidence_score"],
+                        "snippet": result["snippet"],
+                        "citations": result["citations"],
+                        "reasoning": result["reasoning"],
+                        "raw_response": result["raw_response"],
+                        "competitor_results": result["competitor_results"],
+                        "retry_count": result["retry_count"],
+                        "updated_at": "now()",
+                    }).eq("id", row_id).execute()
+                    counts["completed"] += 1
+                except ScanFailed as exc:
+                    supabase.table("brand_mention_history").update(
+                        {"status": "failed", "failure_reason": exc.reason, "updated_at": "now()"}
+                    ).eq("id", row_id).execute()
+                    counts["failed"] += 1
+                except Exception as exc:
+                    logger.warning("brand_scan.row_error", extra={"row_id": row_id, "error": str(exc)})
+                    supabase.table("brand_mention_history").update(
+                        {"status": "failed", "failure_reason": "internal_error", "updated_at": "now()"}
+                    ).eq("id", row_id).execute()
+                    counts["failed"] += 1
+
+        await asyncio.gather(*(_process_cell(rid, kw, eng) for rid, kw, eng in rows_to_process))
 
         supabase.table("async_jobs").update({
             "status": "complete",
             "result": {
                 "scan_batch_id": scan_batch_id,
                 "total": len(rows_to_process),
-                "completed": completed,
-                "failed": failed,
+                "completed": counts["completed"],
+                "failed": counts["failed"],
             },
             "completed_at": "now()",
         }).eq("id", job_id).execute()
@@ -652,6 +687,14 @@ async def run_brand_scan_job(job: dict) -> None:
         )
     except Exception as exc:
         logger.warning("brand_scan.failed", extra={"job_id": job_id, "error": str(exc)})
+        # Don't leave half-created cells stuck as queued/processing — they'd
+        # render forever as "in progress" in the matrix.
+        try:
+            supabase.table("brand_mention_history").update(
+                {"status": "failed", "failure_reason": "job_aborted", "updated_at": "now()"}
+            ).eq("scan_batch_id", scan_batch_id).in_("status", ["queued", "processing"]).execute()
+        except Exception:
+            pass
         supabase.table("async_jobs").update(
             {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
         ).eq("id", job_id).execute()
