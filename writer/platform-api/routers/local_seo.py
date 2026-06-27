@@ -24,10 +24,16 @@ from pydantic import BaseModel
 from middleware.auth import require_auth
 from models.local_seo import (
     LocalSeoAnalyzeRequest,
+    LocalSeoBulkGenerateJob,
+    LocalSeoBulkGenerateRequest,
     LocalSeoFindPageRequest,
     LocalSeoGenerateJob,
     LocalSeoGenerateJobResult,
     LocalSeoGenerateRequest,
+    LocalSeoJobsStatusRequest,
+    LocalSeoJobStatus,
+    LocalSeoReoptimizeBulkJob,
+    LocalSeoReoptimizeBulkRequest,
     LocalSeoPageDetail,
     LocalSeoPageListItem,
     LocalSeoPrecheckRequest,
@@ -106,6 +112,55 @@ async def get_local_seo_generate_job(
     """Poll a background generation job; returns its status and (when complete) the
     new page id."""
     return LocalSeoGenerateJobResult(**local_seo_service.get_generate_job(str(job_id), str(client_id)))
+
+
+@router.post("/clients/{client_id}/local-seo/generate-bulk", response_model=LocalSeoBulkGenerateJob)
+async def generate_local_seo_pages_bulk(
+    client_id: UUID,
+    body: LocalSeoBulkGenerateRequest,
+    auth: dict = Depends(require_auth),
+) -> LocalSeoBulkGenerateJob:
+    """Enqueue background generation for several keywords (bulk-create). The UI
+    polls the returned job ids and can leave while they run."""
+    job_ids = await local_seo_service.enqueue_generate_bulk(
+        client_id=str(client_id),
+        keywords=body.keywords,
+        location=body.location,
+        location_code=body.location_code,
+        user_id=auth["user_id"],
+        page_template_url=body.page_template_url,
+        force_refresh=body.force_refresh,
+    )
+    return LocalSeoBulkGenerateJob(job_ids=job_ids)
+
+
+@router.post("/clients/{client_id}/local-seo/reoptimize-bulk", response_model=LocalSeoReoptimizeBulkJob)
+async def reoptimize_local_seo_pages_bulk(
+    client_id: UUID,
+    body: LocalSeoReoptimizeBulkRequest,
+    auth: dict = Depends(require_auth),
+) -> LocalSeoReoptimizeBulkJob:
+    """Enqueue background reoptimization for several page URLs. The UI polls the
+    returned jobs (paired with their URLs) and can leave while they run."""
+    jobs = await local_seo_service.enqueue_reoptimize_bulk(
+        client_id=str(client_id),
+        targets=[t.model_dump() for t in body.targets],
+        user_id=auth["user_id"],
+        score_threshold=body.score_threshold,
+        publish_to_doc=body.publish_to_doc,
+    )
+    return LocalSeoReoptimizeBulkJob(jobs=jobs)
+
+
+@router.post("/clients/{client_id}/local-seo/jobs/status", response_model=list[LocalSeoJobStatus])
+async def local_seo_jobs_status(
+    client_id: UUID,
+    body: LocalSeoJobsStatusRequest,
+    auth: dict = Depends(require_auth),
+) -> list[LocalSeoJobStatus]:
+    """Batch-poll a set of background jobs (generate / reoptimize) for this client."""
+    rows = local_seo_service.get_jobs_status(str(client_id), [str(j) for j in body.job_ids])
+    return [LocalSeoJobStatus(**row) for row in rows]
 
 
 @router.post("/clients/{client_id}/local-seo/precheck")

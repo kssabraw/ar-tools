@@ -17,10 +17,11 @@ interface Props {
 // with a <RelatedPagesList selection={...}> (which renders the per-row
 // checkboxes). Shared by the Plan Silo and per-page Related Pages flows.
 export function BulkCreateBar({ items, bulk, location, locationCode, onViewSaved }: Props) {
-  const { selected, creating, progress, elapsed, done, failed, start, cancel, setSelection, clear } = bulk
+  const { selected, creating, detached, total, done, failed, start, leave, setSelection, clear } = bulk
   const missingKws = items.filter(r => r.status === 'missing').map(r => r.keyword)
   const allMissingSelected = missingKws.length > 0 && missingKws.every(kw => selected.has(kw))
   const selectedCount = selected.size
+  const finished = done + failed
 
   const handleCreate = () => {
     const queue = items
@@ -43,44 +44,42 @@ export function BulkCreateBar({ items, bulk, location, locationCode, onViewSaved
         </div>
       )}
 
-      {creating && progress ? (
+      {creating ? (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 12, background: '#f8fafc' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Spinner size={16} />
-            <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              Creating “{progress.currentKw}”…
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
+              Generating in the background…
             </span>
             <span style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b', flexShrink: 0 }}>
-              {progress.current} / {progress.total}{(() => {
-                if (progress.current <= 1 || elapsed <= 0) return ''
-                const avg = elapsed / (progress.current - 1)
-                const remaining = Math.round(avg * (progress.total - progress.current + 1))
-                if (remaining <= 0) return ''
-                return ` · ~${remaining >= 60 ? `${Math.round(remaining / 60)}m` : `${remaining}s`} left`
-              })()}
+              {finished} / {total} done{failed > 0 ? ` · ${failed} failed` : ''}
             </span>
           </div>
           <div style={{ display: 'flex', gap: 4 }}>
-            {Array.from({ length: progress.total }).map((_, idx) => (
+            {Array.from({ length: total }).map((_, idx) => (
               <div key={idx} style={{
                 height: 6, flex: 1, borderRadius: 999, transition: 'background 0.3s',
-                background: idx < progress.current - 1 ? '#16a34a' : idx === progress.current - 1 ? '#6366f1' : '#e2e8f0',
+                background: idx < done ? '#16a34a' : idx < finished ? '#dc2626' : '#e2e8f0',
               }} />
             ))}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12, color: '#64748b' }}>
-            <span>{done} done{failed > 0 ? ` · ${failed} failed` : ''}</span>
-            <button onClick={cancel} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#dc2626' }}>
-              Cancel
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, flex: 1 }}>
+              Each page is saved to Saved Pages as it finishes — you don’t need to wait here.
+            </p>
+            <button onClick={leave} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#6366f1', flexShrink: 0 }}>
+              Leave &amp; finish in the background
             </button>
           </div>
-          <p style={{ fontSize: 11, color: '#94a3b8', margin: 0 }}>
-            Keep this open — pages generate one at a time and each is saved as it finishes.
-          </p>
         </div>
       ) : (
         <>
-          {(done > 0 || failed > 0) && (
+          {detached && total > 0 && (
+            <p style={{ fontSize: 13, color: '#6366f1', fontWeight: 600, margin: 0 }}>
+              {total} page{total === 1 ? '' : 's'} generating in the background — they’ll appear in Saved Pages as they finish.
+            </p>
+          )}
+          {!detached && (done > 0 || failed > 0) && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {done > 0 && (
                 <p style={{ fontSize: 13, color: '#16a34a', fontWeight: 600, margin: 0 }}>
@@ -104,7 +103,7 @@ export function BulkCreateBar({ items, bulk, location, locationCode, onViewSaved
                 <Sparkles size={16} /> Create {selectedCount} selected page{selectedCount === 1 ? '' : 's'}
               </button>
               <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textAlign: 'center' }}>
-                Each page takes ~2–4 minutes. They’re created one at a time.
+                Each page takes ~2–4 minutes and runs in the background — you can leave once they start.
               </p>
             </div>
           )}

@@ -11,7 +11,9 @@ import { LocationAutocomplete } from '../components/localseo/LocationAutocomplet
 import type { AnalysisResult, ExistingMatch, LocalSeoPageDetail, LocalSeoPageListItem, PrecheckResult, RankabilityResult, RelatedPageItem } from '../components/localseo/types'
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
+import { BulkCreateBar } from '../components/localseo/BulkCreateBar'
 import { useSiloPlan } from '../components/localseo/useSiloPlan'
+import { useBulkCreate } from '../components/localseo/useBulkCreate'
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { ReoptimizeView } from '../components/localseo/ReoptimizeView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
@@ -102,16 +104,6 @@ export function LocalSeoContent() {
     return () => clearInterval(id)
   }, [planScanning])
 
-  // Bulk creation — generate the selected missing silo pages sequentially.
-  const [selectedForCreate, setSelectedForCreate] = useState<Set<string>>(new Set())
-  const [bulkCreating, setBulkCreating] = useState(false)
-  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number; currentKw: string } | null>(null)
-  const [bulkElapsed, setBulkElapsed] = useState(0)
-  const [bulkDone, setBulkDone] = useState(0)
-  const [bulkFailed, setBulkFailed] = useState(0)
-  const bulkTickRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const bulkCancelledRef = useRef(false)
-  const bulkAbortRef = useRef<AbortController | null>(null)
 
   // Creating-progress ticker. Generation runs as a background job; progress is
   // time-based and we poll the job for completion.
@@ -147,11 +139,10 @@ export function LocalSeoContent() {
     tickRef.current = setInterval(() => setElapsed(s => s + 1), 1000)
   }
   useEffect(() => () => stopTicker(), [])
-  // Stop the bulk timer, the generate poll, and abort any in-flight bulk generate
-  // if the page unmounts mid-run. The background generate job itself keeps running.
+  // Stop the single-generate poll if the page unmounts mid-run. The background
+  // job itself keeps running server-side. (Plan-silo bulk cleanup lives in the
+  // useBulkCreate hook.)
   useEffect(() => () => {
-    if (bulkTickRef.current) clearInterval(bulkTickRef.current)
-    bulkAbortRef.current?.abort()
     genCancelledRef.current = true
     if (genPollRef.current) clearTimeout(genPollRef.current)
   }, [])
@@ -160,6 +151,10 @@ export function LocalSeoContent() {
     queryClient.invalidateQueries({ queryKey: ['local-seo-pages', clientId] })
     queryClient.invalidateQueries({ queryKey: ['local-seo-drafts', clientId] })
   }
+
+  // Plan Silo bulk creation — background jobs via the shared hook (same flow as
+  // the per-page Related Pages tab); selection + progress live in the hook.
+  const planBulk = useBulkCreate(clientId, refreshSaved)
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -301,9 +296,7 @@ export function LocalSeoContent() {
 
   const handleScanSilo = () => {
     if (!keyword.trim() || !location.trim()) return
-    setSelectedForCreate(new Set())
-    setBulkDone(0)
-    setBulkFailed(0)
+    planBulk.reset()
     void siloPlan.run(keyword, location, locationCode)
   }
 
@@ -314,65 +307,6 @@ export function LocalSeoContent() {
       setKeyword(item.keyword)
       setView({ kind: 'score', pageUrl: item.url })
     }
-  }
-
-  const toggleSelect = (kw: string, checked: boolean) => setSelectedForCreate(prev => {
-    const next = new Set(prev)
-    if (checked) next.add(kw); else next.delete(kw)
-    return next
-  })
-
-  // Generate each selected missing page in turn via the existing generate flow
-  // (which saves server-side). Sequential by design: one long generation at a
-  // time keeps progress honest and isolates per-page failures. No new backend.
-  const handleBulkCreate = async () => {
-    const queue = (planResults ?? [])
-      .filter(r => r.status === 'missing' && selectedForCreate.has(r.keyword))
-      .map(r => r.keyword)
-    if (!queue.length || bulkCreating) return
-    bulkCancelledRef.current = false
-    bulkAbortRef.current = new AbortController()
-    setBulkCreating(true)
-    setBulkDone(0)
-    setBulkFailed(0)
-    setBulkElapsed(0)
-    if (bulkTickRef.current) clearInterval(bulkTickRef.current)
-    bulkTickRef.current = setInterval(() => setBulkElapsed(s => s + 1), 1000)
-
-    let done = 0
-    let failed = 0
-    for (let i = 0; i < queue.length; i++) {
-      if (bulkCancelledRef.current) break
-      setBulkProgress({ current: i + 1, total: queue.length, currentKw: queue[i] })
-      try {
-        await localSeoApi.generate(
-          clientId,
-          { keyword: queue[i], location: location.trim(), location_code: locationCode, force_refresh: false, page_template_url: null },
-          bulkAbortRef.current?.signal,
-        )
-        if (bulkCancelledRef.current) break
-        done++; setBulkDone(done)
-      } catch {
-        if (bulkCancelledRef.current) break
-        failed++; setBulkFailed(failed)
-      }
-    }
-
-    if (bulkTickRef.current) { clearInterval(bulkTickRef.current); bulkTickRef.current = null }
-    bulkAbortRef.current = null
-    setBulkCreating(false)
-    setBulkProgress(null)
-    // Drop the keywords we handled (kept the failed ones deselected too — they
-    // can be re-selected for a retry); refresh the Saved Pages list.
-    setSelectedForCreate(new Set())
-    refreshSaved()
-  }
-
-  const cancelBulk = () => {
-    bulkCancelledRef.current = true
-    bulkAbortRef.current?.abort()
-    bulkAbortRef.current = null
-    if (bulkTickRef.current) { clearInterval(bulkTickRef.current); bulkTickRef.current = null }
   }
 
   const handleSaveTemplateDefault = async () => {
@@ -551,7 +485,7 @@ export function LocalSeoContent() {
           {/* Service */}
           <div>
             <label style={label}>Seed service</label>
-            <input style={input} value={keyword} disabled={bulkCreating} onChange={e => { setKeyword(e.target.value); siloPlan.reset(); setSelectedForCreate(new Set()) }} placeholder="e.g. emergency plumber" />
+            <input style={input} value={keyword} disabled={planBulk.creating} onChange={e => { setKeyword(e.target.value); siloPlan.reset(); planBulk.reset() }} placeholder="e.g. emergency plumber" />
           </div>
 
           {/* Area */}
@@ -560,17 +494,17 @@ export function LocalSeoContent() {
             <LocationAutocomplete
               clientId={clientId}
               value={location}
-              onChange={(loc, code) => { setLocation(loc); setLocationCode(code); siloPlan.reset(); setSelectedForCreate(new Set()) }}
+              onChange={(loc, code) => { setLocation(loc); setLocationCode(code); siloPlan.reset(); planBulk.reset() }}
               placeholder="Start typing a city, e.g. Melbourne…"
-              disabled={bulkCreating}
+              disabled={planBulk.creating}
             />
           </div>
 
           {planError && <div style={errorBox}>{planError}</div>}
 
           <button
-            style={{ ...primaryBtn, width: '100%', opacity: (planScanning || bulkCreating || !keyword.trim() || !location.trim()) ? 0.5 : 1, cursor: (planScanning || bulkCreating || !keyword.trim() || !location.trim()) ? 'not-allowed' : 'pointer' }}
-            disabled={planScanning || bulkCreating || !keyword.trim() || !location.trim()}
+            style={{ ...primaryBtn, width: '100%', opacity: (planScanning || planBulk.creating || !keyword.trim() || !location.trim()) ? 0.5 : 1, cursor: (planScanning || planBulk.creating || !keyword.trim() || !location.trim()) ? 'not-allowed' : 'pointer' }}
+            disabled={planScanning || planBulk.creating || !keyword.trim() || !location.trim()}
             onClick={handleScanSilo}
           >
             {planScanning ? <Spinner size={16} /> : <Search size={16} />} {planScanning ? 'Planning silo…' : 'Plan silo'}
@@ -601,10 +535,8 @@ export function LocalSeoContent() {
           {!planScanning && planResults && planResults.length > 0 && (() => {
             const found = planResults.filter(r => r.status === 'found').length
             const onSite = planResults.filter(r => r.status === 'on_site').length
-            const missingKws = planResults.filter(r => r.status === 'missing').map(r => r.keyword)
+            const missingCount = planResults.filter(r => r.status === 'missing').length
             const siloCount = new Set(planResults.map(r => r.group)).size
-            const allMissingSelected = missingKws.length > 0 && missingKws.every(kw => selectedForCreate.has(kw))
-            const selectedCount = selectedForCreate.size
             return (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, color: '#64748b', flexWrap: 'wrap' }}>
@@ -613,97 +545,22 @@ export function LocalSeoContent() {
                   {onSite > 0 && (
                     <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#dbeafe', color: '#1e40af' }} title="Generic location pages already on the client's site">{onSite} on site</span>
                   )}
-                  <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#fef3c7', color: '#92400e' }}>{missingKws.length} missing</span>
-                  {missingKws.length > 0 && !bulkCreating && (
-                    <button
-                      onClick={() => setSelectedForCreate(allMissingSelected ? new Set() : new Set(missingKws))}
-                      style={{ marginLeft: 'auto', background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#6366f1' }}
-                    >
-                      {allMissingSelected ? 'Deselect all' : 'Select all missing'}
-                    </button>
-                  )}
+                  <span style={{ fontSize: 12, fontWeight: 600, padding: '1px 8px', borderRadius: 5, background: '#fef3c7', color: '#92400e' }}>{missingCount} missing</span>
                 </div>
-
-                {missingKws.length > 0 && (
-                  <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
-                    Tick the missing pages you want, then create them in one batch. Found pages can be reoptimized individually.
-                  </p>
-                )}
 
                 <RelatedPagesList
                   items={planResults}
                   onAction={handlePlanAction}
-                  selection={{ selected: selectedForCreate, onToggle: toggleSelect, disabled: bulkCreating }}
+                  selection={{ selected: planBulk.selected, onToggle: planBulk.toggle, disabled: planBulk.creating }}
                 />
 
-                {/* Bulk creation: action bar → progress → summary */}
-                {bulkCreating && bulkProgress ? (
-                  <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 12, background: '#f8fafc' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <Spinner size={16} />
-                      <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        Creating “{bulkProgress.currentKw}”…
-                      </span>
-                      <span style={{ marginLeft: 'auto', fontSize: 12, color: '#64748b', flexShrink: 0 }}>
-                        {bulkProgress.current} / {bulkProgress.total}{(() => {
-                          if (bulkProgress.current <= 1 || bulkElapsed <= 0) return ''
-                          const avg = bulkElapsed / (bulkProgress.current - 1)
-                          const remaining = Math.round(avg * (bulkProgress.total - bulkProgress.current + 1))
-                          if (remaining <= 0) return ''
-                          return ` · ~${remaining >= 60 ? `${Math.round(remaining / 60)}m` : `${remaining}s`} left`
-                        })()}
-                      </span>
-                    </div>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      {Array.from({ length: bulkProgress.total }).map((_, idx) => (
-                        <div key={idx} style={{
-                          height: 6, flex: 1, borderRadius: 999, transition: 'background 0.3s',
-                          background: idx < bulkProgress.current - 1 ? '#16a34a' : idx === bulkProgress.current - 1 ? '#6366f1' : '#e2e8f0',
-                        }} />
-                      ))}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, fontSize: 12, color: '#64748b' }}>
-                      <span>{bulkDone} done{bulkFailed > 0 ? ` · ${bulkFailed} failed` : ''}</span>
-                      <button onClick={cancelBulk} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#dc2626' }}>
-                        Cancel
-                      </button>
-                    </div>
-                    <p style={{ fontSize: 11, color: '#94a3b8', margin: 0 }}>
-                      Keep this tab open — pages generate one at a time and each is saved as it finishes.
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    {(bulkDone > 0 || bulkFailed > 0) && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {bulkDone > 0 && (
-                          <p style={{ fontSize: 13, color: '#16a34a', fontWeight: 600, margin: 0 }}>
-                            {bulkDone} page{bulkDone === 1 ? '' : 's'} created and saved — <button onClick={() => setTab('saved')} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: '#16a34a', fontWeight: 600, textDecoration: 'underline' }}>view in Saved Pages</button>.
-                          </p>
-                        )}
-                        {bulkFailed > 0 && (
-                          <p style={{ fontSize: 13, color: '#dc2626', fontWeight: 600, margin: 0 }}>
-                            {bulkFailed} page{bulkFailed === 1 ? '' : 's'} failed to generate. Re-select to retry.
-                          </p>
-                        )}
-                      </div>
-                    )}
-
-                    {selectedCount > 0 && (
-                      <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 12, background: '#f8fafc' }}>
-                        <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
-                          Competitor SERP analysis runs for every page so each one targets the right terms and entities.
-                        </p>
-                        <button style={{ ...primaryBtn, width: '100%' }} onClick={handleBulkCreate}>
-                          <Sparkles size={16} /> Create {selectedCount} selected page{selectedCount === 1 ? '' : 's'}
-                        </button>
-                        <p style={{ fontSize: 11, color: '#94a3b8', margin: 0, textAlign: 'center' }}>
-                          Each page takes ~2–4 minutes. They’re created one at a time.
-                        </p>
-                      </div>
-                    )}
-                  </>
-                )}
+                <BulkCreateBar
+                  items={planResults}
+                  bulk={planBulk}
+                  location={location}
+                  locationCode={locationCode}
+                  onViewSaved={() => setTab('saved')}
+                />
               </div>
             )
           })()}
