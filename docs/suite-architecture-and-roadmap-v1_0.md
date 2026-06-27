@@ -23,13 +23,14 @@ Not customer-facing. No billing, no signup. Internal team only. (Unchanged from 
 | 5 | Maps / local-pack ranker | Scheduled time-series + geo | **Built** (2026-06-23) | **Local Dominator** geo-grid (supersedes the DataForSEO-geo-grid plan — user decision) |
 | 6 | Ranking-drop agent | Intelligence over #4 + #5 | Build | Position **+ GSC clicks/impressions** |
 | 7 | Content scheduler (VA) | Workflow / automation | Build | Orchestrates #1 & #2 |
+| 8 | AI Visibility (Brand Strength) | Scheduled time-series + on-demand | **Built** (2026-06-27) — Path-B full port of `kssabraw/brand-strength-ai`; notifications deferred | **Six AI answer engines** — OpenAI (`gpt-5.4` + web search) / Anthropic / Gemini / Perplexity + Google AI Overview/Mode via **DataForSEO** |
 
 Plus a cross-cutting **Google Search Console analytics layer** (clicks / impressions / CTR / average position) that feeds modules 3, 4, and 6 and powers a per-client performance view.
 
 ### Module groupings (they behave differently)
 
 - **Group A — On-demand tools (1, 2, 3):** user provides input → tool runs → result. Migrations #2 and #3 are independent of the rankings work and can land in parallel any time.
-- **Group B — Scheduled trackers (4, 5):** recurring jobs collect time-series data. Depend on the shared scheduler + rankings data model.
+- **Group B — Scheduled trackers (4, 5, 8):** recurring jobs collect time-series data. Depend on the shared scheduler + rankings data model. #8 (AI Visibility) tracks brand presence in AI-assistant answers on the same shared `gsc_scheduler`.
 - **Group C — Intelligence & automation (6, 7):** ride on top of Groups A/B. The drop agent reasons over tracker data + SOPs; the content scheduler orchestrates Group A on a monthly cadence.
 
 ## 3. Decision log (locked)
@@ -42,7 +43,8 @@ These were decided with the user during scoping on 2026-05-29. Do not reverse wi
 | **GSC connection** | **Service account.** A Google Cloud service-account key in env (no interactive OAuth/token refresh). Per-client onboarding step: add the service account's email as a user on that client's Search Console property, and store the property/site URL on the `clients` row. |
 | **Rank data provider** | **DataForSEO** for organic SERP (already wired into the Blog Writer). **Maps/local-pack geo-grid (#5) uses Local Dominator** — `LOCAL_DOMINATOR_API_KEY` on PLATFORM; async `POST /v1/scans` → poll `GET /v1/scans/{uuid}`; per-pin Maps rank grid. This supersedes the original "DataForSEO geo-grid, no new SERP vendor" line for Module #5 (user decision, 2026-06-23). |
 | **Ranking-drop agent knowledge** | Build an **SOP store** (Supabase table + in-dashboard Markdown editor) the agent reasons over. SOPs are editable by the team without code changes. |
-| **Alerting** | **In-app alerts feed** (badges on client tiles) **+ email/Slack** push on a flagged drop. Adds a small outbound notification service. |
+| **Alerting** | **In-app alerts feed** (badges on client tiles) **+ email/Slack** push on a flagged drop. Adds a small outbound notification service. *AI Visibility (#8) is the first module that wants this feed (its scan-completion / invisibility / reputation alerts), currently deferred onto this service.* |
+| **AI Visibility (#8)** | **Built 2026-06-27** — Path-B full port of `kssabraw/brand-strength-ai` (a Lovable/Deno-edge-function + RLS app, re-implemented in the suite's Python/FastAPI stack; billing/credits/own-auth/snippet-encryption cut, re-anchored from `business_profiles` → `clients`). Six scan engines (OpenAI `chatgpt` via Responses API + `web_search`, Anthropic `claude`, `gemini`, `perplexity`, and Google `ai_overview`/`ai_mode` via DataForSEO); models config-tunable (`brand_*_model` in `config.py` — engine `gpt-5.4`, classifier `gpt-5.4-mini`, diagnose/suggest `gpt-5.4`, report narrative `claude-sonnet-4-6`). New env on PLATFORM: `PERPLEXITY_API_KEY` + `GEMINI_API_KEY`. Scheduling reuses the shared `gsc_scheduler`; reports publish to Drive (Google Doc) like the Maps report. **Notifications deferred** onto the Alerting service above (this module is its natural first consumer/seed). Authority: `docs/modules/brand-strength-module-integration-plan-v1_0.md`. |
 | **Content scheduler trigger** | **Generate + publish, no human approval gate.** On the target date the system generates the content and publishes it automatically. |
 | **Publish destination** | **Drive now, CMS-ready later.** "Publish" today = create a Google Doc in the client's Drive folder via the existing Apps Script webhook (`writer/platform-api/routers/publish.py`). Design the publish step so a live-to-CMS target (e.g. WordPress REST) can be added later without rework. **Live-to-site is explicitly out of scope for v1.** |
 | **Auth/roles** | Internal only. VAs are `team_member`s. No new auth surface beyond the GSC service account. |
