@@ -46,6 +46,67 @@ class LocalSeoGenerateJobResult(BaseModel):
     error: Optional[str] = None
 
 
+class LocalSeoBulkGenerateRequest(BaseModel):
+    """Enqueue background generation for several keywords at once (bulk-create)."""
+
+    keywords: list[str] = Field(..., min_length=1)
+    location: str = Field(..., min_length=1)
+    location_code: Optional[int] = None
+    page_template_url: Optional[str] = None
+    force_refresh: bool = False
+
+
+class LocalSeoBulkGenerateJob(BaseModel):
+    """Handles for an enqueued bulk generation."""
+
+    job_ids: list[UUID] = Field(default_factory=list)
+
+
+class LocalSeoReoptimizeTarget(BaseModel):
+    """One page to reoptimize in a bulk reoptimization run."""
+
+    page_url: str = Field(..., min_length=1)
+    keyword: str = ""
+    location: str = ""
+    location_code: Optional[int] = None
+
+
+class LocalSeoReoptimizeBulkRequest(BaseModel):
+    """Enqueue background reoptimization for several page URLs at once."""
+
+    targets: list[LocalSeoReoptimizeTarget] = Field(..., min_length=1)
+    score_threshold: Optional[float] = None
+    publish_to_doc: bool = False
+
+
+class LocalSeoReoptimizeJobHandle(BaseModel):
+    """One enqueued reoptimization job, paired with its page URL."""
+
+    job_id: UUID
+    page_url: str
+
+
+class LocalSeoReoptimizeBulkJob(BaseModel):
+    """Handles for an enqueued bulk reoptimization."""
+
+    jobs: list[LocalSeoReoptimizeJobHandle] = Field(default_factory=list)
+
+
+class LocalSeoJobsStatusRequest(BaseModel):
+    """Batch poll a set of background jobs."""
+
+    job_ids: list[UUID] = Field(default_factory=list)
+
+
+class LocalSeoJobStatus(BaseModel):
+    """One job's status (+ its result dict when complete)."""
+
+    job_id: UUID
+    status: str  # pending | running | complete | failed
+    result: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+
+
 class LocalSeoPrecheckRequest(BaseModel):
     """Detect existing/ranking pages for a keyword before writing a new page."""
 

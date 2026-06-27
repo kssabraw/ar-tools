@@ -26,14 +26,14 @@ interface Target {
   error?: string
 }
 
-// Per-target run state. 'pending' before it runs, 'running' while in flight,
-// then the resolved ReoptimizeUrlResult — or a failure / cancellation.
+// Per-target run state. 'pending'/'running' while the background job is in
+// flight, then the resolved ReoptimizeUrlResult — or a failure / detach.
 type RowState =
   | { phase: 'pending' }
   | { phase: 'running' }
   | { phase: 'done'; result: ReoptimizeUrlResult }
   | { phase: 'failed'; error: string }
-  | { phase: 'cancelled' }
+  | { phase: 'detached' }
 
 function normalizeUrl(u: string): string {
   const t = u.trim()
@@ -67,13 +67,15 @@ export function ReoptimizeView({ clientId, clientName, onOpenSaved }: Props) {
 
   const [error, setError] = useState('')
   const [running, setRunning] = useState(false)
+  const [detached, setDetached] = useState(false) // left while jobs still run
   // Keyed by target index → run state. Built when a run starts.
   const [rows, setRows] = useState<Array<{ target: Target; state: RowState }>>([])
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null)
 
-  const cancelledRef = useRef(false)
-  const abortRef = useRef<AbortController | null>(null)
-  useEffect(() => () => abortRef.current?.abort(), [])
+  const detachedRef = useRef(false)
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // On unmount, stop polling. The background jobs keep running server-side.
+  useEffect(() => () => { detachedRef.current = true; if (pollRef.current) clearTimeout(pollRef.current) }, [])
 
   // Parse a bulk textarea into dispatchable targets, applying the shared service
   // + area as the default for lines that don't override them.
@@ -128,54 +130,79 @@ export function ReoptimizeView({ clientId, clientName, onOpenSaved }: Props) {
     const valid = all.filter(t => !t.error)
     if (!valid.length || running) return
     setError('')
-    cancelledRef.current = false
-    abortRef.current = new AbortController()
+    detachedRef.current = false
+    setDetached(false)
     setRunning(true)
     setRows(valid.map(target => ({ target, state: { phase: 'pending' } as RowState })))
+    if (pollRef.current) clearTimeout(pollRef.current)
 
-    for (let i = 0; i < valid.length; i++) {
-      if (cancelledRef.current) break
-      setProgress({ current: i + 1, total: valid.length })
-      setRows(prev => prev.map((r, idx) => (idx === i ? { ...r, state: { phase: 'running' } } : r)))
-      try {
-        const result = await localSeoApi.reoptimizeUrl(
-          clientId,
-          {
-            page_url: valid[i].url,
-            keyword: valid[i].keyword,
-            location: valid[i].location,
-            location_code: valid[i].locationCode,
-            score_threshold: SCORE_THRESHOLD,
-            publish_to_doc: destination === 'doc',
-          },
-          abortRef.current?.signal,
-        )
-        if (cancelledRef.current) break
-        setRows(prev => prev.map((r, idx) => (idx === i ? { ...r, state: { phase: 'done', result } } : r)))
-      } catch (e) {
-        if (cancelledRef.current) break
-        const msg = e instanceof Error ? e.message : 'Reoptimization failed'
-        setRows(prev => prev.map((r, idx) => (idx === i ? { ...r, state: { phase: 'failed', error: msg } } : r)))
-      }
+    // Enqueue one background reoptimize job per target.
+    let handles: Array<{ job_id: string; page_url: string }> = []
+    try {
+      const res = await localSeoApi.reoptimizeBulk(clientId, {
+        targets: valid.map(t => ({
+          page_url: t.url, keyword: t.keyword, location: t.location, location_code: t.locationCode,
+        })),
+        score_threshold: SCORE_THRESHOLD,
+        publish_to_doc: destination === 'doc',
+      })
+      handles = res.jobs ?? []
+    } catch (e) {
+      setRunning(false)
+      setRows([])
+      setError(e instanceof Error ? e.message : 'Could not start reoptimization')
+      return
     }
+    if (detachedRef.current) return
+    if (!handles.length) { setRunning(false); return }
+    const jobIds = handles.map(h => h.job_id)
+    setProgress({ current: 0, total: jobIds.length })
 
-    abortRef.current = null
-    setRunning(false)
-    setProgress(null)
+    // Poll the jobs; map each back to its row (handles are in target order).
+    const poll = async () => {
+      if (detachedRef.current) return
+      try {
+        const statuses = await localSeoApi.jobsStatus(clientId, jobIds)
+        if (detachedRef.current) return
+        const byId = new Map(statuses.map(s => [s.job_id, s]))
+        setRows(prev => prev.map((r, idx) => {
+          const st = handles[idx] && byId.get(handles[idx].job_id)
+          if (!st) return r
+          if (st.status === 'complete' && st.result) {
+            return { ...r, state: { phase: 'done', result: st.result as unknown as ReoptimizeUrlResult } }
+          }
+          if (st.status === 'failed') {
+            return { ...r, state: { phase: 'failed', error: st.error || 'Reoptimization failed' } }
+          }
+          if (st.status === 'running') return { ...r, state: { phase: 'running' } }
+          return r
+        }))
+        const terminal = statuses.filter(s => s.status === 'complete' || s.status === 'failed').length
+        setProgress({ current: terminal, total: jobIds.length })
+        if (terminal >= jobIds.length) {
+          setRunning(false)
+          setProgress(null)
+          return
+        }
+      } catch {
+        // transient poll error — keep trying
+      }
+      pollRef.current = setTimeout(poll, 4000)
+    }
+    pollRef.current = setTimeout(poll, 4000)
   }
 
-  const cancel = () => {
-    cancelledRef.current = true
-    abortRef.current?.abort()
-    abortRef.current = null
+  // Leave without stopping the jobs — they finish server-side and the
+  // reoptimized pages land in Saved Pages.
+  const leave = () => {
+    detachedRef.current = true
+    if (pollRef.current) clearTimeout(pollRef.current)
     setRunning(false)
+    setDetached(true)
     setProgress(null)
-    // Resolve any still-open rows so they don't hang on a stuck spinner / "Queued".
-    // (The in-flight server task may still finish + save its page — that page shows
-    // up in Saved Pages; the row here just reflects that we stopped watching it.)
     setRows(prev => prev.map(r =>
       r.state.phase === 'running' || r.state.phase === 'pending'
-        ? { ...r, state: { phase: 'cancelled' } }
+        ? { ...r, state: { phase: 'detached' } }
         : r,
     ))
   }
@@ -307,10 +334,10 @@ export function ReoptimizeView({ clientId, clientName, onOpenSaved }: Props) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <Spinner size={16} />
             <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
-              Scoring &amp; reoptimizing… {progress ? `${progress.current} / ${progress.total}` : ''}
+              Scoring &amp; reoptimizing in the background… {progress ? `${progress.current} / ${progress.total} done` : ''}
             </span>
-            <button onClick={cancel} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#dc2626' }}>
-              Cancel
+            <button onClick={leave} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#6366f1' }}>
+              Leave &amp; finish in the background
             </button>
           </div>
           {progress && (
@@ -318,13 +345,13 @@ export function ReoptimizeView({ clientId, clientName, onOpenSaved }: Props) {
               {Array.from({ length: progress.total }).map((_, idx) => (
                 <div key={idx} style={{
                   height: 6, flex: 1, borderRadius: 999, transition: 'background 0.3s',
-                  background: idx < progress.current - 1 ? '#16a34a' : idx === progress.current - 1 ? '#6366f1' : '#e2e8f0',
+                  background: idx < progress.current ? '#16a34a' : '#e2e8f0',
                 }} />
               ))}
             </div>
           )}
           <p style={{ fontSize: 11, color: '#94a3b8', margin: 0 }}>
-            Each page is scored, then rewritten only if it scores below {SCORE_THRESHOLD}. This takes ~1–4 minutes per rewritten page — keep this tab open.
+            Each page is scored, then rewritten only if it scores below {SCORE_THRESHOLD}. This runs in the background — you can leave; reoptimized pages land in Saved Pages.
           </p>
         </div>
       )}
@@ -332,6 +359,11 @@ export function ReoptimizeView({ clientId, clientName, onOpenSaved }: Props) {
       {/* Results */}
       {rows.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {detached && (
+            <p style={{ fontSize: 13, color: '#6366f1', fontWeight: 600, margin: 0 }}>
+              Reoptimizing in the background — finished pages appear in Saved Pages. You can work on other clients.
+            </p>
+          )}
           {!running && reoptimizedCount > 0 && (
             <p style={{ fontSize: 13, color: '#16a34a', fontWeight: 600, margin: 0 }}>
               {reoptimizedCount} page{reoptimizedCount === 1 ? '' : 's'} reoptimized and saved — {' '}
@@ -389,9 +421,9 @@ function ResultRow({ target, state, onOpenSaved }: { target: Target; state: RowS
   } else if (state.phase === 'failed') {
     badge = <span style={chip('#fef2f2', '#dc2626')}><XCircle size={12} /> Failed</span>
     detail = <span style={{ fontSize: 12, color: '#dc2626' }}>{state.error}</span>
-  } else if (state.phase === 'cancelled') {
-    badge = <span style={chip('#f1f5f9', '#94a3b8')}>Cancelled</span>
-    detail = <span style={{ fontSize: 12, color: '#94a3b8' }}>Stopped before completing — any page that finished saving will appear in Saved Pages.</span>
+  } else if (state.phase === 'detached') {
+    badge = <span style={chip('#eef2ff', '#6366f1')}>In background</span>
+    detail = <span style={{ fontSize: 12, color: '#94a3b8' }}>Still finishing in the background — it’ll appear in Saved Pages when done.</span>
   } else {
     const r = state.result
     if (r.status === 'skipped') {

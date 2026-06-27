@@ -53,6 +53,37 @@ export const localSeoApi = {
       `/clients/${clientId}/local-seo/generate/${jobId}`,
     ),
 
+  // Bulk background generation — enqueue one job per keyword; poll jobsStatus.
+  generateBulk: (
+    clientId: string,
+    body: {
+      keywords: string[]
+      location: string
+      location_code?: number | null
+      force_refresh?: boolean
+      page_template_url?: string | null
+    },
+  ) => api.post<{ job_ids: string[] }>(`/clients/${clientId}/local-seo/generate-bulk`, body),
+
+  // Bulk background reoptimization — enqueue one job per page URL; poll jobsStatus.
+  reoptimizeBulk: (
+    clientId: string,
+    body: {
+      targets: Array<{ page_url: string; keyword?: string; location?: string; location_code?: number | null }>
+      score_threshold?: number | null
+      publish_to_doc?: boolean
+    },
+  ) => api.post<{ jobs: Array<{ job_id: string; page_url: string }> }>(
+    `/clients/${clientId}/local-seo/reoptimize-bulk`, body,
+  ),
+
+  // Batch-poll background jobs (generate / reoptimize). `result` is the job's
+  // result dict — {page_id} for generate, a ReoptimizeUrlResult for reoptimize.
+  jobsStatus: (clientId: string, jobIds: string[]) =>
+    api.post<Array<{ job_id: string; status: string; result?: Record<string, unknown> | null; error?: string | null }>>(
+      `/clients/${clientId}/local-seo/jobs/status`, { job_ids: jobIds },
+    ),
+
   // Pre-write existing-page detection (in-tool + live site + GSC/DataForSEO
   // ranking). The New Page flow runs this first and, when it returns matches,
   // offers reoptimize-vs-write-new before generating. SSE — the live scan + SERP

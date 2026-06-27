@@ -441,6 +441,137 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
     return {"status": row["status"], "page_id": result.get("page_id"), "error": row.get("error")}
 
 
+# ── bulk background generation / reoptimization (per-item async jobs) ─────────
+# Bulk flows enqueue ONE job per item (not one big batch job): the worker runs a
+# single job per tick, so per-item jobs interleave fairly with other clients'
+# jobs instead of one long batch monopolizing the worker. The UI enqueues the
+# set, polls get_jobs_status, and can leave at any time — the jobs keep running
+# server-side and the pages land in the client's pages.
+
+async def enqueue_generate_bulk(
+    client_id: str, keywords: list[str], location: str, location_code: Optional[int],
+    user_id: str, page_template_url: Optional[str] = None, force_refresh: bool = False,
+) -> list[str]:
+    """Enqueue one `local_seo_generate` job per keyword (area validated once up
+    front). Returns the job ids in input order."""
+    client = _get_client(client_id)
+    location, location_code = await locations_service.resolve_location(client, location, location_code)
+    template = (page_template_url or "").strip() or None
+    rows = [
+        {
+            "job_type": "local_seo_generate",
+            "entity_id": client_id,
+            "payload": {
+                "client_id": client_id,
+                "keyword": kw.strip(),
+                "location": location,
+                "location_code": location_code,
+                "user_id": user_id,
+                "page_template_url": template,
+                "force_refresh": bool(force_refresh),
+            },
+        }
+        for kw in keywords
+        if (kw or "").strip()
+    ]
+    if not rows:
+        return []
+    res = get_supabase().table("async_jobs").insert(rows).execute()
+    return [r["id"] for r in (res.data or [])]
+
+
+async def enqueue_reoptimize_bulk(
+    client_id: str, targets: list[dict], user_id: str,
+    score_threshold: Optional[float] = None, publish_to_doc: bool = False,
+) -> list[dict]:
+    """Enqueue one `local_seo_reoptimize_url` job per target. Each target is
+    ``{page_url, keyword, location, location_code}``; the area is resolved inside
+    the job (so a bad line fails its own row, not the batch). Returns
+    ``[{job_id, page_url}]`` in input order."""
+    _get_client(client_id)  # validate client exists
+    threshold = REOPT_SCORE_THRESHOLD if score_threshold is None else score_threshold
+    rows = []
+    for t in targets:
+        page_url = (t.get("page_url") or "").strip()
+        if not page_url:
+            continue
+        rows.append(
+            {
+                "job_type": "local_seo_reoptimize_url",
+                "entity_id": client_id,
+                "payload": {
+                    "client_id": client_id,
+                    "page_url": page_url,
+                    "keyword": (t.get("keyword") or "").strip(),
+                    "location": (t.get("location") or "").strip(),
+                    "location_code": t.get("location_code"),
+                    "user_id": user_id,
+                    "score_threshold": threshold,
+                    "publish_to_doc": bool(publish_to_doc),
+                },
+            }
+        )
+    if not rows:
+        return []
+    res = get_supabase().table("async_jobs").insert(rows).execute()
+    return [
+        {"job_id": r["id"], "page_url": rows[i]["payload"]["page_url"]}
+        for i, r in enumerate(res.data or [])
+    ]
+
+
+async def run_reoptimize_url_job(job: dict) -> None:
+    """async_jobs handler for job_type='local_seo_reoptimize_url'. Runs
+    reoptimize_url and stores its full result dict (status reoptimized/skipped +
+    scores) in the job result."""
+    payload = job.get("payload") or {}
+    job_id = job["id"]
+    supabase = get_supabase()
+    try:
+        result = await reoptimize_url(
+            client_id=payload["client_id"],
+            page_url=payload["page_url"],
+            keyword=payload["keyword"],
+            location=payload["location"],
+            location_code=payload.get("location_code"),
+            user_id=payload["user_id"],
+            score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
+            publish_to_doc=bool(payload.get("publish_to_doc")),
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": result, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.info("local_seo.reoptimize_job_complete", extra={"job_id": job_id})
+    except Exception as exc:  # noqa: BLE001 — record the failure for the poller
+        detail = getattr(exc, "detail", None) or str(exc)
+        logger.warning("local_seo.reoptimize_job_failed", extra={"job_id": job_id, "error": str(detail)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+
+def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
+    """Batch poll a set of jobs (scoped to the client). Returns
+    ``[{job_id, status, result, error}]`` for the jobs that belong to the client."""
+    if not job_ids:
+        return []
+    supabase = get_supabase()
+    res = (
+        supabase.table("async_jobs")
+        .select("id, status, result, error, entity_id")
+        .in_("id", job_ids)
+        .execute()
+    )
+    out = []
+    for row in res.data or []:
+        if row.get("entity_id") != client_id:
+            continue
+        out.append(
+            {"job_id": row["id"], "status": row["status"], "result": row.get("result"), "error": row.get("error")}
+        )
+    return out
+
+
 async def analyze(
     client_id: str, keyword: str, location: str, location_code: Optional[int], force_refresh: bool = False,
 ) -> dict:
