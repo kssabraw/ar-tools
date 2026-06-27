@@ -305,6 +305,21 @@ async def diagnose_mention(client_id: str, mention_id: str) -> dict:
     return {"diagnosis": diagnosis, "cached": False}
 
 
+def get_report_status(client_id: str, job_id: str) -> dict:
+    def _q():
+        res = (
+            get_supabase().table("async_jobs")
+            .select("status, result, error, entity_id, job_type")
+            .eq("id", job_id).limit(1).execute().data
+        )
+        if not res or res[0].get("entity_id") != client_id or res[0].get("job_type") != "brand_report":
+            raise HTTPException(status_code=404, detail="report_not_found")
+        row = res[0]
+        result = row.get("result") or {}
+        return {"status": row["status"], "doc_url": result.get("doc_url"), "error": row.get("error")}
+    return _safe(_q)
+
+
 async def suggest_keywords_for_client(client_id: str) -> dict:
     """Suggest keywords to track, using the client's name + GBP business context."""
     from services import brand_insights

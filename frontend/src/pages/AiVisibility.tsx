@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, Eye, RefreshCw, AlertTriangle, Plus, Trash2, Check, X, CalendarClock, Sparkles,
+  ArrowLeft, Eye, RefreshCw, AlertTriangle, Plus, Trash2, Check, X, CalendarClock, Sparkles, FileText,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
@@ -165,6 +165,22 @@ function Overview(props: {
   const [diagnose, setDiagnose] = useState<{ m: Mention; keyword: string } | null>(null)
   const keywordById = useMemo(() => new Map(keywords.map(k => [k.id, k.keyword])), [keywords])
 
+  const [reportJob, setReportJob] = useState<string | null>(null)
+  const reportMut = useMutation({
+    mutationFn: () => api.post<{ job_id: string }>(`/clients/${clientId}/brand/report`, {}),
+    onSuccess: (r) => setReportJob(r.job_id),
+  })
+  const { data: report } = useQuery<{ status: string; doc_url: string | null; error: string | null }>({
+    queryKey: ['brand-report-job', clientId, reportJob],
+    queryFn: () => api.get(`/clients/${clientId}/brand/report/${reportJob}`),
+    enabled: Boolean(reportJob),
+    refetchInterval: (q) => {
+      const s = q.state.data?.status
+      return s === 'complete' || s === 'failed' ? false : 3000
+    },
+  })
+  const reportRunning = Boolean(reportJob) && report?.status !== 'complete' && report?.status !== 'failed'
+
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18, flexWrap: 'wrap' }}>
@@ -182,9 +198,21 @@ function Overview(props: {
             Add keywords first — <button onClick={onManageKeywords} style={linkBtn}>manage keywords</button>
           </span>
         )}
+        {latestBatch !== null && (
+          <button style={{ ...miniBtn, marginLeft: 'auto' }} disabled={reportRunning} onClick={() => reportMut.mutate()}>
+            <FileText size={13} /> {reportRunning ? 'Generating…' : 'Generate report'}
+          </button>
+        )}
       </div>
 
       {runError && <Banner kind="error">{runError}</Banner>}
+      {report?.status === 'complete' && report.doc_url && (
+        <div style={{ ...card, marginBottom: 16, borderColor: '#bbf7d0', background: '#f0fdf4' }}>
+          <span style={{ fontSize: 13, color: '#166534' }}>Report ready — </span>
+          <a href={report.doc_url} target="_blank" rel="noreferrer" style={{ color: '#15803d', fontWeight: 600, fontSize: 13 }}>open the Google Doc</a>
+        </div>
+      )}
+      {report?.status === 'failed' && <Banner kind="error">Report failed: {report.error ?? 'unknown_error'}</Banner>}
       {latestBatch === null ? (
         <EmptyState title="No scans yet" body="Run a scan to see whether this brand appears in each AI engine's answers for your tracked keywords." />
       ) : (

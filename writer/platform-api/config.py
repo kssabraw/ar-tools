@@ -246,6 +246,9 @@ class Settings(BaseSettings):
     # tasks run on demand, not per-row, so flagship cost is fine).
     brand_diagnose_model: str = "gpt-5.4"
     brand_suggest_model: str = "gpt-5.4"
+    # Visibility report narrative (published as a Google Doc). Suite-default
+    # Claude, matching the Maps Local Rank Analysis report.
+    brand_report_model: str = "claude-sonnet-4-6"
     # Per keyword×engine attempt budget for transient errors (matches the source
     # app's 2 retries). Auth/quota/rate-limit errors are terminal (no retry).
     brand_scan_max_retries: int = 2

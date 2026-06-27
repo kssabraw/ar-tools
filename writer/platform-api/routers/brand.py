@@ -170,6 +170,17 @@ async def suggest_brand_keywords(client_id: UUID, auth: dict = Depends(require_a
     return await brand_service.suggest_keywords_for_client(str(client_id))
 
 
+@router.post("/clients/{client_id}/brand/report")
+async def start_brand_report(client_id: UUID, auth: dict = Depends(require_auth)):
+    from services.brand_report import enqueue_brand_report
+    return {"job_id": enqueue_brand_report(str(client_id))}
+
+
+@router.get("/clients/{client_id}/brand/report/{job_id}")
+async def get_brand_report_status(client_id: UUID, job_id: UUID, auth: dict = Depends(require_auth)):
+    return brand_service.get_report_status(str(client_id), str(job_id))
+
+
 # ── schedule ─────────────────────────────────────────────────────────────────
 @router.get("/clients/{client_id}/brand/schedule", response_model=BrandScheduleResponse)
 async def get_brand_schedule(client_id: UUID, auth: dict = Depends(require_auth)):
