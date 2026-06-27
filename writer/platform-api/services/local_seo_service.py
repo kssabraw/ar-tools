@@ -442,11 +442,15 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
 
 
 # ── bulk background generation / reoptimization (per-item async jobs) ─────────
-# Bulk flows enqueue ONE job per item (not one big batch job): the worker runs a
-# single job per tick, so per-item jobs interleave fairly with other clients'
-# jobs instead of one long batch monopolizing the worker. The UI enqueues the
-# set, polls get_jobs_status, and can leave at any time — the jobs keep running
-# server-side and the pages land in the client's pages.
+# Bulk flows enqueue ONE job per item (not one big batch job). The worker claims
+# the OLDEST pending job each tick and runs it to completion one at a time, so a
+# batch DOES occupy the worker until it drains (delaying other async jobs) — that
+# tradeoff is accepted for "leave & walk away". The reason for per-item rather
+# than one batch job is the stale-job reaper (`job_stale_timeout_minutes`, 30m):
+# each item stays well under it, whereas a single ~90-min batch job would be
+# reaped mid-run and requeued, re-generating the items it had already finished.
+# The UI enqueues the set, polls get_jobs_status, and can leave at any time — the
+# jobs keep running server-side and the pages land in the client's pages.
 
 async def enqueue_generate_bulk(
     client_id: str, keywords: list[str], location: str, location_code: Optional[int],
