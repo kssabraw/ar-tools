@@ -161,7 +161,7 @@ async def _execute_chatgpt(keyword: str, brand: str) -> tuple[str, list[str]]:
     try:
         resp = await client.responses.create(
             model=settings.brand_engine_chatgpt_model,
-            tools=[{"type": "web_search_preview"}],
+            tools=[{"type": settings.brand_chatgpt_web_search_tool}],
             input=_SCAN_PROMPT.format(keyword=keyword, brand=brand),
         )
     except openai.APIStatusError as exc:  # pragma: no cover - thin provider wrapper

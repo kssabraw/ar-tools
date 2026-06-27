@@ -235,6 +235,10 @@ class Settings(BaseSettings):
     # representative model (no suite default exists for them).
     brand_engine_claude_model: str = "claude-sonnet-4-6"
     brand_engine_chatgpt_model: str = "gpt-4.1"
+    # OpenAI Responses API web-search tool type. GA name is "web_search";
+    # tunable (like the Fanout client) so it can be flipped to
+    # "web_search_preview" without a code change if the account needs it.
+    brand_chatgpt_web_search_tool: str = "web_search"
     brand_engine_gemini_model: str = "gemini-2.0-flash"
     brand_engine_perplexity_model: str = "sonar"
     # Per keyword×engine attempt budget for transient errors (matches the source
