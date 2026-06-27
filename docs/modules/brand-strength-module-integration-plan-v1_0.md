@@ -1,6 +1,13 @@
 # Brand Strength (AI Visibility) Module — Integration & Implementation Plan (v1.0)
 
-**Authored:** 2026-06-26 · **Status:** plan approved (Path B — full port), **no code written yet** · **New suite module (AI Visibility tracker)**
+**Authored:** 2026-06-26 · **Status:** plan approved (Path B — full port); **Phase 0 in progress** · **New suite module — "AI Visibility"**
+
+> **Decisions resolved (2026-06-27)** — see §6 for the original open items.
+> 1. **Engines:** ship **all six** in v1 (requires `PERPLEXITY_API_KEY` + `GEMINI_API_KEY` to be provisioned before Phase 1 live-testing).
+> 2. **Models:** use **suite defaults** — auxiliary LLM calls (mention classifier, invisibility diagnosis, keyword suggestions) move from the source's `gpt-4o-mini`/etc. to the suite default `claude-sonnet-4-6`. *Note:* the scan **engines** measure their own surface and can't be cross-provider'd — the `claude` engine uses `claude-sonnet-4-6`; `chatgpt`/`gemini`/`perplexity` keep their provider's current representative model (config-tunable, set in Phase 1).
+> 3. **Placement/name:** its **own** client-workspace card + dashboard tile, labeled **"AI Visibility"** (internal code/table prefix: `brand_`).
+> 4. **Notifications:** **deferred** (the schema decision was skipped). Phase 0 does **not** create the notification tables; revisit at Phase 5.
+> 5. **Schema home (refinement):** tables go in the **`public` schema with a `brand_` prefix**, *not* a dedicated `brand` schema. This matches the Local SEO port (`local_seo_pages`) and reuses the suite's public-scoped service-role client unchanged — the `fanout` schema only exists because fanout was vendored with its own schema-scoped client. (Supersedes the "`brand` schema" wording below.)
 
 > Read alongside **`docs/suite-architecture-and-roadmap-v1_0.md`** (decision log + shared infrastructure) and the source app at **`kssabraw/brand-strength-ai`** (cloned locally during planning). This document records the agreed scope and phasing for folding the standalone **brand-strength-ai** app into AR Tools as an in-suite module, following the same template as `local-seo-module-integration-plan-v1_0.md`.
 
