@@ -22,8 +22,10 @@ from models.brand import (
     BrandScanRequest,
     BrandScanStartResponse,
     BrandScanStatusResponse,
+    BrandScheduleResponse,
+    BrandScheduleUpdateRequest,
 )
-from services import brand_service
+from services import brand_schedule, brand_service
 
 router = APIRouter(tags=["brand"])
 
@@ -151,3 +153,21 @@ async def get_brand_scan_results(
 @router.get("/clients/{client_id}/brand/trends")
 async def get_brand_trends(client_id: UUID, auth: dict = Depends(require_auth)):
     return brand_service.get_trends(str(client_id))
+
+
+# ── schedule ─────────────────────────────────────────────────────────────────
+@router.get("/clients/{client_id}/brand/schedule", response_model=BrandScheduleResponse)
+async def get_brand_schedule(client_id: UUID, auth: dict = Depends(require_auth)):
+    return brand_schedule.get_schedule(str(client_id))
+
+
+@router.put("/clients/{client_id}/brand/schedule", response_model=BrandScheduleResponse)
+async def set_brand_schedule(
+    client_id: UUID,
+    body: BrandScheduleUpdateRequest,
+    auth: dict = Depends(require_auth),
+):
+    return brand_schedule.upsert_schedule(
+        str(client_id), body.cadence, body.day_of_week, body.day_of_month,
+        body.hour_utc, body.selected_engines, body.include_competitors, body.is_active,
+    )

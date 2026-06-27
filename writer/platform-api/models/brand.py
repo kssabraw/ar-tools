@@ -64,6 +64,29 @@ class BrandScanStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+# ── schedule ─────────────────────────────────────────────────────────────────
+class BrandScheduleUpdateRequest(BaseModel):
+    cadence: str = "weekly"  # weekly | monthly | disabled
+    day_of_week: Optional[int] = Field(default=None, ge=0, le=6)   # Monday=0 … Sunday=6
+    day_of_month: Optional[int] = Field(default=None, ge=1, le=28)
+    hour_utc: int = Field(default=9, ge=0, le=23)
+    selected_engines: Optional[list[str]] = None
+    include_competitors: bool = False
+    is_active: bool = True
+
+
+class BrandScheduleResponse(BaseModel):
+    cadence: str
+    day_of_week: Optional[int] = None
+    day_of_month: Optional[int] = None
+    hour_utc: int
+    selected_engines: list[str] = Field(default_factory=list)
+    include_competitors: bool = False
+    is_active: bool = False
+    next_run_at: Optional[str] = None
+    last_run_at: Optional[str] = None
+
+
 # ── history / trends ─────────────────────────────────────────────────────────
 class BrandMentionResponse(BaseModel):
     id: str

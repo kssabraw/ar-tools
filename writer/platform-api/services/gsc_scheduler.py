@@ -204,6 +204,7 @@ async def gsc_scheduler() -> None:
     """Background loop: daily GSC ingest enqueue + per-client-scheduled DataForSEO
     rank enqueue (evaluated daily) + weekly Maps geo-grid scans, and a per-tick
     poll of in-flight Maps scans."""
+    from services.brand_schedule import enqueue_due_brand_scans
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
 
     interval = settings.gsc_scheduler_poll_interval_seconds
@@ -240,5 +241,8 @@ async def gsc_scheduler() -> None:
                 last_maps_date = now.date()
             # Advance any in-flight Maps scans every tick (non-blocking GETs).
             await poll_pending_maps_scans()
+            # AI Visibility scheduled scans are self-clocked via each schedule's
+            # next_run_at, so they're evaluated every tick (cheap due-query).
+            enqueue_due_brand_scans()
         except Exception as exc:
             logger.error("gsc_scheduler.unhandled", extra={"error": str(exc)})
