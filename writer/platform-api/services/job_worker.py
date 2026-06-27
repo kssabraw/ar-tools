@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from config import settings
 from db.supabase_client import get_supabase
+from services.brand_scan import run_brand_scan_job
 from services.dataforseo_rank import run_dataforseo_rank_job
 from services.gsc_ingest import run_gsc_ingest_job, run_gsc_page_ingest_job
 from services.gsc_research import run_gsc_research_job
@@ -297,6 +298,8 @@ async def _process_job(job: dict) -> None:
         await run_service_plan_job(job)
     elif job_type == "rank_location_derive":
         await run_rank_location_derive_job(job)
+    elif job_type == "brand_scan":
+        await run_brand_scan_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 
