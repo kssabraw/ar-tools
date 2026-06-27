@@ -155,6 +155,21 @@ async def get_brand_trends(client_id: UUID, auth: dict = Depends(require_auth)):
     return brand_service.get_trends(str(client_id))
 
 
+# ── insights ─────────────────────────────────────────────────────────────────
+@router.post("/clients/{client_id}/brand/mentions/{mention_id}/diagnose")
+async def diagnose_brand_mention(
+    client_id: UUID,
+    mention_id: UUID,
+    auth: dict = Depends(require_auth),
+):
+    return await brand_service.diagnose_mention(str(client_id), str(mention_id))
+
+
+@router.post("/clients/{client_id}/brand/suggest-keywords")
+async def suggest_brand_keywords(client_id: UUID, auth: dict = Depends(require_auth)):
+    return await brand_service.suggest_keywords_for_client(str(client_id))
+
+
 # ── schedule ─────────────────────────────────────────────────────────────────
 @router.get("/clients/{client_id}/brand/schedule", response_model=BrandScheduleResponse)
 async def get_brand_schedule(client_id: UUID, auth: dict = Depends(require_auth)):

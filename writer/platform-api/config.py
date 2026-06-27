@@ -241,6 +241,11 @@ class Settings(BaseSettings):
     brand_chatgpt_web_search_tool: str = "web_search"
     brand_engine_gemini_model: str = "gemini-2.0-flash"
     brand_engine_perplexity_model: str = "sonar"
+    # Auxiliary OpenAI features: invisibility diagnosis + keyword suggestions.
+    # Use the latest OpenAI flagship (these are quality reasoning/generation
+    # tasks run on demand, not per-row, so flagship cost is fine).
+    brand_diagnose_model: str = "gpt-5.4"
+    brand_suggest_model: str = "gpt-5.4"
     # Per keyword×engine attempt budget for transient errors (matches the source
     # app's 2 retries). Auth/quota/rate-limit errors are terminal (no retry).
     brand_scan_max_retries: int = 2

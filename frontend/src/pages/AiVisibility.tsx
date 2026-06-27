@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, Eye, RefreshCw, AlertTriangle, Plus, Trash2, Check, X, CalendarClock,
+  ArrowLeft, Eye, RefreshCw, AlertTriangle, Plus, Trash2, Check, X, CalendarClock, Sparkles,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
@@ -130,6 +130,7 @@ export function AiVisibility() {
 
       {tab === 'overview' && (
         <Overview
+          clientId={clientId!}
           activeCount={activeKeywords.length}
           keywords={keywords}
           latestByCell={latestByCell}
@@ -153,14 +154,16 @@ export function AiVisibility() {
 
 // ── Overview ─────────────────────────────────────────────────────────────────
 function Overview(props: {
-  activeCount: number; keywords: Keyword[]; latestByCell: Map<string, Mention>
+  clientId: string; activeCount: number; keywords: Keyword[]; latestByCell: Map<string, Mention>
   latestBatch: TrendBatch | null; trends: TrendBatch[]; running: boolean
   jobStatus: ScanStatus | undefined; includeCompetitors: boolean
   setIncludeCompetitors: (v: boolean) => void; onRun: () => void
   runError: string | null; onManageKeywords: () => void
 }) {
-  const { activeCount, keywords, latestByCell, latestBatch, trends, running, jobStatus, includeCompetitors, setIncludeCompetitors, onRun, runError, onManageKeywords } = props
+  const { clientId, activeCount, keywords, latestByCell, latestBatch, trends, running, jobStatus, includeCompetitors, setIncludeCompetitors, onRun, runError, onManageKeywords } = props
   const activeKeywords = keywords.filter(k => k.is_active)
+  const [diagnose, setDiagnose] = useState<{ m: Mention; keyword: string } | null>(null)
+  const keywordById = useMemo(() => new Map(keywords.map(k => [k.id, k.keyword])), [keywords])
 
   return (
     <div>
@@ -217,14 +220,50 @@ function Overview(props: {
                 {activeKeywords.map((k, i) => (
                   <tr key={k.id} style={i % 2 ? rowAlt : undefined}>
                     <Td><strong>{k.keyword}</strong></Td>
-                    {ENGINE_ORDER.map(e => <MentionCell key={e} m={latestByCell.get(`${k.id}::${e}`)} />)}
+                    {ENGINE_ORDER.map(e => (
+                      <MentionCell
+                        key={e}
+                        m={latestByCell.get(`${k.id}::${e}`)}
+                        onDiagnose={(m) => setDiagnose({ m, keyword: keywordById.get(k.id) ?? k.keyword })}
+                      />
+                    ))}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 10 }}>
+            Tip: click a <X size={11} color="#dc2626" style={{ verticalAlign: 'middle' }} /> cell to diagnose why the brand is invisible there.
+          </p>
         </>
       )}
+      {diagnose && (
+        <DiagnoseModal clientId={clientId} mention={diagnose.m} keyword={diagnose.keyword} onClose={() => setDiagnose(null)} />
+      )}
+    </div>
+  )
+}
+
+function DiagnoseModal({ clientId, mention, keyword, onClose }: { clientId: string; mention: Mention; keyword: string; onClose: () => void }) {
+  const { data, isLoading, isError, error } = useQuery<{ diagnosis: string }>({
+    queryKey: ['brand-diagnose', clientId, mention.id],
+    queryFn: () => api.post<{ diagnosis: string }>(`/clients/${clientId}/brand/mentions/${mention.id}/diagnose`, {}),
+    retry: false,
+  })
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={modal} onClick={e => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+          <strong style={{ fontSize: 15, color: '#0f172a' }}>
+            Why invisible · {ENGINE_LABELS[mention.engine] ?? mention.engine}
+          </strong>
+          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }} onClick={onClose}><X size={18} /></button>
+        </div>
+        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>“{keyword}”</div>
+        {isLoading && <div style={{ fontSize: 13, color: '#64748b' }}>Analyzing the competitors that did appear…</div>}
+        {isError && <Banner kind="error">{(error as Error).message}</Banner>}
+        {data && <div style={{ fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{data.diagnosis}</div>}
+      </div>
     </div>
   )
 }
@@ -239,16 +278,26 @@ function EngineStat({ label, pct, highlight }: { label: string; pct: number | nu
   )
 }
 
-function MentionCell({ m }: { m: Mention | undefined }) {
+function MentionCell({ m, onDiagnose }: { m: Mention | undefined; onDiagnose?: (m: Mention) => void }) {
   let content: React.ReactNode = <span style={{ color: '#cbd5e1' }}>—</span>
   let title = 'Not scanned'
+  let notFound = false
   if (m) {
     if (m.status === 'failed') { content = <span style={{ color: '#cbd5e1' }}>—</span>; title = m.failure_reason ?? 'failed' }
     else if (m.status === 'queued' || m.status === 'processing') { content = <span style={{ color: '#94a3b8' }}>…</span>; title = m.status }
     else if (m.mention_found) { content = <Check size={16} color="#15803d" />; title = `Found (${m.mention_type ?? 'direct'})` }
-    else { content = <X size={15} color="#dc2626" />; title = 'Not found' }
+    else { content = <X size={15} color="#dc2626" />; title = 'Not found — click to diagnose'; notFound = true }
   }
-  return <td style={{ textAlign: 'center', padding: '8px 12px', borderBottom: '1px solid #f1f5f9' }} title={title}>{content}</td>
+  const clickable = notFound && onDiagnose && m
+  return (
+    <td
+      style={{ textAlign: 'center', padding: '8px 12px', borderBottom: '1px solid #f1f5f9', cursor: clickable ? 'pointer' : 'default' }}
+      title={title}
+      onClick={clickable ? () => onDiagnose!(m!) : undefined}
+    >
+      {content}
+    </td>
+  )
 }
 
 function TrendLine({ points }: { points: number[] }) {
@@ -270,14 +319,43 @@ function TrendLine({ points }: { points: number[] }) {
 function Keywords({ clientId, keywords }: { clientId: string; keywords: Keyword[] }) {
   const qc = useQueryClient()
   const [text, setText] = useState('')
+  const [suggested, setSuggested] = useState<string[] | null>(null)
   const invalidate = () => qc.invalidateQueries({ queryKey: ['brand-keywords', clientId] })
   const addMut = useMutation({ mutationFn: (keyword: string) => api.post(`/clients/${clientId}/brand/keywords`, { keyword }), onSuccess: () => { setText(''); invalidate() } })
   const toggleMut = useMutation({ mutationFn: (k: Keyword) => api.patch(`/clients/${clientId}/brand/keywords/${k.id}`, { is_active: !k.is_active }), onSuccess: invalidate })
   const delMut = useMutation({ mutationFn: (id: string) => api.delete(`/clients/${clientId}/brand/keywords/${id}`), onSuccess: invalidate })
+  const suggestMut = useMutation({
+    mutationFn: () => api.post<{ keywords: string[] }>(`/clients/${clientId}/brand/suggest-keywords`, {}),
+    onSuccess: (r) => setSuggested(r.keywords),
+  })
+  const existing = new Set(keywords.map(k => k.keyword.toLowerCase()))
+  const addSuggestion = async (kw: string) => { await addMut.mutateAsync(kw); setSuggested(s => (s ? s.filter(x => x !== kw) : s)) }
 
   return (
     <div>
       <AddRow placeholder="Add a keyword (e.g. emergency plumber sydney)" value={text} setValue={setText} onAdd={() => text.trim() && addMut.mutate(text.trim())} pending={addMut.isPending} />
+      <div style={{ marginBottom: 16, marginTop: -6 }}>
+        <button style={miniBtn} disabled={suggestMut.isPending} onClick={() => suggestMut.mutate()}>
+          <Sparkles size={13} /> {suggestMut.isPending ? 'Thinking…' : 'Suggest keywords'}
+        </button>
+      </div>
+      {suggestMut.isError && <Banner kind="error">{(suggestMut.error as Error).message}</Banner>}
+      {suggested && suggested.length > 0 && (
+        <div style={{ ...card, marginBottom: 16 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 8 }}>Suggested for this client — click to add</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {suggested.map(kw => {
+              const dupe = existing.has(kw.toLowerCase())
+              return (
+                <button key={kw} disabled={dupe || addMut.isPending} onClick={() => addSuggestion(kw)}
+                  style={{ ...chip, opacity: dupe ? 0.45 : 1, cursor: dupe ? 'default' : 'pointer' }}>
+                  {dupe ? <Check size={12} /> : <Plus size={12} />} {kw}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
       {addMut.isError && <Banner kind="error">{(addMut.error as Error).message}</Banner>}
       {keywords.length === 0 ? (
         <EmptyState title="No keywords yet" body="Add the search queries you want to check this brand's AI visibility for." />
@@ -476,3 +554,6 @@ const rowAlt: React.CSSProperties = { background: '#fafbfc' }
 const card: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 16 }
 const badgeOn: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#15803d', background: '#dcfce7', borderRadius: 999, padding: '2px 8px' }
 const badgeOff: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#64748b', background: '#f1f5f9', borderRadius: 999, padding: '2px 8px' }
+const chip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, background: '#f8fafc', color: '#334155', border: '1px solid #e2e8f0', borderRadius: 999, padding: '5px 12px', fontSize: 12, fontWeight: 600 }
+const overlay: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, zIndex: 50 }
+const modal: React.CSSProperties = { background: '#fff', borderRadius: 14, padding: 22, maxWidth: 560, width: '100%', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 10px 40px rgba(15,23,42,0.2)' }

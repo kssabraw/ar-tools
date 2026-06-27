@@ -263,3 +263,66 @@ def compute_trends(rows: list[dict]) -> list[dict]:
 def get_trends(client_id: str, limit: int = 2000) -> list[dict]:
     rows = list_history(client_id, limit=limit)
     return compute_trends(rows)
+
+
+# ── insights (diagnose / suggest) ────────────────────────────────────────────
+async def diagnose_mention(client_id: str, mention_id: str) -> dict:
+    """Explain why the brand was invisible for a given not-found scan result.
+    Caches the diagnosis on the row so re-asking is free."""
+    from services import brand_insights
+
+    supabase = get_supabase()
+    rows = (
+        supabase.table("brand_mention_history")
+        .select("id, client_id, keyword_id, status, mention_found, scanned_brand_name, "
+                "raw_response, invisibility_diagnosis")
+        .eq("id", mention_id).limit(1).execute().data
+    )
+    if not rows or rows[0].get("client_id") != client_id:
+        raise HTTPException(status_code=404, detail="mention_not_found")
+    row = rows[0]
+    if row.get("invisibility_diagnosis"):
+        return {"diagnosis": row["invisibility_diagnosis"], "cached": True}
+    if row.get("status") != "completed" or row.get("mention_found"):
+        raise HTTPException(status_code=400, detail="diagnosis_only_for_not_found")
+
+    brand = row.get("scanned_brand_name") or ""
+    keyword = ""
+    if row.get("keyword_id"):
+        kw = (
+            supabase.table("brand_tracked_keywords").select("keyword")
+            .eq("id", row["keyword_id"]).limit(1).execute().data
+        )
+        keyword = kw[0]["keyword"] if kw else ""
+    try:
+        diagnosis = await brand_insights.diagnose_invisibility(brand, keyword, row.get("raw_response") or "")
+    except brand_insights.InsightUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+    supabase.table("brand_mention_history").update(
+        {"invisibility_diagnosis": diagnosis, "updated_at": "now()"}
+    ).eq("id", mention_id).execute()
+    return {"diagnosis": diagnosis, "cached": False}
+
+
+async def suggest_keywords_for_client(client_id: str) -> dict:
+    """Suggest keywords to track, using the client's name + GBP business context."""
+    from services import brand_insights
+
+    supabase = get_supabase()
+    rows = (
+        supabase.table("clients").select("name, website_url, gbp")
+        .eq("id", client_id).limit(1).execute().data
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    client = rows[0]
+    gbp = client.get("gbp") or {}
+    brand = client.get("name") or ""
+    business_types = [t for t in [gbp.get("gbp_category")] if t]
+    address = gbp.get("address") or gbp.get("formatted_address")
+    try:
+        keywords = await brand_insights.suggest_keywords(brand, business_types, address)
+    except brand_insights.InsightUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"keywords": keywords}
