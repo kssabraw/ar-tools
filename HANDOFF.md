@@ -1,6 +1,35 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **Topical focus (specialist vs generalist)** (latest)
+## ⏩ Update — 2026-06-28 · **Rankability capture cadence (cost control)** (latest)
+
+Replaced the blanket **weekly** SERP-snapshot auto-capture with an event-driven
+model (the snapshot is the cost; rankability reads it for free). On a **new
+branch off main** (`claude/rankability-capture-cadence`) after #156 merged — new
+draft PR.
+
+- **Weekly auto-capture OFF** by default (`serp_snapshot_auto_weekly=False`; the
+  weekly enqueue in `gsc_scheduler` is gated behind it). Flip to restore dense
+  SERP-trend history.
+- **First-entry opt-in:** after keywords are added (typed/CSV/suggestion), a
+  banner offers "Run rankability" → captures snapshots for just those keywords
+  (`RankKeywords.tsx`).
+- **Drop-triggered (≤1/mo):** when any `rank_alerts` rule newly opens (all four,
+  incl. deindexed), `rank_materialize` calls
+  `serp_snapshot.enqueue_drop_triggered_snapshots`, which captures only keywords
+  with **no snapshot in the last 30 days** (`serp_snapshot_drop_min_days`) — so a
+  flapping ranking can't re-capture. `reconcile_alerts` now returns
+  `opened_keyword_ids`.
+- **Manual:** the per-keyword camera + Rankability tab stay ungated.
+
+**Trade-off (accepted):** SERP Trends/timelines now only have points at those
+events (sparser). **Config-only, no migration.**
+
+**Verified:** import main + **566 tests** on pinned fastapi==0.115.0/pydantic==2.9.2
+(2 new gate cases); ruff clean; frontend build clean.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Topical focus (specialist vs generalist)**
 
 Added a **topical-specialization** signal to the SERP snapshot + rankability: a
 niche site dedicated to the keyword's topic can out-rank generalist incumbents

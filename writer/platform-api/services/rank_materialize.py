@@ -258,9 +258,15 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
     if to_inspect and prop_row:
         _confirm_deindex(supabase, prop_row, to_inspect)
 
-    # Open/resolve in-app rank-drop alerts from this run's signals.
+    # Open/resolve in-app rank-drop alerts from this run's signals, then trigger a
+    # rate-limited rankability snapshot for any keyword that newly dropped.
     try:
-        rank_alerts.reconcile_alerts(supabase, client_id, alert_inputs, today)
+        result = rank_alerts.reconcile_alerts(supabase, client_id, alert_inputs, today)
+        opened_ids = result.get("opened_keyword_ids") or []
+        if opened_ids:
+            from services import serp_snapshot
+
+            serp_snapshot.enqueue_drop_triggered_snapshots(client_id, opened_ids, today)
     except Exception as exc:
         logger.warning("rank_alerts_reconcile_failed", extra={"client_id": client_id, "error": str(exc)})
 

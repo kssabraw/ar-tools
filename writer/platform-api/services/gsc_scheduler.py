@@ -233,7 +233,11 @@ async def gsc_scheduler() -> None:
             # not the per-client tracked rank).
             if now.weekday() == weekday and should_run(now, last_df_date, hour):
                 enqueue_due_page_ingest()
-                enqueue_due_serp_snapshots()
+                # SERP snapshots are now captured on keyword first-entry, on a
+                # detected rank drop (≤1/mo), and on-demand — not weekly — unless
+                # serp_snapshot_auto_weekly is re-enabled (cost vs trend density).
+                if settings.serp_snapshot_auto_weekly:
+                    enqueue_due_serp_snapshots()
                 last_df_date = now.date()
             # Weekly Maps geo-grid scans (Module #5) on their own weekday.
             if now.weekday() == maps_weekday and should_run(now, last_maps_date, hour):
