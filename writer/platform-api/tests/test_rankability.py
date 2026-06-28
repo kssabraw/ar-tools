@@ -95,6 +95,31 @@ def test_rankability_scores_without_topical_data():
     assert out["band"] in ("Easy", "Moderate", "Hard", "Very hard")
 
 
+def test_missing_authority_data_does_not_inflate():
+    # Every competitor backlinks lookup failed (None) → we must NOT read that as a
+    # weak SERP. Weakness/capability are dropped; the tightly-targeted incumbents
+    # keep the score honest (not the old inflated 'Moderate').
+    out = rankability.score_keyword(_inp(
+        top_ur=[None, None, None], top_rd=[None, None, None], competitor_dr=[None, None, None],
+        targeted_count=10, top_count=10,
+        client_ur=None, client_rd=None, client_dr=None,
+    ))
+    assert out["score"] <= 45
+    assert not any("authority" in f["text"] for f in out["factors"])  # no fabricated authority claim
+
+
+def test_insufficient_data_returns_none():
+    # No authority, no topical, no organic to assess → unscored, not a fake number.
+    out = rankability.score_keyword({
+        "top_ur": [], "top_rd": [], "competitor_dr": [],
+        "targeted_count": 0, "top_count": 0,
+        "client_ur": None, "client_rd": None, "client_dr": None,
+        "aio_present": False, "signals": [],
+        "generalist_count": None, "client_topical_focus": None, "client_rank": None,
+    })
+    assert out["score"] is None and out["band"] is None
+
+
 def test_median_robust_to_single_outlier():
     # One giant brand shouldn't tank an otherwise-weak SERP (median, not mean).
     out = rankability.score_keyword(_inp(

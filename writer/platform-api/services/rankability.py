@@ -93,11 +93,14 @@ def score_keyword(inp: dict) -> dict:
     client_rd / client_dr, aio_present, signals (list), client_rank.
     """
     top_count = inp.get("top_count") or 0
-    incumbent = _authority(
-        _median(inp.get("top_rd") or []),
-        _median(inp.get("top_ur") or []),
-        _median(inp.get("competitor_dr") or []),
-    )
+    m_rd = _median(inp.get("top_rd") or [])
+    m_ur = _median(inp.get("top_ur") or [])
+    m_dr = _median(inp.get("competitor_dr") or [])
+    # Distinguish "no incumbent authority data" (e.g. every backlinks lookup failed
+    # on a partial snapshot) from "genuinely zero authority". Without the gate,
+    # missing data reads as a maximally-weak SERP and inflates the score.
+    incumbent_available = any(x is not None for x in (m_rd, m_ur, m_dr))
+    incumbent = _authority(m_rd, m_ur, m_dr)
     client = _authority(inp.get("client_rd"), inp.get("client_ur"), inp.get("client_dr"))
 
     # 1) Competition weakness.
@@ -133,14 +136,20 @@ def score_keyword(inp: dict) -> dict:
     elif focus == "generalist":
         topical = topical * 0.7  # we're also a generalist — less of an edge
 
-    # Weighted blend over available sub-scores (weights renormalized).
+    # Weighted blend over available sub-scores (weights renormalized). Weakness +
+    # capability are both relative to incumbent authority — drop them when we have
+    # no authority data rather than scoring off a fabricated zero.
     parts = [
-        (weakness, _W_WEAKNESS, True),
-        (capability, _W_CAPABILITY, True),
+        (weakness, _W_WEAKNESS, incumbent_available),
+        (capability, _W_CAPABILITY, incumbent_available),
         (targeting, _W_TARGETING, top_count > 0),
         (opportunity, _W_OPPORTUNITY, True),
         (topical, _W_TOPICAL, topical_available),
     ]
+    # Too little to judge: no authority, no topical, no organic to assess targeting.
+    if not (incumbent_available or topical_available or top_count > 0):
+        return {"score": None, "band": None, "factors": []}
+
     total_w = sum(w for _, w, ok in parts if ok) or 1.0
     score = int(round(_clamp(sum(v * w for v, w, ok in parts if ok) / total_w)))
 
@@ -150,21 +159,22 @@ def score_keyword(inp: dict) -> dict:
         "band": band,
         "factors": _factors(
             weakness, targeting, capability, opportunity, topical, topical_available,
-            inp, top_count, targeted,
+            incumbent_available, inp, top_count, targeted,
         ),
     }
 
 
 def _factors(weakness, targeting, capability, opportunity, topical, topical_available,
-             inp, top_count, targeted) -> list[dict]:
+             incumbent_available, inp, top_count, targeted) -> list[dict]:
     """The 2–3 sub-scores furthest from neutral (50), weighted by their blend
     weight, rendered as human-readable drivers with a direction."""
     loose = top_count - targeted
     cands: list[tuple[float, str, str]] = []  # (impact, text, direction)
 
-    impact = (weakness - 50) * _W_WEAKNESS
-    cands.append((impact, "Top-10 backlink authority is low" if impact >= 0
-                  else "Top-10 are high-authority pages", "up" if impact >= 0 else "down"))
+    if incumbent_available:
+        impact = (weakness - 50) * _W_WEAKNESS
+        cands.append((impact, "Top-10 backlink authority is low" if impact >= 0
+                      else "Top-10 are high-authority pages", "up" if impact >= 0 else "down"))
 
     if topical_available:
         impact = (topical - 50) * _W_TOPICAL
@@ -182,12 +192,13 @@ def _factors(weakness, targeting, capability, opportunity, topical, topical_avai
         cands.append((impact, f"{loose} of {top_count} incumbents are loose matches" if impact >= 0
                       else "Incumbents are tightly targeted", "up" if impact >= 0 else "down"))
 
-    impact = (capability - 50) * _W_CAPABILITY
     rank = inp.get("client_rank")
     if rank and rank <= 20:
-        cands.append((abs(impact) + 1, f"You already rank #{rank}", "up"))
-    cands.append((impact, "Your authority is competitive here" if impact >= 0
-                  else "Large authority gap to close", "up" if impact >= 0 else "down"))
+        cands.append((abs((capability - 50) * _W_CAPABILITY) + 1, f"You already rank #{rank}", "up"))
+    if incumbent_available:  # the authority-comparison factor needs incumbent data
+        impact = (capability - 50) * _W_CAPABILITY
+        cands.append((impact, "Your authority is competitive here" if impact >= 0
+                      else "Large authority gap to close", "up" if impact >= 0 else "down"))
 
     impact = (opportunity - 50) * _W_OPPORTUNITY
     if inp.get("aio_present"):
@@ -312,7 +323,11 @@ def get_client_rankability(client_id: str, today: Optional[date] = None) -> dict
                 "client_rank": snap.get("client_rank"),
             }
         )
-        priority = round(scored["score"] / 100.0 * (potential or 0.0), 2)
+        priority = (
+            round(scored["score"] / 100.0 * (potential or 0.0), 2)
+            if scored["score"] is not None
+            else None
+        )
         items.append({**base, "has_snapshot": True, "snapshot_id": snap["id"],
                       "client_rank": snap.get("client_rank"), "priority": priority, **scored})
 
