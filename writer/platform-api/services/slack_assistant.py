@@ -137,6 +137,27 @@ def format_context(client: dict, context: dict) -> str:
     return json.dumps(payload, default=str, ensure_ascii=False)
 
 
+def weak_cities(report_weak_locations) -> list[str]:
+    """City names from a Maps result's `report_weak_locations`. Pure, shape-tolerant.
+
+    The stored value is the geocoder's object — `{geocoded, capped, weak_areas:[...]}`
+    — but tolerate a bare list of area dicts or None/other too (so a shape change
+    never throws and drops the whole module)."""
+    rwl = report_weak_locations
+    if isinstance(rwl, dict):
+        areas = rwl.get("weak_areas") or []
+    elif isinstance(rwl, list):
+        areas = rwl
+    else:
+        areas = []
+    out: list[str] = []
+    for area in areas[:5]:
+        city = area.get("city") if isinstance(area, dict) else None
+        if city:
+            out.append(city)
+    return out
+
+
 def format_history(history: list[dict]) -> str:
     """Render prior thread turns as a plain transcript for the prompt. Pure.
 
@@ -306,9 +327,8 @@ def _ctx_maps(supabase, client_id: str, today: date) -> Optional[dict]:
         ]
         weak: list[str] = []
         for r in results:
-            for area in (r.get("report_weak_locations") or [])[:5]:
-                city = area.get("city") if isinstance(area, dict) else None
-                if city and city not in weak:
+            for city in weak_cities(r.get("report_weak_locations")):
+                if city not in weak:
                     weak.append(city)
         if weak:
             out["weak_coverage_areas"] = weak[:10]
