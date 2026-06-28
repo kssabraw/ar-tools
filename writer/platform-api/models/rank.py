@@ -256,6 +256,7 @@ class SerpSnapshotDetail(BaseModel):
     language_code: Optional[str] = None
     query_intent: Optional[str] = None
     intent_probabilities: Optional[dict] = None
+    local_intent: bool = False
     aio_present: bool = False
     aio_text: Optional[str] = None
     aio_sources: Optional[list] = None

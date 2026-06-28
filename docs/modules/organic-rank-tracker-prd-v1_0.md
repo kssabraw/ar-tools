@@ -341,7 +341,7 @@ A **dated competitive snapshot** for a tracked keyword: the live SERP landscape 
 ### 14.1 Contents (per snapshot)
 - **AI Overview (AIO)** — whether an AI Overview appears for the query + its cited sources.
 - **Top 10 organic results** — position, URL, domain, title.
-- **Query intent** — informational / commercial / transactional / navigational.
+- **Query intent** — informational / commercial / transactional / navigational (DataForSEO Labs), plus a derived **local intent** flag (DataForSEO's intent taxonomy has no 'local' label, so it's inferred from the SERP showing a local pack / local finder / map — free, no extra call).
 - **Per ranking page** (each top-10 competitor page **and** the client's ranking/canonical page): **referring domains** (page-level count) + **UR** (URL Rating).
 - **Per domain** (each competitor domain **and** the client's domain): **Domain Rating (DR)** for the whole domain.
 

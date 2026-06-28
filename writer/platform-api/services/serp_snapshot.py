@@ -212,6 +212,26 @@ def extract_serp_features(items: list[dict]) -> dict:
     }
 
 
+# SERP item types that signal Google treats the query as locally-intented.
+_LOCAL_FEATURE_TYPES = {"local_pack", "local_finder", "map"}
+
+
+def detect_local_intent(features: dict) -> bool:
+    """Whether the query carries **local intent**, derived from the SERP feature
+    inventory (extract_serp_features output): a local pack / local finder / map
+    means Google surfaced geographic results. Cheap + reliable — no extra API
+    call — and independent of the Labs search-intent call (whose taxonomy has no
+    'local' label), so it still works when that call fails.
+    """
+    if not features:
+        return False
+    types = set(features.get("feature_types") or [])
+    if types & _LOCAL_FEATURE_TYPES:
+        return True
+    # Defensive: local_pack detail captured even if feature_types somehow missed it.
+    return bool(features.get("local_pack"))
+
+
 def classify_intent(result_items: list[dict]) -> tuple[Optional[str], dict]:
     """Primary intent label + a {label: probability} map from a Labs
     search-intent result's items."""
@@ -364,6 +384,7 @@ async def _capture_and_store(
     organic = extract_organic_results(items, settings.serp_snapshot_top_n)
     aio = extract_aio(items)
     features = extract_serp_features(items)
+    local_intent = detect_local_intent(features)
 
     # Intent is best-effort — a failure here must not lose the SERP capture.
     try:
@@ -439,6 +460,7 @@ async def _capture_and_store(
                 "language_code": language_code,
                 "query_intent": intent_label,
                 "intent_probabilities": intent_probs or None,
+                "local_intent": local_intent,
                 "aio_present": aio["present"],
                 "aio_text": aio["text"],
                 "aio_sources": aio["sources"] or None,

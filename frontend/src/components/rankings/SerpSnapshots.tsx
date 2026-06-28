@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Camera, ExternalLink, Sparkles, X } from 'lucide-react'
+import { Camera, ExternalLink, MapPin, Sparkles, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import type {
   SerpSnapshotCaptureResponse,
@@ -181,6 +181,12 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
           {new Date(snap.captured_at).toLocaleString()}
         </span>
         {snap.query_intent && <IntentBadge intent={snap.query_intent} />}
+        {snap.local_intent && (
+          <span style={{ ...miniBadge, color: '#0e7490', background: '#cffafe', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+            title="Google shows a local pack / map for this query — it carries local intent">
+            <MapPin size={11} /> Local
+          </span>
+        )}
         {snap.status === 'partial' && (
           <span style={{ ...miniBadge, color: '#b45309', background: '#fffbeb' }}>partial — some authority lookups failed</span>
         )}

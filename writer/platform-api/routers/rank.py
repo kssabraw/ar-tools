@@ -703,8 +703,8 @@ async def get_serp_snapshot(
         **{k: snap.get(k) for k in (
             "id", "keyword_id", "client_id", "keyword", "captured_at", "status",
             "location_code", "language_code", "query_intent", "intent_probabilities",
-            "aio_present", "aio_text", "aio_sources", "serp_features", "client_rank",
-            "client_url", "error",
+            "local_intent", "aio_present", "aio_text", "aio_sources", "serp_features",
+            "client_rank", "client_url", "error",
         )},
         results=[SerpSnapshotResultRow(**{k: r.get(k) for k in (
             "position", "url", "domain", "title", "description", "is_client",

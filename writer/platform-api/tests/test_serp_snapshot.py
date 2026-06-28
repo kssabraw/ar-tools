@@ -109,6 +109,35 @@ def test_extract_serp_features_inventory_and_detail():
 
 
 # ---------------------------------------------------------------------------
+# detect_local_intent
+# ---------------------------------------------------------------------------
+def test_detect_local_intent_true_on_local_pack():
+    features = serp_snapshot.extract_serp_features([
+        {"type": "organic", "rank_absolute": 1},
+        {"type": "local_pack", "title": "Joe's Plumbing", "domain": "joes.com"},
+    ])
+    assert serp_snapshot.detect_local_intent(features) is True
+
+
+def test_detect_local_intent_true_on_map_feature_type():
+    # A 'map' item with no local_pack detail still counts (feature_types match).
+    features = serp_snapshot.extract_serp_features([
+        {"type": "organic", "rank_absolute": 1},
+        {"type": "map"},
+    ])
+    assert serp_snapshot.detect_local_intent(features) is True
+
+
+def test_detect_local_intent_false_without_local_features():
+    features = serp_snapshot.extract_serp_features([
+        {"type": "organic", "rank_absolute": 1},
+        {"type": "people_also_ask", "items": [{"title": "q?"}]},
+    ])
+    assert serp_snapshot.detect_local_intent(features) is False
+    assert serp_snapshot.detect_local_intent({}) is False
+
+
+# ---------------------------------------------------------------------------
 # classify_intent
 # ---------------------------------------------------------------------------
 def test_classify_intent_primary_and_secondary():
