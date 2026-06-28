@@ -32,8 +32,10 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from datetime import date
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -232,6 +234,92 @@ def detect_local_intent(features: dict) -> bool:
     return bool(features.get("local_pack"))
 
 
+# Intent signals derived from the SERP composition + organic title patterns.
+# Google's choice of what to show IS an intent classification; this reads it back.
+# Keys are stable identifiers; the frontend maps them to labels/tooltips and
+# MIRRORS this logic for snapshots captured before the column existed. Keep the
+# two in sync (frontend: components/rankings/SerpSnapshots.tsx deriveIntentSignals).
+_FEATURE_SIGNAL_MAP = {
+    "discussions_and_forums": "forums",
+    "video": "video", "video_carousel": "video", "youtube": "video",
+    "top_stories": "news", "news_search": "news", "news": "news",
+    "shopping": "shopping", "google_shopping": "shopping",
+    "commercial_units": "shopping", "popular_products": "shopping", "paid": "shopping",
+    "featured_snippet": "featured_snippet",
+    "people_also_ask": "paa",
+    "knowledge_graph": "knowledge", "knowledge_panel": "knowledge",
+    "images": "images", "image": "images",
+    "recipes": "recipes",
+    "jobs": "jobs",
+    "events": "events",
+}
+
+# A format signal fires only when at least this many of the captured organic
+# titles match (the SERP "leans" that way — one oddball title doesn't flag it).
+_FORMAT_MIN_TITLES = 2
+# Navigational: this many of the top results are homepages (root URLs).
+_NAV_MIN_HOMEPAGES = 3
+
+_LISTICLE_RE = re.compile(
+    r"\b\d{1,3}\s+(best|top|ways|things|tips|ideas|reasons|examples)\b|\btop\s+\d{1,3}\b", re.I
+)
+_COMPARISON_RE = re.compile(r"\bvs\.?\b|\balternatives?\b|\bcomparison\b", re.I)
+_HOWTO_RE = re.compile(r"\bhow to\b|\bguide\b|\btutorial\b|\bstep[- ]by[- ]step\b", re.I)
+_YEAR_RE = re.compile(r"\b20[2-9]\d\b")
+_DEFINITIONAL_RE = re.compile(r"\bwhat (is|are)\b|\bmeaning of\b|\bdefinition\b", re.I)
+
+# Stable display order for the derived signal list.
+_SIGNAL_ORDER = [
+    "forums", "video", "news", "shopping", "featured_snippet", "paa", "knowledge",
+    "images", "recipes", "jobs", "events",
+    "listicle", "comparison", "how_to", "freshness", "definitional", "navigational",
+]
+
+
+def derive_intent_signals(features: dict, organic: list[dict]) -> list[str]:
+    """Normalized intent signals read off the SERP (free — no extra API call).
+
+    Three families: (a) SERP enhancements Google chose to show (forums, video,
+    news, shopping, snippet, PAA, knowledge, images, recipes/jobs/events) from the
+    captured feature inventory; (b) content-format patterns in the organic titles
+    (listicle, comparison, how-to, freshness, definitional); (c) a navigational
+    read when homepages dominate. 'local' is intentionally excluded — it's its own
+    stored flag (local_intent). Returns stable-ordered keys; the frontend renders
+    labels/tooltips and mirrors this for pre-column snapshots.
+    """
+    found: set[str] = set()
+    for t in (features or {}).get("feature_types") or []:
+        key = _FEATURE_SIGNAL_MAP.get(t)
+        if key:
+            found.add(key)
+
+    titles = [(o.get("title") or "") for o in (organic or [])]
+
+    def hits(rx: re.Pattern) -> int:
+        return sum(1 for t in titles if rx.search(t))
+
+    if hits(_LISTICLE_RE) >= _FORMAT_MIN_TITLES:
+        found.add("listicle")
+    if hits(_COMPARISON_RE) >= _FORMAT_MIN_TITLES:
+        found.add("comparison")
+    if hits(_HOWTO_RE) >= _FORMAT_MIN_TITLES:
+        found.add("how_to")
+    if hits(_YEAR_RE) >= _FORMAT_MIN_TITLES:
+        found.add("freshness")
+    if hits(_DEFINITIONAL_RE) >= _FORMAT_MIN_TITLES:
+        found.add("definitional")
+
+    homepages = 0
+    for o in organic or []:
+        url = o.get("url") or ""
+        if url and urlparse(url).path in ("", "/"):
+            homepages += 1
+    if homepages >= _NAV_MIN_HOMEPAGES:
+        found.add("navigational")
+
+    return [s for s in _SIGNAL_ORDER if s in found]
+
+
 def classify_intent(result_items: list[dict]) -> tuple[Optional[str], dict]:
     """Primary intent label + a {label: probability} map from a Labs
     search-intent result's items."""
@@ -385,6 +473,7 @@ async def _capture_and_store(
     aio = extract_aio(items)
     features = extract_serp_features(items)
     local_intent = detect_local_intent(features)
+    intent_signals = derive_intent_signals(features, organic)
 
     # Intent is best-effort — a failure here must not lose the SERP capture.
     try:
@@ -461,6 +550,7 @@ async def _capture_and_store(
                 "query_intent": intent_label,
                 "intent_probabilities": intent_probs or None,
                 "local_intent": local_intent,
+                "intent_signals": intent_signals or None,
                 "aio_present": aio["present"],
                 "aio_text": aio["text"],
                 "aio_sources": aio["sources"] or None,

@@ -161,6 +161,14 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
     [snap],
   )
 
+  // Intent signals: use the persisted set when present; otherwise derive client-
+  // side (snapshots captured before the column existed). Mirrors the backend's
+  // derive_intent_signals — keep the two in sync.
+  const signals = useMemo(
+    () => (snap?.intent_signals?.length ? snap.intent_signals : snap ? deriveIntentSignals(snap) : []),
+    [snap],
+  )
+
   if (isLoading) return <p style={{ color: '#94a3b8', fontSize: 13 }}>Loading snapshot…</p>
   if (!snap) return <p style={errorBox}>Snapshot not found.</p>
 
@@ -191,6 +199,16 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
           <span style={{ ...miniBadge, color: '#b45309', background: '#fffbeb' }}>partial — some authority lookups failed</span>
         )}
       </div>
+
+      {/* Intent signals derived from the SERP composition + title patterns */}
+      {signals.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 11, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+            Signals
+          </span>
+          {signals.map(s => <SignalChip key={s} signal={s} />)}
+        </div>
+      )}
 
       {/* AI Overview */}
       <section style={card}>
@@ -306,6 +324,86 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
   )
 }
 
+// Intent signals — MIRRORS services/serp_snapshot.py::derive_intent_signals.
+// Used only for snapshots captured before the intent_signals column existed
+// (newer ones carry the persisted set); keep the logic in sync with the backend.
+const FEATURE_SIGNAL_MAP: Record<string, string> = {
+  discussions_and_forums: 'forums',
+  video: 'video', video_carousel: 'video', youtube: 'video',
+  top_stories: 'news', news_search: 'news', news: 'news',
+  shopping: 'shopping', google_shopping: 'shopping', commercial_units: 'shopping',
+  popular_products: 'shopping', paid: 'shopping',
+  featured_snippet: 'featured_snippet',
+  people_also_ask: 'paa',
+  knowledge_graph: 'knowledge', knowledge_panel: 'knowledge',
+  images: 'images', image: 'images',
+  recipes: 'recipes', jobs: 'jobs', events: 'events',
+}
+const SIGNAL_ORDER = [
+  'forums', 'video', 'news', 'shopping', 'featured_snippet', 'paa', 'knowledge',
+  'images', 'recipes', 'jobs', 'events',
+  'listicle', 'comparison', 'how_to', 'freshness', 'definitional', 'navigational',
+]
+const FORMAT_MIN_TITLES = 2
+const NAV_MIN_HOMEPAGES = 3
+const LISTICLE_RE = /\b\d{1,3}\s+(best|top|ways|things|tips|ideas|reasons|examples)\b|\btop\s+\d{1,3}\b/i
+const COMPARISON_RE = /\bvs\.?\b|\balternatives?\b|\bcomparison\b/i
+const HOWTO_RE = /\bhow to\b|\bguide\b|\btutorial\b|\bstep[- ]by[- ]step\b/i
+const YEAR_RE = /\b20[2-9]\d\b/
+const DEFINITIONAL_RE = /\bwhat (is|are)\b|\bmeaning of\b|\bdefinition\b/i
+
+function deriveIntentSignals(snap: SerpSnapshotDetail): string[] {
+  const found = new Set<string>()
+  const featureTypes = (snap.serp_features?.feature_types as string[] | undefined) ?? []
+  for (const t of featureTypes) {
+    const key = FEATURE_SIGNAL_MAP[t]
+    if (key) found.add(key)
+  }
+  const titles = (snap.results ?? []).map(r => r.title ?? '')
+  const hits = (rx: RegExp) => titles.filter(t => rx.test(t)).length
+  if (hits(LISTICLE_RE) >= FORMAT_MIN_TITLES) found.add('listicle')
+  if (hits(COMPARISON_RE) >= FORMAT_MIN_TITLES) found.add('comparison')
+  if (hits(HOWTO_RE) >= FORMAT_MIN_TITLES) found.add('how_to')
+  if (hits(YEAR_RE) >= FORMAT_MIN_TITLES) found.add('freshness')
+  if (hits(DEFINITIONAL_RE) >= FORMAT_MIN_TITLES) found.add('definitional')
+  let homepages = 0
+  for (const r of snap.results ?? []) {
+    if (!r.url) continue
+    try {
+      const path = new URL(r.url).pathname
+      if (path === '' || path === '/') homepages++
+    } catch { /* malformed URL — ignore */ }
+  }
+  if (homepages >= NAV_MIN_HOMEPAGES) found.add('navigational')
+  return SIGNAL_ORDER.filter(s => found.has(s))
+}
+
+const SIGNAL_META: Record<string, { label: string; tip: string }> = {
+  forums: { label: 'Forums', tip: 'Discussions & forums shown — users want opinions & real experiences (often pre-purchase research).' },
+  video: { label: 'Video', tip: 'Video results present — how-to / demo / visual intent.' },
+  news: { label: 'News', tip: 'Top stories present — news & freshness (QDF) intent.' },
+  shopping: { label: 'Shopping', tip: 'Shopping units / ads present — commercial / transactional intent.' },
+  featured_snippet: { label: 'Snippet', tip: 'Featured snippet — direct-answer informational intent.' },
+  paa: { label: 'PAA', tip: 'People Also Ask — research depth / unresolved sub-questions.' },
+  knowledge: { label: 'Knowledge', tip: 'Knowledge panel — entity or navigational intent.' },
+  images: { label: 'Images', tip: 'Image pack — visual intent.' },
+  recipes: { label: 'Recipes', tip: 'Recipe results — recipe intent.' },
+  jobs: { label: 'Jobs', tip: 'Jobs pack — job-seeking intent.' },
+  events: { label: 'Events', tip: 'Events pack — events intent.' },
+  listicle: { label: 'Listicle', tip: 'Roundup titles ("10 best…", "top N") — comparison / commercial-investigation intent.' },
+  comparison: { label: 'Comparison', tip: '"vs" / "alternatives" titles — comparison intent.' },
+  how_to: { label: 'How-to', tip: '"How to" / guide / tutorial titles — instructional intent.' },
+  freshness: { label: 'Freshness', tip: 'Year-stamped titles — query deserves freshness (QDF).' },
+  definitional: { label: 'Definitional', tip: '"What is" titles — informational / definitional intent.' },
+  navigational: { label: 'Navigational', tip: 'Homepages dominate the results — brand / navigational intent.' },
+}
+
+function SignalChip({ signal }: { signal: string }) {
+  const m = SIGNAL_META[signal]
+  const label = m?.label ?? signal
+  return <span style={signalChip} title={m?.tip ?? signal}>{label}</span>
+}
+
 function Authority({ value, status }: { value: number | null; status?: string }) {
   if (value == null) {
     if (status === 'failed') return <span style={{ color: '#dc2626', fontSize: 11 }}>failed</span>
@@ -363,6 +461,7 @@ const hint: React.CSSProperties = { marginTop: 10, fontSize: 11, color: '#64748b
 const snapItem: React.CSSProperties = { textAlign: 'left', background: '#fff', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px', cursor: 'pointer', fontSize: 12 }
 const snapItemActive: React.CSSProperties = { borderColor: '#6366f1', background: '#eef2ff' }
 const miniBadge: React.CSSProperties = { fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px' }
+const signalChip: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 999, padding: '2px 8px', cursor: 'help' }
 const clientChip: React.CSSProperties = { fontSize: 9, fontWeight: 700, color: '#4338ca', background: '#e0e7ff', borderRadius: 4, padding: '1px 5px', flexShrink: 0 }
 const sourceLink: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#6366f1', textDecoration: 'none' }
 const table: React.CSSProperties = { borderCollapse: 'collapse', width: '100%', fontSize: 12 }

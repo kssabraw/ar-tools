@@ -870,6 +870,7 @@ export interface SerpSnapshotDetail {
   query_intent: string | null
   intent_probabilities: Record<string, number> | null
   local_intent: boolean
+  intent_signals: string[] | null
   aio_present: boolean
   aio_text: string | null
   aio_sources: SerpAioSource[] | null

@@ -342,6 +342,7 @@ A **dated competitive snapshot** for a tracked keyword: the live SERP landscape 
 - **AI Overview (AIO)** — whether an AI Overview appears for the query + its cited sources.
 - **Top 10 organic results** — position, URL, domain, title.
 - **Query intent** — informational / commercial / transactional / navigational (DataForSEO Labs), plus a derived **local intent** flag (DataForSEO's intent taxonomy has no 'local' label, so it's inferred from the SERP showing a local pack / local finder / map — free, no extra call).
+- **Intent signals** — a normalized set read off the SERP composition + organic title patterns (Google's choice of features IS an intent classification): SERP enhancements (discussions & forums, video, news/top-stories, shopping/ads, featured snippet, PAA, knowledge panel, images, recipes/jobs/events), content-format patterns (listicle, comparison, how-to, freshness/QDF, definitional), and a navigational read when homepages dominate. Derived for free, persisted per snapshot (`serp_snapshots.intent_signals`), and mirrored client-side for pre-column snapshots. Rendered as a "Signals" chip row in the viewer (`derive_intent_signals` in `services/serp_snapshot.py`).
 - **Per ranking page** (each top-10 competitor page **and** the client's ranking/canonical page): **referring domains** (page-level count) + **UR** (URL Rating).
 - **Per domain** (each competitor domain **and** the client's domain): **Domain Rating (DR)** for the whole domain.
 

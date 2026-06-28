@@ -138,6 +138,57 @@ def test_detect_local_intent_false_without_local_features():
 
 
 # ---------------------------------------------------------------------------
+# derive_intent_signals
+# ---------------------------------------------------------------------------
+def test_derive_intent_signals_features_and_order():
+    features = {"feature_types": ["people_also_ask", "video", "discussions_and_forums", "shopping"]}
+    out = serp_snapshot.derive_intent_signals(features, [])
+    # Mapped + deduped + in canonical order (forums, video, shopping, paa).
+    assert out == ["forums", "video", "shopping", "paa"]
+
+
+def test_derive_intent_signals_excludes_local():
+    # local_pack/map are NOT emitted here — local intent has its own flag.
+    features = {"feature_types": ["local_pack", "map", "people_also_ask"]}
+    assert serp_snapshot.derive_intent_signals(features, []) == ["paa"]
+
+
+def test_derive_intent_signals_listicle_and_freshness_need_threshold():
+    organic = [
+        {"title": "10 Best Plumbers in 2026", "url": "https://a.com/best"},
+        {"title": "Top 7 Plumbing Services for 2026", "url": "https://b.com/top"},
+        {"title": "Contact us", "url": "https://c.com/contact"},
+    ]
+    out = serp_snapshot.derive_intent_signals({}, organic)
+    assert "listicle" in out      # two listicle titles ≥ threshold
+    assert "freshness" in out     # two year-stamped titles ≥ threshold
+
+
+def test_derive_intent_signals_single_title_below_threshold():
+    organic = [
+        {"title": "10 Best Plumbers", "url": "https://a.com/x"},
+        {"title": "Emergency plumbing", "url": "https://b.com/y"},
+    ]
+    # Only one listicle title — below the 2-title threshold.
+    assert "listicle" not in serp_snapshot.derive_intent_signals({}, organic)
+
+
+def test_derive_intent_signals_navigational_on_homepages():
+    organic = [
+        {"title": "Acme", "url": "https://acme.com"},
+        {"title": "Brand", "url": "https://brand.com/"},
+        {"title": "Co", "url": "https://co.com"},
+        {"title": "Deep", "url": "https://deep.com/some/path"},
+    ]
+    assert "navigational" in serp_snapshot.derive_intent_signals({}, organic)
+
+
+def test_derive_intent_signals_empty():
+    assert serp_snapshot.derive_intent_signals({}, []) == []
+    assert serp_snapshot.derive_intent_signals(None, None) == []
+
+
+# ---------------------------------------------------------------------------
 # classify_intent
 # ---------------------------------------------------------------------------
 def test_classify_intent_primary_and_secondary():

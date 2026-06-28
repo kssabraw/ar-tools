@@ -78,6 +78,7 @@ expected for a shared project, not a problem.
 | `20260623000343` | `rank_alerts` (Organic Rank Tracker #4 — in-app rank-drop alerting) |
 | `20260628015542` | `serp_snapshot_domains` (#4 — Competitive SERP Snapshot per-domain Domain Rating) |
 | `20260628022039` | `serp_snapshot_local_intent` (#4 — derived local-intent flag on a snapshot) |
+| `20260628024053` | `serp_snapshot_intent_signals` (#4 — derived SERP/title intent signals on a snapshot) |
 
 > A few `schema_migrations.name` values carry version suffixes (`_v1_4`, `_v2_0`)
 > from how they were originally applied. The CLI matches on the numeric version,
@@ -85,6 +86,13 @@ expected for a shared project, not a problem.
 > the same migration.
 
 ## Reconciliation log
+
+**2026-06-28** — SERP Snapshot intent signals (#4): added an `intent_signals`
+jsonb column to `serp_snapshots` (normalized SERP-feature + title-pattern intent
+signals), applied via the Supabase MCP. The MCP stamped version `20260628024053`,
+so the file was renamed from its placeholder `…120000` prefix to that recorded
+version and its `-- Migration:` header updated to match. Additive, nullable; the
+frontend mirrors the derivation for pre-column snapshots. No RLS change.
 
 **2026-06-28** — SERP Snapshot local intent (#4): added a `local_intent` boolean
 to `serp_snapshots` (derived from the SERP feature inventory — local pack/finder/
