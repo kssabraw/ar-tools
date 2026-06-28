@@ -34,19 +34,30 @@ logger = logging.getLogger(__name__)
 
 _SLACK_POST_URL = "https://slack.com/api/chat.postMessage"
 _TIMEOUT = 20.0
+_LLM_TIMEOUT = 60.0  # bound the Claude call so a hung request can't pin the task
 _MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
 _SIG_MAX_SKEW_SECONDS = 60 * 5  # reject events older than 5 min (replay guard)
 
 _SYSTEM = (
     "You are SerMastr, an in-house SEO strategist for an agency, answering a "
-    "teammate in Slack. You are given structured data about ONE client's search "
-    "performance (tracked keywords with current rank and trend, open ranking-drop "
-    "alerts, the latest reoptimization Action Plan, and Search Console "
-    "opportunities). Answer the question using ONLY that data. Be concise and "
-    "direct — a few sentences or a short list, Slack-friendly (you may use *bold* "
-    "and bullet points). Lead with the answer. If the data doesn't cover the "
-    "question, say so plainly and suggest what to open in AR Tools. Never invent "
-    "numbers."
+    "teammate in Slack. You are given a JSON object describing ONE client across "
+    "the agency's SEO modules, keyed by module:\n"
+    "- organic_rank: tracked keywords with current rank + trend, open ranking-drop "
+    "alerts, the latest reoptimization Action Plan, and Search Console opportunities.\n"
+    "- maps_geogrid: local-pack / Google Maps geo-grid scan results (average rank, "
+    "top-3/top-10 pin counts, weak coverage areas).\n"
+    "- ai_visibility: whether the brand appears in AI-assistant answers across "
+    "engines (per-engine visibility, invisible keywords).\n"
+    "- content: what content has been produced (blog posts, service/location pages, "
+    "Local SEO pages).\n"
+    "- keyword_research: Topic Fanout research sessions.\n"
+    "- setup: the client's configured context (GBP, brand voice, ICP, target cities).\n"
+    "A module is OMITTED when there's no data for it — if a module key is absent, "
+    "that work simply hasn't been set up or run for this client; say so rather than "
+    "guessing. Answer using ONLY this data. Be concise and direct — a few sentences "
+    "or a short list, Slack-friendly (you may use *bold* and bullets). Lead with the "
+    "answer. As a strategist, you may connect signals across modules when relevant "
+    "(e.g. a ranking drop + a content gap). Never invent numbers or modules."
 )
 
 
@@ -125,111 +136,310 @@ def format_context(client: dict, context: dict) -> str:
 # Context assembly (DB reads).
 # ---------------------------------------------------------------------------
 def build_context(client_id: str, today: Optional[date] = None) -> dict:
-    """Gather the client's current rank picture for the assistant. Best-effort —
-    a failing section is omitted, never fatal."""
-    from services import rank_status
+    """Assemble a per-client, cross-module context for the assistant.
 
+    Runs every registered module provider (see `_CONTEXT_PROVIDERS`), each isolated
+    so one module's failure or empty result never breaks the answer. A provider
+    returning a falsy value is omitted entirely, so the LLM can tell "no data for
+    this module" from real data.
+
+    **To give SerMastr a new module:** write a `_ctx_<module>(supabase, client_id,
+    today)` provider returning a compact dict (or None), and append it to
+    `_CONTEXT_PROVIDERS`. It flows into every answer automatically — no other change.
+    """
     supabase = get_supabase()
     today = today or date.today()
     ctx: dict = {}
+    for key, provider in _CONTEXT_PROVIDERS:
+        try:
+            section = provider(supabase, client_id, today)
+            if section:
+                ctx[key] = section
+        except Exception as exc:
+            logger.warning(
+                "slack_ctx_provider_failed",
+                extra={"client_id": client_id, "ctx_module": key, "error": str(exc)},
+            )
+    return ctx
 
-    try:
-        kws = (
-            supabase.table("tracked_keywords")
-            .select("id, keyword, status")
-            .eq("client_id", client_id)
-            .eq("active", True)
-            .order("keyword")
-            .limit(settings.slack_assistant_max_keywords)
-            .execute()
-        ).data or []
+
+# --- Module context providers (each: (supabase, client_id, today) -> dict|None) ---
+def _ctx_organic_rank(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Organic rank tracker: keywords + rank/trend, open drops, Action Plan, GSC."""
+    from services import rank_status
+
+    out: dict = {}
+    kws = (
+        supabase.table("tracked_keywords")
+        .select("id, keyword, status")
+        .eq("client_id", client_id)
+        .eq("active", True)
+        .order("keyword")
+        .limit(settings.slack_assistant_max_keywords)
+        .execute()
+    ).data or []
+    if kws:
         kw_ids = [k["id"] for k in kws]
         metrics: dict[str, list[dict]] = {}
-        if kw_ids:
-            cutoff = date.fromordinal(today.toordinal() - 90).isoformat()
-            for r in (
-                supabase.table("rank_keyword_metrics")
-                .select("keyword_id, date, gsc_position, tracked_rank")
-                .in_("keyword_id", kw_ids)
-                .gte("date", cutoff)
-                .execute()
-            ).data or []:
-                metrics.setdefault(r["keyword_id"], []).append(r)
-        keywords = []
-        for k in kws:
-            s = rank_status.compute_keyword_summary(
-                metrics.get(k["id"], []), today, settings.rank_gsc_coverage_days
-            )
-            keywords.append(
-                {
-                    "keyword": k["keyword"],
-                    "status": k.get("status"),
-                    "current_rank": s.get("today_rank"),
-                    "avg_30d": s.get("avg_30"),
-                    "direction": s.get("direction"),
-                }
-            )
-        ctx["keywords"] = keywords
-        ctx["keyword_count"] = len(keywords)
-    except Exception as exc:
-        logger.warning("slack_ctx_keywords_failed", extra={"client_id": client_id, "error": str(exc)})
+        cutoff = date.fromordinal(today.toordinal() - 90).isoformat()
+        for r in (
+            supabase.table("rank_keyword_metrics")
+            .select("keyword_id, date, gsc_position, tracked_rank")
+            .in_("keyword_id", kw_ids)
+            .gte("date", cutoff)
+            .execute()
+        ).data or []:
+            metrics.setdefault(r["keyword_id"], []).append(r)
+        out["keywords"] = [
+            {
+                "keyword": k["keyword"],
+                "status": k.get("status"),
+                "current_rank": (s := rank_status.compute_keyword_summary(
+                    metrics.get(k["id"], []), today, settings.rank_gsc_coverage_days
+                )).get("today_rank"),
+                "avg_30d": s.get("avg_30"),
+                "direction": s.get("direction"),
+            }
+            for k in kws
+        ]
+        out["keyword_count"] = len(kws)
 
-    try:
-        alerts = (
-            supabase.table("rank_alerts")
-            .select("keyword, alert_type, message")
+    alerts = (
+        supabase.table("rank_alerts")
+        .select("keyword, alert_type, message")
+        .eq("client_id", client_id)
+        .is_("resolved_at", "null")
+        .execute()
+    ).data or []
+    if alerts:
+        out["open_drop_alerts"] = alerts
+
+    plan = (
+        supabase.table("reopt_plans")
+        .select("summary, items, action_count, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if plan:
+        p = plan[0]
+        out["action_plan"] = {
+            "summary": p.get("summary"),
+            "action_count": p.get("action_count"),
+            "top_actions": [
+                {"keyword": a.get("keyword"), "recommendation": a.get("recommendation")}
+                for a in (p.get("items") or [])[:8]
+            ],
+        }
+
+    gsc = (
+        supabase.table("gsc_research_runs")
+        .select("cannibalization, hidden_wins, quick_wins, created_at")
+        .eq("client_id", client_id)
+        .eq("status", "complete")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if gsc:
+        g = gsc[0]
+        out["gsc_opportunities"] = {
+            "cannibalization": len(g.get("cannibalization") or []),
+            "quick_wins": len(g.get("quick_wins") or []),
+            "hidden_wins": len(g.get("hidden_wins") or []),
+        }
+    return out or None
+
+
+def _ctx_maps(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Maps geo-grid: latest scan status + per-keyword average rank / pin coverage."""
+    scan = (
+        supabase.table("maps_scans")
+        .select("id, status, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if not scan:
+        return None
+    s = scan[0]
+    out: dict = {"latest_scan_status": s.get("status"), "latest_scan_at": s.get("created_at")}
+    results = (
+        supabase.table("maps_scan_results")
+        .select("keyword, average_rank, top3_pins, top10_pins, report_weak_locations")
+        .eq("scan_id", s["id"])
+        .limit(15)
+        .execute()
+    ).data or []
+    if results:
+        out["keywords"] = [
+            {
+                "keyword": r.get("keyword"),
+                "average_rank": r.get("average_rank"),
+                "top3_pins": r.get("top3_pins"),
+                "top10_pins": r.get("top10_pins"),
+            }
+            for r in results
+        ]
+        weak: list[str] = []
+        for r in results:
+            for area in (r.get("report_weak_locations") or [])[:5]:
+                city = area.get("city") if isinstance(area, dict) else None
+                if city and city not in weak:
+                    weak.append(city)
+        if weak:
+            out["weak_coverage_areas"] = weak[:10]
+    return out
+
+
+def _ctx_ai_visibility(supabase, client_id: str, today: date) -> Optional[dict]:
+    """AI Visibility: tracked-keyword count + latest scan's per-engine visibility."""
+    kw_count = (
+        supabase.table("brand_tracked_keywords")
+        .select("id", count="exact")
+        .eq("client_id", client_id)
+        .eq("is_active", True)
+        .execute()
+    ).count or 0
+    # Pin the latest batch id first, then fetch that whole batch — a batch is
+    # (keywords × engines) rows, so a single capped query could truncate it and
+    # undercount visibility for clients with many tracked keywords.
+    newest = (
+        supabase.table("brand_mention_history")
+        .select("scan_batch_id, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if not (kw_count or newest):
+        return None
+    out: dict = {"keywords_tracked": kw_count}
+    if newest:
+        latest_batch = newest[0]["scan_batch_id"]
+        batch = (
+            supabase.table("brand_mention_history")
+            .select("keyword_id, engine, mention_found")
             .eq("client_id", client_id)
-            .is_("resolved_at", "null")
+            .eq("scan_batch_id", latest_batch)
             .execute()
         ).data or []
-        ctx["open_drop_alerts"] = alerts
-    except Exception as exc:
-        logger.warning("slack_ctx_alerts_failed", extra={"client_id": client_id, "error": str(exc)})
+        out["latest_scan_at"] = newest[0].get("created_at")
+        per_engine: dict[str, dict] = {}
+        for r in batch:
+            e = per_engine.setdefault(r.get("engine") or "?", {"found": 0, "total": 0})
+            e["total"] += 1
+            if r.get("mention_found"):
+                e["found"] += 1
+        out["per_engine_visibility"] = {k: f"{v['found']}/{v['total']}" for k, v in per_engine.items()}
+        seen, visible = set(), set()
+        for r in batch:
+            seen.add(r.get("keyword_id"))
+            if r.get("mention_found"):
+                visible.add(r.get("keyword_id"))
+        out["invisible_keyword_count"] = len(seen - visible)
+    return out
 
-    try:
-        plan = (
-            supabase.table("reopt_plans")
-            .select("summary, items, action_count, created_at")
-            .eq("client_id", client_id)
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        ).data
-        if plan:
-            p = plan[0]
-            items = p.get("items") or []
-            ctx["action_plan"] = {
-                "summary": p.get("summary"),
-                "action_count": p.get("action_count"),
-                "top_actions": [
-                    {"keyword": a.get("keyword"), "recommendation": a.get("recommendation")}
-                    for a in items[:8]
-                ],
-            }
-    except Exception as exc:
-        logger.warning("slack_ctx_plan_failed", extra={"client_id": client_id, "error": str(exc)})
 
-    try:
-        gsc = (
-            supabase.table("gsc_research_runs")
-            .select("cannibalization, hidden_wins, quick_wins, created_at")
+def _ctx_content(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Content produced: completed blog/service/location runs + Local SEO pages.
+
+    Uses head-only `count="exact"` queries (no row transfer) — these counts can
+    grow large for an active client and we only need the totals.
+    """
+    out: dict = {}
+    by_type: dict[str, int] = {}
+    for t in ("blog_post", "service_page", "location_page"):
+        n = (
+            supabase.table("runs")
+            .select("id", count="exact", head=True)
             .eq("client_id", client_id)
             .eq("status", "complete")
-            .order("created_at", desc=True)
-            .limit(1)
+            .eq("content_type", t)
             .execute()
-        ).data
-        if gsc:
-            g = gsc[0]
-            ctx["gsc_opportunities"] = {
-                "cannibalization": len(g.get("cannibalization") or []),
-                "quick_wins": len(g.get("quick_wins") or []),
-                "hidden_wins": len(g.get("hidden_wins") or []),
-            }
-    except Exception as exc:
-        logger.warning("slack_ctx_gsc_failed", extra={"client_id": client_id, "error": str(exc)})
+        ).count or 0
+        if n:
+            by_type[t] = n
+    if by_type:
+        out["completed_runs_by_type"] = by_type
 
-    return ctx
+    saved = (
+        supabase.table("local_seo_pages")
+        .select("id", count="exact", head=True)
+        .eq("client_id", client_id)
+        .is_("deleted_at", "null")
+        .execute()
+    ).count or 0
+    if saved:
+        published = (
+            supabase.table("local_seo_pages")
+            .select("id", count="exact", head=True)
+            .eq("client_id", client_id)
+            .is_("deleted_at", "null")
+            .not_.is_("published_doc_id", "null")
+            .execute()
+        ).count or 0
+        out["local_seo_pages_saved"] = saved
+        out["local_seo_pages_published"] = published
+    return out or None
+
+
+def _ctx_keyword_research(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Topic Fanout keyword-research sessions (vendored fanout schema)."""
+    from fanout.storage.supabase_client import get_service_client
+
+    rows = (
+        get_service_client()
+        .table("sessions")
+        .select("seed_keyword, status, created_at")
+        .eq("client_id", client_id)
+        .eq("archived", False)
+        .order("created_at", desc=True)
+        .limit(10)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    return {
+        "session_count": len(rows),
+        "recent_seeds": [r.get("seed_keyword") for r in rows[:5] if r.get("seed_keyword")],
+    }
+
+
+def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Client setup context the strategist should be aware of."""
+    rows = (
+        supabase.table("clients")
+        .select("website_url, gbp, brand_voice, detected_icp, differentiators, target_cities")
+        .eq("id", client_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        return None
+    c = rows[0]
+    gbp = c.get("gbp") or {}
+    return {
+        "website": c.get("website_url"),
+        "has_gbp": bool(gbp.get("business_name") or gbp.get("place_id")),
+        "gbp_name": gbp.get("business_name"),
+        "has_brand_voice": bool(c.get("brand_voice")),
+        "has_icp": bool(c.get("detected_icp") or c.get("differentiators")),
+        "target_city_count": len(c.get("target_cities") or []),
+    }
+
+
+# Registry — append a provider here to give SerMastr a new module (see build_context).
+_CONTEXT_PROVIDERS = [
+    ("organic_rank", _ctx_organic_rank),
+    ("maps_geogrid", _ctx_maps),
+    ("ai_visibility", _ctx_ai_visibility),
+    ("content", _ctx_content),
+    ("keyword_research", _ctx_keyword_research),
+    ("setup", _ctx_setup),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +450,7 @@ async def answer_question(question: str, client: dict, context: dict) -> str:
     import anthropic
 
     user = f"Question: {question}\n\nClient data (JSON):\n{format_context(client, context)}"
-    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
     resp = await api.messages.create(
         model=settings.slack_assistant_model,
         max_tokens=settings.slack_assistant_max_tokens,
