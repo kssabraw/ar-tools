@@ -255,8 +255,9 @@ _FEATURE_SIGNAL_MAP = {
 }
 
 # A format signal fires only when at least this many of the captured organic
-# titles match (the SERP "leans" that way — one oddball title doesn't flag it).
-_FORMAT_MIN_TITLES = 2
+# titles match — i.e. the format genuinely dominates the SERP (≥6 of the top
+# results), not just a couple of incidental matches.
+_FORMAT_MIN_TITLES = 6
 # Navigational: this many of the top results are homepages (root URLs).
 _NAV_MIN_HOMEPAGES = 3
 

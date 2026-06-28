@@ -344,7 +344,7 @@ const SIGNAL_ORDER = [
   'images', 'recipes', 'jobs', 'events',
   'listicle', 'comparison', 'how_to', 'freshness', 'definitional', 'navigational',
 ]
-const FORMAT_MIN_TITLES = 2
+const FORMAT_MIN_TITLES = 6
 const NAV_MIN_HOMEPAGES = 3
 const LISTICLE_RE = /\b\d{1,3}\s+(best|top|ways|things|tips|ideas|reasons|examples)\b|\btop\s+\d{1,3}\b/i
 const COMPARISON_RE = /\bvs\.?\b|\balternatives?\b|\bcomparison\b/i

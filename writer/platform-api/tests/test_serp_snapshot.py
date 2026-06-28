@@ -153,23 +153,18 @@ def test_derive_intent_signals_excludes_local():
     assert serp_snapshot.derive_intent_signals(features, []) == ["paa"]
 
 
-def test_derive_intent_signals_listicle_and_freshness_need_threshold():
-    organic = [
-        {"title": "10 Best Plumbers in 2026", "url": "https://a.com/best"},
-        {"title": "Top 7 Plumbing Services for 2026", "url": "https://b.com/top"},
-        {"title": "Contact us", "url": "https://c.com/contact"},
-    ]
+def test_derive_intent_signals_listicle_and_freshness_at_threshold():
+    # The format must dominate: >= 6 matching titles (the _FORMAT_MIN_TITLES bar).
+    organic = [{"title": f"{n} Best Plumbers in 2026", "url": f"https://s{n}.com/best"} for n in range(6)]
     out = serp_snapshot.derive_intent_signals({}, organic)
-    assert "listicle" in out      # two listicle titles ≥ threshold
-    assert "freshness" in out     # two year-stamped titles ≥ threshold
+    assert "listicle" in out      # six listicle titles ≥ threshold
+    assert "freshness" in out     # six year-stamped titles ≥ threshold
 
 
-def test_derive_intent_signals_single_title_below_threshold():
-    organic = [
-        {"title": "10 Best Plumbers", "url": "https://a.com/x"},
-        {"title": "Emergency plumbing", "url": "https://b.com/y"},
-    ]
-    # Only one listicle title — below the 2-title threshold.
+def test_derive_intent_signals_below_threshold_does_not_fire():
+    # Five listicle titles — just under the 6-title threshold.
+    organic = [{"title": f"{n} Best Plumbers", "url": f"https://s{n}.com/x"} for n in range(5)]
+    organic.append({"title": "Emergency plumbing", "url": "https://b.com/y"})
     assert "listicle" not in serp_snapshot.derive_intent_signals({}, organic)
 
 
