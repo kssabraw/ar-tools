@@ -143,6 +143,33 @@ def test_format_history_empty():
     assert slack_assistant.format_history([]) == ""
 
 
+# ---------------------------------------------------------------------------
+# weak_cities (shape-tolerant — the real stored value is an object, not a list)
+# ---------------------------------------------------------------------------
+def test_weak_cities_from_object_shape():
+    rwl = {"geocoded": True, "capped": False, "weak_areas": [
+        {"city": "Port Melbourne", "pins": 5},
+        {"city": "Toorak", "pins": 3},
+        {"pins": 1},  # no city → skipped
+    ]}
+    assert slack_assistant.weak_cities(rwl) == ["Port Melbourne", "Toorak"]
+
+
+def test_weak_cities_from_list_shape():
+    assert slack_assistant.weak_cities([{"city": "A"}, {"city": "B"}]) == ["A", "B"]
+
+
+def test_weak_cities_tolerates_none_and_junk():
+    assert slack_assistant.weak_cities(None) == []
+    assert slack_assistant.weak_cities("oops") == []
+    assert slack_assistant.weak_cities({"weak_areas": None}) == []
+
+
+def test_weak_cities_caps_at_five():
+    rwl = {"weak_areas": [{"city": f"C{i}"} for i in range(9)]}
+    assert slack_assistant.weak_cities(rwl) == ["C0", "C1", "C2", "C3", "C4"]
+
+
 def test_format_context_is_json_with_client():
     import json
 
