@@ -303,3 +303,35 @@ The existing `clients.gsc_property` column (migration `20260529220918_clients_su
 - **Suite decision log** (`docs/suite-architecture-and-roadmap-v1_0.md` §3): organic rank source = hybrid; GSC = service account; rank provider = DataForSEO; alerting = in-app + email/Slack. This module is the concrete realization of those rows.
 - **CLAUDE.md:** stack (React+Vite/Netlify, FastAPI/Railway, supabase-py service role), RLS-via-service-role, snake_case/PascalCase conventions, "ask before adding scheduler/queue infra."
 - **Source spec:** *Organic Rank Tracker — Build Spec v0.2* (the throwaway-mockup design doc this PRD graduates and supersedes for in-repo build).
+
+---
+
+## 14. Competitive SERP Snapshot (planned — not built)
+
+A **dated, on-demand competitive snapshot** for a tracked keyword: the live SERP landscape plus per-page/per-domain authority signals for the client and the top-10 competitors. Stored so snapshots can be compared over time (same archive pattern as reports, §12). All data via **DataForSEO** — no new vendor; "UR"/"DR" use DataForSEO's 0–1000 `rank` metric as the URL-Rating / Domain-Rating equivalent.
+
+### 14.1 Contents (per snapshot)
+- **AI Overview (AIO)** — whether an AI Overview appears for the query + its cited sources.
+- **Top 10 organic results** — position, URL, domain, title.
+- **Query intent** — informational / commercial / transactional / navigational.
+- **Per ranking page** (each top-10 competitor page **and** the client's ranking/canonical page): **referring domains** (page-level count) + **UR** (URL Rating).
+- **Per domain** (each competitor domain **and** the client's domain): **Domain Rating (DR)** for the whole domain.
+
+The client's ranking URL comes from the tracker's already-resolved `tracked_keywords.canonical_url` (or the client domain's position in the fetched SERP).
+
+### 14.2 Data sources (DataForSEO — decisions locked)
+| Field | Endpoint |
+|---|---|
+| AIO + top 10 | `serp/google/organic/live/advanced` (`ai_overview` + `organic` items) — reuse `services/dataforseo_rank.py` auth/SERP pattern |
+| Query intent | DataForSEO Labs search-intent |
+| Page **referring domains** + **UR** | `backlinks/summary/live`, **target = URL** → `referring_domains` + `rank` (UR) |
+| Domain **DR** (+ domain referring domains) | `backlinks/summary/live`, **target = domain** → `rank` (DR) |
+
+**Cost:** the Backlinks API bills **per target**. One snapshot ≈ ~10 competitor URLs + ~10 competitor domains + client URL + client domain ≈ **~22 backlink lookups per keyword** (batch as many targets per POST as the endpoint allows; still billed per item). Confirm the per-snapshot cost is acceptable before enabling broadly; consider a confirm step / not auto-scheduling.
+
+### 14.3 Shape & UX (proposed)
+- New table `serp_snapshots` — `(id, tracked_keyword_id → tracked_keywords(id), client_id, created_at, snapshot jsonb)`; RLS on, no client-facing policies (service-role only), per the suite pattern. `snapshot` JSON holds AIO, intent, the top-10 rows, and the per-page/per-domain authority numbers.
+- On-demand **"SERP Snapshot"** action per tracked keyword (the Keywords table / keyword expansion) → builds + stores a snapshot → a read view rendering the landscape (top-10 table with UR/RD per page + DR per domain, AIO box, intent badge, client row highlighted). Dated archive per keyword for over-time comparison.
+- Backend lives in `services/` + `routers/rank.py`; frontend in `components/rankings/`.
+
+**Status:** spec only — confirm the per-snapshot DataForSEO cost + propose the data model before building.
