@@ -169,6 +169,17 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
     [snap],
   )
 
+  // How many of the top organic results are written for the keyword (persisted
+  // targeted_count, or derived for pre-column snapshots).
+  const targeting = useMemo(() => {
+    if (!snap) return { numerator: 0, denominator: 0 }
+    const top = snap.results.filter(r => r.position != null && (r.position as number) <= 10)
+    const numerator = snap.targeted_count != null
+      ? snap.targeted_count
+      : top.filter(r => isPageTargeted(snap.keyword, r.title, r.url)).length
+    return { numerator, denominator: top.length }
+  }, [snap])
+
   if (isLoading) return <p style={{ color: '#94a3b8', fontSize: 13 }}>Loading snapshot…</p>
   if (!snap) return <p style={errorBox}>Snapshot not found.</p>
 
@@ -246,6 +257,14 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
       <section style={{ ...card, padding: 0, overflow: 'hidden' }}>
         <div style={{ padding: '12px 14px' }}>
           <SectionTitle title="Top organic results" />
+          {targeting.denominator > 0 && (
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              <strong style={{ color: '#0f172a' }}>{targeting.numerator} of {targeting.denominator}</strong> top results are written for this keyword
+              {targeting.numerator < targeting.denominator && (
+                <span style={{ color: '#15803d' }}> · the rest are loosely-relevant (an opening for a purpose-built page)</span>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={table}>
@@ -266,8 +285,13 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {r.is_client && <span style={clientChip}>client</span>}
                       <div style={{ minWidth: 0 }}>
-                        <div style={{ fontWeight: 600, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 360 }}>
-                          {r.title || r.domain || '—'}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ fontWeight: 600, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320 }}>
+                            {r.title || r.domain || '—'}
+                          </span>
+                          {!(r.targeted ?? isPageTargeted(snap.keyword, r.title, r.url)) && (
+                            <span style={looseChip} title="Not written for this keyword — title/URL don't target it (a weaker, beatable result)">loose match</span>
+                          )}
                         </div>
                         {r.url && (
                           <a href={r.url} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: '#6366f1', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', maxWidth: 360 }}>
@@ -378,6 +402,40 @@ function deriveIntentSignals(snap: SerpSnapshotDetail): string[] {
   return SIGNAL_ORDER.filter(s => found.has(s))
 }
 
+// "Written for the keyword" — MIRRORS services/serp_snapshot.py::is_page_targeted.
+// Used to mark loosely-relevant incumbents + count targeted top results, and to
+// derive both for snapshots captured before the `targeted`/`targeted_count`
+// columns existed. Keep in sync with the backend heuristic.
+const TARGET_STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'in', 'on', 'for', 'and', 'to', 'with', 'your', 'my',
+  'near', 'me', 'best', 'top',
+])
+const TARGET_MIN_COVERAGE = 0.75
+
+function normText(s: string | null | undefined): string {
+  return (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ')
+}
+function keywordTokens(keyword: string): string[] {
+  return normText(keyword).split(' ').filter(t => t.length >= 2 && !TARGET_STOPWORDS.has(t))
+}
+function coverage(tokens: string[], text: string): number {
+  if (!tokens.length) return 0
+  const norm = normText(text)
+  let matched = 0
+  for (const t of tokens) {
+    const stem = t.endsWith('s') && t.length > 3 ? t.slice(0, -1) : t
+    if (norm.includes(stem)) matched++
+  }
+  return matched / tokens.length
+}
+export function isPageTargeted(keyword: string, title: string | null, url: string | null): boolean {
+  const tokens = keywordTokens(keyword)
+  if (!tokens.length) return false
+  let slug = ''
+  try { slug = new URL(url ?? '').pathname } catch { slug = '' }
+  return coverage(tokens, title ?? '') >= TARGET_MIN_COVERAGE || coverage(tokens, slug) >= TARGET_MIN_COVERAGE
+}
+
 export const SIGNAL_META: Record<string, { label: string; tip: string }> = {
   aio: { label: 'AI Overview', tip: 'An AI Overview appears for this query.' },
   local: { label: 'Local pack', tip: 'A local pack / map appears — local intent.' },
@@ -472,6 +530,7 @@ const snapItemActive: React.CSSProperties = { borderColor: '#6366f1', background
 const miniBadge: React.CSSProperties = { fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '2px 8px' }
 const signalChip: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 999, padding: '2px 8px', cursor: 'help' }
 const clientChip: React.CSSProperties = { fontSize: 9, fontWeight: 700, color: '#4338ca', background: '#e0e7ff', borderRadius: 4, padding: '1px 5px', flexShrink: 0 }
+const looseChip: React.CSSProperties = { fontSize: 9, fontWeight: 600, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 5px', flexShrink: 0, whiteSpace: 'nowrap', cursor: 'help' }
 const sourceLink: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#6366f1', textDecoration: 'none' }
 const table: React.CSSProperties = { borderCollapse: 'collapse', width: '100%', fontSize: 12 }
 const th: React.CSSProperties = { padding: '8px 12px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap' }

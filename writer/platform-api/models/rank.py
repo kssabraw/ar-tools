@@ -230,6 +230,7 @@ class SerpSnapshotResultRow(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     is_client: bool = False
+    targeted: Optional[bool] = None  # page written for the keyword (title/slug coverage)
     referring_domains: Optional[int] = None
     url_rating: Optional[int] = None  # DataForSEO page rank (0–1000), UR-equivalent
     backlinks: Optional[int] = None
@@ -262,6 +263,7 @@ class SerpSnapshotDetail(BaseModel):
     aio_text: Optional[str] = None
     aio_sources: Optional[list] = None
     serp_features: Optional[dict] = None
+    targeted_count: Optional[int] = None  # # of top organic results written for the keyword
     client_rank: Optional[int] = None
     client_url: Optional[str] = None
     error: Optional[str] = None
@@ -283,6 +285,7 @@ class SerpTimelinePoint(BaseModel):
     local_intent: bool = False
     intent_signals: list[str] = []
     aio_present: bool = False
+    targeted_count: Optional[int] = None  # # of top organic results written for the keyword
     client_rank: Optional[int] = None
     client_rd: Optional[int] = None  # client's page referring-domains count
     client_ur: Optional[int] = None  # client's page URL Rating (raw 0–1000; UI shows /10)

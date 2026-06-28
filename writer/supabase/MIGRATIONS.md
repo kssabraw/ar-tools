@@ -79,6 +79,7 @@ expected for a shared project, not a problem.
 | `20260628015542` | `serp_snapshot_domains` (#4 — Competitive SERP Snapshot per-domain Domain Rating) |
 | `20260628022039` | `serp_snapshot_local_intent` (#4 — derived local-intent flag on a snapshot) |
 | `20260628024053` | `serp_snapshot_intent_signals` (#4 — derived SERP/title intent signals on a snapshot) |
+| `20260628032756` | `serp_snapshot_targeted` (#4 — per-result "written for keyword" flag + top-N targeted_count) |
 
 > A few `schema_migrations.name` values carry version suffixes (`_v1_4`, `_v2_0`)
 > from how they were originally applied. The CLI matches on the numeric version,
@@ -86,6 +87,13 @@ expected for a shared project, not a problem.
 > the same migration.
 
 ## Reconciliation log
+
+**2026-06-28** — SERP Snapshot topical targeting (#4): added `targeted_count`
+(int) to `serp_snapshots` and `targeted` (bool) to `serp_snapshot_results` —
+whether each ranking page is written for the keyword + how many of the top
+results are. Applied via the Supabase MCP; recorded version `20260628032756`,
+file renamed from its `…120000` placeholder + `-- Migration:` header updated.
+Additive, nullable; the frontend mirrors the heuristic for pre-column snapshots.
 
 **2026-06-28** — SERP Snapshot intent signals (#4): added an `intent_signals`
 jsonb column to `serp_snapshots` (normalized SERP-feature + title-pattern intent

@@ -106,6 +106,58 @@ def find_client_organic(items: list[dict], domain: str) -> Optional[dict]:
     return None
 
 
+# "Written for the keyword" detection. A ranking page is treated as *targeted*
+# when its title OR its URL slug covers most of the keyword's significant tokens
+# — i.e. the page is purpose-built for the term, not merely mentioning it. Many
+# loosely-relevant incumbents (homepages, tangential posts, category pages) = a
+# gap a dedicated page can take (a rankability input). Heuristic over title+slug
+# only (not the marketing-copy description) to avoid false positives; mirrored
+# client-side in components/rankings/SerpSnapshots.tsx — keep the two in sync.
+_TARGET_STOPWORDS = {
+    "the", "a", "an", "of", "in", "on", "for", "and", "to", "with", "your", "my",
+    "near", "me", "best", "top",
+}
+_TARGET_MIN_COVERAGE = 0.75
+
+
+def _norm_text(s: Optional[str]) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower())
+
+
+def _keyword_tokens(keyword: str) -> list[str]:
+    return [t for t in _norm_text(keyword).split() if len(t) >= 2 and t not in _TARGET_STOPWORDS]
+
+
+def _coverage(tokens: list[str], text: str) -> float:
+    if not tokens:
+        return 0.0
+    norm = _norm_text(text)
+    matched = 0
+    for t in tokens:
+        stem = t[:-1] if t.endswith("s") and len(t) > 3 else t  # plural-tolerant
+        if stem in norm:
+            matched += 1
+    return matched / len(tokens)
+
+
+def is_page_targeted(keyword: str, title: Optional[str], url: Optional[str]) -> bool:
+    """Whether a ranking page looks written *for* `keyword` — its title or URL
+    slug covers ≥75% of the keyword's significant tokens (plural-tolerant)."""
+    tokens = _keyword_tokens(keyword)
+    if not tokens:
+        return False
+    slug = urlparse(url or "").path
+    return (
+        _coverage(tokens, title or "") >= _TARGET_MIN_COVERAGE
+        or _coverage(tokens, slug) >= _TARGET_MIN_COVERAGE
+    )
+
+
+def count_targeted(keyword: str, organic: list[dict]) -> int:
+    """How many of the captured top organic results are written for the keyword."""
+    return sum(1 for o in organic if is_page_targeted(keyword, o.get("title"), o.get("url")))
+
+
 def collect_snapshot_domains(result_rows: list[dict], client_domain: str) -> list[dict]:
     """Deduped, ordered ``[{domain, is_client}, ...]`` to fetch Domain Rating for.
 
@@ -494,9 +546,20 @@ async def _capture_and_store(
     for o in organic:
         is_client = _domain_matches(o["domain"], domain)
         client_in_top = client_in_top or is_client
-        result_rows.append({**o, "is_client": is_client})
+        result_rows.append({
+            **o,
+            "is_client": is_client,
+            "targeted": is_page_targeted(keyword, o.get("title"), o.get("url")),
+        })
     if client_match and not client_in_top:
-        result_rows.append({**client_match, "is_client": True})
+        result_rows.append({
+            **client_match,
+            "is_client": True,
+            "targeted": is_page_targeted(keyword, client_match.get("title"), client_match.get("url")),
+        })
+    # How many of the top organic results are written for the keyword (the client's
+    # below-depth extra row, appended after `organic`, is excluded from the count).
+    targeted_count = sum(1 for r in result_rows[: len(organic)] if r.get("targeted"))
 
     # Backlinks enrichment (the pricier per-URL calls), isolated per URL.
     any_backlinks_failed = False
@@ -556,6 +619,7 @@ async def _capture_and_store(
                 "aio_text": aio["text"],
                 "aio_sources": aio["sources"] or None,
                 "serp_features": features,
+                "targeted_count": targeted_count,
                 "client_rank": client_rank,
                 "client_url": client_url,
             }
@@ -575,6 +639,7 @@ async def _capture_and_store(
                     "title": r.get("title"),
                     "description": r.get("description"),
                     "is_client": r.get("is_client", False),
+                    "targeted": r.get("targeted"),
                     "referring_domains": r.get("referring_domains"),
                     "url_rating": r.get("url_rating"),
                     "backlinks": r.get("backlinks"),

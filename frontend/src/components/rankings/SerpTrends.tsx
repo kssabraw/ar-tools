@@ -181,6 +181,11 @@ function KeywordTimeline({ clientId }: { clientId: string }) {
                   <span title="Client page URL Rating (0–100)">UR <strong style={{ color: '#0f172a' }}>{ahrefsScale(p.client_ur) ?? '—'}</strong></span>
                   <span title="Client domain Domain Rating (0–100)">DR <strong style={{ color: '#0f172a' }}>{ahrefsScale(p.client_dr) ?? '—'}</strong>{' '}
                     {p.client_dr_delta != null && Math.round(p.client_dr_delta / 10) !== 0 && <Delta value={Math.round(p.client_dr_delta / 10)} unit="" higherBetter />}</span>
+                  {p.targeted_count != null && (
+                    <span title="How many of the top results are written for this keyword (fewer = more winnable)">
+                      Targeted <strong style={{ color: '#0f172a' }}>{p.targeted_count}</strong>
+                    </span>
+                  )}
                   {p.query_intent && <span style={{ color: '#7c3aed', textTransform: 'capitalize' }}>{p.query_intent}</span>}
                 </div>
                 {/* Signal chips */}

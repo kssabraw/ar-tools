@@ -178,7 +178,7 @@ def get_keyword_timeline(keyword_id: str) -> Optional[dict]:
 
     snaps = (
         supabase.table("serp_snapshots")
-        .select("id, captured_at, status, query_intent, local_intent, intent_signals, aio_present, client_rank")
+        .select("id, captured_at, status, query_intent, local_intent, intent_signals, aio_present, targeted_count, client_rank")
         .eq("keyword_id", keyword_id)
         .in_("status", ["complete", "partial"])
         .order("captured_at")
@@ -224,6 +224,7 @@ def get_keyword_timeline(keyword_id: str) -> Optional[dict]:
             "local_intent": bool(s.get("local_intent")),
             "intent_signals": s.get("intent_signals") or [],
             "aio_present": bool(s.get("aio_present")),
+            "targeted_count": s.get("targeted_count"),
             "client_rank": s.get("client_rank"),
             "client_rd": rd_by.get(s["id"]),
             "client_ur": ur_by.get(s["id"]),

@@ -206,6 +206,40 @@ def test_classify_intent_empty():
 
 
 # ---------------------------------------------------------------------------
+# is_page_targeted / count_targeted
+# ---------------------------------------------------------------------------
+def test_is_page_targeted_title_and_slug_plural_tolerant():
+    kw = "emergency plumber sydney"
+    # Title covers all tokens (plural "plumbers" matches "plumber").
+    assert serp_snapshot.is_page_targeted(kw, "Emergency Plumbers Sydney - 24/7", "https://x.com/")
+    # Slug covers all tokens even with a generic title.
+    assert serp_snapshot.is_page_targeted(kw, "Home", "https://x.com/emergency-plumber-sydney")
+
+
+def test_is_page_targeted_false_for_loose_or_homepage():
+    kw = "emergency plumber sydney"
+    # Only the city token present — not written for the keyword.
+    assert not serp_snapshot.is_page_targeted(kw, "Sydney City Council", "https://gov.au/")
+    # Generic homepage.
+    assert not serp_snapshot.is_page_targeted(kw, "Joe's Plumbing & Gas", "https://joes.com/")
+
+
+def test_count_targeted_counts_top_results():
+    kw = "roof restoration melbourne"
+    organic = [
+        {"title": "Roof Restoration Melbourne | Best", "url": "https://a.com/roof-restoration-melbourne"},
+        {"title": "Melbourne Weather Today", "url": "https://b.com/weather"},
+        {"title": "About Us", "url": "https://c.com/"},
+        {"title": "Roof Restoration in Melbourne - Quotes", "url": "https://d.com/services"},
+    ]
+    assert serp_snapshot.count_targeted(kw, organic) == 2
+
+
+def test_is_page_targeted_empty_keyword():
+    assert serp_snapshot.is_page_targeted("", "anything", "https://x.com/x") is False
+
+
+# ---------------------------------------------------------------------------
 # parse_backlinks_summary
 # ---------------------------------------------------------------------------
 def test_parse_backlinks_summary_maps_rank_to_url_rating():

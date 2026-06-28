@@ -837,6 +837,7 @@ export interface SerpSnapshotResultRow {
   title: string | null
   description: string | null
   is_client: boolean
+  targeted: boolean | null // page written for the keyword (title/slug coverage)
   referring_domains: number | null
   url_rating: number | null // DataForSEO page rank (0–1000), UR-equivalent
   backlinks: number | null
@@ -875,6 +876,7 @@ export interface SerpSnapshotDetail {
   aio_text: string | null
   aio_sources: SerpAioSource[] | null
   serp_features: Record<string, unknown> | null
+  targeted_count: number | null
   client_rank: number | null
   client_url: string | null
   error: string | null
@@ -896,6 +898,7 @@ export interface SerpTimelinePoint {
   local_intent: boolean
   intent_signals: string[]
   aio_present: boolean
+  targeted_count: number | null
   client_rank: number | null
   client_rd: number | null
   client_ur: number | null
