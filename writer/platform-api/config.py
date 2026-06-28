@@ -129,6 +129,24 @@ class Settings(BaseSettings):
     # account), then every `_interval_days`. On-demand always works regardless.
     gsc_research_auto_enabled: bool = True
     gsc_research_interval_days: int = 30
+
+    # Notifications service — shared delivery pipe (in-app card/feed + email +
+    # Slack). In-app always works (DB row); email/Slack are best-effort and only
+    # fire when their creds are configured. Recipients/channel are agency-level for
+    # v1 (per-client routing later).
+    notifications_enabled: bool = True
+    # Email via SMTP (Gmail/Workspace app password).
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""            # From address (defaults to smtp_user if blank)
+    notify_email_to: str = ""      # comma-separated recipients (the agency team)
+    # Slack app bot token (xoxb-…) + default channel id/name.
+    slack_bot_token: str = ""
+    slack_default_channel: str = ""
+    # Frontend base URL for deep links in email/Slack (e.g. https://ar-internal.netlify.app).
+    app_base_url: str = ""
     maps_report_competitor_min_rating: float = 4.7
     maps_report_octant_rule: str = "R1"
     # Weak-zone geocoding (turns the geo-grid's weakest pins into real city names

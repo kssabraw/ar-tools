@@ -25,6 +25,7 @@ from routers.gsc_research import router as gsc_research_router
 from routers.icp import router as icp_router
 from routers.local_seo import router as local_seo_router
 from routers.maps import router as maps_router
+from routers.notifications import router as notifications_router
 from routers.publish import router as publish_router
 from routers.rank import router as rank_router
 from routers.runs import router as runs_router
@@ -131,6 +132,7 @@ app.include_router(gsc_research_router)
 app.include_router(icp_router)
 app.include_router(local_seo_router)
 app.include_router(maps_router)
+app.include_router(notifications_router)
 app.include_router(rank_router)
 app.include_router(runs_router)
 app.include_router(silos_router)

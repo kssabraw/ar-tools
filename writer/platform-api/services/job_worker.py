@@ -24,6 +24,7 @@ from services.rank_location import run_rank_location_derive_job
 from services.service_page_plan import run_service_plan_job
 from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
+from services.notifications import run_notification_dispatch_job
 from services.serp_snapshot import run_serp_snapshot_job
 from services.local_dominator import run_maps_scan_job
 from services.maps_report import run_maps_report_job
@@ -314,6 +315,8 @@ async def _process_job(job: dict) -> None:
         await run_brand_scan_job(job)
     elif job_type == "brand_report":
         await run_brand_report_job(job)
+    elif job_type == "notification_dispatch":
+        await run_notification_dispatch_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 

@@ -966,3 +966,28 @@ export interface RankabilityItem {
 export interface RankabilityResponse {
   items: RankabilityItem[]
 }
+
+// --- Notifications --------------------------------------------------------
+export interface Notification {
+  id: string
+  client_id: string | null
+  kind: string
+  severity: 'info' | 'warning' | 'critical'
+  title: string
+  summary: string | null
+  payload: Record<string, unknown> | null
+  status: 'unread' | 'read' | 'dismissed'
+  channels_sent: Record<string, string> | null
+  created_at: string
+  read_at: string | null
+}
+
+export interface UnreadCount {
+  client_id: string
+  count: number
+}
+
+export interface UnreadCountsResponse {
+  counts: UnreadCount[]
+  total: number
+}

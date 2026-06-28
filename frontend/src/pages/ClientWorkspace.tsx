@@ -6,6 +6,7 @@ import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye,
 } from 'lucide-react'
+import { ClientNotifications } from '../components/ClientNotifications'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
@@ -66,6 +67,8 @@ export function ClientWorkspace() {
           )}
         </div>
       </div>
+
+      {id && <ClientNotifications clientId={id} />}
 
       {/* ── Client setup ─────────────────────────────────────────────── */}
       <Section

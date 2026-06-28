@@ -113,3 +113,21 @@ def test_no_alerts_when_no_data():
     rows = _gsc([(o, None) for o in range(0, 10)])
     signals = rank_alerts.detect_alerts("kw", rows, "none", "no_data", TODAY)
     assert signals == []
+
+
+def test_summarize_drop_alerts_digest():
+    from services import rank_alerts
+    out = rank_alerts.summarize_drop_alerts([
+        {"keyword": "a", "alert_type": "weekly_drop", "message": "a dropped 7."},
+        {"keyword": "b", "alert_type": "deindexed", "message": "b may be deindexed."},
+    ])
+    assert out["title"] == "2 ranking drops detected"
+    assert out["severity"] == "critical"
+    assert "a dropped 7." in out["summary"] and "b may be deindexed." in out["summary"]
+
+
+def test_summarize_drop_alerts_single_warning():
+    from services import rank_alerts
+    out = rank_alerts.summarize_drop_alerts([{"keyword": "a", "alert_type": "weekly_drop", "message": "m"}])
+    assert out["title"] == "1 ranking drop detected"
+    assert out["severity"] == "warning"
