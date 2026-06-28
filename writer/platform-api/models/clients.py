@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 class ClientListItem(BaseModel):
@@ -113,6 +113,20 @@ class ClientDetail(BaseModel):
     # Cities the team explicitly wants location pages for, beyond the primary —
     # one source feeding the silo planner's target-city discovery.
     target_cities: list[str] = Field(default_factory=list)
+
+    @field_validator("drive_folders", mode="before")
+    @classmethod
+    def _sanitize_drive_folders(cls, v: Any) -> dict[str, str]:
+        """Coerce the stored JSONB into a clean {str: str} map so a malformed or
+        legacy value (null, non-dict, non-string/blank entries) can't 500 a GET.
+        Drops empty/whitespace entries; stringifies keys and values."""
+        if not isinstance(v, dict):
+            return {}
+        return {
+            str(k): str(val).strip()
+            for k, val in v.items()
+            if val is not None and str(val).strip()
+        }
 
 
 class ClientCreateRequest(BaseModel):

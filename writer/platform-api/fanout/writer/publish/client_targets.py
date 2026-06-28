@@ -30,7 +30,8 @@ def resolve_client_publish_targets(client_id: str | None) -> dict:
             get_supabase()
             .table("clients")
             .select(
-                "google_drive_folder_id, github_repo, github_branch, github_content_path"
+                "google_drive_folder_id, drive_folders, "
+                "github_repo, github_branch, github_content_path"
             )
             .eq("id", client_id)
             .limit(1)
@@ -40,7 +41,12 @@ def resolve_client_publish_targets(client_id: str | None) -> dict:
             return {}
         c = resp.data[0]
         return {
-            "drive": {"folder_id": c.get("google_drive_folder_id")},
+            # `folder_id` is the default; `folders` is the per-content-type map
+            # (content_type slug → folder ID) for when this path resolves by type.
+            "drive": {
+                "folder_id": c.get("google_drive_folder_id"),
+                "folders": c.get("drive_folders") or {},
+            },
             "github": {
                 "repo": c.get("github_repo"),
                 "branch": c.get("github_branch"),

@@ -199,11 +199,18 @@ export function ClientForm() {
         icp_source_type: 'text',
         icp_text: form.icp_text,
         google_drive_folder_id: form.google_drive_folder_id || null,
-        drive_folders: Object.fromEntries(
-          DRIVE_FOLDER_FIELDS
-            .map(f => [f.type, (form[f.key] as string).trim()])
-            .filter(([, v]) => v)
-        ),
+        // Merge the form's known per-type folders onto the existing map so keys
+        // we don't render (e.g. a content type added later) are preserved, not
+        // dropped. Blank fields clear their key.
+        drive_folders: (() => {
+          const merged: Record<string, string> = { ...(existing?.drive_folders ?? {}) }
+          for (const f of DRIVE_FOLDER_FIELDS) {
+            const v = (form[f.key] as string).trim()
+            if (v) merged[f.type] = v
+            else delete merged[f.type]
+          }
+          return merged
+        })(),
         github_repo: form.github_repo || null,
         github_branch: form.github_branch || null,
         github_content_path: form.github_content_path || null,

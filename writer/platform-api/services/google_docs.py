@@ -34,13 +34,20 @@ def resolve_drive_folder(client: dict, content_type: str | None) -> str | None:
     Clients carry a per-content-type folder map (`drive_folders`, keyed by
     content_type slug) plus a single default folder (`google_drive_folder_id`).
     Return the type-specific folder when one is set, otherwise fall back to the
-    default — so a client with no per-type config still publishes everywhere."""
+    default — so a client with no per-type config still publishes everywhere.
+
+    Values are stripped; a blank/whitespace-only or non-string entry is treated
+    as unset (falls through to the default, then to None) so a malformed value
+    can't be sent to the webhook as a bogus folder ID."""
     folders = client.get("drive_folders")
     if content_type and isinstance(folders, dict):
         specific = folders.get(content_type)
-        if specific:
-            return specific
-    return client.get("google_drive_folder_id")
+        if isinstance(specific, str) and specific.strip():
+            return specific.strip()
+    default = client.get("google_drive_folder_id")
+    if isinstance(default, str) and default.strip():
+        return default.strip()
+    return None
 
 
 async def create_google_doc(
