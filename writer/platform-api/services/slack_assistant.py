@@ -302,21 +302,30 @@ def _ctx_ai_visibility(supabase, client_id: str, today: date) -> Optional[dict]:
         .eq("is_active", True)
         .execute()
     ).count or 0
-    rows = (
+    # Pin the latest batch id first, then fetch that whole batch — a batch is
+    # (keywords × engines) rows, so a single capped query could truncate it and
+    # undercount visibility for clients with many tracked keywords.
+    newest = (
         supabase.table("brand_mention_history")
-        .select("keyword_id, scan_batch_id, engine, mention_found, created_at")
+        .select("scan_batch_id, created_at")
         .eq("client_id", client_id)
         .order("created_at", desc=True)
-        .limit(400)
+        .limit(1)
         .execute()
-    ).data or []
-    if not (kw_count or rows):
+    ).data
+    if not (kw_count or newest):
         return None
     out: dict = {"keywords_tracked": kw_count}
-    if rows:
-        latest_batch = rows[0]["scan_batch_id"]
-        batch = [r for r in rows if r["scan_batch_id"] == latest_batch]
-        out["latest_scan_at"] = rows[0].get("created_at")
+    if newest:
+        latest_batch = newest[0]["scan_batch_id"]
+        batch = (
+            supabase.table("brand_mention_history")
+            .select("keyword_id, engine, mention_found")
+            .eq("client_id", client_id)
+            .eq("scan_batch_id", latest_batch)
+            .execute()
+        ).data or []
+        out["latest_scan_at"] = newest[0].get("created_at")
         per_engine: dict[str, dict] = {}
         for r in batch:
             e = per_engine.setdefault(r.get("engine") or "?", {"found": 0, "total": 0})
