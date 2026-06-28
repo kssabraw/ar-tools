@@ -25,9 +25,14 @@ config. The outbound channels stay dormant until their creds are set on the
   (sending address), `SMTP_PASSWORD` (**Google App Password**, needs 2FA on the
   account), `SMTP_FROM` (optional), `NOTIFY_EMAIL_TO` (comma-separated
   recipients). Email fires only when host+user+password+recipients are all set.
-- **💬 Slack — not yet set.** Vars: `SLACK_BOT_TOKEN` (`xoxb-…`, scope
-  `chat:write`, app installed + bot invited to the channel), `SLACK_DEFAULT_CHANNEL`
-  (channel id or `#name`). Fires only when both are set.
+- **💬 Slack — CONFIGURED & live-verified (2026-06-28).** App **SerMastr**
+  (`ar_tools`/display "SerMastr", bot `B0BDP9BDXPU`, team "Amazing Rankings")
+  with `chat:write`, installed + invited to channel `C0BDM8E9FJA`. `SLACK_BOT_TOKEN`
+  + `SLACK_DEFAULT_CHANNEL` set on PLATFORM. Verified end-to-end through the live
+  worker (`notification_dispatch` → `channels_sent.slack="ok"`), not just a raw
+  API call. (Setup gotcha for next time: the scope must be **`chat:write`** under
+  *Bot* Token Scopes — `calls:write` looks similar and yields `missing_scope`;
+  private channels need the bot invited and addressed by **ID**, not `#name`.)
 - **🔗 `APP_BASE_URL`** (e.g. `https://ar-internal.netlify.app`) — makes the
   email/Slack "Open in AR Tools" deep links clickable; copies still send without it.
 - Master switch `NOTIFICATIONS_ENABLED` defaults `true`. Each channel is
