@@ -364,3 +364,11 @@ The client's ranking URL comes from the tracker's already-resolved `tracked_keyw
 - Backend: `services/serp_snapshot.py` (`fetch_domain_summary` + the pure `collect_snapshot_domains` helper for DR), routes in `routers/rank.py` (`GET .../serp-snapshots`, `GET /serp-snapshots/{id}` now returns `domains`, `POST .../serp-snapshot`). Frontend: `components/rankings/SerpSnapshots.tsx`, wired into `RankKeywords.tsx`.
 
 **Status:** built (2026-06-28). Per-snapshot cost ≈ ~24 DataForSEO lookups (confirmed acceptable); DR captured on every snapshot incl. the weekly pass.
+
+### 14.4 SERP Landscape Trends (built)
+Over-time + cross-keyword views over the dated snapshot archive — a **"SERP Trends"** tab in the Rankings page (`components/rankings/SerpTrends.tsx`, backend `services/serp_trends.py`, routes `GET /clients/{id}/serp-trends` + `GET /tracked-keywords/{id}/serp-timeline`):
+- **Per-signal prevalence over time** — for each tracked signal (AIO, local pack, the SERP-feature + title-format signals), the % of the client's keywords whose SERP shows it, as an **as-of weekly series** (each keyword contributes its latest snapshot on-or-before each week-end, so the weekly auto-capture + ad-hoc captures both read cleanly). Rendered as a per-signal sparkline + now/Δ table.
+- **"What changed" digest** — keywords whose newest snapshot gained/lost a signal vs the prior capture.
+- **Per-keyword timeline** — each dated snapshot with its signal chips, the client's rank/UR/DR, and the delta vs the previous capture (signals added/removed, rank/DR movement).
+
+Pure helpers (deltas, as-of prevalence, change digest) are unit-tested. This is the read foundation for a future **automated reoptimization planner** (track SERP + competition change → recommend actions).

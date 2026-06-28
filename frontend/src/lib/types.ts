@@ -886,3 +886,49 @@ export interface SerpSnapshotCaptureResponse {
   keyword_id: string
   status: string // 'enqueued'
 }
+
+// --- SERP Landscape Trends ------------------------------------------------
+export interface SerpTimelinePoint {
+  snapshot_id: string
+  captured_at: string
+  status: string
+  query_intent: string | null
+  local_intent: boolean
+  intent_signals: string[]
+  aio_present: boolean
+  client_rank: number | null
+  client_ur: number | null
+  client_dr: number | null
+  signals_added: string[]
+  signals_removed: string[]
+  client_rank_delta: number | null
+  client_dr_delta: number | null
+}
+
+export interface SerpTimelineResponse {
+  keyword_id: string
+  keyword: string
+  points: SerpTimelinePoint[]
+}
+
+export interface SerpTrendSeries {
+  signal: string
+  counts: number[]
+  pct: (number | null)[]
+}
+
+export interface SerpChangeItem {
+  keyword_id: string
+  keyword: string
+  captured_at: string
+  added: string[]
+  removed: string[]
+  client_rank_delta: number | null
+}
+
+export interface SerpTrendsResponse {
+  week_ends: string[]
+  keyword_counts: number[]
+  series: SerpTrendSeries[]
+  changes: SerpChangeItem[]
+}

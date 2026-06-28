@@ -274,6 +274,52 @@ class SerpSnapshotCaptureResponse(BaseModel):
     status: str  # 'enqueued'
 
 
+# --- SERP Landscape Trends (over-time + cross-keyword) ----------------------
+class SerpTimelinePoint(BaseModel):
+    snapshot_id: UUID
+    captured_at: str
+    status: str
+    query_intent: Optional[str] = None
+    local_intent: bool = False
+    intent_signals: list[str] = []
+    aio_present: bool = False
+    client_rank: Optional[int] = None
+    client_ur: Optional[int] = None  # client's page URL Rating (0–1000)
+    client_dr: Optional[int] = None  # client's domain Domain Rating (0–1000)
+    signals_added: list[str] = []
+    signals_removed: list[str] = []
+    client_rank_delta: Optional[int] = None  # vs previous snapshot (− = improved)
+    client_dr_delta: Optional[int] = None     # vs previous snapshot (+ = stronger)
+
+
+class SerpTimelineResponse(BaseModel):
+    keyword_id: UUID
+    keyword: str
+    points: list[SerpTimelinePoint] = []
+
+
+class SerpTrendSeries(BaseModel):
+    signal: str
+    counts: list[int] = []
+    pct: list[Optional[float]] = []  # fraction 0–1 of keywords-with-data per week
+
+
+class SerpChangeItem(BaseModel):
+    keyword_id: UUID
+    keyword: str
+    captured_at: str
+    added: list[str] = []
+    removed: list[str] = []
+    client_rank_delta: Optional[int] = None
+
+
+class SerpTrendsResponse(BaseModel):
+    week_ends: list[str] = []
+    keyword_counts: list[int] = []
+    series: list[SerpTrendSeries] = []
+    changes: list[SerpChangeItem] = []
+
+
 # --- In-app rank-drop alerts ------------------------------------------------
 class RankAlert(BaseModel):
     id: UUID

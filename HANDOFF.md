@@ -1,6 +1,38 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **Competitive SERP Snapshot — per-domain DR + viewer UI** (latest)
+## ⏩ Update — 2026-06-28 · **SERP Landscape Trends** (latest)
+
+Built on top of the SERP Snapshot work: an over-time + cross-keyword view of how
+Google's SERP composition changes, from the dated snapshot archive. New **"SERP
+Trends"** tab in the Rankings page. (All on PR #156, still draft, awaiting merge.)
+
+**Three views** (`services/serp_trends.py` + `components/rankings/SerpTrends.tsx`):
+- **Per-signal prevalence over time** — % of the client's keywords whose SERP
+  shows each tracked signal (AIO, local pack, the SERP-feature + title-format
+  signals), as an **as-of weekly series** (each keyword contributes its latest
+  snapshot on-or-before each week-end, so weekly auto-capture + ad-hoc captures
+  read cleanly). Per-signal sparkline + now/Δ table.
+- **"What changed" digest** — keywords whose newest snapshot gained/lost a signal
+  vs the prior capture.
+- **Per-keyword timeline** — each dated snapshot with its signal chips, the
+  client's rank/UR/DR, and the delta vs the previous capture.
+
+**API:** `GET /clients/{id}/serp-trends?weeks=12`, `GET /tracked-keywords/{id}/serp-timeline`
+(`routers/rank.py`). No new tables/migration — pure reads over `serp_snapshots` /
+`serp_snapshot_results` / `serp_snapshot_domains`. Pure helpers (deltas, as-of
+weekly prevalence, change digest, week-end generation) are unit-tested.
+
+**Intended direction (user):** track SERP + competition change over time to drive
+an **automated optimization/reoptimization planner** — these trend reads are that
+planner's data foundation (not yet built).
+
+**Verified:** import main + **546 tests** on pinned fastapi==0.115.0/pydantic==2.9.2
+(8 new serp_trends cases); ruff clean; frontend build clean. Live providers not
+exercised from the sandbox.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Competitive SERP Snapshot — per-domain DR + viewer UI**
 
 Closed out the rank tracker's **Competitive SERP Snapshot** (PRD §14). The capture
 engine + retrieval API + weekly auto-capture already existed (PR #53, 2026-06-22) —

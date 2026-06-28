@@ -378,7 +378,9 @@ function deriveIntentSignals(snap: SerpSnapshotDetail): string[] {
   return SIGNAL_ORDER.filter(s => found.has(s))
 }
 
-const SIGNAL_META: Record<string, { label: string; tip: string }> = {
+export const SIGNAL_META: Record<string, { label: string; tip: string }> = {
+  aio: { label: 'AI Overview', tip: 'An AI Overview appears for this query.' },
+  local: { label: 'Local pack', tip: 'A local pack / map appears — local intent.' },
   forums: { label: 'Forums', tip: 'Discussions & forums shown — users want opinions & real experiences (often pre-purchase research).' },
   video: { label: 'Video', tip: 'Video results present — how-to / demo / visual intent.' },
   news: { label: 'News', tip: 'Top stories present — news & freshness (QDF) intent.' },
@@ -398,7 +400,7 @@ const SIGNAL_META: Record<string, { label: string; tip: string }> = {
   navigational: { label: 'Navigational', tip: 'Homepages dominate the results — brand / navigational intent.' },
 }
 
-function SignalChip({ signal }: { signal: string }) {
+export function SignalChip({ signal }: { signal: string }) {
   const m = SIGNAL_META[signal]
   const label = m?.label ?? signal
   return <span style={signalChip} title={m?.tip ?? signal}>{label}</span>

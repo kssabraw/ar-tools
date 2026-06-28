@@ -43,6 +43,11 @@ from models.rank import (
     SerpSnapshotDomainRow,
     SerpSnapshotListItem,
     SerpSnapshotResultRow,
+    SerpChangeItem,
+    SerpTimelinePoint,
+    SerpTimelineResponse,
+    SerpTrendSeries,
+    SerpTrendsResponse,
     StrikingDistanceResponse,
     TrackedKeywordCreateRequest,
     TrackedKeywordUpdateRequest,
@@ -57,6 +62,7 @@ from services import (
     rank_report,
     rank_status,
     serp_snapshot,
+    serp_trends,
 )
 
 logger = logging.getLogger(__name__)
@@ -739,6 +745,41 @@ async def capture_serp_snapshot(
         raise HTTPException(status_code=404, detail="not_found")
     serp_snapshot.enqueue_serp_snapshot(found.data[0]["client_id"], keyword_id=str(keyword_id))
     return SerpSnapshotCaptureResponse(keyword_id=keyword_id, status="enqueued")
+
+
+# ---------------------------------------------------------------------------
+# SERP Landscape Trends — over-time + cross-keyword views over the snapshots.
+# ---------------------------------------------------------------------------
+@router.get("/tracked-keywords/{keyword_id}/serp-timeline", response_model=SerpTimelineResponse)
+async def get_serp_timeline(
+    keyword_id: UUID, auth: dict = Depends(require_auth)
+) -> SerpTimelineResponse:
+    """Dated snapshots for a keyword with the signal set, the client's rank/UR/DR,
+    and the delta vs the previous capture — "how Google changed for this query"."""
+    data = serp_trends.get_keyword_timeline(str(keyword_id))
+    if data is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return SerpTimelineResponse(
+        keyword_id=data["keyword_id"],
+        keyword=data["keyword"],
+        points=[SerpTimelinePoint(**p) for p in data["points"]],
+    )
+
+
+@router.get("/clients/{client_id}/serp-trends", response_model=SerpTrendsResponse)
+async def get_serp_trends(
+    client_id: UUID, weeks: int = 12, auth: dict = Depends(require_auth)
+) -> SerpTrendsResponse:
+    """Client-level SERP-landscape rollup: per-signal prevalence over an as-of
+    weekly series, plus a "what changed since last capture" digest."""
+    weeks = max(2, min(weeks, 52))
+    data = serp_trends.get_client_trends(str(client_id), weeks=weeks)
+    return SerpTrendsResponse(
+        week_ends=data["week_ends"],
+        keyword_counts=data["keyword_counts"],
+        series=[SerpTrendSeries(**s) for s in data["series"]],
+        changes=[SerpChangeItem(**c) for c in data["changes"]],
+    )
 
 
 # ---------------------------------------------------------------------------
