@@ -693,9 +693,12 @@ async def get_serp_snapshot(
         supabase.table("serp_snapshot_domains")
         .select("*")
         .eq("snapshot_id", str(snapshot_id))
-        .order("domain_rating", desc=True)
         .execute()
     ).data or []
+    # Strongest domains first, with unrated (null DR — e.g. a failed lookup on a
+    # 'partial' snapshot) sorted LAST. Done in Python because Postgres orders
+    # NULLS FIRST on DESC, which would float failed rows to the top.
+    domains.sort(key=lambda d: (d.get("domain_rating") is None, -(d.get("domain_rating") or 0)))
     return SerpSnapshotDetail(
         **{k: snap.get(k) for k in (
             "id", "keyword_id", "client_id", "keyword", "captured_at", "status",

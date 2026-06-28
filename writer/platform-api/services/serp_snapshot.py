@@ -472,20 +472,38 @@ async def _capture_and_store(
         ).execute()
 
     if domain_rows:
-        supabase.table("serp_snapshot_domains").insert(
-            [
-                {
-                    "snapshot_id": snapshot_id,
-                    "domain": d.get("domain"),
-                    "is_client": d.get("is_client", False),
-                    "domain_rating": d.get("domain_rating"),
-                    "referring_domains": d.get("referring_domains"),
-                    "backlinks": d.get("backlinks"),
-                    "backlinks_status": d.get("backlinks_status", "pending"),
-                }
-                for d in domain_rows
-            ]
-        ).execute()
+        try:
+            supabase.table("serp_snapshot_domains").insert(
+                [
+                    {
+                        "snapshot_id": snapshot_id,
+                        "domain": d.get("domain"),
+                        "is_client": d.get("is_client", False),
+                        "domain_rating": d.get("domain_rating"),
+                        "referring_domains": d.get("referring_domains"),
+                        "backlinks": d.get("backlinks"),
+                        "backlinks_status": d.get("backlinks_status", "pending"),
+                    }
+                    for d in domain_rows
+                ]
+            ).execute()
+        except Exception as exc:
+            # The snapshot + results already persisted; don't let a domains-insert
+            # failure propagate (which would miscount this mostly-successful
+            # capture as 'failed'). Degrade to 'partial' so the missing DR is
+            # visible, best-effort.
+            logger.warning(
+                "serp_snapshot_domains_insert_failed",
+                extra={"snapshot_id": snapshot_id, "error": str(exc)},
+            )
+            if status != "partial":
+                status = "partial"
+                try:
+                    supabase.table("serp_snapshots").update({"status": "partial"}).eq(
+                        "id", snapshot_id
+                    ).execute()
+                except Exception:
+                    pass
 
     return status
 
