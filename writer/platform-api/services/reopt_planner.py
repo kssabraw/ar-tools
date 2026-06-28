@@ -284,7 +284,16 @@ async def run_reopt_plan_job(job: dict) -> None:
             {"status": "failed", "error": "missing client_id", "completed_at": "now()"}
         ).eq("id", job_id).execute()
         return
-    result = build_plan(client_id, trigger=trigger)
+    try:
+        result = build_plan(client_id, trigger=trigger)
+    except Exception as exc:
+        # The worker loop only logs unhandled errors; a handler must mark its own
+        # job failed (else it sits 'running' until the stale reaper sweeps it).
+        logger.warning("reopt_plan_job_failed", extra={"client_id": client_id, "error": str(exc)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        return
     supabase.table("async_jobs").update(
         {"status": "complete", "result": result, "completed_at": "now()"}
     ).eq("id", job_id).execute()
