@@ -414,7 +414,10 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
                 brand_guide_provided=not brand_empty,
                 icp_provided=not icp_empty,
                 website_analysis_used=not no_website,
-                reference_structure_used=bool((ctx.reference_page_structure or "").strip()),
+                reference_structure_used=bool(
+                    (ctx.reference_page_structure or "").strip()
+                    or (ctx.reference_page_body_structure or "").strip()
+                ),
                 schema_version_effective=schema_effective,
             )
 
@@ -612,6 +615,11 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     #       section sees what previous sections actually wrote and can
     #       differentiate (instead of repeating setups / definitions).
     # Both are free (no extra LLM calls - just bigger prompts).
+    # Client's structural style for the body (heading depth, length variation,
+    # recurring blocks), mirrored onto each section over the SEO-driven outline.
+    body_structure = (
+        req.client_context.reference_page_body_structure if req.client_context else None
+    )
     preceding_summaries_running: list[str] = []
     for h2_idx, (h2_item, h3_items) in enumerate(h2_groups):
         section_budget = section_budgets.get(h2_item.get("order"), 0)
@@ -634,6 +642,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             current_h2_index=h2_idx,
             preceding_section_summaries=list(preceding_summaries_running),
             placement_directive=placement_plan.for_order(h2_item.get("order", -1)),
+            reference_structure=body_structure,
         )
         article.extend(result.sections)
         banned_terms_leaked_in_body.extend(result.banned_terms_leaked)

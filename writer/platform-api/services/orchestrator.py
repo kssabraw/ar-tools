@@ -538,10 +538,16 @@ def _build_writer_payload(
     icp_format = snapshot.get("icp_format") or "text"
     website_analysis = snapshot.get("website_analysis")
     website_unavailable = snapshot.get("website_analysis_unavailable", False)
-    # Blog posts mirror the client's own blog-post OPENING when one is configured
-    # (the cached, client-agnostic brief can't carry the full heading layout).
+    # Blog posts mirror the client's own blog-post structure when one is configured
+    # (the cached, client-agnostic brief can't carry client layout). The intro gets
+    # the OPENING pattern; the body sections get the STRUCTURE style (heading depth,
+    # length variation, recurring blocks) applied over the SEO-driven outline.
+    blog_structure_entry = (snapshot.get("page_structures") or {}).get("blog_post")
     reference_page_structure = render_reference_structure(
-        (snapshot.get("page_structures") or {}).get("blog_post"), "blog_post", mode="opening"
+        blog_structure_entry, "blog_post", mode="opening"
+    )
+    reference_page_body_structure = render_reference_structure(
+        blog_structure_entry, "blog_post", mode="structure"
     )
 
     return {
@@ -558,6 +564,7 @@ def _build_writer_payload(
             "website_analysis": website_analysis,
             "website_analysis_unavailable": website_unavailable,
             "reference_page_structure": reference_page_structure,
+            "reference_page_body_structure": reference_page_body_structure,
         },
     }
 

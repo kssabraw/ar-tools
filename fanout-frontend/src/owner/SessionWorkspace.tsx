@@ -17,6 +17,9 @@ export interface SessionCtx {
   contentType?: "blog_post" | "local_seo_page" | null;
   // Local SEO target area chosen at session creation; pre-fills the Schedule modal.
   location?: string | null;
+  // Client + market for this run — scope the Schedule modal's location typeahead.
+  clientId?: string | null;
+  locationCode?: number | null;
 }
 
 export function useSession() {
@@ -163,7 +166,7 @@ export function SessionWorkspace() {
         {status && hasResults(status) && session.data && (
           <Outlet
             context={
-              { sessionId, topics, topicName, role, contentType: session.data?.content_type, location: session.data?.location } satisfies SessionCtx
+              { sessionId, topics, topicName, role, contentType: session.data?.content_type, location: session.data?.location, clientId: session.data?.client_id, locationCode: session.data?.location_code } satisfies SessionCtx
             }
           />
         )}

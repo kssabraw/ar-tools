@@ -153,6 +153,40 @@ async def test_outline_skips_empty_sibling_titles_without_breaking_marker(monkey
 
 
 @pytest.mark.asyncio
+async def test_section_prompt_carries_reference_structure(monkeypatch):
+    """The client's body-structure style block (mode='structure') reaches the
+    section prompt when provided, and is absent otherwise."""
+    call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
+    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+
+    h2_item = {"order": 3, "text": "Some Section", "type": "content", "level": "H2"}
+    block = "REFERENCE STRUCTURE STYLE — write this section in the structural style…"
+    await write_h2_group(
+        keyword="kw", intent="how-to",
+        h2_item=h2_item, h3_items=[],
+        section_budgets={3: 300},
+        filtered_terms=FilteredSIETerms(),
+        citations=[], brand_voice_card=None,
+        banned_regex=build_banned_regex([]),
+        reference_structure=block,
+    )
+    assert "REFERENCE STRUCTURE STYLE" in captured["user"]
+
+    # Absent by default — legacy callers are unaffected.
+    call2, captured2 = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
+    monkeypatch.setattr("modules.writer.sections.claude_json", call2)
+    await write_h2_group(
+        keyword="kw", intent="how-to",
+        h2_item=h2_item, h3_items=[],
+        section_budgets={3: 300},
+        filtered_terms=FilteredSIETerms(),
+        citations=[], brand_voice_card=None,
+        banned_regex=build_banned_regex([]),
+    )
+    assert "REFERENCE STRUCTURE STYLE" not in captured2["user"]
+
+
+@pytest.mark.asyncio
 async def test_section_prompt_omits_cohesion_blocks_when_args_absent(monkeypatch):
     """Backward compat: legacy callers that don't pass the new kwargs
     get the old prompt shape - no ARTICLE_TITLE / ARTICLE_OUTLINE /

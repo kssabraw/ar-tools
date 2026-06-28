@@ -2,9 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, Eye, RefreshCw, AlertTriangle, Plus, Trash2, Check, X, CalendarClock, Sparkles, FileText,
+  ArrowLeft, Eye, RefreshCw, AlertTriangle, Plus, Trash2, Check, X, CalendarClock, Sparkles, FileText, Download,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { toCsv, downloadCsv } from '../lib/csv'
 import type { Client } from '../lib/types'
 
 // ── engine taxonomy (mirrors services/brand_scan.ENGINE_ORDER) ───────────────
@@ -24,6 +25,13 @@ interface Mention {
   mention_found: boolean | null; mention_type: string | null; sentiment: number | null
   confidence_score: number | null; citations: string[]; competitor_results: unknown[] | null
   reasoning: string | null; snippet: string | null; failure_reason: string | null; created_at: string | null
+}
+// One competitor's re-classification of the same AI answer (stored on the
+// client mention's competitor_results JSONB by services/brand_scan.py).
+interface CompResult { name: string; found: boolean | null; mention_type: string | null; sentiment: number | null; confidence: number | null; snippet: string | null }
+function compResultFor(m: Mention | undefined, name: string): CompResult | undefined {
+  if (!m || !Array.isArray(m.competitor_results)) return undefined
+  return (m.competitor_results as CompResult[]).find(c => c?.name === name)
 }
 interface TrendBatch {
   scan_batch_id: string | null; created_at: string | null; total: number; found: number
@@ -135,6 +143,8 @@ export function AiVisibility() {
           clientId={clientId!}
           activeCount={activeKeywords.length}
           keywords={keywords}
+          competitors={competitors}
+          history={history}
           latestByCell={latestByCell}
           latestBatch={latestBatch}
           trends={trends}
@@ -156,16 +166,48 @@ export function AiVisibility() {
 
 // ── Overview ─────────────────────────────────────────────────────────────────
 function Overview(props: {
-  clientId: string; activeCount: number; keywords: Keyword[]; latestByCell: Map<string, Mention>
+  clientId: string; activeCount: number; keywords: Keyword[]; competitors: Competitor[]; history: Mention[]
+  latestByCell: Map<string, Mention>
   latestBatch: TrendBatch | null; trends: TrendBatch[]; running: boolean
   jobStatus: ScanStatus | undefined; includeCompetitors: boolean
   setIncludeCompetitors: (v: boolean) => void; onRun: () => void
   runError: string | null; onManageKeywords: () => void
 }) {
-  const { clientId, activeCount, keywords, latestByCell, latestBatch, trends, running, jobStatus, includeCompetitors, setIncludeCompetitors, onRun, runError, onManageKeywords } = props
+  const { clientId, activeCount, keywords, competitors, history, latestByCell, latestBatch, trends, running, jobStatus, includeCompetitors, setIncludeCompetitors, onRun, runError, onManageKeywords } = props
   const activeKeywords = keywords.filter(k => k.is_active)
   const [diagnose, setDiagnose] = useState<{ m: Mention; keyword: string } | null>(null)
   const keywordById = useMemo(() => new Map(keywords.map(k => [k.id, k.keyword])), [keywords])
+
+  // Matrix view: the client's own brand, or a tracked competitor's mentions
+  // (re-classified from the same answers, available only on competitor-included scans).
+  const [view, setView] = useState<string>('brand')
+  // A competitor removed (or never scanned) shouldn't leave the matrix stuck on it.
+  const viewing = view !== 'brand' && competitors.some(c => c.competitor_name === view) ? view : 'brand'
+
+  // Export the full scan history (every keyword×engine row over time) as CSV.
+  const exportHistoryCsv = () => {
+    const headers = [
+      'Scan date', 'Keyword', 'Engine', 'Brand mentioned', 'Mention type', 'Sentiment',
+      'Confidence', 'Status', 'Citations', 'Competitors mentioned',
+    ]
+    const rows = history.map(h => {
+      const comps = Array.isArray(h.competitor_results) ? (h.competitor_results as CompResult[]) : []
+      const mentioned = comps.filter(c => c?.found).map(c => c.name)
+      return [
+        h.created_at ? new Date(h.created_at).toLocaleString() : '',
+        keywordById.get(h.keyword_id ?? '') ?? '',
+        ENGINE_LABELS[h.engine] ?? h.engine,
+        h.mention_found == null ? '' : h.mention_found ? 'Yes' : 'No',
+        h.mention_type ?? '',
+        h.sentiment == null ? '' : h.sentiment.toFixed(2),
+        h.confidence_score == null ? '' : `${Math.round(h.confidence_score * 100)}%`,
+        h.status,
+        (h.citations ?? []).length,
+        mentioned.join('; '),
+      ]
+    })
+    downloadCsv(`ai-visibility-history-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(headers, rows))
+  }
 
   const [reportJob, setReportJob] = useState<string | null>(null)
   const reportMut = useMutation({
@@ -200,10 +242,19 @@ function Overview(props: {
             Add keywords first — <button onClick={onManageKeywords} style={linkBtn}>manage keywords</button>
           </span>
         )}
-        {latestBatch !== null && (
-          <button style={{ ...miniBtn, marginLeft: 'auto' }} disabled={reportRunning} onClick={() => reportMut.mutate()}>
-            <FileText size={13} /> {reportRunning ? 'Generating…' : 'Generate report'}
-          </button>
+        {(history.length > 0 || latestBatch !== null) && (
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 0 }}>
+            {latestBatch !== null && (
+              <button style={miniBtn} disabled={reportRunning} onClick={() => reportMut.mutate()}>
+                <FileText size={13} /> {reportRunning ? 'Generating…' : 'Generate report'}
+              </button>
+            )}
+            {history.length > 0 && (
+              <button style={miniBtn} onClick={exportHistoryCsv}>
+                <Download size={13} /> Export CSV
+              </button>
+            )}
+          </div>
         )}
       </div>
 
@@ -237,6 +288,20 @@ function Overview(props: {
             </div>
           )}
 
+          {/* Whose mentions the matrix shows: this brand, or a tracked competitor. */}
+          {competitors.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b' }}>Show visibility for</span>
+              <select style={{ ...input, padding: '6px 10px' }} value={viewing} onChange={e => setView(e.target.value)}>
+                <option value="brand">This brand</option>
+                {competitors.map(c => <option key={c.id} value={c.competitor_name}>{c.competitor_name}</option>)}
+              </select>
+              {viewing !== 'brand' && (
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>from competitor-included scans</span>
+              )}
+            </div>
+          )}
+
           {/* Visibility matrix: keyword × engine */}
           <div style={tableWrap}>
             <table style={table}>
@@ -254,6 +319,7 @@ function Overview(props: {
                       <MentionCell
                         key={e}
                         m={latestByCell.get(`${k.id}::${e}`)}
+                        competitor={viewing === 'brand' ? undefined : viewing}
                         onDiagnose={(m) => setDiagnose({ m, keyword: keywordById.get(k.id) ?? k.keyword })}
                       />
                     ))}
@@ -263,7 +329,9 @@ function Overview(props: {
             </table>
           </div>
           <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 10 }}>
-            Tip: click a <X size={11} color="#dc2626" style={{ verticalAlign: 'middle' }} /> cell to diagnose why the brand is invisible there.
+            {viewing === 'brand'
+              ? <>Tip: click a <X size={11} color="#dc2626" style={{ verticalAlign: 'middle' }} /> cell to diagnose why the brand is invisible there.</>
+              : <>Showing where <strong>{viewing}</strong> appears. A — means that keyword×engine wasn't scanned with competitors included.</>}
           </p>
         </>
       )}
@@ -308,10 +376,26 @@ function EngineStat({ label, pct, highlight }: { label: string; pct: number | nu
   )
 }
 
-function MentionCell({ m, onDiagnose }: { m: Mention | undefined; onDiagnose?: (m: Mention) => void }) {
+function MentionCell({ m, onDiagnose, competitor }: { m: Mention | undefined; onDiagnose?: (m: Mention) => void; competitor?: string }) {
   let content: React.ReactNode = <span style={{ color: '#cbd5e1' }}>—</span>
   let title = 'Not scanned'
   let notFound = false
+
+  // Competitor view: read the competitor's re-classification off the same row.
+  // No diagnosis here (diagnosis is brand-specific), so cells aren't clickable.
+  if (competitor) {
+    const cr = m && m.status === 'completed' ? compResultFor(m, competitor) : undefined
+    if (!m || m.status !== 'completed') { title = m ? m.status : 'Not scanned' }
+    else if (!cr) { title = 'Competitor not included in this scan' }
+    else if (cr.found) { content = <Check size={16} color="#15803d" />; title = `Found (${cr.mention_type ?? 'direct'})` }
+    else { content = <X size={15} color="#94a3b8" />; title = 'Not found' }
+    return (
+      <td style={{ textAlign: 'center', padding: '8px 12px', borderBottom: '1px solid #f1f5f9' }} title={title}>
+        {content}
+      </td>
+    )
+  }
+
   if (m) {
     if (m.status === 'failed') { content = <span style={{ color: '#cbd5e1' }}>—</span>; title = m.failure_reason ?? 'failed' }
     else if (m.status === 'queued' || m.status === 'processing') { content = <span style={{ color: '#94a3b8' }}>…</span>; title = m.status }
