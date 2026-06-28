@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 
@@ -211,6 +211,13 @@ export function ClientWorkspace() {
           label="AI Visibility"
           description="Track whether this brand shows up in AI assistant answers — ChatGPT, Claude, Gemini, Perplexity & Google AI Overviews — across your keywords, over time."
           to={id ? `/clients/${id}/ai-visibility` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<ListChecks size={22} />}
+          label="Action Plan"
+          description="A prioritized reoptimization to-do list built from this client's rank signals — drops to fix, winnable quick wins & Search Console opportunities, each linked to the tool that does it."
+          to={id ? `/clients/${id}/action-plan` : undefined}
           cta="Open"
         />
       </Section>

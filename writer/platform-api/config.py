@@ -130,6 +130,14 @@ class Settings(BaseSettings):
     gsc_research_auto_enabled: bool = True
     gsc_research_interval_days: int = 30
 
+    # Reoptimization planner — turns rank-tracker signals (open drops, rankability
+    # Quick wins, GSC-Research cannibalization/hidden-wins) into a ranked,
+    # recommend-only action plan per client. A weekly digest (the only auto
+    # notification trigger), plus an on-drop refresh that rides the rank-drop
+    # alert. On-demand always works regardless.
+    reopt_plan_auto_enabled: bool = True
+    reopt_plan_weekday: int = 0    # Monday=0 … Sunday=6 (weekly digest day, UTC)
+
     # Notifications service — shared delivery pipe (in-app card/feed + email +
     # Slack). In-app always works (DB row); email/Slack are best-effort and only
     # fire when their creds are configured. Recipients/channel are agency-level for

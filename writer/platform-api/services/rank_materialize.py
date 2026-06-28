@@ -280,6 +280,12 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
                 severity=digest["severity"],
                 payload={"link": f"clients/{client_id}/rankings", "alerts": opened_alerts},
             )
+            # Refresh the action plan so the drop shows up there too. trigger="drop"
+            # stays silent (no second notification — the rank-drop alert above
+            # already pinged); the plan is ready when the user opens it.
+            from services import reopt_planner
+
+            reopt_planner.enqueue_reopt_plan(client_id, trigger="drop")
     except Exception as exc:
         logger.warning("rank_alerts_reconcile_failed", extra={"client_id": client_id, "error": str(exc)})
 

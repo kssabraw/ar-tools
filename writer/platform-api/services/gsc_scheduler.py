@@ -225,6 +225,25 @@ def enqueue_due_gsc_research() -> int:
     return due
 
 
+def enqueue_due_reopt_plans() -> int:
+    """Weekly: enqueue a reopt_plan job per client with active keywords — the
+    routine action-plan digest. The job builds the plan from already-produced
+    signals (open drops, rankability, GSC-Research) and notifies only when it
+    finds something. enqueue_reopt_plan dedupes against any in-flight one."""
+    from services.reopt_planner import enqueue_reopt_plan
+
+    if not settings.reopt_plan_auto_enabled:
+        return 0
+    supabase = get_supabase()
+    rows = supabase.table("tracked_keywords").select("client_id").eq("active", True).execute()
+    client_ids = {r["client_id"] for r in (rows.data or [])}
+    for client_id in client_ids:
+        enqueue_reopt_plan(client_id, trigger="scheduled")
+    if client_ids:
+        logger.info("gsc_scheduler.reopt_plans_enqueued", extra={"clients": len(client_ids)})
+    return len(client_ids)
+
+
 def enqueue_due_reports() -> int:
     """Daily: enqueue a rank_report job for each client whose schedule is due."""
     from datetime import date
@@ -257,9 +276,11 @@ async def gsc_scheduler() -> None:
     hour = settings.gsc_ingest_hour_utc
     weekday = settings.dataforseo_rank_weekday
     maps_weekday = settings.maps_scan_weekday
+    reopt_weekday = settings.reopt_plan_weekday
     last_run_date: Optional[date] = None
     last_df_date: Optional[date] = None
     last_maps_date: Optional[date] = None
+    last_reopt_date: Optional[date] = None
     logger.info("gsc_scheduler.started", extra={"poll_interval_s": interval, "hour_utc": hour})
     while True:
         await asyncio.sleep(interval)
@@ -290,6 +311,10 @@ async def gsc_scheduler() -> None:
             if now.weekday() == maps_weekday and should_run(now, last_maps_date, hour):
                 enqueue_due_maps_scans()
                 last_maps_date = now.date()
+            # Weekly reoptimization action-plan digest on its own weekday.
+            if now.weekday() == reopt_weekday and should_run(now, last_reopt_date, hour):
+                enqueue_due_reopt_plans()
+                last_reopt_date = now.date()
             # Advance any in-flight Maps scans every tick (non-blocking GETs).
             await poll_pending_maps_scans()
             # AI Visibility scheduled scans are self-clocked via each schedule's

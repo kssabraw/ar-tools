@@ -16,6 +16,7 @@ import { LocalSeoContent } from './pages/LocalSeoContent'
 import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
+import { ActionPlan } from './pages/ActionPlan'
 import { GscResearch } from './pages/GscResearch'
 import { AiVisibility } from './pages/AiVisibility'
 import { MapsGeogrid } from './pages/MapsGeogrid'
@@ -59,6 +60,7 @@ export default function App() {
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
+                      <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
                       <Route path="/clients/:id/ai-visibility" element={<AiVisibility />} />
                       <Route path="/clients/:id/maps" element={<MapsGeogrid />} />
                       <Route path="/clients/:id/maps/report" element={<MapsReport />} />

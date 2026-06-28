@@ -1,0 +1,57 @@
+"""Reoptimization planner router — the Action Plan surface.
+
+Reads the latest stored plan and rebuilds it on demand. The plan is built from
+signals the rank tracker already produces (open drops, rankability Quick wins,
+GSC-Research opportunities), so a manual rebuild is a set of cheap DB reads — run
+synchronously here rather than as a background job. The weekly digest + on-drop
+refresh are enqueued by the scheduler / rank materializer instead.
+"""
+
+from __future__ import annotations
+
+import logging
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException
+
+from db.supabase_client import get_supabase
+from middleware.auth import require_auth
+from models.reopt import ReoptPlan
+from services import reopt_planner
+
+router = APIRouter(tags=["reopt"])
+logger = logging.getLogger(__name__)
+
+
+def _latest_plan(client_id: str) -> dict | None:
+    supabase = get_supabase()
+    rows = (
+        supabase.table("reopt_plans")
+        .select("*")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    return rows[0] if rows else None
+
+
+@router.get("/clients/{client_id}/action-plan", response_model=ReoptPlan | None)
+async def get_action_plan(client_id: UUID, auth: dict = Depends(require_auth)) -> ReoptPlan | None:
+    """The client's latest action plan (null if none built yet)."""
+    row = _latest_plan(str(client_id))
+    return ReoptPlan(**row) if row else None
+
+
+@router.post("/clients/{client_id}/action-plan/refresh", response_model=ReoptPlan)
+async def refresh_action_plan(client_id: UUID, auth: dict = Depends(require_auth)) -> ReoptPlan:
+    """Rebuild the plan now (manual trigger — no notification) and return it."""
+    try:
+        reopt_planner.build_plan(str(client_id), trigger="manual")
+    except Exception as exc:
+        logger.error("action_plan_refresh_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    row = _latest_plan(str(client_id))
+    if not row:
+        raise HTTPException(status_code=500, detail="internal_error")
+    return ReoptPlan(**row)
