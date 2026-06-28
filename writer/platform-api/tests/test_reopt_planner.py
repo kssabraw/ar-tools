@@ -162,6 +162,27 @@ def test_summarize_counts_and_severity():
     assert "2 other opportunities" in out["summary"]
 
 
+# ---------------------------------------------------------------------------
+# _should_store (empty-plan dedup)
+# ---------------------------------------------------------------------------
+def test_should_store_nonempty_always():
+    assert reopt_planner._should_store(3, None) is True
+    assert reopt_planner._should_store(3, 0) is True
+    assert reopt_planner._should_store(3, 5) is True
+
+
+def test_should_store_first_empty_when_no_prior():
+    assert reopt_planner._should_store(0, None) is True   # record the first empty
+
+
+def test_should_store_records_transition_to_empty():
+    assert reopt_planner._should_store(0, 2) is True       # actions cleared → store
+
+
+def test_should_skip_steady_state_empty():
+    assert reopt_planner._should_store(0, 0) is False      # empty after empty → skip
+
+
 def test_summarize_singular_plurals():
     out = reopt_planner.summarize_plan([
         {"kind": "rank_drop", "severity": "warning"},

@@ -52,6 +52,19 @@ def _within(value: float) -> float:
     return max(0.0, min(float(value), _WITHIN_MAX))
 
 
+def _should_store(action_count: int, latest_action_count: "int | None") -> bool:
+    """Whether to persist a freshly-built plan as a new row. Pure (unit-tested).
+
+    Always store a non-empty plan, and always store the *transition* to empty
+    (so 'latest plan' reflects that the actions cleared). Skip only the steady
+    state — an empty build when the latest stored plan is already empty — so a
+    healthy client doesn't accumulate one identical no-op row per weekly run.
+    """
+    if action_count > 0:
+        return True
+    return latest_action_count is None or latest_action_count > 0
+
+
 def _plan_path(client_id: str) -> str:
     return f"clients/{client_id}/action-plan"
 
@@ -219,19 +232,34 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     actions = build_actions(client_id, drops, rankability_items, gsc)
     digest = summarize_plan(actions)
 
-    plan = (
+    latest = (
         supabase.table("reopt_plans")
-        .insert(
-            {
-                "client_id": client_id,
-                "trigger": trigger,
-                "summary": digest["summary"],
-                "items": actions,
-                "action_count": len(actions),
-            }
-        )
+        .select("id, action_count")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
         .execute()
-    ).data[0]
+    ).data
+    latest_count = latest[0]["action_count"] if latest else None
+
+    if _should_store(len(actions), latest_count):
+        plan = (
+            supabase.table("reopt_plans")
+            .insert(
+                {
+                    "client_id": client_id,
+                    "trigger": trigger,
+                    "summary": digest["summary"],
+                    "items": actions,
+                    "action_count": len(actions),
+                }
+            )
+            .execute()
+        ).data[0]
+    else:
+        # Steady-state healthy client: reuse the existing empty plan rather than
+        # writing another identical no-op row.
+        plan = latest[0]
 
     # Notify only the routine weekly digest — an on-drop refresh rides the
     # rank-drop notification that already fired; a manual run means the user is
