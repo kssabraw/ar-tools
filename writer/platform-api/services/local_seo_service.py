@@ -593,6 +593,70 @@ def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
     return out
 
 
+async def enqueue_reoptimize_page(
+    client_id: str, keyword: str, location: str,
+    existing_page_html: Optional[str], existing_page_url: Optional[str],
+    deficiencies: list[dict], serp_analysis: Optional[dict], user_id: str,
+) -> str:
+    """Enqueue a background reoptimize-by-page job (the score→reoptimize flow).
+    Returns the job id. A single interactive reoptimize, so it's NOT staggered —
+    it gets default `scheduled_at` (now) and runs at normal priority. The poller
+    reads the new page id from the job result (via get_jobs_status)."""
+    _get_client(client_id)  # validate client exists
+    res = (
+        get_supabase()
+        .table("async_jobs")
+        .insert(
+            {
+                "job_type": "local_seo_reoptimize_page",
+                "entity_id": client_id,
+                "payload": {
+                    "client_id": client_id,
+                    "keyword": keyword,
+                    "location": location,
+                    "existing_page_html": existing_page_html,
+                    "existing_page_url": existing_page_url,
+                    "deficiencies": deficiencies or [],
+                    "serp_analysis": serp_analysis,
+                    "user_id": user_id,
+                },
+            }
+        )
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+async def run_reoptimize_page_job(job: dict) -> None:
+    """async_jobs handler for job_type='local_seo_reoptimize_page'. Runs
+    reoptimize_page (which persists the reoptimized page) and stores the new page
+    id in the job result."""
+    payload = job.get("payload") or {}
+    job_id = job["id"]
+    supabase = get_supabase()
+    try:
+        page = await reoptimize_page(
+            client_id=payload["client_id"],
+            keyword=payload["keyword"],
+            location=payload["location"],
+            existing_page_html=payload.get("existing_page_html"),
+            existing_page_url=payload.get("existing_page_url"),
+            deficiencies=payload.get("deficiencies") or [],
+            serp_analysis=payload.get("serp_analysis"),
+            user_id=payload["user_id"],
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.info("local_seo.reoptimize_page_job_complete", extra={"job_id": job_id, "page_id": page["id"]})
+    except Exception as exc:  # noqa: BLE001 — record the failure for the poller
+        detail = getattr(exc, "detail", None) or str(exc)
+        logger.warning("local_seo.reoptimize_page_job_failed", extra={"job_id": job_id, "error": str(detail)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+
 async def analyze(
     client_id: str, keyword: str, location: str, location_code: Optional[int], force_refresh: bool = False,
 ) -> dict:

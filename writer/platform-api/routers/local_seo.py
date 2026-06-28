@@ -267,26 +267,26 @@ async def get_local_seo_silo_plan(
     return LocalSeoSiloPlanResult(**local_seo_silo.get_silo_plan(str(job_id), str(client_id)))
 
 
-@router.post("/clients/{client_id}/local-seo/reoptimize")
-async def reoptimize_local_seo_page(
+@router.post("/clients/{client_id}/local-seo/reoptimize-async", response_model=LocalSeoGenerateJob)
+async def reoptimize_local_seo_page_async(
     client_id: UUID,
     body: LocalSeoReoptimizeRequest,
     auth: dict = Depends(require_auth),
-) -> StreamingResponse:
-    async def _run() -> dict:
-        page = await local_seo_service.reoptimize_page(
-            client_id=str(client_id),
-            keyword=body.keyword,
-            location=body.location,
-            existing_page_html=body.existing_page_html,
-            existing_page_url=body.existing_page_url,
-            deficiencies=body.deficiencies,
-            serp_analysis=body.serp_analysis,
-            user_id=auth["user_id"],
-        )
-        return LocalSeoPageDetail(**page).model_dump(mode="json")
-
-    return sse_response(_run())
+) -> LocalSeoGenerateJob:
+    """Kick off the score→reoptimize rewrite as a background job (the new page id
+    comes back via the jobs/status poll). Lets the UI navigate away while it runs;
+    the reoptimized page lands in the client's pages when done."""
+    job_id = await local_seo_service.enqueue_reoptimize_page(
+        client_id=str(client_id),
+        keyword=body.keyword,
+        location=body.location,
+        existing_page_html=body.existing_page_html,
+        existing_page_url=body.existing_page_url,
+        deficiencies=body.deficiencies,
+        serp_analysis=body.serp_analysis,
+        user_id=auth["user_id"],
+    )
+    return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
 
 @router.post("/clients/{client_id}/local-seo/social-posts")

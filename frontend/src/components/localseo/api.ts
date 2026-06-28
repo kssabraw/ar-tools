@@ -136,7 +136,9 @@ export const localSeoApi = {
   getSiloPlan: (clientId: string, jobId: string) =>
     api.get<SiloPlanResult>(`/clients/${clientId}/local-seo/silo-plan/${jobId}`),
 
-  reoptimize: (
+  // Score→reoptimize as a background job: enqueue the rewrite, then poll
+  // jobsStatus (result.page_id) — the UI can leave while it runs.
+  reoptimizeAsync: (
     clientId: string,
     body: {
       keyword: string
@@ -146,7 +148,7 @@ export const localSeoApi = {
       deficiencies: Array<Record<string, unknown>>
       serp_analysis?: AnalysisResult | null
     },
-  ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/reoptimize`, body),
+  ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/reoptimize-async`, body),
 
   socialPosts: (
     clientId: string,
