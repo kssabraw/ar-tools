@@ -125,6 +125,24 @@ def test_build_context_assembles_isolates_and_omits(monkeypatch):
     assert ctx == {"alpha": {"ok": True}}  # empty omitted, failing one isolated
 
 
+def test_format_history_labels_roles_and_skips_empty():
+    out = slack_assistant.format_history([
+        {"role": "user", "content": "how is Acme?"},
+        {"role": "assistant", "content": "Acme is #4, steady."},
+        {"role": "user", "content": "  "},
+        {"role": "user", "content": "what about Maps?"},
+    ])
+    assert out == (
+        "Teammate: how is Acme?\n"
+        "SerMastr: Acme is #4, steady.\n"
+        "Teammate: what about Maps?"
+    )
+
+
+def test_format_history_empty():
+    assert slack_assistant.format_history([]) == ""
+
+
 def test_format_context_is_json_with_client():
     import json
 
