@@ -991,3 +991,25 @@ export interface UnreadCountsResponse {
   counts: UnreadCount[]
   total: number
 }
+
+// Reoptimization planner (Action Plan).
+export interface ReoptAction {
+  kind: 'rank_drop' | 'quick_win' | 'cannibalization' | 'opportunity'
+  keyword: string
+  diagnosis: string
+  recommendation: string
+  cta_label: string
+  cta_path: string
+  severity: 'info' | 'warning' | 'critical'
+  sort: number
+}
+
+export interface ReoptPlan {
+  id: string
+  client_id: string
+  trigger: 'scheduled' | 'drop' | 'manual'
+  summary: string | null
+  items: ReoptAction[]
+  action_count: number
+  created_at: string
+}
