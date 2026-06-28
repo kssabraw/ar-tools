@@ -6,9 +6,22 @@ Two-way Slack, **channel mode**: SerMastr lives in a **dedicated channel** and
 answers **every plain human message there — no @mention needed** — a
 natural-language question about a client's search performance, grounded in the
 cross-module context (below), via Claude, posted back **in-thread** with thread
-memory. Read-only Q&A — it explains, it doesn't trigger work. Anyone in the
-workspace can ask (product decision). Its own posts (rank-drop alerts) + other
-bots + edits/joins are ignored, so it never loops.
+memory. Also works in **DMs**. It answers questions AND can **take actions**
+(below). Anyone in the workspace can ask/act (product decision). Its own posts
+(rank-drop alerts) + other bots + edits/joins are ignored, so it never loops.
+
+- **Actions (NL → trigger work):** via Claude tool-use in `interpret()`. Tools =
+  `_ACTIONS` (append to add one): `rebuild_action_plan` (free → runs immediately),
+  `run_maps_scan` / `run_gsc_research` / `run_ai_visibility_scan` (**paid → staged
+  behind an explicit confirm**). Each runner enqueues an EXISTING job
+  (`reopt_planner.build_plan`, `local_dominator.enqueue_maps_scan`,
+  `gsc_research.enqueue_gsc_research`, `brand_service.start_scan`). Confirm flow: a
+  paid request stores a pending entry keyed by `(channel, thread_ts)` in the
+  in-memory `_pending` (single-replica PLATFORM; a redeploy just drops pending →
+  user re-asks) and replies "…reply *yes* to proceed"; the next `is_affirmative`
+  message in that thread runs it (the pending carries its own `client_id`, so the
+  "yes" needn't re-name the client). Read-only Q&A stays open; a paid action never
+  runs without a confirm.
 
 - **Inbound:** `routers/slack_events.py` → `POST /slack/events` (public; the only
   guard is Slack request-signature verification, fail-closed). Answers the
@@ -20,9 +33,10 @@ bots + edits/joins are ignored, so it never loops.
 - **Logic:** `services/slack_assistant.py` — pure helpers (`verify_slack_signature`,
   `strip_mention`, `resolve_client`, `format_context`, `format_history`, unit-tested)
   + `build_context` + `fetch_thread_history` (conversations.replies → prior turns)
-  + `answer_question` (Claude, `slack_assistant_model`=`claude-sonnet-4-6`, folds
-  thread history into the prompt) + `post_message`/`handle_message`. Every message
-  gets a reply: an answer, or a "which client?" prompt when none can be resolved.
+  + `interpret` (Claude tool-use, `slack_assistant_model`=`claude-sonnet-4-6`, folds
+  thread history into the prompt; returns `("action", tool)` or `("text", answer)`)
+  + `is_affirmative` + `post_message`/`handle_message`. Every message gets a reply:
+  an answer, an action/confirm, or a "which client?" prompt when none resolves.
 - **Cross-module context (extensible registry):** `build_context` runs every
   provider in `_CONTEXT_PROVIDERS`, each isolated (one module failing/empty never
   breaks the answer) and keyed under its module name, so the LLM can tell "no data
@@ -47,15 +61,17 @@ bots + edits/joins are ignored, so it never loops.
 **Signing secret + Request URL are already done** (live). For **channel mode**
 (answer untagged messages) the remaining steps are:
 1. **OAuth & Permissions → Bot Token Scopes** → add **`channels:history`** +
-   **`groups:history`** (keep `chat:write`; `app_mentions:read` is no longer needed
-   but harmless) → **Reinstall to Workspace**.
+   **`groups:history`** (+ **`im:history`** for DMs) (keep `chat:write`;
+   `app_mentions:read` is no longer needed but harmless) → **Reinstall to Workspace**.
 2. **Event Subscriptions → Subscribe to bot events** → add **`message.channels`**
-   (public) and **`message.groups`** (private) → Save. (You can remove
-   `app_mention` — `message.*` covers mentions too.) Request URL stays
+   (public) + **`message.groups`** (private) + **`message.im`** (DMs) → Save. (You
+   can remove `app_mention` — `message.*` covers mentions too.) Request URL stays
    `https://platform-production-a5c5.up.railway.app/slack/events`.
 3. Keep SerMastr in its dedicated channel.
 
-(History scopes power the in-thread memory via `conversations.replies`.)
+(History scopes power the in-thread memory via `conversations.replies`. DM events
+were a no-op until `im:history` + `message.im` are added; actions need no extra
+Slack config — they reuse `chat:write`.)
 
 Verified so far: import + **605 tests** (12 new), ruff clean (my files), frontend
 unaffected. End-to-end Slack round-trip is **untested until the event
