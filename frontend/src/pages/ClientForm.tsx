@@ -12,6 +12,12 @@ interface FormData {
   brand_guide_text: string
   icp_text: string
   google_drive_folder_id: string
+  df_blog_post: string
+  df_service_page: string
+  df_location_page: string
+  df_local_seo_page: string
+  df_ecom_page: string
+  df_use_case: string
   github_repo: string
   github_branch: string
   github_content_path: string
@@ -35,11 +41,24 @@ interface FormData {
 
 const empty: FormData = {
   name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
+  df_blog_post: '', df_service_page: '', df_location_page: '', df_local_seo_page: '', df_ecom_page: '', df_use_case: '',
   github_repo: '', github_branch: '', github_content_path: '',
   wordpress_site_url: '', wordpress_username: '', wordpress_app_password: '', wordpress_app_password_set: false,
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
 }
+
+// Per-content-type Drive folders. `type` is the backend content_type slug used
+// as the drive_folders map key. Reserved types have no generator yet — the
+// folder is captured now so it's ready when the module ships.
+const DRIVE_FOLDER_FIELDS: { key: keyof FormData; type: string; label: string; reserved?: boolean }[] = [
+  { key: 'df_blog_post', type: 'blog_post', label: 'Blog posts' },
+  { key: 'df_service_page', type: 'service_page', label: 'Service pages' },
+  { key: 'df_location_page', type: 'location_page', label: 'Location pages' },
+  { key: 'df_local_seo_page', type: 'local_seo_page', label: 'Local SEO pages' },
+  { key: 'df_ecom_page', type: 'ecom_page', label: 'Ecom pages', reserved: true },
+  { key: 'df_use_case', type: 'use_case', label: 'Use cases', reserved: true },
+]
 
 const PAGE_STRUCTURE_FIELDS: { key: keyof FormData; type: PageStructureType; label: string; placeholder: string; help: string }[] = [
   { key: 'ps_local_landing', type: 'local_landing', label: 'Local Landing Page URL', placeholder: 'https://acmehvac.com/ac-repair-austin', help: 'A service-in-location landing page. Used by Local SEO page generation.' },
@@ -110,6 +129,12 @@ export function ClientForm() {
         brand_guide_text: existing.brand_guide_text ?? '',
         icp_text: existing.icp_text ?? '',
         google_drive_folder_id: existing.google_drive_folder_id ?? '',
+        df_blog_post: existing.drive_folders?.blog_post ?? '',
+        df_service_page: existing.drive_folders?.service_page ?? '',
+        df_location_page: existing.drive_folders?.location_page ?? '',
+        df_local_seo_page: existing.drive_folders?.local_seo_page ?? '',
+        df_ecom_page: existing.drive_folders?.ecom_page ?? '',
+        df_use_case: existing.drive_folders?.use_case ?? '',
         github_repo: existing.github_repo ?? '',
         github_branch: existing.github_branch ?? '',
         github_content_path: existing.github_content_path ?? '',
@@ -174,6 +199,18 @@ export function ClientForm() {
         icp_source_type: 'text',
         icp_text: form.icp_text,
         google_drive_folder_id: form.google_drive_folder_id || null,
+        // Merge the form's known per-type folders onto the existing map so keys
+        // we don't render (e.g. a content type added later) are preserved, not
+        // dropped. Blank fields clear their key.
+        drive_folders: (() => {
+          const merged: Record<string, string> = { ...(existing?.drive_folders ?? {}) }
+          for (const f of DRIVE_FOLDER_FIELDS) {
+            const v = (form[f.key] as string).trim()
+            if (v) merged[f.type] = v
+            else delete merged[f.type]
+          }
+          return merged
+        })(),
         github_repo: form.github_repo || null,
         github_branch: form.github_branch || null,
         github_content_path: form.github_content_path || null,
@@ -456,6 +493,26 @@ export function ClientForm() {
           <p style={hintStyle}>
             Find the ID in the folder's URL — the part after <code>/folders/</code>. Make sure your Apps Script account has Editor access.
           </p>
+
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #e2e8f0' }}>
+            <label style={{ ...labelStyle, fontWeight: 600 }}>Per-content-type folders (optional)</label>
+            <p style={hintStyle}>
+              Route each content type to its own folder. Leave a field blank to fall back to the default folder above.
+            </p>
+            {DRIVE_FOLDER_FIELDS.map(({ key, label, reserved }) => (
+              <div key={key} style={{ marginTop: 12 }}>
+                <label style={labelStyle}>
+                  {label}{reserved && <span style={{ color: '#94a3b8', fontWeight: 400 }}> — reserved (no generator yet)</span>}
+                </label>
+                <input
+                  value={form[key] as string}
+                  onChange={set(key)}
+                  placeholder="Folder ID (blank = use default folder)"
+                  style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' }}
+                />
+              </div>
+            ))}
+          </div>
         </div>
 
         <div style={sectionStyle}>

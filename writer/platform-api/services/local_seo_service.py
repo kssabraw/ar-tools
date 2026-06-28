@@ -23,6 +23,7 @@ from fastapi import HTTPException
 from config import settings
 from db.supabase_client import get_supabase
 from services import analysis_cache, locations_service
+from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
 
 logger = logging.getLogger(__name__)
@@ -1145,14 +1146,14 @@ async def publish_page(
 
     client_res = (
         supabase.table("clients")
-        .select("name, google_drive_folder_id")
+        .select("name, google_drive_folder_id, drive_folders")
         .eq("id", page["client_id"])
         .single()
         .execute()
     )
     if not client_res.data:
         raise HTTPException(status_code=404, detail="client_not_found")
-    folder_id = client_res.data.get("google_drive_folder_id")
+    folder_id = resolve_drive_folder(client_res.data, "local_seo_page")
     if not folder_id:
         raise HTTPException(status_code=422, detail="missing_google_drive_folder_id")
 

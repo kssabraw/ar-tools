@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 class ClientListItem(BaseModel):
@@ -86,6 +86,9 @@ class ClientDetail(BaseModel):
     created_at: str
     updated_at: str
     google_drive_folder_id: Optional[str] = None
+    # Per-content-type Drive folders (content_type slug → folder ID). The
+    # type-specific folder wins; google_drive_folder_id is the fallback.
+    drive_folders: dict[str, str] = Field(default_factory=dict)
     # Publish-target scaffold (#3): GitHub repo the Fanout/Blog content can be
     # committed to (resolved per-client when publishing). Wired, used later.
     github_repo: Optional[str] = None
@@ -111,6 +114,20 @@ class ClientDetail(BaseModel):
     # one source feeding the silo planner's target-city discovery.
     target_cities: list[str] = Field(default_factory=list)
 
+    @field_validator("drive_folders", mode="before")
+    @classmethod
+    def _sanitize_drive_folders(cls, v: Any) -> dict[str, str]:
+        """Coerce the stored JSONB into a clean {str: str} map so a malformed or
+        legacy value (null, non-dict, non-string/blank entries) can't 500 a GET.
+        Drops empty/whitespace entries; stringifies keys and values."""
+        if not isinstance(v, dict):
+            return {}
+        return {
+            str(k): str(val).strip()
+            for k, val in v.items()
+            if val is not None and str(val).strip()
+        }
+
 
 class ClientCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
@@ -122,6 +139,7 @@ class ClientCreateRequest(BaseModel):
     icp_text: str = ""
     icp_file_id: Optional[UUID] = None
     google_drive_folder_id: Optional[str] = None
+    drive_folders: Optional[dict[str, str]] = None
     # Publish-target scaffold (#3): GitHub repo the Fanout/Blog content can be
     # committed to (resolved per-client when publishing). Wired, used later.
     github_repo: Optional[str] = None
@@ -153,6 +171,7 @@ class ClientUpdateRequest(BaseModel):
     icp_text: Optional[str] = None
     icp_file_id: Optional[UUID] = None
     google_drive_folder_id: Optional[str] = None
+    drive_folders: Optional[dict[str, str]] = None
     # Publish-target scaffold (#3): GitHub repo the Fanout/Blog content can be
     # committed to (resolved per-client when publishing). Wired, used later.
     github_repo: Optional[str] = None
