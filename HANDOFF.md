@@ -15,9 +15,23 @@ decision). On branch `claude/slack-assistant` — **draft PR**.
   in a BackgroundTask (Claude > 3s). Skips retries + the bot's own messages.
 - **Logic:** `services/slack_assistant.py` — pure helpers (`verify_slack_signature`,
   `strip_mention`, `resolve_client`, `format_context`, unit-tested) + `build_context`
-  (DB reads: keywords w/ `rank_status.compute_keyword_summary`, open `rank_alerts`,
-  latest `reopt_plans`, latest `gsc_research_runs`) + `answer_question` (Claude,
-  `slack_assistant_model`=`claude-sonnet-4-6`) + `post_message`/`handle_app_mention`.
+  + `answer_question` (Claude, `slack_assistant_model`=`claude-sonnet-4-6`) +
+  `post_message`/`handle_app_mention`.
+- **Cross-module context (extensible registry):** `build_context` runs every
+  provider in `_CONTEXT_PROVIDERS`, each isolated (one module failing/empty never
+  breaks the answer) and keyed under its module name, so the LLM can tell "no data
+  for this module" from real data. Current providers: `organic_rank` (keywords
+  w/ `rank_status.compute_keyword_summary`, open `rank_alerts`, latest `reopt_plans`,
+  `gsc_research_runs`), `maps_geogrid` (latest `maps_scans`/`maps_scan_results` —
+  avg rank, pin coverage, weak areas), `ai_visibility` (`brand_tracked_keywords` +
+  latest `brand_mention_history` per-engine visibility + invisible count), `content`
+  (completed `runs` by content_type + `local_seo_pages` saved/published),
+  `keyword_research` (fanout `sessions` via the fanout-schema service client),
+  `setup` (GBP/brand-voice/ICP/target-cities presence on `clients`).
+  **To add a future module:** write `_ctx_<module>(supabase, client_id, today)`
+  returning a compact dict (or None) and append it to `_CONTEXT_PROVIDERS` — it
+  flows into every answer automatically. (Reserved-LogRecord gotcha: don't use
+  `extra={"module": …}` — it collides; we use `ctx_module`.)
 - **Config on PLATFORM:** `SLACK_SIGNING_SECRET` (**required** — without it the
   endpoint fail-closes and answers nothing), `slack_assistant_enabled` (default
   on), `slack_assistant_model`, `slack_assistant_max_tokens`,

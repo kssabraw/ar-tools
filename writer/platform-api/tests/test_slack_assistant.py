@@ -101,6 +101,30 @@ def test_resolve_ignores_generic_tokens():
 # ---------------------------------------------------------------------------
 # format_context
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# build_context registry behavior (providers isolated; empties omitted)
+# ---------------------------------------------------------------------------
+def test_build_context_assembles_isolates_and_omits(monkeypatch):
+    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: object())
+
+    def good(sb, cid, today):
+        return {"ok": True}
+
+    def empty(sb, cid, today):
+        return None
+
+    def boom(sb, cid, today):
+        raise RuntimeError("module down")
+
+    monkeypatch.setattr(
+        slack_assistant,
+        "_CONTEXT_PROVIDERS",
+        [("alpha", good), ("beta", empty), ("gamma", boom)],
+    )
+    ctx = slack_assistant.build_context("client-1")
+    assert ctx == {"alpha": {"ok": True}}  # empty omitted, failing one isolated
+
+
 def test_format_context_is_json_with_client():
     import json
 
