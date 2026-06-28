@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 _SLACK_POST_URL = "https://slack.com/api/chat.postMessage"
 _TIMEOUT = 20.0
+_LLM_TIMEOUT = 60.0  # bound the Claude call so a hung request can't pin the task
 _MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
 _SIG_MAX_SKEW_SECONDS = 60 * 5  # reject events older than 5 min (replay guard)
 
@@ -343,31 +344,45 @@ def _ctx_ai_visibility(supabase, client_id: str, today: date) -> Optional[dict]:
 
 
 def _ctx_content(supabase, client_id: str, today: date) -> Optional[dict]:
-    """Content produced: completed blog/service/location runs + Local SEO pages."""
+    """Content produced: completed blog/service/location runs + Local SEO pages.
+
+    Uses head-only `count="exact"` queries (no row transfer) — these counts can
+    grow large for an active client and we only need the totals.
+    """
     out: dict = {}
-    runs = (
-        supabase.table("runs")
-        .select("content_type, status")
-        .eq("client_id", client_id)
-        .eq("status", "complete")
-        .execute()
-    ).data or []
-    if runs:
-        by_type: dict[str, int] = {}
-        for r in runs:
-            t = r.get("content_type") or "blog_post"
-            by_type[t] = by_type.get(t, 0) + 1
+    by_type: dict[str, int] = {}
+    for t in ("blog_post", "service_page", "location_page"):
+        n = (
+            supabase.table("runs")
+            .select("id", count="exact", head=True)
+            .eq("client_id", client_id)
+            .eq("status", "complete")
+            .eq("content_type", t)
+            .execute()
+        ).count or 0
+        if n:
+            by_type[t] = n
+    if by_type:
         out["completed_runs_by_type"] = by_type
-    pages = (
+
+    saved = (
         supabase.table("local_seo_pages")
-        .select("id, published_doc_id")
+        .select("id", count="exact", head=True)
         .eq("client_id", client_id)
         .is_("deleted_at", "null")
         .execute()
-    ).data or []
-    if pages:
-        out["local_seo_pages_saved"] = len(pages)
-        out["local_seo_pages_published"] = sum(1 for p in pages if p.get("published_doc_id"))
+    ).count or 0
+    if saved:
+        published = (
+            supabase.table("local_seo_pages")
+            .select("id", count="exact", head=True)
+            .eq("client_id", client_id)
+            .is_("deleted_at", "null")
+            .not_.is_("published_doc_id", "null")
+            .execute()
+        ).count or 0
+        out["local_seo_pages_saved"] = saved
+        out["local_seo_pages_published"] = published
     return out or None
 
 
@@ -435,7 +450,7 @@ async def answer_question(question: str, client: dict, context: dict) -> str:
     import anthropic
 
     user = f"Question: {question}\n\nClient data (JSON):\n{format_context(client, context)}"
-    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
     resp = await api.messages.create(
         model=settings.slack_assistant_model,
         max_tokens=settings.slack_assistant_max_tokens,
