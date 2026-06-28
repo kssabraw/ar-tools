@@ -1,18 +1,21 @@
 """Slack conversational assistant — "SerMastr".
 
-Two-way Slack: when someone @mentions the bot in a channel, Slack POSTs an
-`app_mention` event to `/slack/events`. We resolve which client the question is
-about, assemble a compact context from the rank tracker's data (current ranks +
-status, open drops, the latest Action Plan, GSC opportunities), ask Claude, and
-post the answer back **in-thread**.
+Two-way Slack, **channel mode**: SerMastr lives in a dedicated channel, so Slack
+POSTs a `message` event to `/slack/events` for *every* message there (no @mention
+needed). We answer each plain human message — resolve which client it's about,
+assemble a cross-module context (rank tracker, Maps geo-grid, AI visibility,
+content, keyword research, setup), fold in the thread's prior turns for
+continuity, ask Claude, and post the answer back **in-thread**. The bot's own
+posts (rank-drop alerts etc.) and other bots are ignored, so it never loops.
 
 Read-only Q&A — the assistant only reads and explains; it never triggers work
 (that's a later, carefully-authed step). Anyone in the workspace can ask
 (per the product decision); inbound requests are verified by Slack's request
 signature so the public endpoint can't be spoofed.
 
-Split: pure helpers (signature verify, mention stripping, client resolution) are
-import-light and unit-tested; the context build + Claude call + Slack post do I/O.
+Split: pure helpers (signature verify, mention stripping, client resolution,
+history formatting) are import-light and unit-tested; the context build + thread
+fetch + Claude call + Slack post do I/O.
 """
 
 from __future__ import annotations
@@ -33,8 +36,10 @@ from db.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 _SLACK_POST_URL = "https://slack.com/api/chat.postMessage"
+_SLACK_REPLIES_URL = "https://slack.com/api/conversations.replies"
 _TIMEOUT = 20.0
 _LLM_TIMEOUT = 60.0  # bound the Claude call so a hung request can't pin the task
+_THREAD_HISTORY_LIMIT = 12  # prior thread messages folded into context for continuity
 _MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
 _SIG_MAX_SKEW_SECONDS = 60 * 5  # reject events older than 5 min (replay guard)
 
@@ -130,6 +135,22 @@ def format_context(client: dict, context: dict) -> str:
         **context,
     }
     return json.dumps(payload, default=str, ensure_ascii=False)
+
+
+def format_history(history: list[dict]) -> str:
+    """Render prior thread turns as a plain transcript for the prompt. Pure.
+
+    Folded into the user message (not structured messages) so multi-person threads
+    with no strict user/assistant alternation don't violate the LLM's role rules.
+    Each item is {"role": "assistant"|"user", "content": str}.
+    """
+    lines = []
+    for h in history:
+        who = "SerMastr" if h.get("role") == "assistant" else "Teammate"
+        text = (h.get("content") or "").strip()
+        if text:
+            lines.append(f"{who}: {text}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -445,11 +466,22 @@ _CONTEXT_PROVIDERS = [
 # ---------------------------------------------------------------------------
 # Claude + Slack I/O.
 # ---------------------------------------------------------------------------
-async def answer_question(question: str, client: dict, context: dict) -> str:
-    """Ask Claude the question against the assembled context. Returns reply text."""
+async def answer_question(
+    question: str, client: dict, context: dict, history: Optional[list[dict]] = None
+) -> str:
+    """Ask Claude the question against the assembled context. Returns reply text.
+
+    Prior thread turns (if any) are folded into the prompt as a transcript so
+    follow-ups have continuity without re-stating the client each time.
+    """
     import anthropic
 
-    user = f"Question: {question}\n\nClient data (JSON):\n{format_context(client, context)}"
+    blocks = []
+    if history:
+        blocks.append("Conversation so far (oldest first):\n" + format_history(history))
+    blocks.append(f"Latest question: {question}")
+    blocks.append(f"Client data (JSON):\n{format_context(client, context)}")
+    user = "\n\n".join(blocks)
     api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
     resp = await api.messages.create(
         model=settings.slack_assistant_model,
@@ -478,23 +510,46 @@ async def post_message(channel: str, text: str, thread_ts: Optional[str] = None)
         raise RuntimeError(f"slack_error: {data.get('error')}")
 
 
-async def handle_app_mention(event: dict) -> None:
-    """Process one app_mention event end-to-end. Best-effort; logs and bails on error."""
+async def fetch_thread_history(channel: str, thread_ts: str, skip_ts: Optional[str]) -> list[dict]:
+    """Recent prior messages of a thread as [{role, content}], oldest first.
+
+    `role` is "assistant" for SerMastr's own posts (any bot message) and "user"
+    otherwise. The triggering message (`skip_ts`) is excluded. Best-effort — any
+    failure returns []."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.get(
+            _SLACK_REPLIES_URL,
+            headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
+            params={"channel": channel, "ts": thread_ts, "limit": _THREAD_HISTORY_LIMIT},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    if not data.get("ok"):
+        return []
+    out: list[dict] = []
+    for m in data.get("messages", []):
+        if skip_ts and m.get("ts") == skip_ts:
+            continue
+        text = strip_mention(m.get("text", ""))
+        if not text:
+            continue
+        out.append({"role": "assistant" if m.get("bot_id") else "user", "content": text})
+    return out
+
+
+async def handle_message(event: dict) -> None:
+    """Process one channel message end-to-end (channel mode: no @mention needed).
+
+    The router has already filtered to plain human messages. We answer every one:
+    resolve the client, build cross-module context, fold in thread history for
+    continuity, ask Claude, and reply in-thread. Best-effort; logs and bails on error.
+    """
     channel = event.get("channel")
     thread_ts = event.get("thread_ts") or event.get("ts")
     question = strip_mention(event.get("text", ""))
-    if not channel:
+    if not (channel and question):
         return
     try:
-        if not question:
-            await post_message(
-                channel,
-                "Hi, I'm SerMastr 👋 Ask me about a client's rankings — e.g. "
-                "“how is *Acme Plumbing* doing?” or “any drops for *Acme*?”",
-                thread_ts,
-            )
-            return
-
         supabase = get_supabase()
         clients = (
             supabase.table("clients").select("id, name, website_url").execute()
@@ -504,14 +559,21 @@ async def handle_app_mention(event: dict) -> None:
             names = ", ".join(c["name"] for c in clients[:8] if c.get("name"))
             await post_message(
                 channel,
-                "I'm not sure which client you mean — name them in your question. "
-                + (f"For example: {names}." if names else ""),
+                "Which client do you mean? Name them in your message"
+                + (f" — e.g. {names}." if names else "."),
                 thread_ts,
             )
             return
 
+        history: list[dict] = []
+        if event.get("thread_ts") and event.get("thread_ts") != event.get("ts"):
+            try:
+                history = await fetch_thread_history(channel, event["thread_ts"], event.get("ts"))
+            except Exception as exc:  # memory is best-effort
+                logger.warning("slack_thread_history_failed", extra={"channel": channel, "error": str(exc)})
+
         context = build_context(client["id"])
-        answer = await answer_question(question, client, context)
+        answer = await answer_question(question, client, context, history)
         await post_message(channel, answer, thread_ts)
     except Exception as exc:
         logger.warning("slack_assistant_failed", extra={"channel": channel, "error": str(exc)})

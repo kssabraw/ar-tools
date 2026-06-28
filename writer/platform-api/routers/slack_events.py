@@ -63,8 +63,16 @@ async def slack_events(request: Request, background: BackgroundTasks) -> Respons
 
     if payload.get("type") == "event_callback":
         event = payload.get("event") or {}
-        # Only human @mentions; ignore the bot's own messages / edits.
-        if event.get("type") == "app_mention" and not event.get("bot_id"):
-            background.add_task(slack_assistant.handle_app_mention, event)
+        # Channel mode: answer every plain human message in channels SerMastr is in
+        # (it's used in a dedicated channel). Ignore the bot's own posts (rank-drop
+        # alerts etc.) + other bots + edits/joins/deletes (subtypes) to avoid loops.
+        # `message` events also cover @mentions (the mention text is just stripped),
+        # so we don't separately handle `app_mention` — that would double-reply.
+        if (
+            event.get("type") == "message"
+            and event.get("subtype") in (None, "thread_broadcast")
+            and not event.get("bot_id")
+        ):
+            background.add_task(slack_assistant.handle_message, event)
 
     return Response(status_code=200)
