@@ -179,6 +179,52 @@ def enqueue_due_page_ingest() -> int:
     return enqueued
 
 
+def enqueue_due_gsc_research() -> int:
+    """First-entry + monthly: enqueue a GSC Research run (cannibalization / quick
+    wins / hidden wins) for each GSC-eligible client that has never had one, or
+    whose last completed run is at least `gsc_research_interval_days` old.
+
+    Gated on GSC actually being provisioned (service account + a verified
+    property) — GSC Research can't produce anything otherwise. On-demand runs are
+    unaffected. enqueue_gsc_research dedupes against any in-flight run.
+    """
+    from datetime import date
+
+    from services.gsc_research import enqueue_gsc_research, is_gsc_research_due
+
+    if not (settings.gsc_research_auto_enabled and settings.google_service_account_key):
+        return 0
+    supabase = get_supabase()
+    props = (
+        supabase.table("gsc_properties").select("client_id").eq("access_status", "ok").execute()
+    ).data or []
+    client_ids = sorted({p["client_id"] for p in props})
+    if not client_ids:
+        return 0
+    runs = (
+        supabase.table("gsc_research_runs")
+        .select("client_id, created_at")
+        .eq("status", "complete")
+        .in_("client_id", client_ids)
+        .order("created_at", desc=True)
+        .execute()
+    ).data or []
+    last_by: dict[str, date] = {}
+    for r in runs:  # newest-first → first seen per client wins
+        cid = r["client_id"]
+        if cid not in last_by and r.get("created_at"):
+            last_by[cid] = date.fromisoformat(r["created_at"][:10])
+    today = date.today()
+    due = 0
+    for cid in client_ids:
+        if is_gsc_research_due(last_by.get(cid), today, settings.gsc_research_interval_days):
+            enqueue_gsc_research(cid, trigger="scheduled")
+            due += 1
+    if due:
+        logger.info("gsc_scheduler.gsc_research_enqueued", extra={"clients": due})
+    return due
+
+
 def enqueue_due_reports() -> int:
     """Daily: enqueue a rank_report job for each client whose schedule is due."""
     from datetime import date
@@ -223,6 +269,7 @@ async def gsc_scheduler() -> None:
                 enqueue_due_ingests()
                 enqueue_due_market()
                 enqueue_due_reports()
+                enqueue_due_gsc_research()
                 # DataForSEO rank pull is now per-client scheduled (weekly/
                 # monthly/interval/off); the enqueue helper decides who is due
                 # today, so it runs daily rather than on one global weekday.
@@ -233,7 +280,11 @@ async def gsc_scheduler() -> None:
             # not the per-client tracked rank).
             if now.weekday() == weekday and should_run(now, last_df_date, hour):
                 enqueue_due_page_ingest()
-                enqueue_due_serp_snapshots()
+                # SERP snapshots are now captured on keyword first-entry, on a
+                # detected rank drop (≤1/mo), and on-demand — not weekly — unless
+                # serp_snapshot_auto_weekly is re-enabled (cost vs trend density).
+                if settings.serp_snapshot_auto_weekly:
+                    enqueue_due_serp_snapshots()
                 last_df_date = now.date()
             # Weekly Maps geo-grid scans (Module #5) on their own weekday.
             if now.weekday() == maps_weekday and should_run(now, last_maps_date, hour):

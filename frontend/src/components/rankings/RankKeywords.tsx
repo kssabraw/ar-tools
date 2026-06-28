@@ -25,6 +25,7 @@ export function RankKeywords({ clientId, gscConnected }: {
   const [draft, setDraft] = useState('')
   const [adding, setAdding] = useState(false)
   const [filter, setFilter] = useState<KeywordStatus | null>(null)
+  const [justAdded, setJustAdded] = useState<KeywordSummary[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
 
   const invalidate = () => {
@@ -35,7 +36,16 @@ export function RankKeywords({ clientId, gscConnected }: {
   const addMut = useMutation({
     mutationFn: (keywords: string[]) =>
       api.post<KeywordSummary[]>(`/clients/${clientId}/rank/keywords`, { keywords }),
-    onSuccess: () => { invalidate(); setDraft(''); setAdding(false) },
+    onSuccess: (data) => { invalidate(); setDraft(''); setAdding(false); setJustAdded(data ?? []) },
+  })
+
+  // First-entry opt-in: offer to run rankability (capture a snapshot) for the
+  // keywords just added. After this, rankability only re-runs on a detected drop
+  // (≤1/mo) or on demand.
+  const rankabilityMut = useMutation({
+    mutationFn: (ids: string[]) =>
+      Promise.all(ids.map(id => api.post(`/tracked-keywords/${id}/serp-snapshot`, {}))),
+    onSuccess: () => setJustAdded([]),
   })
 
   const onCsvSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -124,6 +134,21 @@ export function RankKeywords({ clientId, gscConnected }: {
           </>
         )}
       </div>
+
+      {justAdded.length > 0 && (
+        <div style={rankabilityBanner}>
+          <span style={{ flex: 1 }}>
+            Added <strong>{justAdded.length}</strong> keyword{justAdded.length === 1 ? '' : 's'}. Run a{' '}
+            <strong>rankability score</strong> now? (~{justAdded.length} SERP snapshot{justAdded.length === 1 ? '' : 's'}.
+            After this it only re-runs on a detected drop or on demand.)
+          </span>
+          <button style={primaryBtn} disabled={rankabilityMut.isPending}
+            onClick={() => rankabilityMut.mutate(justAdded.map(k => k.id))}>
+            {rankabilityMut.isPending ? 'Starting…' : 'Run rankability'}
+          </button>
+          <button style={outlineBtn} onClick={() => setJustAdded([])}>Not now</button>
+        </div>
+      )}
 
       {!gscConnected && (keywords?.length ?? 0) > 0 && (
         <div style={dfBanner}>
@@ -416,3 +441,4 @@ const canonChip: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '
 const todayBox: React.CSSProperties = { display: 'inline-block', minWidth: 22, border: '1px solid #e2e8f0', borderRadius: 5, padding: '1px 6px', fontWeight: 700, color: '#0f172a' }
 const emptyCard: React.CSSProperties = { ...card, color: '#64748b', fontSize: 13, lineHeight: 1.6 }
 const dfBanner: React.CSSProperties = { background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#0369a1', marginBottom: 14, lineHeight: 1.5 }
+const rankabilityBanner: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#3730a3', marginBottom: 14, lineHeight: 1.5, flexWrap: 'wrap' }

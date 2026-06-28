@@ -253,4 +253,11 @@ def reconcile_alerts(
             "rank_alerts_reconciled",
             extra={"client_id": client_id, "opened": len(inserts), "resolved": len(resolve_ids)},
         )
-    return {"opened": len(inserts), "resolved": len(resolve_ids)}
+    # Keywords with a newly-opened alert this run — the caller uses these to
+    # trigger a (rate-limited) rankability snapshot for the dropped keyword.
+    opened_keyword_ids = sorted({i["keyword_id"] for i in inserts})
+    return {
+        "opened": len(inserts),
+        "resolved": len(resolve_ids),
+        "opened_keyword_ids": opened_keyword_ids,
+    }

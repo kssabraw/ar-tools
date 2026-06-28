@@ -33,7 +33,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -916,6 +916,54 @@ def enqueue_serp_snapshot(client_id: str, keyword_id: Optional[str] = None) -> N
             "payload": {"client_id": client_id, "keyword_id": keyword_id},
         }
     ).execute()
+
+
+def _drop_capture_due(keyword_ids: list[str], recent_keyword_ids: set[str]) -> list[str]:
+    """Deduped keyword_ids eligible for a drop-triggered capture — those NOT
+    already captured within the rate-limit window. Pure (unit-tested)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for kid in keyword_ids:
+        if kid in recent_keyword_ids or kid in seen:
+            continue
+        seen.add(kid)
+        out.append(kid)
+    return out
+
+
+def enqueue_drop_triggered_snapshots(
+    client_id: str,
+    keyword_ids: list[str],
+    today: Optional[date] = None,
+    min_days: Optional[int] = None,
+) -> int:
+    """Enqueue a rankability snapshot for each just-dropped keyword, bounded to at
+    most one per `min_days` (default `serp_snapshot_drop_min_days`). A keyword with
+    any snapshot — manual, first-entry, or a prior drop — within the window is
+    skipped, so a flapping ranking can't capture repeatedly. Returns the count."""
+    if not keyword_ids:
+        return 0
+    supabase = get_supabase()
+    today = today or date.today()
+    window = min_days if min_days is not None else settings.serp_snapshot_drop_min_days
+    cutoff = (today - timedelta(days=window)).isoformat()
+    recent = (
+        supabase.table("serp_snapshots")
+        .select("keyword_id")
+        .in_("keyword_id", keyword_ids)
+        .gte("captured_at", cutoff)
+        .execute()
+    ).data or []
+    recent_ids = {r["keyword_id"] for r in recent}
+    due = _drop_capture_due(keyword_ids, recent_ids)
+    for kid in due:
+        enqueue_serp_snapshot(client_id, keyword_id=kid)
+    if due:
+        logger.info(
+            "serp_snapshot_drop_triggered",
+            extra={"client_id": client_id, "enqueued": len(due)},
+        )
+    return len(due)
 
 
 async def run_serp_snapshot_job(job: dict) -> None:

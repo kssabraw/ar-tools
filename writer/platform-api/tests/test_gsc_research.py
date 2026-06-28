@@ -116,3 +116,19 @@ def test_enrich_with_market_matches_case_insensitively():
     assert rows[0]["search_volume"] == 1000
     assert rows[0]["cpc"] == 4.5
     assert rows[0]["competition"] == "HIGH"
+
+
+# ---------------------------------------------------------------------------
+# is_gsc_research_due (first-entry + monthly cadence)
+# ---------------------------------------------------------------------------
+def test_is_gsc_research_due_first_run_when_never_run():
+    from datetime import date
+    assert gsc_research.is_gsc_research_due(None, date(2026, 6, 28), 30) is True
+
+
+def test_is_gsc_research_due_monthly_boundary():
+    from datetime import date
+    today = date(2026, 6, 28)
+    assert gsc_research.is_gsc_research_due(date(2026, 5, 29), today, 30) is True   # 30 days → due
+    assert gsc_research.is_gsc_research_due(date(2026, 5, 30), today, 30) is False  # 29 days → not yet
+    assert gsc_research.is_gsc_research_due(date(2026, 6, 20), today, 30) is False  # 8 days → not yet

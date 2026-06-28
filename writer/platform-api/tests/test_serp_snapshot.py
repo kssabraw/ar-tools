@@ -240,6 +240,19 @@ def test_is_page_targeted_empty_keyword():
 
 
 # ---------------------------------------------------------------------------
+# _drop_capture_due (drop-trigger rate-limit gate)
+# ---------------------------------------------------------------------------
+def test_drop_capture_due_skips_recent_and_dedupes():
+    # kw2 captured within the window → skipped; kw1 appears twice → once.
+    out = serp_snapshot._drop_capture_due(["kw1", "kw2", "kw1", "kw3"], {"kw2"})
+    assert out == ["kw1", "kw3"]
+
+
+def test_drop_capture_due_all_recent():
+    assert serp_snapshot._drop_capture_due(["a", "b"], {"a", "b"}) == []
+
+
+# ---------------------------------------------------------------------------
 # parse_topical_classification
 # ---------------------------------------------------------------------------
 def test_parse_topical_classification_counts_generalists_excluding_client():

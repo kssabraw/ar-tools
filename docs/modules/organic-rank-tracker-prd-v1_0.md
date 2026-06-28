@@ -386,3 +386,10 @@ A **client-relative rankability score** per tracked keyword — how realisticall
 - **SERP opportunity** (0.10) — click real-estate left after AIO / shopping crowding.
 
 Paired with the keyword's **potential value** (volume × CTR-at-top-3 × CPC) into a **Quick wins** priority (rankability × value), so "easy *and* valuable" floats to the top. Keywords without a snapshot yet are listed unscored with a capture prompt. Weights/thresholds are module constants (tunable); the pure scorer is unit-tested. Heuristic, not ground truth — it reads title/URL + DataForSEO authority, not page bodies. Inputs the rank tracker + snapshot already capture; **no new data or migration**.
+
+**Capture cadence (cost control).** Rankability reads the latest snapshot, so spend = snapshots, not the score. The blanket **weekly auto-capture is OFF** (`serp_snapshot_auto_weekly=False`); snapshots/rankability run only:
+1. on **keyword first-entry** — an opt-in "Run rankability" prompt after a keyword is added (typed / CSV / accepted suggestion);
+2. on a **detected rank drop** — any of the four `rank_alerts` rules newly opening triggers a capture, **bounded to once per `serp_snapshot_drop_min_days` (30)** per keyword (any snapshot in that window — manual, first-entry, or a prior drop — suppresses it, so a flapping ranking can't re-capture);
+3. **on demand** — the per-keyword camera / Rankability tab, always available, ungated.
+
+Trade-off: with weekly capture off, **SERP Trends / timelines only have points at those events** (sparser). Flip `serp_snapshot_auto_weekly` to restore dense history. `services/serp_snapshot.py::enqueue_drop_triggered_snapshots` (rate-limit gate), wired from `rank_materialize` after `rank_alerts.reconcile_alerts`.
