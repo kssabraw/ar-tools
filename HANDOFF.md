@@ -1,6 +1,46 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **Notifications service (in-app + email + Slack)** (latest)
+## ⏩ Update — 2026-06-28 · **Reoptimization planner / Action Plan** (latest) + notifications provisioning status
+
+**Reoptimization planner — built & merged** (`#159`, squash `51f5237` → `main`).
+PR 2 of 2 on the notifications pipe. Per-client, recommend-only **Action Plan**:
+`build_actions` maps the rank tracker's existing signals (open rank-drop alerts,
+rankability Quick wins, GSC-Research cannibalization/hidden-wins) to a strictly
+tiered action list, each deep-linking into the tool that does the work; nothing
+auto-executes. `services/reopt_planner.py` (+ `routers/reopt.py`, `models/reopt.py`,
+`pages/ActionPlan.tsx`, workspace card, route `clients/:id/action-plan`,
+migration `…060818_reopt_plans` + `reopt_plan` job type). **Cadence:** on-demand
+Rebuild; **weekly digest** (`enqueue_due_reopt_plans` on `reopt_plan_weekday`) is
+the only auto-notification trigger; **on-drop refresh** (`trigger="drop"`, silent)
+from `rank_materialize`. Verified: **593 tests**, ruff clean, frontend build clean.
+
+### ⚠️ Notifications channel provisioning — current status (PLATFORM Railway vars)
+
+The notifications **pipe is built**; in-app card alerts work **today** with no
+config. The outbound channels stay dormant until their creds are set on the
+**PLATFORM** service. Status:
+
+- **📧 Email (SMTP) — DEFERRED by user (2026-06-28), set up later.** Vars to set
+  when ready: `SMTP_HOST` (`smtp.gmail.com`), `SMTP_PORT` (`587`), `SMTP_USER`
+  (sending address), `SMTP_PASSWORD` (**Google App Password**, needs 2FA on the
+  account), `SMTP_FROM` (optional), `NOTIFY_EMAIL_TO` (comma-separated
+  recipients). Email fires only when host+user+password+recipients are all set.
+- **💬 Slack — CONFIGURED & live-verified (2026-06-28).** App **SerMastr**
+  (`ar_tools`/display "SerMastr", bot `B0BDP9BDXPU`, team "Amazing Rankings")
+  with `chat:write`, installed + invited to channel `C0BDM8E9FJA`. `SLACK_BOT_TOKEN`
+  + `SLACK_DEFAULT_CHANNEL` set on PLATFORM. Verified end-to-end through the live
+  worker (`notification_dispatch` → `channels_sent.slack="ok"`), not just a raw
+  API call. (Setup gotcha for next time: the scope must be **`chat:write`** under
+  *Bot* Token Scopes — `calls:write` looks similar and yields `missing_scope`;
+  private channels need the bot invited and addressed by **ID**, not `#name`.)
+- **🔗 `APP_BASE_URL`** (e.g. `https://ar-internal.netlify.app`) — makes the
+  email/Slack "Open in AR Tools" deep links clickable; copies still send without it.
+- Master switch `NOTIFICATIONS_ENABLED` defaults `true`. Each channel is
+  best-effort and records `channels_sent` (ok/failed/skipped) per notification.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Notifications service (in-app + email + Slack)**
 
 The suite's long-deferred **notifications service** — the shared delivery pipe for
 in-app alerts, email, and Slack. Built as **PR 1 of 2** toward the reoptimization
