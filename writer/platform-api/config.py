@@ -153,6 +153,15 @@ class Settings(BaseSettings):
     # Slack app bot token (xoxb-…) + default channel id/name.
     slack_bot_token: str = ""
     slack_default_channel: str = ""
+    # Slack conversational assistant (SerMastr): respond to @mentions in channels
+    # with a Claude answer grounded in the client's rank/GSC data. The signing
+    # secret (Basic Information → App Credentials) verifies inbound Slack events;
+    # without it the /slack/events endpoint rejects everything (fail-closed).
+    slack_signing_secret: str = ""
+    slack_assistant_enabled: bool = True
+    slack_assistant_model: str = "claude-sonnet-4-6"
+    slack_assistant_max_tokens: int = 900
+    slack_assistant_max_keywords: int = 60   # cap keywords folded into the LLM context
     # Frontend base URL for deep links in email/Slack (e.g. https://ar-internal.netlify.app).
     app_base_url: str = ""
     maps_report_competitor_min_rating: float = 4.7

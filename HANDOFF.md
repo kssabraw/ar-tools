@@ -1,6 +1,51 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **Reoptimization planner / Action Plan** (latest) + notifications provisioning status
+## ⏩ Update — 2026-06-28 · **Slack conversational assistant (SerMastr)** (latest)
+
+Two-way Slack: @mention **SerMastr** in a channel and it answers a
+natural-language question about a client's search performance, grounded in the
+rank tracker's data (current ranks + trend, open drop alerts, the latest Action
+Plan, GSC opportunities), via Claude, posted back **in-thread**. Read-only Q&A —
+it explains, it doesn't trigger work. Anyone in the workspace can ask (product
+decision). On branch `claude/slack-assistant` — **draft PR**.
+
+- **Inbound:** `routers/slack_events.py` → `POST /slack/events` (public; the only
+  guard is Slack request-signature verification, fail-closed). Answers the
+  url_verification handshake, acks within Slack's 3s window, and runs the answer
+  in a BackgroundTask (Claude > 3s). Skips retries + the bot's own messages.
+- **Logic:** `services/slack_assistant.py` — pure helpers (`verify_slack_signature`,
+  `strip_mention`, `resolve_client`, `format_context`, unit-tested) + `build_context`
+  (DB reads: keywords w/ `rank_status.compute_keyword_summary`, open `rank_alerts`,
+  latest `reopt_plans`, latest `gsc_research_runs`) + `answer_question` (Claude,
+  `slack_assistant_model`=`claude-sonnet-4-6`) + `post_message`/`handle_app_mention`.
+- **Config on PLATFORM:** `SLACK_SIGNING_SECRET` (**required** — without it the
+  endpoint fail-closes and answers nothing), `slack_assistant_enabled` (default
+  on), `slack_assistant_model`, `slack_assistant_max_tokens`,
+  `slack_assistant_max_keywords`. Reuses `SLACK_BOT_TOKEN` + `ANTHROPIC_API_KEY`.
+
+### ⚠️ Slack dashboard provisioning still required (one-time)
+The code is deployed-ready but inert until the Slack app is wired for inbound:
+1. **Basic Information → App Credentials → Signing Secret** → set as
+   `SLACK_SIGNING_SECRET` on the **PLATFORM** Railway service.
+2. **OAuth & Permissions → Bot Token Scopes** → add **`app_mentions:read`**
+   (keep `chat:write`) → **Reinstall to Workspace**.
+3. **Event Subscriptions** → toggle on → **Request URL** =
+   `https://<PLATFORM public domain>/slack/events` (must show *Verified* — the
+   endpoint answers the handshake) → under **Subscribe to bot events** add
+   **`app_mention`** → Save.
+4. Make sure SerMastr is in the channel(s) you'll @mention it from.
+
+Verified so far: import + **605 tests** (12 new), ruff clean (my files), frontend
+unaffected. End-to-end Slack round-trip is **untested until the event
+subscription + signing secret are provisioned** (above) — there's no way to
+exercise the inbound path without a real signed Slack event.
+
+**Next:** future levels if wanted — NL→action commands (trigger scans / rebuild
+plans) with per-user authorization; DM support (`im:history` + `message.im`).
+
+---
+
+## ⏩ Update — 2026-06-28 · **Reoptimization planner / Action Plan** + notifications provisioning status
 
 **Reoptimization planner — built & merged** (`#159`, squash `51f5237` → `main`).
 PR 2 of 2 on the notifications pipe. Per-client, recommend-only **Action Plan**:
