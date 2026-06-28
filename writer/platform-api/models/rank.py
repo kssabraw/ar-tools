@@ -236,6 +236,15 @@ class SerpSnapshotResultRow(BaseModel):
     backlinks_status: str = "pending"
 
 
+class SerpSnapshotDomainRow(BaseModel):
+    domain: Optional[str] = None
+    is_client: bool = False
+    domain_rating: Optional[int] = None  # DataForSEO domain rank (0–1000), DR-equivalent
+    referring_domains: Optional[int] = None
+    backlinks: Optional[int] = None
+    backlinks_status: str = "pending"
+
+
 class SerpSnapshotDetail(BaseModel):
     id: UUID
     keyword_id: UUID
@@ -255,6 +264,7 @@ class SerpSnapshotDetail(BaseModel):
     client_url: Optional[str] = None
     error: Optional[str] = None
     results: list[SerpSnapshotResultRow] = []
+    domains: list[SerpSnapshotDomainRow] = []
 
 
 class SerpSnapshotCaptureResponse(BaseModel):

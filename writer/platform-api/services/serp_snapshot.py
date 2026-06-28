@@ -11,17 +11,21 @@ Each snapshot records, for a keyword at a point in time:
   - the SERP feature inventory ("enhancements": local pack/GBP, PAA, forums,
     featured snippet, …),
   - the query intent (informational/commercial/transactional/navigational),
-  - and the top organic results (url / domain / rendered title + description /
+  - the top organic results (url / domain / rendered title + description /
     position), each enriched with referring domains + URL Rating (DataForSEO
-    Backlinks page rank, 0–1000) — including the client's own ranking page.
+    Backlinks page rank, 0–1000) — including the client's own ranking page,
+  - and, per unique domain in the SERP (competitors + the client), the
+    Domain Rating (DataForSEO Backlinks domain rank, 0–1000) — the whole-domain
+    authority signal (PRD §14).
 
 Sources (all DataForSEO, reusing the Basic-auth pattern from dataforseo_rank):
   - SERP advanced  (/v3/serp/google/organic/live/advanced) — AIO + organic + features
   - Labs search-intent  (/v3/dataforseo_labs/google/search_intent/live)
-  - Backlinks summary  (/v3/backlinks/summary/live) — per target URL
+  - Backlinks summary  (/v3/backlinks/summary/live) — per target URL (UR) AND
+    per target domain (DR)
 
-Per-URL / per-keyword failures are isolated and recorded, never fatal to the
-batch (the same resilience as refresh_client_ranks).
+Per-URL / per-domain / per-keyword failures are isolated and recorded, never
+fatal to the batch (the same resilience as refresh_client_ranks).
 """
 
 from __future__ import annotations
@@ -98,6 +102,29 @@ def find_client_organic(items: list[dict], domain: str) -> Optional[dict]:
                 "description": item.get("description"),
             }
     return None
+
+
+def collect_snapshot_domains(result_rows: list[dict], client_domain: str) -> list[dict]:
+    """Deduped, ordered ``[{domain, is_client}, ...]`` to fetch Domain Rating for.
+
+    The whole-domain authority targets for a snapshot: every distinct domain
+    among the captured ranking pages (competitors + the client's own page),
+    plus the client's domain itself even when it doesn't rank in the fetched
+    depth (so the client always gets a DR row). Order is SERP order, with the
+    client domain appended last if it wasn't already present. Case-insensitive.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    cd = (client_domain or "").lower()
+    for row in result_rows:
+        domain = (row.get("domain") or "").lower()
+        if not domain or domain in seen:
+            continue
+        seen.add(domain)
+        out.append({"domain": domain, "is_client": bool(cd) and domain == cd})
+    if cd and cd not in seen:
+        out.append({"domain": cd, "is_client": True})
+    return out
 
 
 def _dedup_sources(sources: list[dict]) -> list[dict]:
@@ -267,6 +294,34 @@ async def fetch_backlinks_summary(target_url: str) -> dict:
     return parse_backlinks_summary(body)
 
 
+async def fetch_domain_summary(domain: str) -> dict:
+    """Domain Rating (DR) + domain-level referring domains for one domain target.
+
+    Same Backlinks summary endpoint as :func:`fetch_backlinks_summary`, but with
+    a bare-domain target and ``include_subdomains=True`` so DataForSEO returns
+    whole-domain metrics. Its ``rank`` (0–1000) is the DR-equivalent. Reuses
+    ``parse_backlinks_summary`` and relabels ``rank`` → ``domain_rating``.
+    """
+    payload = [
+        {
+            "target": domain,
+            "internal_list_limit": 1,
+            "backlinks_status_type": "live",
+            "include_subdomains": True,
+        }
+    ]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(f"{_BASE_URL}{_BACKLINKS_PATH}", headers=_auth_header(), json=payload)
+        resp.raise_for_status()
+        body = resp.json()
+    summary = parse_backlinks_summary(body)
+    return {
+        "domain_rating": summary["url_rating"],
+        "referring_domains": summary["referring_domains"],
+        "backlinks": summary["backlinks"],
+    }
+
+
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
@@ -346,7 +401,26 @@ async def _capture_and_store(
                 "serp_snapshot_backlinks_failed", extra={"url": url, "error": str(exc)}
             )
 
-    status = "partial" if any_backlinks_failed else "complete"
+    # Per-domain Domain Rating (DR): one Backlinks call per unique domain across
+    # the captured pages plus the client's own domain (always included). Isolated
+    # per domain — a failure degrades the snapshot to 'partial', never fatal.
+    domain_rows = collect_snapshot_domains(result_rows, domain)
+    any_domains_failed = False
+    for d in domain_rows:
+        try:
+            summary = await fetch_domain_summary(d["domain"])
+            d["domain_rating"] = summary["domain_rating"]
+            d["referring_domains"] = summary["referring_domains"]
+            d["backlinks"] = summary["backlinks"]
+            d["backlinks_status"] = "ok"
+        except Exception as exc:
+            any_domains_failed = True
+            d["backlinks_status"] = "failed"
+            logger.warning(
+                "serp_snapshot_domain_failed", extra={"domain": d["domain"], "error": str(exc)}
+            )
+
+    status = "partial" if (any_backlinks_failed or any_domains_failed) else "complete"
     snapshot_res = (
         supabase.table("serp_snapshots")
         .insert(
@@ -388,6 +462,22 @@ async def _capture_and_store(
                     "backlinks_status": r.get("backlinks_status", "pending"),
                 }
                 for r in result_rows
+            ]
+        ).execute()
+
+    if domain_rows:
+        supabase.table("serp_snapshot_domains").insert(
+            [
+                {
+                    "snapshot_id": snapshot_id,
+                    "domain": d.get("domain"),
+                    "is_client": d.get("is_client", False),
+                    "domain_rating": d.get("domain_rating"),
+                    "referring_domains": d.get("referring_domains"),
+                    "backlinks": d.get("backlinks"),
+                    "backlinks_status": d.get("backlinks_status", "pending"),
+                }
+                for d in domain_rows
             ]
         ).execute()
 

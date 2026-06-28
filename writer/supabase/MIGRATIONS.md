@@ -76,6 +76,7 @@ expected for a shared project, not a problem.
 | `20260622203200` | `sie_cache_enable_rls` (drift fix — RLS on `sie_cache`) |
 | `20260622232017` | `serp_snapshots` (Organic Rank Tracker #4 — Competitive SERP Snapshot store) |
 | `20260623000343` | `rank_alerts` (Organic Rank Tracker #4 — in-app rank-drop alerting) |
+| `20260628015542` | `serp_snapshot_domains` (#4 — Competitive SERP Snapshot per-domain Domain Rating) |
 
 > A few `schema_migrations.name` values carry version suffixes (`_v1_4`, `_v2_0`)
 > from how they were originally applied. The CLI matches on the numeric version,
@@ -83,6 +84,12 @@ expected for a shared project, not a problem.
 > the same migration.
 
 ## Reconciliation log
+
+**2026-06-28** — Competitive SERP Snapshot per-domain DR (#4): added
+`serp_snapshot_domains` (per-domain Domain Rating, FK → `serp_snapshots`), applied
+via the Supabase MCP. The MCP stamped version `20260628015542`, so the file was
+renamed from its placeholder `…120000` prefix to that recorded version and its
+`-- Migration:` header updated to match. RLS on, no client-facing policies.
 
 **2026-06-23** — Rank-drop alerting (#4): added `rank_alerts` (one-open-alert-per
 -keyword-per-type via a partial unique index; in-app only) applied via the

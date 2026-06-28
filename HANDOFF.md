@@ -1,6 +1,50 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-23 · **Module #5 — Maps geo-grid ranker (Local Dominator)** (latest)
+## ⏩ Update — 2026-06-28 · **Competitive SERP Snapshot — per-domain DR + viewer UI** (latest)
+
+Closed out the rank tracker's **Competitive SERP Snapshot** (PRD §14). The capture
+engine + retrieval API + weekly auto-capture already existed (PR #53, 2026-06-22) —
+backend-only, covering AIO, SERP features, intent, top-10 organic, and **per-URL**
+referring domains + UR. This pass added the two missing §14 pieces: **per-domain
+Domain Rating (DR)** and an **on-demand viewer UI**. (Decisions confirmed before
+building: extend the existing feature rather than rebuild; capture DR on **every**
+snapshot including the weekly pass.)
+
+**What's new:**
+- **Per-domain DR (backend).** `services/serp_snapshot.py`: `fetch_domain_summary(domain)`
+  (Backlinks summary, `target=<domain>`, `include_subdomains=True` → `rank` = DR) +
+  a pure `collect_snapshot_domains(result_rows, client_domain)` helper (deduped,
+  case-insensitive domain set; client domain always appended even when it doesn't
+  rank). `_capture_and_store` now fetches DR per unique domain (competitors + client),
+  isolated per-domain (a failure degrades the snapshot to `partial`), and stores rows
+  in the new **`serp_snapshot_domains`** table.
+- **API.** `SerpSnapshotDomainRow` model + `domains: [...]` on `SerpSnapshotDetail`;
+  `GET /serp-snapshots/{id}` now returns the per-domain DR rows.
+- **Viewer UI.** `components/rankings/SerpSnapshots.tsx` — a per-keyword camera button
+  in `RankKeywords.tsx` opens a modal: dated-snapshot sidebar + "New snapshot" (enqueues
+  the capture job, polls the list until it lands), and a detail view (AIO + cited sources,
+  intent badge, top-10 table with RD/UR + the page's domain DR, a per-domain DR table,
+  client rows highlighted).
+
+**Cost:** ~24 DataForSEO lookups/snapshot (1 SERP + 1 intent + ~11 per-URL backlinks +
+~11 per-domain backlinks). Confirmed acceptable. The weekly auto pass now also incurs the
+per-domain calls across all keywords/clients (per the "DR everywhere" decision).
+
+**Migration (applied to `wvcthtmmcmhkybcesirb`; filename = recorded version):**
+`20260628015542_serp_snapshot_domains` — `serp_snapshot_domains` (snapshot_id FK,
+domain, is_client, domain_rating, referring_domains, backlinks, backlinks_status).
+RLS on, no policies.
+
+**Verification:** full `import main` (under the pinned `fastapi==0.115.0` /
+`pydantic==2.9.2`, with a local `community` stub since python-louvain won't build in the
+sandbox — fanout-only, unrelated) + **528 passed** (incl. 3 new `collect_snapshot_domains`
+unit tests); frontend `npm run build` clean. Live DataForSEO not exercised from the sandbox
+(only runs on Railway) — first real on-demand capture with a competitor domain is the live
+proof of the DR path.
+
+---
+
+## ⏩ Update — 2026-06-23 · **Module #5 — Maps geo-grid ranker (Local Dominator)**
 
 **Module #5 is built, merged, deployed, and proven live** — a real scan ran end to
 end against Local Dominator (PRs **#59, #61, #63, #64, #66, #68, #69**, all merged;

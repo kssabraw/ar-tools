@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, ChevronRight, Download, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, Upload, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { Camera, ChevronDown, ChevronRight, Download, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, Upload, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse } from '../../lib/types'
 import { toCsv, downloadCsv, parseKeywordsFromCsv } from '../../lib/csv'
@@ -8,6 +8,7 @@ import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
 import { STATUS_META, statusRank } from './status'
 import { Sparkline } from './Sparkline'
 import { PositionChart } from './PositionChart'
+import { SerpSnapshots } from './SerpSnapshots'
 
 // `gscConnected` controls whether the GSC-only columns (clicks, impressions,
 // CTR, 7/30/60/90 average position) are shown at all. Without GSC the table
@@ -184,6 +185,7 @@ function KeywordRow({ k, clientId, showGsc }: {
 }) {
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  const [snapshotOpen, setSnapshotOpen] = useState(false)
   const meta = STATUS_META[k.status]
   const isDf = k.primary_source === 'dataforseo'
 
@@ -271,10 +273,19 @@ function KeywordRow({ k, clientId, showGsc }: {
           <td style={td}>{k.impressions_30d ? `${(k.ctr_30d * 100).toFixed(1)}%` : <Dash />}</td>
         </>}
         <td style={td} onClick={(e) => e.stopPropagation()}>
-          <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
-            onClick={() => deleteMut.mutate()} title="Stop tracking"><Trash2 size={13} /></button>
+          <div style={{ display: 'inline-flex', gap: 6 }}>
+            <button style={{ ...outlineBtn, padding: '4px 7px', color: '#6366f1' }}
+              onClick={() => setSnapshotOpen(true)} title="Competitive SERP snapshot"><Camera size={13} /></button>
+            <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
+              onClick={() => deleteMut.mutate()} title="Stop tracking"><Trash2 size={13} /></button>
+          </div>
         </td>
       </tr>
+      {snapshotOpen && (
+        <tr><td colSpan={colSpan}>
+          <SerpSnapshots keywordId={k.id} keyword={k.keyword} onClose={() => setSnapshotOpen(false)} />
+        </td></tr>
+      )}
       {open && (
         <tr>
           <td colSpan={colSpan} style={{ padding: 16, background: '#fafbfc', borderBottom: '1px solid #f1f5f9' }}>

@@ -307,9 +307,10 @@ The existing `clients.gsc_property` column (migration `20260529220918_clients_su
   intent (DataForSEO Labs), and the top-10 organic results (url/domain/rendered
   title+description/position) each enriched with referring domains + URL Rating
   (DataForSEO Backlinks page rank 0–1000) — including the client's own ranking
-  page. **Backend-only** (no viewer UI; retrieved on request via the API to
-  diagnose drops). `services/serp_snapshot.py`; `serp_snapshots` +
-  `serp_snapshot_results`; routes under `routers/rank.py`. RESERVED-table note in
+  page. **Extended 2026-06-28** with per-domain Domain Rating (DR) + an on-demand
+  viewer UI (see §14 — now built). `services/serp_snapshot.py`; `serp_snapshots` +
+  `serp_snapshot_results` + `serp_snapshot_domains`; routes under `routers/rank.py`;
+  `components/rankings/SerpSnapshots.tsx`. RESERVED-table note in
   §5 (`rank_snapshots`) still stands — that is Module #5's geo-grid table, distinct
   from this `serp_snapshots` diagnostic store.
 - **Reports (built).** On-demand + scheduled client reports. On-demand = a printable in-app view (browser Print → PDF). Scheduled = a per-client `rank_report_config` (as_needed / weekly+day / monthly+day / every 7·14·30 days); the shared scheduler enqueues a `rank_report` job when due, which snapshots the report data into a `rank_reports` archive (in-app list, each printable). **Delivery:** an optional **Google Doc** in the client's Drive folder — reuses the Apps Script publish webhook (renders the snapshot to Markdown via `render_report_markdown`); a per-client toggle (`deliver_google_doc`) auto-publishes scheduled/generated reports, and any saved report can be published on demand (`POST /rank-reports/{id}/publish`). Email delivery remains a future option via the notifications service.
@@ -329,9 +330,13 @@ The existing `clients.gsc_property` column (migration `20260529220918_clients_su
 
 ---
 
-## 14. Competitive SERP Snapshot (planned — not built)
+## 14. Competitive SERP Snapshot (built)
 
-A **dated, on-demand competitive snapshot** for a tracked keyword: the live SERP landscape plus per-page/per-domain authority signals for the client and the top-10 competitors. Stored so snapshots can be compared over time (same archive pattern as reports, §12). All data via **DataForSEO** — no new vendor; "UR"/"DR" use DataForSEO's 0–1000 `rank` metric as the URL-Rating / Domain-Rating equivalent.
+A **dated competitive snapshot** for a tracked keyword: the live SERP landscape plus per-page/per-domain authority signals for the client and the top-10 competitors. Stored so snapshots can be compared over time (same archive pattern as reports, §12). All data via **DataForSEO** — no new vendor; "UR"/"DR" use DataForSEO's 0–1000 `rank` metric as the URL-Rating / Domain-Rating equivalent.
+
+> **Build note (2026-06-28).** Shipped in two passes. The capture engine + retrieval API + weekly auto-capture landed first (PR #53, §12) covering AIO, SERP features, intent, top-10 organic, and **per-URL** referring domains + UR — **backend-only**. The §14 spec's two remaining pieces — **per-domain Domain Rating (DR)** and an **on-demand viewer UI** — were added after. DR is captured on **every** snapshot, including the weekly auto pass.
+>
+> The data model is **normalized** (not the single-`jsonb` shape proposed in §14.3 below): `serp_snapshots` (one row per capture) + `serp_snapshot_results` (the ranking pages, with per-URL RD/UR) + `serp_snapshot_domains` (the unique domains, with per-domain DR). All RLS-on, service-role-only.
 
 ### 14.1 Contents (per snapshot)
 - **AI Overview (AIO)** — whether an AI Overview appears for the query + its cited sources.
@@ -352,9 +357,9 @@ The client's ranking URL comes from the tracker's already-resolved `tracked_keyw
 
 **Cost:** the Backlinks API bills **per target**. One snapshot ≈ ~10 competitor URLs + ~10 competitor domains + client URL + client domain ≈ **~22 backlink lookups per keyword** (batch as many targets per POST as the endpoint allows; still billed per item). Confirm the per-snapshot cost is acceptable before enabling broadly; consider a confirm step / not auto-scheduling.
 
-### 14.3 Shape & UX (proposed)
-- New table `serp_snapshots` — `(id, tracked_keyword_id → tracked_keywords(id), client_id, created_at, snapshot jsonb)`; RLS on, no client-facing policies (service-role only), per the suite pattern. `snapshot` JSON holds AIO, intent, the top-10 rows, and the per-page/per-domain authority numbers.
-- On-demand **"SERP Snapshot"** action per tracked keyword (the Keywords table / keyword expansion) → builds + stores a snapshot → a read view rendering the landscape (top-10 table with UR/RD per page + DR per domain, AIO box, intent badge, client row highlighted). Dated archive per keyword for over-time comparison.
-- Backend lives in `services/` + `routers/rank.py`; frontend in `components/rankings/`.
+### 14.3 Shape & UX (as built)
+- **Tables** (normalized — see the build note above): `serp_snapshots` + `serp_snapshot_results` + `serp_snapshot_domains`. RLS on, no client-facing policies (service-role only), per the suite pattern.
+- On-demand **"SERP Snapshot"** action per tracked keyword (a camera button on each Keywords-table row) → enqueues a `serp_snapshot` capture job → a modal viewer rendering the landscape: AIO box + cited sources, intent badge, the top-10 table (RD/UR per page + DR per page's domain), and a per-domain DR table, with the client's row highlighted. Dated archive in the modal sidebar for over-time comparison; the viewer polls until a freshly-captured snapshot lands.
+- Backend: `services/serp_snapshot.py` (`fetch_domain_summary` + the pure `collect_snapshot_domains` helper for DR), routes in `routers/rank.py` (`GET .../serp-snapshots`, `GET /serp-snapshots/{id}` now returns `domains`, `POST .../serp-snapshot`). Frontend: `components/rankings/SerpSnapshots.tsx`, wired into `RankKeywords.tsx`.
 
-**Status:** spec only — confirm the per-snapshot DataForSEO cost + propose the data model before building.
+**Status:** built (2026-06-28). Per-snapshot cost ≈ ~24 DataForSEO lookups (confirmed acceptable); DR captured on every snapshot incl. the weekly pass.

@@ -40,6 +40,7 @@ from models.rank import (
     ReportSchedule,
     SerpSnapshotCaptureResponse,
     SerpSnapshotDetail,
+    SerpSnapshotDomainRow,
     SerpSnapshotListItem,
     SerpSnapshotResultRow,
     StrikingDistanceResponse,
@@ -688,6 +689,13 @@ async def get_serp_snapshot(
         .order("position")
         .execute()
     ).data or []
+    domains = (
+        supabase.table("serp_snapshot_domains")
+        .select("*")
+        .eq("snapshot_id", str(snapshot_id))
+        .order("domain_rating", desc=True)
+        .execute()
+    ).data or []
     return SerpSnapshotDetail(
         **{k: snap.get(k) for k in (
             "id", "keyword_id", "client_id", "keyword", "captured_at", "status",
@@ -699,6 +707,10 @@ async def get_serp_snapshot(
             "position", "url", "domain", "title", "description", "is_client",
             "referring_domains", "url_rating", "backlinks", "backlinks_status",
         )}) for r in results],
+        domains=[SerpSnapshotDomainRow(**{k: d.get(k) for k in (
+            "domain", "is_client", "domain_rating", "referring_domains",
+            "backlinks", "backlinks_status",
+        )}) for d in domains],
     )
 
 
@@ -710,7 +722,8 @@ async def capture_serp_snapshot(
     keyword_id: UUID, auth: dict = Depends(require_auth)
 ) -> SerpSnapshotCaptureResponse:
     """On-demand capture for one keyword (the weekly pass captures all). Enqueues
-    an async job — the capture is ~13 DataForSEO calls."""
+    an async job — the capture is ~24 DataForSEO calls (1 SERP + 1 intent + ~11
+    per-URL backlinks + ~11 per-domain backlinks)."""
     supabase = get_supabase()
     found = (
         supabase.table("tracked_keywords")

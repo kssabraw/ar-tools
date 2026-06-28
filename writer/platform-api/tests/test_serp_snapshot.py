@@ -151,3 +151,34 @@ def test_parse_backlinks_summary_raises_on_error():
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "dataforseo_backlinks_error" in str(exc)
+
+
+# ---------------------------------------------------------------------------
+# collect_snapshot_domains
+# ---------------------------------------------------------------------------
+def test_collect_snapshot_domains_dedupes_and_flags_client():
+    rows = [
+        {"domain": "comp.com", "is_client": False},
+        {"domain": "Comp.com", "is_client": False},   # case-insensitive dup
+        {"domain": "acme.com", "is_client": True},
+        {"domain": "other.com", "is_client": False},
+    ]
+    out = serp_snapshot.collect_snapshot_domains(rows, "acme.com")
+    assert [d["domain"] for d in out] == ["comp.com", "acme.com", "other.com"]
+    assert [d["is_client"] for d in out] == [False, True, False]
+
+
+def test_collect_snapshot_domains_appends_client_when_absent():
+    # Client doesn't rank in the captured pages — its domain is still appended
+    # last so it always gets a DR row.
+    rows = [{"domain": "comp.com"}, {"domain": "other.com"}]
+    out = serp_snapshot.collect_snapshot_domains(rows, "acme.com")
+    assert [d["domain"] for d in out] == ["comp.com", "other.com", "acme.com"]
+    assert out[-1] == {"domain": "acme.com", "is_client": True}
+
+
+def test_collect_snapshot_domains_skips_empty_and_no_client_domain():
+    rows = [{"domain": None}, {"domain": ""}, {"domain": "comp.com"}]
+    out = serp_snapshot.collect_snapshot_domains(rows, "")
+    assert [d["domain"] for d in out] == ["comp.com"]
+    assert out[0]["is_client"] is False
