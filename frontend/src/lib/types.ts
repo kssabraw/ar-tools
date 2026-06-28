@@ -897,11 +897,13 @@ export interface SerpTimelinePoint {
   intent_signals: string[]
   aio_present: boolean
   client_rank: number | null
+  client_rd: number | null
   client_ur: number | null
   client_dr: number | null
   signals_added: string[]
   signals_removed: string[]
   client_rank_delta: number | null
+  client_rd_delta: number | null
   client_dr_delta: number | null
 }
 

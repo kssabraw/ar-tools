@@ -7,7 +7,7 @@ import type {
 } from '../../lib/types'
 import { card } from '../localseo/shared'
 import { Sparkline } from './Sparkline'
-import { SIGNAL_META, SignalChip } from './SerpSnapshots'
+import { SIGNAL_META, SignalChip, ahrefsScale } from './SerpSnapshots'
 
 // SERP Landscape Trends (rank tracker §14) — how Google's SERP composition
 // changes over time, from the dated snapshot archive. Three sections:
@@ -176,9 +176,11 @@ function KeywordTimeline({ clientId }: { clientId: string }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', fontSize: 12, color: '#475569', marginBottom: 6 }}>
                   <span title="Client's organic position">Rank <strong style={{ color: '#0f172a' }}>{p.client_rank ?? '—'}</strong>{' '}
                     {p.client_rank_delta != null && p.client_rank_delta !== 0 && <RankArrow delta={p.client_rank_delta} />}</span>
-                  <span title="Client page URL Rating">UR <strong style={{ color: '#0f172a' }}>{p.client_ur ?? '—'}</strong></span>
-                  <span title="Client domain Domain Rating">DR <strong style={{ color: '#0f172a' }}>{p.client_dr ?? '—'}</strong>{' '}
-                    {p.client_dr_delta != null && p.client_dr_delta !== 0 && <Delta value={p.client_dr_delta} unit="" higherBetter />}</span>
+                  <span title="Referring domains to the client's ranking page (strongest backlink signal)">RD <strong style={{ color: '#0f172a' }}>{p.client_rd ?? '—'}</strong>{' '}
+                    {p.client_rd_delta != null && p.client_rd_delta !== 0 && <Delta value={p.client_rd_delta} unit="" higherBetter />}</span>
+                  <span title="Client page URL Rating (0–100)">UR <strong style={{ color: '#0f172a' }}>{ahrefsScale(p.client_ur) ?? '—'}</strong></span>
+                  <span title="Client domain Domain Rating (0–100)">DR <strong style={{ color: '#0f172a' }}>{ahrefsScale(p.client_dr) ?? '—'}</strong>{' '}
+                    {p.client_dr_delta != null && Math.round(p.client_dr_delta / 10) !== 0 && <Delta value={Math.round(p.client_dr_delta / 10)} unit="" higherBetter />}</span>
                   {p.query_intent && <span style={{ color: '#7c3aed', textTransform: 'capitalize' }}>{p.query_intent}</span>}
                 </div>
                 {/* Signal chips */}

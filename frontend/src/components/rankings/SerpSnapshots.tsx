@@ -253,9 +253,9 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
               <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
                 <th style={thNum}>#</th>
                 <th style={thLeft}>Page</th>
-                <th style={th} title="Referring domains (page-level)">RD</th>
-                <th style={th} title="URL Rating (DataForSEO page rank 0–1000)">UR</th>
-                <th style={th} title="Domain Rating (DataForSEO domain rank 0–1000)">DR</th>
+                <th style={th} title="Referring domains to this page (the strongest backlink signal)">RD</th>
+                <th style={th} title="URL Rating — this page's authority, 0–100">UR</th>
+                <th style={th} title="Domain Rating — the whole domain's authority, 0–100">DR</th>
               </tr>
             </thead>
             <tbody>
@@ -298,8 +298,8 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
               <thead>
                 <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
                   <th style={thLeft}>Domain</th>
-                  <th style={th} title="Domain Rating (DataForSEO domain rank 0–1000)">DR</th>
-                  <th style={th} title="Referring domains (domain-level)">Ref. domains</th>
+                  <th style={th} title="Referring domains to the whole domain">Ref. domains</th>
+                  <th style={th} title="Domain Rating — the whole domain's authority, 0–100">DR</th>
                 </tr>
               </thead>
               <tbody>
@@ -311,8 +311,8 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
                         <span style={{ fontWeight: 600, color: '#0f172a' }}>{d.domain}</span>
                       </span>
                     </td>
-                    <td style={td}><Authority value={d.domain_rating} status={d.backlinks_status} /></td>
                     <td style={td}>{numOrDash(d.referring_domains)}</td>
+                    <td style={td}><Authority value={d.domain_rating} status={d.backlinks_status} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -406,16 +406,23 @@ export function SignalChip({ signal }: { signal: string }) {
   return <span style={signalChip} title={m?.tip ?? signal}>{label}</span>
 }
 
+// DataForSEO's UR/DR rank is 0–1000; display it on the familiar Ahrefs-style
+// 0–100 scale (raw value is kept in the DB for the rankability calc). Referring
+// domains (RD) are a real count and are NOT scaled.
+export function ahrefsScale(value: number | null | undefined): number | null {
+  return value == null ? null : Math.round(value / 10)
+}
+
 function Authority({ value, status }: { value: number | null; status?: string }) {
   if (value == null) {
     if (status === 'failed') return <span style={{ color: '#dc2626', fontSize: 11 }}>failed</span>
     return <span style={{ color: '#cbd5e1' }}>—</span>
   }
-  // 0–1000 scale → a quiet strength tint.
+  // Colour off the raw 0–1000 value; show the 0–100-scaled number.
   const strong = value >= 400
   const mid = value >= 150
   const color = strong ? '#15803d' : mid ? '#b45309' : '#64748b'
-  return <span style={{ fontWeight: 700, color }}>{value}</span>
+  return <span style={{ fontWeight: 700, color }}>{ahrefsScale(value)}</span>
 }
 
 function IntentBadge({ intent }: { intent: string }) {

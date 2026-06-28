@@ -7,7 +7,7 @@ from datetime import date
 from services import serp_trends
 
 
-def _snap(d: str, signals=None, aio=False, local=False, rank=None, dr=None):
+def _snap(d: str, signals=None, aio=False, local=False, rank=None, dr=None, rd=None):
     return {
         "captured_at": f"{d}T00:00:00+00:00",
         "intent_signals": signals or [],
@@ -15,6 +15,7 @@ def _snap(d: str, signals=None, aio=False, local=False, rank=None, dr=None):
         "local_intent": local,
         "client_rank": rank,
         "client_dr": dr,
+        "client_rd": rd,
     }
 
 
@@ -35,8 +36,8 @@ def test_signal_set_empty():
 # ---------------------------------------------------------------------------
 def test_timeline_deltas_added_removed_and_rank():
     snaps = [
-        _snap("2026-06-01", ["forums"], rank=8, dr=100),
-        _snap("2026-06-08", ["forums", "video"], aio=True, rank=5, dr=120),
+        _snap("2026-06-01", ["forums"], rank=8, dr=100, rd=40),
+        _snap("2026-06-08", ["forums", "video"], aio=True, rank=5, dr=120, rd=55),
     ]
     out = serp_trends.compute_timeline_deltas(snaps)
     assert out[0]["signals_added"] == [] and out[0]["client_rank_delta"] is None
@@ -45,6 +46,7 @@ def test_timeline_deltas_added_removed_and_rank():
     assert out[1]["signals_removed"] == []
     assert out[1]["client_rank_delta"] == -3   # 5 - 8, improved
     assert out[1]["client_dr_delta"] == 20
+    assert out[1]["client_rd_delta"] == 15     # 55 - 40, gained referring domains
 
 
 def test_timeline_deltas_removal_and_none_rank():

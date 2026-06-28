@@ -70,11 +70,13 @@ def compute_timeline_deltas(snaps: list[dict]) -> list[dict]:
             entry["signals_added"] = [s for s in TRACKED_SIGNALS if s in cur and s not in prev_sigs]
             entry["signals_removed"] = [s for s in TRACKED_SIGNALS if s in prev_sigs and s not in cur]
             entry["client_rank_delta"] = _delta(snap.get("client_rank"), prev.get("client_rank"))
+            entry["client_rd_delta"] = _delta(snap.get("client_rd"), prev.get("client_rd"))
             entry["client_dr_delta"] = _delta(snap.get("client_dr"), prev.get("client_dr"))
         else:
             entry["signals_added"] = []
             entry["signals_removed"] = []
             entry["client_rank_delta"] = None
+            entry["client_rd_delta"] = None
             entry["client_dr_delta"] = None
         out.append(entry)
         prev = snap
@@ -188,7 +190,7 @@ def get_keyword_timeline(keyword_id: str) -> Optional[dict]:
     ids = [s["id"] for s in snaps]
     ur_rows = (
         supabase.table("serp_snapshot_results")
-        .select("snapshot_id, url_rating")
+        .select("snapshot_id, url_rating, referring_domains")
         .eq("is_client", True)
         .in_("snapshot_id", ids)
         .execute()
@@ -200,14 +202,17 @@ def get_keyword_timeline(keyword_id: str) -> Optional[dict]:
         .in_("snapshot_id", ids)
         .execute()
     ).data or []
-    # The client can rank multiple pages → keep the strongest UR per snapshot.
-    ur_by: dict[str, int] = {}
+    # The client can rank multiple pages → keep the strongest page per snapshot
+    # (highest UR), and read both UR and page-level RD (referring domains) from
+    # that same page so the two stay consistent.
+    best_by: dict[str, dict] = {}
     for r in ur_rows:
-        v = r.get("url_rating")
-        if v is None:
-            continue
         sid = r["snapshot_id"]
-        ur_by[sid] = max(ur_by.get(sid, v), v)
+        cur = best_by.get(sid)
+        if cur is None or (r.get("url_rating") or -1) > (cur.get("url_rating") or -1):
+            best_by[sid] = r
+    ur_by = {sid: r.get("url_rating") for sid, r in best_by.items()}
+    rd_by = {sid: r.get("referring_domains") for sid, r in best_by.items()}
     dr_by = {r["snapshot_id"]: r.get("domain_rating") for r in dr_rows}
 
     enriched = [
@@ -220,6 +225,7 @@ def get_keyword_timeline(keyword_id: str) -> Optional[dict]:
             "intent_signals": s.get("intent_signals") or [],
             "aio_present": bool(s.get("aio_present")),
             "client_rank": s.get("client_rank"),
+            "client_rd": rd_by.get(s["id"]),
             "client_ur": ur_by.get(s["id"]),
             "client_dr": dr_by.get(s["id"]),
         }

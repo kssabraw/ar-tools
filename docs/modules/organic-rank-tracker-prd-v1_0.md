@@ -369,6 +369,8 @@ The client's ranking URL comes from the tracker's already-resolved `tracked_keyw
 Over-time + cross-keyword views over the dated snapshot archive — a **"SERP Trends"** tab in the Rankings page (`components/rankings/SerpTrends.tsx`, backend `services/serp_trends.py`, routes `GET /clients/{id}/serp-trends` + `GET /tracked-keywords/{id}/serp-timeline`):
 - **Per-signal prevalence over time** — for each tracked signal (AIO, local pack, the SERP-feature + title-format signals), the % of the client's keywords whose SERP shows it, as an **as-of weekly series** (each keyword contributes its latest snapshot on-or-before each week-end, so the weekly auto-capture + ad-hoc captures both read cleanly). Rendered as a per-signal sparkline + now/Δ table.
 - **"What changed" digest** — keywords whose newest snapshot gained/lost a signal vs the prior capture.
-- **Per-keyword timeline** — each dated snapshot with its signal chips, the client's rank/UR/DR, and the delta vs the previous capture (signals added/removed, rank/DR movement).
+- **Per-keyword timeline** — each dated snapshot with its signal chips, the client's rank + backlink authority (**RD · UR · DR**, in that backlink-importance order), and the delta vs the previous capture (signals added/removed, rank/RD/DR movement).
+
+**Authority display:** UR and DR are DataForSEO's 0–1000 `rank` proxy; they're stored raw (for the rankability calc) but **shown ÷10 on the familiar 0–100 scale**. **RD (referring domains)** is a real count, shown un-scaled, and is treated as the **most important** backlink signal (RD > UR > DR) — the intended weighting for the future rankability score.
 
 Pure helpers (deltas, as-of prevalence, change digest) are unit-tested. This is the read foundation for a future **automated reoptimization planner** (track SERP + competition change → recommend actions).

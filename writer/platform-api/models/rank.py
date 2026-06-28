@@ -284,11 +284,13 @@ class SerpTimelinePoint(BaseModel):
     intent_signals: list[str] = []
     aio_present: bool = False
     client_rank: Optional[int] = None
-    client_ur: Optional[int] = None  # client's page URL Rating (0–1000)
-    client_dr: Optional[int] = None  # client's domain Domain Rating (0–1000)
+    client_rd: Optional[int] = None  # client's page referring-domains count
+    client_ur: Optional[int] = None  # client's page URL Rating (raw 0–1000; UI shows /10)
+    client_dr: Optional[int] = None  # client's domain Domain Rating (raw 0–1000; UI shows /10)
     signals_added: list[str] = []
     signals_removed: list[str] = []
     client_rank_delta: Optional[int] = None  # vs previous snapshot (− = improved)
+    client_rd_delta: Optional[int] = None     # vs previous snapshot (+ = stronger)
     client_dr_delta: Optional[int] = None     # vs previous snapshot (+ = stronger)
 
 
