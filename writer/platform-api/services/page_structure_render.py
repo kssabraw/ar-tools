@@ -14,6 +14,13 @@ Two render modes shape the directive to the consumer:
   blog brief is client-agnostic + globally cached, so the heading structure can't
   carry client layout; the intro honors the *opening pattern* only. This mode
   omits the full outline so the intro can't accidentally enumerate the sections.
+- ``"structure"`` — for the blog Writer's body sections. Like ``"opening"`` the
+  blog outline is SEO-driven and client-agnostic, so we don't replace it; instead
+  this emits the client's structural *texture* (heading-nesting depth, how much
+  section length varies — some sections run 1–2 sentences — and which recurring
+  blocks they use) as style guidance the section writer applies on top of the
+  article's own outline. It does NOT force a section count/order (that would fight
+  the SEO outline), which is what separates it from ``"full"``.
 """
 
 from __future__ import annotations
@@ -42,7 +49,7 @@ _ELEMENT_FLAGS = (
     ("has_lists", "lists"),
 )
 
-RenderMode = Literal["full", "opening"]
+RenderMode = Literal["full", "opening", "structure"]
 
 
 def _usable(entry: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -77,7 +84,32 @@ def render_reference_structure(
         return None
     if mode == "opening":
         return _render_opening(analysis, page_type)
+    if mode == "structure":
+        return _render_structure(analysis, page_type)
     return _render_full(analysis, page_type)
+
+
+def _outline_lines(outline: Any) -> list[str]:
+    """Render an outline (list of {level, heading, blocks, approx_words}) into
+    indented bullet lines. Shared by the full + structure renderers."""
+    lines: list[str] = []
+    if not isinstance(outline, list):
+        return lines
+    for item in outline:
+        if not isinstance(item, dict):
+            continue
+        level = str(item.get("level") or "H2").upper()
+        indent = _LEVEL_INDENT.get(level, "  ")
+        heading = (item.get("heading") or "").strip()
+        blocks = item.get("blocks") or []
+        blocks_txt = (
+            f" [{', '.join(str(b) for b in blocks)}]"
+            if isinstance(blocks, list) and blocks else ""
+        )
+        words = item.get("approx_words")
+        words_txt = f" (~{words} words)" if isinstance(words, int) and words else ""
+        lines.append(f"{indent}- {level}: {heading}{blocks_txt}{words_txt}")
+    return lines
 
 
 def _render_full(analysis: dict[str, Any], page_type: str) -> str:
@@ -96,22 +128,10 @@ def _render_full(analysis: dict[str, Any], page_type: str) -> str:
     if summary:
         lines.append(f"Summary: {summary}")
 
-    if isinstance(outline, list) and outline:
+    outline_lines = _outline_lines(outline)
+    if outline_lines:
         lines.append("Outline:")
-        for item in outline:
-            if not isinstance(item, dict):
-                continue
-            level = str(item.get("level") or "H2").upper()
-            indent = _LEVEL_INDENT.get(level, "  ")
-            heading = (item.get("heading") or "").strip()
-            blocks = item.get("blocks") or []
-            blocks_txt = (
-                f" [{', '.join(str(b) for b in blocks)}]"
-                if isinstance(blocks, list) and blocks else ""
-            )
-            words = item.get("approx_words")
-            words_txt = f" (~{words} words)" if isinstance(words, int) and words else ""
-            lines.append(f"{indent}- {level}: {heading}{blocks_txt}{words_txt}")
+        lines.extend(outline_lines)
 
     if isinstance(elements, dict) and elements:
         flags = _present_flags(elements)
@@ -188,5 +208,73 @@ def _render_opening(analysis: dict[str, Any], page_type: str) -> str:
         blocks = first.get("blocks") or []
         if isinstance(blocks, list) and blocks:
             lines.append("Opening blocks: " + ", ".join(str(b) for b in blocks))
+
+    return "\n".join(lines)
+
+
+# A section short enough to read as 1–2 sentences (used to flag deliberate
+# brevity the writer should preserve rather than padding every section out).
+_SHORT_SECTION_WORDS = 45
+
+
+def _render_structure(analysis: dict[str, Any], page_type: str) -> str:
+    """Body-structure style block for the blog Writer's sections: the client's
+    structural texture (heading depth, length variation, recurring blocks) applied
+    as style over the article's own outline — NOT a section-for-section replica."""
+    outline = analysis.get("outline") or []
+    summary = (analysis.get("structure_summary") or "").strip()
+    elements = analysis.get("elements") or {}
+    label = PAGE_TYPE_LABELS.get(page_type, page_type)
+
+    items = [it for it in outline if isinstance(it, dict)]
+    levels = {str(it.get("level") or "").upper() for it in items}
+    word_vals = [it.get("approx_words") for it in items if isinstance(it.get("approx_words"), int)]
+    short_sections = [w for w in word_vals if w <= _SHORT_SECTION_WORDS]
+
+    lines: list[str] = [
+        f"REFERENCE STRUCTURE STYLE — write this section in the structural style of the "
+        f"client's own {label} pages. Apply this as texture over THIS article's outline; keep "
+        "this article's own headings, topic, and wording (do NOT rename the section to the "
+        "reference's topics, copy its text, or enumerate its outline)."
+    ]
+
+    if "H3" in levels:
+        lines.append(
+            "- Heading depth: the client splits sections with H3 sub-headings — use an H3 "
+            "sub-point where this section naturally breaks into parts."
+        )
+    else:
+        lines.append(
+            "- Heading depth: the client keeps sections flat (H2s with few or no H3s) — prefer "
+            "a flat section over nested sub-headings."
+        )
+
+    if short_sections:
+        lines.append(
+            "- Section length: the client varies it — some sections run only 1–2 sentences. If "
+            "this section's point is simple, keep it tight; don't pad it to match longer sections."
+        )
+    elif word_vals:
+        avg = round(sum(word_vals) / len(word_vals))
+        lines.append(
+            f"- Section length: the client's sections average ~{avg} words — match that density "
+            "rather than over-writing."
+        )
+
+    flags = _present_flags(elements) if isinstance(elements, dict) else []
+    block_flags = [f for f in flags if f in {"table", "lists", "CTA"}]
+    if block_flags:
+        lines.append(
+            "- Blocks they use: " + ", ".join(block_flags) + " — use the same where they fit "
+            "this section's content."
+        )
+
+    if summary:
+        lines.append(f"How their page is organized (context only): {summary}")
+
+    outline_lines = _outline_lines(outline)
+    if outline_lines:
+        lines.append("For reference, one of the client's pages is laid out like this (style, not a template to copy):")
+        lines.extend(outline_lines)
 
     return "\n".join(lines)

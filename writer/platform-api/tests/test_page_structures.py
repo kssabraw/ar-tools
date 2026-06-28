@@ -143,6 +143,40 @@ def test_render_opening_mode_omits_outline():
     assert "Why it matters" not in out
 
 
+def test_render_structure_mode_is_style_not_replica():
+    out = render_reference_structure(_complete_entry(), "blog_post", mode="structure")
+    assert out is not None
+    assert "REFERENCE STRUCTURE STYLE" in out
+    # Heading-depth + section-length texture directives are present.
+    assert "Heading depth:" in out
+    assert "Section length:" in out
+    # It shows the outline for reference but must NOT force a section count/order
+    # like full mode does (that would fight the SEO-driven outline).
+    assert "Why it matters" in out
+    assert "Replication checklist:" not in out
+    assert "main (H2) sections in the same order" not in out
+
+
+def test_render_structure_flags_short_sections():
+    entry = {
+        "status": "complete",
+        "analysis": {
+            "outline": [
+                {"level": "H2", "heading": "Quick note", "approx_words": 20},
+                {"level": "H3", "heading": "A sub-point", "approx_words": 30},
+            ],
+            "structure_summary": "Tight sections.",
+            "elements": {},
+        },
+    }
+    out = render_reference_structure(entry, "blog_post", mode="structure")
+    assert out is not None
+    # A <=45-word section is flagged as deliberate brevity to preserve.
+    assert "1–2 sentences" in out
+    # An H3 in the outline drives the "splits sections with H3" depth directive.
+    assert "H3 sub-headings" in out or "H3 sub-point" in out
+
+
 def test_page_types_constant():
     assert set(PAGE_TYPES) == {"local_landing", "service", "location", "blog_post", "product", "solution"}
 

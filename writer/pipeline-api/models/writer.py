@@ -49,6 +49,11 @@ class ClientContextInput(BaseModel):
     # layout; instead the Writer uses this as soft guidance for the opening
     # pattern. Optional — None/absent leaves writing behavior unchanged.
     reference_page_structure: Optional[str] = None
+    # Companion to the above for the body sections (page_structure_render
+    # mode="structure"): the client's structural texture — heading-nesting depth,
+    # section-length variation, recurring blocks — applied as style over the
+    # SEO-driven outline. Optional — None/absent leaves body writing unchanged.
+    reference_page_body_structure: Optional[str] = None
 
 
 class WriterRequest(BaseModel):
