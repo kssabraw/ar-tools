@@ -170,6 +170,35 @@ def test_weak_cities_caps_at_five():
     assert slack_assistant.weak_cities(rwl) == ["C0", "C1", "C2", "C3", "C4"]
 
 
+# ---------------------------------------------------------------------------
+# is_affirmative (confirmation of a pending paid action)
+# ---------------------------------------------------------------------------
+def test_is_affirmative_accepts_yeses():
+    for t in ["yes", "Yes", "YES!", "yep", "yeah", "confirm", "do it", "go ahead",
+              "proceed", "ok", "sure", "yes please", "yes, go"]:
+        assert slack_assistant.is_affirmative(t) is True, t
+
+
+def test_is_affirmative_rejects_others():
+    for t in ["no", "not yet", "what?", "how is acme", "yesterday", "", "maybe"]:
+        assert slack_assistant.is_affirmative(t) is False, t
+
+
+# ---------------------------------------------------------------------------
+# action registry/tools consistency
+# ---------------------------------------------------------------------------
+def test_action_tools_match_registry():
+    tool_names = {t["name"] for t in slack_assistant._ACTION_TOOLS}
+    assert tool_names == set(slack_assistant._ACTIONS)
+    for meta in slack_assistant._ACTIONS.values():
+        assert callable(meta["run"])
+        assert isinstance(meta["paid"], bool)
+    # exactly one free action (rebuild plan), the scans are paid.
+    assert slack_assistant._ACTIONS["rebuild_action_plan"]["paid"] is False
+    assert all(slack_assistant._ACTIONS[k]["paid"] for k in
+               ("run_maps_scan", "run_gsc_research", "run_ai_visibility_scan"))
+
+
 def test_format_context_is_json_with_client():
     import json
 

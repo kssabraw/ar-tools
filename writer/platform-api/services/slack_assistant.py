@@ -62,7 +62,12 @@ _SYSTEM = (
     "guessing. Answer using ONLY this data. Be concise and direct — a few sentences "
     "or a short list, Slack-friendly (you may use *bold* and bullets). Lead with the "
     "answer. As a strategist, you may connect signals across modules when relevant "
-    "(e.g. a ranking drop + a content gap). Never invent numbers or modules."
+    "(e.g. a ranking drop + a content gap). Never invent numbers or modules.\n\n"
+    "You can also TAKE ACTIONS via the provided tools (rebuild the Action Plan, "
+    "run a Maps geo-grid scan, run GSC Research, run an AI Visibility scan). If the "
+    "teammate is clearly asking you to run/start/trigger/rebuild one of these for the "
+    "client, call the matching tool instead of answering. If they're only asking about "
+    "results or anything else, answer normally — do NOT call a tool for a question."
 )
 
 
@@ -172,6 +177,15 @@ def format_history(history: list[dict]) -> str:
         if text:
             lines.append(f"{who}: {text}")
     return "\n".join(lines)
+
+
+def is_affirmative(text: str) -> bool:
+    """Whether a reply confirms a pending action (a 'yes'). Pure."""
+    t = (text or "").strip().lower().rstrip("!.")
+    return t in {
+        "yes", "y", "yep", "yeah", "yup", "confirm", "confirmed", "do it",
+        "go", "go ahead", "proceed", "ok", "okay", "sure", "please do",
+    } or t.startswith(("yes ", "yes,", "go ahead", "do it"))
 
 
 # ---------------------------------------------------------------------------
@@ -484,22 +498,92 @@ _CONTEXT_PROVIDERS = [
 
 
 # ---------------------------------------------------------------------------
+# Actions — SerMastr can trigger work (not just report). Anyone in the channel
+# may trigger (product decision); paid actions are gated behind an explicit
+# confirmation. Each runner enqueues an EXISTING job and returns a reply string.
+# ---------------------------------------------------------------------------
+def _act_rebuild_plan(client_id: str) -> str:
+    from services import reopt_planner
+
+    res = reopt_planner.build_plan(client_id, trigger="manual")
+    return f"✅ Rebuilt the Action Plan — {res.get('summary')}."
+
+
+def _act_maps_scan(client_id: str) -> str:
+    from services import local_dominator
+
+    started = local_dominator.enqueue_maps_scan(client_id, trigger="manual")
+    return (
+        "✅ Started a Maps geo-grid scan — results land in a few minutes."
+        if started
+        else "A Maps scan is already running for this client."
+    )
+
+
+def _act_gsc_research(client_id: str) -> str:
+    from services import gsc_research
+
+    job_id = gsc_research.enqueue_gsc_research(client_id, trigger="manual")
+    return (
+        "✅ Started a GSC Research analysis."
+        if job_id
+        else "A GSC Research run is already in progress for this client."
+    )
+
+
+def _act_ai_scan(client_id: str) -> str:
+    from fastapi import HTTPException
+
+    from services import brand_service
+
+    try:
+        brand_service.start_scan(client_id, None, None, False, None)
+        return "✅ Started an AI Visibility scan across the engines."
+    except HTTPException as exc:
+        if exc.detail == "no_keywords_to_scan":
+            return "No AI-visibility keywords are set up for this client yet — add some first."
+        raise
+
+
+# (tool name) → {label, paid, run}. Append here to add an action.
+_ACTIONS: dict[str, dict] = {
+    "rebuild_action_plan": {"label": "rebuild the Action Plan", "paid": False, "run": _act_rebuild_plan},
+    "run_maps_scan": {"label": "run a Maps geo-grid scan", "paid": True, "run": _act_maps_scan},
+    "run_gsc_research": {"label": "run a GSC Research analysis", "paid": True, "run": _act_gsc_research},
+    "run_ai_visibility_scan": {"label": "run an AI Visibility scan", "paid": True, "run": _act_ai_scan},
+}
+_ACTION_TOOLS = [
+    {"name": name, "description": meta["label"].capitalize() + " for the client.",
+     "input_schema": {"type": "object", "properties": {}}}
+    for name, meta in _ACTIONS.items()
+]
+
+# Pending paid actions awaiting a "yes", keyed by (channel, thread_ts). In-memory
+# / single-process (PLATFORM is one replica) + best-effort: a redeploy drops
+# pending confirmations, which just means the user re-asks. Never executes a paid
+# action without an explicit confirm.
+_pending: dict[tuple, dict] = {}
+
+
+# ---------------------------------------------------------------------------
 # Claude + Slack I/O.
 # ---------------------------------------------------------------------------
-async def answer_question(
+async def interpret(
     question: str, client: dict, context: dict, history: Optional[list[dict]] = None
-) -> str:
-    """Ask Claude the question against the assembled context. Returns reply text.
+) -> tuple[str, str]:
+    """Decide whether the message is a question or an action request.
 
-    Prior thread turns (if any) are folded into the prompt as a transcript so
-    follow-ups have continuity without re-stating the client each time.
+    Returns ("action", tool_name) when the teammate is asking to trigger one of
+    the available actions, else ("text", answer). Claude sees the cross-module
+    context + thread history and the action tools; a tool call ⇒ action, otherwise
+    a normal grounded answer.
     """
     import anthropic
 
     blocks = []
     if history:
         blocks.append("Conversation so far (oldest first):\n" + format_history(history))
-    blocks.append(f"Latest question: {question}")
+    blocks.append(f"Latest message: {question}")
     blocks.append(f"Client data (JSON):\n{format_context(client, context)}")
     user = "\n\n".join(blocks)
     api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
@@ -507,10 +591,14 @@ async def answer_question(
         model=settings.slack_assistant_model,
         max_tokens=settings.slack_assistant_max_tokens,
         system=_SYSTEM,
+        tools=_ACTION_TOOLS,
         messages=[{"role": "user", "content": user}],
     )
+    for b in resp.content:
+        if getattr(b, "type", None) == "tool_use" and b.name in _ACTIONS:
+            return ("action", b.name)
     parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
-    return "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing."
+    return ("text", "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing.")
 
 
 async def post_message(channel: str, text: str, thread_ts: Optional[str] = None) -> None:
@@ -570,6 +658,18 @@ async def handle_message(event: dict) -> None:
     if not (channel and question):
         return
     try:
+        # 1) Confirmation of a pending paid action ("yes") — runs the stored action
+        # (which carries its own client_id, so the "yes" needn't name a client).
+        pend_key = (channel, thread_ts)
+        pending = _pending.get(pend_key)
+        if pending and is_affirmative(question):
+            _pending.pop(pend_key, None)
+            reply = _ACTIONS[pending["action"]]["run"](pending["client_id"])
+            await post_message(channel, reply, thread_ts)
+            return
+        if pending:  # a different message supersedes the pending confirmation
+            _pending.pop(pend_key, None)
+
         supabase = get_supabase()
         clients = (
             supabase.table("clients").select("id, name, website_url").execute()
@@ -593,8 +693,22 @@ async def handle_message(event: dict) -> None:
                 logger.warning("slack_thread_history_failed", extra={"channel": channel, "error": str(exc)})
 
         context = build_context(client["id"])
-        answer = await answer_question(question, client, context, history)
-        await post_message(channel, answer, thread_ts)
+        kind, payload = await interpret(question, client, context, history)
+        if kind == "action":
+            meta = _ACTIONS[payload]
+            if meta["paid"]:
+                # 2) Stage paid actions behind an explicit confirm (guards spend).
+                _pending[pend_key] = {"action": payload, "client_id": client["id"]}
+                await post_message(
+                    channel,
+                    f"This will {meta['label']} for *{client['name']}* (uses API budget). "
+                    "Reply *yes* to proceed.",
+                    thread_ts,
+                )
+            else:
+                await post_message(channel, meta["run"](client["id"]), thread_ts)
+            return
+        await post_message(channel, payload, thread_ts)
     except Exception as exc:
         logger.warning("slack_assistant_failed", extra={"channel": channel, "error": str(exc)})
         try:
