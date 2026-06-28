@@ -219,11 +219,13 @@ async def publish_run(
             status_code=422,
             detail="missing_google_drive_folder_id: client has no Drive folder configured",
         )
-    # Render the hero image at the top of the doc (WordPress handles it as the
-    # post's featured image instead, so it's only injected on the Docs path).
-    doc_markdown = f"![]({featured_image_url})\n\n{markdown}" if featured_image_url else markdown
+    # Send HTML (not markdown) so the Apps Script builds a natively-formatted Doc
+    # that copy-pastes cleanly into WordPress. Render the hero image at the top of
+    # the doc (WordPress handles it as the post's featured image instead, so it's
+    # only injected on the Docs path).
+    doc_html = f'<p><img src="{featured_image_url}" /></p>\n{html}' if featured_image_url else html
     try:
-        result = await create_google_doc(folder_id, title, doc_markdown)
+        result = await create_google_doc(folder_id, title, doc_html, content_format="html")
     except GoogleDocError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 

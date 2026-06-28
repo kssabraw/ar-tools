@@ -614,11 +614,22 @@ async def test_publish_page_success_persists_doc():
             "page_title": "Plumber Anaheim", "content_html": "<h1>Plumber</h1><p>Call us.</p>"}
     supabase = _publish_supabase(page, {"name": "Joe", "google_drive_folder_id": "folder-9"})
     resp = _FakeResp({"success": True, "doc_id": "doc-1", "doc_url": "https://docs/doc-1"})
+    capture: dict = {}
+
+    class _CapClient(_FakeAsyncClient):
+        async def post(self, url, json=None):
+            capture["json"] = json
+            return self._resp
+
     with patch.object(local_seo_service.settings, "google_apps_script_url", "https://script"), \
          patch.object(local_seo_service, "get_supabase", return_value=supabase), \
-         patch.object(local_seo_service.httpx, "AsyncClient", lambda *a, **k: _FakeAsyncClient(resp)):
+         patch.object(local_seo_service.httpx, "AsyncClient", lambda *a, **k: _CapClient(resp)):
         out = await local_seo_service.publish_page("page-1", "user-1")
     assert out == {"success": True, "doc_id": "doc-1", "doc_url": "https://docs/doc-1"}
+    # The page's HTML is sent as-is with format="html" (not degraded to markdown),
+    # so the resulting Doc copy-pastes cleanly into WordPress.
+    assert capture["json"]["format"] == "html"
+    assert capture["json"]["content"] == "<h1>Plumber</h1><p>Call us.</p>"
     update_arg = supabase.table.return_value.update.call_args[0][0]
     assert update_arg["published_doc_url"] == "https://docs/doc-1"
     assert update_arg["published_doc_id"] == "doc-1"
