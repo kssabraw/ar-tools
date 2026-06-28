@@ -35,6 +35,7 @@ from models.rank import (
     RankAlert,
     RankAlertsResponse,
     RankLocation,
+    RankabilityResponse,
     ReportListItem,
     ReportPublishResponse,
     ReportSchedule,
@@ -61,6 +62,7 @@ from services import (
     rank_materialize,
     rank_report,
     rank_status,
+    rankability,
     serp_snapshot,
     serp_trends,
 )
@@ -764,6 +766,16 @@ async def get_serp_timeline(
         keyword=data["keyword"],
         points=[SerpTimelinePoint(**p) for p in data["points"]],
     )
+
+
+@router.get("/clients/{client_id}/rank/rankability", response_model=RankabilityResponse)
+async def get_rankability(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> RankabilityResponse:
+    """Per-keyword rankability (0–100 + band + factors) and a Quick-wins priority
+    (rankability × potential value), from each keyword's latest SERP snapshot."""
+    data = rankability.get_client_rankability(str(client_id))
+    return RankabilityResponse(**data)
 
 
 @router.get("/clients/{client_id}/serp-trends", response_model=SerpTrendsResponse)

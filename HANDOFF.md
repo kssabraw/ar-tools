@@ -1,6 +1,31 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **SERP Landscape Trends** (latest)
+## ⏩ Update — 2026-06-28 · **Rankability score + Quick wins** (latest)
+
+A client-relative **rankability** score per tracked keyword — how realistically
+*this* client can win it — on a new **"Rankability"** tab in the Rankings page.
+Computed on read from each keyword's latest SERP snapshot (no migration). Part of
+PR #156 (draft, awaiting merge).
+
+- **Score 0–100 + band** (Easy / Moderate / Hard / Very hard; higher = winnable,
+  inverse of difficulty), each with its 2–3 **driving factors**. Four blended
+  sub-scores: competition weakness (0.40, backlink authority weighted **RD > UR >
+  DR**, medians), client capability (0.25, authority gap + rank momentum),
+  targeting gap (0.20, loose-match incumbents), SERP opportunity (0.15, AIO/
+  shopping crowding).
+- **Quick wins** sort = rankability × **potential value** (volume × CTR-at-top-3 ×
+  CPC). Keywords without a snapshot are listed unscored with a capture prompt.
+- `services/rankability.py` (pure `score_keyword` + `get_client_rankability`),
+  `GET /clients/{id}/rank/rankability`, `components/rankings/Rankability.tsx`.
+  Weights/thresholds are tunable module constants; pure scorer unit-tested.
+- Heuristic, not ground truth (title/URL + DataForSEO authority, not page bodies).
+
+**Verified:** import main + **558 tests** on pinned fastapi==0.115.0/pydantic==2.9.2
+(8 new scorer cases); ruff clean; frontend build clean.
+
+---
+
+## ⏩ Update — 2026-06-28 · **SERP Landscape Trends**
 
 Built on top of the SERP Snapshot work: an over-time + cross-keyword view of how
 Google's SERP composition changes, from the dated snapshot archive. New **"SERP

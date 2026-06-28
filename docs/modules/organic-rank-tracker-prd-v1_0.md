@@ -375,3 +375,12 @@ Over-time + cross-keyword views over the dated snapshot archive — a **"SERP Tr
 **Authority display:** UR and DR are DataForSEO's 0–1000 `rank` proxy; they're stored raw (for the rankability calc) but **shown ÷10 on the familiar 0–100 scale**. **RD (referring domains)** is a real count, shown un-scaled, and is treated as the **most important** backlink signal (RD > UR > DR) — the intended weighting for the future rankability score.
 
 Pure helpers (deltas, as-of prevalence, change digest) are unit-tested. This is the read foundation for a future **automated reoptimization planner** (track SERP + competition change → recommend actions).
+
+### 14.5 Rankability (built)
+A **client-relative rankability score** per tracked keyword — how realistically *this* client can win it — computed on read from the keyword's latest SERP snapshot (`services/rankability.py`, `GET /clients/{id}/rank/rankability`, **"Rankability"** tab `components/rankings/Rankability.tsx`). **Score 0–100 + band** (Easy / Moderate / Hard / Very hard; higher = more winnable, the inverse of keyword difficulty), each with its **2–3 driving factors** (not a black box). Four blended sub-scores:
+- **competition weakness** (0.40) — low top-10 backlink authority, weighted **RD > UR > DR** (medians, robust to one outlier brand);
+- **client capability** (0.25) — the client's authority vs the incumbents' + rank momentum;
+- **targeting gap** (0.20) — how many top results are loose matches (not written for the keyword);
+- **SERP opportunity** (0.15) — click real-estate left after AIO / shopping crowding.
+
+Paired with the keyword's **potential value** (volume × CTR-at-top-3 × CPC) into a **Quick wins** priority (rankability × value), so "easy *and* valuable" floats to the top. Keywords without a snapshot yet are listed unscored with a capture prompt. Weights/thresholds are module constants (tunable); the pure scorer is unit-tested. Heuristic, not ground truth — it reads title/URL + DataForSEO authority, not page bodies. Inputs the rank tracker + snapshot already capture; **no new data or migration**.

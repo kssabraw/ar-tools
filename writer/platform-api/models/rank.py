@@ -325,6 +325,31 @@ class SerpTrendsResponse(BaseModel):
     changes: list[SerpChangeItem] = []
 
 
+# --- Rankability (how winnable a keyword is for the client) ------------------
+class RankabilityFactor(BaseModel):
+    text: str
+    direction: Literal["up", "down"]
+
+
+class RankabilityItem(BaseModel):
+    keyword_id: UUID
+    keyword: str
+    has_snapshot: bool = False
+    snapshot_id: Optional[UUID] = None
+    score: Optional[int] = None  # 0–100, higher = more winnable for this client
+    band: Optional[str] = None   # Easy / Moderate / Hard / Very hard
+    factors: list[RankabilityFactor] = []
+    client_rank: Optional[int] = None
+    search_volume: Optional[int] = None
+    cpc: Optional[float] = None
+    est_value: Optional[float] = None  # potential monthly value if won (top-3)
+    priority: Optional[float] = None   # score × potential value (Quick wins sort)
+
+
+class RankabilityResponse(BaseModel):
+    items: list[RankabilityItem] = []
+
+
 # --- In-app rank-drop alerts ------------------------------------------------
 class RankAlert(BaseModel):
     id: UUID

@@ -937,3 +937,28 @@ export interface SerpTrendsResponse {
   series: SerpTrendSeries[]
   changes: SerpChangeItem[]
 }
+
+// --- Rankability ----------------------------------------------------------
+export interface RankabilityFactor {
+  text: string
+  direction: 'up' | 'down'
+}
+
+export interface RankabilityItem {
+  keyword_id: string
+  keyword: string
+  has_snapshot: boolean
+  snapshot_id: string | null
+  score: number | null
+  band: string | null
+  factors: RankabilityFactor[]
+  client_rank: number | null
+  search_volume: number | null
+  cpc: number | null
+  est_value: number | null
+  priority: number | null
+}
+
+export interface RankabilityResponse {
+  items: RankabilityItem[]
+}
