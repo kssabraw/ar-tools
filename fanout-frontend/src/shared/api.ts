@@ -47,6 +47,10 @@ export interface SiloDiscovery {
   // Local SEO target area chosen at session creation; the Schedule modal pre-fills
   // its location from it. Null/absent for blog runs.
   location?: string | null;
+  // AR Tools client + DataForSEO market for this run — scope the Schedule modal's
+  // Local SEO location typeahead. Absent on older/blog runs.
+  client_id?: string | null;
+  location_code?: number | null;
   publish_config?: {
     github?: { repo?: string; branch?: string; content_path?: string };
     drive?: { folder_id?: string };

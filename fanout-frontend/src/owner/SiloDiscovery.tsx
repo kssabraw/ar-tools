@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addTopic,
@@ -31,6 +31,18 @@ import {
   RELATIONSHIP_LABELS,
   RELATIONSHIP_OPTIONS,
 } from "../shared/relationshipTypes";
+
+// A just-finished expansion can briefly read back zero keyword counts: the
+// session flips to `awaiting_article_planning` a beat before the gated keyword
+// pool is visible on the summary read. Detect that stale snapshot — terminal
+// status, zero active, yet clustering clearly produced groups — so the poller
+// keeps going instead of locking the UI onto "0 keywords". (Backend has its own
+// guard; this is the frontend safety net for when that read still slips through.)
+function expansionLooksUnsettled(s: PipelineSummary): boolean {
+  if (s.status !== "awaiting_article_planning") return false;
+  if ((s.expansion?.counts?.active ?? 0) > 0) return false;
+  return (s.expansion?.topics ?? []).some((t) => (t.grouping_count ?? 0) > 0);
+}
 
 // The pipeline steps run in the background; "pipeline" is a polling-driven view
 // that renders progress / results from the session summary.
@@ -111,12 +123,24 @@ export function SiloDiscovery({
 
   // Pipeline runs in the background; we poll the session summary to drive the UI.
   const [phase, setPhase] = useState<Phase>("expanding");
+  // Bounds the settling retries so a genuinely-empty run still stops polling.
+  const staleSummaryRetries = useRef(0);
   const summaryQ = useQuery({
     queryKey: ["summary", sessionId],
     queryFn: () => getSummary(sessionId!),
     enabled: !!sessionId && step === "pipeline",
-    // Poll while a run is in progress; stop once it reaches a terminal status.
-    refetchInterval: (q) => (q.state.data?.status === "running" ? 4000 : false),
+    // Poll while a run is in progress; stop once it reaches a terminal status —
+    // except keep polling a few more cycles past a stale zero-count read.
+    refetchInterval: (q) => {
+      const d = q.state.data;
+      if (d?.status === "running") { staleSummaryRetries.current = 0; return 4000; }
+      if (d && expansionLooksUnsettled(d) && staleSummaryRetries.current < 4) {
+        staleSummaryRetries.current += 1;
+        return 3000;
+      }
+      staleSummaryRetries.current = 0;
+      return false;
+    },
   });
 
   const expandMut = useMutation({

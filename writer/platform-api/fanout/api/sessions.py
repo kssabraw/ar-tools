@@ -166,6 +166,11 @@ class SiloDiscoveryResponse(BaseModel):
     # Local SEO target area chosen at session creation (lives in `settings`); the
     # Schedule modal pre-fills its location from it. Null for blog runs.
     location: str | None = None
+    # AR Tools client this run belongs to + its DataForSEO market — let the
+    # Schedule modal scope its Local SEO location typeahead (by country, with the
+    # client as a fallback) without a second session lookup.
+    client_id: str | None = None
+    location_code: int | None = None
     publish_config: dict = {}
     publish_available: dict = {}     # which destinations have server creds (no secrets)
 
@@ -416,6 +421,8 @@ def get_session(
         site_base_url=session.get("site_base_url"),
         content_type=(session.get("settings") or {}).get("content_type"),
         location=(session.get("settings") or {}).get("location"),
+        client_id=session.get("client_id"),
+        location_code=store.session_location_code(session),
         publish_config=session.get("publish_config") or {},
         publish_available={
             "github": bool(_s.github_publish_token),

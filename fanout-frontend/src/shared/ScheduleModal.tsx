@@ -3,8 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createSchedule,
   scheduleEstimate,
+  isoForLocationCode,
   type ScheduleRequest,
 } from "./api";
+import { LocationAutocomplete } from "./LocationAutocomplete";
 
 type Mode = "all_at_once" | "drip" | "fixed";
 type ContentType = "blog_post" | "local_seo_page" | "service_page";
@@ -22,10 +24,13 @@ export function ScheduleModal(props: {
   // Local SEO target area chosen at session creation; pre-fills the location
   // field below. The user can still change it here.
   defaultLocation?: string | null;
+  // Client + market for this run — scope the Local SEO location typeahead.
+  clientId?: string | null;
+  locationCode?: number | null;
   onClose: () => void;
   onScheduled?: (scheduled: number) => void;
 }) {
-  const { sessionId, clusterIds, onClose, onScheduled } = props;
+  const { sessionId, clusterIds, clientId, locationCode, onClose, onScheduled } = props;
   const qc = useQueryClient();
   const browserTz = useMemo(
     () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
@@ -42,10 +47,16 @@ export function ScheduleModal(props: {
   const [contentType, setContentType] = useState<ContentType>(
     props.defaultContentType ?? "blog_post",
   );
+  // Committed (picked) location vs the raw field text. A picked suggestion is the
+  // canonical DataForSEO name; we fall back to the raw text so an unmatched area
+  // is still submittable (preserves the old free-text behavior).
   const [location, setLocation] = useState(props.defaultLocation ?? "");
+  const [locationInput, setLocationInput] = useState(props.defaultLocation ?? "");
+  const effectiveLocation = (location.trim() || locationInput.trim());
 
   const isLocalSeo = contentType === "local_seo_page";
   const isServicePage = contentType === "service_page";
+  const locCountry = locationCode ? isoForLocationCode(locationCode) : undefined;
 
   const body: ScheduleRequest = {
     mode,
@@ -58,7 +69,7 @@ export function ScheduleModal(props: {
     // Only blog posts need a base URL (absolute internal links); Local SEO pages
     // need a target area; service pages are keyword-only.
     site_base_url: contentType === "blog_post" ? baseUrl.trim() || undefined : undefined,
-    location: isLocalSeo ? location.trim() || undefined : undefined,
+    location: isLocalSeo ? effectiveLocation || undefined : undefined,
   };
 
   // Live preview — re-estimates as the inputs change.
@@ -87,7 +98,7 @@ export function ScheduleModal(props: {
 
   // Blog posts need a base URL; Local SEO pages need a target area; service
   // pages are keyword-only (the client link is enforced server-side).
-  const missingRequirement = isServicePage ? false : isLocalSeo ? !location.trim() : !baseUrl.trim();
+  const missingRequirement = isServicePage ? false : isLocalSeo ? !effectiveLocation : !baseUrl.trim();
   const count = est.data?.count ?? 0;
   const noun = isLocalSeo || isServicePage ? "page" : "article";
   const scope = clusterIds ? `${clusterIds.length} selected ${noun}(s)` : "the whole session";
@@ -140,11 +151,15 @@ export function ScheduleModal(props: {
           {isLocalSeo && (
             <label className="field">
               <span className="field-label">Target area / location</span>
-              <input
-                className="input"
-                placeholder="e.g. Round Rock, TX"
+              <LocationAutocomplete
+                country={locCountry}
+                clientId={clientId}
                 value={location}
-                onChange={(e) => setLocation(e.target.value)}
+                inputValue={locationInput}
+                placeholder="Start typing a city or area…"
+                onSelect={(loc) => { setLocation(loc.location_name); setLocationInput(loc.location_name); }}
+                onInputChange={(raw) => { setLocationInput(raw); setLocation(""); }}
+                onClear={() => { setLocation(""); setLocationInput(""); }}
               />
               <span className="field-hint">Required — the city/area each Local SEO page targets.</span>
             </label>
