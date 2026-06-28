@@ -41,6 +41,7 @@ This layer is an orchestrator. It calls existing services rather than reimplemen
 | Reference page structures | `services/page_structure_scraper.py` → `clients.page_structures` |
 | Keyword intake (3 trackers) | `tracked_keywords`, `maps_keywords`, `brand_tracked_keywords` (+ the planned **Unified Keyword Portal**) |
 | Target geographies | `clients.target_cities`, `services/target_cities.py`, Local SEO multi‑city discovery |
+| First‑party data (Search Console) | `services/gsc_service.py` (agency service‑account connect/verify), `services/gsc_ingest.py`, GSC Research — **GA4 + GBP Performance are NEW siblings (§6.7)** |
 | Organic SERP intelligence | `services/serp_snapshot.py`, `services/serp_trends.py`, `services/rankability.py` |
 | Maps competition | `services/local_dominator.py`, `services/maps_grid.py`, `services/maps_report.py`, `services/maps_analytics.py` |
 | Content silos | Local SEO **Plan Silo** (`services/local_seo_silo.py`), content silos (`silo_dedup`/`silo_promotion`), Fanout clustering |
@@ -83,9 +84,11 @@ engagements
   config (jsonb: budgets, checkpoint toggles, publish_mode draft|live)
 
 audit_runs
-  id, engagement_id (FK), kind (enum: site_technical | serp_competition | maps_competition),
+  id, engagement_id (FK), kind (enum: site_technical | serp_competition |
+     maps_competition | performance_baseline),
   status (pending|running|complete|failed), result (jsonb), score (numeric), created_at
   -- one row per audit kind per audit cycle; reruns append
+  -- performance_baseline reads the connected GSC/GA4/GBP-Performance ingests (Stage 0b)
 
 strategy_plans
   id, engagement_id (FK), version (int), status (draft|proposed|approved|superseded),
@@ -116,12 +119,29 @@ execution_events
 
 ### Stage 0 — Onboarding (mostly exists; add a wizard + approval gates)
 
-**Goal:** GBP and/or website in → approved brand voice + ICP out.
+**Goal:** GBP and/or website in → approved brand voice + ICP out → **first‑party data sources connected**.
 
-- Wrap existing pieces in a guided, multi‑step **Onboarding wizard** (today it's one flat `ClientForm`): Business → Voice → ICP → Reference pages → Targets.
+- Wrap existing pieces in a guided, multi‑step **Onboarding wizard** (today it's one flat `ClientForm`): Business → Voice → ICP → Reference pages → **Connect data** → Targets.
 - **Reuse:** GBP picker/resolve, auto website scrape, page‑structure scrape, the brand‑voice and ICP scan/accept services — all already there.
 - **New behavior:** make brand voice and ICP **approval gates**. The wizard requires an explicit "Approve voice" / "Approve ICP" before the engagement can leave `onboarding`. (Data already supports this — `brand_voice.recommended_accepted`, `detected_icp.source`; we add the gate, not the storage.)
+- **New step — connect first‑party data (Stage 0b below):** the wizard's "Connect data" step links the client's **Search Console**, **Google Analytics (GA4)**, and **Business Profile Performance** so every downstream audit, the strategy engine, and reporting are grounded in the client's *own* numbers, not just third‑party SERP/Maps estimates.
 - **Output:** `engagements.status = intake`.
+
+### Stage 0b — Connect first‑party data sources (GSC existing; GA4 + GBP Performance NEW — Section 6.7)
+
+**Goal:** authoritative first‑party performance data wired in during onboarding, on the suite's existing **agency service‑account** model wherever the API allows (locked decision: service account, no interactive OAuth).
+
+These three sources are *authoritative ground truth* about how the client is actually performing — they outrank third‑party estimates (DataForSEO/SERP snapshots) when both are present. They feed the **performance baseline** the audits and strategy engine read (Stage 2), and they enrich the consolidated report (Stage 7).
+
+| Source | Status | What it adds | Connection model | Stored on |
+|---|---|---|---|---|
+| **Search Console** | ✅ Exists (`services/gsc_service.py`, `gsc_ingest.py`, GSC Research) | Query×page impressions/clicks/position, indexation (URL Inspection), opportunity analysis | Agency **service account** (`client_email` added as a property user); app‑level key in `settings.google_service_account_key` | `clients.gsc_property` + `gsc_*` tables |
+| **Google Analytics (GA4)** | ❌ NEW | Sessions, channel mix, landing‑page traffic, **engagement + conversions/key events** (which pages actually convert) — the demand/value layer the suite has no first‑party read of today | GA4 **Data API** supports a **service account** added as a *Viewer* on the property → reuse the same agency‑SA pattern as GSC (no new auth infra) | new `clients.ga4_property_id` + `ga4_*` ingest tables |
+| **Business Profile Performance** | ❌ NEW | Real GBP **performance** metrics — profile impressions (Maps vs Search), calls, direction requests, website clicks, bookings, search‑keyword breakdown — vs. the current Outscraper/DataForSEO *profile + reviews* scrape, which has none of this | Google's **Business Profile Performance API** is OAuth‑centric (a Google account with **manager** access to the location); service‑account access is **not** generally supported — **decision needed** (Section 12 Q8). Falls back to the existing scrape if not connected | new `clients.gbp_performance_location_id` + `gbp_performance_*` ingest tables |
+
+**Connection UX (wizard "Connect data" step):** per source — show connection status, the agency service‑account email to grant (GSC/GA4), a verify‑access check (reuse the `gsc_service.verify_access` shape), and for GBP Performance the OAuth‑connect affordance *if* we land on OAuth. Every source is **optional and best‑effort** — onboarding completes without them; an unconnected source just narrows the baseline and is flagged in the plan (degraded note), exactly like the existing GSC "not configured" state.
+
+**Ingest:** each connected source gets a periodic pull on the **shared `gsc_scheduler`** (GSC ingest already runs there; GA4 + GBP Performance add `ga4_ingest` / `gbp_performance_ingest` jobs alongside it — no new infra), materializing a rolling window the audits read.
 
 ### Stage 1 — Intake (the Unified Keyword Portal, extended)
 
@@ -133,15 +153,17 @@ execution_events
 
 ### Stage 2 — Audits (parallel; one `audit_runs` row each)
 
-Three audits fan out concurrently via `async_jobs`. Each is best‑effort and isolated — a failing audit degrades the plan, never blocks it (same resilience pattern as the Slack context providers and Local SEO planner).
+**Four** audits fan out concurrently via `async_jobs` (the three competitive/technical audits plus the first‑party **performance baseline**). Each is best‑effort and isolated — a failing audit degrades the plan, never blocks it (same resilience pattern as the Slack context providers and Local SEO planner). The competitive audits read the **performance baseline** (2d) so they can weight findings by the client's actual traffic/conversions, not just SERP position.
 
-**2a. Site / technical audit — NEW (Section 6.2).** Crawl the client site (sitemap‑seeded via existing `services/site_page_index.py`), pull on‑page + technical signals. Sources: **DataForSEO OnPage API** and/or **Google PageSpeed/Lighthouse** (new external calls — see Section 9). Produces: indexability issues, meta/title gaps, heading/schema gaps, broken links, Core Web Vitals, thin/duplicate content, internal‑link graph snapshot.
+**2a. Site / technical audit — NEW (Section 6.2).** Crawl the client site (sitemap‑seeded via existing `services/site_page_index.py`), pull on‑page + technical signals. Sources: **DataForSEO OnPage API** and/or **Google PageSpeed/Lighthouse** (new external calls — see Section 9). Produces: indexability issues, meta/title gaps, heading/schema gaps, broken links, Core Web Vitals, thin/duplicate content, internal‑link graph snapshot. Cross‑references **GSC indexation** + **GA4 landing‑page traffic** to flag "high‑traffic page with technical problems" first.
 
-**2b. Organic SERP competition audit — SYNTHESIS of existing.** For each target keyword, compose existing `serp_snapshot` (top‑10 + DR/UR/referring domains + intent + topical focus), `rankability` (client‑relative difficulty + quick‑win signal), and `serp_trends`. New work = **rolling it up** into "where can we win, how hard, against whom, with what content shape."
+**2b. Organic SERP competition audit — SYNTHESIS of existing + first‑party.** For each target keyword, compose existing `serp_snapshot` (top‑10 + DR/UR/referring domains + intent + topical focus), `rankability` (client‑relative difficulty + quick‑win signal), and `serp_trends` — now grounded by **GSC** (the client's real impressions/clicks/position for that query) and **GA4** (does the ranking page actually convert). New work = **rolling it up** into "where can we win, how hard, against whom, with what content shape — and what it's worth," with first‑party clicks/conversions replacing estimated value where available.
 
-**2c. Maps competition audit — SYNTHESIS of existing.** Where the client targets local, compose the geo‑grid scan + `maps_analytics` rollups + weak‑zone geocoding into "coverage gaps and the competitors owning them." Reuses `local_dominator` + `maps_report` building blocks.
+**2c. Maps competition audit — SYNTHESIS of existing + first‑party.** Where the client targets local, compose the geo‑grid scan + `maps_analytics` rollups + weak‑zone geocoding into "coverage gaps and the competitors owning them," now anchored by **GBP Performance** (real impressions/calls/direction‑requests/website‑clicks and the search‑keyword breakdown) so weak grid zones are prioritized by lost *local conversions*, not just rank. Reuses `local_dominator` + `maps_report` building blocks.
 
-**Output:** three `audit_runs` rows; `engagements.status = strategizing`.
+**2d. Performance baseline — NEW (reads Stage 0b sources, no competitive scraping).** A first‑party snapshot assembled from the connected GSC + GA4 + GBP Performance ingests: traffic + channel mix + conversions (GA4), query/page impressions‑clicks‑position (GSC), and local actions (GBP Performance). This is both the **engagement's starting line** (so progress is measurable in the client's own numbers) and the **weighting layer** the other three audits and the strategy engine consume. Degrades gracefully per unconnected source.
+
+**Output:** up to four `audit_runs` rows; `engagements.status = strategizing`.
 
 ### Stage 3 — Strategy Engine (NEW — Section 6.1)
 
@@ -213,7 +235,16 @@ Check NAP presence/consistency across a directory set (DataForSEO Business Listi
 Analyzer builds the site's internal‑link graph from the crawl, finds orphan pages + missing topical links (silo‑aware) → `internal_link` actions. **Injector (autonomous):** for WordPress clients, applies approved link edits via the **existing** `wordpress_publish.py` REST/app‑password path, **as drafts/revisions**, never silently to live. Non‑WordPress → recommend‑only deep links.
 
 ### 6.6 Consolidated client report — `services/engagement_report.py`
-Composes the existing `rank_report`/`brand_report`/`maps_report` builders + plan progress + `execution_events` into one Google Doc via the shared `google_docs.py`. Async `engagement_report` job; scheduled via `gsc_scheduler`.
+Composes the existing `rank_report`/`brand_report`/`maps_report` builders + the **first‑party performance baseline + deltas** (GSC/GA4/GBP‑Performance, §6.7) + plan progress + `execution_events` into one Google Doc via the shared `google_docs.py`. The baseline makes the report a **measurable before/after** in the client's own numbers (traffic, conversions, local actions), not just rank movement. Async `engagement_report` job; scheduled via `gsc_scheduler`.
+
+### 6.7 First‑party data connectors (GSC existing; GA4 + GBP Performance NEW)
+The onboarding data layer (Stage 0b) + the periodic ingests + the performance baseline (audit 2d).
+
+- **Search Console — exists.** `services/gsc_service.py` (agency service‑account connect/verify), `services/gsc_ingest.py` (query×page ingest on `gsc_scheduler`), GSC Research. No new build beyond surfacing connect/status in the wizard.
+- **GA4 — NEW: `services/ga4_service.py` + `services/ga4_ingest.py`.** Connect/verify a GA4 property via the **GA4 Data API (`google-analytics-data`)** using the **same agency service‑account** added as a property *Viewer* (reuse `settings.google_service_account_key`; widen `SCOPES` with `analytics.readonly`). Periodic pull of sessions / channel mix / landing‑page traffic / engagement + **key events (conversions)** into `ga4_*` tables. Pure‑helper + lazy‑import pattern mirrors `gsc_service`. New: `clients.ga4_property_id`, `clients.ga4_access_status`. Async `ga4_ingest` job on `gsc_scheduler`.
+- **GBP Performance — NEW: `services/gbp_performance_service.py` + `services/gbp_performance_ingest.py`.** Pull daily metrics from the **Business Profile Performance API** (`businessprofileperformance.googleapis.com`) — `BUSINESS_IMPRESSIONS_{DESKTOP,MOBILE}_{MAPS,SEARCH}`, `CALL_CLICKS`, `BUSINESS_DIRECTION_REQUESTS`, `WEBSITE_CLICKS`, `BUSINESS_BOOKINGS`, plus the search‑keywords report — keyed off the client's GBP location id (`clients.gbp_place_id` → resolve to the `locations/{id}` resource). **Auth wrinkle (Q8):** this API is OAuth‑centric (requires a Google account with *manager* access to the location); service‑account access isn't generally available, so this connector likely needs an **OAuth token store** (the one place the suite would deviate from the locked "service account, no OAuth" decision — flagged for decision, not assumed). New: `clients.gbp_performance_location_id`, `clients.gbp_performance_access_status`, `gbp_performance_*` tables. Async `gbp_performance_ingest` job on `gsc_scheduler`. **Best‑effort:** absent the connection, the suite keeps using the existing Outscraper/DataForSEO profile+reviews scrape (which has no performance metrics).
+
+All three are read‑only, creds/connection‑gated, and degrade to "not configured" exactly like the current GSC path.
 
 ---
 
@@ -257,9 +288,11 @@ Per `CLAUDE.md`, new external dependencies and dashboard setup must be confirmed
 | Google **PageSpeed/Lighthouse API** | Core Web Vitals | Free tier / API key | **Ask** |
 | DataForSEO **Backlinks API** | Backlink‑gap | Per‑query cost; shared creds | **Ask** |
 | DataForSEO **Business Listings** (or static directory list) | Local citations | Per‑query cost — or $0 with a fixed checklist to start | **Ask / default to static** |
+| **GA4 Data API** (`google-analytics-data`) | Performance baseline (2d), value‑weighted audits, report | **Free** API; reuse agency service account added as property *Viewer* + `analytics.readonly` scope. Per‑client dashboard step = grant the SA email (like GSC) | **Provisioning incoming** (user has access) |
+| **Business Profile Performance API** | Local performance baseline, Maps audit weighting, report | **Free** API, but **OAuth‑centric** (manager access to the location) — likely needs an OAuth token store; service account may not suffice (Q8) | **Provisioning incoming — auth model TBD** |
 | **Asana** API token + project mapping | Asana sync (deferred) | OAuth/token + dashboard mapping | **Deferred — ask when we get there** |
 
-Everything else (LLM, WordPress, GSC, Outscraper, geocoding) is already provisioned.
+Everything else (LLM, WordPress, GSC, Outscraper, geocoding) is already provisioned. The three first‑party data sources (GSC/GA4/GBP‑Performance) are **read‑only and free** — their cost is setup/auth, not per‑call.
 
 ---
 
@@ -282,9 +315,9 @@ Large surface area — built in slices, each shippable and useful on its own.
 
 **Phase 0 — Unified Keyword Portal** (already planned separately). The intake primitive; ships independently.
 
-**Phase 1 — Engagement spine + onboarding wizard + intake.** `engagements` table + state machine, the onboarding wizard with brand‑voice/ICP **approval gates**, and the extended intake. Pure orchestration over existing data; no new external APIs. Delivers the "guided onboard" immediately.
+**Phase 1 — Engagement spine + onboarding wizard + intake + first‑party connectors.** `engagements` table + state machine, the onboarding wizard with brand‑voice/ICP **approval gates** and the **Connect data** step, the GA4 + GBP‑Performance connectors/ingests (§6.7) alongside existing GSC, and the extended intake. Mostly orchestration over existing data; the connectors are free read‑only APIs (GA4 reuses the agency SA; GBP‑Performance auth per Q8). Delivers the "guided onboard" + a first‑party baseline immediately.
 
-**Phase 2 — Strategy Engine v1 (recommend‑only) + plan review.** Generalize `reopt_planner` to cross‑module using the existing context providers + the *synthesis* audits (2b/2c, no new APIs yet). `strategy_plans`/`strategy_actions`, the generalized plan view, gate #2. This is the brain; valuable even before autonomy.
+**Phase 2 — Strategy Engine v1 (recommend‑only) + plan review + performance baseline.** Generalize `reopt_planner` to cross‑module using the existing context providers + the *synthesis* audits (2b/2c) + the **performance baseline (2d)** from Phase 1's connectors (no new external APIs). `strategy_plans`/`strategy_actions`, the generalized plan view, gate #2. This is the brain; valuable even before autonomy, and now value‑weighted by real traffic/conversions.
 
 **Phase 3 — New audit modules.** Site/technical (6.2), backlink‑gap (6.3), local citations (6.4). Each gated on its external‑API approval (Section 9); each feeds richer actions into the engine.
 
@@ -303,6 +336,7 @@ Large surface area — built in slices, each shippable and useful on its own.
 5. **WordPress live vs draft default** for autonomous internal‑link edits — recommend draft/revision always.
 6. **Asana model** when we build it — one‑way mirror vs. system‑of‑record (user leaned defer; revisit at Phase 5).
 7. **One engagement per client** assumption — confirm we never need concurrent engagements per client.
+8. **GBP Performance API auth** — the Business Profile Performance API is OAuth‑centric (manager access to the location), so it likely needs an **OAuth token store**, deviating from the locked "service account, no interactive OAuth" decision *for this one source*. Confirm: stand up a minimal OAuth connect flow for GBP Performance, or stay on the existing Outscraper/DataForSEO scrape (no first‑party performance metrics)? (GA4 stays on the agency service account — no deviation.)
 
 ---
 
