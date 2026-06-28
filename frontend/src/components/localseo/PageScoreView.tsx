@@ -20,6 +20,9 @@ interface Props {
   onBack: () => void
   onReoptimized: (page: LocalSeoPageDetail, prevScore: number) => void
   onCreateNew: () => void
+  // Leave the score screen while the background reoptimize keeps running; the
+  // page lands in Saved Pages when done.
+  onLeaveBackground?: () => void
 }
 
 const ENGINE_LABELS: Record<string, string> = {
@@ -40,6 +43,7 @@ function EngineIcon({ score }: { score: number }) {
 
 export function PageScoreView({
   clientId, keyword, location, pageUrl, pageHtml, serpAnalysis, onBack, onReoptimized, onCreateNew,
+  onLeaveBackground,
 }: Props) {
   const [result, setResult] = useState<ScoreResult | null>(null)
   const [scoring, setScoring] = useState(false)
@@ -48,6 +52,15 @@ export function PageScoreView({
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const startedRef = useRef(false)
+  // Reoptimize runs as a background job we poll. detachedRef short-circuits the
+  // poll loop when the user leaves; pollRef lets unmount cancel the pending tick.
+  const reoptPollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const reoptDetachedRef = useRef(false)
+
+  useEffect(() => () => {
+    reoptDetachedRef.current = true
+    if (reoptPollRef.current) clearTimeout(reoptPollRef.current)
+  }, [])
 
   const runScore = async () => {
     setScoring(true)
@@ -79,20 +92,60 @@ export function PageScoreView({
     if (!result) return
     setReoptimizing(true)
     setError('')
+    reoptDetachedRef.current = false
+    const prevScore = result.composite_score
     try {
-      const page = await localSeoApi.reoptimize(clientId, {
+      const res = await localSeoApi.reoptimizeAsync(clientId, {
         keyword, location,
         existing_page_html: pageHtml ?? null,
         existing_page_url: pageUrl ?? null,
         deficiencies: deficiencies as unknown as Array<Record<string, unknown>>,
         serp_analysis: result.serp_analysis ?? serpAnalysis ?? null,
       })
-      onReoptimized(page, result.composite_score)
+      const jobId = res.job_id
+
+      const poll = async () => {
+        if (reoptDetachedRef.current) return
+        try {
+          const [status] = await localSeoApi.jobsStatus(clientId, [jobId])
+          if (reoptDetachedRef.current) return
+          if (!status || status.status === 'pending' || status.status === 'running') {
+            reoptPollRef.current = setTimeout(() => { void poll() }, 4000)
+            return
+          }
+          if (status.status === 'complete') {
+            const pageId = status.result?.page_id as string | undefined
+            if (!pageId) {
+              setError('Reoptimize finished but returned no page.')
+              setReoptimizing(false)
+              return
+            }
+            const page = await localSeoApi.getPage(pageId)
+            if (reoptDetachedRef.current) return
+            setReoptimizing(false)
+            onReoptimized(page, prevScore)
+            return
+          }
+          // failed / cancelled
+          setError(status.error || 'Reoptimize failed')
+          setReoptimizing(false)
+        } catch (e) {
+          if (reoptDetachedRef.current) return
+          setError(e instanceof Error ? e.message : 'Reoptimize failed')
+          setReoptimizing(false)
+        }
+      }
+      void poll()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Reoptimize failed')
-    } finally {
       setReoptimizing(false)
     }
+  }
+
+  const leaveBackground = () => {
+    reoptDetachedRef.current = true
+    if (reoptPollRef.current) clearTimeout(reoptPollRef.current)
+    onLeaveBackground?.()
   }
 
   const toggleExpand = (key: string) => setExpanded(prev => {
@@ -240,9 +293,15 @@ export function PageScoreView({
                     Fix selected ({selected.size})
                   </button>
                 )}
-                <button style={{ ...outlineBtn, width: '100%' }} disabled={reoptimizing} onClick={onCreateNew}>
-                  Create a new page instead
-                </button>
+                {reoptimizing && onLeaveBackground ? (
+                  <button style={{ ...outlineBtn, width: '100%' }} onClick={leaveBackground}>
+                    Leave & finish in the background
+                  </button>
+                ) : (
+                  <button style={{ ...outlineBtn, width: '100%' }} disabled={reoptimizing} onClick={onCreateNew}>
+                    Create a new page instead
+                  </button>
+                )}
               </>
             ) : (
               <>

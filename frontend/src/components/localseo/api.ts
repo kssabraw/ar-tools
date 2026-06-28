@@ -8,7 +8,6 @@ import type {
   PrecheckResult,
   RankabilityResult,
   RelatedPagesResult,
-  ReoptimizeUrlResult,
   ScoreResult,
   SiloPlanJob,
   SiloPlanResult,
@@ -22,18 +21,6 @@ import type {
 // multi-minute generate/score/reoptimize isn't dropped by a proxy idle timeout.
 // They still resolve to the same typed payload as a plain POST would.
 export const localSeoApi = {
-  generate: (
-    clientId: string,
-    body: {
-      keyword: string
-      location: string
-      location_code?: number | null
-      force_refresh?: boolean
-      page_template_url?: string | null
-    },
-    signal?: AbortSignal,
-  ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/generate`, body, signal),
-
   // Background generation — enqueue a job and poll, so the UI can navigate away
   // (even to other clients) while the page generates server-side. The page lands
   // in the client's pages when done.
@@ -149,7 +136,9 @@ export const localSeoApi = {
   getSiloPlan: (clientId: string, jobId: string) =>
     api.get<SiloPlanResult>(`/clients/${clientId}/local-seo/silo-plan/${jobId}`),
 
-  reoptimize: (
+  // Score→reoptimize as a background job: enqueue the rewrite, then poll
+  // jobsStatus (result.page_id) — the UI can leave while it runs.
+  reoptimizeAsync: (
     clientId: string,
     body: {
       keyword: string
@@ -159,24 +148,7 @@ export const localSeoApi = {
       deficiencies: Array<Record<string, unknown>>
       serp_analysis?: AnalysisResult | null
     },
-  ) => api.stream<LocalSeoPageDetail>(`/clients/${clientId}/local-seo/reoptimize`, body),
-
-  // Reoptimization tab — score a live page by URL and rewrite it only if it
-  // scores below `score_threshold` (strong pages are skipped with a note). The
-  // single + bulk flows both loop one URL per call so progress + failures stay
-  // isolated per page (same pattern as bulk page creation).
-  reoptimizeUrl: (
-    clientId: string,
-    body: {
-      page_url: string
-      keyword: string
-      location: string
-      location_code?: number | null
-      score_threshold?: number
-      publish_to_doc?: boolean
-    },
-    signal?: AbortSignal,
-  ) => api.stream<ReoptimizeUrlResult>(`/clients/${clientId}/local-seo/reoptimize-url`, body, signal),
+  ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/reoptimize-async`, body),
 
   socialPosts: (
     clientId: string,

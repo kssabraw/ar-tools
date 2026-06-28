@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 import httpx
@@ -442,11 +443,27 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
 
 
 # ── bulk background generation / reoptimization (per-item async jobs) ─────────
-# Bulk flows enqueue ONE job per item (not one big batch job): the worker runs a
-# single job per tick, so per-item jobs interleave fairly with other clients'
-# jobs instead of one long batch monopolizing the worker. The UI enqueues the
-# set, polls get_jobs_status, and can leave at any time — the jobs keep running
-# server-side and the pages land in the client's pages.
+# Bulk flows enqueue ONE job per item (not one big batch job), for two reasons:
+#   1. the stale-job reaper (`job_stale_timeout_minutes`, 30m) — each item stays
+#      well under it, whereas a single ~90-min batch job would be reaped mid-run
+#      and requeued, re-generating the items it had already finished; and
+#   2. background priority — each item's `scheduled_at` is staggered into the
+#      future (`_bulk_scheduled_at`), so the worker (which claims the oldest
+#      `scheduled_at` with no <=now gate) interleaves now-dated interactive /
+#      scheduled jobs ahead of the rest of a batch instead of the batch
+#      monopolizing the single worker. Bulk still runs back-to-back when the
+#      queue is otherwise empty (no gate = no artificial delay).
+# The UI enqueues the set, polls get_jobs_status, and can leave at any time — the
+# jobs keep running server-side and the pages land in the client's pages.
+
+def _bulk_scheduled_at(index: int) -> str:
+    """Staggered `scheduled_at` for the `index`-th item of a bulk run, so the
+    worker (which claims the oldest scheduled_at, with no <=now gate) interleaves
+    now-dated interactive/scheduled jobs ahead of the rest of the batch. No delay
+    when the queue is otherwise empty. See `local_seo_bulk_job_spacing_seconds`."""
+    spacing = settings.local_seo_bulk_job_spacing_seconds
+    return (datetime.now(timezone.utc) + timedelta(seconds=index * spacing)).isoformat()
+
 
 async def enqueue_generate_bulk(
     client_id: str, keywords: list[str], location: str, location_code: Optional[int],
@@ -457,23 +474,26 @@ async def enqueue_generate_bulk(
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
     template = (page_template_url or "").strip() or None
-    rows = [
-        {
-            "job_type": "local_seo_generate",
-            "entity_id": client_id,
-            "payload": {
-                "client_id": client_id,
-                "keyword": kw.strip(),
-                "location": location,
-                "location_code": location_code,
-                "user_id": user_id,
-                "page_template_url": template,
-                "force_refresh": bool(force_refresh),
-            },
-        }
-        for kw in keywords
-        if (kw or "").strip()
-    ]
+    rows = []
+    for kw in keywords:
+        if not (kw or "").strip():
+            continue
+        rows.append(
+            {
+                "job_type": "local_seo_generate",
+                "entity_id": client_id,
+                "scheduled_at": _bulk_scheduled_at(len(rows)),
+                "payload": {
+                    "client_id": client_id,
+                    "keyword": kw.strip(),
+                    "location": location,
+                    "location_code": location_code,
+                    "user_id": user_id,
+                    "page_template_url": template,
+                    "force_refresh": bool(force_refresh),
+                },
+            }
+        )
     if not rows:
         return []
     res = get_supabase().table("async_jobs").insert(rows).execute()
@@ -499,6 +519,7 @@ async def enqueue_reoptimize_bulk(
             {
                 "job_type": "local_seo_reoptimize_url",
                 "entity_id": client_id,
+                "scheduled_at": _bulk_scheduled_at(len(rows)),
                 "payload": {
                     "client_id": client_id,
                     "page_url": page_url,
@@ -570,6 +591,70 @@ def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
             {"job_id": row["id"], "status": row["status"], "result": row.get("result"), "error": row.get("error")}
         )
     return out
+
+
+async def enqueue_reoptimize_page(
+    client_id: str, keyword: str, location: str,
+    existing_page_html: Optional[str], existing_page_url: Optional[str],
+    deficiencies: list[dict], serp_analysis: Optional[dict], user_id: str,
+) -> str:
+    """Enqueue a background reoptimize-by-page job (the score→reoptimize flow).
+    Returns the job id. A single interactive reoptimize, so it's NOT staggered —
+    it gets default `scheduled_at` (now) and runs at normal priority. The poller
+    reads the new page id from the job result (via get_jobs_status)."""
+    _get_client(client_id)  # validate client exists
+    res = (
+        get_supabase()
+        .table("async_jobs")
+        .insert(
+            {
+                "job_type": "local_seo_reoptimize_page",
+                "entity_id": client_id,
+                "payload": {
+                    "client_id": client_id,
+                    "keyword": keyword,
+                    "location": location,
+                    "existing_page_html": existing_page_html,
+                    "existing_page_url": existing_page_url,
+                    "deficiencies": deficiencies or [],
+                    "serp_analysis": serp_analysis,
+                    "user_id": user_id,
+                },
+            }
+        )
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+async def run_reoptimize_page_job(job: dict) -> None:
+    """async_jobs handler for job_type='local_seo_reoptimize_page'. Runs
+    reoptimize_page (which persists the reoptimized page) and stores the new page
+    id in the job result."""
+    payload = job.get("payload") or {}
+    job_id = job["id"]
+    supabase = get_supabase()
+    try:
+        page = await reoptimize_page(
+            client_id=payload["client_id"],
+            keyword=payload["keyword"],
+            location=payload["location"],
+            existing_page_html=payload.get("existing_page_html"),
+            existing_page_url=payload.get("existing_page_url"),
+            deficiencies=payload.get("deficiencies") or [],
+            serp_analysis=payload.get("serp_analysis"),
+            user_id=payload["user_id"],
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.info("local_seo.reoptimize_page_job_complete", extra={"job_id": job_id, "page_id": page["id"]})
+    except Exception as exc:  # noqa: BLE001 — record the failure for the poller
+        detail = getattr(exc, "detail", None) or str(exc)
+        logger.warning("local_seo.reoptimize_page_job_failed", extra={"job_id": job_id, "error": str(detail)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
 
 
 async def analyze(

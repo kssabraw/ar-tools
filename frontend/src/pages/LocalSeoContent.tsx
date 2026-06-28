@@ -407,6 +407,7 @@ export function LocalSeoContent() {
           onBack={() => setView({ kind: 'form' })}
           onReoptimized={(page, prevScore) => { refreshSaved(); setView({ kind: 'generated', page, isNew: true, prevScore }) }}
           onCreateNew={() => runGenerate()}
+          onLeaveBackground={() => { refreshSaved(); setView({ kind: 'form' }); setTab('saved') }}
         />
       </div>
     )
