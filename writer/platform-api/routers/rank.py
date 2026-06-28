@@ -707,6 +707,25 @@ async def get_serp_snapshot(
     # 'partial' snapshot) sorted LAST. Done in Python because Postgres orders
     # NULLS FIRST on DESC, which would float failed rows to the top.
     domains.sort(key=lambda d: (d.get("domain_rating") is None, -(d.get("domain_rating") or 0)))
+
+    # Back-compat: snapshots captured before these columns existed (the PR #53 era)
+    # have them null. Derive on read from the stored serp_features + results so the
+    # API is the single source of truth — no client-side re-derivation (which would
+    # risk drifting from the backend heuristics). Topical focus needs the LLM, so
+    # it can't be backfilled and simply stays absent on those old snapshots.
+    features = snap.get("serp_features") or {}
+    keyword = snap.get("keyword") or ""
+    top = [r for r in results if r.get("position") is not None and r["position"] <= 10]
+    if snap.get("intent_signals") is None:
+        snap["intent_signals"] = serp_snapshot.derive_intent_signals(features, top) or None
+    if not snap.get("local_intent"):
+        snap["local_intent"] = serp_snapshot.detect_local_intent(features)
+    for r in results:
+        if r.get("targeted") is None:
+            r["targeted"] = serp_snapshot.is_page_targeted(keyword, r.get("title"), r.get("url"))
+    if snap.get("targeted_count") is None:
+        snap["targeted_count"] = sum(1 for r in top if r.get("targeted"))
+
     return SerpSnapshotDetail(
         **{k: snap.get(k) for k in (
             "id", "keyword_id", "client_id", "keyword", "captured_at", "status",

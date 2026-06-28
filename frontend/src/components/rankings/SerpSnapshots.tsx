@@ -161,23 +161,14 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
     [snap],
   )
 
-  // Intent signals: use the persisted set when present; otherwise derive client-
-  // side (snapshots captured before the column existed). Mirrors the backend's
-  // derive_intent_signals — keep the two in sync.
-  const signals = useMemo(
-    () => (snap?.intent_signals?.length ? snap.intent_signals : snap ? deriveIntentSignals(snap) : []),
-    [snap],
-  )
+  // Intent signals + targeting come straight from the API — it derives them for
+  // pre-column snapshots too (single source of truth; no client-side heuristics).
+  const signals = useMemo(() => snap?.intent_signals ?? [], [snap])
 
-  // How many of the top organic results are written for the keyword (persisted
-  // targeted_count, or derived for pre-column snapshots).
   const targeting = useMemo(() => {
     if (!snap) return { numerator: 0, denominator: 0 }
     const top = snap.results.filter(r => r.position != null && (r.position as number) <= 10)
-    const numerator = snap.targeted_count != null
-      ? snap.targeted_count
-      : top.filter(r => isPageTargeted(snap.keyword, r.title, r.url)).length
-    return { numerator, denominator: top.length }
+    return { numerator: snap.targeted_count ?? 0, denominator: top.length }
   }, [snap])
 
   if (isLoading) return <p style={{ color: '#94a3b8', fontSize: 13 }}>Loading snapshot…</p>
@@ -303,7 +294,7 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
                           <span style={{ fontWeight: 600, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 320 }}>
                             {r.title || r.domain || '—'}
                           </span>
-                          {!(r.targeted ?? isPageTargeted(snap.keyword, r.title, r.url)) && (
+                          {r.targeted === false && (
                             <span style={looseChip} title="Not written for this keyword — title/URL don't target it (a weaker, beatable result)">loose match</span>
                           )}
                           {!r.is_client && r.topical_focus === 'generalist' && (
@@ -363,94 +354,6 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
       )}
     </div>
   )
-}
-
-// Intent signals — MIRRORS services/serp_snapshot.py::derive_intent_signals.
-// Used only for snapshots captured before the intent_signals column existed
-// (newer ones carry the persisted set); keep the logic in sync with the backend.
-const FEATURE_SIGNAL_MAP: Record<string, string> = {
-  discussions_and_forums: 'forums',
-  video: 'video', video_carousel: 'video', youtube: 'video',
-  top_stories: 'news', news_search: 'news', news: 'news',
-  shopping: 'shopping', google_shopping: 'shopping', commercial_units: 'shopping',
-  popular_products: 'shopping', paid: 'shopping',
-  featured_snippet: 'featured_snippet',
-  people_also_ask: 'paa',
-  knowledge_graph: 'knowledge', knowledge_panel: 'knowledge',
-  images: 'images', image: 'images',
-  recipes: 'recipes', jobs: 'jobs', events: 'events',
-}
-const SIGNAL_ORDER = [
-  'forums', 'video', 'news', 'shopping', 'featured_snippet', 'paa', 'knowledge',
-  'images', 'recipes', 'jobs', 'events',
-  'listicle', 'comparison', 'how_to', 'freshness', 'definitional', 'navigational',
-]
-const FORMAT_MIN_TITLES = 6
-const NAV_MIN_HOMEPAGES = 3
-const LISTICLE_RE = /\b\d{1,3}\s+(best|top|ways|things|tips|ideas|reasons|examples)\b|\btop\s+\d{1,3}\b/i
-const COMPARISON_RE = /\bvs\.?\b|\balternatives?\b|\bcomparison\b/i
-const HOWTO_RE = /\bhow to\b|\bguide\b|\btutorial\b|\bstep[- ]by[- ]step\b/i
-const YEAR_RE = /\b20[2-9]\d\b/
-const DEFINITIONAL_RE = /\bwhat (is|are)\b|\bmeaning of\b|\bdefinition\b/i
-
-function deriveIntentSignals(snap: SerpSnapshotDetail): string[] {
-  const found = new Set<string>()
-  const featureTypes = (snap.serp_features?.feature_types as string[] | undefined) ?? []
-  for (const t of featureTypes) {
-    const key = FEATURE_SIGNAL_MAP[t]
-    if (key) found.add(key)
-  }
-  const titles = (snap.results ?? []).map(r => r.title ?? '')
-  const hits = (rx: RegExp) => titles.filter(t => rx.test(t)).length
-  if (hits(LISTICLE_RE) >= FORMAT_MIN_TITLES) found.add('listicle')
-  if (hits(COMPARISON_RE) >= FORMAT_MIN_TITLES) found.add('comparison')
-  if (hits(HOWTO_RE) >= FORMAT_MIN_TITLES) found.add('how_to')
-  if (hits(YEAR_RE) >= FORMAT_MIN_TITLES) found.add('freshness')
-  if (hits(DEFINITIONAL_RE) >= FORMAT_MIN_TITLES) found.add('definitional')
-  let homepages = 0
-  for (const r of snap.results ?? []) {
-    if (!r.url) continue
-    try {
-      const path = new URL(r.url).pathname
-      if (path === '' || path === '/') homepages++
-    } catch { /* malformed URL — ignore */ }
-  }
-  if (homepages >= NAV_MIN_HOMEPAGES) found.add('navigational')
-  return SIGNAL_ORDER.filter(s => found.has(s))
-}
-
-// "Written for the keyword" — MIRRORS services/serp_snapshot.py::is_page_targeted.
-// Used to mark loosely-relevant incumbents + count targeted top results, and to
-// derive both for snapshots captured before the `targeted`/`targeted_count`
-// columns existed. Keep in sync with the backend heuristic.
-const TARGET_STOPWORDS = new Set([
-  'the', 'a', 'an', 'of', 'in', 'on', 'for', 'and', 'to', 'with', 'your', 'my',
-  'near', 'me', 'best', 'top',
-])
-const TARGET_MIN_COVERAGE = 0.75
-
-function normText(s: string | null | undefined): string {
-  return (s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ')
-}
-function keywordTokens(keyword: string): string[] {
-  return normText(keyword).split(' ').filter(t => t.length >= 2 && !TARGET_STOPWORDS.has(t))
-}
-function coverage(tokens: string[], text: string): number {
-  if (!tokens.length) return 0
-  const norm = normText(text)
-  let matched = 0
-  for (const t of tokens) {
-    const stem = t.endsWith('s') && t.length > 3 ? t.slice(0, -1) : t
-    if (norm.includes(stem)) matched++
-  }
-  return matched / tokens.length
-}
-export function isPageTargeted(keyword: string, title: string | null, url: string | null): boolean {
-  const tokens = keywordTokens(keyword)
-  if (!tokens.length) return false
-  let slug = ''
-  try { slug = new URL(url ?? '').pathname } catch { slug = '' }
-  return coverage(tokens, title ?? '') >= TARGET_MIN_COVERAGE || coverage(tokens, slug) >= TARGET_MIN_COVERAGE
 }
 
 export const SIGNAL_META: Record<string, { label: string; tip: string }> = {
