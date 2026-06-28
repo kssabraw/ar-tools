@@ -21,7 +21,12 @@ export function SerpSnapshots({ keywordId, keyword, onClose }: {
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [capturing, setCapturing] = useState(false)
+  const [timedOut, setTimedOut] = useState(false)
   const baselineNewest = useRef<string | null>(null)
+  const pollCount = useRef(0)
+  // ~6 min at the 6s interval. A capture that never lands a row (e.g. the client
+  // has no website, so the job inserts nothing) would otherwise poll forever.
+  const MAX_POLLS = 60
 
   const { data: snapshots } = useQuery<SerpSnapshotListItem[]>({
     queryKey: ['serp-snapshots', keywordId],
@@ -32,12 +37,20 @@ export function SerpSnapshots({ keywordId, keyword, onClose }: {
   // While capturing, watch the list for a new snapshot row (the worker inserts it
   // when the capture finishes — or a 'failed' marker on a SERP error). When the
   // newest id changes from the pre-capture baseline, stop polling + auto-open it.
+  // Bounded so a capture that never persists a row can't spin indefinitely.
   useEffect(() => {
     if (!capturing) return
     const newest = snapshots?.[0]?.id ?? null
     if (newest && newest !== baselineNewest.current) {
       setCapturing(false)
+      pollCount.current = 0
       setSelectedId(newest)
+      return
+    }
+    pollCount.current += 1
+    if (pollCount.current >= MAX_POLLS) {
+      setCapturing(false)
+      setTimedOut(true)
     }
   }, [snapshots, capturing])
 
@@ -46,6 +59,8 @@ export function SerpSnapshots({ keywordId, keyword, onClose }: {
       api.post<SerpSnapshotCaptureResponse>(`/tracked-keywords/${keywordId}/serp-snapshot`, {}),
     onSuccess: () => {
       baselineNewest.current = snapshots?.[0]?.id ?? null
+      pollCount.current = 0
+      setTimedOut(false)
       setCapturing(true)
       queryClient.invalidateQueries({ queryKey: ['serp-snapshots', keywordId] })
     },
@@ -77,6 +92,12 @@ export function SerpSnapshots({ keywordId, keyword, onClose }: {
               <div style={hint}>
                 Capturing the live SERP + authority signals (~24 DataForSEO lookups). This can take a
                 minute — the snapshot appears below when it lands.
+              </div>
+            )}
+            {timedOut && (
+              <div style={{ ...hint, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
+                Still working — this capture is taking longer than expected. It keeps running in the
+                background; reopen this panel later to see it, or try again.
               </div>
             )}
             <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -130,6 +151,15 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
     for (const d of snap?.domains ?? []) if (d.domain) m.set(d.domain, d.domain_rating)
     return m
   }, [snap])
+
+  // The client's ranking page may surface on a www/subdomain host that isn't a
+  // key in drByDomain (DR is keyed on the canonical client domain). Fall back to
+  // the client domain row's DR for is_client result rows so the per-page DR column
+  // isn't blank for the client.
+  const clientDr = useMemo(
+    () => snap?.domains?.find(d => d.is_client)?.domain_rating ?? null,
+    [snap],
+  )
 
   if (isLoading) return <p style={{ color: '#94a3b8', fontSize: 13 }}>Loading snapshot…</p>
   if (!snap) return <p style={errorBox}>Snapshot not found.</p>
@@ -225,7 +255,7 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
                   </td>
                   <td style={td}>{numOrDash(r.referring_domains)}</td>
                   <td style={td}><Authority value={r.url_rating} status={r.backlinks_status} /></td>
-                  <td style={td}><Authority value={r.domain ? (drByDomain.get(r.domain) ?? null) : null} /></td>
+                  <td style={td}><Authority value={r.is_client ? clientDr : (r.domain ? drByDomain.get(r.domain) ?? null : null)} /></td>
                 </tr>
               ))}
             </tbody>

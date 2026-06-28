@@ -107,11 +107,15 @@ def find_client_organic(items: list[dict], domain: str) -> Optional[dict]:
 def collect_snapshot_domains(result_rows: list[dict], client_domain: str) -> list[dict]:
     """Deduped, ordered ``[{domain, is_client}, ...]`` to fetch Domain Rating for.
 
-    The whole-domain authority targets for a snapshot: every distinct domain
-    among the captured ranking pages (competitors + the client's own page),
-    plus the client's domain itself even when it doesn't rank in the fetched
-    depth (so the client always gets a DR row). Order is SERP order, with the
-    client domain appended last if it wasn't already present. Case-insensitive.
+    The whole-domain authority targets for a snapshot: every distinct competitor
+    domain among the captured ranking pages, plus exactly one row for the client's
+    own domain (always included, even when the client doesn't rank in the fetched
+    depth). The client's ranking page may surface on a www/subdomain host (e.g.
+    ``www.acme.com``) while the canonical client domain is the bare ``acme.com``
+    (``extract_domain`` strips ``www``); such hosts are folded into the single
+    canonical client row rather than emitted as a separate (mislabelled) target —
+    using the same suffix match as the rest of the module (``_domain_matches``).
+    Competitor order is SERP order; the client row is appended last. Case-insensitive.
     """
     out: list[dict] = []
     seen: set[str] = set()
@@ -121,8 +125,10 @@ def collect_snapshot_domains(result_rows: list[dict], client_domain: str) -> lis
         if not domain or domain in seen:
             continue
         seen.add(domain)
-        out.append({"domain": domain, "is_client": bool(cd) and domain == cd})
-    if cd and cd not in seen:
+        if cd and _domain_matches(domain, cd):
+            continue  # the client's own (sub)domain — folded into the cd row below
+        out.append({"domain": domain, "is_client": False})
+    if cd:
         out.append({"domain": cd, "is_client": True})
     return out
 

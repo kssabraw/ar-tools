@@ -164,8 +164,22 @@ def test_collect_snapshot_domains_dedupes_and_flags_client():
         {"domain": "other.com", "is_client": False},
     ]
     out = serp_snapshot.collect_snapshot_domains(rows, "acme.com")
-    assert [d["domain"] for d in out] == ["comp.com", "acme.com", "other.com"]
-    assert [d["is_client"] for d in out] == [False, True, False]
+    # Competitors in SERP order; the client's domain folded to a single row, last.
+    assert [d["domain"] for d in out] == ["comp.com", "other.com", "acme.com"]
+    assert [d["is_client"] for d in out] == [False, False, True]
+
+
+def test_collect_snapshot_domains_folds_client_www_subdomain():
+    # The client ranks on a www host while the canonical domain is bare (extract_
+    # _domain strips www). It must NOT appear as a separate competitor target.
+    rows = [
+        {"domain": "comp.com", "is_client": False},
+        {"domain": "www.acme.com", "is_client": True},  # client's own page
+    ]
+    out = serp_snapshot.collect_snapshot_domains(rows, "acme.com")
+    assert [d["domain"] for d in out] == ["comp.com", "acme.com"]
+    assert [d["is_client"] for d in out] == [False, True]
+    assert sum(d["is_client"] for d in out) == 1  # exactly one client row, no dup
 
 
 def test_collect_snapshot_domains_appends_client_when_absent():
