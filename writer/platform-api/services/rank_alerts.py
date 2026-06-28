@@ -188,6 +188,19 @@ def detect_alerts(
     return signals
 
 
+def summarize_drop_alerts(opened_alerts: list[dict]) -> dict:
+    """A {title, summary, severity} digest for a batch of newly-opened drop
+    alerts, for the notification copy. Pure (unit-tested)."""
+    n = len(opened_alerts)
+    severity = "critical" if any(a.get("alert_type") == "deindexed" for a in opened_alerts) else "warning"
+    title = f"{n} ranking {'drop' if n == 1 else 'drops'} detected"
+    msgs = [a.get("message", "") for a in opened_alerts[:5]]
+    summary = " ".join(m for m in msgs if m)
+    if n > 5:
+        summary += f" …and {n - 5} more."
+    return {"title": title, "summary": summary, "severity": severity}
+
+
 # ----------------------------------------------------------------------------
 # Reconcile (I/O) — open/resolve the episode log.
 # ----------------------------------------------------------------------------
@@ -254,10 +267,15 @@ def reconcile_alerts(
             extra={"client_id": client_id, "opened": len(inserts), "resolved": len(resolve_ids)},
         )
     # Keywords with a newly-opened alert this run — the caller uses these to
-    # trigger a (rate-limited) rankability snapshot for the dropped keyword.
+    # trigger a (rate-limited) rankability snapshot + a notification.
     opened_keyword_ids = sorted({i["keyword_id"] for i in inserts})
+    opened_alerts = [
+        {"keyword": i["keyword"], "alert_type": i["alert_type"], "message": i["message"]}
+        for i in inserts
+    ]
     return {
         "opened": len(inserts),
         "resolved": len(resolve_ids),
         "opened_keyword_ids": opened_keyword_ids,
+        "opened_alerts": opened_alerts,
     }

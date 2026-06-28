@@ -1,6 +1,50 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **GSC Research auto-cadence (first run + monthly)** (latest)
+## ⏩ Update — 2026-06-28 · **Notifications service (in-app + email + Slack)** (latest)
+
+The suite's long-deferred **notifications service** — the shared delivery pipe for
+in-app alerts, email, and Slack. Built as **PR 1 of 2** toward the reoptimization
+planner (the planner is PR 2; this proves the pipe on the existing rank-drop
+alerts first). On branch `claude/notifications-service` — **draft PR**.
+
+**Decisions (user):** email = **SMTP (Gmail/Workspace)**; Slack = **app bot token**;
+planner cadence = **weekly digest + on-drop** (planner build is PR 2).
+
+- `services/notifications.py::emit(client_id, kind, title, summary, severity, payload)`
+  — writes a `notifications` row (in-app feed) + enqueues a `notification_dispatch`
+  async job that sends email (`smtplib`, via `asyncio.to_thread`) + Slack
+  (`chat.postMessage`) **best-effort, each gated on its creds**. `emit` never
+  raises into the producer. Pure format/gating helpers unit-tested.
+- **First producer:** rank-drop alerts. `reconcile_alerts` now returns
+  `opened_alerts`; `rank_materialize` calls `emit` with a batched digest
+  (`summarize_drop_alerts`) when new alerts open (severity critical if a deindex
+  is among them).
+- **In-app surfaces:** a red unread badge per client tile on **Home**
+  (`/notifications/unread-counts`) + an **Alerts panel** in the client workspace
+  (`components/ClientNotifications.tsx`) with mark-read / dismiss / mark-all-read,
+  deep-linking via `payload.link`.
+- **API:** `routers/notifications.py` — unread-counts, per-client feed,
+  read/dismiss/read-all.
+- **Config on PLATFORM (to provision):** `SMTP_HOST/PORT/USER/PASSWORD/FROM`,
+  `NOTIFY_EMAIL_TO`, `SLACK_BOT_TOKEN`, `SLACK_DEFAULT_CHANNEL`, `APP_BASE_URL`.
+  Until set, in-app works and email/Slack are skipped (channels_sent records it).
+
+**Migrations (applied; filenames = recorded versions):** `…054924_notifications`
+(table + `notification_dispatch` job type) and `…055434_async_jobs_jobtype_complete`
+— a **drift fix**: the `async_jobs.job_type` CHECK was missing `local_seo_generate`,
+`local_seo_reoptimize_url/page`, `brand_scan`, `brand_report` (dispatched by the
+worker but not allowed — latent, none enqueued yet); recreated as the full set.
+
+**Verified:** import main + **576 tests** on pinned fastapi==0.115.0/pydantic==2.9.2
+(8 new); ruff clean (my files); frontend build clean. Email/Slack only run on
+Railway once creds are set — first real drop is the live proof.
+
+**Next:** PR 2 — the reoptimization planner as the second producer (weekly digest
++ on-drop), emitting through this pipe.
+
+---
+
+## ⏩ Update — 2026-06-28 · **GSC Research auto-cadence (first run + monthly)**
 
 GSC Research (cannibalization / quick wins / hidden wins — the n8n port) was
 **on-demand only**; now it also runs **automatically on first GSC-eligibility and

@@ -267,6 +267,19 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
             from services import serp_snapshot
 
             serp_snapshot.enqueue_drop_triggered_snapshots(client_id, opened_ids, today)
+        opened_alerts = result.get("opened_alerts") or []
+        if opened_alerts:
+            from services import notifications
+
+            digest = rank_alerts.summarize_drop_alerts(opened_alerts)
+            notifications.emit(
+                client_id=client_id,
+                kind="rank_drop",
+                title=digest["title"],
+                summary=digest["summary"],
+                severity=digest["severity"],
+                payload={"link": f"clients/{client_id}/rankings", "alerts": opened_alerts},
+            )
     except Exception as exc:
         logger.warning("rank_alerts_reconcile_failed", extra={"client_id": client_id, "error": str(exc)})
 

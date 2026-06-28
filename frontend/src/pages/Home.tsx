@@ -2,8 +2,8 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import type { ClientListItem, ClientRankingHealth, RankingHealthResponse, RankingTrend } from '../lib/types'
-import { Plus, Globe } from 'lucide-react'
+import type { ClientListItem, ClientRankingHealth, RankingHealthResponse, RankingTrend, UnreadCountsResponse } from '../lib/types'
+import { Plus, Globe, Bell } from 'lucide-react'
 
 function initials(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
@@ -64,6 +64,14 @@ export function Home() {
   })
   const healthByClient = new Map((rankingResp?.clients ?? []).map(c => [c.client_id, c]))
 
+  // Unread notification count per client → the card badge.
+  const { data: unreadResp } = useQuery<UnreadCountsResponse>({
+    queryKey: ['notification-unread-counts'],
+    queryFn: () => api.get<UnreadCountsResponse>('/notifications/unread-counts'),
+    refetchInterval: 60000,
+  })
+  const unreadByClient = new Map((unreadResp?.counts ?? []).map(u => [u.client_id, u.count]))
+
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 4px' }}>Dashboard</h1>
@@ -76,7 +84,12 @@ export function Home() {
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
           {clients.map(c => (
-            <Link key={c.id} to={`/clients/${c.id}`} style={tileStyle}>
+            <Link key={c.id} to={`/clients/${c.id}`} style={{ ...tileStyle, position: 'relative' }}>
+              {(unreadByClient.get(c.id) ?? 0) > 0 && (
+                <span style={notifyBadge} title={`${unreadByClient.get(c.id)} new alert${unreadByClient.get(c.id) === 1 ? '' : 's'}`}>
+                  <Bell size={11} /> {unreadByClient.get(c.id)}
+                </span>
+              )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 {c.logo_url ? (
                   <img
@@ -125,6 +138,12 @@ const tileStyle: React.CSSProperties = {
   borderRadius: 12,
   padding: 20,
   textDecoration: 'none',
+}
+const notifyBadge: React.CSSProperties = {
+  position: 'absolute', top: 10, right: 10,
+  display: 'inline-flex', alignItems: 'center', gap: 3,
+  fontSize: 11, fontWeight: 700, color: '#fff', background: '#dc2626',
+  borderRadius: 999, padding: '2px 8px',
 }
 const threatLabel: React.CSSProperties = {
   fontSize: 10, fontWeight: 600, color: '#94a3b8',
