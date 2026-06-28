@@ -86,6 +86,9 @@ class ClientDetail(BaseModel):
     created_at: str
     updated_at: str
     google_drive_folder_id: Optional[str] = None
+    # Per-content-type Drive folders (content_type slug → folder ID). The
+    # type-specific folder wins; google_drive_folder_id is the fallback.
+    drive_folders: dict[str, str] = Field(default_factory=dict)
     # Publish-target scaffold (#3): GitHub repo the Fanout/Blog content can be
     # committed to (resolved per-client when publishing). Wired, used later.
     github_repo: Optional[str] = None
@@ -122,6 +125,7 @@ class ClientCreateRequest(BaseModel):
     icp_text: str = ""
     icp_file_id: Optional[UUID] = None
     google_drive_folder_id: Optional[str] = None
+    drive_folders: Optional[dict[str, str]] = None
     # Publish-target scaffold (#3): GitHub repo the Fanout/Blog content can be
     # committed to (resolved per-client when publishing). Wired, used later.
     github_repo: Optional[str] = None
@@ -153,6 +157,7 @@ class ClientUpdateRequest(BaseModel):
     icp_text: Optional[str] = None
     icp_file_id: Optional[UUID] = None
     google_drive_folder_id: Optional[str] = None
+    drive_folders: Optional[dict[str, str]] = None
     # Publish-target scaffold (#3): GitHub repo the Fanout/Blog content can be
     # committed to (resolved per-client when publishing). Wired, used later.
     github_repo: Optional[str] = None

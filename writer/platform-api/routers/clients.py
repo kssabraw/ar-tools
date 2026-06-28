@@ -237,6 +237,8 @@ async def create_client(
         row["gbp"] = body.gbp.model_dump()
     if body.target_cities is not None:
         row["target_cities"] = body.target_cities
+    if body.drive_folders is not None:
+        row["drive_folders"] = body.drive_folders
     # Reference page structures: seed the pending entries so the row reflects the
     # configured URLs immediately; the scrape jobs are enqueued after insert.
     page_structures, ps_to_enqueue = _sync_page_structures({}, body.page_structure_urls)
@@ -323,6 +325,8 @@ async def update_client(
             )
     if body.google_drive_folder_id is not None:
         updates["google_drive_folder_id"] = body.google_drive_folder_id
+    if body.drive_folders is not None:
+        updates["drive_folders"] = body.drive_folders
     if body.github_repo is not None:
         updates["github_repo"] = body.github_repo
     if body.github_branch is not None:

@@ -14,7 +14,7 @@ from typing import Literal, Optional
 from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
-from services.google_docs import GoogleDocError, create_google_doc
+from services.google_docs import GoogleDocError, create_google_doc, resolve_drive_folder
 from services.markdown_html import markdown_to_html
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
 
@@ -152,7 +152,7 @@ async def publish_run(
     client_result = (
         supabase.table("clients")
         .select(
-            "name, google_drive_folder_id, "
+            "name, google_drive_folder_id, drive_folders, "
             "wordpress_site_url, wordpress_username, wordpress_app_password"
         )
         .eq("id", run["client_id"])
@@ -213,7 +213,7 @@ async def publish_run(
             status_code=503,
             detail="publish_not_configured: GOOGLE_APPS_SCRIPT_URL is not set",
         )
-    folder_id = client.get("google_drive_folder_id")
+    folder_id = resolve_drive_folder(client, content_type)
     if not folder_id:
         raise HTTPException(
             status_code=422,

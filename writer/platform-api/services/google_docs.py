@@ -28,6 +28,21 @@ class GoogleDocError(RuntimeError):
     """Raised when the Apps Script webhook is unconfigured or fails."""
 
 
+def resolve_drive_folder(client: dict, content_type: str | None) -> str | None:
+    """Pick the Drive folder a piece of content publishes into.
+
+    Clients carry a per-content-type folder map (`drive_folders`, keyed by
+    content_type slug) plus a single default folder (`google_drive_folder_id`).
+    Return the type-specific folder when one is set, otherwise fall back to the
+    default — so a client with no per-type config still publishes everywhere."""
+    folders = client.get("drive_folders")
+    if content_type and isinstance(folders, dict):
+        specific = folders.get(content_type)
+        if specific:
+            return specific
+    return client.get("google_drive_folder_id")
+
+
 async def create_google_doc(
     folder_id: str, title: str, content: str, *, content_format: str = "markdown"
 ) -> dict:
