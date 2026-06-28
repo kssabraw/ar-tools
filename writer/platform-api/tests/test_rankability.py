@@ -74,6 +74,27 @@ def test_band_thresholds():
     ))["band"] == "Easy"
 
 
+def test_topical_specialist_offsets_weak_backlinks():
+    # Strong-ish incumbent backlinks but all generalists; client has weak backlinks.
+    serp = _inp(
+        top_ur=[300, 320, 310], top_rd=[200, 220, 210], competitor_dr=[400, 420, 410],
+        targeted_count=8, top_count=10,
+        client_ur=20, client_rd=10, client_dr=80,
+        generalist_count=9, client_topical_focus="specialist",
+    )
+    specialist = rankability.score_keyword(serp)
+    generalist = rankability.score_keyword({**serp, "client_topical_focus": "generalist"})
+    assert specialist["score"] > generalist["score"]
+    assert any("specialist" in f["text"] for f in specialist["factors"])
+
+
+def test_rankability_scores_without_topical_data():
+    # No generalist_count / focus → topical sub-score excluded, weights renormalized.
+    out = rankability.score_keyword(_inp())
+    assert 0 <= out["score"] <= 100
+    assert out["band"] in ("Easy", "Moderate", "Hard", "Very hard")
+
+
 def test_median_robust_to_single_outlier():
     # One giant brand shouldn't tank an otherwise-weak SERP (median, not mean).
     out = rankability.score_keyword(_inp(

@@ -712,11 +712,12 @@ async def get_serp_snapshot(
             "id", "keyword_id", "client_id", "keyword", "captured_at", "status",
             "location_code", "language_code", "query_intent", "intent_probabilities",
             "local_intent", "intent_signals", "aio_present", "aio_text", "aio_sources",
-            "serp_features", "targeted_count", "client_rank", "client_url", "error",
+            "serp_features", "targeted_count", "keyword_topic", "generalist_count",
+            "client_topical_focus", "client_rank", "client_url", "error",
         )},
         results=[SerpSnapshotResultRow(**{k: r.get(k) for k in (
             "position", "url", "domain", "title", "description", "is_client", "targeted",
-            "referring_domains", "url_rating", "backlinks", "backlinks_status",
+            "topical_focus", "referring_domains", "url_rating", "backlinks", "backlinks_status",
         )}) for r in results],
         domains=[SerpSnapshotDomainRow(**{k: d.get(k) for k in (
             "domain", "is_client", "domain_rating", "referring_domains",

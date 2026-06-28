@@ -1,6 +1,36 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **Rankability score + Quick wins** (latest)
+## ⏩ Update — 2026-06-28 · **Topical focus (specialist vs generalist)** (latest)
+
+Added a **topical-specialization** signal to the SERP snapshot + rankability: a
+niche site dedicated to the keyword's topic can out-rank generalist incumbents
+*even with weaker backlinks*, so a generalist-dominated SERP is an opening for a
+specialist client. Part of PR #156 (draft).
+
+- **Classifier:** one best-effort **Claude Haiku** call per snapshot
+  (`classify_topical_focus`, `serp_topic_model`) labels each ranking site +
+  the client **specialist / generalist / unknown** from domain + title + snippet,
+  and names the keyword's core topic. First LLM call in the snapshot pipeline
+  (otherwise pure DataForSEO) — needs `ANTHROPIC_API_KEY` on PLATFORM (already
+  present for maps/brand). Pure parser `parse_topical_classification` unit-tested.
+- **Persisted:** `serp_snapshots.keyword_topic / generalist_count /
+  client_topical_focus` + `serp_snapshot_results.topical_focus` (migration
+  20260628040255).
+- **Rankability:** new **topical-opening** sub-score (weight **0.25**, second only
+  to competition weakness) — generalist SERP + specialist client boosts the score
+  and **offsets weak backlinks**; weights renormalize when a snapshot has no
+  topical data. Surfaces as a driving factor ("Incumbents are generalists; you're
+  a topic specialist").
+- **Viewer:** "generalist" row tags + a "Topic X · N of M incumbents are
+  generalists · you're a specialist (an edge here)" summary.
+
+**Verified:** import main + **562 tests** on pinned fastapi==0.115.0/pydantic==2.9.2
+(6 new parser/scorer cases); ruff clean; frontend build clean. The Haiku call only
+runs on Railway (sandbox has no key/egress) — first live snapshot is the proof.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Rankability score + Quick wins**
 
 A client-relative **rankability** score per tracked keyword — how realistically
 *this* client can win it — on a new **"Rankability"** tab in the Rankings page.

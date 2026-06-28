@@ -231,6 +231,7 @@ class SerpSnapshotResultRow(BaseModel):
     description: Optional[str] = None
     is_client: bool = False
     targeted: Optional[bool] = None  # page written for the keyword (title/slug coverage)
+    topical_focus: Optional[str] = None  # specialist | generalist | unknown (site's topic focus)
     referring_domains: Optional[int] = None
     url_rating: Optional[int] = None  # DataForSEO page rank (0–1000), UR-equivalent
     backlinks: Optional[int] = None
@@ -264,6 +265,9 @@ class SerpSnapshotDetail(BaseModel):
     aio_sources: Optional[list] = None
     serp_features: Optional[dict] = None
     targeted_count: Optional[int] = None  # # of top organic results written for the keyword
+    keyword_topic: Optional[str] = None
+    generalist_count: Optional[int] = None  # # of top incumbents that are generalists
+    client_topical_focus: Optional[str] = None  # specialist | generalist | unknown
     client_rank: Optional[int] = None
     client_url: Optional[str] = None
     error: Optional[str] = None

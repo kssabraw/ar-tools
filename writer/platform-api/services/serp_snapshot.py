@@ -158,6 +158,123 @@ def count_targeted(keyword: str, organic: list[dict]) -> int:
     return sum(1 for o in organic if is_page_targeted(keyword, o.get("title"), o.get("url")))
 
 
+# Topical focus — does a ranking SITE specialise in the keyword's topic, or is it
+# a generalist where the topic is one of many things? A topic specialist can
+# out-rank generalist incumbents even with weaker backlinks, so a generalist-
+# dominated SERP is an opening for a specialist client (a rankability input).
+# One cheap Haiku call per snapshot classifies each ranking site + the client.
+_TOPIC_TOOL = {
+    "name": "emit_classification",
+    "description": "Classify each ranking site and the client as a topic specialist or generalist.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "topic": {"type": "string", "description": "The core topic/service the keyword is about."},
+            "client_focus": {
+                "type": "string",
+                "enum": ["specialist", "generalist", "unknown"],
+                "description": "Is the client business primarily about this topic (specialist) or broader (generalist)?",
+            },
+            "sites": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "domain": {"type": "string"},
+                        "focus": {"type": "string", "enum": ["specialist", "generalist", "unknown"]},
+                    },
+                    "required": ["domain", "focus"],
+                },
+            },
+        },
+        "required": ["topic", "client_focus", "sites"],
+    },
+}
+
+_TOPIC_SYSTEM = (
+    "You judge topical specialisation for SEO. Given a search keyword and a list of "
+    "ranking websites (domain + page title + snippet), decide for each whether the "
+    "SITE is a SPECIALIST — primarily/only about the keyword's topic — or a "
+    "GENERALIST, where the topic is just one of many services/subjects it covers. "
+    "Example: for 'tire installation', a dedicated tire shop is a specialist; a "
+    "general 'car repair' shop that also does tires is a generalist. Use 'unknown' "
+    "only when there's genuinely no signal. Also classify the client business and "
+    "name the keyword's core topic."
+)
+
+
+def parse_topical_classification(
+    tool_input: dict, competitor_domains: list[str], client_domain: str
+) -> dict:
+    """Normalize the classifier tool output into
+    ``{topic, by_domain: {domain: focus}, client_focus, generalist_count}``.
+
+    `generalist_count` counts the competitor domains (excluding the client) the
+    model labelled 'generalist'. Pure — independently unit-tested.
+    """
+    valid = {"specialist", "generalist", "unknown"}
+    topic = (tool_input.get("topic") or "").strip() or None
+    client_focus = tool_input.get("client_focus")
+    if client_focus not in valid:
+        client_focus = "unknown"
+    by_domain: dict[str, str] = {}
+    for s in tool_input.get("sites") or []:
+        d = (s.get("domain") or "").lower().strip()
+        f = s.get("focus")
+        if d and f in valid:
+            by_domain[d] = f
+    cd = (client_domain or "").lower()
+    generalist_count = sum(
+        1 for d in competitor_domains if d and d != cd and by_domain.get(d) == "generalist"
+    )
+    return {
+        "topic": topic,
+        "by_domain": by_domain,
+        "client_focus": client_focus,
+        "generalist_count": generalist_count,
+    }
+
+
+async def classify_topical_focus(keyword: str, organic: list[dict], client: dict) -> dict:
+    """Haiku call → topical-focus labels for the top results + the client.
+
+    Best-effort: any failure returns an empty dict so the snapshot still completes
+    (topical focus simply stays unknown, and rankability degrades gracefully).
+    """
+    import anthropic  # lazy — keep the pure helpers import-free
+
+    sites = [
+        {"domain": o.get("domain"), "title": o.get("title"), "snippet": o.get("description")}
+        for o in organic
+        if o.get("domain")
+    ]
+    if not sites:
+        return {}
+    client_line = (
+        f"Client business: name={client.get('name')!r}, website={client.get('website_url')!r}"
+        f"{', category=' + repr(client['category']) if client.get('category') else ''}"
+    )
+    user = (
+        f"Keyword: {keyword!r}\n{client_line}\n\nRanking sites:\n"
+        + "\n".join(
+            f"- {s['domain']} | {s.get('title') or ''} | {s.get('snippet') or ''}" for s in sites
+        )
+    )
+    api_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    response = await api_client.messages.create(
+        model=settings.serp_topic_model,
+        max_tokens=settings.serp_topic_max_tokens,
+        system=_TOPIC_SYSTEM,
+        tools=[_TOPIC_TOOL],
+        tool_choice={"type": "tool", "name": "emit_classification"},
+        messages=[{"role": "user", "content": user}],
+    )
+    for block in response.content:
+        if getattr(block, "type", None) == "tool_use" and block.name == "emit_classification":
+            return block.input or {}
+    return {}
+
+
 def collect_snapshot_domains(result_rows: list[dict], client_domain: str) -> list[dict]:
     """Deduped, ordered ``[{domain, is_client}, ...]`` to fetch Domain Rating for.
 
@@ -561,6 +678,31 @@ async def _capture_and_store(
     # below-depth extra row, appended after `organic`, is excluded from the count).
     targeted_count = sum(1 for r in result_rows[: len(organic)] if r.get("targeted"))
 
+    # Topical focus (specialist vs generalist) — one best-effort Haiku call.
+    keyword_topic = None
+    generalist_count = None
+    client_topical_focus = None
+    gbp = client.get("gbp") if isinstance(client.get("gbp"), dict) else {}
+    client_ctx = {
+        "name": client.get("name"),
+        "website_url": client.get("website_url"),
+        "category": (gbp or {}).get("category") or ((gbp or {}).get("categories") or [None])[0],
+    }
+    try:
+        raw_topic = await classify_topical_focus(keyword, organic, client_ctx)
+        if raw_topic:
+            comp_domains = [(o.get("domain") or "").lower() for o in organic if o.get("domain")]
+            parsed = parse_topical_classification(raw_topic, comp_domains, domain)
+            keyword_topic = parsed["topic"]
+            client_topical_focus = parsed["client_focus"]
+            generalist_count = parsed["generalist_count"]
+            for r in result_rows:
+                lbl = parsed["by_domain"].get((r.get("domain") or "").lower())
+                if lbl:
+                    r["topical_focus"] = lbl
+    except Exception as exc:
+        logger.warning("serp_snapshot_topic_failed", extra={"keyword": keyword, "error": str(exc)})
+
     # Backlinks enrichment (the pricier per-URL calls), isolated per URL.
     any_backlinks_failed = False
     for row in result_rows:
@@ -620,6 +762,9 @@ async def _capture_and_store(
                 "aio_sources": aio["sources"] or None,
                 "serp_features": features,
                 "targeted_count": targeted_count,
+                "keyword_topic": keyword_topic,
+                "generalist_count": generalist_count,
+                "client_topical_focus": client_topical_focus,
                 "client_rank": client_rank,
                 "client_url": client_url,
             }
@@ -640,6 +785,7 @@ async def _capture_and_store(
                     "description": r.get("description"),
                     "is_client": r.get("is_client", False),
                     "targeted": r.get("targeted"),
+                    "topical_focus": r.get("topical_focus"),
                     "referring_domains": r.get("referring_domains"),
                     "url_rating": r.get("url_rating"),
                     "backlinks": r.get("backlinks"),
@@ -696,7 +842,7 @@ async def capture_client_snapshots(
     supabase = get_supabase()
     client_res = (
         supabase.table("clients")
-        .select("id, name, website_url, rank_tracking_location_code")
+        .select("id, name, website_url, gbp, rank_tracking_location_code")
         .eq("id", client_id)
         .limit(1)
         .execute()

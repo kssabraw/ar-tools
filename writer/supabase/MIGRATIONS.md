@@ -80,6 +80,7 @@ expected for a shared project, not a problem.
 | `20260628022039` | `serp_snapshot_local_intent` (#4 — derived local-intent flag on a snapshot) |
 | `20260628024053` | `serp_snapshot_intent_signals` (#4 — derived SERP/title intent signals on a snapshot) |
 | `20260628032756` | `serp_snapshot_targeted` (#4 — per-result "written for keyword" flag + top-N targeted_count) |
+| `20260628040255` | `serp_snapshot_topical_focus` (#4 — specialist/generalist site focus + keyword topic) |
 
 > A few `schema_migrations.name` values carry version suffixes (`_v1_4`, `_v2_0`)
 > from how they were originally applied. The CLI matches on the numeric version,
@@ -87,6 +88,13 @@ expected for a shared project, not a problem.
 > the same migration.
 
 ## Reconciliation log
+
+**2026-06-28** — SERP Snapshot topical focus (#4): added `keyword_topic`,
+`generalist_count`, `client_topical_focus` to `serp_snapshots` and `topical_focus`
+to `serp_snapshot_results` (specialist vs generalist site classification, a
+rankability input). Applied via the Supabase MCP; recorded version
+`20260628040255`, file renamed from its `…140000` placeholder + header updated.
+Additive, nullable (best-effort Haiku classification at capture). No RLS change.
 
 **2026-06-28** — SERP Snapshot topical targeting (#4): added `targeted_count`
 (int) to `serp_snapshots` and `targeted` (bool) to `serp_snapshot_results` —

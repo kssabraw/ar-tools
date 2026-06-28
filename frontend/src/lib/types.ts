@@ -838,6 +838,7 @@ export interface SerpSnapshotResultRow {
   description: string | null
   is_client: boolean
   targeted: boolean | null // page written for the keyword (title/slug coverage)
+  topical_focus: string | null // specialist | generalist | unknown
   referring_domains: number | null
   url_rating: number | null // DataForSEO page rank (0–1000), UR-equivalent
   backlinks: number | null
@@ -877,6 +878,9 @@ export interface SerpSnapshotDetail {
   aio_sources: SerpAioSource[] | null
   serp_features: Record<string, unknown> | null
   targeted_count: number | null
+  keyword_topic: string | null
+  generalist_count: number | null
+  client_topical_focus: string | null
   client_rank: number | null
   client_url: string | null
   error: string | null

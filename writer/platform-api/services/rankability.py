@@ -28,11 +28,18 @@ from typing import Optional
 from db.supabase_client import get_supabase
 from services import keyword_market
 
-# Sub-score blend (sums to 1.0). Competition weakness dominates; capability next.
-_W_WEAKNESS = 0.40
-_W_CAPABILITY = 0.25
-_W_TARGETING = 0.20
-_W_OPPORTUNITY = 0.15
+# Sub-score blend (sums to 1.0). Competition weakness dominates; topical focus is
+# a heavy second so a specialist can win a generalist SERP even with weaker
+# backlinks. When a sub-score is unavailable (e.g. no topical classification on an
+# old/failed snapshot) its weight is redistributed across the rest.
+_W_WEAKNESS = 0.30
+_W_TOPICAL = 0.25
+_W_CAPABILITY = 0.20
+_W_TARGETING = 0.15
+_W_OPPORTUNITY = 0.10
+
+# Bonus added to the topical sub-score when the client itself is a specialist.
+_TOPICAL_SPECIALIST_BONUS = 25
 
 # Backlink-metric weights inside an authority figure: RD > UR > DR (user's order).
 _A_RD, _A_UR, _A_DR = 0.5, 0.3, 0.2
@@ -113,23 +120,43 @@ def score_keyword(inp: dict) -> dict:
     )
     opportunity = _clamp(100.0 - penalty)
 
-    score = (
-        _W_WEAKNESS * weakness
-        + _W_CAPABILITY * capability
-        + _W_TARGETING * targeting
-        + _W_OPPORTUNITY * opportunity
-    )
-    score = int(round(_clamp(score)))
+    # 5) Topical opening — generalist-dominated SERP + a specialist client = an
+    # opening even with weaker backlinks. Available only when the snapshot was
+    # classified (else its weight is redistributed).
+    focus = inp.get("client_topical_focus")
+    generalist_count = inp.get("generalist_count")
+    topical_available = focus is not None or generalist_count is not None
+    gen_frac = (generalist_count / top_count) if (generalist_count is not None and top_count) else 0.0
+    topical = gen_frac * 100.0
+    if focus == "specialist":
+        topical = _clamp(topical + _TOPICAL_SPECIALIST_BONUS)
+    elif focus == "generalist":
+        topical = topical * 0.7  # we're also a generalist — less of an edge
+
+    # Weighted blend over available sub-scores (weights renormalized).
+    parts = [
+        (weakness, _W_WEAKNESS, True),
+        (capability, _W_CAPABILITY, True),
+        (targeting, _W_TARGETING, top_count > 0),
+        (opportunity, _W_OPPORTUNITY, True),
+        (topical, _W_TOPICAL, topical_available),
+    ]
+    total_w = sum(w for _, w, ok in parts if ok) or 1.0
+    score = int(round(_clamp(sum(v * w for v, w, ok in parts if ok) / total_w)))
 
     band = next(label for threshold, label in _BANDS if score >= threshold)
     return {
         "score": score,
         "band": band,
-        "factors": _factors(weakness, targeting, capability, opportunity, inp, top_count, targeted),
+        "factors": _factors(
+            weakness, targeting, capability, opportunity, topical, topical_available,
+            inp, top_count, targeted,
+        ),
     }
 
 
-def _factors(weakness, targeting, capability, opportunity, inp, top_count, targeted) -> list[dict]:
+def _factors(weakness, targeting, capability, opportunity, topical, topical_available,
+             inp, top_count, targeted) -> list[dict]:
     """The 2–3 sub-scores furthest from neutral (50), weighted by their blend
     weight, rendered as human-readable drivers with a direction."""
     loose = top_count - targeted
@@ -138,6 +165,17 @@ def _factors(weakness, targeting, capability, opportunity, inp, top_count, targe
     impact = (weakness - 50) * _W_WEAKNESS
     cands.append((impact, "Top-10 backlink authority is low" if impact >= 0
                   else "Top-10 are high-authority pages", "up" if impact >= 0 else "down"))
+
+    if topical_available:
+        impact = (topical - 50) * _W_TOPICAL
+        focus = inp.get("client_topical_focus")
+        if focus == "specialist" and impact >= 0:
+            text = "Incumbents are generalists; you're a topic specialist"
+        elif impact >= 0:
+            text = "Incumbents aren't topic-focused"
+        else:
+            text = "Incumbents are topic specialists"
+        cands.append((impact, text, "up" if impact >= 0 else "down"))
 
     if top_count:
         impact = (targeting - 50) * _W_TARGETING
@@ -175,7 +213,8 @@ def _factors(weakness, targeting, capability, opportunity, inp, top_count, targe
 def _latest_snapshot_per_keyword(supabase, client_id: str) -> dict[str, dict]:
     rows = (
         supabase.table("serp_snapshots")
-        .select("id, keyword_id, captured_at, targeted_count, aio_present, intent_signals, client_rank")
+        .select("id, keyword_id, captured_at, targeted_count, aio_present, intent_signals, "
+                "generalist_count, client_topical_focus, client_rank")
         .eq("client_id", client_id)
         .in_("status", ["complete", "partial"])
         .order("captured_at", desc=True)
@@ -268,6 +307,8 @@ def get_client_rankability(client_id: str, today: Optional[date] = None) -> dict
                 "client_dr": (client_dr_row or {}).get("domain_rating"),
                 "aio_present": bool(snap.get("aio_present")),
                 "signals": snap.get("intent_signals") or [],
+                "generalist_count": snap.get("generalist_count"),
+                "client_topical_focus": snap.get("client_topical_focus"),
                 "client_rank": snap.get("client_rank"),
             }
         )

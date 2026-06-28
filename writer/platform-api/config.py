@@ -110,6 +110,13 @@ class Settings(BaseSettings):
     # The full templated report (10 sections + 4 tables) is large; too small a
     # budget truncates the forced tool-use JSON and yields an empty summary.
     maps_report_max_tokens: int = 8192
+
+    # Competitive SERP Snapshot — topical-focus classifier. One cheap Haiku call
+    # per snapshot labels each ranking site (and the client) specialist vs
+    # generalist for the keyword's topic (a rankability input: a specialist can
+    # out-rank generalist incumbents even with weaker backlinks). Best-effort.
+    serp_topic_model: str = "claude-haiku-4-5-20251001"
+    serp_topic_max_tokens: int = 1024
     maps_report_competitor_min_rating: float = 4.7
     maps_report_octant_rule: str = "R1"
     # Weak-zone geocoding (turns the geo-grid's weakest pins into real city names

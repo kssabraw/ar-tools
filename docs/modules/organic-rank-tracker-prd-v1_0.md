@@ -346,6 +346,7 @@ A **dated competitive snapshot** for a tracked keyword: the live SERP landscape 
 - **Per ranking page** (each top-10 competitor page **and** the client's ranking/canonical page): **referring domains** (page-level count) + **UR** (URL Rating).
 - **Per domain** (each competitor domain **and** the client's domain): **Domain Rating (DR)** for the whole domain.
 - **Topical targeting** — whether each ranking page is **written for the keyword** (title/URL-slug token coverage), and **how many of the top results are** (`targeted_count`). Loosely-relevant incumbents (homepages, tangential posts) = an opening a purpose-built page can take — a rankability input. Derived for free from the captured title/URL; the viewer marks "loose match" rows and shows an "N of M written for this keyword" summary.
+- **Topical focus** — whether each ranking **site** is a **specialist** (primarily about the keyword's topic) or a **generalist** (the topic is one of many things), plus the keyword's core **topic**, the count of generalist incumbents, and the **client's own focus**. A topic specialist can out-rank generalist incumbents *even with weaker backlinks*, so a generalist-dominated SERP is an opening for a specialist client — a rankability input. Classified by one cheap **Claude Haiku** call per snapshot from domain + title + snippet (`classify_topical_focus`; best-effort, needs `ANTHROPIC_API_KEY` on PLATFORM — already present); the viewer tags "generalist" rows + shows a topic/focus summary.
 
 The client's ranking URL comes from the tracker's already-resolved `tracked_keywords.canonical_url` (or the client domain's position in the fetched SERP).
 
@@ -377,10 +378,11 @@ Over-time + cross-keyword views over the dated snapshot archive — a **"SERP Tr
 Pure helpers (deltas, as-of prevalence, change digest) are unit-tested. This is the read foundation for a future **automated reoptimization planner** (track SERP + competition change → recommend actions).
 
 ### 14.5 Rankability (built)
-A **client-relative rankability score** per tracked keyword — how realistically *this* client can win it — computed on read from the keyword's latest SERP snapshot (`services/rankability.py`, `GET /clients/{id}/rank/rankability`, **"Rankability"** tab `components/rankings/Rankability.tsx`). **Score 0–100 + band** (Easy / Moderate / Hard / Very hard; higher = more winnable, the inverse of keyword difficulty), each with its **2–3 driving factors** (not a black box). Four blended sub-scores:
-- **competition weakness** (0.40) — low top-10 backlink authority, weighted **RD > UR > DR** (medians, robust to one outlier brand);
-- **client capability** (0.25) — the client's authority vs the incumbents' + rank momentum;
-- **targeting gap** (0.20) — how many top results are loose matches (not written for the keyword);
-- **SERP opportunity** (0.15) — click real-estate left after AIO / shopping crowding.
+A **client-relative rankability score** per tracked keyword — how realistically *this* client can win it — computed on read from the keyword's latest SERP snapshot (`services/rankability.py`, `GET /clients/{id}/rank/rankability`, **"Rankability"** tab `components/rankings/Rankability.tsx`). **Score 0–100 + band** (Easy / Moderate / Hard / Very hard; higher = more winnable, the inverse of keyword difficulty), each with its **2–3 driving factors** (not a black box). Five blended sub-scores (a sub-score with no data — e.g. topical focus on an old snapshot — has its weight redistributed):
+- **competition weakness** (0.30) — low top-10 backlink authority, weighted **RD > UR > DR** (medians, robust to one outlier brand);
+- **topical opening** (0.25) — generalist-dominated SERP + a **specialist** client = an opening that can offset weaker backlinks;
+- **client capability** (0.20) — the client's authority vs the incumbents' + rank momentum;
+- **targeting gap** (0.15) — how many top results are loose matches (not written for the keyword);
+- **SERP opportunity** (0.10) — click real-estate left after AIO / shopping crowding.
 
 Paired with the keyword's **potential value** (volume × CTR-at-top-3 × CPC) into a **Quick wins** priority (rankability × value), so "easy *and* valuable" floats to the top. Keywords without a snapshot yet are listed unscored with a capture prompt. Weights/thresholds are module constants (tunable); the pure scorer is unit-tested. Heuristic, not ground truth — it reads title/URL + DataForSEO authority, not page bodies. Inputs the rank tracker + snapshot already capture; **no new data or migration**.

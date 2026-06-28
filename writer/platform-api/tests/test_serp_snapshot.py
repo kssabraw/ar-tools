@@ -240,6 +240,40 @@ def test_is_page_targeted_empty_keyword():
 
 
 # ---------------------------------------------------------------------------
+# parse_topical_classification
+# ---------------------------------------------------------------------------
+def test_parse_topical_classification_counts_generalists_excluding_client():
+    tool_input = {
+        "topic": "tire installation",
+        "client_focus": "specialist",
+        "sites": [
+            {"domain": "carrepair.com", "focus": "generalist"},
+            {"domain": "autoshop.com", "focus": "generalist"},
+            {"domain": "tirepros.com", "focus": "specialist"},
+            {"domain": "acme.com", "focus": "generalist"},  # the client — excluded from count
+        ],
+    }
+    comp = ["carrepair.com", "autoshop.com", "tirepros.com", "acme.com"]
+    out = serp_snapshot.parse_topical_classification(tool_input, comp, "acme.com")
+    assert out["topic"] == "tire installation"
+    assert out["client_focus"] == "specialist"
+    assert out["by_domain"]["carrepair.com"] == "generalist"
+    assert out["generalist_count"] == 2  # client (also generalist) excluded
+
+
+def test_parse_topical_classification_invalid_values_default():
+    out = serp_snapshot.parse_topical_classification(
+        {"topic": "x", "client_focus": "bogus",
+         "sites": [{"domain": "A.com", "focus": "weird"}, {"domain": "b.com", "focus": "specialist"}]},
+        ["a.com", "b.com"], "",
+    )
+    assert out["client_focus"] == "unknown"
+    assert "a.com" not in out["by_domain"]        # invalid focus dropped
+    assert out["by_domain"]["b.com"] == "specialist"
+    assert out["generalist_count"] == 0
+
+
+# ---------------------------------------------------------------------------
 # parse_backlinks_summary
 # ---------------------------------------------------------------------------
 def test_parse_backlinks_summary_maps_rank_to_url_rating():

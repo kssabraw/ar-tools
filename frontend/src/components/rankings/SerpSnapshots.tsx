@@ -265,6 +265,20 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
               )}
             </div>
           )}
+          {(snap.keyword_topic || snap.generalist_count != null) && (
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              {snap.keyword_topic && <>Topic <strong style={{ color: '#0f172a' }}>{snap.keyword_topic}</strong> · </>}
+              {snap.generalist_count != null && (
+                <><strong style={{ color: '#0f172a' }}>{snap.generalist_count} of {targeting.denominator}</strong> incumbents are generalists</>
+              )}
+              {snap.client_topical_focus && snap.client_topical_focus !== 'unknown' && (
+                <span style={{ color: snap.client_topical_focus === 'specialist' ? '#15803d' : '#64748b' }}>
+                  {' '}· you're a <strong>{snap.client_topical_focus}</strong>
+                  {snap.client_topical_focus === 'specialist' && snap.generalist_count ? ' (an edge here)' : ''}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div style={{ overflowX: 'auto' }}>
           <table style={table}>
@@ -291,6 +305,9 @@ function SnapshotDetailView({ snapshotId }: { snapshotId: string }) {
                           </span>
                           {!(r.targeted ?? isPageTargeted(snap.keyword, r.title, r.url)) && (
                             <span style={looseChip} title="Not written for this keyword — title/URL don't target it (a weaker, beatable result)">loose match</span>
+                          )}
+                          {!r.is_client && r.topical_focus === 'generalist' && (
+                            <span style={generalistChip} title="A generalist site — the topic is one of many things it covers (beatable by a specialist)">generalist</span>
                           )}
                         </div>
                         {r.url && (
@@ -531,6 +548,7 @@ const miniBadge: React.CSSProperties = { fontSize: 10, fontWeight: 700, borderRa
 const signalChip: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 999, padding: '2px 8px', cursor: 'help' }
 const clientChip: React.CSSProperties = { fontSize: 9, fontWeight: 700, color: '#4338ca', background: '#e0e7ff', borderRadius: 4, padding: '1px 5px', flexShrink: 0 }
 const looseChip: React.CSSProperties = { fontSize: 9, fontWeight: 600, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 4, padding: '1px 5px', flexShrink: 0, whiteSpace: 'nowrap', cursor: 'help' }
+const generalistChip: React.CSSProperties = { fontSize: 9, fontWeight: 600, color: '#0e7490', background: '#ecfeff', border: '1px solid #a5f3fc', borderRadius: 4, padding: '1px 5px', flexShrink: 0, whiteSpace: 'nowrap', cursor: 'help' }
 const sourceLink: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#6366f1', textDecoration: 'none' }
 const table: React.CSSProperties = { borderCollapse: 'collapse', width: '100%', fontSize: 12 }
 const th: React.CSSProperties = { padding: '8px 12px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap' }
