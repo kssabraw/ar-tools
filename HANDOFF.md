@@ -1,6 +1,31 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **Rankability capture cadence (cost control)** (latest)
+## ⏩ Update — 2026-06-28 · **GSC Research auto-cadence (first run + monthly)** (latest)
+
+GSC Research (cannibalization / quick wins / hidden wins — the n8n port) was
+**on-demand only**; now it also runs **automatically on first GSC-eligibility and
+monthly**. Same branch/PR as the capture-cadence change (`claude/rankability-
+capture-cadence`, PR #157).
+
+- `gsc_scheduler.enqueue_due_gsc_research` (daily due-check, in the daily block):
+  for each client with a **verified GSC property**, enqueue a run if it has **never
+  had a completed run** (first-entry) or its last is **≥ `gsc_research_interval_days`
+  (30)** old. Reuses `enqueue_gsc_research(trigger="scheduled")` (dedupes in-flight).
+- Gated on GSC being **provisioned** (`gsc_research_auto_enabled` + a service-
+  account key); GSC Research can't produce anything without GSC, so until
+  `GOOGLE_SERVICE_ACCOUNT_KEY` is set + a property verified, **no auto-runs fire**
+  (on-demand also returns empty in that state — unchanged).
+- Pure `is_gsc_research_due` unit-tested. **No migration** (reuses `gsc_research_runs`).
+
+⚠️ Note: this is **dormant until the standing GSC provisioning gap is closed**
+(service account + Search Console API). It activates automatically once that's done.
+
+**Verified:** import main + **568 tests** on pinned fastapi==0.115.0/pydantic==2.9.2
+(2 new); ruff clean.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Rankability capture cadence (cost control)**
 
 Replaced the blanket **weekly** SERP-snapshot auto-capture with an event-driven
 model (the snapshot is the cost; rankability reads it for free). On a **new

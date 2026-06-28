@@ -123,6 +123,12 @@ class Settings(BaseSettings):
     # serp_snapshot_auto_weekly to re-enable dense SERP-trend history.
     serp_snapshot_auto_weekly: bool = False
     serp_snapshot_drop_min_days: int = 30
+
+    # GSC Research (cannibalization / quick wins / hidden wins) auto-cadence: a
+    # first run as soon as a client is GSC-eligible (verified property + service
+    # account), then every `_interval_days`. On-demand always works regardless.
+    gsc_research_auto_enabled: bool = True
+    gsc_research_interval_days: int = 30
     maps_report_competitor_min_rating: float = 4.7
     maps_report_octant_rule: str = "R1"
     # Weak-zone geocoding (turns the geo-grid's weakest pins into real city names

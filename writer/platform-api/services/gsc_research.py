@@ -278,6 +278,14 @@ async def _fetch_market_for(supabase, keywords: list[str], location_code: int) -
     return cached
 
 
+def is_gsc_research_due(last_run_date: Optional[date], today: date, interval_days: int) -> bool:
+    """Whether a scheduled GSC Research run is due: never run before (first-entry),
+    or the last completed run is at least `interval_days` old (monthly). Pure."""
+    if last_run_date is None:
+        return True
+    return (today.toordinal() - last_run_date.toordinal()) >= interval_days
+
+
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
