@@ -76,6 +76,11 @@ expected for a shared project, not a problem.
 | `20260622203200` | `sie_cache_enable_rls` (drift fix — RLS on `sie_cache`) |
 | `20260622232017` | `serp_snapshots` (Organic Rank Tracker #4 — Competitive SERP Snapshot store) |
 | `20260623000343` | `rank_alerts` (Organic Rank Tracker #4 — in-app rank-drop alerting) |
+| `20260628015542` | `serp_snapshot_domains` (#4 — Competitive SERP Snapshot per-domain Domain Rating) |
+| `20260628022039` | `serp_snapshot_local_intent` (#4 — derived local-intent flag on a snapshot) |
+| `20260628024053` | `serp_snapshot_intent_signals` (#4 — derived SERP/title intent signals on a snapshot) |
+| `20260628032756` | `serp_snapshot_targeted` (#4 — per-result "written for keyword" flag + top-N targeted_count) |
+| `20260628040255` | `serp_snapshot_topical_focus` (#4 — specialist/generalist site focus + keyword topic) |
 
 > A few `schema_migrations.name` values carry version suffixes (`_v1_4`, `_v2_0`)
 > from how they were originally applied. The CLI matches on the numeric version,
@@ -83,6 +88,40 @@ expected for a shared project, not a problem.
 > the same migration.
 
 ## Reconciliation log
+
+**2026-06-28** — SERP Snapshot topical focus (#4): added `keyword_topic`,
+`generalist_count`, `client_topical_focus` to `serp_snapshots` and `topical_focus`
+to `serp_snapshot_results` (specialist vs generalist site classification, a
+rankability input). Applied via the Supabase MCP; recorded version
+`20260628040255`, file renamed from its `…140000` placeholder + header updated.
+Additive, nullable (best-effort Haiku classification at capture). No RLS change.
+
+**2026-06-28** — SERP Snapshot topical targeting (#4): added `targeted_count`
+(int) to `serp_snapshots` and `targeted` (bool) to `serp_snapshot_results` —
+whether each ranking page is written for the keyword + how many of the top
+results are. Applied via the Supabase MCP; recorded version `20260628032756`,
+file renamed from its `…120000` placeholder + `-- Migration:` header updated.
+Additive, nullable; the frontend mirrors the heuristic for pre-column snapshots.
+
+**2026-06-28** — SERP Snapshot intent signals (#4): added an `intent_signals`
+jsonb column to `serp_snapshots` (normalized SERP-feature + title-pattern intent
+signals), applied via the Supabase MCP. The MCP stamped version `20260628024053`,
+so the file was renamed from its placeholder `…120000` prefix to that recorded
+version and its `-- Migration:` header updated to match. Additive, nullable; the
+frontend mirrors the derivation for pre-column snapshots. No RLS change.
+
+**2026-06-28** — SERP Snapshot local intent (#4): added a `local_intent` boolean
+to `serp_snapshots` (derived from the SERP feature inventory — local pack/finder/
+map), applied via the Supabase MCP. The MCP stamped version `20260628022039`, so
+the file was renamed from its placeholder `…120000` prefix to that recorded
+version and its `-- Migration:` header updated to match. Additive, default false;
+no RLS change.
+
+**2026-06-28** — Competitive SERP Snapshot per-domain DR (#4): added
+`serp_snapshot_domains` (per-domain Domain Rating, FK → `serp_snapshots`), applied
+via the Supabase MCP. The MCP stamped version `20260628015542`, so the file was
+renamed from its placeholder `…120000` prefix to that recorded version and its
+`-- Migration:` header updated to match. RLS on, no client-facing policies.
 
 **2026-06-23** — Rank-drop alerting (#4): added `rank_alerts` (one-open-alert-per
 -keyword-per-type via a partial unique index; in-app only) applied via the

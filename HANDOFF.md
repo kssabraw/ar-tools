@@ -1,6 +1,137 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-23 · **Module #5 — Maps geo-grid ranker (Local Dominator)** (latest)
+## ⏩ Update — 2026-06-28 · **Topical focus (specialist vs generalist)** (latest)
+
+Added a **topical-specialization** signal to the SERP snapshot + rankability: a
+niche site dedicated to the keyword's topic can out-rank generalist incumbents
+*even with weaker backlinks*, so a generalist-dominated SERP is an opening for a
+specialist client. Part of PR #156 (draft).
+
+- **Classifier:** one best-effort **Claude Haiku** call per snapshot
+  (`classify_topical_focus`, `serp_topic_model`) labels each ranking site +
+  the client **specialist / generalist / unknown** from domain + title + snippet,
+  and names the keyword's core topic. First LLM call in the snapshot pipeline
+  (otherwise pure DataForSEO) — needs `ANTHROPIC_API_KEY` on PLATFORM (already
+  present for maps/brand). Pure parser `parse_topical_classification` unit-tested.
+- **Persisted:** `serp_snapshots.keyword_topic / generalist_count /
+  client_topical_focus` + `serp_snapshot_results.topical_focus` (migration
+  20260628040255).
+- **Rankability:** new **topical-opening** sub-score (weight **0.25**, second only
+  to competition weakness) — generalist SERP + specialist client boosts the score
+  and **offsets weak backlinks**; weights renormalize when a snapshot has no
+  topical data. Surfaces as a driving factor ("Incumbents are generalists; you're
+  a topic specialist").
+- **Viewer:** "generalist" row tags + a "Topic X · N of M incumbents are
+  generalists · you're a specialist (an edge here)" summary.
+
+**Verified:** import main + **562 tests** on pinned fastapi==0.115.0/pydantic==2.9.2
+(6 new parser/scorer cases); ruff clean; frontend build clean. The Haiku call only
+runs on Railway (sandbox has no key/egress) — first live snapshot is the proof.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Rankability score + Quick wins**
+
+A client-relative **rankability** score per tracked keyword — how realistically
+*this* client can win it — on a new **"Rankability"** tab in the Rankings page.
+Computed on read from each keyword's latest SERP snapshot (no migration). Part of
+PR #156 (draft, awaiting merge).
+
+- **Score 0–100 + band** (Easy / Moderate / Hard / Very hard; higher = winnable,
+  inverse of difficulty), each with its 2–3 **driving factors**. Four blended
+  sub-scores: competition weakness (0.40, backlink authority weighted **RD > UR >
+  DR**, medians), client capability (0.25, authority gap + rank momentum),
+  targeting gap (0.20, loose-match incumbents), SERP opportunity (0.15, AIO/
+  shopping crowding).
+- **Quick wins** sort = rankability × **potential value** (volume × CTR-at-top-3 ×
+  CPC). Keywords without a snapshot are listed unscored with a capture prompt.
+- `services/rankability.py` (pure `score_keyword` + `get_client_rankability`),
+  `GET /clients/{id}/rank/rankability`, `components/rankings/Rankability.tsx`.
+  Weights/thresholds are tunable module constants; pure scorer unit-tested.
+- Heuristic, not ground truth (title/URL + DataForSEO authority, not page bodies).
+
+**Verified:** import main + **558 tests** on pinned fastapi==0.115.0/pydantic==2.9.2
+(8 new scorer cases); ruff clean; frontend build clean.
+
+---
+
+## ⏩ Update — 2026-06-28 · **SERP Landscape Trends**
+
+Built on top of the SERP Snapshot work: an over-time + cross-keyword view of how
+Google's SERP composition changes, from the dated snapshot archive. New **"SERP
+Trends"** tab in the Rankings page. (All on PR #156, still draft, awaiting merge.)
+
+**Three views** (`services/serp_trends.py` + `components/rankings/SerpTrends.tsx`):
+- **Per-signal prevalence over time** — % of the client's keywords whose SERP
+  shows each tracked signal (AIO, local pack, the SERP-feature + title-format
+  signals), as an **as-of weekly series** (each keyword contributes its latest
+  snapshot on-or-before each week-end, so weekly auto-capture + ad-hoc captures
+  read cleanly). Per-signal sparkline + now/Δ table.
+- **"What changed" digest** — keywords whose newest snapshot gained/lost a signal
+  vs the prior capture.
+- **Per-keyword timeline** — each dated snapshot with its signal chips, the
+  client's rank/UR/DR, and the delta vs the previous capture.
+
+**API:** `GET /clients/{id}/serp-trends?weeks=12`, `GET /tracked-keywords/{id}/serp-timeline`
+(`routers/rank.py`). No new tables/migration — pure reads over `serp_snapshots` /
+`serp_snapshot_results` / `serp_snapshot_domains`. Pure helpers (deltas, as-of
+weekly prevalence, change digest, week-end generation) are unit-tested.
+
+**Intended direction (user):** track SERP + competition change over time to drive
+an **automated optimization/reoptimization planner** — these trend reads are that
+planner's data foundation (not yet built).
+
+**Verified:** import main + **546 tests** on pinned fastapi==0.115.0/pydantic==2.9.2
+(8 new serp_trends cases); ruff clean; frontend build clean. Live providers not
+exercised from the sandbox.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Competitive SERP Snapshot — per-domain DR + viewer UI**
+
+Closed out the rank tracker's **Competitive SERP Snapshot** (PRD §14). The capture
+engine + retrieval API + weekly auto-capture already existed (PR #53, 2026-06-22) —
+backend-only, covering AIO, SERP features, intent, top-10 organic, and **per-URL**
+referring domains + UR. This pass added the two missing §14 pieces: **per-domain
+Domain Rating (DR)** and an **on-demand viewer UI**. (Decisions confirmed before
+building: extend the existing feature rather than rebuild; capture DR on **every**
+snapshot including the weekly pass.)
+
+**What's new:**
+- **Per-domain DR (backend).** `services/serp_snapshot.py`: `fetch_domain_summary(domain)`
+  (Backlinks summary, `target=<domain>`, `include_subdomains=True` → `rank` = DR) +
+  a pure `collect_snapshot_domains(result_rows, client_domain)` helper (deduped,
+  case-insensitive domain set; client domain always appended even when it doesn't
+  rank). `_capture_and_store` now fetches DR per unique domain (competitors + client),
+  isolated per-domain (a failure degrades the snapshot to `partial`), and stores rows
+  in the new **`serp_snapshot_domains`** table.
+- **API.** `SerpSnapshotDomainRow` model + `domains: [...]` on `SerpSnapshotDetail`;
+  `GET /serp-snapshots/{id}` now returns the per-domain DR rows.
+- **Viewer UI.** `components/rankings/SerpSnapshots.tsx` — a per-keyword camera button
+  in `RankKeywords.tsx` opens a modal: dated-snapshot sidebar + "New snapshot" (enqueues
+  the capture job, polls the list until it lands), and a detail view (AIO + cited sources,
+  intent badge, top-10 table with RD/UR + the page's domain DR, a per-domain DR table,
+  client rows highlighted).
+
+**Cost:** ~24 DataForSEO lookups/snapshot (1 SERP + 1 intent + ~11 per-URL backlinks +
+~11 per-domain backlinks). Confirmed acceptable. The weekly auto pass now also incurs the
+per-domain calls across all keywords/clients (per the "DR everywhere" decision).
+
+**Migration (applied to `wvcthtmmcmhkybcesirb`; filename = recorded version):**
+`20260628015542_serp_snapshot_domains` — `serp_snapshot_domains` (snapshot_id FK,
+domain, is_client, domain_rating, referring_domains, backlinks, backlinks_status).
+RLS on, no policies.
+
+**Verification:** full `import main` (under the pinned `fastapi==0.115.0` /
+`pydantic==2.9.2`, with a local `community` stub since python-louvain won't build in the
+sandbox — fanout-only, unrelated) + **528 passed** (incl. 3 new `collect_snapshot_domains`
+unit tests); frontend `npm run build` clean. Live DataForSEO not exercised from the sandbox
+(only runs on Railway) — first real on-demand capture with a competitor domain is the live
+proof of the DR path.
+
+---
+
+## ⏩ Update — 2026-06-23 · **Module #5 — Maps geo-grid ranker (Local Dominator)**
 
 **Module #5 is built, merged, deployed, and proven live** — a real scan ran end to
 end against Local Dominator (PRs **#59, #61, #63, #64, #66, #68, #69**, all merged;

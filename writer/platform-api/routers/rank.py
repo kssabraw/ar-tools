@@ -35,13 +35,20 @@ from models.rank import (
     RankAlert,
     RankAlertsResponse,
     RankLocation,
+    RankabilityResponse,
     ReportListItem,
     ReportPublishResponse,
     ReportSchedule,
     SerpSnapshotCaptureResponse,
     SerpSnapshotDetail,
+    SerpSnapshotDomainRow,
     SerpSnapshotListItem,
     SerpSnapshotResultRow,
+    SerpChangeItem,
+    SerpTimelinePoint,
+    SerpTimelineResponse,
+    SerpTrendSeries,
+    SerpTrendsResponse,
     StrikingDistanceResponse,
     TrackedKeywordCreateRequest,
     TrackedKeywordUpdateRequest,
@@ -55,7 +62,9 @@ from services import (
     rank_materialize,
     rank_report,
     rank_status,
+    rankability,
     serp_snapshot,
+    serp_trends,
 )
 
 logger = logging.getLogger(__name__)
@@ -688,17 +697,51 @@ async def get_serp_snapshot(
         .order("position")
         .execute()
     ).data or []
+    domains = (
+        supabase.table("serp_snapshot_domains")
+        .select("*")
+        .eq("snapshot_id", str(snapshot_id))
+        .execute()
+    ).data or []
+    # Strongest domains first, with unrated (null DR — e.g. a failed lookup on a
+    # 'partial' snapshot) sorted LAST. Done in Python because Postgres orders
+    # NULLS FIRST on DESC, which would float failed rows to the top.
+    domains.sort(key=lambda d: (d.get("domain_rating") is None, -(d.get("domain_rating") or 0)))
+
+    # Back-compat: snapshots captured before these columns existed (the PR #53 era)
+    # have them null. Derive on read from the stored serp_features + results so the
+    # API is the single source of truth — no client-side re-derivation (which would
+    # risk drifting from the backend heuristics). Topical focus needs the LLM, so
+    # it can't be backfilled and simply stays absent on those old snapshots.
+    features = snap.get("serp_features") or {}
+    keyword = snap.get("keyword") or ""
+    top = [r for r in results if r.get("position") is not None and r["position"] <= 10]
+    if snap.get("intent_signals") is None:
+        snap["intent_signals"] = serp_snapshot.derive_intent_signals(features, top) or None
+    if not snap.get("local_intent"):
+        snap["local_intent"] = serp_snapshot.detect_local_intent(features)
+    for r in results:
+        if r.get("targeted") is None:
+            r["targeted"] = serp_snapshot.is_page_targeted(keyword, r.get("title"), r.get("url"))
+    if snap.get("targeted_count") is None:
+        snap["targeted_count"] = sum(1 for r in top if r.get("targeted"))
+
     return SerpSnapshotDetail(
         **{k: snap.get(k) for k in (
             "id", "keyword_id", "client_id", "keyword", "captured_at", "status",
             "location_code", "language_code", "query_intent", "intent_probabilities",
-            "aio_present", "aio_text", "aio_sources", "serp_features", "client_rank",
-            "client_url", "error",
+            "local_intent", "intent_signals", "aio_present", "aio_text", "aio_sources",
+            "serp_features", "targeted_count", "keyword_topic", "generalist_count",
+            "client_topical_focus", "client_rank", "client_url", "error",
         )},
         results=[SerpSnapshotResultRow(**{k: r.get(k) for k in (
-            "position", "url", "domain", "title", "description", "is_client",
-            "referring_domains", "url_rating", "backlinks", "backlinks_status",
+            "position", "url", "domain", "title", "description", "is_client", "targeted",
+            "topical_focus", "referring_domains", "url_rating", "backlinks", "backlinks_status",
         )}) for r in results],
+        domains=[SerpSnapshotDomainRow(**{k: d.get(k) for k in (
+            "domain", "is_client", "domain_rating", "referring_domains",
+            "backlinks", "backlinks_status",
+        )}) for d in domains],
     )
 
 
@@ -710,7 +753,8 @@ async def capture_serp_snapshot(
     keyword_id: UUID, auth: dict = Depends(require_auth)
 ) -> SerpSnapshotCaptureResponse:
     """On-demand capture for one keyword (the weekly pass captures all). Enqueues
-    an async job — the capture is ~13 DataForSEO calls."""
+    an async job — the capture is ~24 DataForSEO calls (1 SERP + 1 intent + ~11
+    per-URL backlinks + ~11 per-domain backlinks)."""
     supabase = get_supabase()
     found = (
         supabase.table("tracked_keywords")
@@ -723,6 +767,51 @@ async def capture_serp_snapshot(
         raise HTTPException(status_code=404, detail="not_found")
     serp_snapshot.enqueue_serp_snapshot(found.data[0]["client_id"], keyword_id=str(keyword_id))
     return SerpSnapshotCaptureResponse(keyword_id=keyword_id, status="enqueued")
+
+
+# ---------------------------------------------------------------------------
+# SERP Landscape Trends — over-time + cross-keyword views over the snapshots.
+# ---------------------------------------------------------------------------
+@router.get("/tracked-keywords/{keyword_id}/serp-timeline", response_model=SerpTimelineResponse)
+async def get_serp_timeline(
+    keyword_id: UUID, auth: dict = Depends(require_auth)
+) -> SerpTimelineResponse:
+    """Dated snapshots for a keyword with the signal set, the client's rank/UR/DR,
+    and the delta vs the previous capture — "how Google changed for this query"."""
+    data = serp_trends.get_keyword_timeline(str(keyword_id))
+    if data is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return SerpTimelineResponse(
+        keyword_id=data["keyword_id"],
+        keyword=data["keyword"],
+        points=[SerpTimelinePoint(**p) for p in data["points"]],
+    )
+
+
+@router.get("/clients/{client_id}/rank/rankability", response_model=RankabilityResponse)
+async def get_rankability(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> RankabilityResponse:
+    """Per-keyword rankability (0–100 + band + factors) and a Quick-wins priority
+    (rankability × potential value), from each keyword's latest SERP snapshot."""
+    data = rankability.get_client_rankability(str(client_id))
+    return RankabilityResponse(**data)
+
+
+@router.get("/clients/{client_id}/serp-trends", response_model=SerpTrendsResponse)
+async def get_serp_trends(
+    client_id: UUID, weeks: int = 12, auth: dict = Depends(require_auth)
+) -> SerpTrendsResponse:
+    """Client-level SERP-landscape rollup: per-signal prevalence over an as-of
+    weekly series, plus a "what changed since last capture" digest."""
+    weeks = max(2, min(weeks, 52))
+    data = serp_trends.get_client_trends(str(client_id), weeks=weeks)
+    return SerpTrendsResponse(
+        week_ends=data["week_ends"],
+        keyword_counts=data["keyword_counts"],
+        series=[SerpTrendSeries(**s) for s in data["series"]],
+        changes=[SerpChangeItem(**c) for c in data["changes"]],
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -230,8 +230,19 @@ class SerpSnapshotResultRow(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     is_client: bool = False
+    targeted: Optional[bool] = None  # page written for the keyword (title/slug coverage)
+    topical_focus: Optional[str] = None  # specialist | generalist | unknown (site's topic focus)
     referring_domains: Optional[int] = None
     url_rating: Optional[int] = None  # DataForSEO page rank (0–1000), UR-equivalent
+    backlinks: Optional[int] = None
+    backlinks_status: str = "pending"
+
+
+class SerpSnapshotDomainRow(BaseModel):
+    domain: Optional[str] = None
+    is_client: bool = False
+    domain_rating: Optional[int] = None  # DataForSEO domain rank (0–1000), DR-equivalent
+    referring_domains: Optional[int] = None
     backlinks: Optional[int] = None
     backlinks_status: str = "pending"
 
@@ -247,19 +258,100 @@ class SerpSnapshotDetail(BaseModel):
     language_code: Optional[str] = None
     query_intent: Optional[str] = None
     intent_probabilities: Optional[dict] = None
+    local_intent: bool = False
+    intent_signals: Optional[list[str]] = None
     aio_present: bool = False
     aio_text: Optional[str] = None
     aio_sources: Optional[list] = None
     serp_features: Optional[dict] = None
+    targeted_count: Optional[int] = None  # # of top organic results written for the keyword
+    keyword_topic: Optional[str] = None
+    generalist_count: Optional[int] = None  # # of top incumbents that are generalists
+    client_topical_focus: Optional[str] = None  # specialist | generalist | unknown
     client_rank: Optional[int] = None
     client_url: Optional[str] = None
     error: Optional[str] = None
     results: list[SerpSnapshotResultRow] = []
+    domains: list[SerpSnapshotDomainRow] = []
 
 
 class SerpSnapshotCaptureResponse(BaseModel):
     keyword_id: UUID
     status: str  # 'enqueued'
+
+
+# --- SERP Landscape Trends (over-time + cross-keyword) ----------------------
+class SerpTimelinePoint(BaseModel):
+    snapshot_id: UUID
+    captured_at: str
+    status: str
+    query_intent: Optional[str] = None
+    local_intent: bool = False
+    intent_signals: list[str] = []
+    aio_present: bool = False
+    targeted_count: Optional[int] = None  # # of top organic results written for the keyword
+    client_rank: Optional[int] = None
+    client_rd: Optional[int] = None  # client's page referring-domains count
+    client_ur: Optional[int] = None  # client's page URL Rating (raw 0–1000; UI shows /10)
+    client_dr: Optional[int] = None  # client's domain Domain Rating (raw 0–1000; UI shows /10)
+    signals_added: list[str] = []
+    signals_removed: list[str] = []
+    client_rank_delta: Optional[int] = None  # vs previous snapshot (− = improved)
+    client_rd_delta: Optional[int] = None     # vs previous snapshot (+ = stronger)
+    client_dr_delta: Optional[int] = None     # vs previous snapshot (+ = stronger)
+
+
+class SerpTimelineResponse(BaseModel):
+    keyword_id: UUID
+    keyword: str
+    points: list[SerpTimelinePoint] = []
+
+
+class SerpTrendSeries(BaseModel):
+    signal: str
+    counts: list[int] = []
+    pct: list[Optional[float]] = []  # fraction 0–1 of keywords-with-data per week
+
+
+class SerpChangeItem(BaseModel):
+    keyword_id: UUID
+    keyword: str
+    captured_at: str
+    added: list[str] = []
+    removed: list[str] = []
+    client_rank_delta: Optional[int] = None
+
+
+class SerpTrendsResponse(BaseModel):
+    week_ends: list[str] = []
+    keyword_counts: list[int] = []
+    series: list[SerpTrendSeries] = []
+    changes: list[SerpChangeItem] = []
+
+
+# --- Rankability (how winnable a keyword is for the client) ------------------
+class RankabilityFactor(BaseModel):
+    text: str
+    direction: Literal["up", "down"]
+
+
+class RankabilityItem(BaseModel):
+    keyword_id: UUID
+    keyword: str
+    has_snapshot: bool = False
+    snapshot_id: Optional[UUID] = None
+    score: Optional[int] = None  # 0–100, higher = more winnable for this client
+    band: Optional[str] = None   # Easy / Moderate / Hard / Very hard
+    factors: list[RankabilityFactor] = []
+    client_rank: Optional[int] = None
+    search_volume: Optional[int] = None
+    cpc: Optional[float] = None
+    est_value: Optional[float] = None  # potential monthly value if won (top-3)
+    priority: Optional[float] = None   # score × potential value (Quick wins sort)
+
+
+class RankabilityResponse(BaseModel):
+    items: list[RankabilityItem] = []
 
 
 # --- In-app rank-drop alerts ------------------------------------------------

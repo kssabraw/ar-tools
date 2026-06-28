@@ -307,9 +307,10 @@ The existing `clients.gsc_property` column (migration `20260529220918_clients_su
   intent (DataForSEO Labs), and the top-10 organic results (url/domain/rendered
   title+description/position) each enriched with referring domains + URL Rating
   (DataForSEO Backlinks page rank 0–1000) — including the client's own ranking
-  page. **Backend-only** (no viewer UI; retrieved on request via the API to
-  diagnose drops). `services/serp_snapshot.py`; `serp_snapshots` +
-  `serp_snapshot_results`; routes under `routers/rank.py`. RESERVED-table note in
+  page. **Extended 2026-06-28** with per-domain Domain Rating (DR) + an on-demand
+  viewer UI (see §14 — now built). `services/serp_snapshot.py`; `serp_snapshots` +
+  `serp_snapshot_results` + `serp_snapshot_domains`; routes under `routers/rank.py`;
+  `components/rankings/SerpSnapshots.tsx`. RESERVED-table note in
   §5 (`rank_snapshots`) still stands — that is Module #5's geo-grid table, distinct
   from this `serp_snapshots` diagnostic store.
 - **Reports (built).** On-demand + scheduled client reports. On-demand = a printable in-app view (browser Print → PDF). Scheduled = a per-client `rank_report_config` (as_needed / weekly+day / monthly+day / every 7·14·30 days); the shared scheduler enqueues a `rank_report` job when due, which snapshots the report data into a `rank_reports` archive (in-app list, each printable). **Delivery:** an optional **Google Doc** in the client's Drive folder — reuses the Apps Script publish webhook (renders the snapshot to Markdown via `render_report_markdown`); a per-client toggle (`deliver_google_doc`) auto-publishes scheduled/generated reports, and any saved report can be published on demand (`POST /rank-reports/{id}/publish`). Email delivery remains a future option via the notifications service.
@@ -329,16 +330,23 @@ The existing `clients.gsc_property` column (migration `20260529220918_clients_su
 
 ---
 
-## 14. Competitive SERP Snapshot (planned — not built)
+## 14. Competitive SERP Snapshot (built)
 
-A **dated, on-demand competitive snapshot** for a tracked keyword: the live SERP landscape plus per-page/per-domain authority signals for the client and the top-10 competitors. Stored so snapshots can be compared over time (same archive pattern as reports, §12). All data via **DataForSEO** — no new vendor; "UR"/"DR" use DataForSEO's 0–1000 `rank` metric as the URL-Rating / Domain-Rating equivalent.
+A **dated competitive snapshot** for a tracked keyword: the live SERP landscape plus per-page/per-domain authority signals for the client and the top-10 competitors. Stored so snapshots can be compared over time (same archive pattern as reports, §12). All data via **DataForSEO** — no new vendor; "UR"/"DR" use DataForSEO's 0–1000 `rank` metric as the URL-Rating / Domain-Rating equivalent.
+
+> **Build note (2026-06-28).** Shipped in two passes. The capture engine + retrieval API + weekly auto-capture landed first (PR #53, §12) covering AIO, SERP features, intent, top-10 organic, and **per-URL** referring domains + UR — **backend-only**. The §14 spec's two remaining pieces — **per-domain Domain Rating (DR)** and an **on-demand viewer UI** — were added after. DR is captured on **every** snapshot, including the weekly auto pass.
+>
+> The data model is **normalized** (not the single-`jsonb` shape proposed in §14.3 below): `serp_snapshots` (one row per capture) + `serp_snapshot_results` (the ranking pages, with per-URL RD/UR) + `serp_snapshot_domains` (the unique domains, with per-domain DR). All RLS-on, service-role-only.
 
 ### 14.1 Contents (per snapshot)
 - **AI Overview (AIO)** — whether an AI Overview appears for the query + its cited sources.
 - **Top 10 organic results** — position, URL, domain, title.
-- **Query intent** — informational / commercial / transactional / navigational.
+- **Query intent** — informational / commercial / transactional / navigational (DataForSEO Labs), plus a derived **local intent** flag (DataForSEO's intent taxonomy has no 'local' label, so it's inferred from the SERP showing a local pack / local finder / map — free, no extra call).
+- **Intent signals** — a normalized set read off the SERP composition + organic title patterns (Google's choice of features IS an intent classification): SERP enhancements (discussions & forums, video, news/top-stories, shopping/ads, featured snippet, PAA, knowledge panel, images, recipes/jobs/events), content-format patterns (listicle, comparison, how-to, freshness/QDF, definitional), and a navigational read when homepages dominate. Derived for free, persisted per snapshot (`serp_snapshots.intent_signals`), and mirrored client-side for pre-column snapshots. Rendered as a "Signals" chip row in the viewer (`derive_intent_signals` in `services/serp_snapshot.py`).
 - **Per ranking page** (each top-10 competitor page **and** the client's ranking/canonical page): **referring domains** (page-level count) + **UR** (URL Rating).
 - **Per domain** (each competitor domain **and** the client's domain): **Domain Rating (DR)** for the whole domain.
+- **Topical targeting** — whether each ranking page is **written for the keyword** (title/URL-slug token coverage), and **how many of the top results are** (`targeted_count`). Loosely-relevant incumbents (homepages, tangential posts) = an opening a purpose-built page can take — a rankability input. Derived for free from the captured title/URL; the viewer marks "loose match" rows and shows an "N of M written for this keyword" summary.
+- **Topical focus** — whether each ranking **site** is a **specialist** (primarily about the keyword's topic) or a **generalist** (the topic is one of many things), plus the keyword's core **topic**, the count of generalist incumbents, and the **client's own focus**. A topic specialist can out-rank generalist incumbents *even with weaker backlinks*, so a generalist-dominated SERP is an opening for a specialist client — a rankability input. Classified by one cheap **Claude Haiku** call per snapshot from domain + title + snippet (`classify_topical_focus`; best-effort, needs `ANTHROPIC_API_KEY` on PLATFORM — already present); the viewer tags "generalist" rows + shows a topic/focus summary.
 
 The client's ranking URL comes from the tracker's already-resolved `tracked_keywords.canonical_url` (or the client domain's position in the fetched SERP).
 
@@ -352,9 +360,29 @@ The client's ranking URL comes from the tracker's already-resolved `tracked_keyw
 
 **Cost:** the Backlinks API bills **per target**. One snapshot ≈ ~10 competitor URLs + ~10 competitor domains + client URL + client domain ≈ **~22 backlink lookups per keyword** (batch as many targets per POST as the endpoint allows; still billed per item). Confirm the per-snapshot cost is acceptable before enabling broadly; consider a confirm step / not auto-scheduling.
 
-### 14.3 Shape & UX (proposed)
-- New table `serp_snapshots` — `(id, tracked_keyword_id → tracked_keywords(id), client_id, created_at, snapshot jsonb)`; RLS on, no client-facing policies (service-role only), per the suite pattern. `snapshot` JSON holds AIO, intent, the top-10 rows, and the per-page/per-domain authority numbers.
-- On-demand **"SERP Snapshot"** action per tracked keyword (the Keywords table / keyword expansion) → builds + stores a snapshot → a read view rendering the landscape (top-10 table with UR/RD per page + DR per domain, AIO box, intent badge, client row highlighted). Dated archive per keyword for over-time comparison.
-- Backend lives in `services/` + `routers/rank.py`; frontend in `components/rankings/`.
+### 14.3 Shape & UX (as built)
+- **Tables** (normalized — see the build note above): `serp_snapshots` + `serp_snapshot_results` + `serp_snapshot_domains`. RLS on, no client-facing policies (service-role only), per the suite pattern.
+- On-demand **"SERP Snapshot"** action per tracked keyword (a camera button on each Keywords-table row) → enqueues a `serp_snapshot` capture job → a modal viewer rendering the landscape: AIO box + cited sources, intent badge, the top-10 table (RD/UR per page + DR per page's domain), and a per-domain DR table, with the client's row highlighted. Dated archive in the modal sidebar for over-time comparison; the viewer polls until a freshly-captured snapshot lands.
+- Backend: `services/serp_snapshot.py` (`fetch_domain_summary` + the pure `collect_snapshot_domains` helper for DR), routes in `routers/rank.py` (`GET .../serp-snapshots`, `GET /serp-snapshots/{id}` now returns `domains`, `POST .../serp-snapshot`). Frontend: `components/rankings/SerpSnapshots.tsx`, wired into `RankKeywords.tsx`.
 
-**Status:** spec only — confirm the per-snapshot DataForSEO cost + propose the data model before building.
+**Status:** built (2026-06-28). Per-snapshot cost ≈ ~24 DataForSEO lookups (confirmed acceptable); DR captured on every snapshot incl. the weekly pass.
+
+### 14.4 SERP Landscape Trends (built)
+Over-time + cross-keyword views over the dated snapshot archive — a **"SERP Trends"** tab in the Rankings page (`components/rankings/SerpTrends.tsx`, backend `services/serp_trends.py`, routes `GET /clients/{id}/serp-trends` + `GET /tracked-keywords/{id}/serp-timeline`):
+- **Per-signal prevalence over time** — for each tracked signal (AIO, local pack, the SERP-feature + title-format signals), the % of the client's keywords whose SERP shows it, as an **as-of weekly series** (each keyword contributes its latest snapshot on-or-before each week-end, so the weekly auto-capture + ad-hoc captures both read cleanly). Rendered as a per-signal sparkline + now/Δ table.
+- **"What changed" digest** — keywords whose newest snapshot gained/lost a signal vs the prior capture.
+- **Per-keyword timeline** — each dated snapshot with its signal chips, the client's rank + backlink authority (**RD · UR · DR**, in that backlink-importance order), and the delta vs the previous capture (signals added/removed, rank/RD/DR movement).
+
+**Authority display:** UR and DR are DataForSEO's 0–1000 `rank` proxy; they're stored raw (for the rankability calc) but **shown ÷10 on the familiar 0–100 scale**. **RD (referring domains)** is a real count, shown un-scaled, and is treated as the **most important** backlink signal (RD > UR > DR) — the intended weighting for the future rankability score.
+
+Pure helpers (deltas, as-of prevalence, change digest) are unit-tested. This is the read foundation for a future **automated reoptimization planner** (track SERP + competition change → recommend actions).
+
+### 14.5 Rankability (built)
+A **client-relative rankability score** per tracked keyword — how realistically *this* client can win it — computed on read from the keyword's latest SERP snapshot (`services/rankability.py`, `GET /clients/{id}/rank/rankability`, **"Rankability"** tab `components/rankings/Rankability.tsx`). **Score 0–100 + band** (Easy / Moderate / Hard / Very hard; higher = more winnable, the inverse of keyword difficulty), each with its **2–3 driving factors** (not a black box). Five blended sub-scores (a sub-score with no data — e.g. topical focus on an old snapshot — has its weight redistributed):
+- **competition weakness** (0.30) — low top-10 backlink authority, weighted **RD > UR > DR** (medians, robust to one outlier brand);
+- **topical opening** (0.25) — generalist-dominated SERP + a **specialist** client = an opening that can offset weaker backlinks;
+- **client capability** (0.20) — the client's authority vs the incumbents' + rank momentum;
+- **targeting gap** (0.15) — how many top results are loose matches (not written for the keyword);
+- **SERP opportunity** (0.10) — click real-estate left after AIO / shopping crowding.
+
+Paired with the keyword's **potential value** (volume × CTR-at-top-3 × CPC) into a **Quick wins** priority (rankability × value), so "easy *and* valuable" floats to the top. Keywords without a snapshot yet are listed unscored with a capture prompt. Weights/thresholds are module constants (tunable); the pure scorer is unit-tested. Heuristic, not ground truth — it reads title/URL + DataForSEO authority, not page bodies. Inputs the rank tracker + snapshot already capture; **no new data or migration**.

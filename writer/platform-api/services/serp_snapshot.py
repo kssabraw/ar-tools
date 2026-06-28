@@ -11,25 +11,31 @@ Each snapshot records, for a keyword at a point in time:
   - the SERP feature inventory ("enhancements": local pack/GBP, PAA, forums,
     featured snippet, …),
   - the query intent (informational/commercial/transactional/navigational),
-  - and the top organic results (url / domain / rendered title + description /
+  - the top organic results (url / domain / rendered title + description /
     position), each enriched with referring domains + URL Rating (DataForSEO
-    Backlinks page rank, 0–1000) — including the client's own ranking page.
+    Backlinks page rank, 0–1000) — including the client's own ranking page,
+  - and, per unique domain in the SERP (competitors + the client), the
+    Domain Rating (DataForSEO Backlinks domain rank, 0–1000) — the whole-domain
+    authority signal (PRD §14).
 
 Sources (all DataForSEO, reusing the Basic-auth pattern from dataforseo_rank):
   - SERP advanced  (/v3/serp/google/organic/live/advanced) — AIO + organic + features
   - Labs search-intent  (/v3/dataforseo_labs/google/search_intent/live)
-  - Backlinks summary  (/v3/backlinks/summary/live) — per target URL
+  - Backlinks summary  (/v3/backlinks/summary/live) — per target URL (UR) AND
+    per target domain (DR)
 
-Per-URL / per-keyword failures are isolated and recorded, never fatal to the
-batch (the same resilience as refresh_client_ranks).
+Per-URL / per-domain / per-keyword failures are isolated and recorded, never
+fatal to the batch (the same resilience as refresh_client_ranks).
 """
 
 from __future__ import annotations
 
 import base64
 import logging
+import re
 from datetime import date
 from typing import Optional
+from urllib.parse import urlparse
 
 import httpx
 
@@ -98,6 +104,204 @@ def find_client_organic(items: list[dict], domain: str) -> Optional[dict]:
                 "description": item.get("description"),
             }
     return None
+
+
+# "Written for the keyword" detection. A ranking page is treated as *targeted*
+# when its title OR its URL slug covers most of the keyword's significant tokens
+# — i.e. the page is purpose-built for the term, not merely mentioning it. Many
+# loosely-relevant incumbents (homepages, tangential posts, category pages) = a
+# gap a dedicated page can take (a rankability input). Heuristic over title+slug
+# only (not the marketing-copy description) to avoid false positives; mirrored
+# client-side in components/rankings/SerpSnapshots.tsx — keep the two in sync.
+_TARGET_STOPWORDS = {
+    "the", "a", "an", "of", "in", "on", "for", "and", "to", "with", "your", "my",
+    "near", "me", "best", "top",
+}
+_TARGET_MIN_COVERAGE = 0.75
+
+
+def _norm_text(s: Optional[str]) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (s or "").lower())
+
+
+def _keyword_tokens(keyword: str) -> list[str]:
+    return [t for t in _norm_text(keyword).split() if len(t) >= 2 and t not in _TARGET_STOPWORDS]
+
+
+def _coverage(tokens: list[str], text: str) -> float:
+    if not tokens:
+        return 0.0
+    norm = _norm_text(text)
+    matched = 0
+    for t in tokens:
+        stem = t[:-1] if t.endswith("s") and len(t) > 3 else t  # plural-tolerant
+        if stem in norm:
+            matched += 1
+    return matched / len(tokens)
+
+
+def is_page_targeted(keyword: str, title: Optional[str], url: Optional[str]) -> bool:
+    """Whether a ranking page looks written *for* `keyword` — its title or URL
+    slug covers ≥75% of the keyword's significant tokens (plural-tolerant)."""
+    tokens = _keyword_tokens(keyword)
+    if not tokens:
+        return False
+    slug = urlparse(url or "").path
+    return (
+        _coverage(tokens, title or "") >= _TARGET_MIN_COVERAGE
+        or _coverage(tokens, slug) >= _TARGET_MIN_COVERAGE
+    )
+
+
+def count_targeted(keyword: str, organic: list[dict]) -> int:
+    """How many of the captured top organic results are written for the keyword."""
+    return sum(1 for o in organic if is_page_targeted(keyword, o.get("title"), o.get("url")))
+
+
+# Topical focus — does a ranking SITE specialise in the keyword's topic, or is it
+# a generalist where the topic is one of many things? A topic specialist can
+# out-rank generalist incumbents even with weaker backlinks, so a generalist-
+# dominated SERP is an opening for a specialist client (a rankability input).
+# One cheap Haiku call per snapshot classifies each ranking site + the client.
+_TOPIC_TOOL = {
+    "name": "emit_classification",
+    "description": "Classify each ranking site and the client as a topic specialist or generalist.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "topic": {"type": "string", "description": "The core topic/service the keyword is about."},
+            "client_focus": {
+                "type": "string",
+                "enum": ["specialist", "generalist", "unknown"],
+                "description": "Is the client business primarily about this topic (specialist) or broader (generalist)?",
+            },
+            "sites": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "domain": {"type": "string"},
+                        "focus": {"type": "string", "enum": ["specialist", "generalist", "unknown"]},
+                    },
+                    "required": ["domain", "focus"],
+                },
+            },
+        },
+        "required": ["topic", "client_focus", "sites"],
+    },
+}
+
+_TOPIC_SYSTEM = (
+    "You judge topical specialisation for SEO. Given a search keyword and a list of "
+    "ranking websites (domain + page title + snippet), decide for each whether the "
+    "SITE is a SPECIALIST — primarily/only about the keyword's topic — or a "
+    "GENERALIST, where the topic is just one of many services/subjects it covers. "
+    "Example: for 'tire installation', a dedicated tire shop is a specialist; a "
+    "general 'car repair' shop that also does tires is a generalist. Use 'unknown' "
+    "only when there's genuinely no signal. Also classify the client business and "
+    "name the keyword's core topic."
+)
+
+
+def parse_topical_classification(
+    tool_input: dict, competitor_domains: list[str], client_domain: str
+) -> dict:
+    """Normalize the classifier tool output into
+    ``{topic, by_domain: {domain: focus}, client_focus, generalist_count}``.
+
+    `generalist_count` counts the competitor domains (excluding the client) the
+    model labelled 'generalist'. Pure — independently unit-tested.
+    """
+    valid = {"specialist", "generalist", "unknown"}
+    topic = (tool_input.get("topic") or "").strip() or None
+    client_focus = tool_input.get("client_focus")
+    if client_focus not in valid:
+        client_focus = "unknown"
+    by_domain: dict[str, str] = {}
+    for s in tool_input.get("sites") or []:
+        d = (s.get("domain") or "").lower().strip()
+        f = s.get("focus")
+        if d and f in valid:
+            by_domain[d] = f
+    cd = (client_domain or "").lower()
+    generalist_count = sum(
+        1 for d in competitor_domains if d and d != cd and by_domain.get(d) == "generalist"
+    )
+    return {
+        "topic": topic,
+        "by_domain": by_domain,
+        "client_focus": client_focus,
+        "generalist_count": generalist_count,
+    }
+
+
+async def classify_topical_focus(keyword: str, organic: list[dict], client: dict) -> dict:
+    """Haiku call → topical-focus labels for the top results + the client.
+
+    Best-effort: any failure returns an empty dict so the snapshot still completes
+    (topical focus simply stays unknown, and rankability degrades gracefully).
+    """
+    import anthropic  # lazy — keep the pure helpers import-free
+
+    sites = [
+        {"domain": o.get("domain"), "title": o.get("title"), "snippet": o.get("description")}
+        for o in organic
+        if o.get("domain")
+    ]
+    if not sites:
+        return {}
+    client_line = (
+        f"Client business: name={client.get('name')!r}, website={client.get('website_url')!r}"
+        f"{', category=' + repr(client['category']) if client.get('category') else ''}"
+    )
+    user = (
+        f"Keyword: {keyword!r}\n{client_line}\n\nRanking sites:\n"
+        + "\n".join(
+            f"- {s['domain']} | {s.get('title') or ''} | {s.get('snippet') or ''}" for s in sites
+        )
+    )
+    api_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    response = await api_client.messages.create(
+        model=settings.serp_topic_model,
+        max_tokens=settings.serp_topic_max_tokens,
+        system=_TOPIC_SYSTEM,
+        tools=[_TOPIC_TOOL],
+        tool_choice={"type": "tool", "name": "emit_classification"},
+        messages=[{"role": "user", "content": user}],
+    )
+    for block in response.content:
+        if getattr(block, "type", None) == "tool_use" and block.name == "emit_classification":
+            return block.input or {}
+    return {}
+
+
+def collect_snapshot_domains(result_rows: list[dict], client_domain: str) -> list[dict]:
+    """Deduped, ordered ``[{domain, is_client}, ...]`` to fetch Domain Rating for.
+
+    The whole-domain authority targets for a snapshot: every distinct competitor
+    domain among the captured ranking pages, plus exactly one row for the client's
+    own domain (always included, even when the client doesn't rank in the fetched
+    depth). The client's ranking page may surface on a www/subdomain host (e.g.
+    ``www.acme.com``) while the canonical client domain is the bare ``acme.com``
+    (``extract_domain`` strips ``www``); such hosts are folded into the single
+    canonical client row rather than emitted as a separate (mislabelled) target —
+    using the same suffix match as the rest of the module (``_domain_matches``).
+    Competitor order is SERP order; the client row is appended last. Case-insensitive.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    cd = (client_domain or "").lower()
+    for row in result_rows:
+        domain = (row.get("domain") or "").lower()
+        if not domain or domain in seen:
+            continue
+        seen.add(domain)
+        if cd and _domain_matches(domain, cd):
+            continue  # the client's own (sub)domain — folded into the cd row below
+        out.append({"domain": domain, "is_client": False})
+    if cd:
+        out.append({"domain": cd, "is_client": True})
+    return out
 
 
 def _dedup_sources(sources: list[dict]) -> list[dict]:
@@ -177,6 +381,113 @@ def extract_serp_features(items: list[dict]) -> dict:
         "discussions_and_forums": forums,
         "featured_snippet": featured,
     }
+
+
+# SERP item types that signal Google treats the query as locally-intented.
+_LOCAL_FEATURE_TYPES = {"local_pack", "local_finder", "map"}
+
+
+def detect_local_intent(features: dict) -> bool:
+    """Whether the query carries **local intent**, derived from the SERP feature
+    inventory (extract_serp_features output): a local pack / local finder / map
+    means Google surfaced geographic results. Cheap + reliable — no extra API
+    call — and independent of the Labs search-intent call (whose taxonomy has no
+    'local' label), so it still works when that call fails.
+    """
+    if not features:
+        return False
+    types = set(features.get("feature_types") or [])
+    if types & _LOCAL_FEATURE_TYPES:
+        return True
+    # Defensive: local_pack detail captured even if feature_types somehow missed it.
+    return bool(features.get("local_pack"))
+
+
+# Intent signals derived from the SERP composition + organic title patterns.
+# Google's choice of what to show IS an intent classification; this reads it back.
+# Keys are stable identifiers; the frontend maps them to labels/tooltips and
+# MIRRORS this logic for snapshots captured before the column existed. Keep the
+# two in sync (frontend: components/rankings/SerpSnapshots.tsx deriveIntentSignals).
+_FEATURE_SIGNAL_MAP = {
+    "discussions_and_forums": "forums",
+    "video": "video", "video_carousel": "video", "youtube": "video",
+    "top_stories": "news", "news_search": "news", "news": "news",
+    "shopping": "shopping", "google_shopping": "shopping",
+    "commercial_units": "shopping", "popular_products": "shopping", "paid": "shopping",
+    "featured_snippet": "featured_snippet",
+    "people_also_ask": "paa",
+    "knowledge_graph": "knowledge", "knowledge_panel": "knowledge",
+    "images": "images", "image": "images",
+    "recipes": "recipes",
+    "jobs": "jobs",
+    "events": "events",
+}
+
+# A format signal fires only when at least this many of the captured organic
+# titles match — i.e. the format genuinely dominates the SERP (≥6 of the top
+# results), not just a couple of incidental matches.
+_FORMAT_MIN_TITLES = 6
+# Navigational: this many of the top results are homepages (root URLs).
+_NAV_MIN_HOMEPAGES = 3
+
+_LISTICLE_RE = re.compile(
+    r"\b\d{1,3}\s+(best|top|ways|things|tips|ideas|reasons|examples)\b|\btop\s+\d{1,3}\b", re.I
+)
+_COMPARISON_RE = re.compile(r"\bvs\.?\b|\balternatives?\b|\bcomparison\b", re.I)
+_HOWTO_RE = re.compile(r"\bhow to\b|\bguide\b|\btutorial\b|\bstep[- ]by[- ]step\b", re.I)
+_YEAR_RE = re.compile(r"\b20[2-9]\d\b")
+_DEFINITIONAL_RE = re.compile(r"\bwhat (is|are)\b|\bmeaning of\b|\bdefinition\b", re.I)
+
+# Stable display order for the derived signal list.
+_SIGNAL_ORDER = [
+    "forums", "video", "news", "shopping", "featured_snippet", "paa", "knowledge",
+    "images", "recipes", "jobs", "events",
+    "listicle", "comparison", "how_to", "freshness", "definitional", "navigational",
+]
+
+
+def derive_intent_signals(features: dict, organic: list[dict]) -> list[str]:
+    """Normalized intent signals read off the SERP (free — no extra API call).
+
+    Three families: (a) SERP enhancements Google chose to show (forums, video,
+    news, shopping, snippet, PAA, knowledge, images, recipes/jobs/events) from the
+    captured feature inventory; (b) content-format patterns in the organic titles
+    (listicle, comparison, how-to, freshness, definitional); (c) a navigational
+    read when homepages dominate. 'local' is intentionally excluded — it's its own
+    stored flag (local_intent). Returns stable-ordered keys; the frontend renders
+    labels/tooltips and mirrors this for pre-column snapshots.
+    """
+    found: set[str] = set()
+    for t in (features or {}).get("feature_types") or []:
+        key = _FEATURE_SIGNAL_MAP.get(t)
+        if key:
+            found.add(key)
+
+    titles = [(o.get("title") or "") for o in (organic or [])]
+
+    def hits(rx: re.Pattern) -> int:
+        return sum(1 for t in titles if rx.search(t))
+
+    if hits(_LISTICLE_RE) >= _FORMAT_MIN_TITLES:
+        found.add("listicle")
+    if hits(_COMPARISON_RE) >= _FORMAT_MIN_TITLES:
+        found.add("comparison")
+    if hits(_HOWTO_RE) >= _FORMAT_MIN_TITLES:
+        found.add("how_to")
+    if hits(_YEAR_RE) >= _FORMAT_MIN_TITLES:
+        found.add("freshness")
+    if hits(_DEFINITIONAL_RE) >= _FORMAT_MIN_TITLES:
+        found.add("definitional")
+
+    homepages = 0
+    for o in organic or []:
+        url = o.get("url") or ""
+        if url and urlparse(url).path in ("", "/"):
+            homepages += 1
+    if homepages >= _NAV_MIN_HOMEPAGES:
+        found.add("navigational")
+
+    return [s for s in _SIGNAL_ORDER if s in found]
 
 
 def classify_intent(result_items: list[dict]) -> tuple[Optional[str], dict]:
@@ -267,6 +578,34 @@ async def fetch_backlinks_summary(target_url: str) -> dict:
     return parse_backlinks_summary(body)
 
 
+async def fetch_domain_summary(domain: str) -> dict:
+    """Domain Rating (DR) + domain-level referring domains for one domain target.
+
+    Same Backlinks summary endpoint as :func:`fetch_backlinks_summary`, but with
+    a bare-domain target and ``include_subdomains=True`` so DataForSEO returns
+    whole-domain metrics. Its ``rank`` (0–1000) is the DR-equivalent. Reuses
+    ``parse_backlinks_summary`` and relabels ``rank`` → ``domain_rating``.
+    """
+    payload = [
+        {
+            "target": domain,
+            "internal_list_limit": 1,
+            "backlinks_status_type": "live",
+            "include_subdomains": True,
+        }
+    ]
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.post(f"{_BASE_URL}{_BACKLINKS_PATH}", headers=_auth_header(), json=payload)
+        resp.raise_for_status()
+        body = resp.json()
+    summary = parse_backlinks_summary(body)
+    return {
+        "domain_rating": summary["url_rating"],
+        "referring_domains": summary["referring_domains"],
+        "backlinks": summary["backlinks"],
+    }
+
+
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
@@ -303,6 +642,8 @@ async def _capture_and_store(
     organic = extract_organic_results(items, settings.serp_snapshot_top_n)
     aio = extract_aio(items)
     features = extract_serp_features(items)
+    local_intent = detect_local_intent(features)
+    intent_signals = derive_intent_signals(features, organic)
 
     # Intent is best-effort — a failure here must not lose the SERP capture.
     try:
@@ -322,9 +663,45 @@ async def _capture_and_store(
     for o in organic:
         is_client = _domain_matches(o["domain"], domain)
         client_in_top = client_in_top or is_client
-        result_rows.append({**o, "is_client": is_client})
+        result_rows.append({
+            **o,
+            "is_client": is_client,
+            "targeted": is_page_targeted(keyword, o.get("title"), o.get("url")),
+        })
     if client_match and not client_in_top:
-        result_rows.append({**client_match, "is_client": True})
+        result_rows.append({
+            **client_match,
+            "is_client": True,
+            "targeted": is_page_targeted(keyword, client_match.get("title"), client_match.get("url")),
+        })
+    # How many of the top organic results are written for the keyword (the client's
+    # below-depth extra row, appended after `organic`, is excluded from the count).
+    targeted_count = sum(1 for r in result_rows[: len(organic)] if r.get("targeted"))
+
+    # Topical focus (specialist vs generalist) — one best-effort Haiku call.
+    keyword_topic = None
+    generalist_count = None
+    client_topical_focus = None
+    gbp = client.get("gbp") if isinstance(client.get("gbp"), dict) else {}
+    client_ctx = {
+        "name": client.get("name"),
+        "website_url": client.get("website_url"),
+        "category": (gbp or {}).get("category") or ((gbp or {}).get("categories") or [None])[0],
+    }
+    try:
+        raw_topic = await classify_topical_focus(keyword, organic, client_ctx)
+        if raw_topic:
+            comp_domains = [(o.get("domain") or "").lower() for o in organic if o.get("domain")]
+            parsed = parse_topical_classification(raw_topic, comp_domains, domain)
+            keyword_topic = parsed["topic"]
+            client_topical_focus = parsed["client_focus"]
+            generalist_count = parsed["generalist_count"]
+            for r in result_rows:
+                lbl = parsed["by_domain"].get((r.get("domain") or "").lower())
+                if lbl:
+                    r["topical_focus"] = lbl
+    except Exception as exc:
+        logger.warning("serp_snapshot_topic_failed", extra={"keyword": keyword, "error": str(exc)})
 
     # Backlinks enrichment (the pricier per-URL calls), isolated per URL.
     any_backlinks_failed = False
@@ -346,7 +723,26 @@ async def _capture_and_store(
                 "serp_snapshot_backlinks_failed", extra={"url": url, "error": str(exc)}
             )
 
-    status = "partial" if any_backlinks_failed else "complete"
+    # Per-domain Domain Rating (DR): one Backlinks call per unique domain across
+    # the captured pages plus the client's own domain (always included). Isolated
+    # per domain — a failure degrades the snapshot to 'partial', never fatal.
+    domain_rows = collect_snapshot_domains(result_rows, domain)
+    any_domains_failed = False
+    for d in domain_rows:
+        try:
+            summary = await fetch_domain_summary(d["domain"])
+            d["domain_rating"] = summary["domain_rating"]
+            d["referring_domains"] = summary["referring_domains"]
+            d["backlinks"] = summary["backlinks"]
+            d["backlinks_status"] = "ok"
+        except Exception as exc:
+            any_domains_failed = True
+            d["backlinks_status"] = "failed"
+            logger.warning(
+                "serp_snapshot_domain_failed", extra={"domain": d["domain"], "error": str(exc)}
+            )
+
+    status = "partial" if (any_backlinks_failed or any_domains_failed) else "complete"
     snapshot_res = (
         supabase.table("serp_snapshots")
         .insert(
@@ -359,10 +755,16 @@ async def _capture_and_store(
                 "language_code": language_code,
                 "query_intent": intent_label,
                 "intent_probabilities": intent_probs or None,
+                "local_intent": local_intent,
+                "intent_signals": intent_signals or None,
                 "aio_present": aio["present"],
                 "aio_text": aio["text"],
                 "aio_sources": aio["sources"] or None,
                 "serp_features": features,
+                "targeted_count": targeted_count,
+                "keyword_topic": keyword_topic,
+                "generalist_count": generalist_count,
+                "client_topical_focus": client_topical_focus,
                 "client_rank": client_rank,
                 "client_url": client_url,
             }
@@ -382,6 +784,8 @@ async def _capture_and_store(
                     "title": r.get("title"),
                     "description": r.get("description"),
                     "is_client": r.get("is_client", False),
+                    "targeted": r.get("targeted"),
+                    "topical_focus": r.get("topical_focus"),
                     "referring_domains": r.get("referring_domains"),
                     "url_rating": r.get("url_rating"),
                     "backlinks": r.get("backlinks"),
@@ -390,6 +794,40 @@ async def _capture_and_store(
                 for r in result_rows
             ]
         ).execute()
+
+    if domain_rows:
+        try:
+            supabase.table("serp_snapshot_domains").insert(
+                [
+                    {
+                        "snapshot_id": snapshot_id,
+                        "domain": d.get("domain"),
+                        "is_client": d.get("is_client", False),
+                        "domain_rating": d.get("domain_rating"),
+                        "referring_domains": d.get("referring_domains"),
+                        "backlinks": d.get("backlinks"),
+                        "backlinks_status": d.get("backlinks_status", "pending"),
+                    }
+                    for d in domain_rows
+                ]
+            ).execute()
+        except Exception as exc:
+            # The snapshot + results already persisted; don't let a domains-insert
+            # failure propagate (which would miscount this mostly-successful
+            # capture as 'failed'). Degrade to 'partial' so the missing DR is
+            # visible, best-effort.
+            logger.warning(
+                "serp_snapshot_domains_insert_failed",
+                extra={"snapshot_id": snapshot_id, "error": str(exc)},
+            )
+            if status != "partial":
+                status = "partial"
+                try:
+                    supabase.table("serp_snapshots").update({"status": "partial"}).eq(
+                        "id", snapshot_id
+                    ).execute()
+                except Exception:
+                    pass
 
     return status
 
@@ -404,7 +842,7 @@ async def capture_client_snapshots(
     supabase = get_supabase()
     client_res = (
         supabase.table("clients")
-        .select("id, name, website_url, rank_tracking_location_code")
+        .select("id, name, website_url, gbp, rank_tracking_location_code")
         .eq("id", client_id)
         .limit(1)
         .execute()

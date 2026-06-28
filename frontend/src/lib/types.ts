@@ -818,3 +818,151 @@ export interface ClientRankingHealth {
 export interface RankingHealthResponse {
   clients: ClientRankingHealth[]
 }
+
+// --- Competitive SERP Snapshot (rank tracker §14) -------------------------
+export interface SerpSnapshotListItem {
+  id: string
+  captured_at: string
+  status: 'complete' | 'partial' | 'failed'
+  query_intent: string | null
+  aio_present: boolean
+  client_rank: number | null
+  result_count: number
+}
+
+export interface SerpSnapshotResultRow {
+  position: number | null
+  url: string | null
+  domain: string | null
+  title: string | null
+  description: string | null
+  is_client: boolean
+  targeted: boolean | null // page written for the keyword (title/slug coverage)
+  topical_focus: string | null // specialist | generalist | unknown
+  referring_domains: number | null
+  url_rating: number | null // DataForSEO page rank (0–1000), UR-equivalent
+  backlinks: number | null
+  backlinks_status: string
+}
+
+export interface SerpSnapshotDomainRow {
+  domain: string | null
+  is_client: boolean
+  domain_rating: number | null // DataForSEO domain rank (0–1000), DR-equivalent
+  referring_domains: number | null
+  backlinks: number | null
+  backlinks_status: string
+}
+
+export interface SerpAioSource {
+  url: string | null
+  domain: string | null
+  title: string | null
+}
+
+export interface SerpSnapshotDetail {
+  id: string
+  keyword_id: string
+  client_id: string
+  keyword: string
+  captured_at: string
+  status: 'complete' | 'partial' | 'failed'
+  location_code: number | null
+  language_code: string | null
+  query_intent: string | null
+  intent_probabilities: Record<string, number> | null
+  local_intent: boolean
+  intent_signals: string[] | null
+  aio_present: boolean
+  aio_text: string | null
+  aio_sources: SerpAioSource[] | null
+  serp_features: Record<string, unknown> | null
+  targeted_count: number | null
+  keyword_topic: string | null
+  generalist_count: number | null
+  client_topical_focus: string | null
+  client_rank: number | null
+  client_url: string | null
+  error: string | null
+  results: SerpSnapshotResultRow[]
+  domains: SerpSnapshotDomainRow[]
+}
+
+export interface SerpSnapshotCaptureResponse {
+  keyword_id: string
+  status: string // 'enqueued'
+}
+
+// --- SERP Landscape Trends ------------------------------------------------
+export interface SerpTimelinePoint {
+  snapshot_id: string
+  captured_at: string
+  status: string
+  query_intent: string | null
+  local_intent: boolean
+  intent_signals: string[]
+  aio_present: boolean
+  targeted_count: number | null
+  client_rank: number | null
+  client_rd: number | null
+  client_ur: number | null
+  client_dr: number | null
+  signals_added: string[]
+  signals_removed: string[]
+  client_rank_delta: number | null
+  client_rd_delta: number | null
+  client_dr_delta: number | null
+}
+
+export interface SerpTimelineResponse {
+  keyword_id: string
+  keyword: string
+  points: SerpTimelinePoint[]
+}
+
+export interface SerpTrendSeries {
+  signal: string
+  counts: number[]
+  pct: (number | null)[]
+}
+
+export interface SerpChangeItem {
+  keyword_id: string
+  keyword: string
+  captured_at: string
+  added: string[]
+  removed: string[]
+  client_rank_delta: number | null
+}
+
+export interface SerpTrendsResponse {
+  week_ends: string[]
+  keyword_counts: number[]
+  series: SerpTrendSeries[]
+  changes: SerpChangeItem[]
+}
+
+// --- Rankability ----------------------------------------------------------
+export interface RankabilityFactor {
+  text: string
+  direction: 'up' | 'down'
+}
+
+export interface RankabilityItem {
+  keyword_id: string
+  keyword: string
+  has_snapshot: boolean
+  snapshot_id: string | null
+  score: number | null
+  band: string | null
+  factors: RankabilityFactor[]
+  client_rank: number | null
+  search_volume: number | null
+  cpc: number | null
+  est_value: number | null
+  priority: number | null
+}
+
+export interface RankabilityResponse {
+  items: RankabilityItem[]
+}

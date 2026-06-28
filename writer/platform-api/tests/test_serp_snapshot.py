@@ -109,6 +109,81 @@ def test_extract_serp_features_inventory_and_detail():
 
 
 # ---------------------------------------------------------------------------
+# detect_local_intent
+# ---------------------------------------------------------------------------
+def test_detect_local_intent_true_on_local_pack():
+    features = serp_snapshot.extract_serp_features([
+        {"type": "organic", "rank_absolute": 1},
+        {"type": "local_pack", "title": "Joe's Plumbing", "domain": "joes.com"},
+    ])
+    assert serp_snapshot.detect_local_intent(features) is True
+
+
+def test_detect_local_intent_true_on_map_feature_type():
+    # A 'map' item with no local_pack detail still counts (feature_types match).
+    features = serp_snapshot.extract_serp_features([
+        {"type": "organic", "rank_absolute": 1},
+        {"type": "map"},
+    ])
+    assert serp_snapshot.detect_local_intent(features) is True
+
+
+def test_detect_local_intent_false_without_local_features():
+    features = serp_snapshot.extract_serp_features([
+        {"type": "organic", "rank_absolute": 1},
+        {"type": "people_also_ask", "items": [{"title": "q?"}]},
+    ])
+    assert serp_snapshot.detect_local_intent(features) is False
+    assert serp_snapshot.detect_local_intent({}) is False
+
+
+# ---------------------------------------------------------------------------
+# derive_intent_signals
+# ---------------------------------------------------------------------------
+def test_derive_intent_signals_features_and_order():
+    features = {"feature_types": ["people_also_ask", "video", "discussions_and_forums", "shopping"]}
+    out = serp_snapshot.derive_intent_signals(features, [])
+    # Mapped + deduped + in canonical order (forums, video, shopping, paa).
+    assert out == ["forums", "video", "shopping", "paa"]
+
+
+def test_derive_intent_signals_excludes_local():
+    # local_pack/map are NOT emitted here — local intent has its own flag.
+    features = {"feature_types": ["local_pack", "map", "people_also_ask"]}
+    assert serp_snapshot.derive_intent_signals(features, []) == ["paa"]
+
+
+def test_derive_intent_signals_listicle_and_freshness_at_threshold():
+    # The format must dominate: >= 6 matching titles (the _FORMAT_MIN_TITLES bar).
+    organic = [{"title": f"{n} Best Plumbers in 2026", "url": f"https://s{n}.com/best"} for n in range(6)]
+    out = serp_snapshot.derive_intent_signals({}, organic)
+    assert "listicle" in out      # six listicle titles ≥ threshold
+    assert "freshness" in out     # six year-stamped titles ≥ threshold
+
+
+def test_derive_intent_signals_below_threshold_does_not_fire():
+    # Five listicle titles — just under the 6-title threshold.
+    organic = [{"title": f"{n} Best Plumbers", "url": f"https://s{n}.com/x"} for n in range(5)]
+    organic.append({"title": "Emergency plumbing", "url": "https://b.com/y"})
+    assert "listicle" not in serp_snapshot.derive_intent_signals({}, organic)
+
+
+def test_derive_intent_signals_navigational_on_homepages():
+    organic = [
+        {"title": "Acme", "url": "https://acme.com"},
+        {"title": "Brand", "url": "https://brand.com/"},
+        {"title": "Co", "url": "https://co.com"},
+        {"title": "Deep", "url": "https://deep.com/some/path"},
+    ]
+    assert "navigational" in serp_snapshot.derive_intent_signals({}, organic)
+
+
+def test_derive_intent_signals_empty():
+    assert serp_snapshot.derive_intent_signals({}, []) == []
+    assert serp_snapshot.derive_intent_signals(None, None) == []
+
+
+# ---------------------------------------------------------------------------
 # classify_intent
 # ---------------------------------------------------------------------------
 def test_classify_intent_primary_and_secondary():
@@ -128,6 +203,74 @@ def test_classify_intent_primary_and_secondary():
 
 def test_classify_intent_empty():
     assert serp_snapshot.classify_intent([]) == (None, {})
+
+
+# ---------------------------------------------------------------------------
+# is_page_targeted / count_targeted
+# ---------------------------------------------------------------------------
+def test_is_page_targeted_title_and_slug_plural_tolerant():
+    kw = "emergency plumber sydney"
+    # Title covers all tokens (plural "plumbers" matches "plumber").
+    assert serp_snapshot.is_page_targeted(kw, "Emergency Plumbers Sydney - 24/7", "https://x.com/")
+    # Slug covers all tokens even with a generic title.
+    assert serp_snapshot.is_page_targeted(kw, "Home", "https://x.com/emergency-plumber-sydney")
+
+
+def test_is_page_targeted_false_for_loose_or_homepage():
+    kw = "emergency plumber sydney"
+    # Only the city token present — not written for the keyword.
+    assert not serp_snapshot.is_page_targeted(kw, "Sydney City Council", "https://gov.au/")
+    # Generic homepage.
+    assert not serp_snapshot.is_page_targeted(kw, "Joe's Plumbing & Gas", "https://joes.com/")
+
+
+def test_count_targeted_counts_top_results():
+    kw = "roof restoration melbourne"
+    organic = [
+        {"title": "Roof Restoration Melbourne | Best", "url": "https://a.com/roof-restoration-melbourne"},
+        {"title": "Melbourne Weather Today", "url": "https://b.com/weather"},
+        {"title": "About Us", "url": "https://c.com/"},
+        {"title": "Roof Restoration in Melbourne - Quotes", "url": "https://d.com/services"},
+    ]
+    assert serp_snapshot.count_targeted(kw, organic) == 2
+
+
+def test_is_page_targeted_empty_keyword():
+    assert serp_snapshot.is_page_targeted("", "anything", "https://x.com/x") is False
+
+
+# ---------------------------------------------------------------------------
+# parse_topical_classification
+# ---------------------------------------------------------------------------
+def test_parse_topical_classification_counts_generalists_excluding_client():
+    tool_input = {
+        "topic": "tire installation",
+        "client_focus": "specialist",
+        "sites": [
+            {"domain": "carrepair.com", "focus": "generalist"},
+            {"domain": "autoshop.com", "focus": "generalist"},
+            {"domain": "tirepros.com", "focus": "specialist"},
+            {"domain": "acme.com", "focus": "generalist"},  # the client — excluded from count
+        ],
+    }
+    comp = ["carrepair.com", "autoshop.com", "tirepros.com", "acme.com"]
+    out = serp_snapshot.parse_topical_classification(tool_input, comp, "acme.com")
+    assert out["topic"] == "tire installation"
+    assert out["client_focus"] == "specialist"
+    assert out["by_domain"]["carrepair.com"] == "generalist"
+    assert out["generalist_count"] == 2  # client (also generalist) excluded
+
+
+def test_parse_topical_classification_invalid_values_default():
+    out = serp_snapshot.parse_topical_classification(
+        {"topic": "x", "client_focus": "bogus",
+         "sites": [{"domain": "A.com", "focus": "weird"}, {"domain": "b.com", "focus": "specialist"}]},
+        ["a.com", "b.com"], "",
+    )
+    assert out["client_focus"] == "unknown"
+    assert "a.com" not in out["by_domain"]        # invalid focus dropped
+    assert out["by_domain"]["b.com"] == "specialist"
+    assert out["generalist_count"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -151,3 +294,48 @@ def test_parse_backlinks_summary_raises_on_error():
         assert False, "expected RuntimeError"
     except RuntimeError as exc:
         assert "dataforseo_backlinks_error" in str(exc)
+
+
+# ---------------------------------------------------------------------------
+# collect_snapshot_domains
+# ---------------------------------------------------------------------------
+def test_collect_snapshot_domains_dedupes_and_flags_client():
+    rows = [
+        {"domain": "comp.com", "is_client": False},
+        {"domain": "Comp.com", "is_client": False},   # case-insensitive dup
+        {"domain": "acme.com", "is_client": True},
+        {"domain": "other.com", "is_client": False},
+    ]
+    out = serp_snapshot.collect_snapshot_domains(rows, "acme.com")
+    # Competitors in SERP order; the client's domain folded to a single row, last.
+    assert [d["domain"] for d in out] == ["comp.com", "other.com", "acme.com"]
+    assert [d["is_client"] for d in out] == [False, False, True]
+
+
+def test_collect_snapshot_domains_folds_client_www_subdomain():
+    # The client ranks on a www host while the canonical domain is bare (extract_
+    # _domain strips www). It must NOT appear as a separate competitor target.
+    rows = [
+        {"domain": "comp.com", "is_client": False},
+        {"domain": "www.acme.com", "is_client": True},  # client's own page
+    ]
+    out = serp_snapshot.collect_snapshot_domains(rows, "acme.com")
+    assert [d["domain"] for d in out] == ["comp.com", "acme.com"]
+    assert [d["is_client"] for d in out] == [False, True]
+    assert sum(d["is_client"] for d in out) == 1  # exactly one client row, no dup
+
+
+def test_collect_snapshot_domains_appends_client_when_absent():
+    # Client doesn't rank in the captured pages — its domain is still appended
+    # last so it always gets a DR row.
+    rows = [{"domain": "comp.com"}, {"domain": "other.com"}]
+    out = serp_snapshot.collect_snapshot_domains(rows, "acme.com")
+    assert [d["domain"] for d in out] == ["comp.com", "other.com", "acme.com"]
+    assert out[-1] == {"domain": "acme.com", "is_client": True}
+
+
+def test_collect_snapshot_domains_skips_empty_and_no_client_domain():
+    rows = [{"domain": None}, {"domain": ""}, {"domain": "comp.com"}]
+    out = serp_snapshot.collect_snapshot_domains(rows, "")
+    assert [d["domain"] for d in out] == ["comp.com"]
+    assert out[0]["is_client"] is False
