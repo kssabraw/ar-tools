@@ -117,6 +117,7 @@ function kindMeta(kind: string): { label: string; icon: React.ReactNode } {
     case 'maps_competitor': return { label: 'Local competitor', icon: <Users size={18} /> }
     case 'maps_weak_area': return { label: 'Weak coverage area', icon: <MapPin size={18} /> }
     case 'maps_solv_drop': return { label: 'Local share loss', icon: <TrendingDown size={18} /> }
+    case 'brand_search_decline': return { label: 'Brand search down', icon: <TrendingDown size={18} /> }
     default: return { label: 'Opportunity', icon: <TrendingUp size={18} /> }
   }
 }

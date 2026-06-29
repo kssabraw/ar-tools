@@ -28,6 +28,7 @@ from models.rank import (
     KeywordTrendline,
     KeywordPagesResponse,
     KeywordPageRow,
+    BrandSearchResponse,
     MaterializeResponse,
     OverviewResponse,
     GeneratedReport,
@@ -55,6 +56,7 @@ from models.rank import (
     TrendPoint,
 )
 from services import (
+    brand_search,
     dataforseo_rank,
     gsc_service,
     keyword_market,
@@ -359,6 +361,18 @@ async def get_overview(client_id: UUID, auth: dict = Depends(require_auth)) -> O
         hero=hero,
         unread_alert_count=unread_alerts.count or 0,
     )
+
+
+@router.get("/clients/{client_id}/rank/brand-search", response_model=BrandSearchResponse)
+async def get_brand_search(
+    client_id: UUID, days: int = 90, auth: dict = Depends(require_auth)
+) -> BrandSearchResponse:
+    """Branded vs non-branded GSC demand over time — a brand-health signal.
+    Derived from the ingested gsc_query_daily history; empty until a GSC property
+    is verified for the client."""
+    supabase = get_supabase()
+    out = brand_search.load_brand_series(supabase, str(client_id), days=max(7, min(days, 365)))
+    return BrandSearchResponse(**out)
 
 
 @router.get("/clients/{client_id}/rank/striking-distance", response_model=StrikingDistanceResponse)

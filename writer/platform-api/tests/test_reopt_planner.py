@@ -270,6 +270,33 @@ def test_maps_solv_drop_absent_when_no_signal():
     assert not any(a["kind"] == "maps_solv_drop" for a in actions)
 
 
+# ---------------------------------------------------------------------------
+# build_brand_action
+# ---------------------------------------------------------------------------
+def test_brand_action_emitted_on_decline():
+    decline = {"from_impressions": 400, "to_impressions": 200, "delta_pct": 50.0, "weeks": 4}
+    actions = reopt_planner.build_brand_action(CLIENT, decline)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "brand_search_decline"
+    assert a["source"] == "organic"
+    assert "50.0%" in a["diagnosis"]
+    assert a["cta_path"] == f"clients/{CLIENT}/rankings"
+
+
+def test_brand_action_empty_when_no_decline():
+    assert reopt_planner.build_brand_action(CLIENT, None) == []
+
+
+def test_brand_action_sorts_in_hidden_band():
+    decline = {"from_impressions": 400, "to_impressions": 200, "delta_pct": 50.0, "weeks": 4}
+    brand = reopt_planner.build_brand_action(CLIENT, decline)[0]
+    # Below a quick win (tier 2) but it's the top of the hidden band (tier 1).
+    items = [_rankability_item(keyword="q1", priority=1.0)]
+    quick = reopt_planner.build_actions(CLIENT, [], items, {}, cap=None)[0]
+    assert quick["sort"] > brand["sort"]
+
+
 def test_maps_tier_below_cannibal_above_quick():
     # An organic drop and cannibalization outrank a maps decline; a maps decline
     # outranks a quick win and a hidden win (strict tiers).

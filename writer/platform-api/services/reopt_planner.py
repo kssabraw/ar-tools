@@ -9,8 +9,10 @@ Signals (all reads we already produce):
         cannibalization → "consolidate/canonicalize"
         hidden wins     → "refresh & expand to reach page 1"
   - Maps geo-grid declines (maps_alerts)        → "diagnose & strengthen local signals"
-        + competitor surges, and geocoded weak coverage areas
-          (maps_scan_results.report_weak_locations) → "create a location page"
+        + competitor surges, geocoded weak coverage areas
+          (maps_scan_results.report_weak_locations) → "create a location page",
+          and a Share-of-Local-Voice drop (scan-over-scan) → "win back local share"
+  - Brand-search decline (gsc_query_daily)      → "invest in brand-building"
 
 build_actions (organic, pure) + build_maps_actions (local-pack, pure) do the
 diagnosis→action mapping + ranking; build_plan does the reads, merges both
@@ -64,6 +66,12 @@ _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the M
 _MAPS_SOLV_WITHIN = 8_500       # a SoLV drop sits near the top of the Maps tier (just under lost_pack)
 MAPS_WEAK_AREA_MAX = 5          # cap weak-area actions per plan
 SOLV_DROP_MIN_PCT = 10.0        # min Top-3 local-pack share lost (points) to flag a SoLV drop
+
+# Brand-search health (organic). A relative drop in branded impressions, recent
+# window vs prior window, signals softening brand demand.
+_SORT_BRAND = 1 * _TIER         # hidden-win tier; bumped to the top of it via within
+_BRAND_WITHIN = 9_500
+BRAND_DECLINE_MIN_PCT = 25.0    # min relative % fall in branded impressions to flag
 
 # Full compass-octant labels for human-readable sector text.
 _OCTANT_FULL = {
@@ -316,6 +324,27 @@ def build_maps_actions(
     return actions
 
 
+def build_brand_action(client_id: str, brand_decline: "dict | None") -> list[dict]:
+    """A brand-search-health action when branded GSC demand is falling. Pure."""
+    if not brand_decline:
+        return []
+    return [
+        {
+            "kind": "brand_search_decline",
+            "source": "organic",
+            "keyword": "Branded search demand",
+            "diagnosis": f"Branded searches fell {brand_decline.get('delta_pct')}% over the last "
+            f"{brand_decline.get('weeks')} weeks vs the prior {brand_decline.get('weeks')}.",
+            "recommendation": "Brand demand is softening. Invest in brand-building & reputation — reviews, "
+            "PR/mentions, branded campaigns — and check for a tracking or seasonality cause first.",
+            "cta_label": "Open rank tracker",
+            "cta_path": f"clients/{client_id}/rankings",
+            "severity": "info",
+            "sort": _SORT_BRAND + _within(_BRAND_WITHIN),
+        }
+    ]
+
+
 def summarize_plan(actions: list[dict]) -> dict:
     """{summary, severity} for the plan + its notification. Pure."""
     by_kind: dict[str, int] = {}
@@ -336,7 +365,11 @@ def summarize_plan(actions: list[dict]) -> dict:
     )
     if maps:
         parts.append(f"{maps} local-pack issue{'s' if maps != 1 else ''}")
-    other = by_kind.get("cannibalization", 0) + by_kind.get("opportunity", 0)
+    other = (
+        by_kind.get("cannibalization", 0)
+        + by_kind.get("opportunity", 0)
+        + by_kind.get("brand_search_decline", 0)
+    )
     if other:
         parts.append(f"{other} other opportunit{'ies' if other != 1 else 'y'}")
     summary = ", ".join(parts) if parts else "No actions right now — rankings look healthy."
@@ -420,6 +453,20 @@ def _aggregate_weak_areas(results: list[dict]) -> list[dict]:
     return sorted(best.values(), key=lambda a: a.get("pins") or 0, reverse=True)
 
 
+def _fetch_brand_decline(supabase, client_id: str) -> "dict | None":
+    """Best-effort brand-search decline signal (branded GSC impressions falling)."""
+    try:
+        from services import brand_search
+
+        out = brand_search.load_brand_series(supabase, client_id, days=90)
+        if not out.get("gsc_connected"):
+            return None
+        return brand_search.detect_brand_decline(out.get("series") or [], BRAND_DECLINE_MIN_PCT)
+    except Exception as exc:
+        logger.warning("reopt_plan_brand_failed", extra={"client_id": client_id, "error": str(exc)})
+        return None
+
+
 def build_plan(client_id: str, trigger: str = "manual") -> dict:
     """Gather signals, build the ranked plan, store it, and (on the weekly
     cadence) push a digest notification. Returns the stored plan summary."""
@@ -451,11 +498,13 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     gsc = gsc_row[0] if gsc_row else {}
 
     maps_alerts, weak_areas, solv_drop = _fetch_maps_signals(supabase, client_id)
+    brand_decline = _fetch_brand_decline(supabase, client_id)
 
     # Build organic uncapped so Maps actions compete fairly for the combined cap.
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
-    actions = organic + maps_actions
+    brand_actions = build_brand_action(client_id, brand_decline)
+    actions = organic + maps_actions + brand_actions
     actions.sort(key=lambda a: a["sort"], reverse=True)
     actions = actions[:TOTAL_MAX]
     digest = summarize_plan(actions)

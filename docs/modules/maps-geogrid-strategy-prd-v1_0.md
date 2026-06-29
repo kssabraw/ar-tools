@@ -1,6 +1,6 @@
 # Maps Geo-Grid Strategy & Action Plan — Module PRD (v1.0)
 
-**Authored:** 2026-06-29 · **Status:** **Phase 1 built** (Maps Action Plan hybrid + full-parity cadence); Phases 2–3 pending · **Extends Module #5 (Maps / local-pack geo-grid ranker)**
+**Authored:** 2026-06-29 · **Status:** **Phases 1–2 built** (Action Plan hybrid + cadence; Tier A: Share of Local Voice + brand-search); Phase 3 (Tier B competitor intelligence) pending · **Extends Module #5 (Maps / local-pack geo-grid ranker)**
 
 > Read alongside **`docs/suite-architecture-and-roadmap-v1_0.md`** (suite decision log), **`docs/modules/organic-rank-tracker-prd-v1_0.md`** (the Action Plan / reoptimization-planner pattern this extends), and **`CLAUDE.md`** (stack, conventions, RLS/service-role rule). Where this doc and CLAUDE.md disagree on "how it's built in this repo," CLAUDE.md wins; this doc is authoritative for *what this extension should do*.
 
@@ -88,7 +88,7 @@ Each layer adds a data source and an analysis, and (where it implies action) one
 
 **A1. Share of Local Voice (SoLV). — BUILT.** *Data already exists* — each `maps_scan_results` row carries the client's Top-3 coverage (`top3_pins`/`total_pins`) and a stored `competitors` leaderboard (each with its own `top3_pins`). **Derived on read** (no `maps_solv_metrics` table — follows the existing `build_maps_trends`/`build_competitor_trends` pattern; deviation from §5): pure `services/maps_solv.py` (`overall_coverage`/`build_solv`/`detect_solv_drop`), endpoint `GET /clients/{id}/maps/solv`, rendered as a "Share of Local Voice" panel in the Maps History tab (client coverage sparkline + competitor presence table). **Action** (`maps_solv_drop`, sits near the top of the Maps tier, just under `lost_pack`): "Top-3 local-pack share fell from {x}% to {y}% — {competitor} gained ground." Fed into the Action Plan via `reopt_planner._fetch_maps_signals` (compares the two most recent scans; `SOLV_DROP_MIN_PCT`=10pts). No new API calls.
 
-**A2. Brand-search analysis (GSC).** `gsc_query_daily` already holds every query. Classify each as **branded** (client name + variants) vs **non-branded**; track branded impression/click share over time as a brand-health signal. **Action** (`brand_search_decline`): "Branded searches falling — brand demand softening." *~1 day.*
+**A2. Brand-search analysis (GSC). — BUILT.** `gsc_query_daily` already holds every query. Pure `services/brand_search.py` derives brand terms (client name + GBP business name; generic/trade words stripped — manual `brand_terms` override is a follow-up), classifies branded vs non-branded, and buckets a weekly branded-share series (`build_brand_search`); `load_brand_series` resolves the verified property + pages `gsc_query_daily`. Endpoint `GET /clients/{id}/rank/brand-search`; rendered as a GSC-gated "Brand search" tab in Rankings (branded-share KPIs + per-week stacked bars). **Action** (`brand_search_decline`, organic, hidden-win tier): "Branded searches fell {x}% over the last N weeks vs the prior N." Fed into the Action Plan via `reopt_planner._fetch_brand_decline` (`detect_brand_decline`; recent 4 weeks vs prior 4, `BRAND_DECLINE_MIN_PCT`=25% relative). No new table.
 
 ### Tier B — existing APIs + creds, new tables + fetch/analysis (medium)
 

@@ -1103,6 +1103,7 @@ export interface ReoptAction {
     | 'maps_competitor'
     | 'maps_weak_area'
     | 'maps_solv_drop'
+    | 'brand_search_decline'
   source?: 'organic' | 'maps'
   keyword: string
   diagnosis: string
@@ -1150,6 +1151,29 @@ export interface MapsSolvResponse {
   series: MapsSolvPoint[]
   competitors: MapsSolvCompetitorShare[]
   keywords: MapsSolvKeyword[]
+}
+
+// Brand-search analysis (branded vs non-branded GSC demand).
+export interface BrandSearchWeek {
+  week: string
+  branded_impressions: number
+  nonbranded_impressions: number
+  branded_clicks: number
+  nonbranded_clicks: number
+  branded_share_pct: number | null
+}
+export interface BrandSearchTotals {
+  branded_impressions: number
+  nonbranded_impressions: number
+  branded_clicks: number
+  nonbranded_clicks: number
+  branded_share_pct: number | null
+}
+export interface BrandSearchResponse {
+  gsc_connected: boolean
+  brand_terms: string[]
+  series: BrandSearchWeek[]
+  totals: BrandSearchTotals
 }
 
 // Client Reporting module.
