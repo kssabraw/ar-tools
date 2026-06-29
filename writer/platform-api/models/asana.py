@@ -14,10 +14,12 @@ from pydantic import BaseModel
 class AsanaProjectMapping(BaseModel):
     client_id: UUID
     project_gid: str
+    auto_assignee_gids: list[str] = []
 
 
 class AsanaProjectMappingRequest(BaseModel):
     project_gid: str
+    auto_assignee_gids: list[str] = []
 
 
 # ---------------------------------------------------------------------------
@@ -31,6 +33,7 @@ class AsanaTaskTemplateItem(BaseModel):
     category_option_gid: Optional[str] = None
     category_name: Optional[str] = None
     est_hours: Optional[float] = None
+    auto_assign: bool = False
     sort_order: int = 0
     active: bool = True
 

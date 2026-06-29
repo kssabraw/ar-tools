@@ -210,6 +210,14 @@ client; (2) map it in the **Asana Tasks** page (paste project GID → Save); (3)
 its monthly **template** (tasks + assignee + Service Type [+ est. hrs]). Then the
 monthly job adds a `<Month YYYY>` section automatically each month.
 
+**Auto-distribution (built, separate PR):** a template row's assignee can be set to
+**Auto-distribute** instead of a person; the monthly job spreads those tasks across
+the client's **eligible team subset** ("Auto-assign team" picker on the Asana Tasks
+page → `auto_assignee_gids`) by **remaining capacity** (weekly hours − current open
+hours across all clients, weighted by est. hrs). Pinned rows stay pinned. Migration
+`20260629160000` (`auto_assign` + `auto_assignee_gids`) — **applied to live
+Supabase**. Needs tracked team members with capacities set (Workload page).
+
 **⬜ Remaining:**
 1. **Ship the by-name field resolution** (follow-up PR) so per-client setup needs no
    GID lookups — the next build step.

@@ -50,6 +50,67 @@ def get_active_templates(client_id: str) -> list[dict]:
     ).data or []
 
 
+def get_eligible_assignees(client_id: str) -> list[str]:
+    """The per-client auto-distribution eligibility list (Asana user GIDs)."""
+    rows = (
+        get_supabase()
+        .table("asana_client_projects")
+        .select("auto_assignee_gids")
+        .eq("client_id", client_id)
+        .limit(1)
+        .execute()
+    ).data
+    return list(rows[0].get("auto_assignee_gids") or []) if rows else []
+
+
+def get_member_capacity(gids: list[str]) -> dict[str, float]:
+    """Weekly capacity per gid (from asana_team_members; default for the rest)."""
+    if not gids:
+        return {}
+    rows = (
+        get_supabase()
+        .table("asana_team_members")
+        .select("gid, weekly_hours")
+        .in_("gid", gids)
+        .execute()
+    ).data or []
+    by_gid = {r["gid"]: r.get("weekly_hours") for r in rows}
+    return {g: float(by_gid.get(g) or settings.asana_default_weekly_hours) for g in gids}
+
+
+async def assign_auto_tasks(client_id: str, templates: list[dict]) -> int:
+    """Distribute auto-assign template rows across the client's eligible members
+    by remaining capacity, mutating each chosen row's ``assignee_gid`` in place.
+    Returns how many rows got an auto assignment. Best-effort: no eligible members
+    (or feature off) leaves auto rows unassigned."""
+    from services import asana_workload
+
+    if not settings.asana_auto_distribute_enabled:
+        return 0
+    auto_rows = [r for r in templates if r.get("auto_assign") and not r.get("assignee_gid")]
+    if not auto_rows:
+        return 0
+    eligible = get_eligible_assignees(client_id)
+    if not eligible:
+        logger.info("asana_monthly.auto_distribute_no_eligible", extra={"client_id": client_id})
+        return 0
+
+    capacity = get_member_capacity(eligible)
+    open_hours = await asana_workload.open_hours_for_members(eligible)
+    members = [
+        {"gid": g, "remaining": capacity.get(g, settings.asana_default_weekly_hours) - open_hours.get(g, 0.0)}
+        for g in eligible
+    ]
+    task_hours = [float(r.get("est_hours") or settings.asana_default_task_hours) for r in auto_rows]
+    assigned = asana_service.distribute_tasks(task_hours, members)
+    n = 0
+    for row, gid in zip(auto_rows, assigned):
+        if gid:
+            row["assignee_gid"] = gid
+            n += 1
+    return n
+
+
 # ---------------------------------------------------------------------------
 # Core: generate one month for one client
 # ---------------------------------------------------------------------------
@@ -80,6 +141,10 @@ async def generate_month_for_client(client_id: str, target: date) -> dict:
     # Resolve this project's Status / category / effort field GIDs by name
     # (project-local fields differ per project), once for the whole batch.
     fields = await asana_service.resolve_project_fields(project_gid)
+
+    # Capacity-aware auto-distribution: fill in assignees for auto-assign rows
+    # (mutates those rows' assignee_gid in place before payloads are built).
+    await assign_auto_tasks(client_id, templates)
 
     anchor = asana_service.month_insert_anchor_gid(sections)
     new_section = await asana_service.create_section(project_gid, label, insert_before=anchor)

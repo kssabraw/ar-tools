@@ -192,6 +192,31 @@ def test_match_project_fields_option_name_mismatch():
 
 
 # ---------------------------------------------------------------------------
+# distribute_tasks (capacity-aware auto-distribution)
+# ---------------------------------------------------------------------------
+def test_distribute_no_members_all_none():
+    assert asana.distribute_tasks([1.0, 2.0], []) == [None, None]
+
+
+def test_distribute_gives_more_to_who_has_room():
+    members = [{"gid": "a", "remaining": 10.0}, {"gid": "b", "remaining": 5.0}]
+    # Three equal 3h tasks → A (more room) gets two, B gets one.
+    assert asana.distribute_tasks([3.0, 3.0, 3.0], members) == ["a", "a", "b"]
+
+
+def test_distribute_heaviest_task_to_most_room_and_preserves_order():
+    members = [{"gid": "a", "remaining": 5.0}, {"gid": "b", "remaining": 5.0}]
+    # Heaviest-first: the 4h task lands on A (tie→first), the 1h on B.
+    # Result is returned in ORIGINAL order: [1h→B, 4h→A].
+    assert asana.distribute_tasks([1.0, 4.0], members) == ["b", "a"]
+
+
+def test_distribute_accounts_for_negative_remaining():
+    members = [{"gid": "a", "remaining": -3.0}, {"gid": "b", "remaining": 8.0}]
+    assert asana.distribute_tasks([2.0, 2.0], members) == ["b", "b"]
+
+
+# ---------------------------------------------------------------------------
 # Effort extraction + hours-based workload aggregation
 # ---------------------------------------------------------------------------
 def _task(due, hours=None):

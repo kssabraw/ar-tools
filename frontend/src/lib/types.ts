@@ -1308,6 +1308,7 @@ export interface BrandSearchResponse {
 export interface AsanaProjectMapping {
   client_id: string
   project_gid: string
+  auto_assignee_gids: string[]
 }
 
 export interface AsanaTaskTemplateItem {
@@ -1317,6 +1318,7 @@ export interface AsanaTaskTemplateItem {
   category_option_gid: string | null
   category_name: string | null
   est_hours: number | null
+  auto_assign: boolean
   sort_order: number
   active: boolean
 }

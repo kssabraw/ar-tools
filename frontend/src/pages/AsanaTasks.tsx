@@ -8,8 +8,10 @@ import {
 import { api } from '../lib/api'
 import type {
   Client, AsanaProjectMapping, AsanaTaskTemplateItem, AsanaUser,
-  AsanaCategoryOption, AsanaGenerateMonthResponse,
+  AsanaCategoryOption, AsanaGenerateMonthResponse, AsanaTeamMember,
 } from '../lib/types'
+
+const AUTO = '__auto__'  // assignee-select sentinel for "auto-distribute"
 
 // Asana Tasks — the per-client monthly task template editor + a "Generate this
 // month" trigger. Defines what tasks a client should get every month (name +
@@ -56,14 +58,21 @@ export function AsanaTasks() {
     enabled: Boolean(id) && configured && Boolean(mapping?.project_gid),
   })
 
+  const { data: team } = useQuery<AsanaTeamMember[]>({
+    queryKey: ['asana-team-members'],
+    queryFn: () => api.get<AsanaTeamMember[]>(`/asana/team-members`),
+  })
+
   // ── Local editable state ────────────────────────────────────────────
   const [projectGid, setProjectGid] = useState('')
+  const [autoAssignees, setAutoAssignees] = useState<string[]>([])
   const [rows, setRows] = useState<AsanaTaskTemplateItem[]>([])
   const [genResult, setGenResult] = useState<AsanaGenerateMonthResponse | null>(null)
 
   useEffect(() => {
     if (mapping?.project_gid !== undefined) setProjectGid(mapping?.project_gid ?? '')
-  }, [mapping?.project_gid])
+    setAutoAssignees(mapping?.auto_assignee_gids ?? [])
+  }, [mapping?.project_gid, mapping?.auto_assignee_gids])
 
   useEffect(() => {
     if (templates) setRows(templates.map((t) => ({ ...t })))
@@ -72,7 +81,10 @@ export function AsanaTasks() {
   // ── Mutations ───────────────────────────────────────────────────────
   const saveMapping = useMutation({
     mutationFn: () =>
-      api.put<AsanaProjectMapping>(`/clients/${id}/asana/project`, { project_gid: projectGid.trim() }),
+      api.put<AsanaProjectMapping>(`/clients/${id}/asana/project`, {
+        project_gid: projectGid.trim(),
+        auto_assignee_gids: autoAssignees,
+      }),
     onSuccess: (m) => {
       queryClient.setQueryData(['asana-project', id], m)
       queryClient.invalidateQueries({ queryKey: ['asana-categories', id] })
@@ -102,7 +114,7 @@ export function AsanaTasks() {
   const addRow = () =>
     setRows((rs) => [
       ...rs,
-      { name: '', assignee_gid: null, assignee_name: null, category_option_gid: null, category_name: null, est_hours: null, sort_order: rs.length, active: true },
+      { name: '', assignee_gid: null, assignee_name: null, category_option_gid: null, category_name: null, est_hours: null, auto_assign: false, sort_order: rs.length, active: true },
     ])
   const removeRow = (i: number) => setRows((rs) => rs.filter((_, j) => j !== i))
   const move = (i: number, dir: -1 | 1) =>
@@ -115,7 +127,11 @@ export function AsanaTasks() {
     })
 
   const dirty = JSON.stringify(rows) !== JSON.stringify((templates ?? []).map((t) => ({ ...t })))
-  const mappingDirty = projectGid.trim() !== (mapping?.project_gid ?? '')
+  const mappingDirty =
+    projectGid.trim() !== (mapping?.project_gid ?? '') ||
+    JSON.stringify([...autoAssignees].sort()) !== JSON.stringify([...(mapping?.auto_assignee_gids ?? [])].sort())
+  const toggleAuto = (gid: string) =>
+    setAutoAssignees((a) => (a.includes(gid) ? a.filter((g) => g !== gid) : [...a, gid]))
   const canGenerate = configured && Boolean(mapping?.project_gid) && rows.some((r) => r.active && r.name.trim())
 
   return (
@@ -159,6 +175,38 @@ export function AsanaTasks() {
             <Save size={14} /> {saveMapping.isPending ? 'Saving…' : 'Save'}
           </button>
         </div>
+
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #f1f5f9' }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>Auto-assign team</div>
+          <p style={cardSub}>
+            Who can receive this client’s <strong>Auto-distribute</strong> tasks. Each month those
+            tasks go to whoever here has the most spare capacity (set capacity in{' '}
+            <Link to="/workload" style={{ color: '#4f46e5' }}>Workload</Link>).
+          </p>
+          {(team ?? []).length === 0 ? (
+            <div style={{ fontSize: 12, color: '#94a3b8' }}>
+              No tracked team members yet — add them in the Workload page first.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+              {(team ?? []).map((m) => {
+                const on = autoAssignees.includes(m.gid)
+                return (
+                  <button
+                    key={m.gid}
+                    onClick={() => toggleAuto(m.gid)}
+                    style={{
+                      ...chipBtn,
+                      ...(on ? { background: '#eef2ff', borderColor: '#c7d2fe', color: '#4338ca' } : {}),
+                    }}
+                  >
+                    {on ? '✓ ' : ''}{m.name ?? m.gid}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
         {saveMapping.isError && <p style={errText}>{(saveMapping.error as Error).message}</p>}
       </section>
 
@@ -188,15 +236,20 @@ export function AsanaTasks() {
                   onChange={(e) => updateRow(i, { name: e.target.value })}
                 />
                 <select
-                  style={input}
-                  value={r.assignee_gid ?? ''}
+                  style={{ ...input, ...(r.auto_assign ? { color: '#4338ca', fontWeight: 600 } : {}) }}
+                  value={r.auto_assign ? AUTO : (r.assignee_gid ?? '')}
                   disabled={!configured}
                   onChange={(e) => {
+                    if (e.target.value === AUTO) {
+                      updateRow(i, { auto_assign: true, assignee_gid: null, assignee_name: 'Auto' })
+                      return
+                    }
                     const u = users?.find((x) => x.gid === e.target.value)
-                    updateRow(i, { assignee_gid: u?.gid ?? null, assignee_name: u?.name ?? null })
+                    updateRow(i, { auto_assign: false, assignee_gid: u?.gid ?? null, assignee_name: u?.name ?? null })
                   }}
                 >
-                  <option value="">{r.assignee_name ?? 'Unassigned'}</option>
+                  <option value="">Unassigned</option>
+                  <option value={AUTO}>🔀 Auto-distribute</option>
                   {(users ?? []).map((u) => (
                     <option key={u.gid} value={u.gid}>{u.name ?? u.gid}</option>
                   ))}
@@ -330,6 +383,10 @@ const iconBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 6,
   color: '#64748b', background: 'transparent', border: '1px solid #e2e8f0',
   borderRadius: 6, cursor: 'pointer',
+}
+const chipBtn: React.CSSProperties = {
+  fontSize: 12, fontWeight: 600, color: '#475569', background: '#fff',
+  border: '1px solid #cbd5e1', borderRadius: 999, padding: '4px 12px', cursor: 'pointer',
 }
 const emptyBox: React.CSSProperties = {
   border: '1px dashed #cbd5e1', borderRadius: 10, padding: 24, marginTop: 12,

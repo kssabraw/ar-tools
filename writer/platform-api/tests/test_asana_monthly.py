@@ -11,7 +11,7 @@ from datetime import date
 import pytest
 
 from config import settings
-from services import asana_monthly, asana_service
+from services import asana_monthly, asana_service, asana_workload
 
 
 @pytest.fixture(autouse=True)
@@ -103,3 +103,43 @@ async def test_generate_skips_when_unconfigured(monkeypatch):
     result = await asana_monthly.generate_month_for_client("c1", date(2026, 7, 1))
     assert result["status"] == "skipped"
     assert result["reason"] == "asana_not_configured"
+
+
+# ---------------------------------------------------------------------------
+# Auto-distribution (capacity-aware)
+# ---------------------------------------------------------------------------
+async def test_assign_auto_tasks_distributes_by_capacity(monkeypatch):
+    monkeypatch.setattr(settings, "asana_auto_distribute_enabled", True)
+    monkeypatch.setattr(asana_monthly, "get_eligible_assignees", lambda cid: ["a", "b"])
+    monkeypatch.setattr(asana_monthly, "get_member_capacity", lambda gids: {"a": 40.0, "b": 40.0})
+
+    async def _open(gids):
+        return {"a": 30.0, "b": 0.0}  # a is nearly full, b is free
+
+    monkeypatch.setattr(asana_workload, "open_hours_for_members", _open)
+
+    templates = [
+        {"name": "x", "auto_assign": True, "est_hours": 5},
+        {"name": "y", "auto_assign": True, "est_hours": 5},
+        {"name": "z", "assignee_gid": "pinned"},  # pinned — untouched
+    ]
+    n = await asana_monthly.assign_auto_tasks("c1", templates)
+    assert n == 2
+    # b has far more remaining (40 vs 10) → both auto tasks go to b.
+    assert templates[0]["assignee_gid"] == "b"
+    assert templates[1]["assignee_gid"] == "b"
+    assert templates[2]["assignee_gid"] == "pinned"
+
+
+async def test_assign_auto_tasks_noop_when_no_eligible(monkeypatch):
+    monkeypatch.setattr(asana_monthly, "get_eligible_assignees", lambda cid: [])
+    templates = [{"name": "x", "auto_assign": True}]
+    n = await asana_monthly.assign_auto_tasks("c1", templates)
+    assert n == 0
+    assert "assignee_gid" not in templates[0] or templates[0].get("assignee_gid") is None
+
+
+async def test_assign_auto_tasks_off(monkeypatch):
+    monkeypatch.setattr(settings, "asana_auto_distribute_enabled", False)
+    templates = [{"name": "x", "auto_assign": True}]
+    assert await asana_monthly.assign_auto_tasks("c1", templates) == 0

@@ -71,6 +71,27 @@ async def _member_entry(member: dict, name_by: dict) -> dict:
     }
 
 
+async def open_hours_for_members(gids: list[str]) -> dict[str, float]:
+    """Current open-task hours per member (best-effort; a failed fetch → 0).
+
+    Reused by the monthly job's auto-distribution to seed each member's load.
+    """
+    async def _hours(gid: str) -> tuple[str, float]:
+        try:
+            tasks = await asana_service.list_member_open_tasks(gid)
+        except Exception as exc:
+            logger.warning("asana_workload.open_hours_failed", extra={"gid": gid, "error": str(exc)})
+            return gid, 0.0
+        total = sum(
+            asana_service.task_hours(t, settings.asana_effort_field_gid, settings.asana_default_task_hours)
+            for t in tasks
+        )
+        return gid, total
+
+    results = await asyncio.gather(*[_hours(g) for g in gids])
+    return dict(results)
+
+
 async def build_team_workload() -> dict:
     """Build the effort-weighted Team Workload report for the tracked team."""
     if not asana_service.is_configured() or not settings.asana_workload_enabled:
