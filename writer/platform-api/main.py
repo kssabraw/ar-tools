@@ -18,6 +18,7 @@ from routers.brand import router as brand_router
 from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
 from routers.clients import router as clients_router
+from routers.audits import router as audits_router
 from routers.dashboard import router as dashboard_router
 from routers.engagements import router as engagements_router
 from routers.files import router as files_router
@@ -130,6 +131,7 @@ app.include_router(brand_router)
 app.include_router(brand_voice_router)
 app.include_router(briefs_router)
 app.include_router(clients_router)
+app.include_router(audits_router)
 app.include_router(dashboard_router)
 app.include_router(engagements_router)
 app.include_router(files_router)
