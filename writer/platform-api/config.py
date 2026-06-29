@@ -230,6 +230,30 @@ class Settings(BaseSettings):
     maps_alert_area_rank_drop: float = 2.0          # per-octant avg-rank worsening (spots) → area_decline
     maps_alert_competitor_surge_pins: int = 5       # min newly-above pins for competitor_surge
 
+    # Competitor GBP intelligence (Tier B / B1): how many of the latest scan's
+    # top local-pack competitors to fetch full GBP profiles for (each fetch is an
+    # Outscraper call — capped to bound spend), and the auto-refresh interval.
+    competitor_gbp_max: int = 8
+    competitor_gbp_interval_days: int = 30
+
+    # Review analytics (Tier B / B3): how many newest reviews to pull per listing
+    # (client + each competitor) for volume/velocity/rating analysis, and the min
+    # reviews/month the client must trail the competitor median by to flag a gap.
+    review_intel_depth: int = 100
+    review_gap_min_behind: float = 2.0
+
+    # Backlink profiling (Tier B / B4): thresholds for flagging an authority gap
+    # vs the competitor median (DR points behind; referring-domains behind).
+    backlink_dr_min_behind: float = 10.0
+    backlink_rd_min_behind: int = 25
+
+    # On-site content comparison (Tier B / B5): how many competitor pages to
+    # scrape per keyword, and the thresholds to flag a content gap (words thinner
+    # than the competitor median; distinct topics competitors cover the client lacks).
+    content_intel_max_pages: int = 4
+    content_depth_behind_min: int = 300
+    content_topic_gap_min: int = 3
+
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
     # location). Set to 0 to disable caching.

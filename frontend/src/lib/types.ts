@@ -1094,7 +1094,22 @@ export interface UnreadCountsResponse {
 
 // Reoptimization planner (Action Plan).
 export interface ReoptAction {
-  kind: 'rank_drop' | 'quick_win' | 'cannibalization' | 'opportunity'
+  kind:
+    | 'rank_drop'
+    | 'quick_win'
+    | 'cannibalization'
+    | 'opportunity'
+    | 'maps_decline'
+    | 'maps_competitor'
+    | 'maps_weak_area'
+    | 'maps_solv_drop'
+    | 'gbp_gap'
+    | 'review_gap'
+    | 'backlink_gap'
+    | 'content_gap'
+    | 'local_relevance'
+    | 'brand_search_decline'
+  source?: 'organic' | 'maps'
   keyword: string
   diagnosis: string
   recommendation: string
@@ -1107,11 +1122,186 @@ export interface ReoptAction {
 export interface ReoptPlan {
   id: string
   client_id: string
-  trigger: 'scheduled' | 'drop' | 'manual'
+  trigger: 'scheduled' | 'drop' | 'maps_drop' | 'manual'
   summary: string | null
   items: ReoptAction[]
   action_count: number
   created_at: string
+}
+
+// Share of Local Voice (SoLV) — Maps geo-grid.
+export interface MapsSolvCompetitorShare {
+  place_id: string | null
+  name: string | null
+  top3_pins: number
+  share_pct: number | null
+}
+export interface MapsSolvPoint {
+  scan_id: string
+  completed_at: string | null
+  trigger: string
+  total_pins: number
+  client_top3_pins: number
+  client_coverage_pct: number | null
+  client_coverage_top10_pct: number | null
+}
+export interface MapsSolvKeyword {
+  keyword: string | null
+  total_pins: number
+  client_top3_pins: number
+  client_coverage_pct: number | null
+  competitor_shares: MapsSolvCompetitorShare[]
+}
+export interface MapsSolvResponse {
+  series: MapsSolvPoint[]
+  competitors: MapsSolvCompetitorShare[]
+  keywords: MapsSolvKeyword[]
+}
+
+// Competitor GBP intelligence (Maps Tier B / B1).
+export interface MapsCompetitorProfile {
+  place_id: string | null
+  name: string | null
+  primary_category: string | null
+  gbp_categories: string[]
+  rating: number | null
+  review_count: number | null
+  website: string | null
+  phone: string | null
+  address: string | null
+  photo: string | null
+  has_hours: boolean | null
+  business_type: string | null
+  found_pins: number | null
+  top3_pins: number | null
+  captured_at: string | null
+}
+export interface MapsCompetitorIntelResponse {
+  profiles: MapsCompetitorProfile[]
+  captured_at: string | null
+}
+export interface MapsGbpAuditCheck {
+  key: string
+  label: string
+  ok: boolean
+  detail: string
+}
+export interface MapsGbpReviewGap {
+  client: number
+  competitor_median: number
+  deficit: number
+}
+export interface MapsGbpAuditResponse {
+  score: number | null
+  competitor_count: number
+  checks: MapsGbpAuditCheck[]
+  gaps: string[]
+  category_gaps: string[]
+  review_gap: MapsGbpReviewGap | null
+}
+
+// Local Relevance Scorecard (Maps Tier B / B6).
+export interface MapsRelevanceRow {
+  place_id: string | null
+  is_client: boolean
+  name: string | null
+  domain: string | null
+  gbp_url: string | null
+  category: string | null
+  category_match: 'exact' | 'related' | 'none' | null
+  business_type: string | null
+  reviews_total: number | null
+  reviews_service_mentions: number | null
+  reviews_location_mentions: number | null
+  page_service_relevant: boolean | null
+  page_location_relevant: boolean | null
+  domain_rating: number | null
+  page_ur: number | null
+}
+export interface MapsRelevanceResponse {
+  keyword: string | null
+  location: string | null
+  client: MapsRelevanceRow | null
+  competitors: MapsRelevanceRow[]
+}
+
+// On-site content comparison (Maps Tier B / B5).
+export interface MapsContentAnalysis {
+  keyword: string | null
+  client_url: string | null
+  client_word_count: number | null
+  competitor_median_word_count: number | null
+  depth_behind: number | null
+  topic_gaps: string[]
+  competitor_urls: string[]
+  captured_at: string | null
+}
+export interface MapsContentIntelResponse {
+  analyses: MapsContentAnalysis[]
+}
+
+// Backlink profiling (Maps Tier B / B4).
+export interface MapsBacklinkStats {
+  domain: string | null
+  domain_rating: number | null
+  referring_domains: number | null
+  backlinks: number | null
+}
+export interface MapsBacklinkComparison {
+  competitor_median_dr: number | null
+  competitor_median_referring_domains: number | null
+  dr_behind: number | null
+  referring_domains_behind: number | null
+}
+export interface MapsBacklinkIntelResponse {
+  client: MapsBacklinkStats
+  competitors: MapsBacklinkStats[]
+  comparison: MapsBacklinkComparison
+}
+
+// Review analytics (Maps Tier B / B3).
+export interface MapsReviewStats {
+  place_id: string | null
+  name: string | null
+  count: number
+  avg_rating: number | null
+  rating_distribution: Record<string, number>
+  velocity_per_month: number
+  recent_negatives: number
+  last_review_date: string | null
+}
+export interface MapsReviewComparison {
+  competitor_median_velocity: number | null
+  competitor_median_rating: number | null
+  velocity_behind: number | null
+}
+export interface MapsReviewIntelResponse {
+  client: MapsReviewStats
+  competitors: MapsReviewStats[]
+  comparison: MapsReviewComparison
+}
+
+// Brand-search analysis (branded vs non-branded GSC demand).
+export interface BrandSearchWeek {
+  week: string
+  branded_impressions: number
+  nonbranded_impressions: number
+  branded_clicks: number
+  nonbranded_clicks: number
+  branded_share_pct: number | null
+}
+export interface BrandSearchTotals {
+  branded_impressions: number
+  nonbranded_impressions: number
+  branded_clicks: number
+  nonbranded_clicks: number
+  branded_share_pct: number | null
+}
+export interface BrandSearchResponse {
+  gsc_connected: boolean
+  brand_terms: string[]
+  series: BrandSearchWeek[]
+  totals: BrandSearchTotals
 }
 
 // Asana task integration.

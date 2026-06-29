@@ -9,7 +9,9 @@ import type {
   MapsChangesResponse, MapsCompetitorTrendsResponse,
   MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
   MapsPeriodsResponse, MapsRadius, MapsRunResponse,
-  MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsTrendsResponse,
+  MapsBacklinkIntelResponse, MapsCompetitorIntelResponse, MapsContentIntelResponse,
+  MapsGbpAuditResponse, MapsRelevanceResponse, MapsRelevanceRow, MapsReviewIntelResponse,
+  MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsSolvResponse, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
 import { Markdown } from '../components/Markdown'
@@ -682,7 +684,14 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
         </Link>
       </div>
       <TrendPanel trends={trends} />
+      <SolvPanel clientId={clientId} />
+      <RelevanceScorecard clientId={clientId} />
       <CompetitorMomentum clientId={clientId} />
+      <CompetitorIntel clientId={clientId} />
+      <ReviewIntel clientId={clientId} />
+      <BacklinkIntel clientId={clientId} />
+      <ContentIntel clientId={clientId} />
+      <GbpAudit clientId={clientId} />
       {scans.length === 0 ? (
         <div style={card}><p style={muted}>No scans yet.</p></div>
       ) : (
@@ -800,6 +809,483 @@ function TrendPanel({ trends }: { trends?: MapsTrendsResponse }) {
       ) : (
         <TrendChart keywords={keywords} metric={TREND_METRICS.find(m => m.key === metric)!} />
       )}
+    </div>
+  )
+}
+
+// ── Share of Local Voice (our Top-3 presence vs competitors) ────────────────
+function SolvPanel({ clientId }: { clientId: string }) {
+  const { data } = useQuery<MapsSolvResponse>({
+    queryKey: ['maps-solv', clientId],
+    queryFn: () => api.get<MapsSolvResponse>(`/clients/${clientId}/maps/solv`),
+  })
+  const series = data?.series ?? []
+  const competitors = data?.competitors ?? []
+  const latest = series.length ? series[series.length - 1] : undefined
+  const first = series.length ? series[0] : undefined
+  const delta = latest?.client_coverage_pct != null && first?.client_coverage_pct != null
+    ? Math.round((latest.client_coverage_pct - first.client_coverage_pct) * 10) / 10
+    : null
+  const up = delta != null && delta > 0
+  const down = delta != null && delta < 0
+  const deltaColor = up ? '#16a34a' : down ? '#dc2626' : '#94a3b8'  // for us, up = good
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 13, color: '#334155' }
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Share of Local Voice</h2>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+        Your local-pack presence — % of grid pins where you rank in the top 3 — over time, and how the top
+        competitors compare. (Presence share; it doesn’t sum to 100%.)
+      </p>
+      {!latest ? (
+        <p style={muted}>No completed scans yet — run a scan to see your local share.</p>
+      ) : (
+        <>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 10 }}>
+            <span style={{ fontSize: 28, fontWeight: 700, color: '#0f172a' }}>
+              {latest.client_coverage_pct != null ? `${Math.round(latest.client_coverage_pct)}%` : '—'}
+            </span>
+            <span style={{ fontSize: 13, color: '#64748b' }}>top-3 presence</span>
+            {delta != null && (
+              <span style={{ fontSize: 13, color: deltaColor, fontWeight: 600 }}>
+                {up ? '▲' : down ? '▼' : '–'} {Math.abs(delta)} pts since first scan
+              </span>
+            )}
+            <span style={{ marginLeft: 'auto' }}>
+              <PctSparkline values={series.map(p => p.client_coverage_pct)} color={down ? '#dc2626' : '#16a34a'} width={120} />
+            </span>
+          </div>
+          {competitors.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={{ ...th, textAlign: 'left' }}>Competitor</th><th style={th}>Top-3 presence</th><th style={th}>Pins</th>
+              </tr></thead>
+              <tbody>
+                {competitors.map(c => (
+                  <tr key={c.place_id ?? c.name} style={{ borderTop: '1px solid #f1f5f9' }}>
+                    <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
+                    <td style={td}>{c.share_pct != null ? `${Math.round(c.share_pct)}%` : '—'}</td>
+                    <td style={{ ...td, color: '#94a3b8' }}>{c.top3_pins}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── On-site content comparison (page depth + topic gaps) ────────────────────
+function ContentIntel({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsContentIntelResponse>({
+    queryKey: ['maps-content-intel', clientId],
+    queryFn: () => api.get<MapsContentIntelResponse>(`/clients/${clientId}/maps/content-intel`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/content-intel/refresh`, {}),
+    onSuccess: () => { setQueued(true); queryClient.invalidateQueries({ queryKey: ['maps-content-intel', clientId] }) },
+  })
+  const analyses = data?.analyses ?? []
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Content vs competitors</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            How your ranking page compares to the top organic pages for a keyword — content depth and topics
+            they cover that you don’t.
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Compare your page to the top competitor pages for your first Maps keyword">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {analyses.length === 0 ? (
+        <p style={muted}>No content comparison yet. Click <strong>Refresh</strong> to analyze your first Maps keyword.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {analyses.map(a => (
+            <div key={a.keyword} style={{ borderTop: '1px solid #f1f5f9', paddingTop: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, fontSize: 14, color: '#0f172a' }}>{a.keyword}</span>
+                <span style={{ fontSize: 12, color: '#64748b' }}>
+                  your page {a.client_word_count?.toLocaleString() ?? '—'} words · competitor median{' '}
+                  {a.competitor_median_word_count?.toLocaleString() ?? '—'}
+                  {a.depth_behind != null && a.depth_behind > 0 && (
+                    <span style={{ color: '#b45309', fontWeight: 600 }}> · {a.depth_behind.toLocaleString()} thinner</span>
+                  )}
+                </span>
+              </div>
+              {a.topic_gaps.length > 0 && (
+                <div style={{ fontSize: 13, color: '#334155', marginTop: 4 }}>
+                  <strong>Missing topics:</strong> {a.topic_gaps.join(' · ')}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
+    </div>
+  )
+}
+
+// ── Backlink authority (your domain vs competitors) ─────────────────────────
+function BacklinkIntel({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsBacklinkIntelResponse>({
+    queryKey: ['maps-backlink-intel', clientId],
+    queryFn: () => api.get<MapsBacklinkIntelResponse>(`/clients/${clientId}/maps/backlink-intel`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/backlink-intel/refresh`, {}),
+    onSuccess: () => { setQueued(true); queryClient.invalidateQueries({ queryKey: ['maps-backlink-intel', clientId] }) },
+  })
+  const client = data?.client
+  const competitors = data?.competitors ?? []
+  const cmp = data?.comparison
+  const drBehind = cmp?.dr_behind
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 13, color: '#334155' }
+  const hasData = !!client?.domain || competitors.length > 0
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Backlink authority</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            Domain Rating, referring domains and total backlinks — you vs your top local-pack competitors.
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Pull fresh backlink metrics for you + competitors">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {!hasData ? (
+        <p style={muted}>No backlink data yet. Run a scan to find competitors, then click <strong>Refresh</strong>.</p>
+      ) : (
+        <>
+          {drBehind != null && drBehind > 0 && (
+            <p style={{ fontSize: 13, color: '#b45309', margin: '0 0 10px', fontWeight: 600 }}>
+              ⚠ Your Domain Rating trails the competitor median ({cmp?.competitor_median_dr}) by {drBehind}.
+            </p>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Domain</th>
+              <th style={th}>DR</th><th style={th}>Ref. domains</th><th style={th}>Backlinks</th>
+            </tr></thead>
+            <tbody>
+              <tr style={{ borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: '#0f172a' }}>You{client?.domain ? ` · ${client.domain}` : ''}</td>
+                <td style={{ ...td, fontWeight: 600 }}>{client?.domain_rating ?? '—'}</td>
+                <td style={td}>{client?.referring_domains?.toLocaleString() ?? '—'}</td>
+                <td style={td}>{client?.backlinks?.toLocaleString() ?? '—'}</td>
+              </tr>
+              {competitors.map(c => (
+                <tr key={c.domain} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ ...td, textAlign: 'left', color: '#64748b' }}>{c.domain ?? '—'}</td>
+                  <td style={td}>{c.domain_rating ?? '—'}</td>
+                  <td style={td}>{c.referring_domains?.toLocaleString() ?? '—'}</td>
+                  <td style={td}>{c.backlinks?.toLocaleString() ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
+    </div>
+  )
+}
+
+// ── Review analytics (your reviews vs competitors) ──────────────────────────
+function ReviewIntel({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsReviewIntelResponse>({
+    queryKey: ['maps-review-intel', clientId],
+    queryFn: () => api.get<MapsReviewIntelResponse>(`/clients/${clientId}/maps/review-intel`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/review-intel/refresh`, {}),
+    onSuccess: () => { setQueued(true); queryClient.invalidateQueries({ queryKey: ['maps-review-intel', clientId] }) },
+  })
+  const client = data?.client
+  const competitors = data?.competitors ?? []
+  const cmp = data?.comparison
+  const behind = cmp?.velocity_behind
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 13, color: '#334155' }
+  const hasData = (client?.count ?? 0) > 0 || competitors.length > 0
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Review analytics</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            Review volume, velocity (reviews/month) and rating — you vs your top local-pack competitors.
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Pull fresh reviews for you + competitors">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {!hasData ? (
+        <p style={muted}>No reviews captured yet. Run a scan to find competitors, then click <strong>Refresh</strong>.</p>
+      ) : (
+        <>
+          {behind != null && behind > 0 && (
+            <p style={{ fontSize: 13, color: '#b45309', margin: '0 0 10px', fontWeight: 600 }}>
+              ⚠ Your review velocity ({client?.velocity_per_month}/mo) trails the competitor median
+              ({cmp?.competitor_median_velocity}/mo) by {behind}/mo.
+            </p>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Business</th>
+              <th style={th}>Reviews</th><th style={th}>Rating</th><th style={th}>Per month</th><th style={th}>Recent ✗</th>
+            </tr></thead>
+            <tbody>
+              <tr style={{ borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: '#0f172a' }}>You</td>
+                <td style={{ ...td, fontWeight: 600 }}>{client?.count ?? 0}</td>
+                <td style={td}>{client?.avg_rating != null ? client.avg_rating.toFixed(1) : '—'}</td>
+                <td style={td}>{client?.velocity_per_month ?? 0}</td>
+                <td style={{ ...td, color: (client?.recent_negatives ?? 0) > 0 ? '#dc2626' : '#94a3b8' }}>{client?.recent_negatives ?? 0}</td>
+              </tr>
+              {competitors.map(c => (
+                <tr key={c.place_id ?? c.name} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
+                  <td style={td}>{c.count}</td>
+                  <td style={td}>{c.avg_rating != null ? c.avg_rating.toFixed(1) : '—'}</td>
+                  <td style={td}>{c.velocity_per_month}</td>
+                  <td style={{ ...td, color: c.recent_negatives > 0 ? '#dc2626' : '#94a3b8' }}>{c.recent_negatives}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
+    </div>
+  )
+}
+
+// ── GBP profile audit (your profile vs competitors) ─────────────────────────
+function GbpAudit({ clientId }: { clientId: string }) {
+  const { data } = useQuery<MapsGbpAuditResponse>({
+    queryKey: ['maps-gbp-audit', clientId],
+    queryFn: () => api.get<MapsGbpAuditResponse>(`/clients/${clientId}/maps/gbp-audit`),
+  })
+  if (!data) return null
+  const score = data.score
+  const scoreColor = score == null ? '#94a3b8' : score >= 85 ? '#16a34a' : score >= 60 ? '#d97706' : '#dc2626'
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>GBP profile audit</h2>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+        How complete your Google Business Profile is, and gaps vs your top local-pack competitors.
+      </p>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 12 }}>
+        <span style={{ fontSize: 28, fontWeight: 700, color: scoreColor }}>{score != null ? `${score}` : '—'}</span>
+        <span style={{ fontSize: 13, color: '#64748b' }}>/ 100 completeness{data.competitor_count ? ` · vs ${data.competitor_count} competitors` : ''}</span>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: data.category_gaps.length || data.review_gap ? 12 : 0 }}>
+        {data.checks.map(c => (
+          <span key={c.key} title={c.detail} style={{
+            fontSize: 12, fontWeight: 600, borderRadius: 999, padding: '3px 10px',
+            color: c.ok ? '#166534' : '#b91c1c', background: c.ok ? '#dcfce7' : '#fef2f2',
+          }}>{c.ok ? '✓' : '✗'} {c.label}</span>
+        ))}
+      </div>
+      {data.category_gaps.length > 0 && (
+        <p style={{ fontSize: 13, color: '#334155', margin: '0 0 6px' }}>
+          <strong>Missing categories</strong> competitors use: {data.category_gaps.join(', ')}.
+        </p>
+      )}
+      {data.review_gap && (
+        <p style={{ fontSize: 13, color: '#334155', margin: 0 }}>
+          <strong>Review gap:</strong> you have {data.review_gap.client.toLocaleString()} vs a competitor median of{' '}
+          {data.review_gap.competitor_median.toLocaleString()} (~{data.review_gap.deficit.toLocaleString()} behind).
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ── Competitor intelligence (their GBP — why they win) ──────────────────────
+function CompetitorIntel({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsCompetitorIntelResponse>({
+    queryKey: ['maps-competitor-intel', clientId],
+    queryFn: () => api.get<MapsCompetitorIntelResponse>(`/clients/${clientId}/maps/competitor-intel`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/competitor-intel/refresh`, {}),
+    onSuccess: () => {
+      setQueued(true)
+      queryClient.invalidateQueries({ queryKey: ['maps-competitor-intel', clientId] })
+    },
+  })
+  const profiles = data?.profiles ?? []
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 13, color: '#334155' }
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Competitor intelligence</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            The Google Business Profiles of your top local-pack competitors — categories, reviews, photos,
+            hours — so you can see why they win.
+            {data?.captured_at && <span style={{ color: '#94a3b8' }}> Captured {relativeTime(data.captured_at)}.</span>}
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Fetch fresh GBP profiles for the top local-pack competitors">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {profiles.length === 0 ? (
+        <p style={muted}>
+          No competitor profiles yet. Run a scan to find local-pack competitors, then click <strong>Refresh</strong>.
+        </p>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={{ ...th, textAlign: 'left' }}>Competitor</th>
+            <th style={{ ...th, textAlign: 'left' }}>Primary category</th>
+            <th style={th}>Type</th>
+            <th style={th}>Rating</th><th style={th}>Reviews</th><th style={th}>Top-3 pins</th><th style={th}>Hours</th>
+          </tr></thead>
+          <tbody>
+            {profiles.map(p => (
+              <tr key={p.place_id ?? p.name} style={{ borderTop: '1px solid #f1f5f9' }}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: '#0f172a' }}>
+                  {p.website ? <a href={p.website} target="_blank" rel="noreferrer" style={{ color: '#0f172a' }}>{p.name ?? '—'}</a> : (p.name ?? '—')}
+                </td>
+                <td style={{ ...td, textAlign: 'left', color: '#64748b' }}>{p.primary_category ?? '—'}</td>
+                <td style={td}>{bizTypeLabel(p.business_type)}</td>
+                <td style={td}>{p.rating != null ? p.rating.toFixed(1) : '—'}</td>
+                <td style={td}>{p.review_count != null ? p.review_count.toLocaleString() : '—'}</td>
+                <td style={td}>{p.top3_pins ?? '—'}</td>
+                <td style={td}>{p.has_hours ? '✓' : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
+    </div>
+  )
+}
+
+// GBP business type → short label (SAB / Physical / Hybrid).
+function bizTypeLabel(t: string | null): string {
+  switch (t) {
+    case 'sab': return 'SAB'
+    case 'physical': return 'Physical'
+    case 'hybrid': return 'Hybrid'
+    default: return '—'
+  }
+}
+
+// ── Local Relevance Scorecard (do the signals match the service/location?) ──
+function RelevanceScorecard({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsRelevanceResponse>({
+    queryKey: ['maps-relevance', clientId],
+    queryFn: () => api.get<MapsRelevanceResponse>(`/clients/${clientId}/maps/relevance`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/relevance/refresh`, {}),
+    onSuccess: () => { setQueued(true); queryClient.invalidateQueries({ queryKey: ['maps-relevance', clientId] }) },
+  })
+  const rows: MapsRelevanceRow[] = []
+  if (data?.client) rows.push(data.client)
+  rows.push(...(data?.competitors ?? []))
+  const th: React.CSSProperties = { padding: '6px 6px', textAlign: 'center', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.02em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 6px', textAlign: 'center', fontSize: 13, color: '#334155' }
+  const yn = (v: boolean | null) => v == null ? '—' : v ? <span style={{ color: '#16a34a' }}>✓</span> : <span style={{ color: '#dc2626' }}>✗</span>
+  const catBadge = (m: string | null) => {
+    const c = m === 'exact' ? { fg: '#166534', bg: '#dcfce7' } : m === 'related' ? { fg: '#b45309', bg: '#fffbeb' } : { fg: '#b91c1c', bg: '#fef2f2' }
+    return <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 999, padding: '2px 8px', color: c.fg, background: c.bg }}>{m ?? '—'}</span>
+  }
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Local relevance scorecard</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            For {data?.keyword ? <strong>“{data.keyword}”</strong> : 'the tracked service'}{data?.location ? ` in ${data.location}` : ''} — does each
+            ranking signal actually line up with the service &amp; location? You vs competitors.
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Rebuild the relevance scorecard for your first Maps keyword">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {rows.length === 0 ? (
+        <p style={muted}>No scorecard yet. Click <strong>Refresh</strong> to build it for your first Maps keyword.</p>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Business</th>
+              <th style={th}>Type</th>
+              <th style={th}>Category</th>
+              <th style={th}>Reviews · svc</th>
+              <th style={th}>Reviews · loc</th>
+              <th style={th}>Page · svc</th>
+              <th style={th}>Page · loc</th>
+              <th style={th}>DR</th>
+              <th style={th}>Page UR</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.place_id ?? r.name} style={{ borderTop: '1px solid #f1f5f9', background: r.is_client ? '#f8fafc' : undefined }}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: r.is_client ? 700 : 400, color: '#0f172a' }}>
+                    {r.is_client ? 'You' : (r.name ?? '—')}
+                  </td>
+                  <td style={td}>{bizTypeLabel(r.business_type)}</td>
+                  <td style={td}>{catBadge(r.category_match)}</td>
+                  <td style={td}>{r.reviews_total ? `${r.reviews_service_mentions ?? 0}/${r.reviews_total}` : '—'}</td>
+                  <td style={td}>{r.reviews_total ? `${r.reviews_location_mentions ?? 0}/${r.reviews_total}` : '—'}</td>
+                  <td style={td}>{yn(r.page_service_relevant)}</td>
+                  <td style={td}>{yn(r.page_location_relevant)}</td>
+                  <td style={td}>{r.domain_rating != null ? Math.round(r.domain_rating) : '—'}</td>
+                  <td style={td}>{r.page_ur != null ? Math.round(r.page_ur) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
     </div>
   )
 }

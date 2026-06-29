@@ -13,8 +13,9 @@ import { RankReports } from '../components/rankings/RankReports'
 import { RankAlerts } from '../components/rankings/RankAlerts'
 import { SerpTrends } from '../components/rankings/SerpTrends'
 import { Rankability } from '../components/rankings/Rankability'
+import { BrandSearch } from '../components/rankings/BrandSearch'
 
-type Tab = 'overview' | 'keywords' | 'pages' | 'rankability' | 'trends' | 'alerts' | 'reports' | 'settings'
+type Tab = 'overview' | 'keywords' | 'pages' | 'rankability' | 'trends' | 'brand' | 'alerts' | 'reports' | 'settings'
 
 // Per-client Organic Rank Tracker (Module #4). Tabbed shell over the connected
 // GSC property: Overview (triage), Keywords (wide table), Settings (connection).
@@ -72,6 +73,7 @@ export function Rankings() {
         {gscConnected && <TabButton active={tab === 'pages'} onClick={() => setTab('pages')} label="Pages" />}
         <TabButton active={tab === 'rankability'} onClick={() => setTab('rankability')} label="Rankability" />
         <TabButton active={tab === 'trends'} onClick={() => setTab('trends')} label="SERP Trends" />
+        {gscConnected && <TabButton active={tab === 'brand'} onClick={() => setTab('brand')} label="Brand search" />}
         <TabButton active={tab === 'alerts'} onClick={() => setTab('alerts')} label="Alerts" badge={unreadAlerts} />
         <TabButton active={tab === 'reports'} onClick={() => setTab('reports')} label="Reports" />
         <TabButton active={tab === 'settings'} onClick={() => setTab('settings')} label="Settings" />
@@ -88,6 +90,8 @@ export function Rankings() {
         <Rankability clientId={clientId} />
       ) : tab === 'trends' ? (
         <SerpTrends clientId={clientId} />
+      ) : tab === 'brand' ? (
+        <BrandSearch clientId={clientId} />
       ) : tab === 'alerts' ? (
         <RankAlerts clientId={clientId} />
       ) : tab === 'reports' ? (

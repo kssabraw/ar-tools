@@ -66,6 +66,50 @@ def _to_int(value: Any) -> Optional[int]:
         return None
 
 
+def _address_hidden(place: dict[str, Any]) -> Optional[bool]:
+    """Whether Google hides the storefront address (the defining SAB signal).
+
+    Outscraper flags a service-area business via `area_service` (and we defensively
+    accept a couple of alternates). Returns True/False when the flag is present as
+    a boolean (or boolean-ish string), else None (unknown → fall back to heuristic).
+    Note: `area_service` may instead be a *list* of served place names in some
+    payloads — those are handled by `_service_area_places`, and a non-bool here
+    yields None so we don't misread a place list as a hidden-address flag.
+    """
+    for key in ("area_service", "is_service_area_business", "service_area_business", "hide_address"):
+        v = place.get(key)
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str) and v.strip().lower() in ("true", "yes", "1", "false", "no", "0"):
+            return v.strip().lower() in ("true", "yes", "1")
+    return None
+
+
+def classify_business_type(gbp: "dict | None") -> str:
+    """GBP business type from a mapped GBP payload.
+
+    Primary signal is `address_hidden` (Outscraper's `area_service` flag): a hidden
+    storefront address ⇒ pure service-area business. Falls back to a heuristic
+    (published service-area places ⇒ serves areas; a street address ⇒ storefront)
+    when the flag isn't present (e.g. GBP captured before this field was stored).
+
+    Returns 'sab' | 'physical' | 'hybrid' | 'unknown'. Pure.
+    """
+    g = gbp or {}
+    hidden = g.get("address_hidden")
+    has_service_area = bool(g.get("service_area_places"))
+    has_address = bool((g.get("address") or "").strip())
+    if hidden is True:
+        return "sab"            # storefront address hidden ⇒ service-area business
+    if has_service_area and has_address:
+        return "hybrid"         # storefront shown AND serves areas
+    if has_service_area:
+        return "sab"
+    if has_address:
+        return "physical"
+    return "unknown"
+
+
 def _service_area_places(place: dict[str, Any]) -> list[str]:
     """Best-effort list of service-area place names from an Outscraper place object.
 
@@ -382,6 +426,9 @@ async def get_business_details(query: str) -> dict:
         # not every listing publishes them). Feeds the silo planner's target-city
         # discovery. See `_service_area_places`.
         "service_area_places": _service_area_places(p),
+        # Whether Google hides the storefront address (Outscraper `area_service`) —
+        # the defining service-area-business signal. See `classify_business_type`.
+        "address_hidden": _address_hidden(p),
     }
 
     resolved_place_id = p.get("place_id") or p.get("google_id") or query

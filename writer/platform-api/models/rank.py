@@ -374,3 +374,28 @@ class RankAlert(BaseModel):
 class RankAlertsResponse(BaseModel):
     alerts: list[RankAlert] = Field(default_factory=list)
     unread_count: int = 0
+
+
+# --- Brand-search analysis (branded vs non-branded GSC demand) ---------------
+class BrandSearchWeek(BaseModel):
+    week: str                        # Monday (ISO date) of the week
+    branded_impressions: int = 0
+    nonbranded_impressions: int = 0
+    branded_clicks: int = 0
+    nonbranded_clicks: int = 0
+    branded_share_pct: Optional[float] = None
+
+
+class BrandSearchTotals(BaseModel):
+    branded_impressions: int = 0
+    nonbranded_impressions: int = 0
+    branded_clicks: int = 0
+    nonbranded_clicks: int = 0
+    branded_share_pct: Optional[float] = None
+
+
+class BrandSearchResponse(BaseModel):
+    gsc_connected: bool = False
+    brand_terms: list[str] = Field(default_factory=list)
+    series: list[BrandSearchWeek] = Field(default_factory=list)   # oldest → newest
+    totals: BrandSearchTotals = Field(default_factory=BrandSearchTotals)

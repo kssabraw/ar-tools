@@ -22,6 +22,14 @@ from models.maps import (
     MapsAlertsResponse,
     MapsChangesResponse,
     MapsClientThreats,
+    MapsCompetitorIntelResponse,
+    MapsCompetitorProfile,
+    MapsBacklinkIntelResponse,
+    MapsContentIntelResponse,
+    MapsGbpAuditResponse,
+    MapsRelevanceResponse,
+    MapsRelevanceRow,
+    MapsReviewIntelResponse,
     MapsCompetitorTrend,
     MapsCompetitorTrendPoint,
     MapsCompetitorTrendsResponse,
@@ -38,12 +46,20 @@ from models.maps import (
     MapsScanDetail,
     MapsScanResultRow,
     MapsScanSummary,
+    MapsSolvResponse,
     MapsThreat,
     MapsThreatsResponse,
     MapsTrendPoint,
     MapsTrendsResponse,
 )
+from services import backlink_intel
+from services import competitor_gbp
+from services import content_intel
+from services import gbp_audit as gbp_audit_service
+from services import local_relevance
 from services import local_dominator
+from services import review_analytics
+from services import maps_solv as maps_solv_service
 
 logger = logging.getLogger(__name__)
 
@@ -454,6 +470,145 @@ async def maps_competitor_trends(
         .in_("scan_id", [s["id"] for s in scans]).execute()
     ).data or []
     return build_competitor_trends(scans, results)
+
+
+@router.get("/clients/{client_id}/maps/solv", response_model=MapsSolvResponse)
+async def maps_solv(
+    client_id: UUID, limit: int = 52, auth: dict = Depends(require_auth)
+) -> MapsSolvResponse:
+    """Share of Local Voice — the client's Top-3 local-pack coverage over time
+    plus per-competitor presence share, derived from stored scans (no new fetch)."""
+    supabase = get_supabase()
+    scans = (
+        supabase.table("maps_scans").select("id, completed_at, trigger")
+        .eq("client_id", str(client_id)).eq("status", "complete")
+        .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
+    ).data or []
+    if not scans:
+        return MapsSolvResponse()
+    results = (
+        supabase.table("maps_scan_results")
+        .select("scan_id, keyword, total_pins, top3_pins, top10_pins, competitors")
+        .in_("scan_id", [s["id"] for s in scans]).execute()
+    ).data or []
+    return MapsSolvResponse(**maps_solv_service.build_solv(scans, results))
+
+
+@router.get("/clients/{client_id}/maps/competitor-intel", response_model=MapsCompetitorIntelResponse)
+async def maps_competitor_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsCompetitorIntelResponse:
+    """Latest stored GBP profile per top local-pack competitor (categories,
+    reviews, photos, hours) — the 'why do they win' intelligence."""
+    profiles = competitor_gbp.latest_profiles(str(client_id))
+    return MapsCompetitorIntelResponse(
+        profiles=[MapsCompetitorProfile(**p) for p in profiles],
+        captured_at=profiles[0]["captured_at"] if profiles else None,
+    )
+
+
+@router.get("/clients/{client_id}/maps/relevance", response_model=MapsRelevanceResponse)
+async def maps_relevance(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsRelevanceResponse:
+    """Local Relevance Scorecard — does each ranking signal (reviews, GBP link,
+    category, DR, page UR) align with the tracked service/location? Client vs
+    competitors, from the latest stored capture."""
+    sc = local_relevance.latest_scorecard(str(client_id))
+    return MapsRelevanceResponse(
+        keyword=sc.get("keyword"),
+        location=sc.get("location"),
+        client=MapsRelevanceRow(**sc["client"]) if sc.get("client") else None,
+        competitors=[MapsRelevanceRow(**c) for c in sc.get("competitors") or []],
+    )
+
+
+@router.post("/clients/{client_id}/maps/relevance/refresh", response_model=MapsRunResponse)
+async def refresh_relevance(
+    client_id: UUID, keyword: Optional[str] = None, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Rebuild the Local Relevance Scorecard for `keyword` (defaults to the
+    client's first active Maps keyword)."""
+    local_relevance.enqueue_local_relevance(str(client_id), keyword)
+    return MapsRunResponse(client_id=client_id, status="enqueued")
+
+
+@router.get("/clients/{client_id}/maps/content-intel", response_model=MapsContentIntelResponse)
+async def maps_content_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsContentIntelResponse:
+    """Latest per-keyword on-site content comparison (page depth + topic gaps vs
+    the top organic competitor pages)."""
+    return MapsContentIntelResponse(analyses=content_intel.latest_analyses(str(client_id)))
+
+
+@router.post("/clients/{client_id}/maps/content-intel/refresh", response_model=MapsRunResponse)
+async def refresh_content_intel(
+    client_id: UUID, keyword: Optional[str] = None, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Enqueue a content comparison for `keyword` (defaults to the client's first
+    active Maps keyword) — scrapes the client + top competitor pages."""
+    content_intel.enqueue_content_intel(str(client_id), keyword)
+    return MapsRunResponse(client_id=client_id, status="enqueued")
+
+
+@router.get("/clients/{client_id}/maps/backlink-intel", response_model=MapsBacklinkIntelResponse)
+async def maps_backlink_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsBacklinkIntelResponse:
+    """Backlink authority (Domain Rating, referring domains, backlinks) — client
+    vs the top local-pack competitors, from stored profiles."""
+    return MapsBacklinkIntelResponse(**backlink_intel.get_backlink_intel(str(client_id)))
+
+
+@router.post("/clients/{client_id}/maps/backlink-intel/refresh", response_model=MapsRunResponse)
+async def refresh_backlink_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Enqueue a fresh backlink pull for the client + its top local-pack competitors."""
+    backlink_intel.enqueue_backlink_intel(str(client_id))
+    return MapsRunResponse(client_id=client_id, status="enqueued")
+
+
+@router.get("/clients/{client_id}/maps/review-intel", response_model=MapsReviewIntelResponse)
+async def maps_review_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsReviewIntelResponse:
+    """Review analytics — the client's review volume/velocity/rating/recent
+    negatives vs the top local-pack competitors, from stored reviews."""
+    return MapsReviewIntelResponse(**review_analytics.get_review_intel(str(client_id)))
+
+
+@router.post("/clients/{client_id}/maps/review-intel/refresh", response_model=MapsRunResponse)
+async def refresh_review_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Enqueue a fresh review pull for the client + its top local-pack competitors."""
+    review_analytics.enqueue_review_intel(str(client_id))
+    return MapsRunResponse(client_id=client_id, status="enqueued")
+
+
+@router.get("/clients/{client_id}/maps/gbp-audit", response_model=MapsGbpAuditResponse)
+async def maps_gbp_audit(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsGbpAuditResponse:
+    """Audit the client's own GBP completeness + gaps vs the captured competitor
+    profiles (categories competitors have that the client lacks, review deficit)."""
+    supabase = get_supabase()
+    rows = supabase.table("clients").select("gbp").eq("id", str(client_id)).limit(1).execute().data
+    gbp = (rows[0].get("gbp") if rows else None) or {}
+    profiles = competitor_gbp.latest_profiles(str(client_id))
+    return MapsGbpAuditResponse(**gbp_audit_service.audit(gbp, profiles))
+
+
+@router.post("/clients/{client_id}/maps/competitor-intel/refresh", response_model=MapsRunResponse)
+async def refresh_competitor_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Enqueue a fresh competitor-GBP capture for the client's top local-pack
+    competitors (one Outscraper call each, capped by competitor_gbp_max)."""
+    competitor_gbp.enqueue_competitor_gbp(str(client_id))
+    return MapsRunResponse(client_id=client_id, status="enqueued")
 
 
 @router.get("/maps/threats", response_model=MapsThreatsResponse)
