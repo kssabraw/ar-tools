@@ -162,21 +162,88 @@ def build_task_payload(
     return data
 
 
-def payload_from_template_row(row: dict, project_gid: str, section_gid: str) -> dict:
-    """Adapt a DB ``asana_client_task_templates`` row into a create-task payload,
-    reading the Status / category / effort field GIDs from config."""
+def _config_fields() -> dict:
+    """The configured GID fallbacks (used when by-name resolution is off/misses)."""
+    return {
+        "status_field_gid": settings.asana_status_field_gid,
+        "not_started_option_gid": settings.asana_status_not_started_option_gid,
+        "category_field_gid": settings.asana_category_field_gid,
+        "effort_field_gid": settings.asana_effort_field_gid,
+    }
+
+
+def payload_from_template_row(
+    row: dict, project_gid: str, section_gid: str, fields: Optional[dict] = None
+) -> dict:
+    """Adapt a DB ``asana_client_task_templates`` row into a create-task payload.
+
+    ``fields`` is the resolved-per-project field GID map (from
+    ``resolve_project_fields``); when omitted, the configured GIDs are used.
+    """
+    f = fields if fields is not None else _config_fields()
     return build_task_payload(
         row.get("name") or "",
         project_gid,
         section_gid,
         assignee_gid=row.get("assignee_gid"),
-        category_field_gid=settings.asana_category_field_gid,
+        category_field_gid=f.get("category_field_gid") or "",
         category_option_gid=row.get("category_option_gid"),
-        status_field_gid=settings.asana_status_field_gid,
-        not_started_option_gid=settings.asana_status_not_started_option_gid,
-        effort_field_gid=settings.asana_effort_field_gid,
+        status_field_gid=f.get("status_field_gid") or "",
+        not_started_option_gid=f.get("not_started_option_gid") or "",
+        effort_field_gid=f.get("effort_field_gid") or "",
         est_hours=row.get("est_hours"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Resolve a project's custom fields BY NAME (project-local fields differ per
+# project, so a single global GID won't match every client's project).
+# ---------------------------------------------------------------------------
+def _match_field(settings_rows: list[dict], name: str, subtype: Optional[str] = None) -> Optional[dict]:
+    """Find a project's custom field by (case-insensitive) name, optional subtype."""
+    target = (name or "").strip().casefold()
+    if not target:
+        return None
+    for r in settings_rows:
+        cf = r.get("custom_field") or {}
+        if (cf.get("name") or "").strip().casefold() == target:
+            if subtype and cf.get("resource_subtype") != subtype:
+                continue
+            return cf
+    return None
+
+
+def _match_option(custom_field: Optional[dict], name: str) -> Optional[str]:
+    """Find an enum option GID on a custom field by name."""
+    if not custom_field:
+        return None
+    target = (name or "").strip().casefold()
+    for o in custom_field.get("enum_options") or []:
+        if (o.get("name") or "").strip().casefold() == target:
+            return o.get("gid")
+    return None
+
+
+def match_project_fields(
+    settings_rows: list[dict],
+    *,
+    status_field_name: str,
+    not_started_option_name: str,
+    category_field_name: str,
+    effort_field_name: str,
+) -> dict:
+    """Resolve the Status / category / effort field GIDs from a project's
+    ``custom_field_settings`` by field name. Pure (no I/O) — unit-tested.
+    Each value is None when the named field/option isn't on the project."""
+    status_cf = _match_field(settings_rows, status_field_name)
+    category_cf = _match_field(settings_rows, category_field_name)
+    effort_cf = _match_field(settings_rows, effort_field_name, subtype="number")
+    return {
+        "status_field_gid": status_cf.get("gid") if status_cf else None,
+        "not_started_option_gid": _match_option(status_cf, not_started_option_name),
+        "category_field_gid": category_cf.get("gid") if category_cf else None,
+        "effort_field_gid": effort_cf.get("gid") if effort_cf else None,
+    }
 
 
 def extract_number_field(task: dict, field_gid: str) -> Optional[float]:
@@ -356,19 +423,57 @@ async def list_workspace_users() -> list[dict]:
     return [{"gid": u.get("gid"), "name": u.get("name"), "email": u.get("email")} for u in users]
 
 
+async def _project_field_settings(project_gid: str) -> list[dict]:
+    """A project's custom_field_settings (with names + enum options)."""
+    return await _get(
+        f"/projects/{project_gid}/custom_field_settings",
+        {"opt_fields": "custom_field.gid,custom_field.name,custom_field.resource_subtype,custom_field.enum_options.name"},
+    ) or []
+
+
+async def resolve_project_fields(project_gid: str) -> dict:
+    """Resolve a project's Status / category / effort field GIDs **by name**,
+    falling back to the configured GIDs when a name is unset or not found.
+
+    Returns ``{status_field_gid, not_started_option_gid, category_field_gid,
+    effort_field_gid}``. Best-effort: an API failure falls back to config GIDs,
+    so the monthly job degrades rather than aborting."""
+    resolved = _config_fields()
+    # Skip the API call entirely if no names are configured to resolve by.
+    if not (settings.asana_status_field_name or settings.asana_category_field_name or settings.asana_effort_field_name):
+        return resolved
+    try:
+        rows = await _project_field_settings(project_gid)
+    except Exception as exc:
+        logger.warning("asana.resolve_fields_failed", extra={"project_gid": project_gid, "error": str(exc)})
+        return resolved
+    matched = match_project_fields(
+        rows,
+        status_field_name=settings.asana_status_field_name,
+        not_started_option_name=settings.asana_status_not_started_option_name,
+        category_field_name=settings.asana_category_field_name,
+        effort_field_name=settings.asana_effort_field_name,
+    )
+    # Prefer a by-name match; keep the config fallback when a name didn't resolve.
+    for key, val in matched.items():
+        if val:
+            resolved[key] = val
+    return resolved
+
+
 async def list_project_category_options(project_gid: str) -> list[dict]:
     """The category custom field's enum options [{gid, name}] for a project —
-    populates the category picker. Empty when no category field is configured."""
-    field_gid = settings.asana_category_field_gid
-    if not field_gid:
+    populates the category picker. Matches the field BY NAME
+    (`asana_category_field_name`), falling back to the configured GID."""
+    name = settings.asana_category_field_name
+    gid = settings.asana_category_field_gid
+    if not name and not gid:
         return []
-    settings_rows = await _get(
-        f"/projects/{project_gid}/custom_field_settings",
-        {"opt_fields": "custom_field.gid,custom_field.name,custom_field.enum_options.name"},
-    ) or []
+    settings_rows = await _project_field_settings(project_gid)
+    target = (name or "").strip().casefold()
     for s in settings_rows:
         cf = s.get("custom_field") or {}
-        if cf.get("gid") == field_gid:
+        if (target and (cf.get("name") or "").strip().casefold() == target) or (gid and cf.get("gid") == gid):
             return [
                 {"gid": o.get("gid"), "name": o.get("name")}
                 for o in (cf.get("enum_options") or [])

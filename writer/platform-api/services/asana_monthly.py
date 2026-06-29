@@ -77,6 +77,10 @@ async def generate_month_for_client(client_id: str, target: date) -> dict:
     if asana_service.section_name_exists(sections, label):
         return {"status": "exists", "reason": "section_already_exists", "section": label, "created": 0}
 
+    # Resolve this project's Status / category / effort field GIDs by name
+    # (project-local fields differ per project), once for the whole batch.
+    fields = await asana_service.resolve_project_fields(project_gid)
+
     anchor = asana_service.month_insert_anchor_gid(sections)
     new_section = await asana_service.create_section(project_gid, label, insert_before=anchor)
     section_gid = new_section.get("gid")
@@ -84,7 +88,7 @@ async def generate_month_for_client(client_id: str, target: date) -> dict:
     created = 0
     errors: list[str] = []
     for row in templates:
-        payload = asana_service.payload_from_template_row(row, project_gid, section_gid)
+        payload = asana_service.payload_from_template_row(row, project_gid, section_gid, fields=fields)
         try:
             await asana_service.create_task(payload)
             created += 1

@@ -138,6 +138,60 @@ def test_payload_from_template_row_reads_config(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# match_project_fields (resolve fields by name, project-local)
+# ---------------------------------------------------------------------------
+def _settings_rows():
+    return [
+        {"custom_field": {"gid": "s", "name": "Status", "resource_subtype": "enum",
+                          "enum_options": [{"gid": "ns", "name": "Not Started"}, {"gid": "cm", "name": "Complete"}]}},
+        {"custom_field": {"gid": "cat", "name": "Service Type", "resource_subtype": "enum",
+                          "enum_options": [{"gid": "o1", "name": "Content"}]}},
+        {"custom_field": {"gid": "h", "name": "Hours", "resource_subtype": "number"}},
+    ]
+
+
+_NAMES = dict(status_field_name="Status", not_started_option_name="Not Started",
+              category_field_name="Service Type", effort_field_name="Hours")
+
+
+def test_match_project_fields_resolves_all():
+    m = asana.match_project_fields(_settings_rows(), **_NAMES)
+    assert m == {"status_field_gid": "s", "not_started_option_gid": "ns",
+                 "category_field_gid": "cat", "effort_field_gid": "h"}
+
+
+def test_match_project_fields_case_insensitive():
+    m = asana.match_project_fields(
+        _settings_rows(),
+        status_field_name="status", not_started_option_name="not started",
+        category_field_name="service type", effort_field_name="hours",
+    )
+    assert m["status_field_gid"] == "s" and m["not_started_option_gid"] == "ns"
+    assert m["category_field_gid"] == "cat" and m["effort_field_gid"] == "h"
+
+
+def test_match_project_fields_misses_return_none():
+    # Wrong names + an effort name that points at a non-number field.
+    rows = [{"custom_field": {"gid": "x", "name": "Hours", "resource_subtype": "enum"}}]
+    m = asana.match_project_fields(
+        rows, status_field_name="Nope", not_started_option_name="Not Started",
+        category_field_name="Missing", effort_field_name="Hours",
+    )
+    assert m == {"status_field_gid": None, "not_started_option_gid": None,
+                 "category_field_gid": None, "effort_field_gid": None}
+
+
+def test_match_project_fields_option_name_mismatch():
+    rows = [{"custom_field": {"gid": "s", "name": "Status", "resource_subtype": "enum",
+                              "enum_options": [{"gid": "done", "name": "Done"}]}}]
+    m = asana.match_project_fields(rows, status_field_name="Status",
+                                   not_started_option_name="Not Started",
+                                   category_field_name="", effort_field_name="")
+    assert m["status_field_gid"] == "s"
+    assert m["not_started_option_gid"] is None  # no "Not Started" option present
+
+
+# ---------------------------------------------------------------------------
 # Effort extraction + hours-based workload aggregation
 # ---------------------------------------------------------------------------
 def _task(due, hours=None):

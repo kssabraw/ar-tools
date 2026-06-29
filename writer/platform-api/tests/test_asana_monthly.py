@@ -26,6 +26,17 @@ def _configured(monkeypatch):
 def _patch_common(monkeypatch, sections, created_calls):
     monkeypatch.setattr(asana_monthly, "get_project_gid", lambda cid: "proj1")
 
+    async def _resolve(project_gid):
+        # Stub the per-project by-name resolution to the configured GIDs.
+        return {
+            "status_field_gid": settings.asana_status_field_gid,
+            "not_started_option_gid": settings.asana_status_not_started_option_gid,
+            "category_field_gid": settings.asana_category_field_gid,
+            "effort_field_gid": settings.asana_effort_field_gid,
+        }
+
+    monkeypatch.setattr(asana_service, "resolve_project_fields", _resolve)
+
     async def _list_sections(project_gid):
         return sections
 

@@ -410,9 +410,17 @@ class Settings(BaseSettings):
     # section (the source of truth is the app).
     asana_month_generate_day: int = 1
     asana_month_target_offset: int = 0
-    # Custom-field GIDs on the client projects (Starter plan: these already
-    # exist). The monthly job sets Status = Not Started on each new task and
-    # carries the category enum value forward from the template task.
+    # Custom-field resolution. Client-project custom fields are typically
+    # PROJECT-LOCAL (each project has its own copies → different GIDs), so the
+    # monthly job resolves them **by name** per project at task-creation time:
+    # find the field named `asana_status_field_name` (+ its option named
+    # `asana_status_not_started_option_name`), `asana_category_field_name`, and
+    # the number field `asana_effort_field_name`. The *_gid settings below are an
+    # optional explicit override / fallback when a name isn't found (or is blank).
+    asana_status_field_name: str = "Status"
+    asana_status_not_started_option_name: str = "Not Started"
+    asana_category_field_name: str = "Service Type"
+    asana_effort_field_name: str = ""   # e.g. "Hours" / "Estimated time"; blank = none
     asana_status_field_gid: str = ""
     asana_status_not_started_option_gid: str = ""
     asana_category_field_gid: str = ""

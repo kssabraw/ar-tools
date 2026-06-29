@@ -48,10 +48,26 @@
 > the Workload page (pick members from Asana, set weekly hours), hours/capacity display.
 > Tests green; typechecks + builds clean.
 >
+> *Field resolution by name (built, post-merge):* client-project custom fields are
+> **project-local** (each client's project has its own copies → different GIDs), so a single
+> global GID can't match every project. The monthly job now resolves the **Status** (+ its
+> "Not Started" option), **Service Type**, and effort fields **by name per project** at
+> task-creation time (`asana_service.resolve_project_fields` / `match_project_fields`,
+> configured via `asana_status_field_name` / `asana_status_not_started_option_name` /
+> `asana_category_field_name` / `asana_effort_field_name`; the `*_gid` settings are now an
+> explicit override / fallback). The editor's category picker matches by name too. Result:
+> onboarding a client is just **map project + build template** — no per-client GID lookups.
+>
+> *Project model (decided):* **one ongoing project per client** (months as sections), not
+> per-quarter projects — so the fixed client→project mapping is correct with no rollover logic.
+>
+> **Provisioned (live):** all three migrations applied to Supabase; `ASANA_TOKEN` + workspace +
+> the pilot's Status/category field GIDs set on PLATFORM (the field *names* now drive
+> resolution, so those GIDs are just fallback). PR #170 merged to `main`.
+>
 > **Still ahead (optional Phase 4):** two-way sync (Asana webhook → close rank alerts / mark
-> Action Plan items done). Migrations are committed but **not yet applied to the live Supabase
-> project** (pending plan approval). Everything degrades gracefully until the Asana token +
-> workspace + effort field + team list + per-client mappings are provisioned.
+> Action Plan items done). Everything degrades gracefully until the Asana token + workspace +
+> team list + per-client mappings are provisioned.
 
 > Read alongside **`docs/suite-architecture-and-roadmap-v1_0.md`** (decision log + shared
 > infrastructure) and the **notifications service** section of `CLAUDE.md`. This document
@@ -268,7 +284,8 @@ asana_team_members                        -- migration 20260629140000
 | `asana_workspace_gid` | Workspace to scope task/user queries + the editor pickers. |
 | `asana_month_generate_day` (default `1`) / `asana_month_target_offset` (default `0`) | When the scheduled monthly run fires, and which month it targets (0 = current). |
 | `asana_status_field_gid` / `asana_status_not_started_option_gid` | Set Status = Not Started on new tasks. |
-| `asana_category_field_gid` | The category custom field (its enum options populate the editor; the row's chosen option is stamped on each task). |
+| `asana_status_field_name` (`Status`) / `asana_status_not_started_option_name` (`Not Started`) / `asana_category_field_name` (`Service Type`) / `asana_effort_field_name` (blank) | Field **names** resolved per project (project-local fields differ per client). The `*_gid` settings are the fallback when a name is unset/not found. |
+| `asana_category_field_gid` | Fallback category field GID (by-name resolution preferred). |
 | `asana_effort_field_gid` | The **number** custom field the monthly job stamps with each task's `est_hours`; the workload read pulls it back off the task. |
 | `asana_default_task_hours` (default `1.0`) | Hours assumed for a task with no estimate. |
 | `asana_default_weekly_hours` (default `30`) | Capacity for a tracked member with no `weekly_hours` set. |
