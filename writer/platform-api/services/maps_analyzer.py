@@ -821,6 +821,16 @@ def analyze_scan(scan_id: str) -> dict:
         except Exception as exc:  # notifications are best-effort
             logger.warning("maps_alert_notify_failed", extra={"scan_id": scan_id, "error": str(exc)})
 
+        # Silently rebuild the Action Plan so the new local-pack declines surface
+        # as recommendations. Rides the maps_drop notification above — the rebuild
+        # itself emits nothing (trigger != "scheduled").
+        try:
+            from services.reopt_planner import enqueue_reopt_plan
+
+            enqueue_reopt_plan(client_id, trigger="maps_drop")
+        except Exception as exc:  # best-effort
+            logger.warning("maps_drop_reopt_enqueue_failed", extra={"scan_id": scan_id, "error": str(exc)})
+
     return result
 
 

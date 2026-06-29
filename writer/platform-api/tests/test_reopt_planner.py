@@ -193,3 +193,98 @@ def test_summarize_singular_plurals():
     assert "1 quick win" in out["summary"]
     assert "1 other opportunity" in out["summary"]
     assert out["severity"] == "warning"
+
+
+def test_summarize_counts_maps_issues():
+    out = reopt_planner.summarize_plan([
+        {"kind": "maps_decline", "severity": "critical"},
+        {"kind": "maps_competitor", "severity": "warning"},
+        {"kind": "maps_weak_area", "severity": "info"},
+    ])
+    assert "3 local-pack issues" in out["summary"]
+    assert out["severity"] == "critical"
+
+
+# ---------------------------------------------------------------------------
+# build_maps_actions
+# ---------------------------------------------------------------------------
+def test_maps_lost_pack_is_critical_and_top_of_band():
+    alerts = [
+        {"keyword": "plumber", "alert_type": "coverage_drop", "message": "Coverage fell."},
+        {"keyword": "plumber", "alert_type": "lost_pack", "message": "Fell out of the pack."},
+    ]
+    actions = reopt_planner.build_maps_actions(CLIENT, alerts, [])
+    first = actions[0]
+    assert first["kind"] == "maps_decline"
+    assert first["severity"] == "critical"
+    assert "out of the local pack" in first["recommendation"]
+    assert all(a["source"] == "maps" for a in actions)
+    assert first["sort"] > actions[1]["sort"]
+
+
+def test_maps_competitor_surge_kind_and_cta():
+    alerts = [{"keyword": "roofing", "alert_type": "competitor_surge", "message": "Comp surged."}]
+    actions = reopt_planner.build_maps_actions(CLIENT, alerts, [])
+    assert actions[0]["kind"] == "maps_competitor"
+    assert actions[0]["cta_path"] == f"clients/{CLIENT}/maps"
+    assert "GBP" in actions[0]["recommendation"]
+
+
+def test_maps_area_decline_labels_sector():
+    alerts = [{"keyword": "roofing", "alert_type": "area_decline", "sector": "NE", "message": "Weak NE."}]
+    actions = reopt_planner.build_maps_actions(CLIENT, alerts, [])
+    assert "(northeast)" in actions[0]["keyword"]
+
+
+def test_maps_weak_area_creates_location_page():
+    weak = [{"city": "Inner West", "admin_area": "NSW", "pins": 6}]
+    actions = reopt_planner.build_maps_actions(CLIENT, [], weak)
+    a = actions[0]
+    assert a["kind"] == "maps_weak_area"
+    assert a["cta_path"] == f"clients/{CLIENT}/local-seo"
+    assert "Inner West" in a["recommendation"]
+    assert "6 grid pins" in a["diagnosis"]
+
+
+def test_maps_weak_area_capped():
+    weak = [{"city": f"City{i}", "pins": i} for i in range(20)]
+    actions = reopt_planner.build_maps_actions(CLIENT, [], weak)
+    assert len(actions) == reopt_planner.MAPS_WEAK_AREA_MAX
+
+
+def test_maps_tier_below_cannibal_above_quick():
+    # An organic drop and cannibalization outrank a maps decline; a maps decline
+    # outranks a quick win and a hidden win (strict tiers).
+    drops = [{"keyword": "d1", "alert_type": "drop", "message": "x"}]
+    items = [_rankability_item(keyword="q1", priority=10.0)]
+    gsc = {"cannibalization": [{"query": "c1", "page_count": 2, "total_impressions": 10}]}
+    organic = reopt_planner.build_actions(CLIENT, drops, items, gsc, cap=None)
+    maps = reopt_planner.build_maps_actions(
+        CLIENT, [{"keyword": "m1", "alert_type": "coverage_drop", "message": "m"}], []
+    )
+    combined = sorted(organic + maps, key=lambda a: a["sort"], reverse=True)
+    order = [a["keyword"] for a in combined]
+    assert order.index("d1") < order.index("c1") < order.index("m1") < order.index("q1")
+
+
+# ---------------------------------------------------------------------------
+# _aggregate_weak_areas
+# ---------------------------------------------------------------------------
+def test_aggregate_weak_areas_dedups_by_place_keeps_most_pins():
+    results = [
+        {"report_weak_locations": {"weak_areas": [{"city": "Newtown", "admin_area": "NSW", "pins": 2}]}},
+        {"report_weak_locations": {"weak_areas": [{"city": "Newtown", "admin_area": "NSW", "pins": 5}]}},
+        {"report_weak_locations": {"weak_areas": [{"city": "Glebe", "pins": 3}]}},
+    ]
+    out = reopt_planner._aggregate_weak_areas(results)
+    assert [a["city"] for a in out] == ["Newtown", "Glebe"]  # worst-first by pins
+    assert out[0]["pins"] == 5  # kept the higher-pin Newtown entry
+
+
+def test_aggregate_weak_areas_skips_blank_city_and_handles_empty():
+    results = [
+        {"report_weak_locations": {"weak_areas": [{"city": "", "pins": 9}]}},
+        {"report_weak_locations": None},
+        {},
+    ]
+    assert reopt_planner._aggregate_weak_areas(results) == []

@@ -1,6 +1,6 @@
 # Maps Geo-Grid Strategy & Action Plan — Module PRD (v1.0)
 
-**Authored:** 2026-06-29 · **Status:** plan approved, **no code written yet** (Phase 1 starting) · **Extends Module #5 (Maps / local-pack geo-grid ranker)**
+**Authored:** 2026-06-29 · **Status:** **Phase 1 built** (Maps Action Plan hybrid + full-parity cadence); Phases 2–3 pending · **Extends Module #5 (Maps / local-pack geo-grid ranker)**
 
 > Read alongside **`docs/suite-architecture-and-roadmap-v1_0.md`** (suite decision log), **`docs/modules/organic-rank-tracker-prd-v1_0.md`** (the Action Plan / reoptimization-planner pattern this extends), and **`CLAUDE.md`** (stack, conventions, RLS/service-role rule). Where this doc and CLAUDE.md disagree on "how it's built in this repo," CLAUDE.md wins; this doc is authoritative for *what this extension should do*.
 

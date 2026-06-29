@@ -1094,7 +1094,15 @@ export interface UnreadCountsResponse {
 
 // Reoptimization planner (Action Plan).
 export interface ReoptAction {
-  kind: 'rank_drop' | 'quick_win' | 'cannibalization' | 'opportunity'
+  kind:
+    | 'rank_drop'
+    | 'quick_win'
+    | 'cannibalization'
+    | 'opportunity'
+    | 'maps_decline'
+    | 'maps_competitor'
+    | 'maps_weak_area'
+  source?: 'organic' | 'maps'
   keyword: string
   diagnosis: string
   recommendation: string
@@ -1107,7 +1115,7 @@ export interface ReoptAction {
 export interface ReoptPlan {
   id: string
   client_id: string
-  trigger: 'scheduled' | 'drop' | 'manual'
+  trigger: 'scheduled' | 'drop' | 'maps_drop' | 'manual'
   summary: string | null
   items: ReoptAction[]
   action_count: number
