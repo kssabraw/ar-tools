@@ -47,10 +47,15 @@ async def get_action_plan(client_id: UUID, auth: dict = Depends(require_auth)) -
 async def refresh_action_plan(client_id: UUID, auth: dict = Depends(require_auth)) -> ReoptPlan:
     """Rebuild the plan now (manual trigger — no notification) and return it."""
     try:
-        reopt_planner.build_plan(str(client_id), trigger="manual")
+        result = reopt_planner.build_plan(str(client_id), trigger="manual")
     except Exception as exc:
         logger.error("action_plan_refresh_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
+    # SOP-grounded enrichment (best-effort; no-op when no SOPs exist).
+    try:
+        await reopt_planner.enrich_plan(str(client_id), plan_id=result.get("plan_id"))
+    except Exception as exc:  # enrichment must never fail the refresh
+        logger.warning("action_plan_enrich_failed", extra={"client_id": str(client_id), "error": str(exc)})
     row = _latest_plan(str(client_id))
     if not row:
         raise HTTPException(status_code=500, detail="internal_error")

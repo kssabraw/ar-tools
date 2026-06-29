@@ -111,6 +111,20 @@ class Settings(BaseSettings):
     # budget truncates the forced tool-use JSON and yields an empty summary.
     maps_report_max_tokens: int = 8192
 
+    # Action Plan (reoptimization planner) — SOP-grounded enrichment. One Claude
+    # call per plan rewrites every action's recommendation into the agency's own
+    # methodology + voice, grounded in the SOP store (agency-wide + per-client) and
+    # the client's existing context (ICP, differentiators, services, location).
+    # Skipped entirely when no SOPs exist, so it stays free until a playbook is loaded.
+    reopt_enrich_model: str = "claude-sonnet-4-6"
+    reopt_enrich_max_tokens: int = 8192
+    # Auto-refresh the competitor-GBP + backlink intelligence (the inputs behind
+    # the GBP competitor benchmark + backlink-gap action) when a plan is built and
+    # the stored data is missing or older than reopt_intel_refresh_days. Each fetch
+    # makes paid Outscraper/DataForSEO calls, so it's interval-gated + dedupe-guarded.
+    reopt_auto_intel: bool = True
+    reopt_intel_refresh_days: int = 30
+
     # Competitive SERP Snapshot — topical-focus classifier. One cheap Haiku call
     # per snapshot labels each ranking site (and the client) specialist vs
     # generalist for the keyword's topic (a rankability input: a specialist can

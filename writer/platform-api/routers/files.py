@@ -39,7 +39,7 @@ _IMAGE_CONTENT_TYPES = {
 @router.post("/files/upload", response_model=FileUploadResponse, status_code=201)
 async def upload_file(
     file: UploadFile = File(...),
-    field: str = Form(..., pattern="^(brand_guide|icp)$"),
+    field: str = Form(..., pattern="^(brand_guide|icp|sop)$"),
     auth: dict = Depends(require_auth),
     request: Request = None,
 ) -> FileUploadResponse:

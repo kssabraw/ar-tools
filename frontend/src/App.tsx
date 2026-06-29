@@ -18,6 +18,7 @@ import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
+import { Sops } from './pages/Sops'
 import { AsanaTasks } from './pages/AsanaTasks'
 import { TeamWorkload } from './pages/TeamWorkload'
 import { TaskLibrary } from './pages/TaskLibrary'
@@ -67,6 +68,7 @@ export default function App() {
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
+                      <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />
                       <Route path="/clients/:id/reports" element={<ClientReports />} />
                       <Route path="/clients/:id/ai-visibility" element={<AiVisibility />} />
@@ -79,6 +81,7 @@ export default function App() {
                       <Route path="/silos" element={<Silos />} />
                       <Route path="/workload" element={<TeamWorkload />} />
                       <Route path="/asana/task-library" element={<TaskLibrary />} />
+                      <Route path="/playbook" element={<Sops />} />
                       <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>

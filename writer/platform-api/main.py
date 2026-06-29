@@ -34,6 +34,7 @@ from routers.reports import router as reports_router
 from routers.slack_events import router as slack_events_router
 from routers.runs import router as runs_router
 from routers.silos import router as silos_router
+from routers.sops import router as sops_router
 from routers.users import router as users_router
 from services.gsc_scheduler import gsc_scheduler
 from services.job_worker import job_worker
@@ -144,6 +145,7 @@ app.include_router(reports_router)
 app.include_router(slack_events_router)
 app.include_router(runs_router)
 app.include_router(silos_router)
+app.include_router(sops_router)
 app.include_router(users_router)
 app.include_router(publish_router)
 

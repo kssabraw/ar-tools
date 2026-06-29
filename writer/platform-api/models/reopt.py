@@ -8,6 +8,14 @@ from uuid import UUID
 from pydantic import BaseModel
 
 
+class ReoptActionDetail(BaseModel):
+    """SOP-grounded enrichment for one action (added by enrich_plan; absent until
+    a playbook is loaded, in which case the frontend falls back to a static guide)."""
+    why: str = ""
+    steps: list[str] = []
+    sop_refs: list[str] = []
+
+
 class ReoptAction(BaseModel):
     # rank_drop | quick_win | cannibalization | opportunity
     # | maps_decline | maps_competitor | maps_weak_area
@@ -20,6 +28,7 @@ class ReoptAction(BaseModel):
     cta_path: str
     severity: str                   # critical | warning | info
     sort: float = 0
+    detail: Optional[ReoptActionDetail] = None
 
 
 class ReoptPlan(BaseModel):
