@@ -1923,24 +1923,13 @@ async def _publish_to_client_drive(client_id: str, title: str, html: str) -> dic
     uses). Returns the Fanout-shaped {doc_id, url} on success, or None when the
     client has no Drive folder configured (the caller then falls back to the
     per-session OAuth path). Raises HTTPException on a webhook failure."""
-    from services.google_docs import GoogleDocError, create_google_doc, resolve_drive_folder
-    from fanout.writer.publish.client_targets import resolve_client_publish_targets
+    from services.google_docs import GoogleDocError
+    from fanout.writer.publish.client_drive import publish_html_to_client_drive
 
-    drive = (resolve_client_publish_targets(client_id).get("drive")) or {}
-    # resolve_drive_folder reads a client-row shape; rebuild it from the targets.
-    client_view = {
-        "google_drive_folder_id": drive.get("folder_id"),
-        "drive_folders": drive.get("folders") or {},
-    }
-    folder_id = resolve_drive_folder(client_view, "blog_post")
-    if not folder_id:
-        return None
     try:
-        res = await create_google_doc(folder_id, title, html, content_format="html")
+        return await publish_html_to_client_drive(client_id, title, html, content_type="blog_post")
     except GoogleDocError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    # Normalize the suite's {doc_id, doc_url} to Fanout's {doc_id, url}.
-    return {"doc_id": res.get("doc_id"), "url": res.get("doc_url")}
 
 
 @router.post("/sessions/{session_id}/clusters/{cluster_id}/publish/drive")
