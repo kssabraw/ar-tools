@@ -304,6 +304,39 @@ Strategy = **method × evidence.** The **method** is the team's **SEO SOPs** (a 
 
 ---
 
+## 4.8 Maps — SerMaStr input contract + the Maps gap decisions
+
+Maps hands SerMaStr a **strategist‑ready *local* picture** — rank at every grid cell, ring (distance) + octant (direction) analytics, a performance horizon, **geocoded weak zones (real city names, priority‑ranked) + octant pins (exact lat/lng to place pages)**, a competitor leaderboard + per‑weak‑sector rivals + **review‑gap diagnostics**, and **competitor‑momentum + per‑keyword coverage trends over ≤52 scans**. It is the **local analog** of the organic tracker: different ranking signals (proximity / reviews / category / GBP completeness, *not* links/content depth), so SerMaStr drives it from the **local branch of the SOPs**, and it is **thinner on synthesis** than organic (no winnability band, no alerting, no action plan). The line‑by‑line gap decisions (2026‑06‑29):
+
+- **Value/demand weighting — ❌ won't build.** No reliable local search‑volume/CPC at suburb granularity. Maps prioritization uses the **opportunity score × proximity** already computed in `maps_geocode.extract_weak_cells` (`severity × proximity × beatability × core_adjacency`), not `est_value`.
+- **Alerting — ✅ build, mirroring the organic `rank_alerts` system** (spec below).
+- *Winnability band* — pending (ingredients are latent in `beatability`/proximity/severity; could surface as a 0–100 local band like `rankability`).
+- *Signal‑bus / action‑plan wiring* — pending (today Maps feeds neither alerts nor the reopt planner).
+- *3mi/5mi goal rollup* — pending (the inner‑subset average flagged in §4.6).
+- *Cross‑channel competitor unification* — pending.
+
+### 4.8.1 Maps alerting spec — mirror of `rank_alerts`
+
+Built as a faithful port of the organic alerting pattern (`services/rank_alerts.py` + the `rank_materialize` reconcile + `notifications.emit`), adapted from *position* to *spatial coverage*:
+
+- **New `maps_alerts` table** — same shape as `rank_alerts`: `client_id`, `keyword`, `alert_type`, `from_value`, `to_value`, `delta`, `message`, `details` (jsonb), `status` (`unread`|`read`|`dismissed`), `triggered_on`, `resolved_at`, `read_at`, `dismissed_at`. (Values are coverage %/avg‑rank/beats‑% rather than SERP position.)
+- **Producer** — hook the scan‑complete path (`local_dominator.poll_pending_maps_scans` → after `_store_results`) into a new `reconcile_maps_alerts(client_id)`, exactly as `rank_materialize` reconciles `rank_alerts`. It compares the **latest completed scan vs. the prior scan** (scans are already weekly aggregates, so no extra smoothing needed) using the existing `build_maps_trends` + `competitor‑trends` series.
+- **Episode model — identical:** at most one open alert per `(client_id, keyword, alert_type)`; opened when the condition first holds, **auto‑resolved** when it clears on a later scan.
+- **Delivery — reuse `notifications.emit`** (in‑app + Slack live; email deferred) with `critical` vs `warning` severity, the same path organic uses. This makes Maps a **second notifications producer** and a ready **producer for the SerMaStr signal bus (§6.8)** — `reconcile_maps_alerts` is the seam the cross‑module monitor later absorbs into `strategist_signals` (`coverage_loss`, `new_competitor`, `goal_gap`).
+- **Alert types + thresholds (✅ set confirmed 2026‑06‑29; config‑tunable `maps_alert_*`):**
+  | Alert type | Trigger (scan‑over‑scan) | Severity |
+  |---|---|---|
+  | `coverage_drop` | top‑3 coverage % fell ≥ N points vs prior scan | warning |
+  | `pack_exit` | top‑3 coverage was ≥ X%, now < Y% (lost the pack across the grid) | critical |
+  | `avg_rank_drop` | average grid rank worsened ≥ M positions | warning |
+  | `competitor_surge` | a competitor's beats‑% rose ≥ P points, or a new rival overtook on > Q% of pins | warning |
+
+  (`coverage_drop`/`pack_exit`/`avg_rank_drop` mirror organic's `weekly_drop`/`page_one_exit`/`thirty_day_drop`; `competitor_surge` is the local‑specific addition with no organic equivalent. `zone_loss` was considered and **dropped** — coverage_drop/pack_exit already capture area loss.)
+
+**Build timing — ✅ decided: spec now, build with the signal bus.** Maps alerting stays design‑only for now; it's implemented in **Phase 5** alongside the cross‑module monitor (§6.8) so the alert producer and the `strategist_signals` bus are built **once**, not twice. `reconcile_maps_alerts` is authored as the Maps detector inside `strategist_monitor`, emitting both `maps_alerts` rows (the in‑app/Slack feed, via `notifications.emit`) and the corresponding `strategist_signals`.
+
+---
+
 ## 5. How autonomy rides existing infrastructure
 
 No new queue, no Redis/Celery (per locked decisions). The Executor is **just another `async_jobs` consumer**:
