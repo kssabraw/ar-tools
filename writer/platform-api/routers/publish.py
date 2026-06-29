@@ -74,12 +74,14 @@ def _sections_to_markdown(article: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, str]:
-    """Return (markdown, html) for the run's publishable content.
+def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, str, str | None]:
+    """Return (markdown, html, seo_title) for the run's publishable content.
 
-    Markdown feeds the Google Docs path; HTML feeds WordPress. Service/location
-    pages already carry deterministic Markdown + WordPress(Gutenberg)/HTML
-    renderings; blog posts only have Markdown, so HTML is derived from it.
+    Markdown feeds the Google Docs path; HTML feeds WordPress. `seo_title` is the
+    page's own SEO title where the rendering carries one (service/location
+    pages), else None. Service/location pages already carry deterministic
+    Markdown + WordPress(Gutenberg)/HTML renderings; blog posts only have
+    Markdown, so HTML is derived from it.
     """
     if content_type in ("service_page", "location_page"):
         sw_result = (
@@ -106,7 +108,8 @@ def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, st
         html = renderings.get("wordpress") or renderings.get("html") or ""
         if not html.strip():
             html = markdown_to_html(markdown)
-        return markdown, html
+        seo_title = (payload.get("title") or "").strip() or None
+        return markdown, html, seo_title
 
     sc_result = (
         supabase.table("module_outputs")
@@ -124,7 +127,7 @@ def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, st
     markdown = _sections_to_markdown(article)
     if not markdown.strip():
         raise HTTPException(status_code=422, detail="article_is_empty")
-    return markdown, markdown_to_html(markdown)
+    return markdown, markdown_to_html(markdown), None
 
 
 def _resolve_blog_title_h1(supabase, run_id: UUID) -> tuple[str | None, str | None]:
@@ -188,12 +191,13 @@ async def publish_run(
         raise HTTPException(status_code=404, detail="client_not_found")
     client = client_result.data
 
-    markdown, html = _resolve_content(supabase, run_id, content_type)
+    markdown, html, page_seo_title = _resolve_content(supabase, run_id, content_type)
     fallback_title = f"{run['keyword']} — {client['name']}"
     if content_type in ("service_page", "location_page"):
         # Service/location pages carry their own H1 inside their rendering, so we
-        # only set the post title here (no body-H1 injection).
-        title = fallback_title
+        # only set the post title here (no body-H1 injection), using the page's
+        # own SEO title when present.
+        title = page_seo_title or fallback_title
     else:
         # Blog posts: the SEO title becomes the WordPress post title (and the
         # meta <title> + slug); the distinct on-page H1 is injected at the top of
