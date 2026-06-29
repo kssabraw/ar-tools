@@ -1,6 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Sparkles, RefreshCw, ArrowRight, Loader2 } from 'lucide-react'
+import { ArrowLeft, Sparkles, RefreshCw, ArrowRight, Loader2, Check } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 
@@ -117,6 +117,19 @@ export function StrategyPlan() {
     run: (audits ?? []).find(a => a.kind === k.key),
   }))
 
+  const approve = useMutation({
+    mutationFn: () => api.post(`/engagements/${eid}/plan/approve`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['strategy-plan', eid] })
+      qc.invalidateQueries({ queryKey: ['engagement', clientId] })
+    },
+  })
+  const setStatus = useMutation({
+    mutationFn: (vars: { actionId: string; status: string }) =>
+      api.post(`/strategy-actions/${vars.actionId}/status`, { status: vars.status }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['strategy-plan', eid] }),
+  })
+
   return (
     <div style={{ maxWidth: 820, margin: '0 auto', padding: '24px 20px' }}>
       <Link to={`/clients/${clientId}`} style={backLinkStyle}>
@@ -134,14 +147,21 @@ export function StrategyPlan() {
           </p>
         </div>
         {engagement && (
-          <button
-            onClick={() => refresh.mutate()}
-            disabled={refresh.isPending}
-            style={{ ...buttonStyle, background: '#fff', color: '#0f172a', border: '1px solid #e2e8f0' }}
-          >
-            {refresh.isPending ? <Loader2 size={15} /> : <RefreshCw size={15} />}
-            {refresh.isPending ? 'Refreshing…' : 'Refresh plan'}
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+            {plan?.status === 'proposed' && plan.actions.length > 0 && (
+              <button onClick={() => approve.mutate()} disabled={approve.isPending} style={buttonStyle}>
+                {approve.isPending ? <Loader2 size={15} /> : <Check size={15} />} Approve plan
+              </button>
+            )}
+            <button
+              onClick={() => refresh.mutate()}
+              disabled={refresh.isPending}
+              style={{ ...buttonStyle, background: '#fff', color: '#0f172a', border: '1px solid #e2e8f0' }}
+            >
+              {refresh.isPending ? <Loader2 size={15} /> : <RefreshCw size={15} />}
+              {refresh.isPending ? 'Refreshing…' : 'Refresh plan'}
+            </button>
+          </div>
         )}
       </header>
 
@@ -162,6 +182,7 @@ export function StrategyPlan() {
           <div style={{ display: 'flex', gap: 8, marginBottom: 18, fontSize: 12 }}>
             <span style={chip}>stage: <strong>{engagement.status}</strong></span>
             <span style={chip}>autonomy: <strong>{engagement.autonomy_level}</strong></span>
+            {plan && <span style={chip}>plan: <strong>{plan.status}</strong></span>}
             {plan?.summary?.headline && <span style={{ ...chip, color: '#6366f1' }}>{plan.summary.headline}</span>}
           </div>
 
@@ -200,7 +221,14 @@ export function StrategyPlan() {
               <section key={m.key} style={{ marginBottom: 22 }}>
                 <h2 style={sectionTitle}>{m.label} <span style={{ color: '#94a3b8', fontWeight: 600 }}>· {actions.length}</span></h2>
                 <div style={{ display: 'grid', gap: 10 }}>
-                  {actions.map(a => <ActionRow key={a.id} a={a} />)}
+                  {actions.map(a => (
+                    <ActionRow
+                      key={a.id}
+                      a={a}
+                      onStatus={(status) => setStatus.mutate({ actionId: a.id, status })}
+                      busy={setStatus.isPending}
+                    />
+                  ))}
                 </div>
               </section>
             )
@@ -211,24 +239,32 @@ export function StrategyPlan() {
   )
 }
 
-function ActionRow({ a }: { a: StrategyAction }) {
+function ActionRow({ a, onStatus, busy }: { a: StrategyAction; onStatus: (status: string) => void; busy: boolean }) {
+  const closed = a.status === 'done' || a.status === 'skipped'
   return (
-    <div style={box}>
+    <div style={{ ...box, opacity: closed ? 0.6 : 1 }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>{a.title}</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', textDecoration: a.status === 'skipped' ? 'line-through' : 'none' }}>{a.title}</div>
           {a.rationale && <div style={{ fontSize: 13, color: '#64748b', marginTop: 3 }}>{a.rationale}</div>}
-          <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+            <span style={{ ...tag, color: a.status === 'done' ? '#15803d' : '#475569' }}>{a.status}</span>
             <span style={tag}>{a.execution_mode}</span>
             {a.assignee_role && <span style={tag}>{a.assignee_role.replace('_', ' ')}</span>}
             {a.kind && <span style={tag}>{a.kind}</span>}
           </div>
         </div>
-        {a.deep_link && (
-          <Link to={`/${a.deep_link}`} style={{ ...openLink, flexShrink: 0 }}>
-            Open <ArrowRight size={14} />
-          </Link>
-        )}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
+          {a.deep_link && (
+            <Link to={`/${a.deep_link}`} style={openLink}>Open <ArrowRight size={14} /></Link>
+          )}
+          {!closed && (
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={() => onStatus('done')} disabled={busy} style={miniBtn}>Done</button>
+              <button onClick={() => onStatus('skipped')} disabled={busy} style={{ ...miniBtn, color: '#94a3b8' }}>Skip</button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -241,4 +277,5 @@ const chip: React.CSSProperties = { padding: '4px 10px', borderRadius: 999, back
 const sectionTitle: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.05em', margin: '0 0 10px' }
 const tag: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#475569', background: '#f1f5f9', borderRadius: 6, padding: '2px 8px' }
 const openLink: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, fontWeight: 600, color: '#6366f1', textDecoration: 'none' }
+const miniBtn: React.CSSProperties = { fontSize: 12, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: 'none', borderRadius: 6, padding: '4px 10px', cursor: 'pointer' }
 const linkButton: React.CSSProperties = { background: 'none', border: 'none', color: '#6366f1', fontWeight: 600, cursor: 'pointer', padding: 0, fontSize: 14 }
