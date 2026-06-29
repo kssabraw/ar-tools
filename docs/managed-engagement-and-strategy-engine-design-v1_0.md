@@ -335,6 +335,30 @@ Built as a faithful port of the organic alerting pattern (`services/rank_alerts.
 
 **Build timing — ✅ decided: spec now, build with the signal bus.** Maps alerting stays design‑only for now; it's implemented in **Phase 5** alongside the cross‑module monitor (§6.8) so the alert producer and the `strategist_signals` bus are built **once**, not twice. `reconcile_maps_alerts` is authored as the Maps detector inside `strategist_monitor`, emitting both `maps_alerts` rows (the in‑app/Slack feed, via `notifications.emit`) and the corresponding `strategist_signals`.
 
+### 4.8.2 Local winnability ("maps rankability") — ✅ design settled
+
+A transparent, **no‑LLM** 0–100 score + band per tracked Maps keyword, computed from the latest scan result (`rank_grid` + `competitors` + `report_analytics` + `report_weak_locations`) + client GBP (rating/reviews/category). Mirrors organic `rankability` in structure + bands, but built from **local** ranking signals (relevance / distance / prominence), **not** links. Much of the math is **latent** — `maps_geocode.extract_weak_cells` already yields per‑cell `severity`, `proximity`, `beatability`, `core_adjacency`; this engine reuses them and adds competitor‑prominence + relevance + crowding.
+
+**Five blended sub‑scores** (each 0–100; weights sum to 1.0; renormalized if a factor is unavailable):
+
+| Factor (weight) | Measures | Source | Organic analog |
+|---|---|---|---|
+| **Competitor beatability — prominence gap (0.30)** | how weak the dominant incumbents' review prominence is vs the client | `competitors` leaderboard rating/reviews + existing `beatability` review‑gap | competition weakness (was backlinks) |
+| **Proximity advantage — distance (0.20)** | weakness near the business (winnable) vs only at the far ring (distance‑bound → needs a new/SAB location) | per‑cell `proximity` + ring distribution of weakness | *local‑specific (no organic analog)* |
+| **Current standing + momentum (0.20)** | how close already — top‑10 coverage + avg rank + "edge of pack" cells (rank 4–10) | `rank_grid`, `report_analytics` | client capability + momentum |
+| **Relevance gap — category/name (0.15)** | does the client's GBP category/name fit the keyword better than incumbents (off‑category/generalist rivals = opening)? | competitor `primary_category` + name‑keyword‑hit vs client category | topical opening / targeting gap |
+| **Pack crowding (0.15)** | top‑3 locked by the same few strong rivals everywhere (hard) vs fragmented/volatile (easier) | competitor concentration + coverage variance | SERP crowding |
+
+**Bands** (same as organic): 70–100 Easy · 50–69 Moderate · 30–49 Hard · 0–29 Very hard.
+
+**Winnability ≠ opportunity (important):** the existing **opportunity** score (`severity × proximity × beatability`) answers *"where to attack and how much is left to gain"*; **winnability** answers *"how likely can we take the pack here."* They share beatability + proximity, but winnability *rewards* current standing where opportunity *rewards* current weakness — a distinct composite, not a rename.
+
+**Output** (mirror `RankabilityResponse`): per keyword `{keyword_id, keyword, has_data, score, band, factors:[{text, direction}], top3_coverage, avg_rank, priority}`. `has_data=false` until a completed scan exists (like organic needs a SERP snapshot).
+
+**Quick‑wins priority — ✅ decided: `winnability × gap‑to‑goal × proximity`.** No $ value (per the value decision); instead the sort rewards keywords that are **winnable AND far from the goal bars AND close to home** — `gap‑to‑goal` = distance from the 3mi‑top‑3 / 5mi‑top‑5 targets (§4.6), `proximity` weights nearby gains. Quick wins = Easy/Moderate band + score ≥ 50, sorted by this priority. Ties the local winnability layer **directly to the goal model**.
+
+**Engine:** `services/maps_rankability.py` (pure; no LLM, no new external calls — all from stored scan data + GBP). API `GET /clients/{id}/maps/rankability`, mirroring the organic endpoint. Feeds the optimizer's **local Quick Wins** (§6.9) the same way organic `rankability` feeds the reopt planner. **Build timing:** spec now; implemented alongside the Maps signal/optimizer wiring (Phase 5).
+
 ---
 
 ## 5. How autonomy rides existing infrastructure
