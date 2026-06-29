@@ -223,3 +223,30 @@ class MapsAlert(BaseModel):
 class MapsAlertsResponse(BaseModel):
     alerts: list[MapsAlert] = Field(default_factory=list)
     unread_count: int = 0
+
+
+# --- Multi-window period summary (7/30/90/since-start) -----------------------
+class MapsPeriodDelta(BaseModel):
+    from_value: Optional[float] = None   # the baseline value for this window
+    now: Optional[float] = None
+    delta: Optional[float] = None        # now − from_value (sign meaning is per-metric)
+    baseline_at: Optional[str] = None    # date of the baseline scan
+
+
+class MapsPeriodMetric(BaseModel):
+    metric: str                          # 'average_rank' | 'top3_pct' | 'top10_pct' | 'found_pct'
+    label: str
+    now: Optional[float] = None
+    windows: dict[str, MapsPeriodDelta] = Field(default_factory=dict)  # keys: 7d/30d/90d/start
+
+
+class MapsPeriodScope(BaseModel):
+    keyword: Optional[str] = None        # None = overall client rollup
+    metrics: list[MapsPeriodMetric] = Field(default_factory=list)
+
+
+class MapsPeriodsResponse(BaseModel):
+    as_of: Optional[str] = None
+    scan_count: int = 0
+    overall: Optional[MapsPeriodScope] = None
+    keywords: list[MapsPeriodScope] = Field(default_factory=list)
