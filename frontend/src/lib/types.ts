@@ -1102,6 +1102,7 @@ export interface ReoptAction {
     | 'maps_decline'
     | 'maps_competitor'
     | 'maps_weak_area'
+    | 'maps_solv_drop'
   source?: 'organic' | 'maps'
   keyword: string
   diagnosis: string
@@ -1120,6 +1121,35 @@ export interface ReoptPlan {
   items: ReoptAction[]
   action_count: number
   created_at: string
+}
+
+// Share of Local Voice (SoLV) — Maps geo-grid.
+export interface MapsSolvCompetitorShare {
+  place_id: string | null
+  name: string | null
+  top3_pins: number
+  share_pct: number | null
+}
+export interface MapsSolvPoint {
+  scan_id: string
+  completed_at: string | null
+  trigger: string
+  total_pins: number
+  client_top3_pins: number
+  client_coverage_pct: number | null
+  client_coverage_top10_pct: number | null
+}
+export interface MapsSolvKeyword {
+  keyword: string | null
+  total_pins: number
+  client_top3_pins: number
+  client_coverage_pct: number | null
+  competitor_shares: MapsSolvCompetitorShare[]
+}
+export interface MapsSolvResponse {
+  series: MapsSolvPoint[]
+  competitors: MapsSolvCompetitorShare[]
+  keywords: MapsSolvKeyword[]
 }
 
 // Client Reporting module.

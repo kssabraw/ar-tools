@@ -252,6 +252,24 @@ def test_maps_weak_area_capped():
     assert len(actions) == reopt_planner.MAPS_WEAK_AREA_MAX
 
 
+def test_maps_solv_drop_emits_action_at_top_of_band():
+    solv = {"from_pct": 40.0, "to_pct": 22.0, "delta_pct": 18.0, "top_gainer": "Ace Plumbing"}
+    alerts = [{"keyword": "plumber", "alert_type": "lost_pack", "message": "Out of the pack."}]
+    actions = reopt_planner.build_maps_actions(CLIENT, alerts, [], solv_drop=solv)
+    solv_action = next(a for a in actions if a["kind"] == "maps_solv_drop")
+    assert "40.0% to 22.0%" in solv_action["diagnosis"]
+    assert "Ace Plumbing" in solv_action["diagnosis"]
+    assert solv_action["cta_path"] == f"clients/{CLIENT}/maps"
+    # lost_pack (critical) still sorts above the SoLV drop within the Maps band.
+    lost = next(a for a in actions if a["kind"] == "maps_decline")
+    assert lost["sort"] > solv_action["sort"]
+
+
+def test_maps_solv_drop_absent_when_no_signal():
+    actions = reopt_planner.build_maps_actions(CLIENT, [], [], solv_drop=None)
+    assert not any(a["kind"] == "maps_solv_drop" for a in actions)
+
+
 def test_maps_tier_below_cannibal_above_quick():
     # An organic drop and cannibalization outrank a maps decline; a maps decline
     # outranks a quick win and a hidden win (strict tiers).

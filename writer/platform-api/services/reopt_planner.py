@@ -61,7 +61,9 @@ _MAPS_WITHIN = {
     "area_decline": 3_000,
 }
 _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the Maps tier
+_MAPS_SOLV_WITHIN = 8_500       # a SoLV drop sits near the top of the Maps tier (just under lost_pack)
 MAPS_WEAK_AREA_MAX = 5          # cap weak-area actions per plan
+SOLV_DROP_MIN_PCT = 10.0        # min Top-3 local-pack share lost (points) to flag a SoLV drop
 
 # Full compass-octant labels for human-readable sector text.
 _OCTANT_FULL = {
@@ -209,15 +211,38 @@ def build_maps_actions(
     client_id: str,
     maps_alerts: list[dict],
     weak_areas: list[dict],
+    solv_drop: "dict | None" = None,
 ) -> list[dict]:
     """Map the local-pack (Maps geo-grid) signals to ranked actions. Pure
     (unit-tested). Emits the same action dict shape as build_actions, tagged
     source="maps", with new kinds (maps_decline / maps_competitor /
-    maps_weak_area). Local-pack declines are NOT deduped against organic rank
-    drops: the web SERP and the local pack are distinct channels with distinct
-    fixes, so a keyword can legitimately need both."""
+    maps_weak_area / maps_solv_drop). Local-pack declines are NOT deduped against
+    organic rank drops: the web SERP and the local pack are distinct channels
+    with distinct fixes, so a keyword can legitimately need both."""
     actions: list[dict] = []
     maps_path = f"clients/{client_id}/maps"
+
+    # 0) Share of Local Voice decline — the headline "losing the local market" signal.
+    if solv_drop:
+        gainer = solv_drop.get("top_gainer")
+        from_pct = solv_drop.get("from_pct")
+        to_pct = solv_drop.get("to_pct")
+        actions.append(
+            {
+                "kind": "maps_solv_drop",
+                "source": "maps",
+                "keyword": "Local market share",
+                "diagnosis": f"Top-3 local-pack share fell from {from_pct}% to {to_pct}%"
+                + (f" — {gainer} gained ground." if gainer else "."),
+                "recommendation": "You're losing share of the local pack. Strengthen GBP signals (posts, "
+                "categories, reviews) and location-page content across the grid; review the SoLV trend and "
+                "competitor gains in the Maps tracker.",
+                "cta_label": "Open Maps tracker",
+                "cta_path": maps_path,
+                "severity": "warning",
+                "sort": _SORT_MAPS + _within(_MAPS_SOLV_WITHIN),
+            }
+        )
 
     # 1) Open Maps alerts (already episode-deduped in the maps_alerts table).
     for a in maps_alerts:
@@ -307,6 +332,7 @@ def summarize_plan(actions: list[dict]) -> dict:
         by_kind.get("maps_decline", 0)
         + by_kind.get("maps_competitor", 0)
         + by_kind.get("maps_weak_area", 0)
+        + by_kind.get("maps_solv_drop", 0)
     )
     if maps:
         parts.append(f"{maps} local-pack issue{'s' if maps != 1 else ''}")
@@ -322,11 +348,12 @@ def summarize_plan(actions: list[dict]) -> dict:
 # ----------------------------------------------------------------------------
 # DB assembly + persistence.
 # ----------------------------------------------------------------------------
-def _fetch_maps_signals(supabase, client_id: str) -> "tuple[list[dict], list[dict]]":
-    """Read the Maps geo-grid signals for the Action Plan: open maps_alerts and
-    the latest completed scan's geocoded weak coverage areas (deduped by place,
-    worst-first). Best-effort — any failure yields empty signals so the rest of
-    the plan is unaffected."""
+def _fetch_maps_signals(supabase, client_id: str) -> "tuple[list[dict], list[dict], dict | None]":
+    """Read the Maps geo-grid signals for the Action Plan: open maps_alerts, the
+    latest completed scan's geocoded weak coverage areas (deduped by place,
+    worst-first), and a Share-of-Local-Voice drop between the two most recent
+    scans. Best-effort — any failure yields empty signals so the rest of the plan
+    is unaffected."""
     try:
         alerts = (
             supabase.table("maps_alerts")
@@ -340,29 +367,40 @@ def _fetch_maps_signals(supabase, client_id: str) -> "tuple[list[dict], list[dic
         alerts = []
 
     weak_areas: list[dict] = []
+    solv_drop: "dict | None" = None
     try:
-        scan = (
+        scans = (
             supabase.table("maps_scans")
             .select("id")
             .eq("client_id", client_id)
             .eq("status", "complete")
             .order("completed_at", desc=True)
-            .limit(1)
+            .limit(2)
             .execute()
-        ).data
-        if scan:
-            results = (
+        ).data or []
+        if scans:
+            latest_rows = (
                 supabase.table("maps_scan_results")
-                .select("report_weak_locations")
-                .eq("scan_id", scan[0]["id"])
+                .select("report_weak_locations, total_pins, top3_pins, top10_pins, competitors")
+                .eq("scan_id", scans[0]["id"])
                 .execute()
             ).data or []
-            weak_areas = _aggregate_weak_areas(results)
-    except Exception as exc:
-        logger.warning("reopt_plan_maps_weak_failed", extra={"client_id": client_id, "error": str(exc)})
-        weak_areas = []
+            weak_areas = _aggregate_weak_areas(latest_rows)
+            if len(scans) >= 2:
+                from services import maps_solv
 
-    return alerts, weak_areas
+                prev_rows = (
+                    supabase.table("maps_scan_results")
+                    .select("total_pins, top3_pins, top10_pins, competitors")
+                    .eq("scan_id", scans[1]["id"])
+                    .execute()
+                ).data or []
+                solv_drop = maps_solv.detect_solv_drop(latest_rows, prev_rows, SOLV_DROP_MIN_PCT)
+    except Exception as exc:
+        logger.warning("reopt_plan_maps_signals_failed", extra={"client_id": client_id, "error": str(exc)})
+        weak_areas, solv_drop = weak_areas, None
+
+    return alerts, weak_areas, solv_drop
 
 
 def _aggregate_weak_areas(results: list[dict]) -> list[dict]:
@@ -412,11 +450,11 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     ).data
     gsc = gsc_row[0] if gsc_row else {}
 
-    maps_alerts, weak_areas = _fetch_maps_signals(supabase, client_id)
+    maps_alerts, weak_areas, solv_drop = _fetch_maps_signals(supabase, client_id)
 
     # Build organic uncapped so Maps actions compete fairly for the combined cap.
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
-    maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas)
+    maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
     actions = organic + maps_actions
     actions.sort(key=lambda a: a["sort"], reverse=True)
     actions = actions[:TOTAL_MAX]

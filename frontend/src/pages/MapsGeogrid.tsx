@@ -9,7 +9,7 @@ import type {
   MapsChangesResponse, MapsCompetitorTrendsResponse,
   MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
   MapsPeriodsResponse, MapsRadius, MapsRunResponse,
-  MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsTrendsResponse,
+  MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsSolvResponse, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
 import { Markdown } from '../components/Markdown'
@@ -682,6 +682,7 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
         </Link>
       </div>
       <TrendPanel trends={trends} />
+      <SolvPanel clientId={clientId} />
       <CompetitorMomentum clientId={clientId} />
       {scans.length === 0 ? (
         <div style={card}><p style={muted}>No scans yet.</p></div>
@@ -799,6 +800,72 @@ function TrendPanel({ trends }: { trends?: MapsTrendsResponse }) {
         <p style={muted}>Run at least one scan to start building a trend. Each scan adds a point per keyword.</p>
       ) : (
         <TrendChart keywords={keywords} metric={TREND_METRICS.find(m => m.key === metric)!} />
+      )}
+    </div>
+  )
+}
+
+// ── Share of Local Voice (our Top-3 presence vs competitors) ────────────────
+function SolvPanel({ clientId }: { clientId: string }) {
+  const { data } = useQuery<MapsSolvResponse>({
+    queryKey: ['maps-solv', clientId],
+    queryFn: () => api.get<MapsSolvResponse>(`/clients/${clientId}/maps/solv`),
+  })
+  const series = data?.series ?? []
+  const competitors = data?.competitors ?? []
+  const latest = series.length ? series[series.length - 1] : undefined
+  const first = series.length ? series[0] : undefined
+  const delta = latest?.client_coverage_pct != null && first?.client_coverage_pct != null
+    ? Math.round((latest.client_coverage_pct - first.client_coverage_pct) * 10) / 10
+    : null
+  const up = delta != null && delta > 0
+  const down = delta != null && delta < 0
+  const deltaColor = up ? '#16a34a' : down ? '#dc2626' : '#94a3b8'  // for us, up = good
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 13, color: '#334155' }
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Share of Local Voice</h2>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+        Your local-pack presence — % of grid pins where you rank in the top 3 — over time, and how the top
+        competitors compare. (Presence share; it doesn’t sum to 100%.)
+      </p>
+      {!latest ? (
+        <p style={muted}>No completed scans yet — run a scan to see your local share.</p>
+      ) : (
+        <>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 10 }}>
+            <span style={{ fontSize: 28, fontWeight: 700, color: '#0f172a' }}>
+              {latest.client_coverage_pct != null ? `${Math.round(latest.client_coverage_pct)}%` : '—'}
+            </span>
+            <span style={{ fontSize: 13, color: '#64748b' }}>top-3 presence</span>
+            {delta != null && (
+              <span style={{ fontSize: 13, color: deltaColor, fontWeight: 600 }}>
+                {up ? '▲' : down ? '▼' : '–'} {Math.abs(delta)} pts since first scan
+              </span>
+            )}
+            <span style={{ marginLeft: 'auto' }}>
+              <PctSparkline values={series.map(p => p.client_coverage_pct)} color={down ? '#dc2626' : '#16a34a'} width={120} />
+            </span>
+          </div>
+          {competitors.length > 0 && (
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead><tr>
+                <th style={{ ...th, textAlign: 'left' }}>Competitor</th><th style={th}>Top-3 presence</th><th style={th}>Pins</th>
+              </tr></thead>
+              <tbody>
+                {competitors.map(c => (
+                  <tr key={c.place_id ?? c.name} style={{ borderTop: '1px solid #f1f5f9' }}>
+                    <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
+                    <td style={td}>{c.share_pct != null ? `${Math.round(c.share_pct)}%` : '—'}</td>
+                    <td style={{ ...td, color: '#94a3b8' }}>{c.top3_pins}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </>
       )}
     </div>
   )

@@ -152,6 +152,40 @@ class MapsCompetitorTrendsResponse(BaseModel):
     competitors: list[MapsCompetitorTrend] = Field(default_factory=list)
 
 
+# --- Share of Local Voice (SoLV) --------------------------------------------
+class MapsSolvCompetitorShare(BaseModel):
+    """One business's local-pack presence share (Top-3 pins / total pins)."""
+    place_id: Optional[str] = None
+    name: Optional[str] = None
+    top3_pins: int = 0
+    share_pct: Optional[float] = None
+
+
+class MapsSolvPoint(BaseModel):
+    """The client's overall Top-3 local-pack coverage at one completed scan."""
+    scan_id: UUID
+    completed_at: Optional[str] = None
+    trigger: str = "scheduled"
+    total_pins: int = 0
+    client_top3_pins: int = 0
+    client_coverage_pct: Optional[float] = None       # Top-3 presence %
+    client_coverage_top10_pct: Optional[float] = None
+
+
+class MapsSolvKeyword(BaseModel):
+    keyword: Optional[str] = None
+    total_pins: int = 0
+    client_top3_pins: int = 0
+    client_coverage_pct: Optional[float] = None
+    competitor_shares: list[MapsSolvCompetitorShare] = Field(default_factory=list)
+
+
+class MapsSolvResponse(BaseModel):
+    series: list[MapsSolvPoint] = Field(default_factory=list)              # oldest → newest
+    competitors: list[MapsSolvCompetitorShare] = Field(default_factory=list)  # latest scan, top N
+    keywords: list[MapsSolvKeyword] = Field(default_factory=list)         # latest scan per-keyword
+
+
 class MapsThreat(BaseModel):
     """One top-threat competitor for a dashboard tile."""
     name: Optional[str] = None

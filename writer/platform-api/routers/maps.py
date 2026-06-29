@@ -38,12 +38,14 @@ from models.maps import (
     MapsScanDetail,
     MapsScanResultRow,
     MapsScanSummary,
+    MapsSolvResponse,
     MapsThreat,
     MapsThreatsResponse,
     MapsTrendPoint,
     MapsTrendsResponse,
 )
 from services import local_dominator
+from services import maps_solv as maps_solv_service
 
 logger = logging.getLogger(__name__)
 
@@ -454,6 +456,28 @@ async def maps_competitor_trends(
         .in_("scan_id", [s["id"] for s in scans]).execute()
     ).data or []
     return build_competitor_trends(scans, results)
+
+
+@router.get("/clients/{client_id}/maps/solv", response_model=MapsSolvResponse)
+async def maps_solv(
+    client_id: UUID, limit: int = 52, auth: dict = Depends(require_auth)
+) -> MapsSolvResponse:
+    """Share of Local Voice — the client's Top-3 local-pack coverage over time
+    plus per-competitor presence share, derived from stored scans (no new fetch)."""
+    supabase = get_supabase()
+    scans = (
+        supabase.table("maps_scans").select("id, completed_at, trigger")
+        .eq("client_id", str(client_id)).eq("status", "complete")
+        .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
+    ).data or []
+    if not scans:
+        return MapsSolvResponse()
+    results = (
+        supabase.table("maps_scan_results")
+        .select("scan_id, keyword, total_pins, top3_pins, top10_pins, competitors")
+        .in_("scan_id", [s["id"] for s in scans]).execute()
+    ).data or []
+    return MapsSolvResponse(**maps_solv_service.build_solv(scans, results))
 
 
 @router.get("/maps/threats", response_model=MapsThreatsResponse)
