@@ -1,6 +1,138 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **Slack conversational assistant (SerMastr)** (latest)
+## ⏩ Update — 2026-06-29 · **Asana task integration** (latest)
+
+Connects AR Tools to the team's Asana workspace. **Two features, one token**
+(branch `claude/asana-integration-options-cp3zul` — **draft PR #170**; Phases 0–3
+built, optional Phase 4 ahead):
+
+- **A. Monthly section automation** — each client has an **app-defined task
+  template** (its own editable monthly task list, edited in AR Tools). A job
+  creates those tasks in the client's Asana project under a new **`<Month YYYY>`**
+  section: assignee + category carried, **Status = Not Started**, **no due dates**,
+  inserted above the backlog, **idempotent** (re-run = no-op). Runs **auto on the
+  1st** (shared `gsc_scheduler` → `asana_monthly` job) **and** via a **"Generate
+  this month"** button. UI: client workspace → **Project Management → Asana Tasks**
+  (`/clients/:id/asana-tasks`) — the template editor (name + assignee + category
+  pickers populated from Asana) + project-GID field + generate button.
+- **B. Team Workload** — a suite-level **"Workload"** nav page (`/workload`,
+  `GET /asana/workload`) showing each tracked member's open **hours** across all
+  clients vs their **weekly capacity** (effort-weighted), with per-day due-hours
+  chips + over-capacity flags + a **Team & capacity** editor (pick members from
+  Asana, set weekly hours). A **daily** scheduler check
+  (`asana_workload.run_workload_alert`) emits one suite notification (in-app +
+  Slack) when anyone is over capacity. Effort per task = an **Asana number field**
+  the monthly job stamps from each template row's **Est. hrs**.
+
+**Code:** `services/asana_service.py` (REST client + pure helpers),
+`services/asana_monthly.py` (Feature A), `services/asana_workload.py` (Feature B),
+`routers/asana.py`, `models/asana.py`; frontend `pages/AsanaTasks.tsx` +
+`pages/TeamWorkload.tsx`. Migrations `20260629120000_asana_client_projects.sql`
+(client→project map) + `20260629130000_asana_task_templates.sql` (per-client
+template + widens `async_jobs.job_type` for `asana_monthly`) +
+`20260629140000_asana_effort_capacity.sql` (`est_hours` on templates +
+`asana_team_members` team/capacity table). Everything **degrades gracefully** —
+absent the token / mapping / team list, the relevant feature is skipped with a
+note, never an error (the GSC/Slack pattern).
+
+**Verified:** the Asana test suite is green (`test_asana_service`,
+`test_asana_monthly`, `test_asana_workload`); frontend typechecks + builds clean.
+Nothing runs live until the provisioning below is done.
+
+### ⚠️ Asana provisioning still required (one-time)
+
+The code is deployed-ready but inert until these are set. All secrets/vars go on
+the **PLATFORM** Railway service.
+
+1. **Apply the migrations** to the live Supabase project (all additive — new
+   tables + columns + a `job_type` constraint widen): `20260629120000_asana_client_projects`,
+   `20260629130000_asana_task_templates`, `20260629140000_asana_effort_capacity`.
+2. **Token + workspace** — create an Asana **Personal Access Token**
+   (developers.asana.com → *My access tokens*) → set **`ASANA_TOKEN`**. Set
+   **`asana_workspace_gid`** = your workspace GID (`GET https://app.asana.com/api/1.0/workspaces`
+   with `Authorization: Bearer <token>`).
+3. **Custom-field GIDs** — for any client project, call
+   `GET /projects/<project_gid>/custom_field_settings?opt_fields=custom_field.name,custom_field.gid,custom_field.resource_subtype,custom_field.enum_options.name,custom_field.enum_options.gid`
+   and read off: the **Status** field GID + its **"Not Started"** option GID, the
+   **category** field GID, and (for workload) a **number** field for effort. Set
+   **`asana_status_field_gid`**, **`asana_status_not_started_option_gid`**,
+   **`asana_category_field_gid`**, **`asana_effort_field_gid`**. (Absent these,
+   tasks are still created — just without that field stamped. For effort: create a
+   number custom field like "Est. hours" on the projects first if you don't have
+   one.)
+4. **Per-client project mapping** — in the app: open a client → **Asana Tasks** →
+   paste the project GID (from the Asana project URL `app.asana.com/0/<project_gid>/…`)
+   → **Save**. One per client.
+5. **Per-client task templates** — fill each client's monthly task list in the
+   **Asana Tasks** editor (no Asana "Template" section needed — the app is the
+   source of truth).
+6. **Team list + capacity (Feature B)** — add members in the **Workload** page
+   ("Team & capacity": pick from Asana users, set each one's weekly hours). The
+   env **`asana_team_member_gids`** is a fallback seed only (default capacity).
+7. **Effort estimates** — set **Est. hrs** per task in each client's **Asana Tasks**
+   editor. The monthly job stamps them into the effort field; the workload view is
+   blind to effort until they're filled (unestimated tasks count as
+   `asana_default_task_hours`, default 1h).
+8. *(Optional, no code)* install Asana's official **Slack app** for the Slack ⇄
+   Asana leg (task notifications in Slack + create-task-from-Slack).
+
+**Cadence / tunables (config.py, optional):** `asana_month_generate_day` (default
+`1`), `asana_month_target_offset` (default `0` = current month), feature toggles
+`asana_monthly_enabled` / `asana_workload_enabled`; workload capacity
+`asana_default_weekly_hours` (30), `asana_workload_daily_workdays` (5),
+`asana_workload_backlog_weeks` (2), `asana_default_task_hours` (1).
+
+**Next (optional Phase 4):** two-way sync (Asana webhook → close rank alerts /
+mark Action Plan items done), per-client Asana-project mapping CRUD UI.
+
+### 📍 Provisioning progress (2026-06-29) — where we are
+
+**⚠️ Code not deployed yet.** PLATFORM deploys from **`main`**; **PR #170 is NOT
+merged**, so the Asana routers/services + the AsanaTasks/TeamWorkload frontend are
+**not in the running build**. The DB + env below are pre-staged, so the integration
+goes live **the moment #170 merges to `main`** and PLATFORM + Netlify redeploy.
+Until then the `/asana/*` endpoints and the Asana Tasks / Workload pages don't
+exist in production — don't expect the in-app pages to work yet.
+
+**✅ Migrations applied to live Supabase** (`wvcthtmmcmhkybcesirb`, via MCP):
+`asana_client_projects`, `asana_client_task_templates` (+ `est_hours`),
+`asana_team_members`, and `async_jobs.job_type` widened for `asana_monthly`.
+NB: the live `job_type` CHECK had two values **not** in any repo migration
+(`client_report`, `maps_analyze` — pre-existing drift); I preserved them when
+widening (dropping them would fail constraint validation on existing rows).
+
+**✅ Railway PLATFORM env set** (token by the user; the rest via the Railway MCP):
+- `ASANA_TOKEN` ✅ (secret, set by user)
+- `asana_workspace_gid` = `1143356380295200`
+- `asana_status_field_gid` = `1214452613145654` ("Status")
+- `asana_status_not_started_option_gid` = `1214452613145655` ("Not Started")
+- `asana_category_field_gid` = `1214452613145672` ("Service Type": Content /
+  Link Building / GBP Authority / Strategy)
+- `asana_effort_field_gid` = **not set** — the pilot project has no number custom
+  field. To enable effort-weighting: add an "Est. hours" **number** field to the
+  client projects, re-run the per-project `custom_field_settings` call, and set
+  this GID. Until then Workload treats every task as `asana_default_task_hours`
+  (1h).
+
+**Pilot project:** Asana project GID **`1214452202356916`** (URL form
+`app.asana.com/1/<workspace>/project/<project_gid>/...`). Its Status + Service Type
+fields are the GIDs above (they're **project-local** custom fields, not in the
+workspace library — so any new client project needs its own per-project field
+lookup unless it reuses the same fields).
+
+**⬜ Remaining once #170 is merged + deployed:**
+1. Smoke-test the token: open a client → **Asana Tasks**; the **Assignee** dropdown
+   should populate from Asana (proves the token works).
+2. **Map clients → projects** (in-app Asana Tasks editor, or insert
+   `asana_client_projects` rows). First pilot: project `1214452202356916`.
+3. **Build per-client task templates** (name + assignee + Service Type) and run
+   **Generate this month** to verify section + task creation.
+4. **Team & capacity** (Workload page) — add tracked members + weekly hours.
+5. *(optional)* effort field + per-task **Est. hrs** for hours-based workload.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Slack conversational assistant (SerMastr)**
 
 Two-way Slack, **channel mode**: SerMastr lives in a **dedicated channel** and
 answers **every plain human message there — no @mention needed** — a

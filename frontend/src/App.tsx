@@ -18,6 +18,8 @@ import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
+import { AsanaTasks } from './pages/AsanaTasks'
+import { TeamWorkload } from './pages/TeamWorkload'
 import { ClientReports } from './pages/ClientReports'
 import { GscResearch } from './pages/GscResearch'
 import { AiVisibility } from './pages/AiVisibility'
@@ -64,6 +66,7 @@ export default function App() {
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
+                      <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />
                       <Route path="/clients/:id/reports" element={<ClientReports />} />
                       <Route path="/clients/:id/ai-visibility" element={<AiVisibility />} />
                       <Route path="/clients/:id/maps" element={<MapsGeogrid />} />
@@ -73,6 +76,7 @@ export default function App() {
                       <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
+                      <Route path="/workload" element={<TeamWorkload />} />
                       <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>

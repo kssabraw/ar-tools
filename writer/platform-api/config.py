@@ -359,6 +359,50 @@ class Settings(BaseSettings):
     service_page_rank_top_n: int = 5
     service_page_plan_max_rank_checks: int = 25
 
+    # ------------------------------------------------------------------
+    # Asana task integration (docs/modules/asana-task-integration-plan-v1_0.md)
+    # ------------------------------------------------------------------
+    # Two features on one token: (A) monthly section automation — clone a
+    # hand-maintained "Template" section forward into a new "<Month YYYY>"
+    # section per client project; (B) Team Workload — read a defined team list's
+    # open tasks across all client projects + proactive overload alerts. Both
+    # degrade gracefully: absent the token / workspace the features are skipped
+    # with a note, never an error (the GSC / Slack provisioning pattern).
+    asana_token: str = ""          # Asana PAT / service-account token (Bearer)
+    asana_workspace_gid: str = ""  # scopes the per-assignee task queries
+    asana_monthly_enabled: bool = True
+    asana_workload_enabled: bool = True
+    # Monthly section automation cadence. The scheduler fires once per month on
+    # `asana_month_generate_day`; the target month = today shifted by
+    # `asana_month_target_offset` (0 = the month that just started, 1 = next
+    # month, to pre-stage ahead). Tasks come from each client's app-defined
+    # template (asana_client_task_templates) — there is no Asana "Template"
+    # section (the source of truth is the app).
+    asana_month_generate_day: int = 1
+    asana_month_target_offset: int = 0
+    # Custom-field GIDs on the client projects (Starter plan: these already
+    # exist). The monthly job sets Status = Not Started on each new task and
+    # carries the category enum value forward from the template task.
+    asana_status_field_gid: str = ""
+    asana_status_not_started_option_gid: str = ""
+    asana_category_field_gid: str = ""
+    # Team Workload: the Asana user GIDs to track (comma-separated). Used as a
+    # fallback seed only — the source of truth is the asana_team_members table
+    # (editable in the Workload page). Absent both → the feature is skipped.
+    asana_team_member_gids: str = ""
+    # Effort-weighting (Phase 3). Overload is computed from estimated *hours*,
+    # not task counts. The monthly job stamps each task's est_hours into this
+    # Asana number custom field; the workload read pulls it back off the task.
+    asana_effort_field_gid: str = ""
+    # Fallback hours for a task with no estimate (so the signal isn't blind).
+    asana_default_task_hours: float = 1.0
+    # Default weekly capacity for a tracked member with no weekly_hours set.
+    asana_default_weekly_hours: float = 30.0
+    # Workdays per week — daily capacity = weekly_hours / this (same-day check).
+    asana_workload_daily_workdays: int = 5
+    # Flag a member whose open backlog exceeds this many weeks of their capacity.
+    asana_workload_backlog_weeks: float = 2.0
+
     class Config:
         env_file = ".env"
 

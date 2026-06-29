@@ -5,6 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
+  ClipboardList,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 
@@ -225,6 +226,20 @@ export function ClientWorkspace() {
           label="Action Plan"
           description="A prioritized reoptimization to-do list built from this client's rank signals — drops to fix, winnable quick wins & Search Console opportunities, each linked to the tool that does it."
           to={id ? `/clients/${id}/action-plan` : undefined}
+          cta="Open"
+        />
+      </Section>
+
+      {/* ── Project Management ──────────────────────────────────────── */}
+      <Section
+        title="Project Management"
+        subtitle="Plan and dispatch this client's delivery work."
+      >
+        <ActionCard
+          icon={<ClipboardList size={22} />}
+          label="Asana Tasks"
+          description="Define the tasks this client gets each month — name, assignee & category. The monthly job creates them in Asana under a new section, automatically or on demand."
+          to={id ? `/clients/${id}/asana-tasks` : undefined}
           cta="Open"
         />
       </Section>
