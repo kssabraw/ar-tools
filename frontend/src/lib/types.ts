@@ -1026,7 +1026,15 @@ export interface AsanaTaskTemplateItem {
   assignee_name: string | null
   category_option_gid: string | null
   category_name: string | null
+  est_hours: number | null
   sort_order: number
+  active: boolean
+}
+
+export interface AsanaTeamMember {
+  gid: string
+  name: string | null
+  weekly_hours: number | null
   active: boolean
 }
 
@@ -1053,8 +1061,12 @@ export interface AsanaWorkloadMember {
   gid: string
   name: string
   open_count: number
-  due_by_day: Record<string, number>
-  worst_same_day: { date: string; count: number } | null
+  open_hours: number
+  unestimated: number
+  weekly_hours: number | null
+  daily_capacity: number | null
+  due_hours_by_day: Record<string, number>
+  worst_same_day: { date: string; hours: number } | null
   overloaded: boolean
   flags: string[]
 }
@@ -1063,6 +1075,11 @@ export interface AsanaWorkloadReport {
   configured: boolean
   members: AsanaWorkloadMember[]
   overloaded: AsanaWorkloadMember[]
-  thresholds: { max_open: number; max_due_same_day: number }
+  thresholds: {
+    default_weekly_hours: number
+    daily_workdays: number
+    backlog_weeks: number
+    default_task_hours: number
+  }
   note?: string
 }

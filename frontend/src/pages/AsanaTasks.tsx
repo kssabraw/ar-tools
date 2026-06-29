@@ -102,7 +102,7 @@ export function AsanaTasks() {
   const addRow = () =>
     setRows((rs) => [
       ...rs,
-      { name: '', assignee_gid: null, assignee_name: null, category_option_gid: null, category_name: null, sort_order: rs.length, active: true },
+      { name: '', assignee_gid: null, assignee_name: null, category_option_gid: null, category_name: null, est_hours: null, sort_order: rs.length, active: true },
     ])
   const removeRow = (i: number) => setRows((rs) => rs.filter((_, j) => j !== i))
   const move = (i: number, dir: -1 | 1) =>
@@ -167,7 +167,7 @@ export function AsanaTasks() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <h2 style={cardTitle}>Monthly task template</h2>
-            <p style={cardSub}>One row per task. Order here is the order they’re created in Asana.</p>
+            <p style={cardSub}>One row per task. Order here is the order they’re created in Asana. Est. hrs (optional) feeds the Team Workload view.</p>
           </div>
           <button style={ghostBtn} onClick={addRow}><Plus size={14} /> Add task</button>
         </div>
@@ -177,7 +177,7 @@ export function AsanaTasks() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
             <div style={{ display: 'grid', gridTemplateColumns: rowGrid, gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 4 }}>
-              <span>Task</span><span>Assignee</span><span>Category</span><span>Active</span><span></span>
+              <span>Task</span><span>Assignee</span><span>Category</span><span>Est. hrs</span><span>Active</span><span></span>
             </div>
             {rows.map((r, i) => (
               <div key={i} style={{ display: 'grid', gridTemplateColumns: rowGrid, gap: 8, alignItems: 'center' }}>
@@ -215,6 +215,15 @@ export function AsanaTasks() {
                     <option key={c.gid} value={c.gid}>{c.name ?? c.gid}</option>
                   ))}
                 </select>
+                <input
+                  style={input}
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  placeholder="—"
+                  value={r.est_hours ?? ''}
+                  onChange={(e) => updateRow(i, { est_hours: e.target.value === '' ? null : Number(e.target.value) })}
+                />
                 <input
                   type="checkbox"
                   checked={r.active}
@@ -293,7 +302,7 @@ export function AsanaTasks() {
 }
 
 // ── Styles ─────────────────────────────────────────────────────────────
-const rowGrid = '1fr 150px 150px 50px 86px'
+const rowGrid = '1fr 140px 140px 70px 46px 86px'
 const backLinkStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13,
   color: '#64748b', textDecoration: 'none', marginBottom: 16,

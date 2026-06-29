@@ -1,6 +1,6 @@
 # Asana Task Integration — Plan (v1.0)
 
-**Authored:** 2026-06-29 · **Status:** **Phases 0–2 built** · Phase 3 (workload alerts) ahead · **New suite integration — "Asana"**
+**Authored:** 2026-06-29 · **Status:** **Phases 0–3 built** · Phase 4 (two-way sync) optional/ahead · **New suite integration — "Asana"**
 
 > **Build status (2026-06-29).** **Phase 0 (scaffolding)** + **Phase 1 backend (monthly
 > automation)** are implemented on branch `claude/asana-integration-options-cp3zul`
@@ -36,10 +36,22 @@
 > with a **"Workload"** nav item. Tests: `tests/test_asana_workload.py`. Typechecks + builds
 > clean.
 >
-> **Still ahead:** Phase 3 (workload alerts — a daily scheduler due-check → notifications
-> service). Migrations are committed but **not yet applied to the live Supabase project**
-> (pending plan approval). Everything degrades gracefully until the Asana token + workspace +
-> team list + per-client mappings are provisioned.
+> *Phase 3 — effort-weighted workload + daily alert (built):* overload is computed from
+> estimated **hours** vs each person's **weekly capacity**, not task counts. Migration
+> `20260629140000` (`est_hours` on templates + `asana_team_members` table — team list +
+> capacity, supersedes the env gid list). The monthly job stamps each task's `est_hours` into
+> an **Asana number custom field** (`asana_effort_field_gid`); the workload read pulls it back
+> off the task. `aggregate_member_workload`/`build_workload_report` rewritten to hours
+> (same-day over daily capacity; backlog over N weeks). `asana_workload.run_workload_alert`
+> emits one suite notification when anyone is overloaded; `gsc_scheduler` runs it daily.
+> Frontend: an **Est. hrs** column in the template editor + a **Team & capacity** editor on
+> the Workload page (pick members from Asana, set weekly hours), hours/capacity display.
+> Tests green; typechecks + builds clean.
+>
+> **Still ahead (optional Phase 4):** two-way sync (Asana webhook → close rank alerts / mark
+> Action Plan items done). Migrations are committed but **not yet applied to the live Supabase
+> project** (pending plan approval). Everything degrades gracefully until the Asana token +
+> workspace + effort field + team list + per-client mappings are provisioned.
 
 > Read alongside **`docs/suite-architecture-and-roadmap-v1_0.md`** (decision log + shared
 > infrastructure) and the **notifications service** section of `CLAUDE.md`. This document
@@ -143,23 +155,30 @@ the monthly deliverables for every client are defined/visible in one place in AR
 
 **Goal:** know we're not overloading a team member or stacking too many tasks on one day.
 
+**Effort-weighted (decided 2026-06-29):** overload is computed from estimated **hours** vs
+each person's **weekly capacity**, not raw task counts — counting tasks treats a 4-hour job
+and a 15-minute job as equal. Effort lives on each task as an **Asana number custom field**
+(`asana_effort_field_gid`): the monthly job stamps it from the template row's `est_hours`
+(set once, rides every month), and the workload read pulls it back off the live task. Capacity
+lives per-person in `asana_team_members.weekly_hours` (default for unset).
+
 **Read view (suite-level — spans people and all client projects):**
-- For each person in the **defined team list**, pull **open tasks across the workspace**
-  (`GET /tasks?assignee={user_gid}&workspace={gid}&completed_since=now`, paginated, with
-  `opt_fields=name,due_on,projects`).
-- Aggregate into: **per-person open-task count** and a **due-date distribution**
-  (tasks-due-per-day for the current/next window).
-- **Overload flags** (thresholds in `config.py`): too many open tasks per person; too many
-  tasks **due the same day** (e.g. "Minda has 6 tasks due Jul 9").
-- Lives above any single client — Home or a dedicated "Team Workload" page. Read-only, so
-  no `profiles ↔ Asana-user` mapping required for v1 (display Asana assignee names).
-- Pulled on demand with **light caching** to respect Asana rate limits (~150 req/min).
+- For each person in the **tracked team list** (`asana_team_members`), pull **open tasks across
+  the workspace** (`GET /tasks?assignee={gid}&workspace={gid}&completed_since=now`, with
+  `opt_fields=name,due_on,completed,custom_fields.gid,custom_fields.number_value`).
+- Aggregate into per-person **open hours** (effort field, else `default_task_hours`) and a
+  **due-hours-per-day** distribution.
+- **Overload flags:** a single day's due hours over **daily capacity** (`weekly_hours /
+  workdays`), or open backlog over `backlog_weeks` of capacity (e.g. "9h due Jul 9 over
+  6h/day").
+- A dedicated **"Workload"** nav page; read-only, displays Asana names + a Team & capacity
+  editor. Pulled on demand.
 
 **Proactive alerts:**
-- A **daily** scheduler due-check (`gsc_scheduler`) runs the same aggregation and, when a
-  team member crosses an overload threshold or has too many tasks due the same day, calls
-  `services/notifications.emit(...)` → in-app feed + Slack (email when provisioned). Reuses
-  the existing `notification_dispatch` pipeline; no new delivery infra.
+- A **daily** scheduler due-check (`gsc_scheduler` → `asana_workload.run_workload_alert`) runs
+  the same aggregation and, when anyone is over capacity, calls
+  `services/notifications.emit(client_id=None, kind="asana_workload", …)` → in-app feed + Slack
+  (email when provisioned). Reuses the existing `notification_dispatch` pipeline; no new infra.
 
 **Note on creation-time stacking:** because Feature A creates tasks **without due dates**,
 there is no due-date clustering to guard against *at creation*. Workload is therefore an
@@ -216,17 +235,28 @@ asana_client_task_templates               -- migration 20260629130000
   assignee_name       text                 (cached label for the editor)
   category_option_gid text                 (Asana enum-option gid, nullable)
   category_name       text                 (cached label for the editor)
+  est_hours           numeric              (effort estimate; migration 20260629140000)
   sort_order          integer
   active              boolean
+  created_at / updated_at  timestamptz
+
+asana_team_members                        -- migration 20260629140000
+  gid          text PK                      (Asana user gid — the tracked team)
+  name         text
+  weekly_hours numeric                      (capacity; null → config default)
+  active       boolean
   created_at / updated_at  timestamptz
 ```
 
 - `asana_client_projects`: one row per client (PK enforces uniqueness), set at onboarding.
 - `asana_client_task_templates`: the client's monthly task list, edited in the app. The
-  monthly job reads the **active** rows in `sort_order` and creates one Asana task each.
-- The **team list** (Feature B scope) and **custom-field GIDs** (Status / category + the
-  "Not Started" option GID) are configuration, not per-client data — held in `config.py`
-  (§7), since they're workspace-level constants.
+  monthly job reads the **active** rows in `sort_order` and creates one Asana task each;
+  `est_hours` is stamped into the Asana effort number field for the workload view.
+- `asana_team_members`: the tracked team list + per-person weekly capacity (Feature B),
+  edited in the Workload page. Supersedes the env `asana_team_member_gids` (kept as a
+  fallback seed).
+- The **custom-field GIDs** (Status / category / effort + the "Not Started" option) are
+  workspace-level constants in `config.py` (§7).
 
 ---
 
@@ -239,8 +269,11 @@ asana_client_task_templates               -- migration 20260629130000
 | `asana_month_generate_day` (default `1`) / `asana_month_target_offset` (default `0`) | When the scheduled monthly run fires, and which month it targets (0 = current). |
 | `asana_status_field_gid` / `asana_status_not_started_option_gid` | Set Status = Not Started on new tasks. |
 | `asana_category_field_gid` | The category custom field (its enum options populate the editor; the row's chosen option is stamped on each task). |
-| `asana_team_member_gids` (list) | The defined team list for workload. |
-| `asana_workload_max_open` / `asana_workload_max_due_same_day` | Overload thresholds. |
+| `asana_effort_field_gid` | The **number** custom field the monthly job stamps with each task's `est_hours`; the workload read pulls it back off the task. |
+| `asana_default_task_hours` (default `1.0`) | Hours assumed for a task with no estimate. |
+| `asana_default_weekly_hours` (default `30`) | Capacity for a tracked member with no `weekly_hours` set. |
+| `asana_workload_daily_workdays` (default `5`) / `asana_workload_backlog_weeks` (default `2`) | Daily capacity = weekly/workdays; backlog flag = open hours over N weeks of capacity. |
+| `asana_team_member_gids` (list) | **Fallback** team-list seed only; the source of truth is `asana_team_members`. |
 | `asana_monthly_enabled` / `asana_workload_enabled` | Feature toggles. |
 
 Secrets are set on the `PLATFORM` Railway service by the user — never handled in code/chat.
@@ -282,7 +315,10 @@ notifications setup.
 - **Phase 2 — workload view (built):** `services/asana_workload.py` + `GET /asana/workload`
   + `pages/TeamWorkload.tsx` (suite-level "Workload" nav) — per-person aggregation, overload
   detection, per-day due chips with same-day-stack highlighting.
-- **Phase 3 — workload alerts:** daily due-check → notifications service (Slack/in-app).
+- **Phase 3 — effort-weighted workload + alerts (built):** `est_hours` per template task
+  stamped into an Asana number field; `asana_team_members` (team + weekly capacity); hours-vs-
+  capacity overload; `run_workload_alert` daily due-check → notifications service; frontend
+  Est.-hrs column + Team & capacity editor.
 - **Phase 4 (optional follow-up):** two-way sync (Asana webhook → close rank alerts / mark
   Action Plan items done); per-client Slack/Asana routing; `profiles ↔ Asana-user` mapping
   if the workload view needs to tie to suite identity.
