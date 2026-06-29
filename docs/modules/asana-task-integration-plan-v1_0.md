@@ -1,6 +1,6 @@
 # Asana Task Integration — Plan (v1.0)
 
-**Authored:** 2026-06-29 · **Status:** **Phase 0 + Phase 1 (backend + frontend) built** · Phases 2–3 ahead · **New suite integration — "Asana"**
+**Authored:** 2026-06-29 · **Status:** **Phases 0–2 built** · Phase 3 (workload alerts) ahead · **New suite integration — "Asana"**
 
 > **Build status (2026-06-29).** **Phase 0 (scaffolding)** + **Phase 1 backend (monthly
 > automation)** are implemented on branch `claude/asana-integration-options-cp3zul`
@@ -28,9 +28,18 @@
 > an **"Asana Tasks"** card in a new **Project Management** section of the client workspace.
 > Typechecks + builds clean.
 >
-> **Still ahead:** Phase 2 (workload view), Phase 3 (workload alerts). Migrations are committed
-> but **not yet applied to the live Supabase project** (pending plan approval). Everything
-> degrades gracefully until the Asana token + workspace + per-client mappings are provisioned.
+> *Phase 2 — Team Workload view (built):* `services/asana_workload.py`
+> (`build_team_workload` — resolves names once, fetches each tracked member's open tasks
+> concurrently best-effort, aggregates via `build_workload_report`); `GET /asana/workload`;
+> `frontend/src/pages/TeamWorkload.tsx` (suite-level page: per-member open counts, overload
+> flags, a per-day due-date chip row with same-day-stack highlighting) routed at `/workload`
+> with a **"Workload"** nav item. Tests: `tests/test_asana_workload.py`. Typechecks + builds
+> clean.
+>
+> **Still ahead:** Phase 3 (workload alerts — a daily scheduler due-check → notifications
+> service). Migrations are committed but **not yet applied to the live Supabase project**
+> (pending plan approval). Everything degrades gracefully until the Asana token + workspace +
+> team list + per-client mappings are provisioned.
 
 > Read alongside **`docs/suite-architecture-and-roadmap-v1_0.md`** (decision log + shared
 > infrastructure) and the **notifications service** section of `CLAUDE.md`. This document
@@ -270,8 +279,9 @@ notifications setup.
   - *Frontend (built):* `pages/AsanaTasks.tsx` — the per-client **task template editor**
     (assignee/category pickers from Asana) + project mapping + a **"Generate this month"**
     button; "Asana Tasks" workspace card under a new Project Management section.
-- **Phase 2 — workload view:** per-person aggregation + overload detection + read-only
-  suite-level view.
+- **Phase 2 — workload view (built):** `services/asana_workload.py` + `GET /asana/workload`
+  + `pages/TeamWorkload.tsx` (suite-level "Workload" nav) — per-person aggregation, overload
+  detection, per-day due chips with same-day-stack highlighting.
 - **Phase 3 — workload alerts:** daily due-check → notifications service (Slack/in-app).
 - **Phase 4 (optional follow-up):** two-way sync (Asana webhook → close rank alerts / mark
   Action Plan items done); per-client Slack/Asana routing; `profiles ↔ Asana-user` mapping

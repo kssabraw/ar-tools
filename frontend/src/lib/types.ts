@@ -1048,3 +1048,21 @@ export interface AsanaGenerateMonthResponse {
   reason: string | null
   errors: string[]
 }
+
+export interface AsanaWorkloadMember {
+  gid: string
+  name: string
+  open_count: number
+  due_by_day: Record<string, number>
+  worst_same_day: { date: string; count: number } | null
+  overloaded: boolean
+  flags: string[]
+}
+
+export interface AsanaWorkloadReport {
+  configured: boolean
+  members: AsanaWorkloadMember[]
+  overloaded: AsanaWorkloadMember[]
+  thresholds: { max_open: number; max_due_same_day: number }
+  note?: string
+}

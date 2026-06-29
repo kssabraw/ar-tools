@@ -30,7 +30,7 @@ from models.asana import (
     GenerateMonthRequest,
     GenerateMonthResponse,
 )
-from services import asana_monthly, asana_service
+from services import asana_monthly, asana_service, asana_workload
 
 router = APIRouter(tags=["asana"])
 logger = logging.getLogger(__name__)
@@ -43,6 +43,19 @@ logger = logging.getLogger(__name__)
 async def asana_status(auth: dict = Depends(require_auth)) -> dict:
     """Whether the Asana integration is provisioned (drives UI gating)."""
     return {"configured": asana_service.is_configured()}
+
+
+# ---------------------------------------------------------------------------
+# Team Workload (Feature B, read)
+# ---------------------------------------------------------------------------
+@router.get("/asana/workload")
+async def workload(auth: dict = Depends(require_auth)) -> dict:
+    """Per-person open-task load + same-day due clustering for the team list."""
+    try:
+        return await asana_workload.build_team_workload()
+    except Exception as exc:
+        logger.error("asana_workload_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
 
 
 # ---------------------------------------------------------------------------

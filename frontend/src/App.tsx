@@ -18,6 +18,7 @@ import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
 import { AsanaTasks } from './pages/AsanaTasks'
+import { TeamWorkload } from './pages/TeamWorkload'
 import { GscResearch } from './pages/GscResearch'
 import { AiVisibility } from './pages/AiVisibility'
 import { MapsGeogrid } from './pages/MapsGeogrid'
@@ -71,6 +72,7 @@ export default function App() {
                       <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
+                      <Route path="/workload" element={<TeamWorkload />} />
                       <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
