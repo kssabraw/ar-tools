@@ -19,6 +19,7 @@ import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
 import { Sops } from './pages/Sops'
+import { Guides } from './pages/Guides'
 import { AsanaTasks } from './pages/AsanaTasks'
 import { TeamWorkload } from './pages/TeamWorkload'
 import { TaskLibrary } from './pages/TaskLibrary'
@@ -82,6 +83,8 @@ export default function App() {
                       <Route path="/workload" element={<TeamWorkload />} />
                       <Route path="/asana/task-library" element={<TaskLibrary />} />
                       <Route path="/playbook" element={<Sops />} />
+                      <Route path="/guides" element={<Guides />} />
+                      <Route path="/guides/:slug" element={<Guides />} />
                       <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
