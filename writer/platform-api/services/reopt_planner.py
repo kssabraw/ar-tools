@@ -63,6 +63,7 @@ _MAPS_WITHIN = {
     "area_decline": 3_000,
 }
 _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the Maps tier
+_MAPS_GBP_WITHIN = 4_000        # a GBP-gap action sits mid Maps tier (above weak areas)
 _MAPS_SOLV_WITHIN = 8_500       # a SoLV drop sits near the top of the Maps tier (just under lost_pack)
 MAPS_WEAK_AREA_MAX = 5          # cap weak-area actions per plan
 SOLV_DROP_MIN_PCT = 10.0        # min Top-3 local-pack share lost (points) to flag a SoLV drop
@@ -324,6 +325,39 @@ def build_maps_actions(
     return actions
 
 
+def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[dict]:
+    """A single consolidated 'strengthen your GBP' action from the profile audit
+    (missing fields + category gaps + a review deficit vs competitors). Pure."""
+    a = gbp_audit_result
+    if not a:
+        return []
+    parts: list[str] = []
+    if a.get("gaps"):
+        parts.append("complete " + ", ".join(g.lower() for g in a["gaps"][:3]))
+    if a.get("category_gaps"):
+        parts.append(f"add categories ({', '.join(a['category_gaps'][:2])})")
+    rg = a.get("review_gap")
+    if rg and rg.get("deficit"):
+        parts.append(f"close a ~{rg['deficit']}-review gap vs competitors")
+    if not parts:
+        return []
+    score = a.get("score")
+    return [
+        {
+            "kind": "gbp_gap",
+            "source": "maps",
+            "keyword": "Google Business Profile",
+            "diagnosis": f"GBP completeness {score}/100 vs {a.get('competitor_count', 0)} competitors."
+            if score is not None else "GBP has optimization gaps vs competitors.",
+            "recommendation": "Strengthen the Google Business Profile: " + "; ".join(parts) + ".",
+            "cta_label": "Open Maps tracker",
+            "cta_path": f"clients/{client_id}/maps",
+            "severity": "info",
+            "sort": _SORT_MAPS + _within(_MAPS_GBP_WITHIN),
+        }
+    ]
+
+
 def build_brand_action(client_id: str, brand_decline: "dict | None") -> list[dict]:
     """A brand-search-health action when branded GSC demand is falling. Pure."""
     if not brand_decline:
@@ -362,6 +396,7 @@ def summarize_plan(actions: list[dict]) -> dict:
         + by_kind.get("maps_competitor", 0)
         + by_kind.get("maps_weak_area", 0)
         + by_kind.get("maps_solv_drop", 0)
+        + by_kind.get("gbp_gap", 0)
     )
     if maps:
         parts.append(f"{maps} local-pack issue{'s' if maps != 1 else ''}")
@@ -453,6 +488,22 @@ def _aggregate_weak_areas(results: list[dict]) -> list[dict]:
     return sorted(best.values(), key=lambda a: a.get("pins") or 0, reverse=True)
 
 
+def _fetch_gbp_audit(supabase, client_id: str) -> "dict | None":
+    """Best-effort GBP audit (client GBP vs captured competitor profiles)."""
+    try:
+        from services import competitor_gbp, gbp_audit
+
+        rows = supabase.table("clients").select("gbp").eq("id", client_id).limit(1).execute().data
+        gbp = (rows[0].get("gbp") if rows else None) or {}
+        if not gbp:
+            return None
+        profiles = competitor_gbp.latest_profiles(client_id)
+        return gbp_audit.audit(gbp, profiles)
+    except Exception as exc:
+        logger.warning("reopt_plan_gbp_audit_failed", extra={"client_id": client_id, "error": str(exc)})
+        return None
+
+
 def _fetch_brand_decline(supabase, client_id: str) -> "dict | None":
     """Best-effort brand-search decline signal (branded GSC impressions falling)."""
     try:
@@ -499,10 +550,12 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
 
     maps_alerts, weak_areas, solv_drop = _fetch_maps_signals(supabase, client_id)
     brand_decline = _fetch_brand_decline(supabase, client_id)
+    gbp_audit_result = _fetch_gbp_audit(supabase, client_id)
 
     # Build organic uncapped so Maps actions compete fairly for the combined cap.
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
+    maps_actions += build_gbp_action(client_id, gbp_audit_result)
     brand_actions = build_brand_action(client_id, brand_decline)
     actions = organic + maps_actions + brand_actions
     actions.sort(key=lambda a: a["sort"], reverse=True)

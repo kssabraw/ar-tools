@@ -288,6 +288,30 @@ def test_brand_action_empty_when_no_decline():
     assert reopt_planner.build_brand_action(CLIENT, None) == []
 
 
+def test_gbp_action_consolidates_gaps():
+    audit = {
+        "score": 57,
+        "competitor_count": 5,
+        "gaps": ["Opening hours", "Business description"],
+        "category_gaps": ["emergency plumber"],
+        "review_gap": {"client": 20, "competitor_median": 120, "deficit": 100},
+    }
+    actions = reopt_planner.build_gbp_action(CLIENT, audit)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "gbp_gap" and a["source"] == "maps"
+    assert "57/100" in a["diagnosis"]
+    assert "emergency plumber" in a["recommendation"]
+    assert "100-review gap" in a["recommendation"]
+    assert a["cta_path"] == f"clients/{CLIENT}/maps"
+
+
+def test_gbp_action_empty_when_no_gaps():
+    audit = {"score": 100, "competitor_count": 3, "gaps": [], "category_gaps": [], "review_gap": None}
+    assert reopt_planner.build_gbp_action(CLIENT, audit) == []
+    assert reopt_planner.build_gbp_action(CLIENT, None) == []
+
+
 def test_brand_action_sorts_in_hidden_band():
     decline = {"from_impressions": 400, "to_impressions": 200, "delta_pct": 50.0, "weeks": 4}
     brand = reopt_planner.build_brand_action(CLIENT, decline)[0]

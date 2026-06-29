@@ -9,7 +9,7 @@ import type {
   MapsChangesResponse, MapsCompetitorTrendsResponse,
   MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
   MapsPeriodsResponse, MapsRadius, MapsRunResponse,
-  MapsCompetitorIntelResponse,
+  MapsCompetitorIntelResponse, MapsGbpAuditResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsSolvResponse, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
@@ -686,6 +686,7 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
       <SolvPanel clientId={clientId} />
       <CompetitorMomentum clientId={clientId} />
       <CompetitorIntel clientId={clientId} />
+      <GbpAudit clientId={clientId} />
       {scans.length === 0 ? (
         <div style={card}><p style={muted}>No scans yet.</p></div>
       ) : (
@@ -868,6 +869,48 @@ function SolvPanel({ clientId }: { clientId: string }) {
             </table>
           )}
         </>
+      )}
+    </div>
+  )
+}
+
+// ── GBP profile audit (your profile vs competitors) ─────────────────────────
+function GbpAudit({ clientId }: { clientId: string }) {
+  const { data } = useQuery<MapsGbpAuditResponse>({
+    queryKey: ['maps-gbp-audit', clientId],
+    queryFn: () => api.get<MapsGbpAuditResponse>(`/clients/${clientId}/maps/gbp-audit`),
+  })
+  if (!data) return null
+  const score = data.score
+  const scoreColor = score == null ? '#94a3b8' : score >= 85 ? '#16a34a' : score >= 60 ? '#d97706' : '#dc2626'
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>GBP profile audit</h2>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+        How complete your Google Business Profile is, and gaps vs your top local-pack competitors.
+      </p>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 12 }}>
+        <span style={{ fontSize: 28, fontWeight: 700, color: scoreColor }}>{score != null ? `${score}` : '—'}</span>
+        <span style={{ fontSize: 13, color: '#64748b' }}>/ 100 completeness{data.competitor_count ? ` · vs ${data.competitor_count} competitors` : ''}</span>
+      </div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: data.category_gaps.length || data.review_gap ? 12 : 0 }}>
+        {data.checks.map(c => (
+          <span key={c.key} title={c.detail} style={{
+            fontSize: 12, fontWeight: 600, borderRadius: 999, padding: '3px 10px',
+            color: c.ok ? '#166534' : '#b91c1c', background: c.ok ? '#dcfce7' : '#fef2f2',
+          }}>{c.ok ? '✓' : '✗'} {c.label}</span>
+        ))}
+      </div>
+      {data.category_gaps.length > 0 && (
+        <p style={{ fontSize: 13, color: '#334155', margin: '0 0 6px' }}>
+          <strong>Missing categories</strong> competitors use: {data.category_gaps.join(', ')}.
+        </p>
+      )}
+      {data.review_gap && (
+        <p style={{ fontSize: 13, color: '#334155', margin: 0 }}>
+          <strong>Review gap:</strong> you have {data.review_gap.client.toLocaleString()} vs a competitor median of{' '}
+          {data.review_gap.competitor_median.toLocaleString()} (~{data.review_gap.deficit.toLocaleString()} behind).
+        </p>
       )}
     </div>
   )

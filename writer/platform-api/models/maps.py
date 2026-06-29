@@ -209,6 +209,29 @@ class MapsCompetitorIntelResponse(BaseModel):
     captured_at: Optional[str] = None    # most recent capture timestamp
 
 
+# --- GBP profile audit / gaps (Tier B / B2) ---------------------------------
+class MapsGbpAuditCheck(BaseModel):
+    key: str
+    label: str
+    ok: bool
+    detail: str = ""
+
+
+class MapsGbpReviewGap(BaseModel):
+    client: int = 0
+    competitor_median: int = 0
+    deficit: int = 0
+
+
+class MapsGbpAuditResponse(BaseModel):
+    score: Optional[int] = None              # 0–100 completeness
+    competitor_count: int = 0
+    checks: list[MapsGbpAuditCheck] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)            # failed-check labels
+    category_gaps: list[str] = Field(default_factory=list)   # categories competitors have, client lacks
+    review_gap: Optional[MapsGbpReviewGap] = None
+
+
 class MapsThreat(BaseModel):
     """One top-threat competitor for a dashboard tile."""
     name: Optional[str] = None

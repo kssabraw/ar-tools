@@ -1103,6 +1103,7 @@ export interface ReoptAction {
     | 'maps_competitor'
     | 'maps_weak_area'
     | 'maps_solv_drop'
+    | 'gbp_gap'
     | 'brand_search_decline'
   source?: 'organic' | 'maps'
   keyword: string
@@ -1173,6 +1174,25 @@ export interface MapsCompetitorProfile {
 export interface MapsCompetitorIntelResponse {
   profiles: MapsCompetitorProfile[]
   captured_at: string | null
+}
+export interface MapsGbpAuditCheck {
+  key: string
+  label: string
+  ok: boolean
+  detail: string
+}
+export interface MapsGbpReviewGap {
+  client: number
+  competitor_median: number
+  deficit: number
+}
+export interface MapsGbpAuditResponse {
+  score: number | null
+  competitor_count: number
+  checks: MapsGbpAuditCheck[]
+  gaps: string[]
+  category_gaps: string[]
+  review_gap: MapsGbpReviewGap | null
 }
 
 // Brand-search analysis (branded vs non-branded GSC demand).

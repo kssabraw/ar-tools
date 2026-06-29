@@ -24,6 +24,7 @@ from models.maps import (
     MapsClientThreats,
     MapsCompetitorIntelResponse,
     MapsCompetitorProfile,
+    MapsGbpAuditResponse,
     MapsCompetitorTrend,
     MapsCompetitorTrendPoint,
     MapsCompetitorTrendsResponse,
@@ -47,6 +48,7 @@ from models.maps import (
     MapsTrendsResponse,
 )
 from services import competitor_gbp
+from services import gbp_audit as gbp_audit_service
 from services import local_dominator
 from services import maps_solv as maps_solv_service
 
@@ -494,6 +496,19 @@ async def maps_competitor_intel(
         profiles=[MapsCompetitorProfile(**p) for p in profiles],
         captured_at=profiles[0]["captured_at"] if profiles else None,
     )
+
+
+@router.get("/clients/{client_id}/maps/gbp-audit", response_model=MapsGbpAuditResponse)
+async def maps_gbp_audit(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsGbpAuditResponse:
+    """Audit the client's own GBP completeness + gaps vs the captured competitor
+    profiles (categories competitors have that the client lacks, review deficit)."""
+    supabase = get_supabase()
+    rows = supabase.table("clients").select("gbp").eq("id", str(client_id)).limit(1).execute().data
+    gbp = (rows[0].get("gbp") if rows else None) or {}
+    profiles = competitor_gbp.latest_profiles(str(client_id))
+    return MapsGbpAuditResponse(**gbp_audit_service.audit(gbp, profiles))
 
 
 @router.post("/clients/{client_id}/maps/competitor-intel/refresh", response_model=MapsRunResponse)
