@@ -83,7 +83,10 @@ async def open_hours_for_members(gids: list[str]) -> dict[str, float]:
             logger.warning("asana_workload.open_hours_failed", extra={"gid": gid, "error": str(exc)})
             return gid, 0.0
         total = sum(
-            asana_service.task_hours(t, settings.asana_effort_field_gid, settings.asana_default_task_hours)
+            asana_service.task_hours(
+                t, settings.asana_effort_field_name, settings.asana_effort_field_gid,
+                settings.asana_default_task_hours,
+            )
             for t in tasks
         )
         return gid, total
@@ -112,6 +115,7 @@ async def build_team_workload() -> dict:
 
     report = asana_service.build_workload_report(
         list(entries),
+        effort_field_name=settings.asana_effort_field_name,
         effort_field_gid=settings.asana_effort_field_gid,
         default_task_hours=settings.asana_default_task_hours,
         daily_workdays=settings.asana_workload_daily_workdays,
