@@ -359,6 +359,20 @@ A transparent, **no‑LLM** 0–100 score + band per tracked Maps keyword, compu
 
 **Engine:** `services/maps_rankability.py` (pure; no LLM, no new external calls — all from stored scan data + GBP). API `GET /clients/{id}/maps/rankability`, mirroring the organic endpoint. Feeds the optimizer's **local Quick Wins** (§6.9) the same way organic `rankability` feeds the reopt planner. **Build timing:** spec now; implemented alongside the Maps signal/optimizer wiring (Phase 5).
 
+### 4.8.3 The 3mi / 5mi goal rollup — ✅ design settled
+
+The exact computation behind the Maps half of the goal model (§4.6): **avg top‑3 within 3 mi** and **avg top‑5 within 5 mi**, per tracked keyword, from the stored `rank_grid`.
+
+**Pure helper** `maps_analytics.compute_goal_metrics(rank_grid, absent_penalty=21)` (no I/O; lives beside the existing `build_geogrid_analytics`):
+- Grid geometry from the array itself: `grid_size = len(rank_grid)`, `center = (grid_size − 1) / 2`; each cell's distance from center in miles is `hypot(row − center, col − center)` (1‑mile pin spacing).
+- **In‑circle test** distinguishes the two kinds of empty cell: a cell counts only if `distance ≤ radius_miles` (drops the corner cells masked out of the inscribed circle); **within that disc, an unranked cell is scored `21`** (the §4.6 absent‑cell penalty), a ranked cell uses its value.
+- `avg_rank_3mi` = mean scored rank over cells with `distance ≤ 3.0`; `avg_rank_5mi` = mean over cells with `distance ≤ 5.0` (which, for a 5‑mile engagement grid, is every in‑circle cell).
+- Returns `{avg_rank_3mi, avg_rank_5mi, cells_3mi, cells_5mi, goal_3mi_met (≤3), goal_5mi_met (≤5), goal_state}` where **`goal_state` requires BOTH** sub‑goals (§4.6 is an AND): `met` (both pass) · `close` (within `maps_goal_close_band`, default +2, of either target) · `gap` (beyond). 
+
+**Why it's new, not the existing average:** the stored `maps_scan_results.average_rank` and `analytics.overall.avg_rank` are means over **ranked pins only** (absent cells excluded) — fine for "how good are we where we show up," but they'd **understate the goal gap**, since not appearing in an area is exactly the failure the goal penalizes. The goal rollup therefore includes absent in‑disc cells at `21`. (Boundary is inclusive, `≤`; pins sit at integer offsets so e.g. a `(2,2)` pin at 2.83 mi counts toward 3 mi, a `(3,1)` pin at 3.16 mi does not.)
+
+**Surfacing:** persisted into the existing `report_analytics` JSONB as a `goal_metrics` block (computed when the report runs), exposed on the Maps API, fed to the monitor's `compute_goal_state(keyword, 'maps')` (§6.8) for `goal_gap` signals, consumed by the winnability **gap‑to‑goal** sort (§4.8.2), and shown in the **goal‑attainment scorecard** (§6.6). **Degrades** if a client's grid is < 5 mi (the 5‑mi metric is unavailable — engagement grids default to 5 mi, so this is the exception, flagged not fatal). **Build timing:** spec now; lands with the goal‑model/monitor work (Phase 2/5).
+
 ---
 
 ## 5. How autonomy rides existing infrastructure
