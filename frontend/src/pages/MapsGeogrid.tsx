@@ -9,7 +9,7 @@ import type {
   MapsChangesResponse, MapsCompetitorTrendsResponse,
   MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
   MapsPeriodsResponse, MapsRadius, MapsRunResponse,
-  MapsCompetitorIntelResponse, MapsGbpAuditResponse, MapsReviewIntelResponse,
+  MapsBacklinkIntelResponse, MapsCompetitorIntelResponse, MapsGbpAuditResponse, MapsReviewIntelResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsSolvResponse, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
@@ -687,6 +687,7 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
       <CompetitorMomentum clientId={clientId} />
       <CompetitorIntel clientId={clientId} />
       <ReviewIntel clientId={clientId} />
+      <BacklinkIntel clientId={clientId} />
       <GbpAudit clientId={clientId} />
       {scans.length === 0 ? (
         <div style={card}><p style={muted}>No scans yet.</p></div>
@@ -871,6 +872,79 @@ function SolvPanel({ clientId }: { clientId: string }) {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// ── Backlink authority (your domain vs competitors) ─────────────────────────
+function BacklinkIntel({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsBacklinkIntelResponse>({
+    queryKey: ['maps-backlink-intel', clientId],
+    queryFn: () => api.get<MapsBacklinkIntelResponse>(`/clients/${clientId}/maps/backlink-intel`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/backlink-intel/refresh`, {}),
+    onSuccess: () => { setQueued(true); queryClient.invalidateQueries({ queryKey: ['maps-backlink-intel', clientId] }) },
+  })
+  const client = data?.client
+  const competitors = data?.competitors ?? []
+  const cmp = data?.comparison
+  const drBehind = cmp?.dr_behind
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 13, color: '#334155' }
+  const hasData = !!client?.domain || competitors.length > 0
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Backlink authority</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            Domain Rating, referring domains and total backlinks — you vs your top local-pack competitors.
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Pull fresh backlink metrics for you + competitors">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {!hasData ? (
+        <p style={muted}>No backlink data yet. Run a scan to find competitors, then click <strong>Refresh</strong>.</p>
+      ) : (
+        <>
+          {drBehind != null && drBehind > 0 && (
+            <p style={{ fontSize: 13, color: '#b45309', margin: '0 0 10px', fontWeight: 600 }}>
+              ⚠ Your Domain Rating trails the competitor median ({cmp?.competitor_median_dr}) by {drBehind}.
+            </p>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Domain</th>
+              <th style={th}>DR</th><th style={th}>Ref. domains</th><th style={th}>Backlinks</th>
+            </tr></thead>
+            <tbody>
+              <tr style={{ borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: '#0f172a' }}>You{client?.domain ? ` · ${client.domain}` : ''}</td>
+                <td style={{ ...td, fontWeight: 600 }}>{client?.domain_rating ?? '—'}</td>
+                <td style={td}>{client?.referring_domains?.toLocaleString() ?? '—'}</td>
+                <td style={td}>{client?.backlinks?.toLocaleString() ?? '—'}</td>
+              </tr>
+              {competitors.map(c => (
+                <tr key={c.domain} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ ...td, textAlign: 'left', color: '#64748b' }}>{c.domain ?? '—'}</td>
+                  <td style={td}>{c.domain_rating ?? '—'}</td>
+                  <td style={td}>{c.referring_domains?.toLocaleString() ?? '—'}</td>
+                  <td style={td}>{c.backlinks?.toLocaleString() ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
     </div>
   )
 }

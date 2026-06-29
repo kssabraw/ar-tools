@@ -242,6 +242,11 @@ class Settings(BaseSettings):
     review_intel_depth: int = 100
     review_gap_min_behind: float = 2.0
 
+    # Backlink profiling (Tier B / B4): thresholds for flagging an authority gap
+    # vs the competitor median (DR points behind; referring-domains behind).
+    backlink_dr_min_behind: float = 10.0
+    backlink_rd_min_behind: int = 25
+
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
     # location). Set to 0 to disable caching.

@@ -73,6 +73,7 @@ SOLV_DROP_MIN_PCT = 10.0        # min Top-3 local-pack share lost (points) to fl
 # window vs prior window, signals softening brand demand.
 _SORT_BRAND = 1 * _TIER         # hidden-win tier; bumped to the top of it via within
 _BRAND_WITHIN = 9_500
+_BACKLINK_WITHIN = 9_000        # link-authority gap, just under brand in the hidden tier
 BRAND_DECLINE_MIN_PCT = 25.0    # min relative % fall in branded impressions to flag
 
 # Full compass-octant labels for human-readable sector text.
@@ -392,6 +393,36 @@ def build_review_action(client_id: str, review_gap: "dict | None") -> list[dict]
     ]
 
 
+def build_backlink_action(client_id: str, backlink_gap: "dict | None") -> list[dict]:
+    """A link-building action when the client's domain authority trails the
+    local-pack competitor median. Pure. Organic (links help web + local)."""
+    if not backlink_gap:
+        return []
+    parts: list[str] = []
+    dr_behind = backlink_gap.get("dr_behind")
+    if dr_behind:
+        parts.append(f"Domain Rating {dr_behind} behind the competitor median")
+    rd_behind = backlink_gap.get("referring_domains_behind")
+    if rd_behind:
+        parts.append(f"~{int(rd_behind)} fewer referring domains")
+    if not parts:
+        return []
+    return [
+        {
+            "kind": "backlink_gap",
+            "source": "organic",
+            "keyword": "Backlink authority",
+            "diagnosis": "; ".join(parts) + ".",
+            "recommendation": "Run link-building to close the authority gap — local citations/directories, "
+            "supplier & partner links, digital PR, and reclaiming unlinked mentions.",
+            "cta_label": "Open rank tracker",
+            "cta_path": f"clients/{client_id}/rankings",
+            "severity": "info",
+            "sort": _SORT_HIDDEN + _within(_BACKLINK_WITHIN),
+        }
+    ]
+
+
 def build_brand_action(client_id: str, brand_decline: "dict | None") -> list[dict]:
     """A brand-search-health action when branded GSC demand is falling. Pure."""
     if not brand_decline:
@@ -439,6 +470,7 @@ def summarize_plan(actions: list[dict]) -> dict:
         by_kind.get("cannibalization", 0)
         + by_kind.get("opportunity", 0)
         + by_kind.get("brand_search_decline", 0)
+        + by_kind.get("backlink_gap", 0)
     )
     if other:
         parts.append(f"{other} other opportunit{'ies' if other != 1 else 'y'}")
@@ -556,6 +588,23 @@ def _fetch_review_gap(supabase, client_id: str) -> "dict | None":
         return None
 
 
+def _fetch_backlink_gap(supabase, client_id: str) -> "dict | None":
+    """Best-effort backlink-authority gap signal from stored backlink profiles."""
+    try:
+        from config import settings
+        from services import backlink_intel
+
+        intel = backlink_intel.get_backlink_intel(client_id)
+        if not intel["competitors"] or not intel["client"]:
+            return None
+        return backlink_intel.detect_backlink_gap(
+            intel["comparison"], settings.backlink_dr_min_behind, settings.backlink_rd_min_behind
+        )
+    except Exception as exc:
+        logger.warning("reopt_plan_backlink_failed", extra={"client_id": client_id, "error": str(exc)})
+        return None
+
+
 def _fetch_brand_decline(supabase, client_id: str) -> "dict | None":
     """Best-effort brand-search decline signal (branded GSC impressions falling)."""
     try:
@@ -604,6 +653,7 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     brand_decline = _fetch_brand_decline(supabase, client_id)
     gbp_audit_result = _fetch_gbp_audit(supabase, client_id)
     review_gap = _fetch_review_gap(supabase, client_id)
+    backlink_gap = _fetch_backlink_gap(supabase, client_id)
 
     # Build organic uncapped so Maps actions compete fairly for the combined cap.
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
@@ -611,6 +661,7 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     maps_actions += build_gbp_action(client_id, gbp_audit_result)
     maps_actions += build_review_action(client_id, review_gap)
     brand_actions = build_brand_action(client_id, brand_decline)
+    brand_actions += build_backlink_action(client_id, backlink_gap)
     actions = organic + maps_actions + brand_actions
     actions.sort(key=lambda a: a["sort"], reverse=True)
     actions = actions[:TOTAL_MAX]

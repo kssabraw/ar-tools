@@ -209,6 +209,27 @@ class MapsCompetitorIntelResponse(BaseModel):
     captured_at: Optional[str] = None    # most recent capture timestamp
 
 
+# --- Backlink profiling (Tier B / B4) ---------------------------------------
+class MapsBacklinkStats(BaseModel):
+    domain: Optional[str] = None
+    domain_rating: Optional[float] = None
+    referring_domains: Optional[int] = None
+    backlinks: Optional[int] = None
+
+
+class MapsBacklinkComparison(BaseModel):
+    competitor_median_dr: Optional[float] = None
+    competitor_median_referring_domains: Optional[float] = None
+    dr_behind: Optional[float] = None
+    referring_domains_behind: Optional[float] = None
+
+
+class MapsBacklinkIntelResponse(BaseModel):
+    client: MapsBacklinkStats = Field(default_factory=MapsBacklinkStats)
+    competitors: list[MapsBacklinkStats] = Field(default_factory=list)
+    comparison: MapsBacklinkComparison = Field(default_factory=MapsBacklinkComparison)
+
+
 # --- Review analytics (Tier B / B3) -----------------------------------------
 class MapsReviewStats(BaseModel):
     place_id: Optional[str] = None

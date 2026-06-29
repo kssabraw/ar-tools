@@ -24,6 +24,7 @@ from models.maps import (
     MapsClientThreats,
     MapsCompetitorIntelResponse,
     MapsCompetitorProfile,
+    MapsBacklinkIntelResponse,
     MapsGbpAuditResponse,
     MapsReviewIntelResponse,
     MapsCompetitorTrend,
@@ -48,6 +49,7 @@ from models.maps import (
     MapsTrendPoint,
     MapsTrendsResponse,
 )
+from services import backlink_intel
 from services import competitor_gbp
 from services import gbp_audit as gbp_audit_service
 from services import local_dominator
@@ -498,6 +500,24 @@ async def maps_competitor_intel(
         profiles=[MapsCompetitorProfile(**p) for p in profiles],
         captured_at=profiles[0]["captured_at"] if profiles else None,
     )
+
+
+@router.get("/clients/{client_id}/maps/backlink-intel", response_model=MapsBacklinkIntelResponse)
+async def maps_backlink_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsBacklinkIntelResponse:
+    """Backlink authority (Domain Rating, referring domains, backlinks) — client
+    vs the top local-pack competitors, from stored profiles."""
+    return MapsBacklinkIntelResponse(**backlink_intel.get_backlink_intel(str(client_id)))
+
+
+@router.post("/clients/{client_id}/maps/backlink-intel/refresh", response_model=MapsRunResponse)
+async def refresh_backlink_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Enqueue a fresh backlink pull for the client + its top local-pack competitors."""
+    backlink_intel.enqueue_backlink_intel(str(client_id))
+    return MapsRunResponse(client_id=client_id, status="enqueued")
 
 
 @router.get("/clients/{client_id}/maps/review-intel", response_model=MapsReviewIntelResponse)

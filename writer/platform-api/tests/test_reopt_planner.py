@@ -288,6 +288,23 @@ def test_review_action_empty_when_no_gap():
     assert reopt_planner.build_review_action(CLIENT, None) == []
 
 
+def test_backlink_action_on_authority_gap():
+    gap = {"dr_behind": 25, "referring_domains_behind": 100,
+           "competitor_median_dr": 55, "competitor_median_referring_domains": 150}
+    actions = reopt_planner.build_backlink_action(CLIENT, gap)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "backlink_gap" and a["source"] == "organic"
+    assert "Domain Rating 25 behind" in a["diagnosis"]
+    assert "100 fewer referring domains" in a["diagnosis"]
+    assert a["cta_path"] == f"clients/{CLIENT}/rankings"
+
+
+def test_backlink_action_empty_when_no_gap():
+    assert reopt_planner.build_backlink_action(CLIENT, None) == []
+    assert reopt_planner.build_backlink_action(CLIENT, {"dr_behind": None, "referring_domains_behind": None}) == []
+
+
 def test_brand_action_emitted_on_decline():
     decline = {"from_impressions": 400, "to_impressions": 200, "delta_pct": 50.0, "weeks": 4}
     actions = reopt_planner.build_brand_action(CLIENT, decline)
