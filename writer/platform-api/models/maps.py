@@ -209,6 +209,30 @@ class MapsCompetitorIntelResponse(BaseModel):
     captured_at: Optional[str] = None    # most recent capture timestamp
 
 
+# --- Review analytics (Tier B / B3) -----------------------------------------
+class MapsReviewStats(BaseModel):
+    place_id: Optional[str] = None
+    name: Optional[str] = None
+    count: int = 0
+    avg_rating: Optional[float] = None
+    rating_distribution: dict[str, int] = Field(default_factory=dict)
+    velocity_per_month: float = 0
+    recent_negatives: int = 0
+    last_review_date: Optional[str] = None
+
+
+class MapsReviewComparison(BaseModel):
+    competitor_median_velocity: Optional[float] = None
+    competitor_median_rating: Optional[float] = None
+    velocity_behind: Optional[float] = None
+
+
+class MapsReviewIntelResponse(BaseModel):
+    client: MapsReviewStats = Field(default_factory=MapsReviewStats)
+    competitors: list[MapsReviewStats] = Field(default_factory=list)
+    comparison: MapsReviewComparison = Field(default_factory=MapsReviewComparison)
+
+
 # --- GBP profile audit / gaps (Tier B / B2) ---------------------------------
 class MapsGbpAuditCheck(BaseModel):
     key: str

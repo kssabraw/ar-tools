@@ -64,6 +64,7 @@ _MAPS_WITHIN = {
 }
 _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the Maps tier
 _MAPS_GBP_WITHIN = 4_000        # a GBP-gap action sits mid Maps tier (above weak areas)
+_MAPS_REVIEW_WITHIN = 4_500     # a review-gap action sits just above the GBP-gap action
 _MAPS_SOLV_WITHIN = 8_500       # a SoLV drop sits near the top of the Maps tier (just under lost_pack)
 MAPS_WEAK_AREA_MAX = 5          # cap weak-area actions per plan
 SOLV_DROP_MIN_PCT = 10.0        # min Top-3 local-pack share lost (points) to flag a SoLV drop
@@ -358,6 +359,39 @@ def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[di
     ]
 
 
+def build_review_action(client_id: str, review_gap: "dict | None") -> list[dict]:
+    """A review-growth action when the client's review velocity trails competitors
+    or recent negative reviews have landed. Pure."""
+    if not review_gap:
+        return []
+    parts: list[str] = []
+    behind = review_gap.get("behind")
+    if behind:
+        cv = review_gap.get("competitor_velocity")
+        parts.append(
+            f"review velocity ({review_gap.get('velocity')}/mo) trails competitors"
+            + (f" (~{cv}/mo)" if cv is not None else "") + f" by {behind}/mo"
+        )
+    neg = review_gap.get("recent_negatives") or 0
+    if neg:
+        parts.append(f"{neg} recent negative review{'s' if neg != 1 else ''}")
+    diagnosis = "; ".join(parts).capitalize() + "." if parts else "Review profile needs attention."
+    return [
+        {
+            "kind": "review_gap",
+            "source": "maps",
+            "keyword": "Reviews",
+            "diagnosis": diagnosis,
+            "recommendation": "Run a review-generation push (request reviews from recent customers, especially in "
+            "weak coverage areas) and respond to negatives to protect rating + local-pack strength.",
+            "cta_label": "Open Maps tracker",
+            "cta_path": f"clients/{client_id}/maps",
+            "severity": "warning" if (review_gap.get("recent_negatives") or 0) else "info",
+            "sort": _SORT_MAPS + _within(_MAPS_REVIEW_WITHIN),
+        }
+    ]
+
+
 def build_brand_action(client_id: str, brand_decline: "dict | None") -> list[dict]:
     """A brand-search-health action when branded GSC demand is falling. Pure."""
     if not brand_decline:
@@ -397,6 +431,7 @@ def summarize_plan(actions: list[dict]) -> dict:
         + by_kind.get("maps_weak_area", 0)
         + by_kind.get("maps_solv_drop", 0)
         + by_kind.get("gbp_gap", 0)
+        + by_kind.get("review_gap", 0)
     )
     if maps:
         parts.append(f"{maps} local-pack issue{'s' if maps != 1 else ''}")
@@ -504,6 +539,23 @@ def _fetch_gbp_audit(supabase, client_id: str) -> "dict | None":
         return None
 
 
+def _fetch_review_gap(supabase, client_id: str) -> "dict | None":
+    """Best-effort review-velocity/negatives signal from stored review analytics."""
+    try:
+        from config import settings
+        from services import review_analytics
+
+        intel = review_analytics.get_review_intel(client_id)
+        if not intel["competitors"]:
+            return None
+        return review_analytics.detect_review_gap(
+            intel["comparison"], intel["client"], settings.review_gap_min_behind
+        )
+    except Exception as exc:
+        logger.warning("reopt_plan_review_failed", extra={"client_id": client_id, "error": str(exc)})
+        return None
+
+
 def _fetch_brand_decline(supabase, client_id: str) -> "dict | None":
     """Best-effort brand-search decline signal (branded GSC impressions falling)."""
     try:
@@ -551,11 +603,13 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     maps_alerts, weak_areas, solv_drop = _fetch_maps_signals(supabase, client_id)
     brand_decline = _fetch_brand_decline(supabase, client_id)
     gbp_audit_result = _fetch_gbp_audit(supabase, client_id)
+    review_gap = _fetch_review_gap(supabase, client_id)
 
     # Build organic uncapped so Maps actions compete fairly for the combined cap.
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
     maps_actions += build_gbp_action(client_id, gbp_audit_result)
+    maps_actions += build_review_action(client_id, review_gap)
     brand_actions = build_brand_action(client_id, brand_decline)
     actions = organic + maps_actions + brand_actions
     actions.sort(key=lambda a: a["sort"], reverse=True)

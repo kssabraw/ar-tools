@@ -1104,6 +1104,7 @@ export interface ReoptAction {
     | 'maps_weak_area'
     | 'maps_solv_drop'
     | 'gbp_gap'
+    | 'review_gap'
     | 'brand_search_decline'
   source?: 'organic' | 'maps'
   keyword: string
@@ -1193,6 +1194,28 @@ export interface MapsGbpAuditResponse {
   gaps: string[]
   category_gaps: string[]
   review_gap: MapsGbpReviewGap | null
+}
+
+// Review analytics (Maps Tier B / B3).
+export interface MapsReviewStats {
+  place_id: string | null
+  name: string | null
+  count: number
+  avg_rating: number | null
+  rating_distribution: Record<string, number>
+  velocity_per_month: number
+  recent_negatives: number
+  last_review_date: string | null
+}
+export interface MapsReviewComparison {
+  competitor_median_velocity: number | null
+  competitor_median_rating: number | null
+  velocity_behind: number | null
+}
+export interface MapsReviewIntelResponse {
+  client: MapsReviewStats
+  competitors: MapsReviewStats[]
+  comparison: MapsReviewComparison
 }
 
 // Brand-search analysis (branded vs non-branded GSC demand).

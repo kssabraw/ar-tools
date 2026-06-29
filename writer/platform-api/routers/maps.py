@@ -25,6 +25,7 @@ from models.maps import (
     MapsCompetitorIntelResponse,
     MapsCompetitorProfile,
     MapsGbpAuditResponse,
+    MapsReviewIntelResponse,
     MapsCompetitorTrend,
     MapsCompetitorTrendPoint,
     MapsCompetitorTrendsResponse,
@@ -50,6 +51,7 @@ from models.maps import (
 from services import competitor_gbp
 from services import gbp_audit as gbp_audit_service
 from services import local_dominator
+from services import review_analytics
 from services import maps_solv as maps_solv_service
 
 logger = logging.getLogger(__name__)
@@ -496,6 +498,24 @@ async def maps_competitor_intel(
         profiles=[MapsCompetitorProfile(**p) for p in profiles],
         captured_at=profiles[0]["captured_at"] if profiles else None,
     )
+
+
+@router.get("/clients/{client_id}/maps/review-intel", response_model=MapsReviewIntelResponse)
+async def maps_review_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsReviewIntelResponse:
+    """Review analytics — the client's review volume/velocity/rating/recent
+    negatives vs the top local-pack competitors, from stored reviews."""
+    return MapsReviewIntelResponse(**review_analytics.get_review_intel(str(client_id)))
+
+
+@router.post("/clients/{client_id}/maps/review-intel/refresh", response_model=MapsRunResponse)
+async def refresh_review_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Enqueue a fresh review pull for the client + its top local-pack competitors."""
+    review_analytics.enqueue_review_intel(str(client_id))
+    return MapsRunResponse(client_id=client_id, status="enqueued")
 
 
 @router.get("/clients/{client_id}/maps/gbp-audit", response_model=MapsGbpAuditResponse)

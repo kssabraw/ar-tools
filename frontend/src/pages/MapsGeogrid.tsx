@@ -9,7 +9,7 @@ import type {
   MapsChangesResponse, MapsCompetitorTrendsResponse,
   MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
   MapsPeriodsResponse, MapsRadius, MapsRunResponse,
-  MapsCompetitorIntelResponse, MapsGbpAuditResponse,
+  MapsCompetitorIntelResponse, MapsGbpAuditResponse, MapsReviewIntelResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsSolvResponse, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
@@ -686,6 +686,7 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
       <SolvPanel clientId={clientId} />
       <CompetitorMomentum clientId={clientId} />
       <CompetitorIntel clientId={clientId} />
+      <ReviewIntel clientId={clientId} />
       <GbpAudit clientId={clientId} />
       {scans.length === 0 ? (
         <div style={card}><p style={muted}>No scans yet.</p></div>
@@ -870,6 +871,82 @@ function SolvPanel({ clientId }: { clientId: string }) {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// ── Review analytics (your reviews vs competitors) ──────────────────────────
+function ReviewIntel({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsReviewIntelResponse>({
+    queryKey: ['maps-review-intel', clientId],
+    queryFn: () => api.get<MapsReviewIntelResponse>(`/clients/${clientId}/maps/review-intel`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/review-intel/refresh`, {}),
+    onSuccess: () => { setQueued(true); queryClient.invalidateQueries({ queryKey: ['maps-review-intel', clientId] }) },
+  })
+  const client = data?.client
+  const competitors = data?.competitors ?? []
+  const cmp = data?.comparison
+  const behind = cmp?.velocity_behind
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 13, color: '#334155' }
+  const hasData = (client?.count ?? 0) > 0 || competitors.length > 0
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Review analytics</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            Review volume, velocity (reviews/month) and rating — you vs your top local-pack competitors.
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Pull fresh reviews for you + competitors">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {!hasData ? (
+        <p style={muted}>No reviews captured yet. Run a scan to find competitors, then click <strong>Refresh</strong>.</p>
+      ) : (
+        <>
+          {behind != null && behind > 0 && (
+            <p style={{ fontSize: 13, color: '#b45309', margin: '0 0 10px', fontWeight: 600 }}>
+              ⚠ Your review velocity ({client?.velocity_per_month}/mo) trails the competitor median
+              ({cmp?.competitor_median_velocity}/mo) by {behind}/mo.
+            </p>
+          )}
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Business</th>
+              <th style={th}>Reviews</th><th style={th}>Rating</th><th style={th}>Per month</th><th style={th}>Recent ✗</th>
+            </tr></thead>
+            <tbody>
+              <tr style={{ borderTop: '1px solid #f1f5f9', background: '#f8fafc' }}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 700, color: '#0f172a' }}>You</td>
+                <td style={{ ...td, fontWeight: 600 }}>{client?.count ?? 0}</td>
+                <td style={td}>{client?.avg_rating != null ? client.avg_rating.toFixed(1) : '—'}</td>
+                <td style={td}>{client?.velocity_per_month ?? 0}</td>
+                <td style={{ ...td, color: (client?.recent_negatives ?? 0) > 0 ? '#dc2626' : '#94a3b8' }}>{client?.recent_negatives ?? 0}</td>
+              </tr>
+              {competitors.map(c => (
+                <tr key={c.place_id ?? c.name} style={{ borderTop: '1px solid #f1f5f9' }}>
+                  <td style={{ ...td, textAlign: 'left' }}>{c.name ?? '—'}</td>
+                  <td style={td}>{c.count}</td>
+                  <td style={td}>{c.avg_rating != null ? c.avg_rating.toFixed(1) : '—'}</td>
+                  <td style={td}>{c.velocity_per_month}</td>
+                  <td style={{ ...td, color: c.recent_negatives > 0 ? '#dc2626' : '#94a3b8' }}>{c.recent_negatives}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
     </div>
   )
 }

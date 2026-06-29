@@ -236,6 +236,12 @@ class Settings(BaseSettings):
     competitor_gbp_max: int = 8
     competitor_gbp_interval_days: int = 30
 
+    # Review analytics (Tier B / B3): how many newest reviews to pull per listing
+    # (client + each competitor) for volume/velocity/rating analysis, and the min
+    # reviews/month the client must trail the competitor median by to flag a gap.
+    review_intel_depth: int = 100
+    review_gap_min_behind: float = 2.0
+
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
     # location). Set to 0 to disable caching.

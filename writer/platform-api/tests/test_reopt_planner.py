@@ -273,6 +273,21 @@ def test_maps_solv_drop_absent_when_no_signal():
 # ---------------------------------------------------------------------------
 # build_brand_action
 # ---------------------------------------------------------------------------
+def test_review_action_on_velocity_gap_and_negatives():
+    gap = {"velocity": 1.0, "competitor_velocity": 4.0, "behind": 3.0, "recent_negatives": 2}
+    actions = reopt_planner.build_review_action(CLIENT, gap)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "review_gap" and a["source"] == "maps"
+    assert a["severity"] == "warning"          # recent negatives → warning
+    assert "trails competitors" in a["diagnosis"]
+    assert a["cta_path"] == f"clients/{CLIENT}/maps"
+
+
+def test_review_action_empty_when_no_gap():
+    assert reopt_planner.build_review_action(CLIENT, None) == []
+
+
 def test_brand_action_emitted_on_decline():
     decline = {"from_impressions": 400, "to_impressions": 200, "delta_pct": 50.0, "weeks": 4}
     actions = reopt_planner.build_brand_action(CLIENT, decline)
