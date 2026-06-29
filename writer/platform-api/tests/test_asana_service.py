@@ -229,12 +229,25 @@ def test_extract_number_field_and_task_hours():
     assert asana.extract_number_field(t, "f_hrs") == 3.0
     assert asana.extract_number_field(_task("x"), "f_hrs") is None
     assert asana.extract_number_field(t, "") is None
-    # task_hours falls back to default when unestimated.
-    assert asana.task_hours(t, "f_hrs", 1.0) == 3.0
-    assert asana.task_hours(_task("x"), "f_hrs", 1.5) == 1.5
+    # task_hours falls back to default when unestimated (by gid here, name "").
+    assert asana.task_hours(t, "", "f_hrs", 1.0) == 3.0
+    assert asana.task_hours(_task("x"), "", "f_hrs", 1.5) == 1.5
 
 
-_AGG = dict(effort_field_gid="f_hrs", default_task_hours=1.0, daily_workdays=5, backlog_weeks=2.0)
+def test_effort_by_name_preferred_over_gid():
+    # A task whose effort number field carries a NAME (project-local field).
+    task = {"custom_fields": [{"gid": "proj_local_gid", "name": "Hours", "number_value": 4}]}
+    assert asana.extract_number_field_by_name(task, "Hours") == 4.0
+    assert asana.extract_number_field_by_name(task, "hours") == 4.0  # case-insensitive
+    assert asana.extract_number_field_by_name(task, "Missing") is None
+    # task_effort matches by name even when the configured GID doesn't match.
+    assert asana.task_effort(task, "Hours", "some_other_gid") == 4.0
+    # Falls back to default via task_hours.
+    assert asana.task_hours(task, "Hours", "", 1.0) == 4.0
+    assert asana.task_hours({"custom_fields": []}, "Hours", "", 1.0) == 1.0
+
+
+_AGG = dict(effort_field_name="", effort_field_gid="f_hrs", default_task_hours=1.0, daily_workdays=5, backlog_weeks=2.0)
 
 
 def test_aggregate_same_day_hours_flag():

@@ -247,7 +247,7 @@ def match_project_fields(
 
 
 def extract_number_field(task: dict, field_gid: str) -> Optional[float]:
-    """The numeric value of a task's number custom field (None when unset)."""
+    """The numeric value of a task's number custom field by GID (None when unset)."""
     if not field_gid:
         return None
     for cf in task.get("custom_fields") or []:
@@ -257,12 +257,39 @@ def extract_number_field(task: dict, field_gid: str) -> Optional[float]:
     return None
 
 
+def extract_number_field_by_name(task: dict, field_name: str) -> Optional[float]:
+    """The numeric value of a task's number custom field by (case-insensitive)
+    name (None when unset). Project-local effort fields differ by GID per
+    project, so matching by name reads them uniformly across all projects."""
+    target = (field_name or "").strip().casefold()
+    if not target:
+        return None
+    for cf in task.get("custom_fields") or []:
+        if (cf.get("name") or "").strip().casefold() == target:
+            val = cf.get("number_value")
+            return float(val) if val is not None else None
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Workload aggregation (Feature B)
 # ---------------------------------------------------------------------------
-def task_hours(task: dict, effort_field_gid: str, default_task_hours: float) -> float:
-    """Estimated hours for one task — its effort number field, else the default."""
-    val = extract_number_field(task, effort_field_gid)
+def task_effort(task: dict, effort_field_name: str, effort_field_gid: str) -> Optional[float]:
+    """A task's estimated hours — by effort-field name first (project-agnostic),
+    then by GID — or None when neither is set/found."""
+    if effort_field_name:
+        val = extract_number_field_by_name(task, effort_field_name)
+        if val is not None:
+            return val
+    return extract_number_field(task, effort_field_gid)
+
+
+def task_hours(
+    task: dict, effort_field_name: str, effort_field_gid: str, default_task_hours: float
+) -> float:
+    """Estimated hours for one task — its effort number field (by name, then
+    GID), else the default."""
+    val = task_effort(task, effort_field_name, effort_field_gid)
     return float(val) if val is not None else float(default_task_hours)
 
 
@@ -302,6 +329,7 @@ def aggregate_member_workload(
     tasks: list[dict],
     *,
     weekly_hours: float,
+    effort_field_name: str,
     effort_field_gid: str,
     default_task_hours: float,
     daily_workdays: int,
@@ -310,17 +338,18 @@ def aggregate_member_workload(
     """Summarise one member's open tasks by estimated **hours** vs their capacity.
 
     ``tasks`` are the member's incomplete tasks (``due_on`` 'YYYY-MM-DD' or null;
-    effort read from the configured number field, else ``default_task_hours``).
-    Flags fire when a single day's due hours exceed daily capacity
-    (weekly/workdays), or the open backlog exceeds ``backlog_weeks`` of capacity.
+    effort read from the number field by name first, then GID, else
+    ``default_task_hours``). Flags fire when a single day's due hours exceed daily
+    capacity (weekly/workdays), or the open backlog exceeds ``backlog_weeks`` of
+    capacity.
     """
     due_hours_by_day: dict[str, float] = {}
     open_hours = 0.0
     unestimated = 0
     for t in tasks:
-        if extract_number_field(t, effort_field_gid) is None:
+        if task_effort(t, effort_field_name, effort_field_gid) is None:
             unestimated += 1
-        hrs = task_hours(t, effort_field_gid, default_task_hours)
+        hrs = task_hours(t, effort_field_name, effort_field_gid, default_task_hours)
         open_hours += hrs
         due = t.get("due_on")
         if due:
@@ -363,6 +392,7 @@ def aggregate_member_workload(
 def build_workload_report(
     members: list[dict],
     *,
+    effort_field_name: str,
     effort_field_gid: str,
     default_task_hours: float,
     daily_workdays: int,
@@ -379,6 +409,7 @@ def build_workload_report(
         aggregate_member_workload(
             m["gid"], m.get("name") or m["gid"], m.get("tasks") or [],
             weekly_hours=(m.get("weekly_hours") or default_weekly_hours),
+            effort_field_name=effort_field_name,
             effort_field_gid=effort_field_gid,
             default_task_hours=default_task_hours,
             daily_workdays=daily_workdays,
@@ -524,6 +555,6 @@ async def list_member_open_tasks(user_gid: str) -> list[dict]:
             "assignee": user_gid,
             "workspace": settings.asana_workspace_gid,
             "completed_since": "now",
-            "opt_fields": "name,due_on,completed,custom_fields.gid,custom_fields.number_value",
+            "opt_fields": "name,due_on,completed,custom_fields.gid,custom_fields.name,custom_fields.number_value",
         },
     ) or []
