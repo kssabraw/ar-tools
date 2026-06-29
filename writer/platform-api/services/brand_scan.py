@@ -686,8 +686,7 @@ async def _autodiagnose(client_id: str, brand: str, keyword: str, raw_response: 
     from services import brand_insights
 
     try:
-        signals = brand_insights.gather_client_signals(client_id, keyword)
-        block = brand_insights.format_signals_block(signals)
+        block = await brand_insights.build_signals_block(client_id, keyword)
         return await brand_insights.diagnose_invisibility(brand, keyword, raw_response or "", block)
     except brand_insights.InsightUnavailable:
         return None

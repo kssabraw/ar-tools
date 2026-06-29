@@ -351,8 +351,7 @@ async def diagnose_mention(client_id: str, mention_id: str) -> dict:
         )
         keyword = kw[0]["keyword"] if kw else ""
     try:
-        signals = brand_insights.gather_client_signals(client_id, keyword)
-        block = brand_insights.format_signals_block(signals)
+        block = await brand_insights.build_signals_block(client_id, keyword)
         diagnosis = await brand_insights.diagnose_invisibility(
             brand, keyword, row.get("raw_response") or "", block
         )
