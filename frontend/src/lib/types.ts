@@ -881,6 +881,23 @@ export interface MapsPeriodsResponse {
   keywords: MapsPeriodScope[]
 }
 
+// Area-level (compass octant) trends + narrative.
+export interface MapsAreaTrend {
+  sector: string
+  sector_full: string
+  city: string | null
+  now_top3_pct: number | null
+  now_avg_rank: number | null
+  windows: Record<string, MapsPeriodDelta>  // Top-3 coverage deltas (7d/30d/90d/start)
+}
+
+export interface MapsAreaTrendsResponse {
+  as_of: string | null
+  scan_count: number
+  areas: MapsAreaTrend[]
+  narrative: string[]
+}
+
 // Dashboard ranking-health tile: average organic position + average maps rank,
 // latest run vs first. Lower rank numbers are better, so direction "up" = the
 // latest average is a smaller (better) number than the first.

@@ -250,3 +250,20 @@ class MapsPeriodsResponse(BaseModel):
     scan_count: int = 0
     overall: Optional[MapsPeriodScope] = None
     keywords: list[MapsPeriodScope] = Field(default_factory=list)
+
+
+# --- Area-level (compass octant) trends + narrative -------------------------
+class MapsAreaTrend(BaseModel):
+    sector: str                          # N / NE / E / … / NW
+    sector_full: str                     # "Southwest"
+    city: Optional[str] = None           # nearest town for this octant (best-effort)
+    now_top3_pct: Optional[float] = None
+    now_avg_rank: Optional[float] = None
+    windows: dict[str, MapsPeriodDelta] = Field(default_factory=dict)  # Top-3 coverage deltas
+
+
+class MapsAreaTrendsResponse(BaseModel):
+    as_of: Optional[str] = None
+    scan_count: int = 0
+    areas: list[MapsAreaTrend] = Field(default_factory=list)
+    narrative: list[str] = Field(default_factory=list)

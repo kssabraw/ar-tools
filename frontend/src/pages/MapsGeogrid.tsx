@@ -5,7 +5,8 @@ import { ArrowLeft, Map, Play, Trash2, MapPin, Download, Printer, Square, Toggle
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type {
-  Client, MapsAlert, MapsAlertsResponse, MapsChangesResponse, MapsCompetitorTrendsResponse,
+  Client, MapsAlert, MapsAlertsResponse, MapsAreaTrend, MapsAreaTrendsResponse,
+  MapsChangesResponse, MapsCompetitorTrendsResponse,
   MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
   MapsPeriodsResponse, MapsRadius, MapsRunResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsTrendsResponse,
@@ -908,6 +909,7 @@ function WhatChanged({ clientId }: { clientId: string }) {
   return (
     <div>
       <PeriodSummary periods={periods} />
+      <AreaTrends clientId={clientId} />
       <AlertsPanel
         alerts={openAlerts}
         unread={alerts?.unread_count ?? 0}
@@ -983,6 +985,58 @@ function PeriodSummary({ periods }: { periods?: MapsPeriodsResponse }) {
                 <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: '#0f172a' }}>{m.label}</td>
                 <td style={{ ...td, fontWeight: 700 }}>{fmtMetric(m.metric, m.now)}</td>
                 {WINDOWS.map(([wk]) => <td key={wk} style={td}><DeltaCell metric={m.metric} d={m.windows[wk]} /></td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+// Coverage by area over time: per-octant Top-3 coverage across the windows, with
+// a plain-English narrative naming the most-weakened directions.
+function AreaTrends({ clientId }: { clientId: string }) {
+  const { data } = useQuery<MapsAreaTrendsResponse>({
+    queryKey: ['maps-area-trends', clientId],
+    queryFn: () => api.get<MapsAreaTrendsResponse>(`/clients/${clientId}/maps/area-trends`),
+  })
+  const areas = data?.areas ?? []
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '7px 8px', textAlign: 'right', fontSize: 13, color: '#334155', borderTop: '1px solid #f1f5f9' }
+  const WINDOWS: Array<[string, string]> = [['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days'], ['start', 'Since start']]
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Coverage by area, over time</h2>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 10px' }}>
+        Top-3 coverage by compass direction across the grid, and how each has moved.
+      </p>
+      {(data?.narrative ?? []).length > 0 && (
+        <ul style={{ margin: '0 0 12px', paddingLeft: 18 }}>
+          {data!.narrative.map((line, i) => (
+            <li key={i} style={{ fontSize: 13, color: '#334155', marginBottom: 3 }}>{line}</li>
+          ))}
+        </ul>
+      )}
+      {areas.length === 0 ? (
+        <p style={muted}>Run at least two scans to chart how each direction's coverage is trending.</p>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={{ ...th, textAlign: 'left' }}>Direction</th>
+            <th style={th}>Now (Top-3)</th>
+            {WINDOWS.map(([, label]) => <th key={label} style={th}>{label}</th>)}
+          </tr></thead>
+          <tbody>
+            {areas.map((a: MapsAreaTrend) => (
+              <tr key={a.sector}>
+                <td style={{ ...td, textAlign: 'left', color: '#0f172a' }}>
+                  <span style={{ fontWeight: 600 }}>{a.sector_full}</span>
+                  {a.city && <span style={{ color: '#94a3b8' }}> · {a.city}</span>}
+                </td>
+                <td style={{ ...td, fontWeight: 700 }}>{a.now_top3_pct == null ? '—' : `${Math.round(a.now_top3_pct)}%`}</td>
+                {WINDOWS.map(([wk]) => <td key={wk} style={td}><DeltaCell metric="top3_pct" d={a.windows[wk]} /></td>)}
               </tr>
             ))}
           </tbody>

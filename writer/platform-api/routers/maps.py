@@ -31,6 +31,7 @@ from models.maps import (
     MapsKeywordChange,
     MapsKeywordCreate,
     MapsKeywordTrend,
+    MapsAreaTrendsResponse,
     MapsOctantChange,
     MapsPeriodsResponse,
     MapsRunResponse,
@@ -580,6 +581,58 @@ async def maps_periods(
     ).data or []
     data = build_maps_periods(scans, results, datetime.now(timezone.utc).date())
     return MapsPeriodsResponse(**data)
+
+
+_OCTANTS = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}
+
+
+def _octant_city_map(rows: list[dict]) -> dict:
+    """Best-effort {octant: nearest city} from a scan's geocoded weak locations."""
+    m: dict[str, str] = {}
+    for r in rows:
+        loc = r.get("report_weak_locations") or {}
+        for pin in loc.get("octant_pins") or []:
+            sec = pin.get("octant") if pin.get("octant") in _OCTANTS else pin.get("sector")
+            if sec in _OCTANTS and pin.get("city") and sec not in m:
+                m[sec] = pin["city"]
+        for area in loc.get("weak_areas") or []:
+            if area.get("city"):
+                for sec in area.get("octants") or []:
+                    if sec in _OCTANTS and sec not in m:
+                        m[sec] = area["city"]
+    return m
+
+
+@router.get("/clients/{client_id}/maps/area-trends", response_model=MapsAreaTrendsResponse)
+async def maps_area_trends(
+    client_id: UUID, limit: int = 52, auth: dict = Depends(require_auth)
+) -> MapsAreaTrendsResponse:
+    """Per compass-octant Top-3 coverage trend (7/30/90 + since-start) plus a
+    plain-English narrative naming the most-weakened directions, labeled with the
+    nearest city where the geo-grid has been geocoded."""
+    from datetime import datetime, timezone
+
+    from services.maps_analyzer import build_area_periods
+
+    supabase = get_supabase()
+    scans = (
+        supabase.table("maps_scans").select("id, completed_at")
+        .eq("client_id", str(client_id)).eq("status", "complete")
+        .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
+    ).data or []
+    if not scans:
+        return MapsAreaTrendsResponse()
+    results = (
+        supabase.table("maps_scan_results").select("scan_id, keyword, rank_grid")
+        .in_("scan_id", [s["id"] for s in scans]).execute()
+    ).data or []
+    # Nearest-city labels from the latest scan's geocoded weak locations (best-effort).
+    wl = (
+        supabase.table("maps_scan_results").select("report_weak_locations")
+        .eq("scan_id", scans[0]["id"]).execute()
+    ).data or []
+    data = build_area_periods(scans, results, datetime.now(timezone.utc).date(), _octant_city_map(wl))
+    return MapsAreaTrendsResponse(**data)
 
 
 def _alert_row(r: dict) -> MapsAlert:
