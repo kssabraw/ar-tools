@@ -330,8 +330,9 @@ Built as a faithful port of the organic alerting pattern (`services/rank_alerts.
   | `pack_exit` | top‑3 coverage was ≥ X%, now < Y% (lost the pack across the grid) | critical |
   | `avg_rank_drop` | average grid rank worsened ≥ M positions | warning |
   | `competitor_surge` | a competitor's beats‑% rose ≥ P points, or a new rival overtook on > Q% of pins | warning |
+  | `zone_loss` | a previously‑ranked geocoded weak‑area / octant went **fully unranked** vs the prior scan (was ≥ 1 ranked pin, now 0) | warning → **critical** if the lost area is in the inner rings (proximity‑weighted) |
 
-  (`coverage_drop`/`pack_exit`/`avg_rank_drop` mirror organic's `weekly_drop`/`page_one_exit`/`thirty_day_drop`; `competitor_surge` is the local‑specific addition with no organic equivalent. `zone_loss` was considered and **dropped** — coverage_drop/pack_exit already capture area loss.)
+  (`coverage_drop`/`pack_exit`/`avg_rank_drop` mirror organic's `weekly_drop`/`page_one_exit`/`thirty_day_drop`; `competitor_surge` and `zone_loss` are the local‑specific additions with no organic equivalent. **`zone_loss` re‑added 2026‑06‑29:** it catches a *localized* area you held going dark even when grid‑wide `coverage_drop`/`pack_exit` don't fire — computed scan‑over‑scan from the geocoded `weak_areas`/octants (§4.8.3 geometry), severity **proximity‑weighted** (critical when the lost area sits in the inner rings, since nearby coverage matters most). It emits a `coverage_loss` `strategist_signal` and feeds a **restore** action — `maps_reoptimize_page` if the client has a page for that area, else `maps_competitor_threat` when a rival took it (§4.8.4).)
 
 **Build timing — ✅ decided: spec now, build with the signal bus.** Maps alerting stays design‑only for now; it's implemented in **Phase 5** alongside the cross‑module monitor (§6.8) so the alert producer and the `strategist_signals` bus are built **once**, not twice. `reconcile_maps_alerts` is authored as the Maps detector inside `strategist_monitor`, emitting both `maps_alerts` rows (the in‑app/Slack feed, via `notifications.emit`) and the corresponding `strategist_signals`.
 
