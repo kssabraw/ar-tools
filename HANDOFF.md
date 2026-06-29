@@ -1,6 +1,57 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **Slack conversational assistant (SerMastr)** (latest)
+## ⏩ Update — 2026-06-29 · **Managed engagement + "SerMaStr" Strategy Engine — build started** (latest)
+
+The connective layer from `docs/managed-engagement-and-strategy-engine-design-v1_0.md`
+(the full design) is now being **built**, on branch `claude/unified-keyword-portal-m82e68`
+(**PR #166**). The Phase-1 build plan is `docs/managed-engagement-phase-1-build-plan-v1_0.md`.
+**Recommend-only so far — no autonomous execution, no Asana, no monitor yet.**
+
+**Shipped (code on the branch):**
+- **Unified Keyword Portal** (Phase 1 · PR1) — `POST /clients/{id}/keyword-portal/add` fans
+  one keyword list out to organic / Maps / brand, deduped, with first-scan kickoff (Maps
+  "added but blocked" when the grid isn't configured; brand scans only the new keyword ids).
+  `services/keyword_portal.py` + `routers/keyword_portal.py` + `brand_service.add_keywords`;
+  frontend `pages/KeywordPortal.tsx` + workspace **Add Keywords** card. 10 unit tests.
+- **Engagement spine + Strategy Engine v1** (Phase 2 · PR-A/B/C) — the `engagements`
+  lifecycle state machine (`services/engagement_service.py`, pure `can_transition`),
+  `services/strategy_engine.py` (generalizes `reopt_planner` cross-module: organic reuses
+  it; Maps reads latest-scan weak areas; LLM reads latest-scan invisible keywords → ONE
+  unified recommend-only plan), `routers/engagements.py` + `routers/strategy.py`
+  (`POST /engagements/{id}/plan/refresh`, `GET …/plan`); frontend `pages/StrategyPlan.tsx`
+  + workspace **Strategy** card. 13 unit tests.
+- **Onboarding wizard + approval gate** (Phase 1 · PR3) — `pages/OnboardingWizard.tsx`
+  (begin engagement → approve brand voice + ICP → add targets), `onboarding_readiness` +
+  the `onboarding→intake` transition **gated** on voice + ICP approved; workspace
+  **Onboarding** card.
+
+**Live DB:** migration `engagements_and_strategy` **applied to the live project**
+(`wvcthtmmcmhkybcesirb`) via the Supabase MCP — three new tables (`engagements`,
+`strategy_plans`, `strategy_actions`), RLS enabled. Other migrations on the branch are
+additive code only.
+
+**To go live:** the **`PLATFORM` Railway service must deploy this branch** for the new
+endpoints (`/keyword-portal`, `/engagements`, `/strategy`) to exist. Frontend is built on
+Netlify (PR #166 deploy preview is green). No new env vars / provisioning for any of the
+above.
+
+**Deferred (not built):** the **GA4 connector** (Phase 1 · PR5 — GA4 not hooked up yet),
+**GBP Performance** connector (open OAuth decision, design §12 Q14), **Asana** sync and the
+**monitor/alerting/executor** (Phase 5). The Maps/LLM strategy readers use data that
+already exists; their richer signals (winnability, alerting, goal-gaps) land with the
+monitor in Phase 5.
+
+**Next:** **Phase 3 — new audit modules** (site/technical via DataForSEO OnPage + PageSpeed;
+backlink-gap via DataForSEO Backlinks; local-citation static checklist). See design §6.2–6.4.
+
+**Security note (pre-existing):** the Supabase advisor flags `public.maps_geocode_cache`
+with **RLS disabled** (a shared cross-client cache; predates this work). Enable with
+`ALTER TABLE public.maps_geocode_cache ENABLE ROW LEVEL SECURITY;` **plus policies** if you
+want it locked down — not auto-applied.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Slack conversational assistant (SerMastr)**
 
 Two-way Slack, **channel mode**: SerMastr lives in a **dedicated channel** and
 answers **every plain human message there — no @mention needed** — a
