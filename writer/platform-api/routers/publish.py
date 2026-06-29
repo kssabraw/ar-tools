@@ -16,7 +16,7 @@ from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from services.google_docs import GoogleDocError, create_google_doc, resolve_drive_folder
-from services.markdown_html import markdown_to_html
+from services.markdown_html import markdown_to_gutenberg, markdown_to_html
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
 
 logger = logging.getLogger(__name__)
@@ -75,13 +75,14 @@ def _sections_to_markdown(article: list[dict]) -> str:
 
 
 def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, str, str | None]:
-    """Return (markdown, html, seo_title) for the run's publishable content.
+    """Return (doc_html, wp_html, seo_title) for the run's publishable content.
 
-    Markdown feeds the Google Docs path; HTML feeds WordPress. `seo_title` is the
-    page's own SEO title where the rendering carries one (service/location
-    pages), else None. Service/location pages already carry deterministic
-    Markdown + WordPress(Gutenberg)/HTML renderings; blog posts only have
-    Markdown, so HTML is derived from it.
+    `doc_html` is semantic HTML (headings/paragraphs/lists/tables) for the Google
+    Docs path — the Apps Script imports it as a natively-formatted Doc that
+    copy-pastes into WordPress. `wp_html` is the WordPress body: Gutenberg block
+    markup so the post lands as native, editable blocks. `seo_title` is the page's
+    own SEO title where the rendering carries one (service/location pages), else
+    None (blog posts source their title from the brief).
     """
     if content_type in ("service_page", "location_page"):
         sw_result = (
@@ -103,13 +104,11 @@ def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, st
             markdown = _sections_to_markdown(payload.get("sections") or [])
         if not markdown.strip():
             raise HTTPException(status_code=422, detail="page_is_empty")
-        # Prefer the Gutenberg block markup, fall back to semantic HTML, then to
-        # markdown-derived HTML.
-        html = renderings.get("wordpress") or renderings.get("html") or ""
-        if not html.strip():
-            html = markdown_to_html(markdown)
+        # Docs get semantic HTML; WordPress gets the native Gutenberg rendering.
+        doc_html = renderings.get("html") or markdown_to_html(markdown)
+        wp_html = renderings.get("wordpress") or renderings.get("html") or markdown_to_html(markdown)
         seo_title = (payload.get("title") or "").strip() or None
-        return markdown, html, seo_title
+        return doc_html, wp_html, seo_title
 
     sc_result = (
         supabase.table("module_outputs")
@@ -127,7 +126,7 @@ def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, st
     markdown = _sections_to_markdown(article)
     if not markdown.strip():
         raise HTTPException(status_code=422, detail="article_is_empty")
-    return markdown, markdown_to_html(markdown), None
+    return markdown_to_html(markdown), markdown_to_gutenberg(markdown), None
 
 
 def _resolve_blog_title_h1(supabase, run_id: UUID) -> tuple[str | None, str | None]:
@@ -191,7 +190,7 @@ async def publish_run(
         raise HTTPException(status_code=404, detail="client_not_found")
     client = client_result.data
 
-    markdown, html, page_seo_title = _resolve_content(supabase, run_id, content_type)
+    doc_html, wp_html, page_seo_title = _resolve_content(supabase, run_id, content_type)
     fallback_title = f"{run['keyword']} — {client['name']}"
     if content_type in ("service_page", "location_page"):
         # Service/location pages carry their own H1 inside their rendering, so we
@@ -201,12 +200,16 @@ async def publish_run(
     else:
         # Blog posts: the SEO title becomes the WordPress post title (and the
         # meta <title> + slug); the distinct on-page H1 is injected at the top of
-        # the body so it renders as the visible heading, separate from the title.
+        # each body so it renders as the visible heading, separate from the title.
         seo_title, h1 = _resolve_blog_title_h1(supabase, run_id)
         title = seo_title or fallback_title
         if h1:
-            html = f"<h1>{escape(h1)}</h1>\n{html}"
-            markdown = f"# {h1}\n\n{markdown}"
+            heading = escape(h1)
+            doc_html = f"<h1>{heading}</h1>\n{doc_html}"
+            wp_html = (
+                f'<!-- wp:heading {{"level":1}} -->\n<h1>{heading}</h1>\n'
+                f"<!-- /wp:heading -->\n\n{wp_html}"
+            )
     featured_image_url = run.get("featured_image_url")
 
     if body.destination == "wordpress":
@@ -214,7 +217,7 @@ async def publish_run(
             result = await publish_to_wordpress(
                 client=client,
                 title=title,
-                html=html,
+                html=wp_html,
                 status=body.status,
                 content_type=content_type,
                 featured_image_url=featured_image_url,
@@ -261,11 +264,12 @@ async def publish_run(
             status_code=422,
             detail="missing_google_drive_folder_id: client has no Drive folder configured",
         )
-    # Send HTML (not markdown) so the Apps Script builds a natively-formatted Doc
-    # that copy-pastes cleanly into WordPress. Render the hero image at the top of
-    # the doc (WordPress handles it as the post's featured image instead, so it's
-    # only injected on the Docs path).
-    doc_html = f'<p><img src="{featured_image_url}" /></p>\n{html}' if featured_image_url else html
+    # Send semantic HTML (not markdown) so the Apps Script builds a natively-
+    # formatted Doc that copy-pastes cleanly into WordPress. Render the hero image
+    # at the top of the doc (WordPress handles it as the post's featured image
+    # instead, so it's only injected on the Docs path).
+    if featured_image_url:
+        doc_html = f'<p><img src="{escape(featured_image_url, quote=True)}" /></p>\n{doc_html}'
     try:
         result = await create_google_doc(folder_id, title, doc_html, content_format="html")
     except GoogleDocError as exc:

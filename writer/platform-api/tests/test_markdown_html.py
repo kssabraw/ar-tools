@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.markdown_html import markdown_to_html  # noqa: E402
+from services.markdown_html import markdown_to_gutenberg, markdown_to_html  # noqa: E402
 
 
 def test_headings_and_paragraph():
@@ -91,6 +91,49 @@ def test_pipe_paragraph_without_delimiter_is_not_a_table():
 
 def test_empty_input():
     assert markdown_to_html("") == ""
+
+
+# ── Gutenberg block rendering ────────────────────────────────────────────────
+
+def test_gutenberg_heading_and_paragraph():
+    gb = markdown_to_gutenberg("## Section\n\nHello world.")
+    assert "<!-- wp:heading -->\n<h2>Section</h2>\n<!-- /wp:heading -->" in gb
+    assert "<!-- wp:paragraph -->\n<p>Hello world.</p>\n<!-- /wp:paragraph -->" in gb
+
+
+def test_gutenberg_heading_level_attr_for_non_h2():
+    gb = markdown_to_gutenberg("# Title\n\n### Sub")
+    assert '<!-- wp:heading {"level":1} -->\n<h1>Title</h1>' in gb
+    assert '<!-- wp:heading {"level":3} -->\n<h3>Sub</h3>' in gb
+
+
+def test_gutenberg_list_blocks():
+    gb = markdown_to_gutenberg("- a\n- b")
+    assert gb.startswith("<!-- wp:list -->")
+    assert "<!-- wp:list-item -->\n<li>a</li>\n<!-- /wp:list-item -->" in gb
+    assert "<ul>" in gb and "</ul>" in gb
+
+
+def test_gutenberg_ordered_list_attr():
+    gb = markdown_to_gutenberg("1. first\n2. second")
+    assert '<!-- wp:list {"ordered":true} -->' in gb
+    assert "<ol>" in gb
+
+
+def test_gutenberg_table_block():
+    gb = markdown_to_gutenberg("| A | B |\n| --- | --- |\n| 1 | 2 |")
+    assert '<!-- wp:table -->\n<figure class="wp-block-table"><table>' in gb
+    assert "</table></figure>\n<!-- /wp:table -->" in gb
+
+
+def test_gutenberg_inline_formatting_preserved():
+    gb = markdown_to_gutenberg("A **bold** and [link](https://x.com).")
+    assert "<strong>bold</strong>" in gb
+    assert '<a href="https://x.com"' in gb
+
+
+def test_gutenberg_empty_input():
+    assert markdown_to_gutenberg("") == ""
 
 
 def test_paragraphs_separated_by_blank_lines():
