@@ -22,6 +22,8 @@ from models.maps import (
     MapsAlertsResponse,
     MapsChangesResponse,
     MapsClientThreats,
+    MapsCompetitorIntelResponse,
+    MapsCompetitorProfile,
     MapsCompetitorTrend,
     MapsCompetitorTrendPoint,
     MapsCompetitorTrendsResponse,
@@ -44,6 +46,7 @@ from models.maps import (
     MapsTrendPoint,
     MapsTrendsResponse,
 )
+from services import competitor_gbp
 from services import local_dominator
 from services import maps_solv as maps_solv_service
 
@@ -478,6 +481,29 @@ async def maps_solv(
         .in_("scan_id", [s["id"] for s in scans]).execute()
     ).data or []
     return MapsSolvResponse(**maps_solv_service.build_solv(scans, results))
+
+
+@router.get("/clients/{client_id}/maps/competitor-intel", response_model=MapsCompetitorIntelResponse)
+async def maps_competitor_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsCompetitorIntelResponse:
+    """Latest stored GBP profile per top local-pack competitor (categories,
+    reviews, photos, hours) — the 'why do they win' intelligence."""
+    profiles = competitor_gbp.latest_profiles(str(client_id))
+    return MapsCompetitorIntelResponse(
+        profiles=[MapsCompetitorProfile(**p) for p in profiles],
+        captured_at=profiles[0]["captured_at"] if profiles else None,
+    )
+
+
+@router.post("/clients/{client_id}/maps/competitor-intel/refresh", response_model=MapsRunResponse)
+async def refresh_competitor_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Enqueue a fresh competitor-GBP capture for the client's top local-pack
+    competitors (one Outscraper call each, capped by competitor_gbp_max)."""
+    competitor_gbp.enqueue_competitor_gbp(str(client_id))
+    return MapsRunResponse(client_id=client_id, status="enqueued")
 
 
 @router.get("/maps/threats", response_model=MapsThreatsResponse)

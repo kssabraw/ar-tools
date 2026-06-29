@@ -9,6 +9,7 @@ import type {
   MapsChangesResponse, MapsCompetitorTrendsResponse,
   MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
   MapsPeriodsResponse, MapsRadius, MapsRunResponse,
+  MapsCompetitorIntelResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsSolvResponse, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
@@ -684,6 +685,7 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
       <TrendPanel trends={trends} />
       <SolvPanel clientId={clientId} />
       <CompetitorMomentum clientId={clientId} />
+      <CompetitorIntel clientId={clientId} />
       {scans.length === 0 ? (
         <div style={card}><p style={muted}>No scans yet.</p></div>
       ) : (
@@ -867,6 +869,74 @@ function SolvPanel({ clientId }: { clientId: string }) {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// ── Competitor intelligence (their GBP — why they win) ──────────────────────
+function CompetitorIntel({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsCompetitorIntelResponse>({
+    queryKey: ['maps-competitor-intel', clientId],
+    queryFn: () => api.get<MapsCompetitorIntelResponse>(`/clients/${clientId}/maps/competitor-intel`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/competitor-intel/refresh`, {}),
+    onSuccess: () => {
+      setQueued(true)
+      queryClient.invalidateQueries({ queryKey: ['maps-competitor-intel', clientId] })
+    },
+  })
+  const profiles = data?.profiles ?? []
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 13, color: '#334155' }
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Competitor intelligence</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            The Google Business Profiles of your top local-pack competitors — categories, reviews, photos,
+            hours — so you can see why they win.
+            {data?.captured_at && <span style={{ color: '#94a3b8' }}> Captured {relativeTime(data.captured_at)}.</span>}
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Fetch fresh GBP profiles for the top local-pack competitors">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {profiles.length === 0 ? (
+        <p style={muted}>
+          No competitor profiles yet. Run a scan to find local-pack competitors, then click <strong>Refresh</strong>.
+        </p>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={{ ...th, textAlign: 'left' }}>Competitor</th>
+            <th style={{ ...th, textAlign: 'left' }}>Primary category</th>
+            <th style={th}>Rating</th><th style={th}>Reviews</th><th style={th}>Top-3 pins</th><th style={th}>Hours</th>
+          </tr></thead>
+          <tbody>
+            {profiles.map(p => (
+              <tr key={p.place_id ?? p.name} style={{ borderTop: '1px solid #f1f5f9' }}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: '#0f172a' }}>
+                  {p.website ? <a href={p.website} target="_blank" rel="noreferrer" style={{ color: '#0f172a' }}>{p.name ?? '—'}</a> : (p.name ?? '—')}
+                </td>
+                <td style={{ ...td, textAlign: 'left', color: '#64748b' }}>{p.primary_category ?? '—'}</td>
+                <td style={td}>{p.rating != null ? p.rating.toFixed(1) : '—'}</td>
+                <td style={td}>{p.review_count != null ? p.review_count.toLocaleString() : '—'}</td>
+                <td style={td}>{p.top3_pins ?? '—'}</td>
+                <td style={td}>{p.has_hours ? '✓' : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
     </div>
   )
 }

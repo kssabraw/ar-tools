@@ -92,7 +92,7 @@ Each layer adds a data source and an analysis, and (where it implies action) one
 
 ### Tier B — existing APIs + creds, new tables + fetch/analysis (medium)
 
-**B1. Competitor GBP intelligence.** `gbp_service.get_business_details()` already fetches arbitrary businesses. Discover competitors from the stored maps `competitors` leaderboard; fetch + store profiles (categories, review count/velocity, photos, attributes, hours) as a time-series in a new `competitor_gbp_profiles` table. Foundation for B2/A1 context. *~2 days.*
+**B1. Competitor GBP intelligence. — BUILT (on-demand; monthly auto-refresh deferred).** `gbp_service.get_business_details()` already fetches arbitrary businesses. `services/competitor_gbp.py` selects the top local-pack competitors from the latest scan's stored `competitors` leaderboards (`select_competitors`, capped by `competitor_gbp_max`=8), fetches each GBP, and inserts a time-series capture into `competitor_gbp_profiles` (migration `20260629160000`) via the async `competitor_gbp` job (best-effort per competitor). Endpoints `GET /clients/{id}/maps/competitor-intel` + `POST .../competitor-intel/refresh`; rendered as a "Competitor intelligence" panel in the Maps History tab (category/rating/reviews/top-3-pins/hours, refresh button). Foundation for B2. *Follow-up: monthly auto-refresh via the scheduler.*
 
 **B2. GBP profile audit / gaps.** Completeness scoring of `clients.gbp` vs the B1 competitor profiles → gap list (missing categories/services/photos/posts/attributes). **Action** (`gbp_gap`): "Add {gap} — your top competitors all have it." *~1.5 days.*
 

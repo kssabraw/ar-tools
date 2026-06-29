@@ -1153,6 +1153,28 @@ export interface MapsSolvResponse {
   keywords: MapsSolvKeyword[]
 }
 
+// Competitor GBP intelligence (Maps Tier B / B1).
+export interface MapsCompetitorProfile {
+  place_id: string | null
+  name: string | null
+  primary_category: string | null
+  gbp_categories: string[]
+  rating: number | null
+  review_count: number | null
+  website: string | null
+  phone: string | null
+  address: string | null
+  photo: string | null
+  has_hours: boolean | null
+  found_pins: number | null
+  top3_pins: number | null
+  captured_at: string | null
+}
+export interface MapsCompetitorIntelResponse {
+  profiles: MapsCompetitorProfile[]
+  captured_at: string | null
+}
+
 // Brand-search analysis (branded vs non-branded GSC demand).
 export interface BrandSearchWeek {
   week: string

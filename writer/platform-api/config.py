@@ -230,6 +230,12 @@ class Settings(BaseSettings):
     maps_alert_area_rank_drop: float = 2.0          # per-octant avg-rank worsening (spots) → area_decline
     maps_alert_competitor_surge_pins: int = 5       # min newly-above pins for competitor_surge
 
+    # Competitor GBP intelligence (Tier B / B1): how many of the latest scan's
+    # top local-pack competitors to fetch full GBP profiles for (each fetch is an
+    # Outscraper call — capped to bound spend), and the auto-refresh interval.
+    competitor_gbp_max: int = 8
+    competitor_gbp_interval_days: int = 30
+
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
     # location). Set to 0 to disable caching.

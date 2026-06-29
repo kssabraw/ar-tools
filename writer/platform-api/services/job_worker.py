@@ -31,6 +31,7 @@ from services.serp_snapshot import run_serp_snapshot_job
 from services.local_dominator import run_maps_scan_job
 from services.maps_report import run_maps_report_job
 from services.maps_analyzer import run_maps_analyze_job
+from services.competitor_gbp import run_competitor_gbp_job
 from services.page_structure_scraper import analyze_page_structure
 from services.silo_dedup import process_silo_dedup_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
@@ -304,6 +305,8 @@ async def _process_job(job: dict) -> None:
         await run_maps_report_job(job)
     elif job_type == "maps_analyze":
         await run_maps_analyze_job(job)
+    elif job_type == "competitor_gbp":
+        await run_competitor_gbp_job(job)
     elif job_type == "local_seo_silo":
         await run_silo_plan_job(job)
     elif job_type == "local_seo_generate":

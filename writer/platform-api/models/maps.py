@@ -186,6 +186,29 @@ class MapsSolvResponse(BaseModel):
     keywords: list[MapsSolvKeyword] = Field(default_factory=list)         # latest scan per-keyword
 
 
+# --- Competitor GBP intelligence (Tier B / B1) ------------------------------
+class MapsCompetitorProfile(BaseModel):
+    place_id: Optional[str] = None
+    name: Optional[str] = None
+    primary_category: Optional[str] = None
+    gbp_categories: list[str] = Field(default_factory=list)
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    photo: Optional[str] = None
+    has_hours: Optional[bool] = None
+    found_pins: Optional[int] = None
+    top3_pins: Optional[int] = None
+    captured_at: Optional[str] = None
+
+
+class MapsCompetitorIntelResponse(BaseModel):
+    profiles: list[MapsCompetitorProfile] = Field(default_factory=list)
+    captured_at: Optional[str] = None    # most recent capture timestamp
+
+
 class MapsThreat(BaseModel):
     """One top-threat competitor for a dashboard tile."""
     name: Optional[str] = None
