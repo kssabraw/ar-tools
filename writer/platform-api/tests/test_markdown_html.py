@@ -52,6 +52,43 @@ def test_image_is_not_double_rendered_as_link():
     assert "<a " not in html
 
 
+def test_table_basic():
+    md = "| Name | Age |\n| --- | --- |\n| Ann | 30 |\n| Bob | 25 |"
+    html = markdown_to_html(md)
+    assert "<table>" in html and "</table>" in html
+    assert "<thead>" in html and "<th>Name</th>" in html and "<th>Age</th>" in html
+    assert "<tbody>" in html
+    assert "<td>Ann</td>" in html and "<td>30</td>" in html
+    assert "<td>Bob</td>" in html and "<td>25</td>" in html
+
+
+def test_table_alignment_from_delimiter():
+    md = "| L | C | R |\n| :--- | :--: | ---: |\n| a | b | c |"
+    html = markdown_to_html(md)
+    assert '<th style="text-align:left">L</th>' in html
+    assert '<th style="text-align:center">C</th>' in html
+    assert '<th style="text-align:right">R</th>' in html
+    assert '<td style="text-align:center">b</td>' in html
+
+
+def test_table_cells_support_inline_formatting():
+    md = "| Term | Note |\n| --- | --- |\n| **bold** | [link](https://x.com) |"
+    html = markdown_to_html(md)
+    assert "<strong>bold</strong>" in html
+    assert '<a href="https://x.com"' in html
+
+
+def test_lone_hr_is_not_a_table():
+    html = markdown_to_html("Intro\n\n---\n\nMore")
+    assert "<hr />" in html and "<table>" not in html
+
+
+def test_pipe_paragraph_without_delimiter_is_not_a_table():
+    html = markdown_to_html("a | b | c is just prose")
+    assert "<table>" not in html
+    assert "<p>" in html
+
+
 def test_empty_input():
     assert markdown_to_html("") == ""
 
