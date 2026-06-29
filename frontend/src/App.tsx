@@ -10,6 +10,7 @@ import { RunDetail } from './pages/RunDetail'
 import { Clients } from './pages/Clients'
 import { ClientForm } from './pages/ClientForm'
 import { ClientWorkspace } from './pages/ClientWorkspace'
+import { ClientContent } from './pages/ClientContent'
 import { BrandVoice } from './pages/BrandVoice'
 import { Icp } from './pages/Icp'
 import { LocalSeoContent } from './pages/LocalSeoContent'
@@ -56,6 +57,7 @@ export default function App() {
                       <Route path="/clients/:id" element={<ClientWorkspace />} />
                       <Route path="/clients/:id/brand-voice" element={<BrandVoice />} />
                       <Route path="/clients/:id/icp" element={<Icp />} />
+                      <Route path="/clients/:id/content" element={<ClientContent />} />
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
                       <Route path="/clients/:id/service-pages" element={<ServicePages />} />
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />

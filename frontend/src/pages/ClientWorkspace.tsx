@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 
@@ -177,6 +177,13 @@ export function ClientWorkspace() {
           description="Research the parent, sibling & neighbourhood pages a topic needs — and see which already exist on this client’s site."
           to={id ? `/clients/${id}/local-seo?tab=plan` : undefined}
           cta="Plan"
+        />
+        <ActionCard
+          icon={<UploadCloud size={22} />}
+          label="Publish to Google Docs"
+          description="Select already-generated articles & Local SEO pages and publish them to this client's Drive folder in one batch."
+          to={id ? `/clients/${id}/content` : undefined}
+          cta="Open"
         />
       </Section>
 
