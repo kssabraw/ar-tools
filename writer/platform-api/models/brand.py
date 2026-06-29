@@ -103,5 +103,6 @@ class BrandMentionResponse(BaseModel):
     reasoning: Optional[str] = None
     snippet: Optional[str] = None
     invisibility_diagnosis: Optional[str] = None
+    response_analysis: Optional[dict] = None
     failure_reason: Optional[str] = None
     created_at: Optional[str] = None

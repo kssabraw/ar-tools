@@ -71,6 +71,27 @@ def test_extract_dataforseo_pulls_ai_overview_text_and_refs():
     assert citations == ["https://r.com"]
 
 
+def test_extract_aio_domains_splits_inline_links_from_references():
+    items = [{
+        "type": "ai_overview",
+        # Top-level references = the sources/citations strip.
+        "references": [{"domain": "directory.com", "url": "https://directory.com/x"}],
+        "items": [
+            {
+                # An inline content link inside the generated answer.
+                "text": "Acme is a top pick. [Acme Plumbing](https://acme.com/services)",
+                "links": [{"domain": "partner.com", "url": "https://partner.com"}],
+                "references": [{"url": "https://refonly.com/a"}],
+            },
+        ],
+    }]
+    inline, refs = bs._extract_aio_domains(items)
+    assert "acme.com" in inline          # markdown link in the answer text
+    assert "partner.com" in inline       # inline links[] array
+    assert "directory.com" in refs and "refonly.com" in refs
+    assert "acme.com" not in refs        # not double-counted as a citation
+
+
 # ── regex fallback classifier ────────────────────────────────────────────────
 def test_fallback_detects_explicit_negative():
     r = bs._fallback_analysis("Acme Plumbing does not appear in the results.", "Acme Plumbing", [], "raw")
@@ -104,12 +125,15 @@ def test_analyze_mention_without_openai_key_uses_fallback(monkeypatch):
 
 # ── scan_keyword_engine orchestration ────────────────────────────────────────
 def _stub_analyze(found=True):
-    async def _fn(response_text, brand, citations, raw_response):
-        return {
+    async def _fn(response_text, brand, citations, raw_response, extract_rich=False):
+        out = {
             "mention_found": found, "mention_type": "direct" if found else "none",
             "sentiment": 0.5, "confidence_score": 0.9, "snippet": "snip",
             "citations": citations, "reasoning": "ok", "raw_response": raw_response,
         }
+        if extract_rich:
+            out["rich"] = {"businesses": [], "mention_rank": 1 if found else None}
+        return out
     return _fn
 
 
