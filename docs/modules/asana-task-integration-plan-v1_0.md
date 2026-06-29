@@ -1,6 +1,6 @@
 # Asana Task Integration — Plan (v1.0)
 
-**Authored:** 2026-06-29 · **Status:** **Phase 0 + Phase 1 backend built** · Phase 1 frontend + Phases 2–3 ahead · **New suite integration — "Asana"**
+**Authored:** 2026-06-29 · **Status:** **Phase 0 + Phase 1 (backend + frontend) built** · Phases 2–3 ahead · **New suite integration — "Asana"**
 
 > **Build status (2026-06-29).** **Phase 0 (scaffolding)** + **Phase 1 backend (monthly
 > automation)** are implemented on branch `claude/asana-integration-options-cp3zul`
@@ -21,8 +21,14 @@
 > `tests/test_asana_service.py` (pure helpers) + `tests/test_asana_monthly.py` (create /
 > idempotency / skip branches) — **all green**.
 >
-> **Still ahead:** Phase 1 **frontend** (the per-client template editor + "Generate this
-> month" button), Phase 2 (workload view), Phase 3 (workload alerts). Migrations are committed
+> *Phase 1 frontend (built):* `frontend/src/pages/AsanaTasks.tsx` — the per-client task
+> template editor (add/reorder/remove rows; name + assignee + category, pickers populated from
+> Asana; whole-list save), an Asana project-GID mapping field, and a **"Generate this month"**
+> button surfacing the create/exists/skipped result. Routed at `/clients/:id/asana-tasks` with
+> an **"Asana Tasks"** card in a new **Project Management** section of the client workspace.
+> Typechecks + builds clean.
+>
+> **Still ahead:** Phase 2 (workload view), Phase 3 (workload alerts). Migrations are committed
 > but **not yet applied to the live Supabase project** (pending plan approval). Everything
 > degrades gracefully until the Asana token + workspace + per-client mappings are provisioned.
 
@@ -261,8 +267,9 @@ notifications setup.
   - *Backend (built):* app-defined per-client template (`asana_client_task_templates`),
     `generate_month_for_client`, `asana_monthly` job, scheduler monthly due-check, the
     template/mapping/picker routes + synchronous `generate-month`. Idempotent.
-  - *Frontend (ahead):* the per-client **task template editor** (assignee/category pickers
-    from Asana) + a **"Generate this month"** button, in the client workspace.
+  - *Frontend (built):* `pages/AsanaTasks.tsx` — the per-client **task template editor**
+    (assignee/category pickers from Asana) + project mapping + a **"Generate this month"**
+    button; "Asana Tasks" workspace card under a new Project Management section.
 - **Phase 2 — workload view:** per-person aggregation + overload detection + read-only
   suite-level view.
 - **Phase 3 — workload alerts:** daily due-check → notifications service (Slack/in-app).

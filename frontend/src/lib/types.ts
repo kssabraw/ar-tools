@@ -1013,3 +1013,38 @@ export interface ReoptPlan {
   action_count: number
   created_at: string
 }
+
+// Asana task integration.
+export interface AsanaProjectMapping {
+  client_id: string
+  project_gid: string
+}
+
+export interface AsanaTaskTemplateItem {
+  name: string
+  assignee_gid: string | null
+  assignee_name: string | null
+  category_option_gid: string | null
+  category_name: string | null
+  sort_order: number
+  active: boolean
+}
+
+export interface AsanaUser {
+  gid: string
+  name: string | null
+  email: string | null
+}
+
+export interface AsanaCategoryOption {
+  gid: string
+  name: string | null
+}
+
+export interface AsanaGenerateMonthResponse {
+  status: 'created' | 'exists' | 'skipped'
+  section: string
+  created: number
+  reason: string | null
+  errors: string[]
+}
