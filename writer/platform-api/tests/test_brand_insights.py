@@ -31,3 +31,104 @@ def test_prompts_include_context():
     assert "Acme" in d and "burst pipe sydney" in d and "Joe Pipes" in d
     s = bi._suggest_prompt("Acme", ["Plumber"], "123 St, Sydney")
     assert "Acme" in s and "Plumber" in s and "123 St, Sydney" in s
+
+
+# ── real client signals → prompt block ────────────────────────────────────────
+def test_format_signals_block_empty_when_no_signals():
+    assert bi.format_signals_block({}) == ""
+
+
+def test_format_signals_block_renders_gbp_strength():
+    block = bi.format_signals_block({"gbp": {
+        "rating": 4.6, "review_count": 38, "primary_category": "Roofer",
+        "categories": ["Roofer", "Roofing contractor"], "has_website": True, "has_description": False,
+    }})
+    assert "Google Business Profile" in block
+    assert "4.6★ from 38 reviews" in block
+    assert 'primary category "Roofer"' in block
+    assert "Roofing contractor" in block  # secondary category, not duplicated as primary
+    assert "no description on the profile" in block
+
+
+def test_format_signals_block_renders_competitor_authority_and_rank():
+    block = bi.format_signals_block({"serp": {
+        "captured_at": "2026-06-22T00:00:00Z", "client_rank": 14, "client_domain_rating": 90,
+        "competitors": [
+            {"domain": "big.com", "dr": 410, "referring_domains": 5000},
+            {"domain": "mid.com", "dr": 300, "referring_domains": None},
+        ],
+    }})
+    assert "ranks #14 organically" in block
+    assert "domain rating is 90" in block
+    assert "big.com DR 410/5000 ref. domains" in block
+    assert "mid.com DR 300" in block
+
+
+def test_format_signals_block_notes_client_not_ranking():
+    block = bi.format_signals_block({"serp": {
+        "client_rank": None, "client_domain_rating": None, "competitors": [],
+    }})
+    assert "does NOT rank in the captured top results" in block
+
+
+# ── gather_client_signals (assembly over a fake Supabase) ─────────────────────
+class _FakeQuery:
+    def __init__(self, data):
+        self._data = data
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def ilike(self, *a, **k): return self
+    def neq(self, *a, **k): return self
+    def order(self, *a, **k): return self
+    def limit(self, *a, **k): return self
+    def execute(self):
+        return type("R", (), {"data": self._data})()
+
+
+class _FakeSupabase:
+    def __init__(self, tables):
+        self._tables = tables
+
+    def table(self, name):
+        return _FakeQuery(self._tables.get(name, []))
+
+
+def test_gather_client_signals_assembles_gbp_and_serp(monkeypatch):
+    tables = {
+        "clients": [{"gbp": {
+            "gbp_rating": 4.6, "gbp_review_count": 38, "gbp_category": "Roofer",
+            "gbp_categories": ["Roofer", "Roofing contractor"],
+            "website": "x.com", "description": "We roof.",
+        }}],
+        "serp_snapshots": [{"id": "s1", "captured_at": "2026-06-22T00:00:00Z",
+                            "client_rank": 14, "status": "complete"}],
+        "serp_snapshot_domains": [
+            {"domain": "client.com", "is_client": True, "domain_rating": 90, "referring_domains": 100},
+            {"domain": "mid.com", "is_client": False, "domain_rating": 300, "referring_domains": 200},
+            {"domain": "big.com", "is_client": False, "domain_rating": 410, "referring_domains": 5000},
+            {"domain": "nodr.com", "is_client": False, "domain_rating": None, "referring_domains": 5},
+        ],
+    }
+    monkeypatch.setattr("db.supabase_client.get_supabase", lambda: _FakeSupabase(tables))
+    sig = bi.gather_client_signals("c1", "roof repair")
+    assert sig["gbp"]["rating"] == 4.6 and sig["gbp"]["review_count"] == 38
+    assert sig["serp"]["client_rank"] == 14 and sig["serp"]["client_domain_rating"] == 90
+    # Competitors sorted by DR desc; the DR-less domain is dropped.
+    assert [c["domain"] for c in sig["serp"]["competitors"]] == ["big.com", "mid.com"]
+
+
+def test_gather_client_signals_best_effort_when_empty(monkeypatch):
+    monkeypatch.setattr("db.supabase_client.get_supabase", lambda: _FakeSupabase({}))
+    assert bi.gather_client_signals("c1", "kw") == {}
+
+
+def test_diagnosis_prompt_injects_signals_and_demands_grounding():
+    block = "- Google Business Profile: 4.6★ from 38 reviews."
+    d = bi._diagnosis_prompt("Acme", "roof repair", "Comp A, Comp B", block)
+    assert block in d
+    assert "REAL DATA" in d
+    assert "real metrics provided" in d  # the grounded closing instruction
+    # Without a block, the prompt keeps its original generic wording.
+    plain = bi._diagnosis_prompt("Acme", "roof repair", "Comp A, Comp B")
+    assert "REAL DATA" not in plain
