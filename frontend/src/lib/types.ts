@@ -1117,6 +1117,14 @@ export interface ReoptAction {
   cta_path: string
   severity: 'info' | 'warning' | 'critical'
   sort: number
+  detail?: ReoptActionDetail | null
+}
+
+// SOP-grounded enrichment for one action (present only once a playbook is loaded).
+export interface ReoptActionDetail {
+  why: string
+  steps: string[]
+  sop_refs: string[]
 }
 
 export interface ReoptPlan {
@@ -1127,6 +1135,19 @@ export interface ReoptPlan {
   items: ReoptAction[]
   action_count: number
   created_at: string
+}
+
+// SOP / playbook store.
+export interface Sop {
+  id: string
+  client_id: string | null      // null = agency-wide
+  title: string
+  content: string
+  category: 'general' | 'reoptimization' | 'link_building' | 'local' | 'content' | 'theory'
+  source: 'paste' | 'upload'
+  enabled: boolean
+  created_at: string
+  updated_at: string | null
 }
 
 // Share of Local Voice (SoLV) — Maps geo-grid.

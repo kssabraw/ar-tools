@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList,
+  ClipboardList, BookOpen,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 
@@ -226,6 +226,13 @@ export function ClientWorkspace() {
           label="Action Plan"
           description="A prioritized reoptimization to-do list built from this client's rank signals — drops to fix, winnable quick wins & Search Console opportunities, each linked to the tool that does it."
           to={id ? `/clients/${id}/action-plan` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<BookOpen size={22} />}
+          label="SOPs & Playbook"
+          description="This client's SOPs plus the agency-wide playbook & theories. Loaded SOPs ground the Action Plan's recommendations in your own methodology and voice."
+          to={id ? `/clients/${id}/sops` : undefined}
           cta="Open"
         />
       </Section>

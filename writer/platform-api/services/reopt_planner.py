@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 
 from db.supabase_client import get_supabase
-from services import notifications, rankability
+from services import notifications, rankability, sop_store
 
 logger = logging.getLogger(__name__)
 
@@ -827,6 +827,179 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     return {"plan_id": plan["id"], "action_count": len(actions), "summary": digest["summary"]}
 
 
+# ----------------------------------------------------------------------------
+# SOP-grounded enrichment — rewrites each action's guidance in the agency's own
+# methodology + voice, using the SOP store (agency-wide + per-client) and the
+# client's existing context. One Claude call per plan; best-effort; skipped when
+# no SOPs exist so it stays free until a playbook is loaded.
+# ----------------------------------------------------------------------------
+_ENRICH_TOOL = {
+    "name": "emit_details",
+    "description": "Emit the SOP-grounded detail for each action, keyed by its index.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "details": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "index": {"type": "integer", "description": "The action's index from the input list."},
+                        "why": {"type": "string", "description": "Why this matters for THIS client, grounded in the SOPs."},
+                        "steps": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "Concrete, ordered steps to execute per the agency's SOPs.",
+                        },
+                        "sop_refs": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "Titles of the SOPs/theories this draws on (empty if none applied).",
+                        },
+                    },
+                    "required": ["index", "why", "steps"],
+                },
+            },
+        },
+        "required": ["details"],
+    },
+}
+
+_ENRICH_SYSTEM = (
+    "You are a senior SEO strategist at an agency. You turn a terse, "
+    "auto-generated reoptimization action into a detailed, client-specific plan "
+    "that follows the agency's own SOPs and strategic theories. Use ONLY the "
+    "agency's methodology provided; do not invent steps that contradict it. Be "
+    "concrete and practical. If no SOP is relevant to an action, still give sound, "
+    "specific steps but leave sop_refs empty. Never fabricate SOP titles."
+)
+
+
+def _client_context_for_enrich(client: dict) -> str:
+    """Compact client context block for the enrichment prompt."""
+    from services import icp_service
+
+    gbp = client.get("gbp") or {}
+    lines = [f"Business: {client.get('name') or '—'}"]
+    cat = gbp.get("gbp_category")
+    if cat:
+        lines.append(f"Primary category: {cat}")
+    addr = gbp.get("address")
+    if addr:
+        lines.append(f"Location: {addr}")
+    icp = icp_service.resolve_icp_text(client)
+    if icp:
+        lines.append("\nIdeal customer / differentiators:\n" + icp[:4000])
+    return "\n".join(lines)
+
+
+def _build_enrich_prompt(client_ctx: str, sops_text: str, actions: list[dict]) -> str:
+    import json
+
+    compact = [
+        {
+            "index": i,
+            "type": a.get("kind"),
+            "channel": a.get("source"),
+            "target": a.get("keyword"),
+            "diagnosis": a.get("diagnosis"),
+            "current_recommendation": a.get("recommendation"),
+        }
+        for i, a in enumerate(actions)
+    ]
+    return (
+        f"CLIENT CONTEXT:\n{client_ctx}\n\n"
+        f"AGENCY SOPs & THEORIES (ground every step in these):\n{sops_text}\n\n"
+        f"ACTIONS TO DETAIL (return one details entry per index):\n"
+        f"{json.dumps(compact, indent=2, default=str)}\n\n"
+        "For each action, return: why it matters for THIS client (grounded in the "
+        "SOPs), the concrete ordered steps to execute it per the agency's "
+        "methodology, and which SOP/theory titles you drew on."
+    )
+
+
+async def _call_enrich_llm(client_ctx: str, sops_text: str, actions: list[dict]) -> dict:
+    """One forced-tool Claude call → {index: {why, steps, sop_refs}}."""
+    import anthropic
+
+    from config import settings
+
+    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    response = await client.messages.create(
+        model=settings.reopt_enrich_model,
+        max_tokens=settings.reopt_enrich_max_tokens,
+        system=_ENRICH_SYSTEM,
+        tools=[_ENRICH_TOOL],
+        tool_choice={"type": "tool", "name": "emit_details"},
+        messages=[{"role": "user", "content": _build_enrich_prompt(client_ctx, sops_text, actions)}],
+    )
+    out = None
+    for block in response.content:
+        if getattr(block, "type", None) == "tool_use" and block.name == "emit_details":
+            out = block.input or {}
+            break
+    if out is None:
+        raise RuntimeError(f"reopt_enrich_no_tool_use (stop={response.stop_reason})")
+    by_index: dict[int, dict] = {}
+    for d in out.get("details") or []:
+        idx = d.get("index")
+        if isinstance(idx, int):
+            by_index[idx] = {
+                "why": (d.get("why") or "").strip(),
+                "steps": [s for s in (d.get("steps") or []) if s and s.strip()],
+                "sop_refs": [s for s in (d.get("sop_refs") or []) if s and s.strip()],
+            }
+    return by_index
+
+
+async def enrich_plan(client_id: str, plan_id: "str | None" = None) -> bool:
+    """Rewrite a stored plan's actions with SOP-grounded detail. Best-effort:
+    returns False (leaving the deterministic plan untouched) when there are no
+    SOPs, no actions, or the LLM call fails. Returns True when detail was applied."""
+    supabase = get_supabase()
+    sops_text = sop_store.resolve_sops_text(client_id)
+    if not sops_text:
+        return False  # nothing to ground on — keep the static guide, no LLM cost
+
+    if plan_id:
+        rows = supabase.table("reopt_plans").select("id, items").eq("id", plan_id).limit(1).execute().data
+    else:
+        rows = (
+            supabase.table("reopt_plans").select("id, items")
+            .eq("client_id", client_id).order("created_at", desc=True).limit(1).execute()
+        ).data
+    if not rows:
+        return False
+    plan = rows[0]
+    actions = plan.get("items") or []
+    if not actions:
+        return False
+
+    try:
+        client = (
+            supabase.table("clients")
+            .select("name, gbp, detected_icp, differentiators, icp_text")
+            .eq("id", client_id).limit(1).execute()
+        ).data
+        client_ctx = _client_context_for_enrich(client[0]) if client else f"Business id {client_id}"
+        by_index = await _call_enrich_llm(client_ctx, sops_text, actions)
+    except Exception as exc:
+        logger.warning("reopt_enrich_failed", extra={"client_id": client_id, "error": str(exc)})
+        return False
+
+    if not by_index:
+        return False
+    for i, a in enumerate(actions):
+        detail = by_index.get(i)
+        if detail and (detail["why"] or detail["steps"]):
+            a["detail"] = detail
+    try:
+        supabase.table("reopt_plans").update({"items": actions}).eq("id", plan["id"]).execute()
+    except Exception as exc:
+        logger.warning("reopt_enrich_store_failed", extra={"client_id": client_id, "error": str(exc)})
+        return False
+    logger.info("reopt_plan_enriched", extra={"client_id": client_id, "enriched": len(by_index)})
+    return True
+
+
 def enqueue_reopt_plan(client_id: str, trigger: str = "manual") -> None:
     """Enqueue a reopt_plan job (deduped against any in-flight one for the client)."""
     supabase = get_supabase()
@@ -868,6 +1041,12 @@ async def run_reopt_plan_job(job: dict) -> None:
             {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
         ).eq("id", job_id).execute()
         return
+
+    # SOP-grounded enrichment (best-effort; no-op when no SOPs exist).
+    try:
+        await enrich_plan(client_id, plan_id=result.get("plan_id"))
+    except Exception as exc:  # never fail the job over enrichment
+        logger.warning("reopt_enrich_job_failed", extra={"client_id": client_id, "error": str(exc)})
     supabase.table("async_jobs").update(
         {"status": "complete", "result": result, "completed_at": "now()"}
     ).eq("id", job_id).execute()

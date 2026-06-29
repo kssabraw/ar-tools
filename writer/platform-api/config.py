@@ -111,6 +111,14 @@ class Settings(BaseSettings):
     # budget truncates the forced tool-use JSON and yields an empty summary.
     maps_report_max_tokens: int = 8192
 
+    # Action Plan (reoptimization planner) — SOP-grounded enrichment. One Claude
+    # call per plan rewrites every action's recommendation into the agency's own
+    # methodology + voice, grounded in the SOP store (agency-wide + per-client) and
+    # the client's existing context (ICP, differentiators, services, location).
+    # Skipped entirely when no SOPs exist, so it stays free until a playbook is loaded.
+    reopt_enrich_model: str = "claude-sonnet-4-6"
+    reopt_enrich_max_tokens: int = 8192
+
     # Competitive SERP Snapshot — topical-focus classifier. One cheap Haiku call
     # per snapshot labels each ranking site (and the client) specialist vs
     # generalist for the keyword's topic (a rankability input: a specialist can

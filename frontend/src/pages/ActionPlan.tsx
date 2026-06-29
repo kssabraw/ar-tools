@@ -138,15 +138,38 @@ function ActionRow({ action, onGo }: { action: ReoptAction; onGo: () => void }) 
       </button>
       {open && (
         <div style={detailBox}>
-          <DetailBlock title="Why this is recommended">{guide.why}</DetailBlock>
-          <DetailBlock title="What’s needed">
-            <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-              {guide.needed.map((n, i) => (
-                <li key={i} style={{ marginBottom: 3 }}>{n}</li>
-              ))}
-            </ul>
-          </DetailBlock>
-          <DetailBlock title="Signal source">{guide.source}</DetailBlock>
+          {/* SOP-grounded detail when a playbook is loaded; static guide otherwise. */}
+          {action.detail && (action.detail.why || action.detail.steps?.length) ? (
+            <>
+              <div style={sopTag}>★ Tailored to your SOPs</div>
+              <DetailBlock title="Why this is recommended">
+                {action.detail.why || guide.why}
+              </DetailBlock>
+              <DetailBlock title="What’s needed">
+                <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                  {(action.detail.steps?.length ? action.detail.steps : guide.needed).map((n, i) => (
+                    <li key={i} style={{ marginBottom: 3 }}>{n}</li>
+                  ))}
+                </ul>
+              </DetailBlock>
+              {action.detail.sop_refs?.length ? (
+                <DetailBlock title="Based on">{action.detail.sop_refs.join(' · ')}</DetailBlock>
+              ) : null}
+              <DetailBlock title="Signal source">{guide.source}</DetailBlock>
+            </>
+          ) : (
+            <>
+              <DetailBlock title="Why this is recommended">{guide.why}</DetailBlock>
+              <DetailBlock title="What’s needed">
+                <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                  {guide.needed.map((n, i) => (
+                    <li key={i} style={{ marginBottom: 3 }}>{n}</li>
+                  ))}
+                </ul>
+              </DetailBlock>
+              <DetailBlock title="Signal source">{guide.source}</DetailBlock>
+            </>
+          )}
         </div>
       )}
     </div>
@@ -401,6 +424,11 @@ const discloseBtn: React.CSSProperties = {
 const detailBox: React.CSSProperties = {
   marginTop: 4, padding: '12px 14px', borderRadius: 8,
   background: '#f8fafc', border: '1px solid #e2e8f0',
+}
+const sopTag: React.CSSProperties = {
+  display: 'inline-block', marginBottom: 8, fontSize: 10, fontWeight: 700,
+  color: '#7c3aed', background: '#f5f3ff', borderRadius: 999, padding: '2px 8px',
+  textTransform: 'uppercase', letterSpacing: '0.03em',
 }
 const refreshBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
