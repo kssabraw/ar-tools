@@ -25,6 +25,7 @@ every action routes a human into an existing tool; nothing is auto-executed.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 from db.supabase_client import get_supabase
 from services import notifications, rankability, sop_store
@@ -726,10 +727,68 @@ def _fetch_brand_decline(supabase, client_id: str) -> "dict | None":
         return None
 
 
+def _is_stale(supabase, table: str, client_id: str, days: int) -> bool:
+    """Whether the latest `captured_at` for a client in `table` is missing or older
+    than `days`. Used to interval-gate the paid intel refreshes."""
+    try:
+        rows = (
+            supabase.table(table).select("captured_at")
+            .eq("client_id", client_id).order("captured_at", desc=True).limit(1).execute()
+        ).data or []
+    except Exception:
+        return False  # can't tell → don't churn paid jobs
+    if not rows or not rows[0].get("captured_at"):
+        return True
+    try:
+        captured = datetime.fromisoformat(str(rows[0]["captured_at"]).replace("Z", "+00:00"))
+        if captured.tzinfo is None:
+            captured = captured.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return True
+    return captured < datetime.now(timezone.utc) - timedelta(days=days)
+
+
+def _maybe_refresh_intel(supabase, client_id: str) -> None:
+    """Best-effort: when building a plan, top up the competitor-GBP + backlink
+    intelligence that the GBP benchmark and backlink-gap action depend on, so they
+    stop reading as empty. Interval-gated (paid API calls) and dedupe-guarded by
+    each enqueue. Backlink intel needs competitor GBP profiles first (it derives
+    competitor domains from them), so it's only enqueued once those exist — on a
+    fresh client they populate this cycle and backlink intel follows next cycle.
+    The data refreshed here lands on the *next* rebuild; this run uses what's
+    stored. Never raises."""
+    from config import settings
+
+    if not settings.reopt_auto_intel:
+        return
+    days = settings.reopt_intel_refresh_days
+    try:
+        from services import backlink_intel, competitor_gbp
+
+        # Competitor GBP needs a completed Maps scan to know who the competitors are.
+        has_scan = bool(
+            (supabase.table("maps_scans").select("id")
+             .eq("client_id", client_id).eq("status", "complete").limit(1).execute()).data
+        )
+        has_competitor_profiles = bool(competitor_gbp.latest_profiles(client_id))
+
+        if has_scan and _is_stale(supabase, "competitor_gbp_profiles", client_id, days):
+            competitor_gbp.enqueue_competitor_gbp(client_id)
+        # Only chase backlinks once we have competitor domains to compare against.
+        if has_competitor_profiles and _is_stale(supabase, "backlink_profiles", client_id, days):
+            backlink_intel.enqueue_backlink_intel(client_id)
+    except Exception as exc:
+        logger.warning("reopt_auto_intel_failed", extra={"client_id": client_id, "error": str(exc)})
+
+
 def build_plan(client_id: str, trigger: str = "manual") -> dict:
     """Gather signals, build the ranked plan, store it, and (on the weekly
     cadence) push a digest notification. Returns the stored plan summary."""
     supabase = get_supabase()
+
+    # Top up the paid competitor-GBP + backlink intel (interval-gated); results
+    # land on the next rebuild. Best-effort — never blocks the plan.
+    _maybe_refresh_intel(supabase, client_id)
 
     drops = (
         supabase.table("rank_alerts")
