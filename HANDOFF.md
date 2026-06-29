@@ -85,6 +85,51 @@ the **PLATFORM** Railway service.
 **Next (optional Phase 4):** two-way sync (Asana webhook → close rank alerts /
 mark Action Plan items done), per-client Asana-project mapping CRUD UI.
 
+### 📍 Provisioning progress (2026-06-29) — where we are
+
+**⚠️ Code not deployed yet.** PLATFORM deploys from **`main`**; **PR #170 is NOT
+merged**, so the Asana routers/services + the AsanaTasks/TeamWorkload frontend are
+**not in the running build**. The DB + env below are pre-staged, so the integration
+goes live **the moment #170 merges to `main`** and PLATFORM + Netlify redeploy.
+Until then the `/asana/*` endpoints and the Asana Tasks / Workload pages don't
+exist in production — don't expect the in-app pages to work yet.
+
+**✅ Migrations applied to live Supabase** (`wvcthtmmcmhkybcesirb`, via MCP):
+`asana_client_projects`, `asana_client_task_templates` (+ `est_hours`),
+`asana_team_members`, and `async_jobs.job_type` widened for `asana_monthly`.
+NB: the live `job_type` CHECK had two values **not** in any repo migration
+(`client_report`, `maps_analyze` — pre-existing drift); I preserved them when
+widening (dropping them would fail constraint validation on existing rows).
+
+**✅ Railway PLATFORM env set** (token by the user; the rest via the Railway MCP):
+- `ASANA_TOKEN` ✅ (secret, set by user)
+- `asana_workspace_gid` = `1143356380295200`
+- `asana_status_field_gid` = `1214452613145654` ("Status")
+- `asana_status_not_started_option_gid` = `1214452613145655` ("Not Started")
+- `asana_category_field_gid` = `1214452613145672` ("Service Type": Content /
+  Link Building / GBP Authority / Strategy)
+- `asana_effort_field_gid` = **not set** — the pilot project has no number custom
+  field. To enable effort-weighting: add an "Est. hours" **number** field to the
+  client projects, re-run the per-project `custom_field_settings` call, and set
+  this GID. Until then Workload treats every task as `asana_default_task_hours`
+  (1h).
+
+**Pilot project:** Asana project GID **`1214452202356916`** (URL form
+`app.asana.com/1/<workspace>/project/<project_gid>/...`). Its Status + Service Type
+fields are the GIDs above (they're **project-local** custom fields, not in the
+workspace library — so any new client project needs its own per-project field
+lookup unless it reuses the same fields).
+
+**⬜ Remaining once #170 is merged + deployed:**
+1. Smoke-test the token: open a client → **Asana Tasks**; the **Assignee** dropdown
+   should populate from Asana (proves the token works).
+2. **Map clients → projects** (in-app Asana Tasks editor, or insert
+   `asana_client_projects` rows). First pilot: project `1214452202356916`.
+3. **Build per-client task templates** (name + assignee + Service Type) and run
+   **Generate this month** to verify section + task creation.
+4. **Team & capacity** (Workload page) — add tracked members + weekly hours.
+5. *(optional)* effort field + per-task **Est. hrs** for hours-based workload.
+
 ---
 
 ## ⏩ Update — 2026-06-28 · **Slack conversational assistant (SerMastr)**
