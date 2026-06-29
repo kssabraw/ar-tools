@@ -66,6 +66,28 @@ def _to_int(value: Any) -> Optional[int]:
         return None
 
 
+def classify_business_type(gbp: "dict | None") -> str:
+    """Best-effort GBP business type from a mapped GBP payload.
+
+    - published service-area places  ⇒ serves areas (SAB or hybrid)
+    - a street address               ⇒ has a storefront (physical or hybrid)
+
+    Returns 'sab' | 'physical' | 'hybrid' | 'unknown'. Pure. Heuristic: it
+    depends on Google publishing service-area places and showing an address, so
+    a pure SAB that still exposes a registered address reads as 'hybrid'.
+    """
+    g = gbp or {}
+    has_service_area = bool(g.get("service_area_places"))
+    has_address = bool((g.get("address") or "").strip())
+    if has_service_area and has_address:
+        return "hybrid"
+    if has_service_area:
+        return "sab"
+    if has_address:
+        return "physical"
+    return "unknown"
+
+
 def _service_area_places(place: dict[str, Any]) -> list[str]:
     """Best-effort list of service-area place names from an Outscraper place object.
 

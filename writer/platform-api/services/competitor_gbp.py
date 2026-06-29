@@ -61,6 +61,7 @@ def profile_row(client_id: str, comp: dict, details: dict) -> dict:
         "place_id": (details or {}).get("place_id") or comp.get("place_id"),
         "name": gbp.get("business_name") or comp.get("name"),
         "primary_category": gbp.get("gbp_category") or comp.get("primary_category"),
+        "business_type": gbp_service.classify_business_type(gbp),
         "gbp_categories": gbp.get("gbp_categories") or [],
         "rating": gbp.get("gbp_rating") if gbp.get("gbp_rating") is not None else comp.get("rating"),
         "review_count": gbp.get("gbp_review_count") if gbp.get("gbp_review_count") is not None else comp.get("reviews"),
@@ -125,7 +126,7 @@ def latest_profiles(client_id: str) -> list[dict]:
     rows = (
         supabase.table("competitor_gbp_profiles")
         .select("place_id, name, primary_category, gbp_categories, rating, review_count, "
-                "website, phone, address, photo, has_hours, found_pins, top3_pins, captured_at")
+                "website, phone, address, photo, has_hours, business_type, found_pins, top3_pins, captured_at")
         .eq("client_id", client_id)
         .order("captured_at", desc=True)
         .limit(500)

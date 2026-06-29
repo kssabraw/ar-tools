@@ -1175,6 +1175,7 @@ function CompetitorIntel({ clientId }: { clientId: string }) {
           <thead><tr>
             <th style={{ ...th, textAlign: 'left' }}>Competitor</th>
             <th style={{ ...th, textAlign: 'left' }}>Primary category</th>
+            <th style={th}>Type</th>
             <th style={th}>Rating</th><th style={th}>Reviews</th><th style={th}>Top-3 pins</th><th style={th}>Hours</th>
           </tr></thead>
           <tbody>
@@ -1184,6 +1185,7 @@ function CompetitorIntel({ clientId }: { clientId: string }) {
                   {p.website ? <a href={p.website} target="_blank" rel="noreferrer" style={{ color: '#0f172a' }}>{p.name ?? '—'}</a> : (p.name ?? '—')}
                 </td>
                 <td style={{ ...td, textAlign: 'left', color: '#64748b' }}>{p.primary_category ?? '—'}</td>
+                <td style={td}>{bizTypeLabel(p.business_type)}</td>
                 <td style={td}>{p.rating != null ? p.rating.toFixed(1) : '—'}</td>
                 <td style={td}>{p.review_count != null ? p.review_count.toLocaleString() : '—'}</td>
                 <td style={td}>{p.top3_pins ?? '—'}</td>
@@ -1196,6 +1198,16 @@ function CompetitorIntel({ clientId }: { clientId: string }) {
       {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
     </div>
   )
+}
+
+// GBP business type → short label (SAB / Physical / Hybrid).
+function bizTypeLabel(t: string | null): string {
+  switch (t) {
+    case 'sab': return 'SAB'
+    case 'physical': return 'Physical'
+    case 'hybrid': return 'Hybrid'
+    default: return '—'
+  }
 }
 
 // ── Local Relevance Scorecard (do the signals match the service/location?) ──
@@ -1244,6 +1256,7 @@ function RelevanceScorecard({ clientId }: { clientId: string }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
             <thead><tr>
               <th style={{ ...th, textAlign: 'left' }}>Business</th>
+              <th style={th}>Type</th>
               <th style={th}>Category</th>
               <th style={th}>Reviews · svc</th>
               <th style={th}>Reviews · loc</th>
@@ -1258,6 +1271,7 @@ function RelevanceScorecard({ clientId }: { clientId: string }) {
                   <td style={{ ...td, textAlign: 'left', fontWeight: r.is_client ? 700 : 400, color: '#0f172a' }}>
                     {r.is_client ? 'You' : (r.name ?? '—')}
                   </td>
+                  <td style={td}>{bizTypeLabel(r.business_type)}</td>
                   <td style={td}>{catBadge(r.category_match)}</td>
                   <td style={td}>{r.reviews_total ? `${r.reviews_service_mentions ?? 0}/${r.reviews_total}` : '—'}</td>
                   <td style={td}>{r.reviews_total ? `${r.reviews_location_mentions ?? 0}/${r.reviews_total}` : '—'}</td>

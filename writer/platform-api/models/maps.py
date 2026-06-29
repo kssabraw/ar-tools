@@ -199,6 +199,7 @@ class MapsCompetitorProfile(BaseModel):
     address: Optional[str] = None
     photo: Optional[str] = None
     has_hours: Optional[bool] = None
+    business_type: Optional[str] = None    # sab | physical | hybrid | unknown
     found_pins: Optional[int] = None
     top3_pins: Optional[int] = None
     captured_at: Optional[str] = None
@@ -218,6 +219,7 @@ class MapsRelevanceRow(BaseModel):
     gbp_url: Optional[str] = None
     category: Optional[str] = None
     category_match: Optional[str] = None          # exact | related | none
+    business_type: Optional[str] = None           # sab | physical | hybrid | unknown
     reviews_total: Optional[int] = None
     reviews_service_mentions: Optional[int] = None
     reviews_location_mentions: Optional[int] = None

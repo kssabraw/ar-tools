@@ -1171,6 +1171,7 @@ export interface MapsCompetitorProfile {
   address: string | null
   photo: string | null
   has_hours: boolean | null
+  business_type: string | null
   found_pins: number | null
   top3_pins: number | null
   captured_at: string | null
@@ -1208,6 +1209,7 @@ export interface MapsRelevanceRow {
   gbp_url: string | null
   category: string | null
   category_match: 'exact' | 'related' | 'none' | null
+  business_type: string | null
   reviews_total: number | null
   reviews_service_mentions: number | null
   reviews_location_mentions: number | null

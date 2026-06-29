@@ -23,7 +23,7 @@ from bs4 import BeautifulSoup
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import competitor_gbp, serp_snapshot
+from services import competitor_gbp, gbp_service, serp_snapshot
 from services.website_scraper import scrapeowl_fetch
 
 logger = logging.getLogger(__name__)
@@ -179,6 +179,7 @@ async def _score_entity(
     client_id: str, keyword: str, location: str, svc: set[str], loc: set[str],
     place_id: "str | None", name: "str | None", category: "str | None",
     website: "str | None", review_texts: list[str], is_client: bool,
+    business_type: "str | None" = None,
 ) -> dict:
     domain = _domain(website)
     row = {
@@ -192,6 +193,7 @@ async def _score_entity(
         "gbp_url": website or None,
         "category": category,
         "category_match": category_match(category, svc),
+        "business_type": business_type,
         "page_service_relevant": None,
         "page_location_relevant": None,
         "domain_rating": None,
@@ -252,6 +254,7 @@ async def analyze(client_id: str, keyword: str) -> dict:
         client_place, client.get("name"), (gbp or {}).get("gbp_category"),
         (gbp or {}).get("website") or client.get("website") or client.get("website_url"),
         reviews_by_place.get(client_place, []), True,
+        business_type=gbp_service.classify_business_type(gbp),
     ))
 
     for p in competitor_gbp.latest_profiles(client_id)[: settings.competitor_gbp_max]:
@@ -259,6 +262,7 @@ async def analyze(client_id: str, keyword: str) -> dict:
             client_id, keyword, location, svc, loc,
             p.get("place_id"), p.get("name"), p.get("primary_category"), p.get("website"),
             reviews_by_place.get(p.get("place_id"), []), False,
+            business_type=p.get("business_type"),
         ))
 
     try:
@@ -274,8 +278,9 @@ def latest_scorecard(client_id: str) -> dict:
     rows = (
         get_supabase().table("local_relevance_scores")
         .select("keyword, location, place_id, is_client, name, domain, gbp_url, category, "
-                "category_match, reviews_total, reviews_service_mentions, reviews_location_mentions, "
-                "page_service_relevant, page_location_relevant, domain_rating, page_ur, captured_at")
+                "category_match, business_type, reviews_total, reviews_service_mentions, "
+                "reviews_location_mentions, page_service_relevant, page_location_relevant, "
+                "domain_rating, page_ur, captured_at")
         .eq("client_id", client_id).order("captured_at", desc=True).limit(200).execute()
     ).data or []
     if not rows:
