@@ -18,6 +18,9 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from models.maps import (
+    MapsAlert,
+    MapsAlertsResponse,
+    MapsChangesResponse,
     MapsClientThreats,
     MapsCompetitorTrend,
     MapsCompetitorTrendPoint,
@@ -25,8 +28,10 @@ from models.maps import (
     MapsConfig,
     MapsConfigUpdate,
     MapsKeyword,
+    MapsKeywordChange,
     MapsKeywordCreate,
     MapsKeywordTrend,
+    MapsOctantChange,
     MapsRunResponse,
     MapsScanDetail,
     MapsScanResultRow,
@@ -485,3 +490,121 @@ async def maps_dashboard_threats(top_n: int = 3, auth: dict = Depends(require_au
         if threats:
             out.append(MapsClientThreats(client_id=client_id, scan_count=trends.scan_count, threats=threats))
     return MapsThreatsResponse(clients=out)
+
+
+# ---------------------------------------------------------------------------
+# Scan-over-scan analyzer ("What changed") + in-app geo-grid alerts.
+# ---------------------------------------------------------------------------
+def _two_latest_completed_scans(client_id: UUID) -> tuple[Optional[dict], Optional[dict]]:
+    """The client's latest completed scan and the one before it (None if absent)."""
+    rows = (
+        get_supabase().table("maps_scans").select("id, completed_at")
+        .eq("client_id", str(client_id)).eq("status", "complete")
+        .order("completed_at", desc=True).limit(2).execute()
+    ).data or []
+    curr = rows[0] if rows else None
+    prev = rows[1] if len(rows) > 1 else None
+    return curr, prev
+
+
+@router.get("/clients/{client_id}/maps/changes", response_model=MapsChangesResponse)
+async def maps_changes(client_id: UUID, auth: dict = Depends(require_auth)) -> MapsChangesResponse:
+    """Per-keyword deltas between the client's two most recent completed scans —
+    average rank, coverage %, weakened octants, and which decline rules fired.
+    First-ever scan → has_previous=False with current values only."""
+    from services.maps_analyzer import build_maps_changes
+
+    supabase = get_supabase()
+    curr, prev = _two_latest_completed_scans(client_id)
+    if not curr:
+        return MapsChangesResponse()
+    scan_ids = [s["id"] for s in (curr, prev) if s]
+    rows = (
+        supabase.table("maps_scan_results")
+        .select("scan_id, keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins, rank_grid")
+        .in_("scan_id", scan_ids).execute()
+    ).data or []
+    curr_results = [r for r in rows if r["scan_id"] == curr["id"]]
+    prev_results = [r for r in rows if prev and r["scan_id"] == prev["id"]]
+    data = build_maps_changes(curr, prev, curr_results, prev_results)
+    return MapsChangesResponse(
+        has_previous=data["has_previous"],
+        current_scan_id=data["current_scan_id"],
+        previous_scan_id=data["previous_scan_id"],
+        keywords=[
+            MapsKeywordChange(
+                octants=[MapsOctantChange(**o) for o in k.pop("octants")], **k
+            )
+            for k in data["keywords"]
+        ],
+    )
+
+
+def _alert_row(r: dict) -> MapsAlert:
+    severity = "critical" if r["alert_type"] == "lost_pack" else "warning"
+    return MapsAlert(
+        id=r["id"], keyword=r["keyword"], alert_type=r["alert_type"], sector=r.get("sector"),
+        from_value=r.get("from_value"), to_value=r.get("to_value"), delta=r.get("delta"),
+        message=r["message"], severity=severity, status=r["status"],
+        triggered_on=r.get("triggered_on"), resolved_at=r.get("resolved_at"),
+        created_at=r["created_at"],
+    )
+
+
+@router.get("/clients/{client_id}/maps/alerts", response_model=MapsAlertsResponse)
+async def list_maps_alerts(
+    client_id: UUID, include_dismissed: bool = False, auth: dict = Depends(require_auth)
+) -> MapsAlertsResponse:
+    """Geo-grid alerts for a client, newest first. Dismissed hidden by default."""
+    supabase = get_supabase()
+    query = (
+        supabase.table("maps_alerts").select("*")
+        .eq("client_id", str(client_id)).order("created_at", desc=True)
+    )
+    if not include_dismissed:
+        query = query.neq("status", "dismissed")
+    rows = (query.execute()).data or []
+    unread = sum(1 for r in rows if r["status"] == "unread")
+    return MapsAlertsResponse(alerts=[_alert_row(r) for r in rows], unread_count=unread)
+
+
+def _get_maps_alert_or_404(supabase, alert_id: UUID) -> dict:
+    res = supabase.table("maps_alerts").select("*").eq("id", str(alert_id)).limit(1).execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    return res.data[0]
+
+
+@router.post("/maps-alerts/{alert_id}/read", response_model=MapsAlert)
+async def mark_maps_alert_read(alert_id: UUID, auth: dict = Depends(require_auth)) -> MapsAlert:
+    supabase = get_supabase()
+    res = (
+        supabase.table("maps_alerts")
+        .update({"status": "read", "read_at": "now()"})
+        .eq("id", str(alert_id)).eq("status", "unread")  # don't clobber a dismissed alert
+        .execute()
+    )
+    row = res.data[0] if res.data else _get_maps_alert_or_404(supabase, alert_id)
+    return _alert_row(row)
+
+
+@router.post("/maps-alerts/{alert_id}/dismiss", response_model=MapsAlert)
+async def dismiss_maps_alert(alert_id: UUID, auth: dict = Depends(require_auth)) -> MapsAlert:
+    supabase = get_supabase()
+    res = (
+        supabase.table("maps_alerts")
+        .update({"status": "dismissed", "dismissed_at": "now()"})
+        .eq("id", str(alert_id)).execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    return _alert_row(res.data[0])
+
+
+@router.post("/clients/{client_id}/maps/alerts/read-all", response_model=MapsAlertsResponse)
+async def mark_all_maps_alerts_read(client_id: UUID, auth: dict = Depends(require_auth)) -> MapsAlertsResponse:
+    supabase = get_supabase()
+    supabase.table("maps_alerts").update({"status": "read", "read_at": "now()"}).eq(
+        "client_id", str(client_id)
+    ).eq("status", "unread").execute()
+    return await list_maps_alerts(client_id, include_dismissed=False, auth=auth)

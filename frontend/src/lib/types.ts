@@ -798,6 +798,61 @@ export interface MapsThreatsResponse {
   clients: MapsClientThreats[]
 }
 
+// Scan-over-scan analyzer ("What changed" tab).
+export interface MapsOctantChange {
+  sector: string
+  avg_rank_now: number | null
+  avg_rank_prev: number | null
+  top3_pct_now: number | null
+  top3_pct_prev: number | null
+}
+
+export interface MapsKeywordChange {
+  keyword: string
+  average_rank_now: number | null
+  average_rank_prev: number | null
+  average_rank_delta: number | null   // now − prev; positive = worse
+  found_pct_now: number | null
+  found_pct_prev: number | null
+  top3_pct_now: number | null
+  top3_pct_prev: number | null
+  top10_pct_now: number | null
+  top10_pct_prev: number | null
+  octants: MapsOctantChange[]         // weakened octants, worst first
+  alert_types: string[]               // decline rules that fired
+}
+
+export interface MapsChangesResponse {
+  has_previous: boolean
+  current_scan_id: string | null
+  previous_scan_id: string | null
+  keywords: MapsKeywordChange[]
+}
+
+export type MapsAlertType =
+  | 'grid_rank_drop' | 'coverage_drop' | 'lost_pack' | 'area_decline' | 'competitor_surge'
+
+export interface MapsAlert {
+  id: string
+  keyword: string
+  alert_type: MapsAlertType
+  sector: string | null
+  from_value: number | null
+  to_value: number | null
+  delta: number | null
+  message: string
+  severity: string                    // 'critical' | 'warning'
+  status: 'unread' | 'read' | 'dismissed'
+  triggered_on: string | null
+  resolved_at: string | null
+  created_at: string
+}
+
+export interface MapsAlertsResponse {
+  alerts: MapsAlert[]
+  unread_count: number
+}
+
 // Dashboard ranking-health tile: average organic position + average maps rank,
 // latest run vs first. Lower rank numbers are better, so direction "up" = the
 // latest average is a smaller (better) number than the first.

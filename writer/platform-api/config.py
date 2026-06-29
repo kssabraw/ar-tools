@@ -220,6 +220,16 @@ class Settings(BaseSettings):
     maps_min_area_pins: int = 3  # a suburb needs >= this many weak pins to be flagged as a weak area
     maps_geocode_max_cells: int = 250  # safety bound on geocode calls (above any real grid's cell count)
 
+    # Geo-grid analyzer + alerting (maps_analyzer): scan-over-scan decline
+    # thresholds for the `maps_analyze` job (each keyword's newest scan vs its
+    # previous completed scan). Conservative defaults — tune to taste.
+    maps_alert_grid_rank_drop_min: float = 1.5      # avg grid-rank worsening (spots) to alert
+    maps_alert_coverage_drop_pct: float = 15.0      # Top-3/Top-10 coverage drop (pts) to alert
+    maps_alert_found_drop_pct: float = 20.0         # found-pin coverage collapse (pts) → lost_pack
+    maps_alert_area_coverage_drop_pct: float = 25.0  # per-octant Top-3 coverage drop (pts) → area_decline
+    maps_alert_area_rank_drop: float = 2.0          # per-octant avg-rank worsening (spots) → area_decline
+    maps_alert_competitor_surge_pins: int = 5       # min newly-above pins for competitor_surge
+
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
     # location). Set to 0 to disable caching.

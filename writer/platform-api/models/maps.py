@@ -167,3 +167,59 @@ class MapsClientThreats(BaseModel):
 
 class MapsThreatsResponse(BaseModel):
     clients: list[MapsClientThreats] = Field(default_factory=list)
+
+
+# --- Scan-over-scan analyzer ("What changed") -------------------------------
+class MapsOctantChange(BaseModel):
+    """One compass octant that weakened vs the previous scan."""
+    sector: str
+    avg_rank_now: Optional[float] = None
+    avg_rank_prev: Optional[float] = None
+    top3_pct_now: Optional[float] = None
+    top3_pct_prev: Optional[float] = None
+
+
+class MapsKeywordChange(BaseModel):
+    keyword: str
+    average_rank_now: Optional[float] = None
+    average_rank_prev: Optional[float] = None
+    average_rank_delta: Optional[float] = None   # now − prev; positive = worse
+    found_pct_now: Optional[float] = None
+    found_pct_prev: Optional[float] = None
+    top3_pct_now: Optional[float] = None
+    top3_pct_prev: Optional[float] = None
+    top10_pct_now: Optional[float] = None
+    top10_pct_prev: Optional[float] = None
+    octants: list[MapsOctantChange] = Field(default_factory=list)   # weakened octants, worst first
+    alert_types: list[str] = Field(default_factory=list)            # decline rules that fired
+
+
+class MapsChangesResponse(BaseModel):
+    has_previous: bool = False
+    current_scan_id: Optional[UUID] = None
+    previous_scan_id: Optional[UUID] = None
+    keywords: list[MapsKeywordChange] = Field(default_factory=list)
+
+
+# --- In-app geo-grid alerts -------------------------------------------------
+class MapsAlert(BaseModel):
+    id: UUID
+    keyword: str
+    alert_type: Literal[
+        "grid_rank_drop", "coverage_drop", "lost_pack", "area_decline", "competitor_surge"
+    ]
+    sector: Optional[str] = None
+    from_value: Optional[float] = None
+    to_value: Optional[float] = None
+    delta: Optional[float] = None
+    message: str
+    severity: str = "warning"   # derived: 'critical' for lost_pack, else 'warning'
+    status: Literal["unread", "read", "dismissed"]
+    triggered_on: Optional[str] = None
+    resolved_at: Optional[str] = None
+    created_at: str
+
+
+class MapsAlertsResponse(BaseModel):
+    alerts: list[MapsAlert] = Field(default_factory=list)
+    unread_count: int = 0
