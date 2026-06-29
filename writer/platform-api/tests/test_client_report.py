@@ -195,3 +195,68 @@ def test_section_ai_visibility():
     out = cr.build_report_html(data)
     assert "AI search visibility" in out
     assert "ChatGPT" in out and "3 of 5 answers" in out
+
+
+# ---------------------------------------------------------------------------
+# _keyword_change (positions gained; positive = improved)
+# ---------------------------------------------------------------------------
+def test_keyword_change_from_averages_and_sparkline():
+    # 30d avg 8, 7d avg 5 → improved by 3 positions
+    assert cr._keyword_change({"avg_7": 5.0, "avg_30": 8.0}) == 3.0
+    # no averages → first−last of sparkline (12 → 4 = +8 improvement)
+    assert cr._keyword_change({"avg_7": None, "avg_30": None, "sparkline": [12, 9, 4]}) == 8.0
+    # too little history → None
+    assert cr._keyword_change({"sparkline": [4]}) is None
+
+
+# ---------------------------------------------------------------------------
+# organic section trims to top movers + Movement column
+# ---------------------------------------------------------------------------
+def test_section_organic_shows_top_movers_only():
+    kws = [{"keyword": f"kw{i}", "current_rank": 5, "avg_30d": 5,
+            "change": float(i), "sparkline": [9, 5]} for i in range(10)]
+    data = _data(organic={"keywords": kws,
+                          "summary": {"tracked": 10, "top10": 4, "improved": 6, "declined": 1}})
+    out = cr.build_report_html(data)
+    assert "Movement" in out
+    # biggest mover (kw9, change 9) shown; smallest non-mover trimmed
+    assert "kw9" in out and "kw1<" not in out
+    assert "remaining 5 are tracked" in out
+
+
+# ---------------------------------------------------------------------------
+# Work delivered section
+# ---------------------------------------------------------------------------
+def test_section_work_delivered():
+    assert cr._section_work_delivered(_data()) == ""
+    data = _data(work_delivered={"counts": {"blog_post": 3, "local_seo_page": 2}, "total": 5})
+    out = cr.build_report_html(data)
+    assert "Work delivered this period" in out
+    assert "Blog posts" in out and "Local SEO pages" in out
+
+
+# ---------------------------------------------------------------------------
+# At-a-glance KPI strip
+# ---------------------------------------------------------------------------
+def test_kpi_strip_renders_present_metrics():
+    assert cr._kpi_strip(_data()) == ""
+    data = _data(
+        organic={"comparisons": {"impressions": {"current": 100, "changes": {"start": 24.0}},
+                                 "rank": {"current": 5, "changes_positions": {"start": 3.0}}},
+                 "summary": {"tracked": 12, "top10": 5}},
+        work_delivered={"counts": {"blog_post": 4}, "total": 4},
+    )
+    out = cr._kpi_strip(data)
+    assert "Search visibility" in out and "+24%" in out
+    assert "Ranking gains" in out
+    assert "On page 1 of Google" in out and "5" in out
+    assert "Content delivered" in out
+
+
+# ---------------------------------------------------------------------------
+# White-label footer
+# ---------------------------------------------------------------------------
+def test_footer_is_white_labeled():
+    out = cr.build_report_html(_data(agency_name="Amazing Rankings"))
+    assert "Prepared by Amazing Rankings" in out
+    assert "AR Tools" not in out

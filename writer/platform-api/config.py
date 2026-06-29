@@ -136,6 +136,8 @@ class Settings(BaseSettings):
     # Best-effort: absent the Anthropic key or on failure, the section is omitted.
     client_report_health_model: str = "claude-sonnet-4-6"
     client_report_health_max_tokens: int = 1100
+    # White-label: the agency name shown in the client-facing report footer.
+    client_report_agency_name: str = "Amazing Rankings"
 
     # Reoptimization planner — turns rank-tracker signals (open drops, rankability
     # Quick wins, GSC-Research cannibalization/hidden-wins) into a ranked,
