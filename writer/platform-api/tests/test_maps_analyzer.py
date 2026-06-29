@@ -191,6 +191,63 @@ def test_build_maps_periods_overall_is_pin_weighted():
 
 
 # ---------------------------------------------------------------------------
+# build_area_periods (per-octant trends + narrative)
+# ---------------------------------------------------------------------------
+# 3×3 grid: each non-centre cell is its own compass octant (centre = None).
+_OCT_POS = {"NW": (0, 0), "N": (0, 1), "NE": (0, 2), "W": (1, 0),
+            "E": (1, 2), "SW": (2, 0), "S": (2, 1), "SE": (2, 2)}
+
+
+def _grid3(cells: dict):
+    g = [[None, None, None], [None, None, None], [None, None, None]]
+    for oct_name, (r, c) in _OCT_POS.items():
+        if oct_name in cells:
+            g[r][c] = cells[oct_name]
+    return g
+
+
+def test_build_area_periods_octant_drop_and_narrative():
+    scans = [{"id": "now", "completed_at": "2026-06-29T00:00:00Z"},
+             {"id": "first", "completed_at": "2026-01-01T00:00:00Z"}]
+    results = [
+        {"scan_id": "first", "keyword": "kw", "rank_grid": _grid3({"SW": 2, "N": 2})},
+        {"scan_id": "now", "keyword": "kw", "rank_grid": _grid3({"N": 2})},  # SW fell out
+    ]
+    out = ma.build_area_periods(scans, results, TODAY, {"SW": "Newtown"})
+    assert out["scan_count"] == 2
+    sw = next(a for a in out["areas"] if a["sector"] == "SW")
+    assert sw["now_top3_pct"] == 0.0 and sw["city"] == "Newtown" and sw["sector_full"] == "Southwest"
+    assert sw["windows"]["start"]["from_value"] == 100.0 and sw["windows"]["start"]["delta"] == -100.0
+    # N held at 100% and sorts to the end (strongest); SW (0%) is in the weak head.
+    assert out["areas"][-1]["sector"] == "N"
+    assert any("Southwest" in l and "Newtown" in l and "fell 100 pts" in l for l in out["narrative"])
+
+
+def test_build_area_periods_pin_weighted_across_keywords():
+    scans = [{"id": "n", "completed_at": "2026-06-29T00:00:00Z"}]
+    results = [
+        {"scan_id": "n", "keyword": "A", "rank_grid": _grid3({"N": 2})},  # N ranked
+        {"scan_id": "n", "keyword": "B", "rank_grid": _grid3({})},        # N unranked
+    ]
+    out = ma.build_area_periods(scans, results, TODAY)
+    n = next(a for a in out["areas"] if a["sector"] == "N")
+    assert n["now_top3_pct"] == 50.0  # 1 of 2 pins in Top-3
+    assert n["windows"]["start"]["delta"] is None  # single scan → no comparison
+    assert out["narrative"] == []
+
+
+def test_build_area_periods_positive_fallback_when_stable():
+    scans = [{"id": "now", "completed_at": "2026-06-29T00:00:00Z"},
+             {"id": "first", "completed_at": "2026-01-01T00:00:00Z"}]
+    results = [
+        {"scan_id": "first", "keyword": "kw", "rank_grid": _grid3({"N": 2, "S": 2})},
+        {"scan_id": "now", "keyword": "kw", "rank_grid": _grid3({"N": 2, "S": 2})},
+    ]
+    out = ma.build_area_periods(scans, results, TODAY)
+    assert out["narrative"] == ["Coverage has held or improved across all directions over the tracked windows."]
+
+
+# ---------------------------------------------------------------------------
 # reconcile (mocked supabase)
 # ---------------------------------------------------------------------------
 class _FakeQuery:

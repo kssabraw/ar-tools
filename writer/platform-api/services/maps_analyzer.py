@@ -469,25 +469,31 @@ def _window_delta(points: Sequence[dict], key: str, now, baseline: Optional[dict
     return {"from_value": frm, "now": now, "delta": delta, "baseline_at": baseline.get("date")}
 
 
+def _windows_for(points: Sequence[dict], key: str, today: date) -> dict[str, dict]:
+    """7/30/90-day + since-start deltas of one metric over an oldest→newest series.
+    Baseline = the latest point strictly before the current one and on/before the
+    window cutoff; `start` = the earliest point (only when there's prior history)."""
+    now = points[-1].get(key) if points else None
+    windows: dict[str, dict] = {}
+    for wk, days in _PERIOD_WINDOWS:
+        cutoff = today.toordinal() - days
+        baseline = None
+        for p in points[:-1]:
+            if p["ord"] is not None and p["ord"] <= cutoff:
+                baseline = p
+        windows[wk] = _window_delta(points, key, now, baseline)
+    windows["start"] = _window_delta(points, key, now, points[0] if len(points) >= 2 else None)
+    return windows
+
+
 def _scope_for(keyword: Optional[str], points: Sequence[dict], today: date) -> dict:
     """Build a metric-by-window scope from one entity's oldest→newest series."""
     last = points[-1] if points else None
-    metrics = []
-    for key, label in _PERIOD_METRICS:
-        now = last.get(key) if last else None
-        windows: dict[str, dict] = {}
-        for wk, days in _PERIOD_WINDOWS:
-            cutoff = today.toordinal() - days
-            # latest point strictly before the current one and on/before the cutoff
-            baseline = None
-            for p in points[:-1]:
-                if p["ord"] is not None and p["ord"] <= cutoff:
-                    baseline = p
-            windows[wk] = _window_delta(points, key, now, baseline)
-        # since-start: the earliest point (only if there's history before now)
-        start_base = points[0] if len(points) >= 2 else None
-        windows["start"] = _window_delta(points, key, now, start_base)
-        metrics.append({"metric": key, "label": label, "now": now, "windows": windows})
+    metrics = [
+        {"metric": key, "label": label, "now": last.get(key) if last else None,
+         "windows": _windows_for(points, key, today)}
+        for key, label in _PERIOD_METRICS
+    ]
     return {"keyword": keyword, "metrics": metrics}
 
 
@@ -538,6 +544,117 @@ def build_maps_periods(scans: Sequence[dict], results: Sequence[dict], today: da
         "scan_count": len(by_scan),
         "overall": overall,
         "keywords": kw_scopes,
+    }
+
+
+# ----------------------------------------------------------------------------
+# Area-level multi-window trends + narrative (pure) — GET /maps/area-trends.
+# Per compass octant: Top-3 coverage over 7/30/90/since-start, with a
+# deterministic plain-English narrative naming the most-weakened directions.
+# ----------------------------------------------------------------------------
+_AREA_NARRATIVE_MIN_DROP = 10.0  # pts of Top-3 coverage to call an octant out
+_WINDOW_PHRASE = {
+    "7d": "Over the last 7 days, the {area} weakened most",
+    "30d": "Over the last 30 days, the {area} weakened most",
+    "90d": "Over the last 90 days, the {area} weakened most",
+    "start": "Since tracking began, the {area} has weakened most",
+}
+
+
+def _area_narrative(areas: list[dict]) -> list[str]:
+    """One line per window naming the octant with the biggest Top-3 coverage drop
+    (≥ threshold). Falls back to a single positive line when nothing weakened."""
+    lines: list[str] = []
+    saw_window_data = False
+    for wk in ("7d", "30d", "90d", "start"):
+        worst = None
+        for a in areas:
+            d = a["windows"].get(wk)
+            if not d or d.get("delta") is None:
+                continue
+            saw_window_data = True
+            if d["delta"] < 0 and (worst is None or d["delta"] < worst["windows"][wk]["delta"]):
+                worst = a
+        if worst is None:
+            continue
+        d = worst["windows"][wk]
+        if abs(d["delta"]) < _AREA_NARRATIVE_MIN_DROP:
+            continue
+        area = worst["sector_full"] + (f", around {worst['city']}" if worst.get("city") else "")
+        lines.append(
+            _WINDOW_PHRASE[wk].format(area=area)
+            + f" — Top-3 coverage there fell {abs(d['delta']):.0f} pts "
+            f"(from {d['from_value']:.0f}% to {d['now']:.0f}%)."
+        )
+    if not lines and saw_window_data:
+        lines.append("Coverage has held or improved across all directions over the tracked windows.")
+    return lines
+
+
+def build_area_periods(
+    scans: Sequence[dict], results: Sequence[dict], today: date,
+    octant_city: Optional[dict] = None,
+) -> dict:
+    """Per-octant Top-3 coverage trend (7/30/90/since-start) + narrative, computed
+    from each scan's rank grids (pin-weighted across keywords). Pure — matches
+    MapsAreaTrendsResponse. `octant_city` = {sector: nearest city} (best-effort)."""
+    octant_city = octant_city or {}
+    meta = {s["id"]: s for s in scans}
+
+    # Per scan, aggregate octants across keywords (pin-weighted).
+    scan_oct: dict[str, dict[str, dict]] = {}
+    for r in results:
+        sid = r.get("scan_id")
+        if sid not in meta:
+            continue
+        for sec in build_geogrid_analytics(r.get("rank_grid") or []).get("sectors_overall") or []:
+            agg = scan_oct.setdefault(sid, {}).setdefault(
+                sec["sector"], {"top3": 0, "cells": 0, "ranked": 0, "rank_sum": 0.0}
+            )
+            ranked = sec.get("ranked") or 0
+            agg["top3"] += sec.get("top3") or 0
+            agg["cells"] += sec.get("cells") or 0
+            agg["ranked"] += ranked
+            if sec.get("avg_rank") is not None:
+                agg["rank_sum"] += sec["avg_rank"] * ranked
+
+    # Per-octant oldest→newest series.
+    series: dict[str, list[dict]] = {}
+    for sid, octs in scan_oct.items():
+        o = _date_ord(meta[sid].get("completed_at"))
+        if o is None:
+            continue
+        d = str(meta[sid].get("completed_at"))[:10]
+        for sector, agg in octs.items():
+            series.setdefault(sector, []).append({
+                "date": d, "ord": o,
+                "top3_pct": _pct(agg["top3"], agg["cells"]),
+                "avg_rank": round(agg["rank_sum"] / agg["ranked"], 2) if agg["ranked"] else None,
+            })
+    for pts in series.values():
+        pts.sort(key=lambda p: p["ord"])
+
+    areas = []
+    for sector, pts in series.items():
+        last = pts[-1]
+        areas.append({
+            "sector": sector,
+            "sector_full": OCTANT_FULL.get(sector, sector),
+            "city": octant_city.get(sector),
+            "now_top3_pct": last["top3_pct"],
+            "now_avg_rank": last["avg_rank"],
+            "windows": _windows_for(pts, "top3_pct", today),
+        })
+    # Weakest current coverage first (None last).
+    areas.sort(key=lambda a: (a["now_top3_pct"] is None, a["now_top3_pct"] or 0))
+
+    all_pts = [p for pts in series.values() for p in pts]
+    as_of = max(all_pts, key=lambda p: p["ord"])["date"] if all_pts else None
+    return {
+        "as_of": as_of,
+        "scan_count": len(scan_oct),
+        "areas": areas,
+        "narrative": _area_narrative(areas),
     }
 
 
