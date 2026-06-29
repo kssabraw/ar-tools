@@ -24,17 +24,24 @@ The connective layer from `docs/managed-engagement-and-strategy-engine-design-v1
   (begin engagement → approve brand voice + ICP → add targets), `onboarding_readiness` +
   the `onboarding→intake` transition **gated** on voice + ICP approved; workspace
   **Onboarding** card.
-- **Phase 3 — audit modules** (engagement-scoped `audit_runs`; the Strategy Engine reads
-  these later for richer actions): **site/technical** (`services/site_audit.py` — pure
-  parse/score of DataForSEO OnPage `checks` → typed severity-scored issues; best-effort
-  instant-pages crawl seeded from sitemap discovery, capped at `site_audit_max_pages`),
-  **backlink-gap** (`services/backlink_gap.py` — DataForSEO Backlinks: client profile +
-  referring domains linking to ≥N competitors but not the client, capped at top-N), and
-  **local-citation** (`services/citation_audit.py` — a curated target-directory checklist
-  checked via the existing DataForSEO SERP; gap = "where you need to be"). `routers/audits.py`
+- **Phase 3 — audit modules** (engagement-scoped `audit_runs`, **wired into the loop**):
+  **site/technical** (`services/site_audit.py` — pure parse/score of DataForSEO OnPage
+  `checks` → typed severity-scored issues; best-effort instant-pages crawl seeded from
+  sitemap discovery, capped at `site_audit_max_pages`), **backlink-gap**
+  (`services/backlink_gap.py` — DataForSEO Backlinks: client profile + referring domains
+  linking to ≥N competitors but not the client, capped at top-N), and **local-citation**
+  (`services/citation_audit.py` — a curated target-directory checklist checked via the
+  existing DataForSEO SERP; gap = "where you need to be"). `routers/audits.py`
   (`POST …/audits/{site|backlinks|citations}`, `GET …/audits`); async jobs `site_audit` /
   `backlink_audit` / `citation_audit`. Config: `site_audit_max_pages`,
   `backlink_max_competitors`, `citation_directories`. Pure parsers unit-tested.
+- **Audits → strategy + UI** — entering the `auditing` stage **auto-enqueues all three
+  audits** (`engagement_service.transition`, best-effort); the Strategy Engine's audit
+  reader turns the latest `audit_runs` into plan actions — `technical_fix` (**cross**) /
+  `backlink` (**organic**) / `citation` (**maps**) — alongside the organic/Maps/LLM signals
+  in the one unified plan (new `cross` module; `build_plan` threads `engagement_id`). The
+  Strategy page (`pages/StrategyPlan.tsx`) has an **Audits** panel (latest run per kind +
+  summary) and a **Run audits** button that polls while runs are in flight.
 
 **Live DB:** migrations **applied to the live project** (`wvcthtmmcmhkybcesirb`) via the
 Supabase MCP: `engagements_and_strategy` (`engagements`, `strategy_plans`,
@@ -42,9 +49,10 @@ Supabase MCP: `engagements_and_strategy` (`engagements`, `strategy_plans`,
 all RLS-enabled. Other migrations on the branch are additive code only.
 
 **To go live:** the **`PLATFORM` Railway service must deploy this branch** for the new
-endpoints (`/keyword-portal`, `/engagements`, `/strategy`) to exist. Frontend is built on
-Netlify (PR #166 deploy preview is green). No new env vars / provisioning for any of the
-above.
+endpoints (`/keyword-portal`, `/engagements`, `/strategy`, `/engagements/{id}/audits/*`) to
+exist. Frontend is built on Netlify (PR #166 deploy preview is green). No new env vars /
+provisioning for any of the above. **The full loop is wired:** onboard → intake (keyword
+portal) → auditing (audits fire) → strategize (audits + tracker signals → one plan) → review.
 
 **Deferred (not built):** the **GA4 connector** (Phase 1 · PR5 — GA4 not hooked up yet),
 **GBP Performance** connector (open OAuth decision, design §12 Q14), **Asana** sync and the
@@ -52,10 +60,12 @@ above.
 already exists; their richer signals (winnability, alerting, goal-gaps) land with the
 monitor in Phase 5.
 
-**Next:** wire the three audits into the engagement **auditing** stage + surface them in the
-UI, and feed their findings into the Strategy Engine (`technical_fix` / `backlink` /
-`citation` actions). Then **Phase 4/5** (executor, monitor/alerting, Asana). PageSpeed
-(CWV) on top-traffic pages is a follow-up to the site audit. See design §6.2–6.4, §6.8–6.9.
+**Next:** **Phase 5 — the Continuous Strategist** (monitor + signal bus → goal-gap /
+regression / alerting signals; the per-tracker alerting/winnability/goal-rollup designs;
+the algo-update timeline) and **Phase 4** (the autonomous executor + WordPress
+internal-linking) and **Asana** sync. Smaller follow-ups: PageSpeed (CWV) on top-traffic
+pages for the site audit; the DataForSEO Business Listings API for richer citation NAP
+discovery; a deep-link target for audit actions. See design §6.5–6.11.
 
 **Security note (pre-existing):** the Supabase advisor flags `public.maps_geocode_cache`
 with **RLS disabled** (a shared cross-client cache; predates this work). Enable with
