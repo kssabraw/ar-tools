@@ -334,6 +334,35 @@ class Settings(BaseSettings):
     service_page_rank_top_n: int = 5
     service_page_plan_max_rank_checks: int = 25
 
+    # ------------------------------------------------------------------
+    # Asana task integration (docs/modules/asana-task-integration-plan-v1_0.md)
+    # ------------------------------------------------------------------
+    # Two features on one token: (A) monthly section automation — clone a
+    # hand-maintained "Template" section forward into a new "<Month YYYY>"
+    # section per client project; (B) Team Workload — read a defined team list's
+    # open tasks across all client projects + proactive overload alerts. Both
+    # degrade gracefully: absent the token / workspace the features are skipped
+    # with a note, never an error (the GSC / Slack provisioning pattern).
+    asana_token: str = ""          # Asana PAT / service-account token (Bearer)
+    asana_workspace_gid: str = ""  # scopes the per-assignee task queries
+    asana_monthly_enabled: bool = True
+    asana_workload_enabled: bool = True
+    # The section the monthly job clones forward (the team maintains it by hand).
+    asana_template_section_name: str = "Template"
+    # Custom-field GIDs on the client projects (Starter plan: these already
+    # exist). The monthly job sets Status = Not Started on each new task and
+    # carries the category enum value forward from the template task.
+    asana_status_field_gid: str = ""
+    asana_status_not_started_option_gid: str = ""
+    asana_category_field_gid: str = ""
+    # Team Workload: the Asana user GIDs to track (comma-separated). Absent →
+    # the workload feature is skipped. Parsed via asana_service.parse_gids().
+    asana_team_member_gids: str = ""
+    # Overload thresholds: flag a member with more than N open tasks, or more
+    # than M tasks due on the same calendar day.
+    asana_workload_max_open: int = 25
+    asana_workload_max_due_same_day: int = 4
+
     class Config:
         env_file = ".env"
 

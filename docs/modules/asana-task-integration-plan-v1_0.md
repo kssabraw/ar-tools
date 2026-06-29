@@ -1,6 +1,18 @@
 # Asana Task Integration — Plan (v1.0)
 
-**Authored:** 2026-06-29 · **Status:** Planned — not yet built · **New suite integration — "Asana"**
+**Authored:** 2026-06-29 · **Status:** **Phase 0 built** (scaffolding) · Phases 1–3 ahead · **New suite integration — "Asana"**
+
+> **Build status (2026-06-29).** **Phase 0 (scaffolding)** is implemented on branch
+> `claude/asana-integration-options-cp3zul` (PR #170): the `config.py` settings block, the
+> `asana_client_projects` mapping table migration (`20260629120000`), and
+> `services/asana_service.py` — the async Asana REST client (sections / tasks / per-member
+> open tasks) + the pure helpers (`is_configured`, `parse_gids`, `month_label`,
+> `shift_months`, `section_name_exists`, custom-field extraction, `build_task_payload`,
+> `aggregate_member_workload`, `build_workload_report`) with 14 unit tests
+> (`tests/test_asana_service.py`). Everything degrades gracefully — `is_configured()` gates
+> the features and returns False until the token + workspace are provisioned. **No code is
+> wired into the job worker / scheduler / routers yet** (Phases 1–3). The migration file is
+> committed but **not yet applied to the live Supabase project** (pending plan approval).
 
 > Read alongside **`docs/suite-architecture-and-roadmap-v1_0.md`** (decision log + shared
 > infrastructure) and the **notifications service** section of `CLAUDE.md`. This document
