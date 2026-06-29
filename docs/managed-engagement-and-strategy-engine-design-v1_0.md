@@ -373,6 +373,28 @@ The exact computation behind the Maps half of the goal model (§4.6): **avg top�
 
 **Surfacing:** persisted into the existing `report_analytics` JSONB as a `goal_metrics` block (computed when the report runs), exposed on the Maps API, fed to the monitor's `compute_goal_state(keyword, 'maps')` (§6.8) for `goal_gap` signals, consumed by the winnability **gap‑to‑goal** sort (§4.8.2), and shown in the **goal‑attainment scorecard** (§6.6). **Degrades** if a client's grid is < 5 mi (the 5‑mi metric is unavailable — engagement grids default to 5 mi, so this is the exception, flagged not fatal). **Build timing:** spec now; lands with the goal‑model/monitor work (Phase 2/5).
 
+### 4.8.4 Maps signal → action wiring (the local action vocabulary) — ✅ design settled
+
+Closes the Maps loop: the detectors (§4.8.1 alerts), winnability (§4.8.2), goal rollup (§4.8.3), and geocoded weak zones become `strategy_actions` in the optimizer (§6.9) / strategy engine (§6.1). Mirrors the organic reopt vocabulary, but with **local levers** (GBP / reviews / location pages / proximity), not links/content‑depth. **Every action serves closing the 3mi‑top‑3 / 5mi‑top‑5 goal gap**; create/reoptimize actions sort by the winnability priority (winnability × gap‑to‑goal × proximity, §4.8.2).
+
+| Action kind | Trigger signal | Recommendation | Routes to | `execution_mode` · role |
+|---|---|---|---|---|
+| `maps_pack_exit` | `pack_exit` alert (coverage collapse) | **diagnose & restore first** — check GBP suspension/edits, NAP consistency, a category change, *then* content | Maps report + GBP | **assigned** · account_manager · **critical** |
+| `maps_competitor_threat` | `competitor_surge` alert / new dominant rival | diagnose what the rival changed (reviews, new page, category) and counter | Maps report / snapshot | **assigned** · account_manager · warning |
+| `maps_reoptimize_page` | winnability quick‑win where a page already exists, **or** `coverage_drop`/`avg_rank_drop` alert on a keyword with a page | reoptimize the existing local page | Local SEO **reoptimize‑by‑URL** | **auto** score → **assigned** edit · writer |
+| `maps_coverage_gap` | high‑priority geocoded `weak_area` / octant pin, winnable, **no existing page** | create a location/area page for `{city}` (uses the octant‑pin coords + weak‑area names) | Local SEO content (**city silo / bulk‑create**) | **auto** draft → **assigned** review · writer |
+| `maps_review_gap` | weak‑sector rivals with a large `review_gap` / low prominence factor | run a review‑generation + response campaign to close the prominence gap | assigned task (+ GBP data) | **assigned** · account_manager/va |
+| `maps_gbp_optimization` | low relevance factor (category/name mismatch) or competitor name‑keyword advantage | tune GBP categories / services / description / posts / photos | assigned task (deep‑link GBP) | **assigned** · account_manager |
+| `maps_proximity_gap` | weakness concentrated at the **far ring only** (distance‑bound; low proximity factor) | **advisory** — consider an SAB/satellite location; *don't* spend page effort that can't rank by distance | assigned advisory | **assigned** · account_manager · low |
+
+**Tiering (sort, like organic):** `maps_pack_exit` (critical) > alert‑driven `maps_competitor_threat` / `maps_reoptimize_page` (warning) > goal‑gap `maps_coverage_gap` + winnability quick‑wins > supporting `maps_review_gap` / `maps_gbp_optimization` > `maps_proximity_gap` (advisory).
+
+**Dedup:** a keyword already surfaced as an alert is excluded from the winnability quick‑win list for the same keyword (urgency wins — same rule as organic); `maps_coverage_gap` is deduped against existing `local_seo_pages` + already‑open actions (never recommend a page that exists or is queued); and **cross‑module** against organic page work on the same URL/topic so SerMaStr doesn't double‑assign.
+
+**Routing note:** `maps_reoptimize_page` and `maps_coverage_gap` route into **existing tools** (the Local SEO content module's reoptimize / city‑silo bulk‑create — which already run as background jobs), so their "auto" half is real today; `maps_review_gap` / `maps_gbp_optimization` / `maps_competitor_threat` / `maps_proximity_gap` are **assigned‑only** (no in‑app tool, and real reviews can't be auto‑generated) — they become role‑routed Asana tasks carrying the diagnostic data. Publishing any generated page stays a checkpoint (§8).
+
+**Data‑model touch:** extend `strategy_actions.category` with **`gbp`** and **`reviews`** (local‑page create/reoptimize reuse `page`); the `maps_*` kinds live in the action's `kind`/`rationale`, mirroring how the organic reopt kinds do. **Build timing:** spec now; built with the Maps optimizer wiring (Phase 5).
+
 ---
 
 ## 5. How autonomy rides existing infrastructure
