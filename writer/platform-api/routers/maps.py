@@ -27,6 +27,8 @@ from models.maps import (
     MapsBacklinkIntelResponse,
     MapsContentIntelResponse,
     MapsGbpAuditResponse,
+    MapsRelevanceResponse,
+    MapsRelevanceRow,
     MapsReviewIntelResponse,
     MapsCompetitorTrend,
     MapsCompetitorTrendPoint,
@@ -54,6 +56,7 @@ from services import backlink_intel
 from services import competitor_gbp
 from services import content_intel
 from services import gbp_audit as gbp_audit_service
+from services import local_relevance
 from services import local_dominator
 from services import review_analytics
 from services import maps_solv as maps_solv_service
@@ -502,6 +505,32 @@ async def maps_competitor_intel(
         profiles=[MapsCompetitorProfile(**p) for p in profiles],
         captured_at=profiles[0]["captured_at"] if profiles else None,
     )
+
+
+@router.get("/clients/{client_id}/maps/relevance", response_model=MapsRelevanceResponse)
+async def maps_relevance(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsRelevanceResponse:
+    """Local Relevance Scorecard — does each ranking signal (reviews, GBP link,
+    category, DR, page UR) align with the tracked service/location? Client vs
+    competitors, from the latest stored capture."""
+    sc = local_relevance.latest_scorecard(str(client_id))
+    return MapsRelevanceResponse(
+        keyword=sc.get("keyword"),
+        location=sc.get("location"),
+        client=MapsRelevanceRow(**sc["client"]) if sc.get("client") else None,
+        competitors=[MapsRelevanceRow(**c) for c in sc.get("competitors") or []],
+    )
+
+
+@router.post("/clients/{client_id}/maps/relevance/refresh", response_model=MapsRunResponse)
+async def refresh_relevance(
+    client_id: UUID, keyword: Optional[str] = None, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Rebuild the Local Relevance Scorecard for `keyword` (defaults to the
+    client's first active Maps keyword)."""
+    local_relevance.enqueue_local_relevance(str(client_id), keyword)
+    return MapsRunResponse(client_id=client_id, status="enqueued")
 
 
 @router.get("/clients/{client_id}/maps/content-intel", response_model=MapsContentIntelResponse)

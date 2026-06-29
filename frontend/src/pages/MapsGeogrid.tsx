@@ -10,7 +10,7 @@ import type {
   MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
   MapsPeriodsResponse, MapsRadius, MapsRunResponse,
   MapsBacklinkIntelResponse, MapsCompetitorIntelResponse, MapsContentIntelResponse,
-  MapsGbpAuditResponse, MapsReviewIntelResponse,
+  MapsGbpAuditResponse, MapsRelevanceResponse, MapsRelevanceRow, MapsReviewIntelResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsSolvResponse, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
@@ -685,6 +685,7 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
       </div>
       <TrendPanel trends={trends} />
       <SolvPanel clientId={clientId} />
+      <RelevanceScorecard clientId={clientId} />
       <CompetitorMomentum clientId={clientId} />
       <CompetitorIntel clientId={clientId} />
       <ReviewIntel clientId={clientId} />
@@ -1191,6 +1192,84 @@ function CompetitorIntel({ clientId }: { clientId: string }) {
             ))}
           </tbody>
         </table>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
+    </div>
+  )
+}
+
+// ── Local Relevance Scorecard (do the signals match the service/location?) ──
+function RelevanceScorecard({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsRelevanceResponse>({
+    queryKey: ['maps-relevance', clientId],
+    queryFn: () => api.get<MapsRelevanceResponse>(`/clients/${clientId}/maps/relevance`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/relevance/refresh`, {}),
+    onSuccess: () => { setQueued(true); queryClient.invalidateQueries({ queryKey: ['maps-relevance', clientId] }) },
+  })
+  const rows: MapsRelevanceRow[] = []
+  if (data?.client) rows.push(data.client)
+  rows.push(...(data?.competitors ?? []))
+  const th: React.CSSProperties = { padding: '6px 6px', textAlign: 'center', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.02em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '6px 6px', textAlign: 'center', fontSize: 13, color: '#334155' }
+  const yn = (v: boolean | null) => v == null ? '—' : v ? <span style={{ color: '#16a34a' }}>✓</span> : <span style={{ color: '#dc2626' }}>✗</span>
+  const catBadge = (m: string | null) => {
+    const c = m === 'exact' ? { fg: '#166534', bg: '#dcfce7' } : m === 'related' ? { fg: '#b45309', bg: '#fffbeb' } : { fg: '#b91c1c', bg: '#fef2f2' }
+    return <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 999, padding: '2px 8px', color: c.fg, background: c.bg }}>{m ?? '—'}</span>
+  }
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Local relevance scorecard</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            For {data?.keyword ? <strong>“{data.keyword}”</strong> : 'the tracked service'}{data?.location ? ` in ${data.location}` : ''} — does each
+            ranking signal actually line up with the service &amp; location? You vs competitors.
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Rebuild the relevance scorecard for your first Maps keyword">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {rows.length === 0 ? (
+        <p style={muted}>No scorecard yet. Click <strong>Refresh</strong> to build it for your first Maps keyword.</p>
+      ) : (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 640 }}>
+            <thead><tr>
+              <th style={{ ...th, textAlign: 'left' }}>Business</th>
+              <th style={th}>Category</th>
+              <th style={th}>Reviews · svc</th>
+              <th style={th}>Reviews · loc</th>
+              <th style={th}>Page · svc</th>
+              <th style={th}>Page · loc</th>
+              <th style={th}>DR</th>
+              <th style={th}>Page UR</th>
+            </tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.place_id ?? r.name} style={{ borderTop: '1px solid #f1f5f9', background: r.is_client ? '#f8fafc' : undefined }}>
+                  <td style={{ ...td, textAlign: 'left', fontWeight: r.is_client ? 700 : 400, color: '#0f172a' }}>
+                    {r.is_client ? 'You' : (r.name ?? '—')}
+                  </td>
+                  <td style={td}>{catBadge(r.category_match)}</td>
+                  <td style={td}>{r.reviews_total ? `${r.reviews_service_mentions ?? 0}/${r.reviews_total}` : '—'}</td>
+                  <td style={td}>{r.reviews_total ? `${r.reviews_location_mentions ?? 0}/${r.reviews_total}` : '—'}</td>
+                  <td style={td}>{yn(r.page_service_relevant)}</td>
+                  <td style={td}>{yn(r.page_location_relevant)}</td>
+                  <td style={td}>{r.domain_rating != null ? Math.round(r.domain_rating) : '—'}</td>
+                  <td style={td}>{r.page_ur != null ? Math.round(r.page_ur) : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
     </div>

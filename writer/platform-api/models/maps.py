@@ -209,6 +209,31 @@ class MapsCompetitorIntelResponse(BaseModel):
     captured_at: Optional[str] = None    # most recent capture timestamp
 
 
+# --- Local Relevance Scorecard (Tier B / B6) --------------------------------
+class MapsRelevanceRow(BaseModel):
+    place_id: Optional[str] = None
+    is_client: bool = False
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    gbp_url: Optional[str] = None
+    category: Optional[str] = None
+    category_match: Optional[str] = None          # exact | related | none
+    reviews_total: Optional[int] = None
+    reviews_service_mentions: Optional[int] = None
+    reviews_location_mentions: Optional[int] = None
+    page_service_relevant: Optional[bool] = None
+    page_location_relevant: Optional[bool] = None
+    domain_rating: Optional[float] = None
+    page_ur: Optional[float] = None
+
+
+class MapsRelevanceResponse(BaseModel):
+    keyword: Optional[str] = None
+    location: Optional[str] = None
+    client: Optional[MapsRelevanceRow] = None
+    competitors: list[MapsRelevanceRow] = Field(default_factory=list)
+
+
 # --- On-site content comparison (Tier B / B5) -------------------------------
 class MapsContentAnalysis(BaseModel):
     keyword: Optional[str] = None

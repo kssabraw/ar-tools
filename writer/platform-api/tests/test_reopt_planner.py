@@ -288,6 +288,25 @@ def test_review_action_empty_when_no_gap():
     assert reopt_planner.build_review_action(CLIENT, None) == []
 
 
+def test_relevance_action_lists_gaps():
+    gap = {"keyword": "plumber", "gaps": [
+        "your GBP category isn't the service (2 competitors' are)",
+        "your GBP links to a page that isn't about the service",
+    ]}
+    actions = reopt_planner.build_relevance_action(CLIENT, gap)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "local_relevance" and a["source"] == "maps"
+    assert "category isn't the service" in a["diagnosis"]
+    assert "plumber" in a["keyword"]
+    assert a["cta_path"] == f"clients/{CLIENT}/maps"
+
+
+def test_relevance_action_empty_when_no_gaps():
+    assert reopt_planner.build_relevance_action(CLIENT, None) == []
+    assert reopt_planner.build_relevance_action(CLIENT, {"keyword": "x", "gaps": []}) == []
+
+
 def test_content_action_on_depth_and_topic_gap():
     gap = {"depth_behind": 600, "topic_gaps": ["pricing", "faq", "warranty"], "keyword": "emergency plumber"}
     actions = reopt_planner.build_content_action(CLIENT, gap)

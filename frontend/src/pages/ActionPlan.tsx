@@ -2,7 +2,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, ArrowRight, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, GitMerge, Sparkles,
-  CheckCircle2, MapPin, Users, Star, Link2, FileText,
+  CheckCircle2, MapPin, Users, Star, Link2, FileText, Target,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, ReoptAction, ReoptPlan } from '../lib/types'
@@ -120,6 +120,7 @@ function kindMeta(kind: string): { label: string; icon: React.ReactNode } {
     case 'review_gap': return { label: 'Reviews', icon: <Star size={18} /> }
     case 'backlink_gap': return { label: 'Backlinks', icon: <Link2 size={18} /> }
     case 'content_gap': return { label: 'Content gap', icon: <FileText size={18} /> }
+    case 'local_relevance': return { label: 'Local relevance', icon: <Target size={18} /> }
     case 'maps_solv_drop': return { label: 'Local share loss', icon: <TrendingDown size={18} /> }
     case 'brand_search_decline': return { label: 'Brand search down', icon: <TrendingDown size={18} /> }
     default: return { label: 'Opportunity', icon: <TrendingUp size={18} /> }

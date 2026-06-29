@@ -1107,6 +1107,7 @@ export interface ReoptAction {
     | 'review_gap'
     | 'backlink_gap'
     | 'content_gap'
+    | 'local_relevance'
     | 'brand_search_decline'
   source?: 'organic' | 'maps'
   keyword: string
@@ -1196,6 +1197,30 @@ export interface MapsGbpAuditResponse {
   gaps: string[]
   category_gaps: string[]
   review_gap: MapsGbpReviewGap | null
+}
+
+// Local Relevance Scorecard (Maps Tier B / B6).
+export interface MapsRelevanceRow {
+  place_id: string | null
+  is_client: boolean
+  name: string | null
+  domain: string | null
+  gbp_url: string | null
+  category: string | null
+  category_match: 'exact' | 'related' | 'none' | null
+  reviews_total: number | null
+  reviews_service_mentions: number | null
+  reviews_location_mentions: number | null
+  page_service_relevant: boolean | null
+  page_location_relevant: boolean | null
+  domain_rating: number | null
+  page_ur: number | null
+}
+export interface MapsRelevanceResponse {
+  keyword: string | null
+  location: string | null
+  client: MapsRelevanceRow | null
+  competitors: MapsRelevanceRow[]
 }
 
 // On-site content comparison (Maps Tier B / B5).

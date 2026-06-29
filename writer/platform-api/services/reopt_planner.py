@@ -66,6 +66,7 @@ _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the M
 _MAPS_GBP_WITHIN = 4_000        # a GBP-gap action sits mid Maps tier (above weak areas)
 _MAPS_REVIEW_WITHIN = 4_500     # a review-gap action sits just above the GBP-gap action
 _MAPS_CONTENT_WITHIN = 3_500    # a content-gap action sits just below the GBP-gap action
+_MAPS_RELEVANCE_WITHIN = 5_000  # a local-relevance action sits above review/GBP/content actions
 _MAPS_SOLV_WITHIN = 8_500       # a SoLV drop sits near the top of the Maps tier (just under lost_pack)
 MAPS_WEAK_AREA_MAX = 5          # cap weak-area actions per plan
 SOLV_DROP_MIN_PCT = 10.0        # min Top-3 local-pack share lost (points) to flag a SoLV drop
@@ -394,6 +395,28 @@ def build_review_action(client_id: str, review_gap: "dict | None") -> list[dict]
     ]
 
 
+def build_relevance_action(client_id: str, relevance_gap: "dict | None") -> list[dict]:
+    """A local-relevance action when the client's GBP/reviews/links don't align
+    with the tracked service/location as well as competitors. Pure."""
+    if not relevance_gap or not relevance_gap.get("gaps"):
+        return []
+    kw = relevance_gap.get("keyword")
+    return [
+        {
+            "kind": "local_relevance",
+            "source": "maps",
+            "keyword": f'"{kw}" relevance' if kw else "Local relevance",
+            "diagnosis": "Relevance gaps vs competitors: " + "; ".join(relevance_gap["gaps"][:4]) + ".",
+            "recommendation": "Tighten local relevance for this service: point the GBP at a dedicated "
+            "service/location page, align the primary category, and encourage reviews that name the service + area.",
+            "cta_label": "Open Maps tracker",
+            "cta_path": f"clients/{client_id}/maps",
+            "severity": "info",
+            "sort": _SORT_MAPS + _within(_MAPS_RELEVANCE_WITHIN),
+        }
+    ]
+
+
 def build_content_action(client_id: str, content_gap: "dict | None") -> list[dict]:
     """A page-expansion action when the client's page is thinner / misses topics
     competitors cover for a keyword. Pure."""
@@ -496,6 +519,7 @@ def summarize_plan(actions: list[dict]) -> dict:
         + by_kind.get("gbp_gap", 0)
         + by_kind.get("review_gap", 0)
         + by_kind.get("content_gap", 0)
+        + by_kind.get("local_relevance", 0)
     )
     if maps:
         parts.append(f"{maps} local-pack issue{'s' if maps != 1 else ''}")
@@ -601,6 +625,20 @@ def _fetch_gbp_audit(supabase, client_id: str) -> "dict | None":
         return gbp_audit.audit(gbp, profiles)
     except Exception as exc:
         logger.warning("reopt_plan_gbp_audit_failed", extra={"client_id": client_id, "error": str(exc)})
+        return None
+
+
+def _fetch_relevance_gap(supabase, client_id: str) -> "dict | None":
+    """Best-effort local-relevance gap signal from the latest stored scorecard."""
+    try:
+        from services import local_relevance
+
+        scorecard = local_relevance.latest_scorecard(client_id)
+        if not scorecard.get("client"):
+            return None
+        return local_relevance.detect_relevance_gaps(scorecard)
+    except Exception as exc:
+        logger.warning("reopt_plan_relevance_failed", extra={"client_id": client_id, "error": str(exc)})
         return None
 
 
@@ -711,10 +749,12 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     review_gap = _fetch_review_gap(supabase, client_id)
     backlink_gap = _fetch_backlink_gap(supabase, client_id)
     content_gap = _fetch_content_gap(supabase, client_id)
+    relevance_gap = _fetch_relevance_gap(supabase, client_id)
 
     # Build organic uncapped so Maps actions compete fairly for the combined cap.
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
+    maps_actions += build_relevance_action(client_id, relevance_gap)
     maps_actions += build_gbp_action(client_id, gbp_audit_result)
     maps_actions += build_review_action(client_id, review_gap)
     maps_actions += build_content_action(client_id, content_gap)
