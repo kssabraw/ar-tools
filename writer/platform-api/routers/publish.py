@@ -5,6 +5,7 @@ WordPress site (the WP REST API via an Application Password)."""
 from __future__ import annotations
 
 import logging
+from html import escape
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -126,6 +127,30 @@ def _resolve_content(supabase, run_id: UUID, content_type: str) -> tuple[str, st
     return markdown, markdown_to_html(markdown)
 
 
+def _resolve_blog_title_h1(supabase, run_id: UUID) -> tuple[str | None, str | None]:
+    """SEO title + on-page H1 from the Brief Generator output (v2.0 Step 3.5).
+
+    These are deliberately separate: `title` is the SEO/meta title (browser tab,
+    SERP, and the WordPress slug); `h1` is the visible on-page main heading.
+    Either may be None when the brief didn't populate it."""
+    res = (
+        supabase.table("module_outputs")
+        .select("output_payload, attempt_number")
+        .eq("run_id", str(run_id))
+        .eq("module", "brief")
+        .eq("status", "complete")
+        .order("attempt_number", desc=True)
+        .execute()
+    )
+    rows = res.data or []
+    if not rows:
+        return None, None
+    p = rows[0].get("output_payload") or {}
+    title = (p.get("title") or "").strip() or None
+    h1 = (p.get("h1") or "").strip() or None
+    return title, h1
+
+
 @router.post("/runs/{run_id}/publish", response_model=dict)
 async def publish_run(
     run_id: UUID,
@@ -164,7 +189,20 @@ async def publish_run(
     client = client_result.data
 
     markdown, html = _resolve_content(supabase, run_id, content_type)
-    title = f"{run['keyword']} — {client['name']}"
+    fallback_title = f"{run['keyword']} — {client['name']}"
+    if content_type in ("service_page", "location_page"):
+        # Service/location pages carry their own H1 inside their rendering, so we
+        # only set the post title here (no body-H1 injection).
+        title = fallback_title
+    else:
+        # Blog posts: the SEO title becomes the WordPress post title (and the
+        # meta <title> + slug); the distinct on-page H1 is injected at the top of
+        # the body so it renders as the visible heading, separate from the title.
+        seo_title, h1 = _resolve_blog_title_h1(supabase, run_id)
+        title = seo_title or fallback_title
+        if h1:
+            html = f"<h1>{escape(h1)}</h1>\n{html}"
+            markdown = f"# {h1}\n\n{markdown}"
     featured_image_url = run.get("featured_image_url")
 
     if body.destination == "wordpress":
