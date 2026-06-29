@@ -24,7 +24,36 @@ interface Mention {
   id: string; keyword_id: string | null; scan_batch_id: string | null; engine: string; status: string
   mention_found: boolean | null; mention_type: string | null; sentiment: number | null
   confidence_score: number | null; citations: string[]; competitor_results: unknown[] | null
-  reasoning: string | null; snippet: string | null; failure_reason: string | null; created_at: string | null
+  reasoning: string | null; snippet: string | null; invisibility_diagnosis: string | null
+  response_analysis: RespAnalysis | null
+  failure_reason: string | null; created_at: string | null
+}
+// Structured per-answer analysis mined at scan time (services/brand_analysis.py).
+interface RespSource { domain: string; type: string; is_client: boolean; is_competitor: boolean }
+interface NamedBusiness { name: string; attributes: string[] }
+interface RespAnalysis {
+  position?: { rank: number | null; total_businesses: number | null }
+  prominence?: string | null
+  sources?: { client_cited: boolean; domains: RespSource[]; by_type: Record<string, number>; competitor_only_sources: string[] }
+  discovered_competitors?: NamedBusiness[]
+  competitor_attributes?: NamedBusiness[]
+  accuracy_flags?: { field: string; stated: string; actual: string }[]
+  intent?: { inferred: string | null; locations: string[] }
+  aio?: { mention_kind: AioKind }
+}
+type AioKind = 'none' | 'citation_only' | 'in_content_link' | 'both'
+const AIO_KIND_LABELS: Record<AioKind, string> = {
+  none: 'Not in the AI Overview',
+  citation_only: 'Cited in the sources strip only',
+  in_content_link: 'Linked inline in the answer',
+  both: 'Linked inline + cited as a source',
+}
+// Google's AI surfaces — the only engines where the in-content-link vs citation
+// distinction exists (the others don't expose that structure).
+const AIO_ENGINES = new Set(['google_ai_overview', 'google_ai_mode'])
+const SOURCE_TYPE_LABELS: Record<string, string> = {
+  directory: 'Directories', review: 'Review sites', social: 'Social', forum: 'Forums/Q&A',
+  search: 'Search/Maps', editorial: 'Editorial/brand sites',
 }
 // One competitor's re-classification of the same AI answer (stored on the
 // client mention's competitor_results JSONB by services/brand_scan.py).
@@ -189,10 +218,12 @@ function Overview(props: {
     const headers = [
       'Scan date', 'Keyword', 'Engine', 'Brand mentioned', 'Mention type', 'Sentiment',
       'Confidence', 'Status', 'Citations', 'Competitors mentioned',
+      'Position', 'Prominence', 'AIO mention kind', 'Your site cited', 'Discovered competitors',
     ]
     const rows = history.map(h => {
       const comps = Array.isArray(h.competitor_results) ? (h.competitor_results as CompResult[]) : []
       const mentioned = comps.filter(c => c?.found).map(c => c.name)
+      const ra = h.response_analysis
       return [
         h.created_at ? new Date(h.created_at).toLocaleString() : '',
         keywordById.get(h.keyword_id ?? '') ?? '',
@@ -204,6 +235,11 @@ function Overview(props: {
         h.status,
         (h.citations ?? []).length,
         mentioned.join('; '),
+        ra?.position?.rank ?? '',
+        ra?.prominence ?? '',
+        ra?.aio ? ra.aio.mention_kind : '',
+        ra?.sources?.client_cited ? 'Yes' : '',
+        (ra?.discovered_competitors ?? []).map(b => b.name).join('; '),
       ]
     })
     downloadCsv(`ai-visibility-history-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(headers, rows))
@@ -320,7 +356,7 @@ function Overview(props: {
                         key={e}
                         m={latestByCell.get(`${k.id}::${e}`)}
                         competitor={viewing === 'brand' ? undefined : viewing}
-                        onDiagnose={(m) => setDiagnose({ m, keyword: keywordById.get(k.id) ?? k.keyword })}
+                        onOpen={(m) => setDiagnose({ m, keyword: keywordById.get(k.id) ?? k.keyword })}
                       />
                     ))}
                   </tr>
@@ -330,38 +366,190 @@ function Overview(props: {
           </div>
           <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 10 }}>
             {viewing === 'brand'
-              ? <>Tip: click a <X size={11} color="#dc2626" style={{ verticalAlign: 'middle' }} /> cell to diagnose why the brand is invisible there.</>
+              ? <>Tip: click any cell for the full breakdown — position, sources the AI trusted, competitor reasons, and (for not-found cells) why the brand is invisible. On Google columns, <span style={{ color: '#7c3aed' }}>🔗</span> = linked inline in the answer, <span style={{ color: '#94a3b8' }}>◦</span> = cited in the sources strip only.</>
               : <>Showing where <strong>{viewing}</strong> appears. A — means that keyword×engine wasn't scanned with competitors included.</>}
           </p>
+          <BatchInsights clientId={clientId} scanBatchId={latestBatch.scan_batch_id} />
         </>
       )}
       {diagnose && (
-        <DiagnoseModal clientId={clientId} mention={diagnose.m} keyword={diagnose.keyword} onClose={() => setDiagnose(null)} />
+        <CellDetailsModal clientId={clientId} mention={diagnose.m} keyword={diagnose.keyword} onClose={() => setDiagnose(null)} />
       )}
     </div>
   )
 }
 
-function DiagnoseModal({ clientId, mention, keyword, onClose }: { clientId: string; mention: Mention; keyword: string; onClose: () => void }) {
+function Chip({ children, tone = 'slate' }: { children: React.ReactNode; tone?: 'slate' | 'violet' | 'amber' | 'green' | 'red' }) {
+  const tones = {
+    slate: { bg: '#f1f5f9', fg: '#475569' }, violet: { bg: '#f5f3ff', fg: '#6d28d9' },
+    amber: { bg: '#fffbeb', fg: '#b45309' }, green: { bg: '#f0fdf4', fg: '#15803d' },
+    red: { bg: '#fef2f2', fg: '#b91c1c' },
+  }[tone]
+  return <span style={{ display: 'inline-block', fontSize: 11, padding: '2px 8px', borderRadius: 10, background: tones.bg, color: tones.fg, marginRight: 6, marginBottom: 4 }}>{children}</span>
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>{title}</div>
+      {children}
+    </div>
+  )
+}
+
+function CellDetailsModal({ clientId, mention, keyword, onClose }: { clientId: string; mention: Mention; keyword: string; onClose: () => void }) {
+  // New scans auto-diagnose during the scan, so the explanation is already on
+  // the row — show it instantly. Only fall back to the on-demand endpoint for
+  // older rows scanned before auto-diagnosis (or when it was disabled/failed).
+  const found = mention.mention_found === true
+  const precomputed = mention.invisibility_diagnosis
   const { data, isLoading, isError, error } = useQuery<{ diagnosis: string }>({
     queryKey: ['brand-diagnose', clientId, mention.id],
     queryFn: () => api.post<{ diagnosis: string }>(`/clients/${clientId}/brand/mentions/${mention.id}/diagnose`, {}),
     retry: false,
+    enabled: !found && !precomputed,  // diagnosis is only for not-found cells
   })
+  const diagnosis = precomputed ?? data?.diagnosis
+  const ra = mention.response_analysis ?? undefined
+  const isAio = AIO_ENGINES.has(mention.engine)
+  const rank = ra?.position?.rank
+  const total = ra?.position?.total_businesses
   return (
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <strong style={{ fontSize: 15, color: '#0f172a' }}>
-            Why invisible · {ENGINE_LABELS[mention.engine] ?? mention.engine}
+            {ENGINE_LABELS[mention.engine] ?? mention.engine} · {found ? 'Mentioned' : 'Not mentioned'}
           </strong>
           <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }} onClick={onClose}><X size={18} /></button>
         </div>
-        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>“{keyword}”</div>
-        {isLoading && <div style={{ fontSize: 13, color: '#64748b' }}>Analyzing the competitors that did appear…</div>}
-        {isError && <Banner kind="error">{(error as Error).message}</Banner>}
-        {data && <div style={{ fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{data.diagnosis}</div>}
+        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>“{keyword}”</div>
+
+        {/* At-a-glance chips */}
+        <div style={{ marginTop: 8 }}>
+          {found && rank != null && <Chip tone="green">Position {rank}{total ? ` of ${total}` : ''}</Chip>}
+          {found && ra?.prominence && ra.prominence !== 'none' && <Chip tone={ra.prominence === 'leading' ? 'green' : ra.prominence === 'caveated' ? 'amber' : 'slate'}>{ra.prominence} mention</Chip>}
+          {!found && total != null && <Chip tone="slate">{total} businesses listed, none of them this brand</Chip>}
+          {isAio && ra?.aio && <Chip tone={ra.aio.mention_kind === 'in_content_link' || ra.aio.mention_kind === 'both' ? 'violet' : 'slate'}>{AIO_KIND_LABELS[ra.aio.mention_kind]}</Chip>}
+          {ra?.sources?.client_cited && <Chip tone="green">Your site was cited as a source</Chip>}
+        </div>
+
+        {/* Accuracy flags — AI stated something wrong about the brand */}
+        {ra?.accuracy_flags && ra.accuracy_flags.length > 0 && (
+          <Section title="⚠ Possible misinformation">
+            {ra.accuracy_flags.map((f, i) => (
+              <div key={i} style={{ fontSize: 12, color: '#b91c1c', marginBottom: 3 }}>
+                <strong>{f.field}:</strong> AI said “{f.stated}” — on file: “{f.actual}”
+              </div>
+            ))}
+          </Section>
+        )}
+
+        {/* Why the brand is invisible (not-found cells) */}
+        {!found && (
+          <Section title="Why invisible">
+            {isLoading && <div style={{ fontSize: 13, color: '#64748b' }}>Analyzing the competitors that did appear…</div>}
+            {isError && <Banner kind="error">{(error as Error).message}</Banner>}
+            {diagnosis && <div style={{ fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{diagnosis}</div>}
+          </Section>
+        )}
+
+        {/* Competitor reasons — what the answer rewarded */}
+        {ra?.competitor_attributes && ra.competitor_attributes.length > 0 && (
+          <Section title="Who appeared & why">
+            {ra.competitor_attributes.slice(0, 8).map((b, i) => (
+              <div key={i} style={{ fontSize: 12, color: '#334155', marginBottom: 5 }}>
+                <strong>{b.name}</strong>{b.attributes.length > 0 && <> — {b.attributes.join(', ')}</>}
+              </div>
+            ))}
+          </Section>
+        )}
+
+        {/* Sources the AI trusted */}
+        {ra?.sources && ra.sources.domains.length > 0 && (
+          <Section title="Sources the AI cited">
+            <div>
+              {ra.sources.domains.slice(0, 12).map((d, i) => (
+                <Chip key={i} tone={d.is_client ? 'green' : d.is_competitor ? 'amber' : 'slate'}>
+                  {d.domain}{d.is_client ? ' (you)' : d.is_competitor ? ' (competitor)' : ''}
+                </Chip>
+              ))}
+            </div>
+            {ra.sources.competitor_only_sources.length > 0 && (
+              <div style={{ fontSize: 12, color: '#b45309', marginTop: 6 }}>
+                Cites a competitor but not you: {ra.sources.competitor_only_sources.join(', ')} — get listed/mentioned here.
+              </div>
+            )}
+          </Section>
+        )}
+
+        {/* How the AI read the query */}
+        {ra?.intent && (ra.intent.inferred || ra.intent.locations.length > 0) && (
+          <Section title="How the AI read the query">
+            {ra.intent.inferred && <div style={{ fontSize: 12, color: '#334155' }}>{ra.intent.inferred}</div>}
+            {ra.intent.locations.length > 0 && <div style={{ fontSize: 12, color: '#64748b', marginTop: 3 }}>Places named: {ra.intent.locations.join(', ')}</div>}
+          </Section>
+        )}
       </div>
+    </div>
+  )
+}
+
+function BatchInsights({ clientId, scanBatchId }: { clientId: string; scanBatchId: string | null }) {
+  const qc = useQueryClient()
+  const { data } = useQuery<{
+    consensus: { businesses: { name: string; engines: string[]; count: number; attributes: string[] }[]; engines_total: number }
+    discovered_competitors: { name: string; engines: string[]; count: number; attributes: string[] }[]
+    aio_mention_kinds: Record<string, number>
+    source_types: Record<string, number>
+  }>({
+    queryKey: ['brand-scan-insights', clientId, scanBatchId],
+    queryFn: () => api.get(`/clients/${clientId}/brand/scans/${scanBatchId}/insights`),
+    enabled: Boolean(scanBatchId),
+  })
+  const trackMut = useMutation({
+    mutationFn: (name: string) => api.post(`/clients/${clientId}/brand/competitors`, { competitor_name: name }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['brand-competitors', clientId] }),
+  })
+  if (!data) return null
+  const consensus = data.consensus?.businesses ?? []
+  const discovered = data.discovered_competitors ?? []
+  const sourceTypes = Object.entries(data.source_types ?? {}).sort((a, b) => b[1] - a[1])
+  if (consensus.length === 0 && discovered.length === 0 && sourceTypes.length === 0) return null
+
+  return (
+    <div style={{ ...card, marginTop: 20 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 12 }}>Latest scan — cross-engine insights</div>
+
+      {discovered.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', marginBottom: 6 }}>Untracked competitors the AI surfaced</div>
+          {discovered.slice(0, 10).map((b, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#334155', marginBottom: 4 }}>
+              <span><strong>{b.name}</strong> <span style={{ color: '#94a3b8' }}>· {b.count} engine{b.count === 1 ? '' : 's'}</span>{b.attributes.length > 0 && <span style={{ color: '#64748b' }}> — {b.attributes.slice(0, 3).join(', ')}</span>}</span>
+              <button style={{ ...miniBtn, padding: '2px 8px' }} disabled={trackMut.isPending} onClick={() => trackMut.mutate(b.name)}><Plus size={11} /> Track</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {consensus.length > 0 && (
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', marginBottom: 6 }}>Consensus winners (named across engines)</div>
+          {consensus.slice(0, 8).map((b, i) => (
+            <div key={i} style={{ fontSize: 12, color: '#334155', marginBottom: 3 }}>
+              <strong>{b.name}</strong> <span style={{ color: '#94a3b8' }}>· {b.count}/{data.consensus.engines_total} engines</span>{b.attributes.length > 0 && <span style={{ color: '#64748b' }}> — {b.attributes.slice(0, 3).join(', ')}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {sourceTypes.length > 0 && (
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a', marginBottom: 6 }}>What kinds of sources the AIs trust here</div>
+          <div>{sourceTypes.map(([t, n]) => <Chip key={t}>{SOURCE_TYPE_LABELS[t] ?? t}: {n}</Chip>)}</div>
+        </div>
+      )}
     </div>
   )
 }
@@ -376,13 +564,24 @@ function EngineStat({ label, pct, highlight }: { label: string; pct: number | nu
   )
 }
 
-function MentionCell({ m, onDiagnose, competitor }: { m: Mention | undefined; onDiagnose?: (m: Mention) => void; competitor?: string }) {
+// Small corner marker on the AIO columns: was the client linked inline in the
+// answer (🔗, the strong signal) or only listed in the sources strip (◦)?
+function AioBadge({ kind }: { kind: AioKind }) {
+  if (kind === 'none') return null
+  const inline = kind === 'in_content_link' || kind === 'both'
+  return (
+    <span title={AIO_KIND_LABELS[kind]} style={{ fontSize: 9, marginLeft: 3, verticalAlign: 'super', color: inline ? '#7c3aed' : '#94a3b8' }}>
+      {inline ? '🔗' : '◦'}
+    </span>
+  )
+}
+
+function MentionCell({ m, onOpen, competitor }: { m: Mention | undefined; onOpen?: (m: Mention) => void; competitor?: string }) {
   let content: React.ReactNode = <span style={{ color: '#cbd5e1' }}>—</span>
   let title = 'Not scanned'
-  let notFound = false
 
   // Competitor view: read the competitor's re-classification off the same row.
-  // No diagnosis here (diagnosis is brand-specific), so cells aren't clickable.
+  // No detail panel here (analysis is brand-specific), so cells aren't clickable.
   if (competitor) {
     const cr = m && m.status === 'completed' ? compResultFor(m, competitor) : undefined
     if (!m || m.status !== 'completed') { title = m ? m.status : 'Not scanned' }
@@ -396,20 +595,23 @@ function MentionCell({ m, onDiagnose, competitor }: { m: Mention | undefined; on
     )
   }
 
+  const completed = m?.status === 'completed'
   if (m) {
     if (m.status === 'failed') { content = <span style={{ color: '#cbd5e1' }}>—</span>; title = m.failure_reason ?? 'failed' }
     else if (m.status === 'queued' || m.status === 'processing') { content = <span style={{ color: '#94a3b8' }}>…</span>; title = m.status }
-    else if (m.mention_found) { content = <Check size={16} color="#15803d" />; title = `Found (${m.mention_type ?? 'direct'})` }
-    else { content = <X size={15} color="#dc2626" />; title = 'Not found — click to diagnose'; notFound = true }
+    else if (m.mention_found) { content = <Check size={16} color="#15803d" />; title = 'Found — click for details' }
+    else { content = <X size={15} color="#dc2626" />; title = 'Not found — click for why + details' }
   }
-  const clickable = notFound && onDiagnose && m
+  const aioKind = m && completed && AIO_ENGINES.has(m.engine) ? m.response_analysis?.aio?.mention_kind : undefined
+  const clickable = completed && onOpen && m
   return (
     <td
       style={{ textAlign: 'center', padding: '8px 12px', borderBottom: '1px solid #f1f5f9', cursor: clickable ? 'pointer' : 'default' }}
       title={title}
-      onClick={clickable ? () => onDiagnose!(m!) : undefined}
+      onClick={clickable ? () => onOpen!(m!) : undefined}
     >
       {content}
+      {aioKind && <AioBadge kind={aioKind} />}
     </td>
   )
 }

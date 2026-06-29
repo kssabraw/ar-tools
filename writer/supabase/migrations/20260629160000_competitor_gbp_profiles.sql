@@ -51,5 +51,5 @@ alter table async_jobs
     'local_seo_silo', 'local_seo_generate', 'local_seo_reoptimize_url',
     'local_seo_reoptimize_page', 'service_page_plan', 'rank_location_derive',
     'brand_scan', 'brand_report', 'notification_dispatch', 'reopt_plan',
-    'client_report', 'maps_analyze', 'competitor_gbp'
+    'client_report', 'maps_analyze', 'asana_monthly', 'competitor_gbp'
   ]));
