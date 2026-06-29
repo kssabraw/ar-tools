@@ -127,9 +127,10 @@ strategist_signals                                 -- §6.8 the monitoring/anoma
   id, engagement_id (FK), module (enum: organic|maps|ai_visibility|ga4|gbp_performance|content),
   kind (enum: goal_gap|regression|win|anomaly|plateau|new_competitor|cannibalization|coverage_loss|...),
   metric, direction, magnitude (numeric), goal_target (numeric), goal_state (met|close|gap|null),
-  baseline_ref (jsonb), detected_at,
+  baseline_ref (jsonb), detected_at, algo_update_id (FK algo_updates, nullable — §6.11),
   status (open|actioned|dismissed|resolved), action_id (FK strategy_actions, when actioned)
   -- goal_gap = distance from the fixed goal set (§4.6); others = trend/anomaly vs baseline
+  -- algo_update_id set when a regression cluster correlates to a Google update (§6.11)
   -- generalizes the existing rank_alerts; feeds the continuous-optimization engine
 
 role_assignees                                     -- routing map for Asana auto-assignment
@@ -540,6 +541,27 @@ The "suggests tweaks and fixes" pillar — the steady‑state twin of the Strate
 ### 6.10 Asana sync — `services/asana_sync.py`
 The "assigns tasks to Asana boards" pillar. A creds‑gated dispatcher (`asana_sync` job) that: (a) ensures the engagement's board exists/maps (`engagement_asana`); (b) for each `assigned` action, creates/updates an Asana task — **role‑routed** through `role_assignees` (category → role → `asana_user_gid`), in the category's section, with priority/effort custom fields + cadence‑derived due date; (c) **pulls status back** (webhook if available, else poll) so an Asana completion closes the action and feeds the monitor. Mirrors the `notifications.py` channel pattern (best‑effort, only fires when the Asana token is set). New external dependency — Section 9.
 
+### 6.11 Algo‑update timeline — market context for the monitor (✅ design settled 2026‑06‑29)
+Lets the monitor (§6.8) + optimizer (§6.9) tell **market‑wide movement from client‑specific regressions** — "a one‑day drop across many keywords = a Google update, not your content." Without it, the optimizer would emit N per‑page reoptimize actions for what is really one algo event; with it, the recommendation flips to "align with the update's theme and **hold** individual reopts until the rollout completes."
+
+**Data — an agency‑wide `algo_updates` reference table** (not per‑client):
+```
+algo_updates
+  id, name, update_type (core|spam|helpful_content|reviews|product_reviews|local|other),
+  surface (organic|local|ai|multi), started_on (date), ended_on (date, null while rolling out),
+  confirmed (bool), source_url, notes, created_at
+```
+Seeded via migration with recent confirmed updates; refreshed **best‑effort** by a slow (weekly) `algo_update_sync` job that pulls **Google's Search Status Dashboard** (the authoritative free source for confirmed ranking/core/spam updates) and upserts. If no source is reachable it still works from the seed + manual entries (updates are infrequent — a handful/year — so manual upkeep is trivial). **Cost: free.**
+
+**Correlation heuristic** — `services/algo_updates.py` (pure): a regression signal is tagged **`algo_correlated`** only when (a) its detected date falls in an `algo_updates` window for the matching `surface`, **and** (b) the same window saw a **cluster** — ≥ `algo_cluster_min_pct` (default 30%) of the client's tracked keywords (or ≥ `algo_cluster_min_count`) regress together. A lone keyword dropping during an update window is **not** auto‑attributed (could be coincidental) — the cluster is the market‑wide tell. During an **active rollout** (`ended_on` null) the monitor flags "rollout in progress — hold."
+
+**Downstream effects:**
+- `strategist_signals` gains a nullable **`algo_update_id`** FK (added to §3.1); correlated regressions carry it.
+- The optimizer **collapses an algo‑correlated cluster into one `algo_response` action** (`module = organic`/`cross`): *"Google [name] ([type]) rolled out [dates]; this looks market‑wide — align with its theme (core/helpful‑content → E‑E‑A‑T + depth, prune thin pages; reviews → first‑hand review content; spam → audit spam signals) and **hold individual reoptimizations until the rollout completes**"* — and **suppresses the per‑keyword `rank_drop`/reoptimize actions** for that cluster (no wasted 20‑page reopt).
+- The **Strategist digest** notes active rollouts ("[Update] rolling out; X% of keywords moved — likely algo‑driven").
+
+Primarily **organic**, but the `surface` field lets a `local`/`ai` update apply to the Maps/LLM monitors too. **Build timing:** spec now; built with the monitor (Phase 5).
+
 ---
 
 ## 7. The Autonomous Executor — `services/engagement_executor.py`
@@ -633,6 +655,7 @@ Large surface area — built in slices, each shippable and useful on its own.
 7. **One engagement per client** assumption — confirm we never need concurrent engagements per client.
 8. **Monitor cadence + signal severity thresholds** — default weekly per engagement; what magnitude of trend change counts as a `regression`/`win` worth a signal (to avoid noise), and which severities auto‑flow vs. re‑enter `plan_review`.
 9. **Strategist digest cadence/channel** — weekly Slack digest by default? (Email is still deferred per the notifications service status.)
+9b. **History / external context (§6.11):** the **algo‑update timeline is now designed** (§6.11 — correlate regression clusters to confirmed Google updates). Still open: **historical action→outcome import** (the effectiveness loop is forward‑looking only), plus the exact `algo_cluster_min_pct`/`_count` thresholds.
 10. **Goal model specifics (§4.6) — ✅ RESOLVED 2026‑06‑29:** maps grids are already 5‑mile (3‑mi metric = inner subset); absent‑cell penalty = **21**; LLM bar = **all six engines, excluding any that didn't trigger** (esp. Google AI Overview). *Remaining small build item:* ensure `brand_scan` records a per‑engine `triggered`/`answered` flag so a non‑triggering engine is dropped from the bar rather than scored as a miss. Targets stay global constants (per‑client override deferred).
 11. **SerMaStr naming** — unify the strategy brain (**SerMaStr**) and the existing Slack assistant (**SerMastr**) under one brand (brain + voice), or keep distinct names? (§4.7)
 12. **SEO SOP store (§4.7)** — format + ingest of the SOPs you'll provide (structured checklist vs. prose playbook), and how they load into SerMaStr (system‑prompt vs. retrieval). Pending your SOPs.
