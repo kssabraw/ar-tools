@@ -238,10 +238,16 @@ def match_project_fields(
     status_cf = _match_field(settings_rows, status_field_name)
     category_cf = _match_field(settings_rows, category_field_name)
     effort_cf = _match_field(settings_rows, effort_field_name, subtype="number")
+    category_options = {
+        (o.get("name") or "").strip().casefold(): o.get("gid")
+        for o in ((category_cf or {}).get("enum_options") or [])
+        if o.get("gid")
+    }
     return {
         "status_field_gid": status_cf.get("gid") if status_cf else None,
         "not_started_option_gid": _match_option(status_cf, not_started_option_name),
         "category_field_gid": category_cf.get("gid") if category_cf else None,
+        "category_options": category_options,
         "effort_field_gid": effort_cf.get("gid") if effort_cf else None,
     }
 
@@ -321,6 +327,26 @@ def distribute_tasks(task_hours_list: list[float], members: list[dict]) -> list[
         result[i] = best_gid
         remaining[best_gid] -= float(task_hours_list[i])
     return result
+
+
+def build_task_update(row: dict, fields: dict) -> dict:
+    """Build a ``PUT /tasks`` body (assignee + custom fields) for a task that was
+    created by **instantiating an Asana task template** (which already set its
+    name + subtasks). Mirrors build_task_payload's field logic, minus
+    name/project/section."""
+    data: dict[str, Any] = {}
+    if row.get("assignee_gid"):
+        data["assignee"] = row["assignee_gid"]
+    custom_fields: dict[str, Any] = {}
+    if fields.get("status_field_gid") and fields.get("not_started_option_gid"):
+        custom_fields[fields["status_field_gid"]] = fields["not_started_option_gid"]
+    if fields.get("category_field_gid") and row.get("category_option_gid"):
+        custom_fields[fields["category_field_gid"]] = row["category_option_gid"]
+    if fields.get("effort_field_gid") and row.get("est_hours") is not None:
+        custom_fields[fields["effort_field_gid"]] = row["est_hours"]
+    if custom_fields:
+        data["custom_fields"] = custom_fields
+    return data
 
 
 def aggregate_member_workload(
@@ -453,6 +479,40 @@ async def _post(path: str, data: dict) -> Any:
         resp = await client.post(f"{_BASE_URL}{path}", headers=_headers(), json={"data": data})
         resp.raise_for_status()
         return resp.json().get("data")
+
+
+async def _put(path: str, data: dict) -> Any:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.put(f"{_BASE_URL}{path}", headers=_headers(), json={"data": data})
+        resp.raise_for_status()
+        return resp.json().get("data")
+
+
+# ---------------------------------------------------------------------------
+# Task templates (Asana's native templates — instantiate to preserve subtasks)
+# ---------------------------------------------------------------------------
+async def list_project_task_templates(project_gid: str) -> list[dict]:
+    """The Asana task templates defined on a project [{gid, name}]."""
+    return await _get("/task_templates", {"project": project_gid, "opt_fields": "name"}) or []
+
+
+async def instantiate_task_template(template_gid: str, name: str) -> Optional[str]:
+    """Instantiate an Asana task template (creates the task + its subtasks) and
+    return the new task's GID. Asana returns a Job whose ``new_task`` references
+    the created task."""
+    job = await _post(f"/task_templates/{template_gid}/instantiateTask", {"name": name})
+    new_task = (job or {}).get("new_task") or {}
+    return new_task.get("gid")
+
+
+async def update_task(task_gid: str, data: dict) -> dict:
+    """Update a task (assignee / custom fields)."""
+    return await _put(f"/tasks/{task_gid}", data)
+
+
+async def add_task_to_section(section_gid: str, task_gid: str) -> Any:
+    """Move a task into a section (within its project)."""
+    return await _post(f"/sections/{section_gid}/addTask", {"task": task_gid})
 
 
 async def list_sections(project_gid: str) -> list[dict]:

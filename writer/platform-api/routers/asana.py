@@ -26,6 +26,9 @@ from models.asana import (
     AsanaProjectMappingRequest,
     AsanaTaskTemplateItem,
     AsanaTaskTemplateReplaceRequest,
+    AsanaLibraryReplaceRequest,
+    AsanaLibraryTaskItem,
+    AsanaTaskTemplateRef,
     AsanaTeamMemberItem,
     AsanaTeamMembersReplaceRequest,
     AsanaUser,
@@ -99,6 +102,50 @@ async def replace_team_members(
         logger.error("asana_replace_team_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
     return await list_team_members(auth)
+
+
+# ---------------------------------------------------------------------------
+# Task Library (global standard durations)
+# ---------------------------------------------------------------------------
+@router.get("/asana/task-library", response_model=list[AsanaLibraryTaskItem])
+async def list_task_library(auth: dict = Depends(require_auth)) -> list[AsanaLibraryTaskItem]:
+    rows = (
+        get_supabase()
+        .table("asana_task_library")
+        .select("name, default_hours, default_category_name, active")
+        .order("sort_order")
+        .execute()
+    ).data or []
+    return [AsanaLibraryTaskItem(**r) for r in rows]
+
+
+@router.put("/asana/task-library", response_model=list[AsanaLibraryTaskItem])
+async def replace_task_library(
+    body: AsanaLibraryReplaceRequest,
+    auth: dict = Depends(require_auth),
+) -> list[AsanaLibraryTaskItem]:
+    """Replace the whole Task Library. Deduped by name (last wins)."""
+    supabase = get_supabase()
+    seen: dict[str, dict] = {}
+    for idx, item in enumerate(body.items):
+        if not item.name or not item.name.strip():
+            continue
+        seen[item.name.strip().casefold()] = {
+            "name": item.name.strip(),
+            "default_hours": item.default_hours,
+            "default_category_name": item.default_category_name,
+            "active": item.active,
+            "sort_order": idx,
+        }
+    try:
+        supabase.table("asana_task_library").delete().neq("name", "").execute()
+        rows = list(seen.values())
+        if rows:
+            supabase.table("asana_task_library").insert(rows).execute()
+    except Exception as exc:
+        logger.error("asana_replace_library_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return await list_task_library(auth)
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +268,28 @@ async def workspace_users(auth: dict = Depends(require_auth)) -> list[AsanaUser]
         logger.warning("asana_workspace_users_failed", extra={"error": str(exc)})
         return []
     return [AsanaUser(**u) for u in users]
+
+
+@router.get(
+    "/clients/{client_id}/asana/project-task-templates",
+    response_model=list[AsanaTaskTemplateRef],
+)
+async def project_task_templates(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> list[AsanaTaskTemplateRef]:
+    """The Asana task templates on this client's project (names matching a
+    template row are instantiated with their subtasks)."""
+    if not asana_service.is_configured():
+        return []
+    project_gid = asana_monthly.get_project_gid(str(client_id))
+    if not project_gid:
+        return []
+    try:
+        rows = await asana_service.list_project_task_templates(project_gid)
+    except Exception as exc:
+        logger.warning("asana_project_task_templates_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        return []
+    return [AsanaTaskTemplateRef(gid=r["gid"], name=r.get("name")) for r in rows if r.get("gid")]
 
 
 @router.get(

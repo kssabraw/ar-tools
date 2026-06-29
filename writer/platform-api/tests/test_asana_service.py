@@ -126,6 +126,17 @@ def test_build_task_payload_status_needs_both_gids():
     assert payload["custom_fields"] == {"f_cat": "opt_gbp"}
 
 
+def test_build_task_update():
+    fields = {"status_field_gid": "f_status", "not_started_option_gid": "opt_ns",
+              "category_field_gid": "f_cat", "effort_field_gid": "f_hrs"}
+    row = {"assignee_gid": "minda", "category_option_gid": "opt_gbp", "est_hours": 3}
+    upd = asana.build_task_update(row, fields)
+    assert upd["assignee"] == "minda"
+    assert upd["custom_fields"] == {"f_status": "opt_ns", "f_cat": "opt_gbp", "f_hrs": 3}
+    # Unassigned + no resolvable fields → empty update.
+    assert asana.build_task_update({}, {}) == {}
+
+
 def test_payload_from_template_row_reads_config(monkeypatch):
     monkeypatch.setattr(settings, "asana_category_field_gid", "f_cat")
     monkeypatch.setattr(settings, "asana_status_field_gid", "f_status")
@@ -157,7 +168,8 @@ _NAMES = dict(status_field_name="Status", not_started_option_name="Not Started",
 def test_match_project_fields_resolves_all():
     m = asana.match_project_fields(_settings_rows(), **_NAMES)
     assert m == {"status_field_gid": "s", "not_started_option_gid": "ns",
-                 "category_field_gid": "cat", "effort_field_gid": "h"}
+                 "category_field_gid": "cat", "category_options": {"content": "o1"},
+                 "effort_field_gid": "h"}
 
 
 def test_match_project_fields_case_insensitive():
@@ -178,7 +190,7 @@ def test_match_project_fields_misses_return_none():
         category_field_name="Missing", effort_field_name="Hours",
     )
     assert m == {"status_field_gid": None, "not_started_option_gid": None,
-                 "category_field_gid": None, "effort_field_gid": None}
+                 "category_field_gid": None, "category_options": {}, "effort_field_gid": None}
 
 
 def test_match_project_fields_option_name_mismatch():

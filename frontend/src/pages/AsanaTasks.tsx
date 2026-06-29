@@ -8,7 +8,8 @@ import {
 import { api } from '../lib/api'
 import type {
   Client, AsanaProjectMapping, AsanaTaskTemplateItem, AsanaUser,
-  AsanaCategoryOption, AsanaGenerateMonthResponse, AsanaTeamMember,
+  AsanaCategoryOption, AsanaGenerateMonthResponse, AsanaTeamMember, AsanaLibraryTaskItem,
+  AsanaTaskTemplateRef,
 } from '../lib/types'
 
 const AUTO = '__auto__'  // assignee-select sentinel for "auto-distribute"
@@ -62,6 +63,25 @@ export function AsanaTasks() {
     queryKey: ['asana-team-members'],
     queryFn: () => api.get<AsanaTeamMember[]>(`/asana/team-members`),
   })
+
+  const { data: library } = useQuery<AsanaLibraryTaskItem[]>({
+    queryKey: ['asana-task-library'],
+    queryFn: () => api.get<AsanaLibraryTaskItem[]>(`/asana/task-library`),
+  })
+  const libByName = (name: string) =>
+    (library ?? []).find((t) => t.name.trim().toLowerCase() === name.trim().toLowerCase())
+
+  const { data: asanaTemplates } = useQuery<AsanaTaskTemplateRef[]>({
+    queryKey: ['asana-project-task-templates', id],
+    queryFn: () => api.get<AsanaTaskTemplateRef[]>(`/clients/${id}/asana/project-task-templates`),
+    enabled: Boolean(id) && configured && Boolean(mapping?.project_gid),
+  })
+  const templateNames = new Set((asanaTemplates ?? []).map((t) => (t.name ?? '').trim().toLowerCase()))
+  const hasSubtaskTemplate = (name: string) => templateNames.has(name.trim().toLowerCase())
+  const datalistNames = Array.from(new Set([
+    ...(library ?? []).map((t) => t.name),
+    ...(asanaTemplates ?? []).map((t) => t.name ?? ''),
+  ].filter(Boolean)))
 
   // ── Local editable state ────────────────────────────────────────────
   const [projectGid, setProjectGid] = useState('')
@@ -215,10 +235,18 @@ export function AsanaTasks() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <h2 style={cardTitle}>Monthly task template</h2>
-            <p style={cardSub}>One row per task. Order here is the order they’re created in Asana. Est. hrs (optional) feeds the Team Workload view.</p>
+            <p style={cardSub}>
+              One row per task. Type a name or pick from your{' '}
+              <Link to="/asana/task-library" style={{ color: '#4f46e5' }}>Task Library</Link>{' '}
+              — blank Est. hrs / Category inherit the library’s defaults. A name matching an
+              Asana <strong>task template</strong> (⊟) is created <strong>with its subtasks</strong>.
+            </p>
           </div>
           <button style={ghostBtn} onClick={addRow}><Plus size={14} /> Add task</button>
         </div>
+        <datalist id="asana-task-library">
+          {datalistNames.map((n) => <option key={n} value={n} />)}
+        </datalist>
 
         {rows.length === 0 ? (
           <div style={emptyBox}>No tasks yet. Click <strong>Add task</strong> to start the template.</div>
@@ -229,12 +257,19 @@ export function AsanaTasks() {
             </div>
             {rows.map((r, i) => (
               <div key={i} style={{ display: 'grid', gridTemplateColumns: rowGrid, gap: 8, alignItems: 'center' }}>
-                <input
-                  style={input}
-                  placeholder="Task name"
-                  value={r.name}
-                  onChange={(e) => updateRow(i, { name: e.target.value })}
-                />
+                <div style={{ position: 'relative' }}>
+                  <input
+                    style={{ ...input, paddingRight: hasSubtaskTemplate(r.name) ? 26 : 10 }}
+                    placeholder="Task name"
+                    list="asana-task-library"
+                    value={r.name}
+                    onChange={(e) => updateRow(i, { name: e.target.value })}
+                  />
+                  {hasSubtaskTemplate(r.name) && (
+                    <span title="Matches an Asana task template — created with its subtasks"
+                      style={{ position: 'absolute', right: 8, top: 7, fontSize: 13, color: '#4f46e5' }}>⊟</span>
+                  )}
+                </div>
                 <select
                   style={{ ...input, ...(r.auto_assign ? { color: '#4338ca', fontWeight: 600 } : {}) }}
                   value={r.auto_assign ? AUTO : (r.assignee_gid ?? '')}
@@ -273,7 +308,11 @@ export function AsanaTasks() {
                   type="number"
                   min="0"
                   step="0.5"
-                  placeholder="—"
+                  placeholder={
+                    r.est_hours == null && libByName(r.name)?.default_hours != null
+                      ? `${libByName(r.name)!.default_hours} (lib)`
+                      : '—'
+                  }
                   value={r.est_hours ?? ''}
                   onChange={(e) => updateRow(i, { est_hours: e.target.value === '' ? null : Number(e.target.value) })}
                 />

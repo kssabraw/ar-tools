@@ -36,6 +36,12 @@ def _patch_common(monkeypatch, sections, created_calls):
         }
 
     monkeypatch.setattr(asana_service, "resolve_project_fields", _resolve)
+    monkeypatch.setattr(asana_monthly, "get_task_library", lambda: {})
+
+    async def _no_templates(project_gid):
+        return []
+
+    monkeypatch.setattr(asana_service, "list_project_task_templates", _no_templates)
 
     async def _list_sections(project_gid):
         return sections
@@ -71,6 +77,49 @@ async def test_generate_creates_section_and_tasks(monkeypatch):
     assert created[0]["assignee"] == "minda"
     assert created[0]["memberships"] == [{"project": "proj1", "section": "sec_new"}]
     assert created[0]["custom_fields"] == {"f_status": "opt_ns", "f_cat": "opt_gbp"}
+
+
+async def test_generate_instantiates_matching_task_template(monkeypatch):
+    created: list[dict] = []
+    _patch_common(monkeypatch, [{"gid": "b", "name": "Untitled section"}], created)
+
+    async def _templates(project_gid):
+        return [{"gid": "tmpl_gbp", "name": "GBP Blast"}]
+
+    inst, upd, sec = [], [], []
+
+    async def _instantiate(template_gid, name):
+        inst.append((template_gid, name))
+        return "newtask1"
+
+    async def _update(task_gid, data):
+        upd.append((task_gid, data))
+        return {}
+
+    async def _add_section(section_gid, task_gid):
+        sec.append((section_gid, task_gid))
+        return {}
+
+    monkeypatch.setattr(asana_service, "list_project_task_templates", _templates)
+    monkeypatch.setattr(asana_service, "instantiate_task_template", _instantiate)
+    monkeypatch.setattr(asana_service, "update_task", _update)
+    monkeypatch.setattr(asana_service, "add_task_to_section", _add_section)
+    monkeypatch.setattr(asana_monthly, "get_active_templates", lambda cid: [
+        {"name": "GBP Blast", "assignee_gid": "minda", "category_option_gid": "opt_gbp"},
+        {"name": "Ad-hoc", "assignee_gid": None},  # no matching template → plain task
+    ])
+
+    result = await asana_monthly.generate_month_for_client("c1", date(2026, 7, 1))
+    assert result["status"] == "created" and result["created"] == 2
+    # GBP Blast instantiated (subtasks preserved), placed in the section, fields set.
+    assert inst == [("tmpl_gbp", "GBP Blast")]
+    assert sec == [("sec_new", "newtask1")]
+    assert upd[0][0] == "newtask1"
+    assert upd[0][1]["assignee"] == "minda"
+    assert upd[0][1]["custom_fields"] == {"f_status": "opt_ns", "f_cat": "opt_gbp"}
+    # Ad-hoc went the plain-task path; GBP Blast did not.
+    assert any(c["name"] == "Ad-hoc" for c in created)
+    assert not any(c["name"] == "GBP Blast" for c in created)
 
 
 async def test_generate_idempotent_when_section_exists(monkeypatch):
@@ -143,3 +192,38 @@ async def test_assign_auto_tasks_off(monkeypatch):
     monkeypatch.setattr(settings, "asana_auto_distribute_enabled", False)
     templates = [{"name": "x", "auto_assign": True}]
     assert await asana_monthly.assign_auto_tasks("c1", templates) == 0
+
+
+# ---------------------------------------------------------------------------
+# Task Library inheritance
+# ---------------------------------------------------------------------------
+def test_apply_library_defaults_fills_blanks_only():
+    library = {
+        "gbp blast": {"name": "GBP Blast", "default_hours": 1.5, "default_category_name": "GBP Authority"},
+        "40 citations": {"name": "40 Citations", "default_hours": 4, "default_category_name": "Link Building"},
+    }
+    category_options = {"gbp authority": "opt_gbp", "link building": "opt_links"}
+    templates = [
+        {"name": "GBP Blast", "est_hours": None, "category_option_gid": None},      # inherits both
+        {"name": "40 Citations", "est_hours": 6, "category_option_gid": "opt_x"},   # overridden — untouched
+        {"name": "Ad-hoc", "est_hours": None, "category_option_gid": None},         # not in library
+    ]
+    applied = asana_monthly.apply_library_defaults(templates, library, category_options)
+    assert applied == 1
+    assert templates[0]["est_hours"] == 1.5
+    assert templates[0]["category_option_gid"] == "opt_gbp"
+    # Overridden row keeps its own values.
+    assert templates[1]["est_hours"] == 6
+    assert templates[1]["category_option_gid"] == "opt_x"
+    # Ad-hoc row stays blank.
+    assert templates[2]["est_hours"] is None
+
+
+def test_apply_library_defaults_case_insensitive_and_partial():
+    library = {"map embeds": {"name": "Map Embeds", "default_hours": 2, "default_category_name": "Link Building"}}
+    # Category name not in this project's options → only hours inherited.
+    templates = [{"name": "map embeds", "est_hours": None, "category_option_gid": None}]
+    applied = asana_monthly.apply_library_defaults(templates, library, {})
+    assert applied == 1
+    assert templates[0]["est_hours"] == 2
+    assert templates[0]["category_option_gid"] is None

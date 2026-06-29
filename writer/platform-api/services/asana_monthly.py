@@ -50,6 +50,43 @@ def get_active_templates(client_id: str) -> list[dict]:
     ).data or []
 
 
+def get_task_library() -> dict:
+    """The active Task Library keyed by lowercased name → row (default hours +
+    category). The single source of truth for standard task durations."""
+    rows = (
+        get_supabase()
+        .table("asana_task_library")
+        .select("name, default_hours, default_category_name")
+        .eq("active", True)
+        .execute()
+    ).data or []
+    return {(r.get("name") or "").strip().casefold(): r for r in rows}
+
+
+def apply_library_defaults(templates: list[dict], library: dict, category_options: dict) -> int:
+    """Fill each template row's blank est_hours / category from the Task Library
+    (matched by task name), mutating rows in place. A row's own value always
+    wins (per-client override). Returns how many rows inherited something. Pure
+    — unit-tested."""
+    applied = 0
+    for row in templates:
+        lib = library.get((row.get("name") or "").strip().casefold())
+        if not lib:
+            continue
+        touched = False
+        if row.get("est_hours") is None and lib.get("default_hours") is not None:
+            row["est_hours"] = lib["default_hours"]
+            touched = True
+        if not row.get("category_option_gid") and lib.get("default_category_name"):
+            opt = (category_options or {}).get(lib["default_category_name"].strip().casefold())
+            if opt:
+                row["category_option_gid"] = opt
+                touched = True
+        if touched:
+            applied += 1
+    return applied
+
+
 def get_eligible_assignees(client_id: str) -> list[str]:
     """The per-client auto-distribution eligibility list (Asana user GIDs)."""
     rows = (
@@ -111,6 +148,27 @@ async def assign_auto_tasks(client_id: str, templates: list[dict]) -> int:
     return n
 
 
+async def _create_task_for_row(
+    row: dict, project_gid: str, section_gid: str, fields: dict, template_by_name: dict
+) -> None:
+    """Create one task: instantiate the matching Asana task template (preserving
+    its subtasks) then set assignee/fields + move into the section; otherwise
+    create a plain task."""
+    name = (row.get("name") or "").strip()
+    template_gid = template_by_name.get(name.casefold())
+    if template_gid:
+        new_task_gid = await asana_service.instantiate_task_template(template_gid, name)
+        if new_task_gid:
+            update = asana_service.build_task_update(row, fields)
+            if update:
+                await asana_service.update_task(new_task_gid, update)
+            await asana_service.add_task_to_section(section_gid, new_task_gid)
+            return
+        # Instantiation returned no task → fall back to a plain task below.
+    payload = asana_service.payload_from_template_row(row, project_gid, section_gid, fields=fields)
+    await asana_service.create_task(payload)
+
+
 # ---------------------------------------------------------------------------
 # Core: generate one month for one client
 # ---------------------------------------------------------------------------
@@ -142,9 +200,24 @@ async def generate_month_for_client(client_id: str, target: date) -> dict:
     # (project-local fields differ per project), once for the whole batch.
     fields = await asana_service.resolve_project_fields(project_gid)
 
+    # Inherit standard durations / category from the Task Library (by task name)
+    # for any row that didn't set its own — the single source of truth.
+    apply_library_defaults(templates, get_task_library(), fields.get("category_options") or {})
+
     # Capacity-aware auto-distribution: fill in assignees for auto-assign rows
     # (mutates those rows' assignee_gid in place before payloads are built).
     await assign_auto_tasks(client_id, templates)
+
+    # A row whose name matches an Asana task template is INSTANTIATED (so its
+    # subtasks come along); others are created as plain tasks. Best-effort: if
+    # the template list can't be fetched, everything falls back to plain tasks.
+    template_by_name: dict[str, str] = {}
+    try:
+        for t in await asana_service.list_project_task_templates(project_gid):
+            if t.get("gid") and t.get("name"):
+                template_by_name[t["name"].strip().casefold()] = t["gid"]
+    except Exception as exc:
+        logger.warning("asana_monthly.task_templates_failed", extra={"client_id": client_id, "error": str(exc)})
 
     anchor = asana_service.month_insert_anchor_gid(sections)
     new_section = await asana_service.create_section(project_gid, label, insert_before=anchor)
@@ -153,9 +226,8 @@ async def generate_month_for_client(client_id: str, target: date) -> dict:
     created = 0
     errors: list[str] = []
     for row in templates:
-        payload = asana_service.payload_from_template_row(row, project_gid, section_gid, fields=fields)
         try:
-            await asana_service.create_task(payload)
+            await _create_task_for_row(row, project_gid, section_gid, fields, template_by_name)
             created += 1
         except Exception as exc:  # one bad task shouldn't abort the rest
             errors.append(f"{row.get('name')}: {str(exc)[:120]}")

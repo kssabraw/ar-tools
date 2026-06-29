@@ -57,6 +57,12 @@ class AsanaCategoryOption(BaseModel):
     name: Optional[str] = None
 
 
+class AsanaTaskTemplateRef(BaseModel):
+    """An Asana native task template on a project (instantiated to keep subtasks)."""
+    gid: str
+    name: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Team & capacity (Team Workload)
 # ---------------------------------------------------------------------------
@@ -69,6 +75,20 @@ class AsanaTeamMemberItem(BaseModel):
 
 class AsanaTeamMembersReplaceRequest(BaseModel):
     members: list[AsanaTeamMemberItem] = []
+
+
+# ---------------------------------------------------------------------------
+# Task Library (global standard durations, keyed by name)
+# ---------------------------------------------------------------------------
+class AsanaLibraryTaskItem(BaseModel):
+    name: str
+    default_hours: Optional[float] = None
+    default_category_name: Optional[str] = None
+    active: bool = True
+
+
+class AsanaLibraryReplaceRequest(BaseModel):
+    items: list[AsanaLibraryTaskItem] = []
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
 import { AsanaTasks } from './pages/AsanaTasks'
 import { TeamWorkload } from './pages/TeamWorkload'
+import { TaskLibrary } from './pages/TaskLibrary'
 import { ClientReports } from './pages/ClientReports'
 import { GscResearch } from './pages/GscResearch'
 import { AiVisibility } from './pages/AiVisibility'
@@ -77,6 +78,7 @@ export default function App() {
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
                       <Route path="/workload" element={<TeamWorkload />} />
+                      <Route path="/asana/task-library" element={<TaskLibrary />} />
                       <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>

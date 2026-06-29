@@ -210,6 +210,23 @@ client; (2) map it in the **Asana Tasks** page (paste project GID → Save); (3)
 its monthly **template** (tasks + assignee + Service Type [+ est. hrs]). Then the
 monthly job adds a `<Month YYYY>` section automatically each month.
 
+**Task-template instantiation (built, separate PR):** the team's recurring tasks
+are **Asana task templates with subtasks**. The monthly job now **instantiates**
+the matching Asana task template (by name) so subtasks come along, then sets
+assignee/category/status + moves it into the month section; rows with no matching
+template fall back to a plain task. The Asana Tasks editor marks matching rows
+with **⊟**. No migration. Endpoint `…/asana/project-task-templates`.
+
+**Task Library (built, separate PR):** a global `asana_task_library` (migration
+`20260629170000`, **applied to live**) — the single source of truth for standard
+task **durations** (+ default category), keyed by **task name**. Client template
+rows inherit `default_hours` / category by name when blank (override per client by
+filling the row). Managed at **`/asana/task-library`**; the template editor's
+task-name input has a datalist of library names + an inherited "(lib)" hours hint.
+Hours feed auto-distribution immediately; they reach Asana once the effort number
+field exists. (The workload read also now sums the effort field **by name**, so
+real hours work across project-local fields once that field is added + named.)
+
 **Auto-distribution (built, separate PR):** a template row's assignee can be set to
 **Auto-distribute** instead of a person; the monthly job spreads those tasks across
 the client's **eligible team subset** ("Auto-assign team" picker on the Asana Tasks
