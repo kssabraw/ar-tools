@@ -155,6 +155,17 @@ async def get_brand_trends(client_id: UUID, auth: dict = Depends(require_auth)):
     return brand_service.get_trends(str(client_id))
 
 
+@router.get("/clients/{client_id}/brand/scans/{scan_batch_id}/insights")
+async def get_brand_scan_insights(
+    client_id: UUID,
+    scan_batch_id: UUID,
+    auth: dict = Depends(require_auth),
+):
+    """Batch-wide response-analysis insights: cross-engine consensus, discovered
+    (untracked) competitors, and AIO mention-kind / source-type tallies."""
+    return brand_service.get_scan_insights(str(client_id), str(scan_batch_id))
+
+
 # ── insights ─────────────────────────────────────────────────────────────────
 @router.post("/clients/{client_id}/brand/mentions/{mention_id}/diagnose")
 async def diagnose_brand_mention(

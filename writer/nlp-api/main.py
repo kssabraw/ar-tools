@@ -181,8 +181,10 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    ✗ Bad:  "Tree service is a complex process that requires professional expertise..."
    ✓ Good: "[Brand] handles tree removal in Anaheim — including emergency situations."
 
-2. ONE IDEA PER PARAGRAPH: Each <p> covers exactly one point. 3–5 sentences max.
-   Wall-of-text paragraphs are not cited by LLMs. Short, focused paragraphs are.
+2. ONE IDEA PER PARAGRAPH: Each <p> covers exactly one point. 2–3 sentences max —
+   aim for 2, never exceed 3. Wall-of-text paragraphs are not cited by LLMs. Short,
+   focused, well-spaced paragraphs are. Split a longer thought into two <p> blocks
+   rather than packing it into one.
 
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
    e.g. "Do you offer emergency tree removal in Anaheim?"

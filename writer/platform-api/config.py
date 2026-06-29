@@ -130,6 +130,15 @@ class Settings(BaseSettings):
     gsc_research_auto_enabled: bool = True
     gsc_research_interval_days: int = 30
 
+    # Client Reporting — campaign-health narrative (Phase 4). One Claude call per
+    # report synthesizes the gathered sections + signals (open drops, Action Plan)
+    # into an executive summary (health label, headline, wins/risks/next steps).
+    # Best-effort: absent the Anthropic key or on failure, the section is omitted.
+    client_report_health_model: str = "claude-sonnet-4-6"
+    client_report_health_max_tokens: int = 1100
+    # White-label: the agency name shown in the client-facing report footer.
+    client_report_agency_name: str = "Amazing Rankings"
+
     # Reoptimization planner — turns rank-tracker signals (open drops, rankability
     # Quick wins, GSC-Research cannibalization/hidden-wins) into a ranked,
     # recommend-only action plan per client. A weekly digest (the only auto
@@ -210,6 +219,16 @@ class Settings(BaseSettings):
     maps_core_adjacency_floor: float = 0.5  # score a weak pin keeps when ALL 8 neighbors are in the pack
     maps_min_area_pins: int = 3  # a suburb needs >= this many weak pins to be flagged as a weak area
     maps_geocode_max_cells: int = 250  # safety bound on geocode calls (above any real grid's cell count)
+
+    # Geo-grid analyzer + alerting (maps_analyzer): scan-over-scan decline
+    # thresholds for the `maps_analyze` job (each keyword's newest scan vs its
+    # previous completed scan). Conservative defaults — tune to taste.
+    maps_alert_grid_rank_drop_min: float = 1.5      # avg grid-rank worsening (spots) to alert
+    maps_alert_coverage_drop_pct: float = 15.0      # Top-3/Top-10 coverage drop (pts) to alert
+    maps_alert_found_drop_pct: float = 20.0         # found-pin coverage collapse (pts) → lost_pack
+    maps_alert_area_coverage_drop_pct: float = 25.0  # per-octant Top-3 coverage drop (pts) → area_decline
+    maps_alert_area_rank_drop: float = 2.0          # per-octant avg-rank worsening (spots) → area_decline
+    maps_alert_competitor_surge_pins: int = 5       # min newly-above pins for competitor_surge
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
@@ -309,6 +328,12 @@ class Settings(BaseSettings):
     # tasks run on demand, not per-row, so flagship cost is fine).
     brand_diagnose_model: str = "gpt-5.4"
     brand_suggest_model: str = "gpt-5.4"
+    # Auto-generate the invisibility diagnosis during the scan for every
+    # completed not-found cell (vs. lazily on first click). Best-effort: a
+    # failed/unconfigured diagnose never fails the cell, and the on-demand
+    # /diagnose endpoint still backfills older rows. Set False to revert to
+    # purely on-demand diagnosis (one gpt-5.4 call per invisible cell saved).
+    brand_autodiagnose_enabled: bool = True
     # Visibility report narrative (published as a Google Doc). Suite-default
     # Claude, matching the Maps Local Rank Analysis report.
     brand_report_model: str = "claude-sonnet-4-6"

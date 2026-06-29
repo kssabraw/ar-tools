@@ -440,6 +440,12 @@ async def poll_scan(scan_row: dict) -> str:
         enqueue_maps_report(scan_id)
     except Exception as exc:  # reporting is best-effort — never fail the scan
         logger.warning("maps_report_enqueue_failed", extra={"scan_id": scan_id, "error": str(exc)})
+    # Kick off the scan-over-scan analyzer + alerting (independent of the report).
+    try:
+        from services.maps_analyzer import enqueue_maps_analyze
+        enqueue_maps_analyze(scan_id)
+    except Exception as exc:  # analysis is best-effort — never fail the scan
+        logger.warning("maps_analyze_enqueue_failed", extra={"scan_id": scan_id, "error": str(exc)})
     logger.info("maps_scan_complete", extra={"scan_id": scan_id, "keywords": n})
     return "complete"
 

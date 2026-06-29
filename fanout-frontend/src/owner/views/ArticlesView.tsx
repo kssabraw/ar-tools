@@ -49,6 +49,16 @@ export function ArticlesView() {
     onError: (e: Error) => alert(e.message),
   });
 
+  // Bulk "Save to Drive": tick articles, then publish them all to Google Docs in
+  // one action. Client-side fan-out over the per-article endpoint (small
+  // concurrency cap) so no new backend surface is needed; per-row outcomes are
+  // tracked in `driveResults`.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [driveResults, setDriveResults] = useState<
+    Record<string, { status: "done" | "failed"; url?: string | null; error?: string }>
+  >({});
+
   if (q.isLoading) return <p className="muted">Loading articles…</p>;
   if (q.isError) return <p className="form-error">Couldn’t load articles.</p>;
 
@@ -56,6 +66,54 @@ export function ArticlesView() {
   const gh = session.data?.publish_config?.github ?? {};
   const repoConfigured = !!gh.repo;
   const driveAvailable = !!session.data?.publish_available?.drive;
+
+  const allIds = articles.map((a: ArticleListItem) => a.cluster_id);
+  const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
+  const selectedCount = selected.size;
+  const toggleOne = (id: string, on: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(id); else next.delete(id);
+      return next;
+    });
+  const toggleAll = (on: boolean) => setSelected(on ? new Set(allIds) : new Set());
+
+  const bulkSaveDrive = async () => {
+    const queue = articles
+      .filter((a: ArticleListItem) => selected.has(a.cluster_id))
+      .map((a: ArticleListItem) => a.cluster_id);
+    if (!queue.length || bulkBusy) return;
+    setBulkBusy(true);
+    setDriveResults({});
+    const CONCURRENCY = 3;
+    let next = 0;
+    const succeeded: string[] = [];
+    const worker = async () => {
+      for (;;) {
+        const cur = next++;
+        if (cur >= queue.length) return;
+        const id = queue[cur];
+        try {
+          const res = await publishClusterDrive(sessionId, id);
+          succeeded.push(id);
+          setDriveResults((r) => ({ ...r, [id]: { status: "done", url: res.url } }));
+        } catch (e) {
+          setDriveResults((r) => ({
+            ...r,
+            [id]: { status: "failed", error: e instanceof Error ? e.message : "Failed" },
+          }));
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, worker));
+    setBulkBusy(false);
+    // Drop the ones that published cleanly; leave failures ticked for retry.
+    setSelected((prev) => {
+      const n = new Set(prev);
+      for (const id of succeeded) n.delete(id);
+      return n;
+    });
+  };
 
   return (
     <div>
@@ -81,6 +139,17 @@ export function ArticlesView() {
         >
           {pushAll.isPending ? "Pushing…" : "Push all to GitHub"}
         </button>
+        {driveAvailable && (
+          <button
+            className="btn btn-primary"
+            style={{ width: "auto" }}
+            disabled={selectedCount === 0 || bulkBusy}
+            title="Save the ticked articles to Google Drive as Google Docs"
+            onClick={() => void bulkSaveDrive()}
+          >
+            {bulkBusy ? "Saving…" : selectedCount ? `Save ${selectedCount} to Drive` : "Save to Drive"}
+          </button>
+        )}
         <span className="muted">
           {articles.length} written article{articles.length === 1 ? "" : "s"} · stored in the app.
         </span>
@@ -101,11 +170,36 @@ export function ArticlesView() {
       ) : (
         <table className="kw-table">
           <thead>
-            <tr><th>Article</th><th>Words</th><th>Cost</th><th>Source</th><th>Written</th><th></th></tr>
+            <tr>
+              {driveAvailable && (
+                <th style={{ width: 28 }}>
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={(e) => toggleAll(e.target.checked)}
+                    disabled={bulkBusy}
+                    title="Select all"
+                  />
+                </th>
+              )}
+              <th>Article</th><th>Words</th><th>Cost</th><th>Source</th><th>Written</th><th></th>
+            </tr>
           </thead>
           <tbody>
-            {articles.map((a: ArticleListItem) => (
+            {articles.map((a: ArticleListItem) => {
+              const dr = driveResults[a.cluster_id];
+              return (
               <tr key={a.cluster_id}>
+                {driveAvailable && (
+                  <td>
+                    <input
+                      type="checkbox"
+                      checked={selected.has(a.cluster_id)}
+                      onChange={(e) => toggleOne(a.cluster_id, e.target.checked)}
+                      disabled={bulkBusy}
+                    />
+                  </td>
+                )}
                 <td>{a.name}</td>
                 <td>{a.total_word_count ?? "—"}</td>
                 <td>{a.cost_usd != null ? `$${Number(a.cost_usd).toFixed(2)}` : "—"}</td>
@@ -132,16 +226,25 @@ export function ArticlesView() {
                     <button
                       className="link-btn"
                       style={{ marginLeft: 10 }}
-                      disabled={saveDrive.isPending}
+                      disabled={saveDrive.isPending || bulkBusy}
                       title="Save this article to Google Drive as a Google Doc"
                       onClick={() => saveDrive.mutate(a.cluster_id)}
                     >
                       Drive
                     </button>
                   )}
+                  {dr?.status === "done" && (
+                    dr.url
+                      ? <a href={dr.url} target="_blank" rel="noopener noreferrer" className="link-btn" style={{ marginLeft: 10, color: "#16a34a" }}>Open Doc ↗</a>
+                      : <span style={{ marginLeft: 10, color: "#16a34a", fontWeight: 600 }}>Saved</span>
+                  )}
+                  {dr?.status === "failed" && (
+                    <span style={{ marginLeft: 10, color: "#dc2626" }} title={dr.error}>Failed</span>
+                  )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       )}

@@ -1,18 +1,21 @@
 """Slack conversational assistant — "SerMastr".
 
-Two-way Slack: when someone @mentions the bot in a channel, Slack POSTs an
-`app_mention` event to `/slack/events`. We resolve which client the question is
-about, assemble a compact context from the rank tracker's data (current ranks +
-status, open drops, the latest Action Plan, GSC opportunities), ask Claude, and
-post the answer back **in-thread**.
+Two-way Slack, **channel mode**: SerMastr lives in a dedicated channel, so Slack
+POSTs a `message` event to `/slack/events` for *every* message there (no @mention
+needed). We answer each plain human message — resolve which client it's about,
+assemble a cross-module context (rank tracker, Maps geo-grid, AI visibility,
+content, keyword research, setup), fold in the thread's prior turns for
+continuity, ask Claude, and post the answer back **in-thread**. The bot's own
+posts (rank-drop alerts etc.) and other bots are ignored, so it never loops.
 
 Read-only Q&A — the assistant only reads and explains; it never triggers work
 (that's a later, carefully-authed step). Anyone in the workspace can ask
 (per the product decision); inbound requests are verified by Slack's request
 signature so the public endpoint can't be spoofed.
 
-Split: pure helpers (signature verify, mention stripping, client resolution) are
-import-light and unit-tested; the context build + Claude call + Slack post do I/O.
+Split: pure helpers (signature verify, mention stripping, client resolution,
+history formatting) are import-light and unit-tested; the context build + thread
+fetch + Claude call + Slack post do I/O.
 """
 
 from __future__ import annotations
@@ -33,8 +36,10 @@ from db.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 _SLACK_POST_URL = "https://slack.com/api/chat.postMessage"
+_SLACK_REPLIES_URL = "https://slack.com/api/conversations.replies"
 _TIMEOUT = 20.0
 _LLM_TIMEOUT = 60.0  # bound the Claude call so a hung request can't pin the task
+_THREAD_HISTORY_LIMIT = 12  # prior thread messages folded into context for continuity
 _MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
 _SIG_MAX_SKEW_SECONDS = 60 * 5  # reject events older than 5 min (replay guard)
 
@@ -57,7 +62,12 @@ _SYSTEM = (
     "guessing. Answer using ONLY this data. Be concise and direct — a few sentences "
     "or a short list, Slack-friendly (you may use *bold* and bullets). Lead with the "
     "answer. As a strategist, you may connect signals across modules when relevant "
-    "(e.g. a ranking drop + a content gap). Never invent numbers or modules."
+    "(e.g. a ranking drop + a content gap). Never invent numbers or modules.\n\n"
+    "You can also TAKE ACTIONS via the provided tools (rebuild the Action Plan, "
+    "run a Maps geo-grid scan, run GSC Research, run an AI Visibility scan). If the "
+    "teammate is clearly asking you to run/start/trigger/rebuild one of these for the "
+    "client, call the matching tool instead of answering. If they're only asking about "
+    "results or anything else, answer normally — do NOT call a tool for a question."
 )
 
 
@@ -130,6 +140,52 @@ def format_context(client: dict, context: dict) -> str:
         **context,
     }
     return json.dumps(payload, default=str, ensure_ascii=False)
+
+
+def weak_cities(report_weak_locations) -> list[str]:
+    """City names from a Maps result's `report_weak_locations`. Pure, shape-tolerant.
+
+    The stored value is the geocoder's object — `{geocoded, capped, weak_areas:[...]}`
+    — but tolerate a bare list of area dicts or None/other too (so a shape change
+    never throws and drops the whole module)."""
+    rwl = report_weak_locations
+    if isinstance(rwl, dict):
+        areas = rwl.get("weak_areas") or []
+    elif isinstance(rwl, list):
+        areas = rwl
+    else:
+        areas = []
+    out: list[str] = []
+    for area in areas[:5]:
+        city = area.get("city") if isinstance(area, dict) else None
+        if city:
+            out.append(city)
+    return out
+
+
+def format_history(history: list[dict]) -> str:
+    """Render prior thread turns as a plain transcript for the prompt. Pure.
+
+    Folded into the user message (not structured messages) so multi-person threads
+    with no strict user/assistant alternation don't violate the LLM's role rules.
+    Each item is {"role": "assistant"|"user", "content": str}.
+    """
+    lines = []
+    for h in history:
+        who = "SerMastr" if h.get("role") == "assistant" else "Teammate"
+        text = (h.get("content") or "").strip()
+        if text:
+            lines.append(f"{who}: {text}")
+    return "\n".join(lines)
+
+
+def is_affirmative(text: str) -> bool:
+    """Whether a reply confirms a pending action (a 'yes'). Pure."""
+    t = (text or "").strip().lower().rstrip("!.")
+    return t in {
+        "yes", "y", "yep", "yeah", "yup", "confirm", "confirmed", "do it",
+        "go", "go ahead", "proceed", "ok", "okay", "sure", "please do",
+    } or t.startswith(("yes ", "yes,", "go ahead", "do it"))
 
 
 # ---------------------------------------------------------------------------
@@ -285,9 +341,8 @@ def _ctx_maps(supabase, client_id: str, today: date) -> Optional[dict]:
         ]
         weak: list[str] = []
         for r in results:
-            for area in (r.get("report_weak_locations") or [])[:5]:
-                city = area.get("city") if isinstance(area, dict) else None
-                if city and city not in weak:
+            for city in weak_cities(r.get("report_weak_locations")):
+                if city not in weak:
                     weak.append(city)
         if weak:
             out["weak_coverage_areas"] = weak[:10]
@@ -443,22 +498,107 @@ _CONTEXT_PROVIDERS = [
 
 
 # ---------------------------------------------------------------------------
+# Actions — SerMastr can trigger work (not just report). Anyone in the channel
+# may trigger (product decision); paid actions are gated behind an explicit
+# confirmation. Each runner enqueues an EXISTING job and returns a reply string.
+# ---------------------------------------------------------------------------
+def _act_rebuild_plan(client_id: str) -> str:
+    from services import reopt_planner
+
+    res = reopt_planner.build_plan(client_id, trigger="manual")
+    return f"✅ Rebuilt the Action Plan — {res.get('summary')}."
+
+
+def _act_maps_scan(client_id: str) -> str:
+    from services import local_dominator
+
+    started = local_dominator.enqueue_maps_scan(client_id, trigger="manual")
+    return (
+        "✅ Started a Maps geo-grid scan — results land in a few minutes."
+        if started
+        else "A Maps scan is already running for this client."
+    )
+
+
+def _act_gsc_research(client_id: str) -> str:
+    from services import gsc_research
+
+    job_id = gsc_research.enqueue_gsc_research(client_id, trigger="manual")
+    return (
+        "✅ Started a GSC Research analysis."
+        if job_id
+        else "A GSC Research run is already in progress for this client."
+    )
+
+
+def _act_ai_scan(client_id: str) -> str:
+    from fastapi import HTTPException
+
+    from services import brand_service
+
+    try:
+        brand_service.start_scan(client_id, None, None, False, None)
+        return "✅ Started an AI Visibility scan across the engines."
+    except HTTPException as exc:
+        if exc.detail == "no_keywords_to_scan":
+            return "No AI-visibility keywords are set up for this client yet — add some first."
+        raise
+
+
+# (tool name) → {label, paid, run}. Append here to add an action.
+_ACTIONS: dict[str, dict] = {
+    "rebuild_action_plan": {"label": "rebuild the Action Plan", "paid": False, "run": _act_rebuild_plan},
+    "run_maps_scan": {"label": "run a Maps geo-grid scan", "paid": True, "run": _act_maps_scan},
+    "run_gsc_research": {"label": "run a GSC Research analysis", "paid": True, "run": _act_gsc_research},
+    "run_ai_visibility_scan": {"label": "run an AI Visibility scan", "paid": True, "run": _act_ai_scan},
+}
+_ACTION_TOOLS = [
+    {"name": name, "description": meta["label"].capitalize() + " for the client.",
+     "input_schema": {"type": "object", "properties": {}}}
+    for name, meta in _ACTIONS.items()
+]
+
+# Pending paid actions awaiting a "yes", keyed by (channel, thread_ts). In-memory
+# / single-process (PLATFORM is one replica) + best-effort: a redeploy drops
+# pending confirmations, which just means the user re-asks. Never executes a paid
+# action without an explicit confirm.
+_pending: dict[tuple, dict] = {}
+
+
+# ---------------------------------------------------------------------------
 # Claude + Slack I/O.
 # ---------------------------------------------------------------------------
-async def answer_question(question: str, client: dict, context: dict) -> str:
-    """Ask Claude the question against the assembled context. Returns reply text."""
+async def interpret(
+    question: str, client: dict, context: dict, history: Optional[list[dict]] = None
+) -> tuple[str, str]:
+    """Decide whether the message is a question or an action request.
+
+    Returns ("action", tool_name) when the teammate is asking to trigger one of
+    the available actions, else ("text", answer). Claude sees the cross-module
+    context + thread history and the action tools; a tool call ⇒ action, otherwise
+    a normal grounded answer.
+    """
     import anthropic
 
-    user = f"Question: {question}\n\nClient data (JSON):\n{format_context(client, context)}"
+    blocks = []
+    if history:
+        blocks.append("Conversation so far (oldest first):\n" + format_history(history))
+    blocks.append(f"Latest message: {question}")
+    blocks.append(f"Client data (JSON):\n{format_context(client, context)}")
+    user = "\n\n".join(blocks)
     api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
     resp = await api.messages.create(
         model=settings.slack_assistant_model,
         max_tokens=settings.slack_assistant_max_tokens,
         system=_SYSTEM,
+        tools=_ACTION_TOOLS,
         messages=[{"role": "user", "content": user}],
     )
+    for b in resp.content:
+        if getattr(b, "type", None) == "tool_use" and b.name in _ACTIONS:
+            return ("action", b.name)
     parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
-    return "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing."
+    return ("text", "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing.")
 
 
 async def post_message(channel: str, text: str, thread_ts: Optional[str] = None) -> None:
@@ -478,22 +618,57 @@ async def post_message(channel: str, text: str, thread_ts: Optional[str] = None)
         raise RuntimeError(f"slack_error: {data.get('error')}")
 
 
-async def handle_app_mention(event: dict) -> None:
-    """Process one app_mention event end-to-end. Best-effort; logs and bails on error."""
+async def fetch_thread_history(channel: str, thread_ts: str, skip_ts: Optional[str]) -> list[dict]:
+    """Recent prior messages of a thread as [{role, content}], oldest first.
+
+    `role` is "assistant" for SerMastr's own posts (any bot message) and "user"
+    otherwise. The triggering message (`skip_ts`) is excluded. Best-effort — any
+    failure returns []."""
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.get(
+            _SLACK_REPLIES_URL,
+            headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
+            params={"channel": channel, "ts": thread_ts, "limit": _THREAD_HISTORY_LIMIT},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    if not data.get("ok"):
+        return []
+    out: list[dict] = []
+    for m in data.get("messages", []):
+        if skip_ts and m.get("ts") == skip_ts:
+            continue
+        text = strip_mention(m.get("text", ""))
+        if not text:
+            continue
+        out.append({"role": "assistant" if m.get("bot_id") else "user", "content": text})
+    return out
+
+
+async def handle_message(event: dict) -> None:
+    """Process one channel message end-to-end (channel mode: no @mention needed).
+
+    The router has already filtered to plain human messages. We answer every one:
+    resolve the client, build cross-module context, fold in thread history for
+    continuity, ask Claude, and reply in-thread. Best-effort; logs and bails on error.
+    """
     channel = event.get("channel")
     thread_ts = event.get("thread_ts") or event.get("ts")
     question = strip_mention(event.get("text", ""))
-    if not channel:
+    if not (channel and question):
         return
     try:
-        if not question:
-            await post_message(
-                channel,
-                "Hi, I'm SerMastr 👋 Ask me about a client's rankings — e.g. "
-                "“how is *Acme Plumbing* doing?” or “any drops for *Acme*?”",
-                thread_ts,
-            )
+        # 1) Confirmation of a pending paid action ("yes") — runs the stored action
+        # (which carries its own client_id, so the "yes" needn't name a client).
+        pend_key = (channel, thread_ts)
+        pending = _pending.get(pend_key)
+        if pending and is_affirmative(question):
+            _pending.pop(pend_key, None)
+            reply = _ACTIONS[pending["action"]]["run"](pending["client_id"])
+            await post_message(channel, reply, thread_ts)
             return
+        if pending:  # a different message supersedes the pending confirmation
+            _pending.pop(pend_key, None)
 
         supabase = get_supabase()
         clients = (
@@ -504,15 +679,36 @@ async def handle_app_mention(event: dict) -> None:
             names = ", ".join(c["name"] for c in clients[:8] if c.get("name"))
             await post_message(
                 channel,
-                "I'm not sure which client you mean — name them in your question. "
-                + (f"For example: {names}." if names else ""),
+                "Which client do you mean? Name them in your message"
+                + (f" — e.g. {names}." if names else "."),
                 thread_ts,
             )
             return
 
+        history: list[dict] = []
+        if event.get("thread_ts") and event.get("thread_ts") != event.get("ts"):
+            try:
+                history = await fetch_thread_history(channel, event["thread_ts"], event.get("ts"))
+            except Exception as exc:  # memory is best-effort
+                logger.warning("slack_thread_history_failed", extra={"channel": channel, "error": str(exc)})
+
         context = build_context(client["id"])
-        answer = await answer_question(question, client, context)
-        await post_message(channel, answer, thread_ts)
+        kind, payload = await interpret(question, client, context, history)
+        if kind == "action":
+            meta = _ACTIONS[payload]
+            if meta["paid"]:
+                # 2) Stage paid actions behind an explicit confirm (guards spend).
+                _pending[pend_key] = {"action": payload, "client_id": client["id"]}
+                await post_message(
+                    channel,
+                    f"This will {meta['label']} for *{client['name']}* (uses API budget). "
+                    "Reply *yes* to proceed.",
+                    thread_ts,
+                )
+            else:
+                await post_message(channel, meta["run"](client["id"]), thread_ts)
+            return
+        await post_message(channel, payload, thread_ts)
     except Exception as exc:
         logger.warning("slack_assistant_failed", extra={"channel": channel, "error": str(exc)})
         try:

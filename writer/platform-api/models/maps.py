@@ -167,3 +167,103 @@ class MapsClientThreats(BaseModel):
 
 class MapsThreatsResponse(BaseModel):
     clients: list[MapsClientThreats] = Field(default_factory=list)
+
+
+# --- Scan-over-scan analyzer ("What changed") -------------------------------
+class MapsOctantChange(BaseModel):
+    """One compass octant that weakened vs the previous scan."""
+    sector: str
+    avg_rank_now: Optional[float] = None
+    avg_rank_prev: Optional[float] = None
+    top3_pct_now: Optional[float] = None
+    top3_pct_prev: Optional[float] = None
+
+
+class MapsKeywordChange(BaseModel):
+    keyword: str
+    average_rank_now: Optional[float] = None
+    average_rank_prev: Optional[float] = None
+    average_rank_delta: Optional[float] = None   # now − prev; positive = worse
+    found_pct_now: Optional[float] = None
+    found_pct_prev: Optional[float] = None
+    top3_pct_now: Optional[float] = None
+    top3_pct_prev: Optional[float] = None
+    top10_pct_now: Optional[float] = None
+    top10_pct_prev: Optional[float] = None
+    octants: list[MapsOctantChange] = Field(default_factory=list)   # weakened octants, worst first
+    alert_types: list[str] = Field(default_factory=list)            # decline rules that fired
+
+
+class MapsChangesResponse(BaseModel):
+    has_previous: bool = False
+    current_scan_id: Optional[UUID] = None
+    previous_scan_id: Optional[UUID] = None
+    keywords: list[MapsKeywordChange] = Field(default_factory=list)
+
+
+# --- In-app geo-grid alerts -------------------------------------------------
+class MapsAlert(BaseModel):
+    id: UUID
+    keyword: str
+    alert_type: Literal[
+        "grid_rank_drop", "coverage_drop", "lost_pack", "area_decline", "competitor_surge"
+    ]
+    sector: Optional[str] = None
+    from_value: Optional[float] = None
+    to_value: Optional[float] = None
+    delta: Optional[float] = None
+    message: str
+    severity: str = "warning"   # derived: 'critical' for lost_pack, else 'warning'
+    status: Literal["unread", "read", "dismissed"]
+    triggered_on: Optional[str] = None
+    resolved_at: Optional[str] = None
+    created_at: str
+
+
+class MapsAlertsResponse(BaseModel):
+    alerts: list[MapsAlert] = Field(default_factory=list)
+    unread_count: int = 0
+
+
+# --- Multi-window period summary (7/30/90/since-start) -----------------------
+class MapsPeriodDelta(BaseModel):
+    from_value: Optional[float] = None   # the baseline value for this window
+    now: Optional[float] = None
+    delta: Optional[float] = None        # now − from_value (sign meaning is per-metric)
+    baseline_at: Optional[str] = None    # date of the baseline scan
+
+
+class MapsPeriodMetric(BaseModel):
+    metric: str                          # 'average_rank' | 'top3_pct' | 'top10_pct' | 'found_pct'
+    label: str
+    now: Optional[float] = None
+    windows: dict[str, MapsPeriodDelta] = Field(default_factory=dict)  # keys: 7d/30d/90d/start
+
+
+class MapsPeriodScope(BaseModel):
+    keyword: Optional[str] = None        # None = overall client rollup
+    metrics: list[MapsPeriodMetric] = Field(default_factory=list)
+
+
+class MapsPeriodsResponse(BaseModel):
+    as_of: Optional[str] = None
+    scan_count: int = 0
+    overall: Optional[MapsPeriodScope] = None
+    keywords: list[MapsPeriodScope] = Field(default_factory=list)
+
+
+# --- Area-level (compass octant) trends + narrative -------------------------
+class MapsAreaTrend(BaseModel):
+    sector: str                          # N / NE / E / … / NW
+    sector_full: str                     # "Southwest"
+    city: Optional[str] = None           # nearest town for this octant (best-effort)
+    now_top3_pct: Optional[float] = None
+    now_avg_rank: Optional[float] = None
+    windows: dict[str, MapsPeriodDelta] = Field(default_factory=dict)  # Top-3 coverage deltas
+
+
+class MapsAreaTrendsResponse(BaseModel):
+    as_of: Optional[str] = None
+    scan_count: int = 0
+    areas: list[MapsAreaTrend] = Field(default_factory=list)
+    narrative: list[str] = Field(default_factory=list)

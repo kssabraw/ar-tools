@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
   ClipboardList,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
@@ -179,6 +179,13 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/local-seo?tab=plan` : undefined}
           cta="Plan"
         />
+        <ActionCard
+          icon={<UploadCloud size={22} />}
+          label="Publish to Google Docs"
+          description="Select already-generated articles & Local SEO pages and publish them to this client's Drive folder in one batch."
+          to={id ? `/clients/${id}/content` : undefined}
+          cta="Open"
+        />
       </Section>
 
       {/* ── Rank Trackers ───────────────────────────────────────────── */}
@@ -233,6 +240,20 @@ export function ClientWorkspace() {
           label="Asana Tasks"
           description="Define the tasks this client gets each month — name, assignee & category. The monthly job creates them in Asana under a new section, automatically or on demand."
           to={id ? `/clients/${id}/asana-tasks` : undefined}
+          cta="Open"
+        />
+      </Section>
+
+      {/* ── Reporting ────────────────────────────────────────────────── */}
+      <Section
+        title="Reporting"
+        subtitle="Generate client-facing performance reports."
+      >
+        <ActionCard
+          icon={<FileBarChart size={22} />}
+          label="Client Reports"
+          description="Generate a PDF performance report — organic rankings, local-pack geo-grids & Google Business Profile. (Analytics, Asana & a campaign-health summary land in later phases.)"
+          to={id ? `/clients/${id}/reports` : undefined}
           cta="Open"
         />
       </Section>

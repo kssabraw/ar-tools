@@ -1049,13 +1049,14 @@ def generate_article_core(
 def generate_local_seo_page_core(
     *, session: dict, keyword: str, location: str,
     location_code: int | None, user_id: str | None,
-) -> bool:
+) -> str | None:
     """Generate one Local SEO page for a cluster's keyword via the suite's nlp-api
     generator (`services.local_seo_service.generate_page`) — competitor analysis +
     Claude generation + 8-engine scoring/auto-reoptimization. The page is persisted as a
     first-class suite artifact in `local_seo_pages` (NOT `fanout.article_outputs`), so it
     shows up in the client's Local SEO workspace and is scorable / reoptimizable /
-    publishable like any other. Returns True on success.
+    publishable like any other. Returns the new page id on success (truthy — the
+    scheduler treats it as success and can auto-publish it), None on failure.
 
     Cross-pipeline reuse (the locked decision): Fanout's backend is mounted inside
     platform-api, so we import the suite service lazily here (no circular import — the
@@ -1067,14 +1068,14 @@ def generate_local_seo_page_core(
     if not client_id:
         logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
                      "keyword": keyword, "reason": "session has no client_id"})
-        return False
+        return None
     if not (location or "").strip():
         logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
                      "keyword": keyword, "reason": "no target location"})
-        return False
+        return None
     try:
         from services.local_seo_service import generate_page
-        asyncio.run(generate_page(
+        page = asyncio.run(generate_page(
             client_id=client_id, keyword=keyword, location=location,
             location_code=location_code, user_id=user_id,
             force_refresh=False, page_template_url=None,
@@ -1082,21 +1083,23 @@ def generate_local_seo_page_core(
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
         logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
                      "keyword": keyword, "reason": repr(exc)})
-        return False
+        return None
     logger.info("step_complete", extra={"event": "step_complete", "step": "local_seo_page_job",
                 "keyword": keyword, "location": location})
-    return True
+    return (page or {}).get("id")
 
 
 def generate_service_page_core(
     *, session: dict, keyword: str, user_id: str | None,
-) -> bool:
+) -> str | None:
     """Generate one Service Page for a cluster's keyword by creating a suite
     `runs` row (content_type='service_page') and driving the orchestrator
     (service_brief -> service_writer) to completion. The suite run owns the
     artifact (runs/module_outputs) — nothing is written to fanout.article_outputs
     — so the page appears in the client's Service Pages workspace and publishes
-    via the standard run publish path. Returns True on success.
+    via the standard run publish path. Returns the suite run id on success
+    (truthy — the scheduler treats it as success and can auto-publish it), None
+    on failure.
 
     Keyword-only (no location). Cross-pipeline reuse (the locked decision):
     Fanout is mounted inside platform-api, so we import the suite run helpers
@@ -1110,7 +1113,7 @@ def generate_service_page_core(
     if not client_id:
         logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
                      "keyword": keyword, "reason": "session has no client_id"})
-        return False
+        return None
     try:
         from db.supabase_client import get_supabase
         from services.local_seo_service import _get_client
@@ -1130,14 +1133,14 @@ def generate_service_page_core(
         if status != "complete":
             logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
                          "keyword": keyword, "reason": f"run status {status}"})
-            return False
+            return None
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
         logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
                      "keyword": keyword, "reason": repr(exc)})
-        return False
+        return None
     logger.info("step_complete", extra={"event": "step_complete", "step": "service_page_job",
                 "keyword": keyword})
-    return True
+    return run_id
 
 
 # ---- Pre-publish ranking check (per client) -------------------------------

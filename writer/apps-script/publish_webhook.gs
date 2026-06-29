@@ -61,7 +61,21 @@ function doPost(e) {
  * "paste from Google Docs" importer reconstructs into blocks.
  */
 function createDocFromHtml(folderId, title, html) {
-  var wrapped = '<html><head><meta charset="utf-8"></head><body>' + html + '</body></html>';
+  // Drive's HTML importer renders <p> blocks with no space-after (cramped) and
+  // flattens <thead>/<th> into a plain row (header loses its bold/shading). Two
+  // fixes, belt-and-suspenders because the importer applies styling
+  // inconsistently: (1) a <style> block in <head> for paragraph spacing + table
+  // borders, and (2) an inline transform that bolds + shades each <th> cell,
+  // which survives import where element-level <style> alone sometimes doesn't.
+  var styled = _styleForDocs(html);
+  var head = '<head><meta charset="utf-8"><style>'
+    + 'p{margin:0 0 10pt 0;line-height:1.5;}'
+    + 'li{margin:0 0 4pt 0;}'
+    + 'table{border-collapse:collapse;margin:0 0 12pt 0;}'
+    + 'th,td{border:1px solid #cccccc;padding:6pt 9pt;text-align:left;vertical-align:top;}'
+    + 'th{background-color:#f3f3f3;font-weight:bold;}'
+    + '</style></head>';
+  var wrapped = '<html>' + head + '<body>' + styled + '</body></html>';
   var blob = Utilities.newBlob(wrapped, 'text/html', title + '.html');
   var resource = {
     title: title,
@@ -73,6 +87,23 @@ function createDocFromHtml(folderId, title, html) {
   //   Drive.Files.create({ name: title, mimeType: '...document', parents: [folderId] }, blob)
   var file = Drive.Files.insert(resource, blob, { convert: true });
   return file.id;
+}
+
+/**
+ * Make table header cells survive Drive's HTML import. The importer drops the
+ * <thead>/<th> distinction, so the header row reads like a data row. We bold +
+ * shade each <th> inline and wrap its text in <strong> (text bold is the part
+ * the importer most reliably keeps), so the header stays visually distinct in
+ * the Doc. Idempotent enough for our generated HTML (bare <th> cells).
+ */
+function _styleForDocs(html) {
+  return String(html).replace(/<th\b([^>]*)>([\s\S]*?)<\/th>/gi, function (match, attrs, inner) {
+    var hasStyle = /\bstyle\s*=/.test(attrs);
+    var styled = hasStyle
+      ? attrs
+      : attrs + ' style="background-color:#f3f3f3;font-weight:bold;text-align:left;"';
+    return '<th' + styled + '><strong>' + inner + '</strong></th>';
+  });
 }
 
 /**

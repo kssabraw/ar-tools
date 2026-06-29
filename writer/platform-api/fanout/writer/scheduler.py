@@ -158,8 +158,16 @@ def _process_run(row: dict) -> None:
                 ok = jobs.generate_article_core(
                     session_id, cluster_id, keyword, location_code,
                     scheduled_article_run_id=run_id)
-        _finish_run(run_id, "complete" if ok else "failed",
-                    error=None if ok else "content generation failed")
+        # local_seo_page / service_page return the artifact id (truthy) on success;
+        # blog returns True. `bool(ok)` is the success signal for both.
+        success = bool(ok)
+        _finish_run(run_id, "complete" if success else "failed",
+                    error=None if success else "content generation failed")
+        # Opt-in auto-publish: push the finished piece to the client's Drive folder.
+        if success and (schedule or {}).get("auto_publish"):
+            _auto_publish_to_client_drive(
+                content_type, session=session, cluster_id=cluster_id,
+                keyword=keyword, artifact=ok, user_id=row.get("user_id"))
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
         logger.error("scheduled_run_failed",
                      extra={"event": "scheduled_run_failed", "run_id": run_id,
@@ -168,6 +176,60 @@ def _process_run(row: dict) -> None:
     finally:
         if schedule_id:
             _maybe_complete_schedule(schedule_id)
+
+
+def _auto_publish_to_client_drive(
+    content_type: str, *, session: dict, cluster_id: str, keyword: str,
+    artifact, user_id: str | None,
+) -> None:
+    """Publish a just-generated piece to the linked client's Google Drive folder
+    (a Google Doc via the suite's Apps Script webhook). Best-effort — any failure
+    is logged and swallowed so it never affects the generation run's status.
+    Requires a client-linked session; no-ops otherwise."""
+    import asyncio
+
+    client_id = session.get("client_id")
+    if not client_id:
+        logger.info("auto_publish_skipped",
+                    extra={"event": "auto_publish_skipped", "content_type": content_type,
+                           "reason": "session not client-linked"})
+        return
+    try:
+        if content_type == "local_seo_page":
+            # First-class suite artifact — reuse its own publish path (which also
+            # persists published_doc_url on the page row).
+            from services import local_seo_service
+
+            if isinstance(artifact, str):
+                asyncio.run(local_seo_service.publish_page(
+                    artifact, user_id or "", destination="google_docs"))
+        elif content_type == "service_page":
+            from db.supabase_client import get_supabase
+            from routers.publish import _resolve_content
+            from fanout.writer.publish.client_drive import publish_html_to_client_drive
+
+            if isinstance(artifact, str):
+                _, html = _resolve_content(get_supabase(), artifact, "service_page")
+                asyncio.run(publish_html_to_client_drive(
+                    client_id, keyword, html, content_type="service_page"))
+        else:  # blog_post
+            from fanout.writer import store as article_store
+            from fanout.writer.publish.client_drive import publish_html_to_client_drive
+
+            art = article_store.get_latest_article(cluster_id)
+            aj = (art or {}).get("article_json") or {}
+            html = aj.get("article_html") or ""
+            if html:
+                asyncio.run(publish_html_to_client_drive(
+                    client_id, aj.get("title") or keyword or "Article", html,
+                    content_type="blog_post"))
+        logger.info("auto_published",
+                    extra={"event": "auto_published", "content_type": content_type,
+                           "client_id": client_id})
+    except Exception as exc:  # noqa: BLE001 — auto-publish is best-effort
+        logger.warning("auto_publish_failed",
+                       extra={"event": "auto_publish_failed", "content_type": content_type,
+                              "client_id": client_id, "reason": repr(exc)})
 
 
 def _finish_run(run_id: str, status: str, *, error: str | None) -> None:

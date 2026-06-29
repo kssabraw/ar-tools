@@ -3,7 +3,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services.markdown_html import markdown_to_html  # noqa: E402
+from services.markdown_html import markdown_to_gutenberg, markdown_to_html  # noqa: E402
 
 
 def test_headings_and_paragraph():
@@ -52,8 +52,88 @@ def test_image_is_not_double_rendered_as_link():
     assert "<a " not in html
 
 
+def test_table_basic():
+    md = "| Name | Age |\n| --- | --- |\n| Ann | 30 |\n| Bob | 25 |"
+    html = markdown_to_html(md)
+    assert "<table>" in html and "</table>" in html
+    assert "<thead>" in html and "<th>Name</th>" in html and "<th>Age</th>" in html
+    assert "<tbody>" in html
+    assert "<td>Ann</td>" in html and "<td>30</td>" in html
+    assert "<td>Bob</td>" in html and "<td>25</td>" in html
+
+
+def test_table_alignment_from_delimiter():
+    md = "| L | C | R |\n| :--- | :--: | ---: |\n| a | b | c |"
+    html = markdown_to_html(md)
+    assert '<th style="text-align:left">L</th>' in html
+    assert '<th style="text-align:center">C</th>' in html
+    assert '<th style="text-align:right">R</th>' in html
+    assert '<td style="text-align:center">b</td>' in html
+
+
+def test_table_cells_support_inline_formatting():
+    md = "| Term | Note |\n| --- | --- |\n| **bold** | [link](https://x.com) |"
+    html = markdown_to_html(md)
+    assert "<strong>bold</strong>" in html
+    assert '<a href="https://x.com"' in html
+
+
+def test_lone_hr_is_not_a_table():
+    html = markdown_to_html("Intro\n\n---\n\nMore")
+    assert "<hr />" in html and "<table>" not in html
+
+
+def test_pipe_paragraph_without_delimiter_is_not_a_table():
+    html = markdown_to_html("a | b | c is just prose")
+    assert "<table>" not in html
+    assert "<p>" in html
+
+
 def test_empty_input():
     assert markdown_to_html("") == ""
+
+
+# ── Gutenberg block rendering ────────────────────────────────────────────────
+
+def test_gutenberg_heading_and_paragraph():
+    gb = markdown_to_gutenberg("## Section\n\nHello world.")
+    assert "<!-- wp:heading -->\n<h2>Section</h2>\n<!-- /wp:heading -->" in gb
+    assert "<!-- wp:paragraph -->\n<p>Hello world.</p>\n<!-- /wp:paragraph -->" in gb
+
+
+def test_gutenberg_heading_level_attr_for_non_h2():
+    gb = markdown_to_gutenberg("# Title\n\n### Sub")
+    assert '<!-- wp:heading {"level":1} -->\n<h1>Title</h1>' in gb
+    assert '<!-- wp:heading {"level":3} -->\n<h3>Sub</h3>' in gb
+
+
+def test_gutenberg_list_blocks():
+    gb = markdown_to_gutenberg("- a\n- b")
+    assert gb.startswith("<!-- wp:list -->")
+    assert "<!-- wp:list-item -->\n<li>a</li>\n<!-- /wp:list-item -->" in gb
+    assert "<ul>" in gb and "</ul>" in gb
+
+
+def test_gutenberg_ordered_list_attr():
+    gb = markdown_to_gutenberg("1. first\n2. second")
+    assert '<!-- wp:list {"ordered":true} -->' in gb
+    assert "<ol>" in gb
+
+
+def test_gutenberg_table_block():
+    gb = markdown_to_gutenberg("| A | B |\n| --- | --- |\n| 1 | 2 |")
+    assert '<!-- wp:table -->\n<figure class="wp-block-table"><table>' in gb
+    assert "</table></figure>\n<!-- /wp:table -->" in gb
+
+
+def test_gutenberg_inline_formatting_preserved():
+    gb = markdown_to_gutenberg("A **bold** and [link](https://x.com).")
+    assert "<strong>bold</strong>" in gb
+    assert '<a href="https://x.com"' in gb
+
+
+def test_gutenberg_empty_input():
+    assert markdown_to_gutenberg("") == ""
 
 
 def test_paragraphs_separated_by_blank_lines():

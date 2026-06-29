@@ -30,6 +30,7 @@ from routers.notifications import router as notifications_router
 from routers.publish import router as publish_router
 from routers.rank import router as rank_router
 from routers.reopt import router as reopt_router
+from routers.reports import router as reports_router
 from routers.slack_events import router as slack_events_router
 from routers.runs import router as runs_router
 from routers.silos import router as silos_router
@@ -139,6 +140,7 @@ app.include_router(maps_router)
 app.include_router(notifications_router)
 app.include_router(rank_router)
 app.include_router(reopt_router)
+app.include_router(reports_router)
 app.include_router(slack_events_router)
 app.include_router(runs_router)
 app.include_router(silos_router)

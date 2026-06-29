@@ -410,6 +410,7 @@ export interface Run {
   created_at: string
   started_at: string | null
   completed_at: string | null
+  published_doc_url?: string | null
 }
 
 // Service Page Writer output (module_outputs.service_writer.output_payload)
@@ -798,6 +799,105 @@ export interface MapsThreatsResponse {
   clients: MapsClientThreats[]
 }
 
+// Scan-over-scan analyzer ("What changed" tab).
+export interface MapsOctantChange {
+  sector: string
+  avg_rank_now: number | null
+  avg_rank_prev: number | null
+  top3_pct_now: number | null
+  top3_pct_prev: number | null
+}
+
+export interface MapsKeywordChange {
+  keyword: string
+  average_rank_now: number | null
+  average_rank_prev: number | null
+  average_rank_delta: number | null   // now − prev; positive = worse
+  found_pct_now: number | null
+  found_pct_prev: number | null
+  top3_pct_now: number | null
+  top3_pct_prev: number | null
+  top10_pct_now: number | null
+  top10_pct_prev: number | null
+  octants: MapsOctantChange[]         // weakened octants, worst first
+  alert_types: string[]               // decline rules that fired
+}
+
+export interface MapsChangesResponse {
+  has_previous: boolean
+  current_scan_id: string | null
+  previous_scan_id: string | null
+  keywords: MapsKeywordChange[]
+}
+
+export type MapsAlertType =
+  | 'grid_rank_drop' | 'coverage_drop' | 'lost_pack' | 'area_decline' | 'competitor_surge'
+
+export interface MapsAlert {
+  id: string
+  keyword: string
+  alert_type: MapsAlertType
+  sector: string | null
+  from_value: number | null
+  to_value: number | null
+  delta: number | null
+  message: string
+  severity: string                    // 'critical' | 'warning'
+  status: 'unread' | 'read' | 'dismissed'
+  triggered_on: string | null
+  resolved_at: string | null
+  created_at: string
+}
+
+export interface MapsAlertsResponse {
+  alerts: MapsAlert[]
+  unread_count: number
+}
+
+// Multi-window period summary (7/30/90/since-start).
+export interface MapsPeriodDelta {
+  from_value: number | null
+  now: number | null
+  delta: number | null
+  baseline_at: string | null
+}
+
+export interface MapsPeriodMetric {
+  metric: string          // 'average_rank' | 'top3_pct' | 'top10_pct' | 'found_pct'
+  label: string
+  now: number | null
+  windows: Record<string, MapsPeriodDelta>  // keys: 7d / 30d / 90d / start
+}
+
+export interface MapsPeriodScope {
+  keyword: string | null  // null = overall client rollup
+  metrics: MapsPeriodMetric[]
+}
+
+export interface MapsPeriodsResponse {
+  as_of: string | null
+  scan_count: number
+  overall: MapsPeriodScope | null
+  keywords: MapsPeriodScope[]
+}
+
+// Area-level (compass octant) trends + narrative.
+export interface MapsAreaTrend {
+  sector: string
+  sector_full: string
+  city: string | null
+  now_top3_pct: number | null
+  now_avg_rank: number | null
+  windows: Record<string, MapsPeriodDelta>  // Top-3 coverage deltas (7d/30d/90d/start)
+}
+
+export interface MapsAreaTrendsResponse {
+  as_of: string | null
+  scan_count: number
+  areas: MapsAreaTrend[]
+  narrative: string[]
+}
+
 // Dashboard ranking-health tile: average organic position + average maps rank,
 // latest run vs first. Lower rank numbers are better, so direction "up" = the
 // latest average is a smaller (better) number than the first.
@@ -1082,4 +1182,22 @@ export interface AsanaWorkloadReport {
     default_task_hours: number
   }
   note?: string
+}
+
+// Client Reporting module.
+export interface ClientReport {
+  id: string
+  client_id: string
+  report_type: 'monthly' | 'weekly'
+  period_start: string | null
+  period_end: string | null
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  storage_path: string | null
+  pdf_url: string | null
+  drive_doc_id: string | null
+  sections: Record<string, string> | null
+  title: string | null
+  error: string | null
+  created_at: string
+  completed_at: string | null
 }

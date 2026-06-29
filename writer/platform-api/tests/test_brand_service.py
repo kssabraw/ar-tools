@@ -44,3 +44,34 @@ def test_compute_trends_orders_batches_by_time_and_skips_incomplete():
     assert [t["scan_batch_id"] for t in trends] == ["early", "late"]
     # The failed row is excluded from the early batch's totals.
     assert trends[0]["total"] == 1
+
+
+# ── aggregate_response_analysis (batch-wide insights rollup) ──────────────────
+def test_aggregate_response_analysis_rolls_up_batch():
+    rows = [
+        {"status": "completed", "engine": "chatgpt", "response_analysis": {
+            "discovered_competitors": [{"name": "New Co", "attributes": ["fast"]}],
+            "competitor_attributes": [{"name": "Rival", "attributes": ["24/7"]}],
+            "aio": {"mention_kind": "citation_only"},
+            "sources": {"by_type": {"directory": 2, "editorial": 1}},
+        }},
+        {"status": "completed", "engine": "google_ai_overview", "response_analysis": {
+            "discovered_competitors": [{"name": "New Co", "attributes": ["licensed"]}],
+            "competitor_attributes": [{"name": "Rival", "attributes": ["family-owned"]}],
+            "aio": {"mention_kind": "in_content_link"},
+            "sources": {"by_type": {"directory": 1}},
+        }},
+    ]
+    out = bsvc.aggregate_response_analysis(rows)
+    # Discovered competitor seen across both engines, attributes merged.
+    disc = out["discovered_competitors"][0]
+    assert disc["name"] == "New Co" and disc["count"] == 2
+    assert set(disc["attributes"]) == {"fast", "licensed"}
+    # AIO mention-kind + source-type tallies.
+    assert out["aio_mention_kinds"] == {"citation_only": 1, "in_content_link": 1}
+    assert out["source_types"] == {"directory": 3, "editorial": 1}
+    # Cross-engine consensus surfaces Rival across both engines (Rival appears
+    # in competitor_attributes; New Co in discovered_competitors — both count 2).
+    rival = next(b for b in out["consensus"]["businesses"] if b["name"] == "Rival")
+    assert rival["count"] == 2
+    assert set(rival["attributes"]) == {"24/7", "family-owned"}

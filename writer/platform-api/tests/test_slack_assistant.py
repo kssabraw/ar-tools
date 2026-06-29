@@ -125,6 +125,80 @@ def test_build_context_assembles_isolates_and_omits(monkeypatch):
     assert ctx == {"alpha": {"ok": True}}  # empty omitted, failing one isolated
 
 
+def test_format_history_labels_roles_and_skips_empty():
+    out = slack_assistant.format_history([
+        {"role": "user", "content": "how is Acme?"},
+        {"role": "assistant", "content": "Acme is #4, steady."},
+        {"role": "user", "content": "  "},
+        {"role": "user", "content": "what about Maps?"},
+    ])
+    assert out == (
+        "Teammate: how is Acme?\n"
+        "SerMastr: Acme is #4, steady.\n"
+        "Teammate: what about Maps?"
+    )
+
+
+def test_format_history_empty():
+    assert slack_assistant.format_history([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# weak_cities (shape-tolerant — the real stored value is an object, not a list)
+# ---------------------------------------------------------------------------
+def test_weak_cities_from_object_shape():
+    rwl = {"geocoded": True, "capped": False, "weak_areas": [
+        {"city": "Port Melbourne", "pins": 5},
+        {"city": "Toorak", "pins": 3},
+        {"pins": 1},  # no city → skipped
+    ]}
+    assert slack_assistant.weak_cities(rwl) == ["Port Melbourne", "Toorak"]
+
+
+def test_weak_cities_from_list_shape():
+    assert slack_assistant.weak_cities([{"city": "A"}, {"city": "B"}]) == ["A", "B"]
+
+
+def test_weak_cities_tolerates_none_and_junk():
+    assert slack_assistant.weak_cities(None) == []
+    assert slack_assistant.weak_cities("oops") == []
+    assert slack_assistant.weak_cities({"weak_areas": None}) == []
+
+
+def test_weak_cities_caps_at_five():
+    rwl = {"weak_areas": [{"city": f"C{i}"} for i in range(9)]}
+    assert slack_assistant.weak_cities(rwl) == ["C0", "C1", "C2", "C3", "C4"]
+
+
+# ---------------------------------------------------------------------------
+# is_affirmative (confirmation of a pending paid action)
+# ---------------------------------------------------------------------------
+def test_is_affirmative_accepts_yeses():
+    for t in ["yes", "Yes", "YES!", "yep", "yeah", "confirm", "do it", "go ahead",
+              "proceed", "ok", "sure", "yes please", "yes, go"]:
+        assert slack_assistant.is_affirmative(t) is True, t
+
+
+def test_is_affirmative_rejects_others():
+    for t in ["no", "not yet", "what?", "how is acme", "yesterday", "", "maybe"]:
+        assert slack_assistant.is_affirmative(t) is False, t
+
+
+# ---------------------------------------------------------------------------
+# action registry/tools consistency
+# ---------------------------------------------------------------------------
+def test_action_tools_match_registry():
+    tool_names = {t["name"] for t in slack_assistant._ACTION_TOOLS}
+    assert tool_names == set(slack_assistant._ACTIONS)
+    for meta in slack_assistant._ACTIONS.values():
+        assert callable(meta["run"])
+        assert isinstance(meta["paid"], bool)
+    # exactly one free action (rebuild plan), the scans are paid.
+    assert slack_assistant._ACTIONS["rebuild_action_plan"]["paid"] is False
+    assert all(slack_assistant._ACTIONS[k]["paid"] for k in
+               ("run_maps_scan", "run_gsc_research", "run_ai_visibility_scan"))
+
+
 def test_format_context_is_json_with_client():
     import json
 
