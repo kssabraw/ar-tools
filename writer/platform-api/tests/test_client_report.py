@@ -112,3 +112,151 @@ def test_build_html_includes_present_sections():
     data["gbp"]["top_reviews"] = ["<script>x</script>"]
     assert "<script>x</script>" not in cr.build_report_html(data)
     assert "&lt;script&gt;" in cr.build_report_html(data)
+
+
+# ---------------------------------------------------------------------------
+# executive summary (Phase 4 — positive, owner-friendly, no health label)
+# ---------------------------------------------------------------------------
+def test_section_exec_empty_without_data():
+    assert cr._section_exec(_data()) == ""
+
+
+def test_section_exec_renders_positive_no_health_label_and_escapes():
+    data = _data(exec={
+        "headline": "Strong month — visibility <b>up</b> across the board.",
+        "highlights": ["Impressions up 24% vs last month"],
+        "focus_next": ["Expand the drains page to win more local searches"],
+    })
+    out = cr.build_report_html(data)
+    assert "Executive summary" in out
+    assert "Impressions up 24% vs last month" in out
+    assert "focused on next" in out and "Expand the drains page" in out
+    # no health label / score / risks wording
+    assert "/100" not in out and "Risks" not in out
+    # headline escaped
+    assert "<b>up</b>" not in out and "&lt;b&gt;up&lt;/b&gt;" in out
+
+
+def test_generate_exec_summary_no_key_returns_none(monkeypatch):
+    from config import settings
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    assert cr.generate_exec_summary("Acme", {"start": "x", "end": "y"}, {}, {}) is None
+
+
+# ---------------------------------------------------------------------------
+# build_comparisons (30 / 90 / since-start) + performance section
+# ---------------------------------------------------------------------------
+def _series_rows():
+    """Daily rows over ~120 days: impressions climbing, rank improving."""
+    from datetime import date as _d, timedelta as _td
+    today = _d(2026, 6, 26)
+    rows = []
+    for i in range(120):  # oldest → newest
+        day = today - _td(days=119 - i)
+        rows.append({"date": day.isoformat(), "impressions": 100 + i, "clicks": None,
+                     "gsc_position": 30 - (i * 0.1)})
+    return rows, today
+
+
+def test_build_comparisons_volume_and_rank():
+    rows, today = _series_rows()
+    comp = cr.build_comparisons(rows, today)
+    assert comp is not None
+    assert comp["impressions"]["current"] is not None
+    # impressions trended up → all changes positive
+    ch = comp["impressions"]["changes"]
+    assert ch["30d"] > 0 and ch["90d"] > 0 and ch["start"] > 0
+    # rank improved (position number fell) → positive "positions gained"
+    assert comp["rank"]["changes_positions"]["start"] > 0
+    # clicks were all None → omitted
+    assert "clicks" not in comp
+
+
+def test_build_comparisons_empty():
+    assert cr.build_comparisons([], cr.date.today()) is None
+
+
+def test_section_performance_renders_changes():
+    rows, today = _series_rows()
+    data = _data(organic={"comparisons": cr.build_comparisons(rows, today)})
+    out = cr.build_report_html(data)
+    assert "Performance highlights" in out
+    assert "Impressions" in out and "Average ranking" in out
+    assert "Since we started" in out
+    assert "▲" in out  # positive change arrow
+
+
+# ---------------------------------------------------------------------------
+# AI visibility section (auto-populates once scans run)
+# ---------------------------------------------------------------------------
+def test_section_ai_visibility():
+    assert cr._section_ai_visibility(_data()) == ""
+    data = _data(ai_visibility={"engines": {"chatgpt": "3 of 5 answers", "perplexity": "1 of 5 answers"}})
+    out = cr.build_report_html(data)
+    assert "AI search visibility" in out
+    assert "ChatGPT" in out and "3 of 5 answers" in out
+
+
+# ---------------------------------------------------------------------------
+# _keyword_change (positions gained; positive = improved)
+# ---------------------------------------------------------------------------
+def test_keyword_change_from_averages_and_sparkline():
+    # 30d avg 8, 7d avg 5 → improved by 3 positions
+    assert cr._keyword_change({"avg_7": 5.0, "avg_30": 8.0}) == 3.0
+    # no averages → first−last of sparkline (12 → 4 = +8 improvement)
+    assert cr._keyword_change({"avg_7": None, "avg_30": None, "sparkline": [12, 9, 4]}) == 8.0
+    # too little history → None
+    assert cr._keyword_change({"sparkline": [4]}) is None
+
+
+# ---------------------------------------------------------------------------
+# organic section trims to top movers + Movement column
+# ---------------------------------------------------------------------------
+def test_section_organic_shows_top_movers_only():
+    kws = [{"keyword": f"kw{i}", "current_rank": 5, "avg_30d": 5,
+            "change": float(i), "sparkline": [9, 5]} for i in range(10)]
+    data = _data(organic={"keywords": kws,
+                          "summary": {"tracked": 10, "top10": 4, "improved": 6, "declined": 1}})
+    out = cr.build_report_html(data)
+    assert "Movement" in out
+    # biggest mover (kw9, change 9) shown; smallest non-mover trimmed
+    assert "kw9" in out and "kw1<" not in out
+    assert "remaining 5 are tracked" in out
+
+
+# ---------------------------------------------------------------------------
+# Work delivered section
+# ---------------------------------------------------------------------------
+def test_section_work_delivered():
+    assert cr._section_work_delivered(_data()) == ""
+    data = _data(work_delivered={"counts": {"blog_post": 3, "local_seo_page": 2}, "total": 5})
+    out = cr.build_report_html(data)
+    assert "Work delivered this period" in out
+    assert "Blog posts" in out and "Local SEO pages" in out
+
+
+# ---------------------------------------------------------------------------
+# At-a-glance KPI strip
+# ---------------------------------------------------------------------------
+def test_kpi_strip_renders_present_metrics():
+    assert cr._kpi_strip(_data()) == ""
+    data = _data(
+        organic={"comparisons": {"impressions": {"current": 100, "changes": {"start": 24.0}},
+                                 "rank": {"current": 5, "changes_positions": {"start": 3.0}}},
+                 "summary": {"tracked": 12, "top10": 5}},
+        work_delivered={"counts": {"blog_post": 4}, "total": 4},
+    )
+    out = cr._kpi_strip(data)
+    assert "Search visibility" in out and "+24%" in out
+    assert "Ranking gains" in out
+    assert "On page 1 of Google" in out and "5" in out
+    assert "Content delivered" in out
+
+
+# ---------------------------------------------------------------------------
+# White-label footer
+# ---------------------------------------------------------------------------
+def test_footer_is_white_labeled():
+    out = cr.build_report_html(_data(agency_name="Amazing Rankings"))
+    assert "Prepared by Amazing Rankings" in out
+    assert "AR Tools" not in out

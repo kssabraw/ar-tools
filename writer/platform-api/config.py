@@ -130,6 +130,15 @@ class Settings(BaseSettings):
     gsc_research_auto_enabled: bool = True
     gsc_research_interval_days: int = 30
 
+    # Client Reporting — campaign-health narrative (Phase 4). One Claude call per
+    # report synthesizes the gathered sections + signals (open drops, Action Plan)
+    # into an executive summary (health label, headline, wins/risks/next steps).
+    # Best-effort: absent the Anthropic key or on failure, the section is omitted.
+    client_report_health_model: str = "claude-sonnet-4-6"
+    client_report_health_max_tokens: int = 1100
+    # White-label: the agency name shown in the client-facing report footer.
+    client_report_agency_name: str = "Amazing Rankings"
+
     # Reoptimization planner — turns rank-tracker signals (open drops, rankability
     # Quick wins, GSC-Research cannibalization/hidden-wins) into a ranked,
     # recommend-only action plan per client. A weekly digest (the only auto
