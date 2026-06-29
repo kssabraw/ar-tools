@@ -24,3 +24,29 @@ class EngagementResponse(BaseModel):
     current_plan_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+# ── strategy plan / actions (Phase 2 · PR-B) ─────────────────────────────────
+class StrategyActionResponse(BaseModel):
+    id: str
+    module: str
+    category: str
+    kind: Optional[str] = None
+    title: str
+    rationale: Optional[str] = None
+    target: Optional[dict] = None
+    priority: int = 0
+    execution_mode: str
+    assignee_role: Optional[str] = None
+    status: str
+    deep_link: Optional[str] = None
+
+
+class StrategyPlanResponse(BaseModel):
+    id: str
+    engagement_id: str
+    version: int
+    status: str
+    summary: Optional[dict] = None
+    created_at: Optional[str] = None
+    actions: list[StrategyActionResponse] = Field(default_factory=list)
