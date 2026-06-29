@@ -32,6 +32,7 @@ from models.maps import (
     MapsKeywordCreate,
     MapsKeywordTrend,
     MapsOctantChange,
+    MapsPeriodsResponse,
     MapsRunResponse,
     MapsScanDetail,
     MapsScanResultRow,
@@ -508,14 +509,27 @@ def _two_latest_completed_scans(client_id: UUID) -> tuple[Optional[dict], Option
 
 
 @router.get("/clients/{client_id}/maps/changes", response_model=MapsChangesResponse)
-async def maps_changes(client_id: UUID, auth: dict = Depends(require_auth)) -> MapsChangesResponse:
-    """Per-keyword deltas between the client's two most recent completed scans —
-    average rank, coverage %, weakened octants, and which decline rules fired.
-    First-ever scan → has_previous=False with current values only."""
-    from services.maps_analyzer import build_maps_changes
+async def maps_changes(
+    client_id: UUID, scan_id: Optional[UUID] = None, auth: dict = Depends(require_auth)
+) -> MapsChangesResponse:
+    """Per-keyword deltas between a completed scan and the one before it — average
+    rank, coverage %, weakened octants, and which decline rules fired. Defaults to
+    the latest scan; pass ?scan_id= to view any past week. First-ever scan →
+    has_previous=False with current values only."""
+    from services.maps_analyzer import _previous_completed_scan, build_maps_changes
 
     supabase = get_supabase()
-    curr, prev = _two_latest_completed_scans(client_id)
+    if scan_id is not None:
+        found = (
+            supabase.table("maps_scans").select("id, completed_at, status")
+            .eq("id", str(scan_id)).eq("client_id", str(client_id)).limit(1).execute()
+        ).data
+        if not found or found[0].get("status") != "complete":
+            raise HTTPException(status_code=404, detail="scan_not_found")
+        curr = {"id": found[0]["id"], "completed_at": found[0].get("completed_at")}
+        prev = _previous_completed_scan(supabase, str(client_id), curr["completed_at"], curr["id"])
+    else:
+        curr, prev = _two_latest_completed_scans(client_id)
     if not curr:
         return MapsChangesResponse()
     scan_ids = [s["id"] for s in (curr, prev) if s]
@@ -538,6 +552,34 @@ async def maps_changes(client_id: UUID, auth: dict = Depends(require_auth)) -> M
             for k in data["keywords"]
         ],
     )
+
+
+@router.get("/clients/{client_id}/maps/periods", response_model=MapsPeriodsResponse)
+async def maps_periods(
+    client_id: UUID, limit: int = 52, auth: dict = Depends(require_auth)
+) -> MapsPeriodsResponse:
+    """Last 7 / 30 / 90-day + since-start deltas for the visibility metrics
+    (avg rank, Top-3 %, Top-10 %, Found %), overall + per-keyword. Computed from
+    the client's completed-scan time series."""
+    from datetime import datetime, timezone
+
+    from services.maps_analyzer import build_maps_periods
+
+    supabase = get_supabase()
+    scans = (
+        supabase.table("maps_scans").select("id, completed_at")
+        .eq("client_id", str(client_id)).eq("status", "complete")
+        .order("completed_at", desc=True).limit(max(1, min(limit, 200))).execute()
+    ).data or []
+    if not scans:
+        return MapsPeriodsResponse()
+    results = (
+        supabase.table("maps_scan_results")
+        .select("scan_id, keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins")
+        .in_("scan_id", [s["id"] for s in scans]).execute()
+    ).data or []
+    data = build_maps_periods(scans, results, datetime.now(timezone.utc).date())
+    return MapsPeriodsResponse(**data)
 
 
 def _alert_row(r: dict) -> MapsAlert:

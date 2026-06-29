@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Optional, Sequence
 
+from statistics import mean
+
 from config import settings
 from db.supabase_client import get_supabase
 from services.maps_analytics import OCTANT_FULL, build_geogrid_analytics
@@ -421,6 +423,121 @@ def build_maps_changes(
         "current_scan_id": (curr_scan or {}).get("id"),
         "previous_scan_id": (prev_scan or {}).get("id"),
         "keywords": keywords,
+    }
+
+
+# ----------------------------------------------------------------------------
+# Multi-window period summary (pure, DB-free) — powers GET /maps/periods.
+# Last 7 / 30 / 90 days + since-start deltas, overall + per-keyword, for the
+# core visibility metrics. Computed from the existing scan time series (the same
+# data build_maps_trends reads) — no new storage.
+# ----------------------------------------------------------------------------
+_PERIOD_METRICS = [
+    ("average_rank", "Avg rank"),
+    ("top3_pct", "Top-3 %"),
+    ("top10_pct", "Top-10 %"),
+    ("found_pct", "Found %"),
+]
+_PERIOD_WINDOWS = [("7d", 7), ("30d", 30), ("90d", 90)]  # plus "start"
+
+
+def _date_ord(value) -> Optional[int]:
+    try:
+        return date.fromisoformat(str(value)[:10]).toordinal()
+    except Exception:
+        return None
+
+
+def _overall_metrics(rows: Sequence[dict]) -> dict:
+    """Pin-weighted client rollup across one scan's per-keyword rows."""
+    ranks = [r["average_rank"] for r in rows if r.get("average_rank") is not None]
+    total = sum(r.get("total_pins") or 0 for r in rows)
+    return {
+        "average_rank": round(mean(ranks), 2) if ranks else None,
+        "top3_pct": _pct(sum(r.get("top3_pins") or 0 for r in rows), total),
+        "top10_pct": _pct(sum(r.get("top10_pins") or 0 for r in rows), total),
+        "found_pct": _pct(sum(r.get("found_pins") or 0 for r in rows), total),
+    }
+
+
+def _window_delta(points: Sequence[dict], key: str, now, baseline: Optional[dict]) -> dict:
+    """A {from_value, now, delta, baseline_at} cell for one metric/window."""
+    if baseline is None:
+        return {"from_value": None, "now": now, "delta": None, "baseline_at": None}
+    frm = baseline.get(key)
+    delta = round(now - frm, 2) if (now is not None and frm is not None) else None
+    return {"from_value": frm, "now": now, "delta": delta, "baseline_at": baseline.get("date")}
+
+
+def _scope_for(keyword: Optional[str], points: Sequence[dict], today: date) -> dict:
+    """Build a metric-by-window scope from one entity's oldest→newest series."""
+    last = points[-1] if points else None
+    metrics = []
+    for key, label in _PERIOD_METRICS:
+        now = last.get(key) if last else None
+        windows: dict[str, dict] = {}
+        for wk, days in _PERIOD_WINDOWS:
+            cutoff = today.toordinal() - days
+            # latest point strictly before the current one and on/before the cutoff
+            baseline = None
+            for p in points[:-1]:
+                if p["ord"] is not None and p["ord"] <= cutoff:
+                    baseline = p
+            windows[wk] = _window_delta(points, key, now, baseline)
+        # since-start: the earliest point (only if there's history before now)
+        start_base = points[0] if len(points) >= 2 else None
+        windows["start"] = _window_delta(points, key, now, start_base)
+        metrics.append({"metric": key, "label": label, "now": now, "windows": windows})
+    return {"keyword": keyword, "metrics": metrics}
+
+
+def build_maps_periods(scans: Sequence[dict], results: Sequence[dict], today: date) -> dict:
+    """7/30/90-day + since-start deltas for the visibility metrics, overall +
+    per-keyword. `scans` = completed scans ({id, completed_at}); `results` = their
+    per-keyword rows. Pure — matches MapsPeriodsResponse."""
+    meta = {s["id"]: s for s in scans}
+    by_scan: dict[str, list[dict]] = {}
+    by_kw: dict[str, list[dict]] = {}
+    for r in results:
+        sid = r.get("scan_id")
+        if sid not in meta:
+            continue
+        by_scan.setdefault(sid, []).append(r)
+        by_kw.setdefault(r["keyword"], []).append(r)
+
+    def _point(metrics: dict, completed_at) -> dict:
+        return {**metrics, "date": str(completed_at)[:10] if completed_at else None, "ord": _date_ord(completed_at)}
+
+    overall_points = sorted(
+        (p for sid, rows in by_scan.items()
+         if (p := _point(_overall_metrics(rows), meta[sid].get("completed_at")))["ord"] is not None),
+        key=lambda p: p["ord"],
+    )
+    overall = _scope_for(None, overall_points, today) if overall_points else None
+
+    kw_scopes = []
+    for kw in sorted(by_kw):
+        pts = sorted(
+            (p for r in by_kw[kw]
+             if (p := _point(
+                 {
+                     "average_rank": r.get("average_rank"),
+                     "top3_pct": _pct(r.get("top3_pins"), r.get("total_pins")),
+                     "top10_pct": _pct(r.get("top10_pins"), r.get("total_pins")),
+                     "found_pct": _pct(r.get("found_pins"), r.get("total_pins")),
+                 },
+                 meta[r["scan_id"]].get("completed_at"),
+             ))["ord"] is not None),
+            key=lambda p: p["ord"],
+        )
+        if pts:
+            kw_scopes.append(_scope_for(kw, pts, today))
+
+    return {
+        "as_of": overall_points[-1]["date"] if overall_points else None,
+        "scan_count": len(by_scan),
+        "overall": overall,
+        "keywords": kw_scopes,
     }
 
 

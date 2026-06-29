@@ -853,6 +853,33 @@ export interface MapsAlertsResponse {
   unread_count: number
 }
 
+// Multi-window period summary (7/30/90/since-start).
+export interface MapsPeriodDelta {
+  from_value: number | null
+  now: number | null
+  delta: number | null
+  baseline_at: string | null
+}
+
+export interface MapsPeriodMetric {
+  metric: string          // 'average_rank' | 'top3_pct' | 'top10_pct' | 'found_pct'
+  label: string
+  now: number | null
+  windows: Record<string, MapsPeriodDelta>  // keys: 7d / 30d / 90d / start
+}
+
+export interface MapsPeriodScope {
+  keyword: string | null  // null = overall client rollup
+  metrics: MapsPeriodMetric[]
+}
+
+export interface MapsPeriodsResponse {
+  as_of: string | null
+  scan_count: number
+  overall: MapsPeriodScope | null
+  keywords: MapsPeriodScope[]
+}
+
 // Dashboard ranking-health tile: average organic position + average maps rank,
 // latest run vs first. Lower rank numbers are better, so direction "up" = the
 // latest average is a smaller (better) number than the first.

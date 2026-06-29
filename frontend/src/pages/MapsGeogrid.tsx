@@ -6,7 +6,8 @@ import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type {
   Client, MapsAlert, MapsAlertsResponse, MapsChangesResponse, MapsCompetitorTrendsResponse,
-  MapsConfig, MapsKeyword, MapsKeywordChange, MapsRadius, MapsRunResponse,
+  MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
+  MapsPeriodsResponse, MapsRadius, MapsRunResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
@@ -875,9 +876,22 @@ const ALERT_LABEL: Record<string, string> = {
 
 function WhatChanged({ clientId }: { clientId: string }) {
   const queryClient = useQueryClient()
+  // null = view the latest scan (default); otherwise a specific past scan.
+  const [scanId, setScanId] = useState<string | null>(null)
+
+  const { data: periods } = useQuery<MapsPeriodsResponse>({
+    queryKey: ['maps-periods', clientId],
+    queryFn: () => api.get<MapsPeriodsResponse>(`/clients/${clientId}/maps/periods`),
+  })
+  const { data: scans } = useQuery<MapsScanSummary[]>({
+    queryKey: ['maps-scans', clientId],
+    queryFn: () => api.get<MapsScanSummary[]>(`/clients/${clientId}/maps/scans`),
+  })
   const { data: changes, isLoading } = useQuery<MapsChangesResponse>({
-    queryKey: ['maps-changes', clientId],
-    queryFn: () => api.get<MapsChangesResponse>(`/clients/${clientId}/maps/changes`),
+    queryKey: ['maps-changes', clientId, scanId ?? 'latest'],
+    queryFn: () => api.get<MapsChangesResponse>(
+      `/clients/${clientId}/maps/changes${scanId ? `?scan_id=${scanId}` : ''}`,
+    ),
   })
   const { data: alerts } = useQuery<MapsAlertsResponse>({
     queryKey: ['maps-alerts', clientId],
@@ -889,11 +903,11 @@ function WhatChanged({ clientId }: { clientId: string }) {
   const readAllMut = useMutation({ mutationFn: () => api.post(`/clients/${clientId}/maps/alerts/read-all`, {}), onSuccess: invalidate })
 
   const openAlerts = (alerts?.alerts ?? []).filter(a => a.status !== 'dismissed')
-
-  if (isLoading) return <p style={muted}>Loading…</p>
+  const completed = (scans ?? []).filter(s => s.status === 'complete')
 
   return (
     <div>
+      <PeriodSummary periods={periods} />
       <AlertsPanel
         alerts={openAlerts}
         unread={alerts?.unread_count ?? 0}
@@ -902,7 +916,113 @@ function WhatChanged({ clientId }: { clientId: string }) {
         onReadAll={() => readAllMut.mutate()}
         busy={readMut.isPending || dismissMut.isPending || readAllMut.isPending}
       />
-      <ChangeTable changes={changes} />
+      <ChangeBrowser
+        clientId={clientId}
+        completed={completed}
+        scanId={scanId}
+        onSelect={setScanId}
+        changes={changes}
+        isLoading={isLoading}
+      />
+    </div>
+  )
+}
+
+// Period summary: 7/30/90-day + since-start deltas for the visibility metrics,
+// switchable between the overall client rollup and any single keyword.
+function fmtMetric(metric: string, v: number | null): string {
+  if (v == null) return '—'
+  return metric.endsWith('_pct') ? `${Math.round(v)}%` : v.toFixed(1)
+}
+
+function DeltaCell({ metric, d }: { metric: string; d?: { delta: number | null } }) {
+  if (!d || d.delta == null || d.delta === 0) return <span style={{ color: '#cbd5e1' }}>—</span>
+  // Avg rank is lower-is-better; percentages are higher-is-better.
+  const higherBetter = metric !== 'average_rank'
+  const improved = higherBetter ? d.delta > 0 : d.delta < 0
+  const color = improved ? '#16a34a' : '#dc2626'
+  const mag = Math.abs(d.delta)
+  const txt = metric.endsWith('_pct') ? `${Math.round(mag)} pts` : mag.toFixed(1)
+  return <span style={{ color, fontWeight: 600 }}>{improved ? '▲' : '▼'} {txt}</span>
+}
+
+function PeriodSummary({ periods }: { periods?: MapsPeriodsResponse }) {
+  const scopes: MapsPeriodScope[] = periods
+    ? [...(periods.overall ? [periods.overall] : []), ...periods.keywords]
+    : []
+  const [sel, setSel] = useState<string>('__overall__')
+  const current = scopes.find(s => (s.keyword ?? '__overall__') === sel) ?? scopes[0]
+
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '7px 8px', textAlign: 'right', fontSize: 13, color: '#334155', borderTop: '1px solid #f1f5f9' }
+  const WINDOWS: Array<[string, string]> = [['7d', '7 days'], ['30d', '30 days'], ['90d', '90 days'], ['start', 'Since start']]
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 8 }}>
+        <h2 style={{ ...sectionTitle, margin: 0 }}>Performance over time</h2>
+        {current && (
+          <select style={{ ...input, width: 'auto', padding: '6px 8px', fontSize: 13 }} value={sel} onChange={e => setSel(e.target.value)}>
+            {periods?.overall && <option value="__overall__">Overall (all keywords)</option>}
+            {(periods?.keywords ?? []).map(k => <option key={k.keyword} value={k.keyword!}>{k.keyword}</option>)}
+          </select>
+        )}
+      </div>
+      {!current ? (
+        <p style={muted}>Run at least one scan to see period comparisons. With two or more scans, the 7/30/90-day and since-start columns fill in.</p>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={{ ...th, textAlign: 'left' }}>Metric</th>
+            <th style={th}>Now</th>
+            {WINDOWS.map(([, label]) => <th key={label} style={th}>{label}</th>)}
+          </tr></thead>
+          <tbody>
+            {current.metrics.map((m: MapsPeriodMetric) => (
+              <tr key={m.metric}>
+                <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: '#0f172a' }}>{m.label}</td>
+                <td style={{ ...td, fontWeight: 700 }}>{fmtMetric(m.metric, m.now)}</td>
+                {WINDOWS.map(([wk]) => <td key={wk} style={td}><DeltaCell metric={m.metric} d={m.windows[wk]} /></td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
+// Browse any past week's scan-over-scan change (default: latest).
+function ChangeBrowser({ clientId, completed, scanId, onSelect, changes, isLoading }: {
+  clientId: string; completed: MapsScanSummary[]; scanId: string | null
+  onSelect: (id: string | null) => void; changes?: MapsChangesResponse; isLoading: boolean
+}) {
+  const fmt = (s: MapsScanSummary) => {
+    const iso = s.completed_at || s.requested_at
+    return iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
+  }
+  // The scan whose report to link to (selected, or the latest completed).
+  const viewing = scanId ?? completed[0]?.id ?? null
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, marginBottom: 4 }}>
+        <h2 style={{ ...sectionTitle, margin: 0 }}>Week-over-week change</h2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {completed.length > 0 && (
+            <select style={{ ...input, width: 'auto', padding: '6px 8px', fontSize: 13 }} value={scanId ?? ''} onChange={e => onSelect(e.target.value || null)}>
+              <option value="">Latest scan</option>
+              {completed.map(s => <option key={s.id} value={s.id}>{fmt(s)}</option>)}
+            </select>
+          )}
+          {viewing && (
+            <Link to={`/clients/${clientId}/maps/report?scan_id=${viewing}`} target="_blank" rel="noreferrer"
+              style={{ ...outlineBtn, padding: '6px 10px', fontSize: 12, textDecoration: 'none' }}>
+              <Printer size={13} /> Open report ↗
+            </Link>
+          )}
+        </div>
+      </div>
+      {isLoading ? <p style={muted}>Loading…</p> : <ChangeTable changes={changes} />}
     </div>
   )
 }
@@ -964,23 +1084,17 @@ function AlertsPanel({ alerts, unread, onRead, onDismiss, onReadAll, busy }: {
 
 function ChangeTable({ changes }: { changes?: MapsChangesResponse }) {
   if (!changes || !changes.current_scan_id) {
-    return <div style={card}><p style={muted}>No completed scans yet. Run a scan to start tracking changes.</p></div>
+    return <p style={muted}>No completed scans yet. Run a scan to start tracking changes.</p>
   }
   if (!changes.has_previous) {
-    return (
-      <div style={card}>
-        <h2 style={{ ...sectionTitle, margin: '0 0 6px' }}>Since last scan</h2>
-        <p style={muted}>This is the first completed scan — there's nothing to compare against yet. After the next scan, this tab shows what moved.</p>
-      </div>
-    )
+    return <p style={muted}>No earlier scan to compare against — this is the first one in range. The next scan will populate the comparison.</p>
   }
   const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
   const td: React.CSSProperties = { padding: '7px 8px', textAlign: 'right', fontSize: 13, color: '#334155', borderTop: '1px solid #f1f5f9' }
   return (
-    <div style={card}>
-      <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Since last scan</h2>
-      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
-        Each keyword's newest scan vs the previous one. <span style={{ color: '#dc2626', fontWeight: 600 }}>▲ worse</span> · <span style={{ color: '#16a34a', fontWeight: 600 }}>▼ better</span>.
+    <div>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '2px 0 12px' }}>
+        This scan vs the one before it. <span style={{ color: '#dc2626', fontWeight: 600 }}>▲ worse</span> · <span style={{ color: '#16a34a', fontWeight: 600 }}>▼ better</span>.
       </p>
       <table style={{ width: '100%', borderCollapse: 'collapse' }}>
         <thead><tr>

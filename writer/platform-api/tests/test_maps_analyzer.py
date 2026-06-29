@@ -127,6 +127,70 @@ def test_build_maps_changes_deltas():
 
 
 # ---------------------------------------------------------------------------
+# build_maps_periods (7/30/90/since-start)
+# ---------------------------------------------------------------------------
+def _periods_fixture():
+    scans = [
+        {"id": "n", "completed_at": "2026-06-29T00:00:00Z"},     # today
+        {"id": "d8", "completed_at": "2026-06-21T00:00:00Z"},    # 7d baseline
+        {"id": "d31", "completed_at": "2026-05-29T00:00:00Z"},   # 30d baseline
+        {"id": "d95", "completed_at": "2026-03-26T00:00:00Z"},   # 90d baseline
+        {"id": "first", "completed_at": "2026-01-01T00:00:00Z"}, # since-start baseline
+    ]
+    spec = {"first": (2, 8), "d95": (3, 7), "d31": (4, 6), "d8": (5, 5), "n": (8, 2)}
+    results = [
+        {"scan_id": sid, "keyword": "kw", "average_rank": ar,
+         "top3_pins": t3, "top10_pins": t3, "total_pins": 10, "found_pins": t3}
+        for sid, (ar, t3) in spec.items()
+    ]
+    return scans, results
+
+
+def test_build_maps_periods_window_baselines():
+    scans, results = _periods_fixture()
+    out = ma.build_maps_periods(scans, results, TODAY)
+    assert out["scan_count"] == 5 and out["as_of"] == "2026-06-29"
+    kw = out["keywords"][0]
+    rank = next(m for m in kw["metrics"] if m["metric"] == "average_rank")
+    assert rank["now"] == 8
+    assert rank["windows"]["7d"]["from_value"] == 5 and rank["windows"]["7d"]["delta"] == 3
+    assert rank["windows"]["30d"]["delta"] == 4
+    assert rank["windows"]["90d"]["delta"] == 5
+    assert rank["windows"]["start"]["delta"] == 6 and rank["windows"]["start"]["baseline_at"] == "2026-01-01"
+    t3 = next(m for m in kw["metrics"] if m["metric"] == "top3_pct")
+    assert t3["now"] == 20.0
+    assert t3["windows"]["7d"]["delta"] == -30.0 and t3["windows"]["start"]["delta"] == -60.0
+
+
+def test_build_maps_periods_single_scan_has_no_windows():
+    scans = [{"id": "n", "completed_at": "2026-06-29T00:00:00Z"}]
+    results = [{"scan_id": "n", "keyword": "kw", "average_rank": 5,
+                "top3_pins": 5, "top10_pins": 5, "total_pins": 10, "found_pins": 5}]
+    out = ma.build_maps_periods(scans, results, TODAY)
+    rank = next(m for m in out["keywords"][0]["metrics"] if m["metric"] == "average_rank")
+    assert rank["now"] == 5
+    assert all(rank["windows"][w]["delta"] is None for w in ("7d", "30d", "90d", "start"))
+
+
+def test_build_maps_periods_overall_is_pin_weighted():
+    scans = [{"id": "n", "completed_at": "2026-06-29T00:00:00Z"},
+             {"id": "p", "completed_at": "2026-06-21T00:00:00Z"}]
+    results = [
+        {"scan_id": "n", "keyword": "A", "average_rank": 8, "top3_pins": 2, "top10_pins": 2, "total_pins": 10, "found_pins": 2},
+        {"scan_id": "n", "keyword": "B", "average_rank": 4, "top3_pins": 4, "top10_pins": 4, "total_pins": 10, "found_pins": 4},
+        {"scan_id": "p", "keyword": "A", "average_rank": 6, "top3_pins": 3, "top10_pins": 3, "total_pins": 10, "found_pins": 3},
+        {"scan_id": "p", "keyword": "B", "average_rank": 2, "top3_pins": 5, "top10_pins": 5, "total_pins": 10, "found_pins": 5},
+    ]
+    out = ma.build_maps_periods(scans, results, TODAY)
+    ov = out["overall"]
+    rank = next(m for m in ov["metrics"] if m["metric"] == "average_rank")
+    assert rank["now"] == 6  # mean(8, 4)
+    t3 = next(m for m in ov["metrics"] if m["metric"] == "top3_pct")
+    assert t3["now"] == 30.0  # (2+4)/(10+10)
+    assert t3["windows"]["7d"]["delta"] == -10.0  # 30 now vs (3+5)/20=40 a week ago
+
+
+# ---------------------------------------------------------------------------
 # reconcile (mocked supabase)
 # ---------------------------------------------------------------------------
 class _FakeQuery:
