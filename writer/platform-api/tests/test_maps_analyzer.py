@@ -1,0 +1,209 @@
+"""Unit tests for the Maps geo-grid analyzer + alerting (pure logic + reconcile)."""
+
+from __future__ import annotations
+
+import sys
+from datetime import date
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from services import maps_analyzer as ma  # noqa: E402
+
+TODAY = date(2026, 6, 29)
+
+
+def _types(signals):
+    return {s.alert_type for s in signals}
+
+
+# ---------------------------------------------------------------------------
+# Individual detectors
+# ---------------------------------------------------------------------------
+def test_grid_rank_drop_fires_and_respects_threshold():
+    sig = ma.detect_grid_rank_drop("kw", {"average_rank": 8.0}, {"average_rank": 5.0})
+    assert len(sig) == 1 and sig[0].alert_type == "grid_rank_drop"
+    assert sig[0].from_value == 5.0 and sig[0].to_value == 8.0 and sig[0].delta == 3.0
+    # Below threshold (default 1.5) → no signal; improvement → no signal.
+    assert ma.detect_grid_rank_drop("kw", {"average_rank": 5.5}, {"average_rank": 5.0}) == []
+    assert ma.detect_grid_rank_drop("kw", {"average_rank": 3.0}, {"average_rank": 5.0}) == []
+    # Missing data → no signal.
+    assert ma.detect_grid_rank_drop("kw", {"average_rank": None}, {"average_rank": 5.0}) == []
+
+
+def test_coverage_drop_picks_largest_qualifying_metric():
+    curr = {"top3_pins": 6, "top10_pins": 9, "total_pins": 10}
+    prev = {"top3_pins": 8, "top10_pins": 10, "total_pins": 10}
+    sig = ma.detect_coverage_drop("kw", curr, prev)  # Top-3: 80→60 (-20); Top-10: 100→90 (-10)
+    assert len(sig) == 1 and sig[0].delta == 20.0
+    assert sig[0].details["metric"] == "Top-3"
+    # No qualifying drop (defaults 15pts).
+    assert ma.detect_coverage_drop("kw", {"top3_pins": 7, "top10_pins": 9, "total_pins": 10}, prev) == []
+
+
+def test_lost_pack_core_ring():
+    curr_an = {"ring_summaries": [{"ranked": 0, "cells": 9}]}
+    prev_an = {"ring_summaries": [{"ranked": 9, "cells": 9}]}
+    sig = ma.detect_lost_pack("kw", {}, {}, curr_an, prev_an)
+    assert len(sig) == 1 and sig[0].alert_type == "lost_pack"
+    assert sig[0].details["reason"] == "core_ring"
+
+
+def test_lost_pack_found_collapse():
+    sig = ma.detect_lost_pack(
+        "kw", {"found_pins": 2, "total_pins": 9}, {"found_pins": 9, "total_pins": 9}, {}, {}
+    )
+    assert len(sig) == 1 and sig[0].details["reason"] == "found_collapse"
+    # A modest dip stays quiet.
+    assert ma.detect_lost_pack(
+        "kw", {"found_pins": 8, "total_pins": 9}, {"found_pins": 9, "total_pins": 9}, {}, {}
+    ) == []
+
+
+def test_area_decline_per_octant():
+    curr_an = {"sectors_overall": [
+        {"sector": "N", "cells": 4, "coverage_pct_top3": 20.0, "avg_rank": 9.0},
+        {"sector": "S", "cells": 4, "coverage_pct_top3": 75.0, "avg_rank": 3.0},
+        {"sector": "E", "cells": 1, "coverage_pct_top3": 0.0, "avg_rank": None},  # too thin
+    ]}
+    prev_an = {"sectors_overall": [
+        {"sector": "N", "cells": 4, "coverage_pct_top3": 75.0, "avg_rank": 3.0},  # -55 pts
+        {"sector": "S", "cells": 4, "coverage_pct_top3": 80.0, "avg_rank": 2.0},  # -5 pts (quiet)
+        {"sector": "E", "cells": 1, "coverage_pct_top3": 75.0, "avg_rank": 3.0},
+    ]}
+    sig = ma.detect_area_decline("kw", curr_an, prev_an)
+    # Only N qualifies (S below threshold, E too thin to trust).
+    assert [s.sector for s in sig] == ["N"]
+    assert sig[0].alert_type == "area_decline"
+
+
+def _above(grid, directory=None):
+    return {"directory": directory or {"A": {"name": "Comp A"}}, "grid": grid}
+
+
+def test_competitor_surge_fires_for_biggest_gainer():
+    curr = {"competitors_above": _above([[[["A", 1]], [["A", 1]], [["A", 2]], [["A", 1]], [["A", 1]], [["A", 1]]]])}
+    prev = {"competitors_above": _above([[[["A", 1]]]])}  # A was on 1 pin, now 6 → gain 5
+    sig = ma.detect_competitor_surge("kw", curr, prev)
+    assert len(sig) == 1 and sig[0].alert_type == "competitor_surge"
+    assert sig[0].to_value == 6.0 and sig[0].delta == 5.0
+    assert sig[0].details["name"] == "Comp A"
+    # No competitor data on one side → skip (no false surge).
+    assert ma.detect_competitor_surge("kw", {"competitors_above": None}, prev) == []
+
+
+# ---------------------------------------------------------------------------
+# analyze_keyword + build_maps_changes
+# ---------------------------------------------------------------------------
+def test_analyze_keyword_first_scan_no_signals():
+    assert ma.analyze_keyword("kw", {"average_rank": 12.0}, None) == []
+
+
+def test_analyze_keyword_combines_signals():
+    curr = {"average_rank": 9.0, "top3_pins": 2, "top10_pins": 4, "total_pins": 10,
+            "found_pins": 4, "rank_grid": None, "competitors_above": None}
+    prev = {"average_rank": 4.0, "top3_pins": 8, "top10_pins": 9, "total_pins": 10,
+            "found_pins": 9, "rank_grid": None, "competitors_above": None}
+    types = _types(ma.analyze_keyword("kw", curr, prev))
+    assert "grid_rank_drop" in types and "coverage_drop" in types and "lost_pack" in types
+
+
+def test_build_maps_changes_first_scan():
+    out = ma.build_maps_changes({"id": "s1"}, None, [{"keyword": "kw", "average_rank": 5.0, "total_pins": 10, "found_pins": 8, "top3_pins": 5, "top10_pins": 8}], [])
+    assert out["has_previous"] is False
+    assert out["keywords"][0]["average_rank_prev"] is None
+    assert out["keywords"][0]["average_rank_now"] == 5.0
+
+
+def test_build_maps_changes_deltas():
+    curr = [{"keyword": "kw", "average_rank": 8.0, "total_pins": 10, "found_pins": 4, "top3_pins": 2, "top10_pins": 4, "rank_grid": None}]
+    prev = [{"keyword": "kw", "average_rank": 5.0, "total_pins": 10, "found_pins": 9, "top3_pins": 8, "top10_pins": 9, "rank_grid": None}]
+    out = ma.build_maps_changes({"id": "s2"}, {"id": "s1"}, curr, prev)
+    assert out["has_previous"] is True
+    row = out["keywords"][0]
+    assert row["average_rank_delta"] == 3.0
+    assert row["top3_pct_now"] == 20.0 and row["top3_pct_prev"] == 80.0
+    assert "grid_rank_drop" in row["alert_types"]
+
+
+# ---------------------------------------------------------------------------
+# reconcile (mocked supabase)
+# ---------------------------------------------------------------------------
+class _FakeQuery:
+    def __init__(self, table, store):
+        self.table, self.store, self._op, self._payload = table, store, None, None
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def neq(self, *a, **k):
+        return self
+
+    def is_(self, *a, **k):
+        return self
+
+    def in_(self, *a, **k):
+        return self
+
+    def insert(self, rows):
+        self._op, self._payload = "insert", rows
+        return self
+
+    def update(self, patch):
+        self._op, self._payload = "update", patch
+        return self
+
+    def execute(self):
+        if self._op == "insert":
+            self.store.setdefault("inserts", []).extend(self._payload)
+            return type("R", (), {"data": self._payload})
+        if self._op == "update":
+            self.store.setdefault("updates", []).append(self._payload)
+            return type("R", (), {"data": []})
+        return type("R", (), {"data": self.store.get("open_rows", [])})
+
+
+class _FakeSupabase:
+    def __init__(self, open_rows):
+        self.store = {"open_rows": open_rows}
+
+    def table(self, name):
+        return _FakeQuery(name, self.store)
+
+
+def test_reconcile_opens_new_resolves_cleared_dedupes_open():
+    # One alert already open for (kw1, grid_rank_drop); kw1 also newly trips
+    # area_decline (N). kw2's previously-open coverage_drop has cleared.
+    open_rows = [
+        {"id": "a1", "keyword": "kw1", "alert_type": "grid_rank_drop", "sector": None},
+        {"id": "a2", "keyword": "kw2", "alert_type": "coverage_drop", "sector": None},
+    ]
+    supa = _FakeSupabase(open_rows)
+    per_keyword = [
+        ("kw1", [
+            ma.MapsAlertSignal(alert_type="grid_rank_drop", message="still dropping"),  # already open
+            ma.MapsAlertSignal(alert_type="area_decline", sector="N", message="N weak"),  # new
+        ]),
+        ("kw2", []),  # coverage_drop cleared → resolve a2
+    ]
+    out = ma.reconcile_alerts(supa, "client-1", "scan-2", "scan-1", per_keyword, TODAY)
+    assert out["opened"] == 1 and out["resolved"] == 1
+    inserts = supa.store["inserts"]
+    assert len(inserts) == 1 and inserts[0]["alert_type"] == "area_decline" and inserts[0]["sector"] == "N"
+    assert out["opened_alerts"][0]["keyword"] == "kw1"
+
+
+# ---------------------------------------------------------------------------
+# summarize digest
+# ---------------------------------------------------------------------------
+def test_summarize_maps_alerts_critical_and_warning():
+    crit = ma.summarize_maps_alerts([
+        {"keyword": "a", "alert_type": "lost_pack", "message": "a lost pack."},
+        {"keyword": "b", "alert_type": "coverage_drop", "message": "b coverage."},
+    ])
+    assert crit["severity"] == "critical" and crit["title"] == "2 local-pack alerts detected"
+    warn = ma.summarize_maps_alerts([{"keyword": "a", "alert_type": "coverage_drop", "message": "m"}])
+    assert warn["severity"] == "warning" and warn["title"] == "1 local-pack alert detected"

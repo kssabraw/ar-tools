@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight } from 'lucide-react'
+import { ArrowLeft, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight, Bell, Check, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type {
-  Client, MapsCompetitorTrendsResponse, MapsConfig, MapsKeyword, MapsRadius, MapsRunResponse,
+  Client, MapsAlert, MapsAlertsResponse, MapsChangesResponse, MapsCompetitorTrendsResponse,
+  MapsConfig, MapsKeyword, MapsKeywordChange, MapsRadius, MapsRunResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
@@ -14,7 +15,7 @@ import { rankColor, TREND_METRICS } from '../components/maps/rank'
 import type { TrendMetric } from '../components/maps/rank'
 import { backLink, card, errorBox, outlineBtn, primaryBtn, relativeTime } from '../components/localseo/shared'
 
-type Tab = 'heatmap' | 'setup' | 'history'
+type Tab = 'heatmap' | 'changes' | 'setup' | 'history'
 
 // Maps / local-pack geo-grid ranker (Module #5). A separate per-client module:
 // configure a 3/5/7-mile grid around the business, track keywords, and see the
@@ -60,6 +61,14 @@ export function MapsGeogrid() {
   const inFlight = (scans ?? []).some(s => s.status === 'polling' || s.status === 'pending')
   const scanning = inFlight || recentlyRan
 
+  // Badge the "What changed" tab with the unread geo-grid alert count.
+  const { data: alerts } = useQuery<MapsAlertsResponse>({
+    queryKey: ['maps-alerts', clientId],
+    queryFn: () => api.get<MapsAlertsResponse>(`/clients/${clientId}/maps/alerts`),
+    enabled: Boolean(clientId),
+  })
+  const alertsUnread = alerts?.unread_count ?? 0
+
   // While scanning, drive Local Dominator polling from the client so results
   // land in seconds instead of waiting for the 5-minute scheduler tick.
   useQuery({
@@ -86,6 +95,7 @@ export function MapsGeogrid() {
 
       <div style={{ display: 'flex', gap: 4, borderBottom: '1px solid #e2e8f0', marginBottom: 24 }}>
         <TabButton active={tab === 'heatmap'} onClick={() => setTab('heatmap')} label="Heatmap" />
+        <TabButton active={tab === 'changes'} onClick={() => setTab('changes')} label="What changed" badge={alertsUnread} />
         <TabButton active={tab === 'setup'} onClick={() => setTab('setup')} label="Setup" />
         <TabButton active={tab === 'history'} onClick={() => setTab('history')} label="History" />
       </div>
@@ -94,6 +104,8 @@ export function MapsGeogrid() {
         <Setup clientId={clientId} />
       ) : tab === 'history' ? (
         <History clientId={clientId} scans={scans ?? []} onOpen={() => setTab('heatmap')} />
+      ) : tab === 'changes' ? (
+        <WhatChanged clientId={clientId} />
       ) : (
         <Heatmap clientId={clientId} scanning={scanning} onRan={markRun} onStopped={stopRun} />
       )}
@@ -852,6 +864,178 @@ function PctSparkline({ values, color, width = 90, height = 24 }: { values: (num
   )
 }
 
+// ── What changed (scan-over-scan analyzer + alerts) ─────────────────────────
+const ALERT_LABEL: Record<string, string> = {
+  grid_rank_drop: 'Avg rank drop',
+  coverage_drop: 'Coverage drop',
+  lost_pack: 'Lost the pack',
+  area_decline: 'Area decline',
+  competitor_surge: 'Competitor surge',
+}
+
+function WhatChanged({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data: changes, isLoading } = useQuery<MapsChangesResponse>({
+    queryKey: ['maps-changes', clientId],
+    queryFn: () => api.get<MapsChangesResponse>(`/clients/${clientId}/maps/changes`),
+  })
+  const { data: alerts } = useQuery<MapsAlertsResponse>({
+    queryKey: ['maps-alerts', clientId],
+    queryFn: () => api.get<MapsAlertsResponse>(`/clients/${clientId}/maps/alerts`),
+  })
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['maps-alerts', clientId] })
+  const readMut = useMutation({ mutationFn: (id: string) => api.post(`/maps-alerts/${id}/read`, {}), onSuccess: invalidate })
+  const dismissMut = useMutation({ mutationFn: (id: string) => api.post(`/maps-alerts/${id}/dismiss`, {}), onSuccess: invalidate })
+  const readAllMut = useMutation({ mutationFn: () => api.post(`/clients/${clientId}/maps/alerts/read-all`, {}), onSuccess: invalidate })
+
+  const openAlerts = (alerts?.alerts ?? []).filter(a => a.status !== 'dismissed')
+
+  if (isLoading) return <p style={muted}>Loading…</p>
+
+  return (
+    <div>
+      <AlertsPanel
+        alerts={openAlerts}
+        unread={alerts?.unread_count ?? 0}
+        onRead={(id) => readMut.mutate(id)}
+        onDismiss={(id) => dismissMut.mutate(id)}
+        onReadAll={() => readAllMut.mutate()}
+        busy={readMut.isPending || dismissMut.isPending || readAllMut.isPending}
+      />
+      <ChangeTable changes={changes} />
+    </div>
+  )
+}
+
+function AlertsPanel({ alerts, unread, onRead, onDismiss, onReadAll, busy }: {
+  alerts: MapsAlert[]; unread: number; onRead: (id: string) => void; onDismiss: (id: string) => void; onReadAll: () => void; busy: boolean
+}) {
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
+        <h2 style={{ ...sectionTitle, margin: 0, display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          <Bell size={14} color="#6366f1" /> Alerts {unread > 0 && <span style={{ color: '#dc2626' }}>({unread} new)</span>}
+        </h2>
+        {unread > 0 && (
+          <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }} onClick={onReadAll} disabled={busy}>
+            <Check size={13} /> Mark all read
+          </button>
+        )}
+      </div>
+      {alerts.length === 0 ? (
+        <p style={muted}>No active alerts. Declines detected between scans show up here (and in the client's notifications feed + Slack).</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {alerts.map((a, i) => {
+            const critical = a.severity === 'critical'
+            const unreadRow = a.status === 'unread'
+            return (
+              <div key={a.id} style={{
+                display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 2px',
+                borderTop: i ? '1px solid #f1f5f9' : 'none',
+              }}>
+                <span style={{ width: 8, height: 8, borderRadius: 999, marginTop: 6, flexShrink: 0, background: critical ? '#dc2626' : '#d97706' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                    <span style={{
+                      fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em',
+                      padding: '1px 7px', borderRadius: 10,
+                      background: critical ? '#fee2e2' : '#fef3c7', color: critical ? '#b91c1c' : '#b45309',
+                    }}>{ALERT_LABEL[a.alert_type] ?? a.alert_type}</span>
+                    {unreadRow && <span style={{ fontSize: 10.5, fontWeight: 700, color: '#6366f1' }}>NEW</span>}
+                  </div>
+                  <div style={{ fontSize: 13.5, color: '#334155', marginTop: 3 }}>{a.message}</div>
+                  {a.triggered_on && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>{a.triggered_on}</div>}
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {unreadRow && (
+                    <button style={{ ...outlineBtn, padding: '4px 7px', fontSize: 12 }} onClick={() => onRead(a.id)} disabled={busy} title="Mark read"><Check size={13} /></button>
+                  )}
+                  <button style={{ ...outlineBtn, padding: '4px 7px', fontSize: 12, color: '#dc2626' }} onClick={() => onDismiss(a.id)} disabled={busy} title="Dismiss"><X size={13} /></button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ChangeTable({ changes }: { changes?: MapsChangesResponse }) {
+  if (!changes || !changes.current_scan_id) {
+    return <div style={card}><p style={muted}>No completed scans yet. Run a scan to start tracking changes.</p></div>
+  }
+  if (!changes.has_previous) {
+    return (
+      <div style={card}>
+        <h2 style={{ ...sectionTitle, margin: '0 0 6px' }}>Since last scan</h2>
+        <p style={muted}>This is the first completed scan — there's nothing to compare against yet. After the next scan, this tab shows what moved.</p>
+      </div>
+    )
+  }
+  const th: React.CSSProperties = { padding: '6px 8px', textAlign: 'right', fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', borderBottom: '1px solid #e2e8f0' }
+  const td: React.CSSProperties = { padding: '7px 8px', textAlign: 'right', fontSize: 13, color: '#334155', borderTop: '1px solid #f1f5f9' }
+  return (
+    <div style={card}>
+      <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Since last scan</h2>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+        Each keyword's newest scan vs the previous one. <span style={{ color: '#dc2626', fontWeight: 600 }}>▲ worse</span> · <span style={{ color: '#16a34a', fontWeight: 600 }}>▼ better</span>.
+      </p>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+        <thead><tr>
+          <th style={{ ...th, textAlign: 'left' }}>Keyword</th>
+          <th style={th}>Avg rank</th>
+          <th style={th}>Top-3 %</th>
+          <th style={th}>Found %</th>
+          <th style={{ ...th, textAlign: 'left' }}>Weakened areas</th>
+          <th style={{ ...th, textAlign: 'left' }}>Alerts</th>
+        </tr></thead>
+        <tbody>
+          {changes.keywords.map(k => <ChangeRow key={k.keyword} k={k} td={td} />)}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function ChangeRow({ k, td }: { k: MapsKeywordChange; td: React.CSSProperties }) {
+  // Avg rank: lower is better, so a positive delta (now > prev) is worse.
+  const d = k.average_rank_delta
+  const worse = d != null && d > 0
+  const better = d != null && d < 0
+  const arrow = worse ? '▲' : better ? '▼' : ''
+  const color = worse ? '#dc2626' : better ? '#16a34a' : '#94a3b8'
+  const fmtPct = (now: number | null, prev: number | null) =>
+    now == null ? '—' : <span>{Math.round(now)}%{prev != null && <span style={{ color: '#94a3b8' }}> (was {Math.round(prev)}%)</span>}</span>
+  const octants = k.octants.map(o => o.sector).join(' · ')
+  return (
+    <tr>
+      <td style={{ ...td, textAlign: 'left', fontWeight: 600, color: '#0f172a' }}>{k.keyword}</td>
+      <td style={td}>
+        {k.average_rank_now ?? '—'}
+        {d != null && d !== 0 && (
+          <span style={{ color, fontWeight: 600 }}> {arrow}{Math.abs(d)}</span>
+        )}
+      </td>
+      <td style={td}>{fmtPct(k.top3_pct_now, k.top3_pct_prev)}</td>
+      <td style={td}>{fmtPct(k.found_pct_now, k.found_pct_prev)}</td>
+      <td style={{ ...td, textAlign: 'left', color: octants ? '#b45309' : '#94a3b8' }}>{octants || '—'}</td>
+      <td style={{ ...td, textAlign: 'left' }}>
+        {k.alert_types.length === 0 ? <span style={{ color: '#16a34a' }}>—</span> : (
+          <span style={{ display: 'inline-flex', gap: 4, flexWrap: 'wrap' }}>
+            {k.alert_types.map(t => (
+              <span key={t} style={{ fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 10, background: t === 'lost_pack' ? '#fee2e2' : '#fef3c7', color: t === 'lost_pack' ? '#b91c1c' : '#b45309' }}>
+                {ALERT_LABEL[t] ?? t}
+              </span>
+            ))}
+          </span>
+        )}
+      </td>
+    </tr>
+  )
+}
+
 // ── helpers / styles ────────────────────────────────────────────────────────
 function pct(n: number, d: number): string { return d ? `${Math.round((n / d) * 100)}%` : '—' }
 function cap(s: string): string { return s.charAt(0).toUpperCase() + s.slice(1) }
@@ -871,12 +1055,18 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </label>
   )
 }
-function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+function TabButton({ active, onClick, label, badge }: { active: boolean; onClick: () => void; label: string; badge?: number }) {
   return (
     <button onClick={onClick} style={{
       background: 'none', border: 'none', cursor: 'pointer', padding: '10px 14px', fontSize: 14, fontWeight: 600,
       color: active ? '#6366f1' : '#64748b', borderBottom: active ? '2px solid #6366f1' : '2px solid transparent', marginBottom: -1,
-    }}>{label}</button>
+      display: 'inline-flex', alignItems: 'center', gap: 6,
+    }}>
+      {label}
+      {badge ? (
+        <span style={{ fontSize: 11, fontWeight: 700, color: '#fff', background: '#dc2626', borderRadius: 999, padding: '1px 7px', minWidth: 18, textAlign: 'center' }}>{badge}</span>
+      ) : null}
+    </button>
   )
 }
 
