@@ -1,11 +1,19 @@
-# Managed Client Engagement — Onboarding, Audit, Strategy & Autonomous Execution (Design v1.0)
+# The Strategist — Onboarding, Audit, Strategy, Continuous Monitoring & Autonomous Execution (Design v1.1)
 
-> **Status:** Design proposal. **Nothing in this document is built yet.** This is the architecture + phased roadmap for the orchestration layer that turns the AR Tools suite from a toolbox into a managed, semi‑autonomous SEO engagement. It is meant to sit alongside `docs/suite-architecture-and-roadmap-v1_0.md` (the product/architecture authority for "how many tools is this") and inherits all of that doc's locked decisions and the constraints in `CLAUDE.md`.
+> **Status:** Design proposal. **Nothing in this document is built yet.** This is the architecture + phased roadmap for the orchestration layer that turns the AR Tools suite from a toolbox into **"the Strategist"** — a system that creates strategy, **monitors campaigns continuously**, **suggests tweaks and fixes**, executes the automatable work itself, and **assigns the rest to Asana boards**. It sits alongside `docs/suite-architecture-and-roadmap-v1_0.md` (the product/architecture authority for "how many tools is this") and inherits all of that doc's locked decisions and the constraints in `CLAUDE.md`.
 
 > **Scope decisions captured from the user (2026‑06‑28):**
-> - **Autonomy target:** *maximally autonomous* — the system should execute most of an approved plan end‑to‑end (write pages, set internal links, publish drafts, provision tracking) with humans approving only at a few checkpoints.
+> - **Autonomy target:** *maximally autonomous* — execute the automatable work end‑to‑end with humans approving only at a few checkpoints.
 > - **Deliverable:** this design doc; **build nothing yet.**
-> - **Asana:** **deferred.** Designed for, but not built in the first phases; the plan stays internally authoritative until we add it.
+> - **First‑party data:** connect Search Console, GA4, and the Business Profile Performance API during onboarding (Stage 0b, §6.7).
+>
+> **Scope decisions captured from the user (2026‑06‑29) — the Strategist framing:**
+> - **Role:** this is **the Strategist** — it (1) creates strategy, (2) monitors campaigns, (3) suggests tweaks and fixes, (4) assigns tasks to Asana boards. It runs a **continuous loop**, not a one‑shot setup.
+> - **Auto‑vs‑assign split:** **auto the automatable, assign the craft.** The Strategist auto‑executes technical/repeatable work (tracking setup, internal‑link drafts, page generation drafts, on‑page fixes); human‑craft work (content review/publish, outreach, manual fixes) becomes Asana tasks. This is how the `execution_mode` of each action is set.
+> - **Asana: promoted from deferred to CORE.** Asana is the **human work surface**, with **role‑based auto‑assignment** (a role→assignee map: writer / SEO‑tech / link‑builder / VA / account‑manager) and **two‑way status sync**. The in‑app plan stays authoritative; Asana mirrors + assigns + reports status back.
+> - **Monitoring model:** **trend/anomaly only** — *no fixed numeric goal targets*. The monitor flags regressions and wins **relative to the baseline**, not progress toward set KPIs. (Simplifies the model: no campaign‑goal contract; a lightweight monitoring profile instead.)
+
+> **Revision history:** v1.0 (2026‑06‑28) — onboarding→audit→strategy→autonomous‑execution spine + first‑party data sources. **v1.1 (2026‑06‑29) — the Continuous Strategist: monitoring & signal bus, continuous‑optimization engine, the Strategist control loop, and Asana‑as‑core with role‑based assignment (§4.5, §6.8–6.10).** Filename retained at `-v1_0` for PR continuity.
 
 ---
 
@@ -100,18 +108,40 @@ strategy_actions
      backlink | llm_tactic | technical_fix | tracking_setup | schedule),
   title, rationale, target (jsonb: keyword/url/location/etc),
   priority (int), effort (enum), est_value (numeric),
-  execution_mode (enum: auto | assisted | manual),
-  status (proposed|approved|queued|in_progress|done|blocked|skipped),
-  job_id (FK async_jobs, when executing), result (jsonb), deep_link (text)
-  -- the unit the executor consumes; mirrors the reopt_planner action shape, generalized
+  execution_mode (enum: auto | assigned),         -- auto → executor; assigned → Asana task (§4.5)
+  assignee_role (enum: writer|seo_tech|link_builder|va|account_manager|null),
+  source (enum: initial_plan | strategist_signal), -- created by the audit-time engine or the monitor
+  status (proposed|approved|queued|in_progress|assigned|done|blocked|skipped),
+  job_id (FK async_jobs, when auto), asana_task_id (text, when assigned),
+  result (jsonb), deep_link (text)
+  -- the unit the executor OR Asana consumes; mirrors the reopt_planner action shape, generalized
 
 execution_events
-  id, action_id (FK), engagement_id, type (started|completed|failed|paused|checkpoint|budget_halt),
+  id, action_id (FK), engagement_id, type (started|completed|failed|paused|checkpoint|
+     budget_halt|assigned|asana_status),
   detail (jsonb), created_at
-  -- the audit trail for autonomous work; powers the activity feed + report
+  -- the audit trail for autonomous AND assigned work; powers the activity feed + report
+
+strategist_signals                                 -- §6.8 the monitoring/anomaly bus
+  id, engagement_id (FK), module (enum: organic|maps|ai_visibility|ga4|gbp_performance|content),
+  kind (enum: regression|win|anomaly|plateau|new_competitor|cannibalization|coverage_loss|...),
+  metric, direction, magnitude (numeric), baseline_ref (jsonb), detected_at,
+  status (open|actioned|dismissed|resolved), action_id (FK strategy_actions, when actioned)
+  -- trend/anomaly vs baseline; NO fixed-target goals (per 2026-06-29 decision)
+  -- generalizes the existing rank_alerts; feeds the continuous-optimization engine
+
+role_assignees                                     -- routing map for Asana auto-assignment
+  id, client_id (FK, nullable → agency default when null),
+  role (enum: writer|seo_tech|link_builder|va|account_manager),
+  asana_user_gid (text), email (text)
+  -- assigned actions route category → role → this assignee
+
+engagement_asana                                   -- per-engagement Asana board mapping
+  engagement_id (FK, PK), workspace_gid, project_gid (the board),
+  section_gids (jsonb: category → section/column), custom_field_gids (jsonb), synced_at
 ```
 
-`strategy_actions` is deliberately a **superset of the existing `reopt_plans` action shape** so the generalized engine (Section 6.1) can absorb the rank‑tracker's existing logic without a parallel model.
+`strategy_actions` is deliberately a **superset of the existing `reopt_plans` action shape** so the generalized engine (Section 6.1) can absorb the rank‑tracker's existing logic without a parallel model. The `execution_mode` is now binary — **`auto`** (the executor runs it, §7) or **`assigned`** (becomes a role‑routed Asana task, §4.5/§6.10) — encoding the "auto the automatable, assign the craft" decision.
 
 ---
 
@@ -149,7 +179,9 @@ These three sources are *authoritative ground truth* about how the client is act
 
 - Builds directly on the **Unified Keyword Portal** already planned (one textarea → fan out to `tracked_keywords` / `maps_keywords` / `brand_tracked_keywords`, idempotent, with per‑target scan kickoff).
 - **Extend** it with: topic/service framing (not just bare keywords), per‑target geography (reuse `target_cities` + `services/target_cities.py` multi‑city discovery), and a "this is for engagement X" link so intake feeds the audits.
-- **Output:** target set persisted; `engagements.status = auditing`.
+- **Also capture the team routing map** (`role_assignees`) — the Asana assignee per role (writer / SEO‑tech / link‑builder / VA / account‑manager), so `assigned` actions can auto‑route from day one. Defaults to the agency‑level map when a client doesn't override.
+- **No goal/target entry** — per the trend/anomaly decision, intake captures *what* and *where*, not numeric KPI targets. The baseline (audit 2d) is the reference the monitor compares against.
+- **Output:** target set + routing persisted; `engagements.status = auditing`.
 
 ### Stage 2 — Audits (parallel; one `audit_runs` row each)
 
@@ -194,16 +226,38 @@ Auto‑executes the low‑risk setup actions: add/confirm tracked keywords acros
 
 ### Stage 6 — Autonomous Execution (NEW — Section 7)
 
-The **Executor** drains `strategy_actions` where `execution_mode = auto`, respecting guardrails (Section 8). It dispatches each action to the tool that does it — content generation (Blog Writer / Local SEO generator), internal‑link injection (WordPress), citation worklists, etc. — as `async_jobs`, writing `execution_events` for the audit trail. **Publishing defaults to drafts**; going live is a checkpoint. → `steady_state` when the action queue drains.
+The **Executor** drains `strategy_actions` where `execution_mode = auto` (the "automatable" half of the split), respecting guardrails (Section 8). It dispatches each action to the tool that does it — content generation (Blog Writer / Local SEO generator), internal‑link injection (WordPress), tracking/schedule setup, on‑page fixes — as `async_jobs`, writing `execution_events` for the audit trail. **Publishing defaults to drafts**; going live is a checkpoint. Actions marked **`assigned`** are NOT touched by the executor — they go to Asana (§6.10) for the assigned role. → `steady_state` (the §4.5 loop) when the auto‑queue drains; assigned tasks live on in Asana with their status synced back.
 
 ### Stage 7 — Reporting + re‑planning
 
 - **Consolidated client report (NEW — Section 6.6):** one Google Doc composing the existing rank/maps/brand report builders + the engagement's execution activity + plan progress. Delivered on the existing scheduler + notification channels.
 - **Re‑planning loop:** existing rank‑drop alerting + reopt signals + scheduled re‑audits feed plan **amendments** that re‑enter `plan_review`. The engagement never "finishes."
 
-### Stage 8 — Asana (DESIGNED, DEFERRED)
+### Stage 8 — Asana assignment (CORE — Section 6.10)
 
-When enabled: push `strategy_actions` as Asana tasks (one project per engagement, sections by category), mirror `status` outbound. Built as a notifications‑style **dispatcher** (`services/asana_sync.py` + an `asana_sync` job) so it's additive and creds‑gated like Slack/email. **Not in the first phases.** Requires an Asana token + workspace/project mapping (dashboard setup — ask the user). Decision still open: mirror vs. system‑of‑record (user leaned "defer," so we keep the in‑app plan authoritative for now).
+The human work surface. On provisioning, the engagement gets (or maps to) an **Asana board** (`engagement_asana`). Every `strategy_action` with `execution_mode = assigned` becomes an **Asana task**, **role‑routed** via `role_assignees` (category → role → assignee), placed in the board section for its category, with priority/effort as custom fields and a due date from the cadence. **Two‑way status:** a task moving to done in Asana flows back (`asana_status` event → action `done`), which the monitor then watches to confirm the fix actually moved the metric. Built as a notifications‑style **dispatcher** (`services/asana_sync.py` + `asana_sync` job), creds‑gated like Slack/email. The in‑app plan stays authoritative; Asana is the assignment + execution‑tracking layer. Requires an Asana token + workspace/board mapping (one‑time setup — Section 9).
+
+---
+
+## 4.5 The Continuous Strategist loop (steady‑state)
+
+`steady_state` is not an end — it is the Strategist *running the campaign*. On a cadence (default weekly per engagement, on the shared `gsc_scheduler`), the Strategist executes a closed loop:
+
+```
+ monitor ─▶ detect ─▶ diagnose ─▶ amend plan ─▶ split ─▶ act / assign ─▶ report
+ (§6.8)    signals   (§6.9)      strategy_actions   auto│assigned       digest
+    ▲                                                                      │
+    └───────────────── confirm effect on next monitor pass ◀──────────────┘
+```
+
+1. **Monitor (§6.8).** The cross‑module monitor pulls fresh data (rank, geo‑grid, AI‑visibility, GA4, GBP‑Performance, content) and compares **current vs. baseline** — **trend/anomaly only, no fixed targets**. It writes typed `strategist_signals` (regression / win / anomaly / plateau / new‑competitor / cannibalization / coverage‑loss). This **generalizes the existing `rank_alerts`** into one bus.
+2. **Diagnose + tweak (§6.9).** The continuous‑optimization engine turns each open signal into a *specific, diagnosed* `strategy_action` (e.g. "organic clicks for X fell 40% and position slipped 3→7 → reoptimize page Y"), **deduped against already‑open actions**, prioritized by magnitude × value.
+3. **Split — auto the automatable, assign the craft.** Each new action's `execution_mode` is set: technical/repeatable → **`auto`** (executor, §7); human‑craft → **`assigned`** (role‑routed Asana task, §6.10).
+4. **Act / assign.** Auto actions run under the guardrails (§8); assigned actions appear on the right person's Asana board.
+5. **Report (Strategist digest).** A periodic narrative — "what I saw, what I changed, what I assigned, what I'm watching" — over the existing notification channels (Slack live, email deferred, in‑app) + the consolidated report (§6.6). This is the "communicates all this" requirement.
+6. **Confirm.** The next monitor pass checks whether actioned signals actually resolved (the lightweight effectiveness check; full attribution‑learning is a v2 follow‑up).
+
+Material changes (a big new opportunity or a severe regression cluster) re‑enter **`plan_review`** for human approval; routine tweaks flow straight through under the engagement's autonomy level. The loop only stops when the engagement is paused or closed.
 
 ---
 
@@ -245,6 +299,15 @@ The onboarding data layer (Stage 0b) + the periodic ingests + the performance ba
 - **GBP Performance — NEW: `services/gbp_performance_service.py` + `services/gbp_performance_ingest.py`.** Pull daily metrics from the **Business Profile Performance API** (`businessprofileperformance.googleapis.com`) — `BUSINESS_IMPRESSIONS_{DESKTOP,MOBILE}_{MAPS,SEARCH}`, `CALL_CLICKS`, `BUSINESS_DIRECTION_REQUESTS`, `WEBSITE_CLICKS`, `BUSINESS_BOOKINGS`, plus the search‑keywords report — keyed off the client's GBP location id (`clients.gbp_place_id` → resolve to the `locations/{id}` resource). **Auth wrinkle (Q8):** this API is OAuth‑centric (requires a Google account with *manager* access to the location); service‑account access isn't generally available, so this connector likely needs an **OAuth token store** (the one place the suite would deviate from the locked "service account, no OAuth" decision — flagged for decision, not assumed). New: `clients.gbp_performance_location_id`, `clients.gbp_performance_access_status`, `gbp_performance_*` tables. Async `gbp_performance_ingest` job on `gsc_scheduler`. **Best‑effort:** absent the connection, the suite keeps using the existing Outscraper/DataForSEO profile+reviews scrape (which has no performance metrics).
 
 All three are read‑only, creds/connection‑gated, and degrade to "not configured" exactly like the current GSC path.
+
+### 6.8 Cross‑module monitor + signal bus — `services/strategist_monitor.py`
+The "monitors campaigns" pillar. A scheduled job (`strategist_monitor`, on `gsc_scheduler`, default weekly per engagement) that reads every module via the existing `slack_assistant` context‑provider registry + the first‑party ingests, and emits `strategist_signals` by comparing **current vs. baseline** — **trend/anomaly detection, no fixed‑target goals**. Pure, testable detectors per module (e.g. `detect_organic`, `detect_ga4`, `detect_gbp`), each isolated so one failing module never blocks the pass. **Generalizes `rank_materialize`'s existing rank‑drop alerting** into a cross‑module bus; the existing `notifications.emit` is the delivery path for severe signals. No new external APIs (reuses the connected sources).
+
+### 6.9 Continuous‑optimization engine — `services/strategist_optimizer.py`
+The "suggests tweaks and fixes" pillar — the steady‑state twin of the Strategy Engine (§6.1), sharing its `build_actions` core. Input: open `strategist_signals`. Output: diagnosed `strategy_actions` (`source = strategist_signal`), **deduped against currently‑open actions** (so a persistent regression doesn't spawn duplicates each pass) and prioritized by signal magnitude × `est_value`. Sets each action's `execution_mode` (`auto` vs `assigned`) per the split rule. Claude‑Sonnet for the diagnosis narrative; deterministic signal grounding (every tweak cites the signal that triggered it).
+
+### 6.10 Asana sync — `services/asana_sync.py`
+The "assigns tasks to Asana boards" pillar. A creds‑gated dispatcher (`asana_sync` job) that: (a) ensures the engagement's board exists/maps (`engagement_asana`); (b) for each `assigned` action, creates/updates an Asana task — **role‑routed** through `role_assignees` (category → role → `asana_user_gid`), in the category's section, with priority/effort custom fields + cadence‑derived due date; (c) **pulls status back** (webhook if available, else poll) so an Asana completion closes the action and feeds the monitor. Mirrors the `notifications.py` channel pattern (best‑effort, only fires when the Asana token is set). New external dependency — Section 9.
 
 ---
 
@@ -290,7 +353,7 @@ Per `CLAUDE.md`, new external dependencies and dashboard setup must be confirmed
 | DataForSEO **Business Listings** (or static directory list) | Local citations | Per‑query cost — or $0 with a fixed checklist to start | **Ask / default to static** |
 | **GA4 Data API** (`google-analytics-data`) | Performance baseline (2d), value‑weighted audits, report | **Free** API; reuse agency service account added as property *Viewer* + `analytics.readonly` scope. Per‑client dashboard step = grant the SA email (like GSC) | **Provisioning incoming** (user has access) |
 | **Business Profile Performance API** | Local performance baseline, Maps audit weighting, report | **Free** API, but **OAuth‑centric** (manager access to the location) — likely needs an OAuth token store; service account may not suffice (Q8) | **Provisioning incoming — auth model TBD** |
-| **Asana** API token + project mapping | Asana sync (deferred) | OAuth/token + dashboard mapping | **Deferred — ask when we get there** |
+| **Asana** API (token or OAuth) + workspace/board mapping + role→user map | Asana assignment (CORE, §6.10) — the human work surface | Free API; needs a Personal Access Token (or OAuth app), the workspace gid, a board per engagement, and the `role_assignees` map. Webhooks for two‑way status (else poll) | **In scope — provisioning needed** (token + role map) |
 
 Everything else (LLM, WordPress, GSC, Outscraper, geocoding) is already provisioned. The three first‑party data sources (GSC/GA4/GBP‑Performance) are **read‑only and free** — their cost is setup/auth, not per‑call.
 
@@ -321,9 +384,9 @@ Large surface area — built in slices, each shippable and useful on its own.
 
 **Phase 3 — New audit modules.** Site/technical (6.2), backlink‑gap (6.3), local citations (6.4). Each gated on its external‑API approval (Section 9); each feeds richer actions into the engine.
 
-**Phase 4 — Autonomous Executor + internal‑linking injector + consolidated report.** Turn on execution under the Section 8 safety model, starting at `assisted` and graduating to `autonomous`. WordPress internal‑link injection. One consolidated report.
+**Phase 4 — Autonomous Executor + internal‑linking injector + consolidated report.** Turn on execution of `auto` actions under the Section 8 safety model, starting at `assisted` and graduating to `autonomous`. WordPress internal‑link injection. One consolidated report.
 
-**Phase 5 — Asana sync.** The deferred dispatcher, when the plan format is settled and the account is provisioned.
+**Phase 5 — The Continuous Strategist loop + Asana assignment.** The steady‑state engine: cross‑module monitor + signal bus (§6.8), continuous‑optimization engine (§6.9), the §4.5 control loop on the scheduler, the Strategist digest, **and Asana‑as‑core** (§6.10) — board mapping, role‑based auto‑assignment, two‑way status. This is the phase that makes it "the Strategist" rather than a one‑shot planner. Requires the Asana token + role map (Section 9). *(Monitor + optimizer can land slightly ahead of Asana if the token isn't ready — assigned actions simply wait in‑app until the board is connected.)*
 
 ---
 
@@ -334,10 +397,12 @@ Large surface area — built in slices, each shippable and useful on its own.
 3. **Per‑engagement spend ceiling** default (the budget cap value).
 4. **Checkpoint defaults** — which pause points are on by default (e.g., always pause before first live publish?).
 5. **WordPress live vs draft default** for autonomous internal‑link edits — recommend draft/revision always.
-6. **Asana model** when we build it — one‑way mirror vs. system‑of‑record (user leaned defer; revisit at Phase 5).
+6. **Asana provisioning** — confirm: a Personal Access Token vs. an OAuth app; the workspace gid; **one board per engagement** vs. one shared board with per‑client sections; and the **`role_assignees` map** (which Asana user is writer / SEO‑tech / link‑builder / VA / account‑manager — agency default + per‑client overrides). Two‑way status via Asana **webhooks** (preferred) or polling?
 7. **One engagement per client** assumption — confirm we never need concurrent engagements per client.
-8. **GBP Performance API auth** — the Business Profile Performance API is OAuth‑centric (manager access to the location), so it likely needs an **OAuth token store**, deviating from the locked "service account, no interactive OAuth" decision *for this one source*. Confirm: stand up a minimal OAuth connect flow for GBP Performance, or stay on the existing Outscraper/DataForSEO scrape (no first‑party performance metrics)? (GA4 stays on the agency service account — no deviation.)
+8. **Monitor cadence + signal severity thresholds** — default weekly per engagement; what magnitude of trend change counts as a `regression`/`win` worth a signal (to avoid noise), and which severities auto‑flow vs. re‑enter `plan_review`.
+9. **Strategist digest cadence/channel** — weekly Slack digest by default? (Email is still deferred per the notifications service status.)
+10. **GBP Performance API auth** — the Business Profile Performance API is OAuth‑centric (manager access to the location), so it likely needs an **OAuth token store**, deviating from the locked "service account, no interactive OAuth" decision *for this one source*. Confirm: stand up a minimal OAuth connect flow for GBP Performance, or stay on the existing Outscraper/DataForSEO scrape (no first‑party performance metrics)? (GA4 stays on the agency service account — no deviation.)
 
 ---
 
-*End of design v1.0. Nothing herein is implemented. Next step on approval: pick the first phase to detail into a build plan (recommended: Phase 1, the engagement spine + onboarding wizard).*
+*End of design v1.1. Nothing herein is implemented. Next step on approval: pick the first phase to detail into a build plan (recommended: Phase 1, the engagement spine + onboarding wizard + first‑party connectors).*
