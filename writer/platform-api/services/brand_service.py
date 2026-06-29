@@ -186,7 +186,7 @@ def get_scan_status(client_id: str, job_id: str) -> dict:
 _HISTORY_COLS = (
     "id, keyword_id, scan_batch_id, engine, status, mention_found, mention_type, "
     "sentiment, confidence_score, citations, competitor_results, reasoning, snippet, "
-    "failure_reason, created_at"
+    "invisibility_diagnosis, failure_reason, created_at"
 )
 
 

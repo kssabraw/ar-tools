@@ -501,6 +501,23 @@ async def scan_keyword_engine(
     return result
 
 
+# ── auto-diagnosis (per not-found cell, during the scan) ──────────────────────
+
+async def _autodiagnose(brand: str, keyword: str, raw_response: str) -> Optional[str]:
+    """Generate the invisibility diagnosis for a not-found cell. Best-effort:
+    returns None (rather than raising) when OpenAI isn't configured or the call
+    fails, so a diagnosis hiccup never fails the scan cell."""
+    from services import brand_insights
+
+    try:
+        return await brand_insights.diagnose_invisibility(brand, keyword, raw_response or "")
+    except brand_insights.InsightUnavailable:
+        return None
+    except Exception as exc:  # pragma: no cover - defensive; never fail the cell
+        logger.warning("brand_scan.autodiagnose_failed", extra={"error": str(exc)})
+        return None
+
+
 # ── enqueue + job handler ────────────────────────────────────────────────────
 
 def enqueue_brand_scan(
@@ -642,6 +659,13 @@ async def run_brand_scan_job(job: dict) -> None:
                 ).eq("id", row_id).execute()
                 try:
                     result = await scan_keyword_engine(keyword, brand, engine, competitor_names)
+                    # Auto-diagnose invisibility during the scan so the UI shows
+                    # the explanation instantly (no on-click generation). Best-
+                    # effort — a missing/failed diagnose leaves the column null
+                    # and the on-demand /diagnose endpoint can still backfill it.
+                    diagnosis = None
+                    if settings.brand_autodiagnose_enabled and not result["mention_found"]:
+                        diagnosis = await _autodiagnose(brand, keyword, result["raw_response"])
                     supabase.table("brand_mention_history").update({
                         "status": "completed",
                         "mention_found": result["mention_found"],
@@ -654,6 +678,7 @@ async def run_brand_scan_job(job: dict) -> None:
                         "raw_response": result["raw_response"],
                         "competitor_results": result["competitor_results"],
                         "retry_count": result["retry_count"],
+                        "invisibility_diagnosis": diagnosis,
                         "updated_at": "now()",
                     }).eq("id", row_id).execute()
                     counts["completed"] += 1
@@ -683,7 +708,7 @@ async def run_brand_scan_job(job: dict) -> None:
         }).eq("id", job_id).execute()
         logger.info(
             "brand_scan.complete",
-            extra={"job_id": job_id, "completed": completed, "failed": failed},
+            extra={"job_id": job_id, "completed": counts["completed"], "failed": counts["failed"]},
         )
     except Exception as exc:
         logger.warning("brand_scan.failed", extra={"job_id": job_id, "error": str(exc)})

@@ -24,7 +24,8 @@ interface Mention {
   id: string; keyword_id: string | null; scan_batch_id: string | null; engine: string; status: string
   mention_found: boolean | null; mention_type: string | null; sentiment: number | null
   confidence_score: number | null; citations: string[]; competitor_results: unknown[] | null
-  reasoning: string | null; snippet: string | null; failure_reason: string | null; created_at: string | null
+  reasoning: string | null; snippet: string | null; invisibility_diagnosis: string | null
+  failure_reason: string | null; created_at: string | null
 }
 // One competitor's re-classification of the same AI answer (stored on the
 // client mention's competitor_results JSONB by services/brand_scan.py).
@@ -330,7 +331,7 @@ function Overview(props: {
           </div>
           <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 10 }}>
             {viewing === 'brand'
-              ? <>Tip: click a <X size={11} color="#dc2626" style={{ verticalAlign: 'middle' }} /> cell to diagnose why the brand is invisible there.</>
+              ? <>Tip: click a <X size={11} color="#dc2626" style={{ verticalAlign: 'middle' }} /> cell to see why the brand is invisible there — diagnoses are generated automatically during each scan.</>
               : <>Showing where <strong>{viewing}</strong> appears. A — means that keyword×engine wasn't scanned with competitors included.</>}
           </p>
         </>
@@ -343,11 +344,17 @@ function Overview(props: {
 }
 
 function DiagnoseModal({ clientId, mention, keyword, onClose }: { clientId: string; mention: Mention; keyword: string; onClose: () => void }) {
+  // New scans auto-diagnose during the scan, so the explanation is already on
+  // the row — show it instantly. Only fall back to the on-demand endpoint for
+  // older rows scanned before auto-diagnosis (or when it was disabled/failed).
+  const precomputed = mention.invisibility_diagnosis
   const { data, isLoading, isError, error } = useQuery<{ diagnosis: string }>({
     queryKey: ['brand-diagnose', clientId, mention.id],
     queryFn: () => api.post<{ diagnosis: string }>(`/clients/${clientId}/brand/mentions/${mention.id}/diagnose`, {}),
     retry: false,
+    enabled: !precomputed,
   })
+  const diagnosis = precomputed ?? data?.diagnosis
   return (
     <div style={overlay} onClick={onClose}>
       <div style={modal} onClick={e => e.stopPropagation()}>
@@ -360,7 +367,7 @@ function DiagnoseModal({ clientId, mention, keyword, onClose }: { clientId: stri
         <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>“{keyword}”</div>
         {isLoading && <div style={{ fontSize: 13, color: '#64748b' }}>Analyzing the competitors that did appear…</div>}
         {isError && <Banner kind="error">{(error as Error).message}</Banner>}
-        {data && <div style={{ fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{data.diagnosis}</div>}
+        {diagnosis && <div style={{ fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{diagnosis}</div>}
       </div>
     </div>
   )
@@ -400,7 +407,11 @@ function MentionCell({ m, onDiagnose, competitor }: { m: Mention | undefined; on
     if (m.status === 'failed') { content = <span style={{ color: '#cbd5e1' }}>—</span>; title = m.failure_reason ?? 'failed' }
     else if (m.status === 'queued' || m.status === 'processing') { content = <span style={{ color: '#94a3b8' }}>…</span>; title = m.status }
     else if (m.mention_found) { content = <Check size={16} color="#15803d" />; title = `Found (${m.mention_type ?? 'direct'})` }
-    else { content = <X size={15} color="#dc2626" />; title = 'Not found — click to diagnose'; notFound = true }
+    else {
+      content = <X size={15} color="#dc2626" />
+      title = m.invisibility_diagnosis ? 'Not found — click to see why' : 'Not found — click to diagnose'
+      notFound = true
+    }
   }
   const clickable = notFound && onDiagnose && m
   return (
