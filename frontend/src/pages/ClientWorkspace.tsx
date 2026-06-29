@@ -228,6 +228,14 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/action-plan` : undefined}
           cta="Open"
         />
+        <ActionCard
+          icon={<Sparkles size={22} />}
+          label="Strategy"
+          description="One prioritized, cross-module plan — organic, Maps & LLM together — built by the Strategist from every tracker's signals. Recommend-only."
+          to={id ? `/clients/${id}/strategy` : undefined}
+          cta="Open"
+          highlight
+        />
       </Section>
 
       {/* ── More tools (de-emphasized roadmap) ──────────────────────── */}

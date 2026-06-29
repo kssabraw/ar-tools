@@ -15,6 +15,7 @@ import { Icp } from './pages/Icp'
 import { KeywordPortal } from './pages/KeywordPortal'
 import { LocalSeoContent } from './pages/LocalSeoContent'
 import { ServicePages } from './pages/ServicePages'
+import { StrategyPlan } from './pages/StrategyPlan'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
@@ -60,6 +61,7 @@ export default function App() {
                       <Route path="/clients/:id/service-pages" element={<ServicePages />} />
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
                       <Route path="/clients/:id/keyword-portal" element={<KeywordPortal />} />
+                      <Route path="/clients/:id/strategy" element={<StrategyPlan />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
