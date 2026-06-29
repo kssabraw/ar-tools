@@ -50,3 +50,20 @@ def test_self_and_unknown_states_rejected():
     assert not es.can_transition("executing", "executing")
     assert not es.can_transition("executing", "bogus")
     assert not es.can_transition("bogus", "executing")
+
+
+# ── onboarding approval gate (pure helpers) ──────────────────────────────────
+def test_voice_approved_requires_content_and_acceptance():
+    assert es._is_voice_approved({"raw_text": "We sound friendly."})           # user-authored
+    assert es._is_voice_approved({"recommended_voice": "x", "recommended_accepted": True})
+    assert not es._is_voice_approved({"recommended_voice": "x"})               # drafted, not accepted
+    assert not es._is_voice_approved({})
+    assert not es._is_voice_approved(None)
+
+
+def test_icp_ready_from_icp_or_differentiators():
+    assert es._is_icp_ready({"raw_text": "Busy homeowners"}, None)
+    assert es._is_icp_ready({"segments": [{"name": "x"}]}, None)
+    assert es._is_icp_ready(None, ["24/7 service"])                            # differentiators alone
+    assert not es._is_icp_ready({}, None)
+    assert not es._is_icp_ready(None, [])

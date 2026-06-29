@@ -34,6 +34,11 @@ async def get_active_engagement(client_id: UUID, auth: dict = Depends(require_au
     return engagement_service.get_active_for_client(str(client_id))
 
 
+@router.get("/clients/{client_id}/onboarding-readiness")
+async def get_onboarding_readiness(client_id: UUID, auth: dict = Depends(require_auth)):
+    return engagement_service.onboarding_readiness(str(client_id))
+
+
 @router.get("/engagements/{engagement_id}", response_model=EngagementResponse)
 async def get_engagement(engagement_id: UUID, auth: dict = Depends(require_auth)):
     return engagement_service.get_engagement(str(engagement_id))

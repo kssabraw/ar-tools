@@ -110,6 +110,35 @@ def create_engagement(client_id: str, autonomy_level: str, user_id: Optional[str
     return _safe(_q)
 
 
+def _is_voice_approved(brand_voice: Optional[dict]) -> bool:
+    """Pure: has the client's brand voice been explicitly set/accepted?"""
+    bv = brand_voice or {}
+    has_content = bool(bv.get("raw_text") or bv.get("current_voice") or bv.get("recommended_voice"))
+    accepted = bool(bv.get("recommended_accepted") or bv.get("source") == "user" or bv.get("raw_text"))
+    return has_content and accepted
+
+
+def _is_icp_ready(detected_icp: Optional[dict], differentiators: Optional[list]) -> bool:
+    """Pure: does the client have an ICP (or differentiators) on file?"""
+    icp = detected_icp or {}
+    return bool(icp.get("raw_text") or icp.get("segments") or differentiators)
+
+
+def onboarding_readiness(client_id: str) -> dict:
+    """Whether brand voice + ICP are approved — the gate to leave `onboarding`."""
+    def _q():
+        rows = (
+            get_supabase().table("clients")
+            .select("brand_voice, detected_icp, differentiators")
+            .eq("id", client_id).limit(1).execute().data or []
+        )
+        return rows[0] if rows else {}
+    c = _safe(_q)
+    voice = _is_voice_approved(c.get("brand_voice"))
+    icp = _is_icp_ready(c.get("detected_icp"), c.get("differentiators"))
+    return {"voice_approved": voice, "icp_ready": icp, "ready": voice and icp}
+
+
 def transition(engagement_id: str, to_status: str) -> dict:
     current = get_engagement(engagement_id)
     if not can_transition(current["status"], to_status):
@@ -117,6 +146,11 @@ def transition(engagement_id: str, to_status: str) -> dict:
             status_code=409,
             detail=f"invalid_transition: {current['status']} -> {to_status}",
         )
+
+    # Approval gate: leaving onboarding requires brand voice + ICP approved.
+    if current["status"] == "onboarding" and to_status == "intake":
+        if not onboarding_readiness(current["client_id"])["ready"]:
+            raise HTTPException(status_code=409, detail="onboarding_incomplete")
 
     def _q():
         return (

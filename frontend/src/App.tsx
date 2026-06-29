@@ -14,6 +14,7 @@ import { BrandVoice } from './pages/BrandVoice'
 import { Icp } from './pages/Icp'
 import { KeywordPortal } from './pages/KeywordPortal'
 import { LocalSeoContent } from './pages/LocalSeoContent'
+import { OnboardingWizard } from './pages/OnboardingWizard'
 import { ServicePages } from './pages/ServicePages'
 import { StrategyPlan } from './pages/StrategyPlan'
 import { LocationPages } from './pages/LocationPages'
@@ -61,6 +62,7 @@ export default function App() {
                       <Route path="/clients/:id/service-pages" element={<ServicePages />} />
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
                       <Route path="/clients/:id/keyword-portal" element={<KeywordPortal />} />
+                      <Route path="/clients/:id/onboarding" element={<OnboardingWizard />} />
                       <Route path="/clients/:id/strategy" element={<StrategyPlan />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />

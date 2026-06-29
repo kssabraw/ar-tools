@@ -76,6 +76,14 @@ export function ClientWorkspace() {
         subtitle="The business context the content & ranking tools draw on."
       >
         <ActionCard
+          icon={<Sparkles size={22} />}
+          label="Onboarding"
+          description="Guided setup — business profile, approve brand voice & ICP, then add targets — that starts a managed engagement and unlocks the Strategy plan."
+          to={id ? `/clients/${id}/onboarding` : undefined}
+          cta="Start"
+          highlight
+        />
+        <ActionCard
           icon={<Building2 size={22} />}
           label="Business Profile"
           description={
