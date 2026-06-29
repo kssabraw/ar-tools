@@ -1,6 +1,77 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-29 · **Asana task integration** (latest)
+## ⏩ Update — 2026-06-29 · **Maps geo-grid strategy & Action Plan** (latest) — **MERGED to `main`** (PR #182, squash `35394ae`)
+
+Brought the **Maps geo-grid tracker** to parity with the organic rank tracker's
+reoptimization guidance, then layered on strategic competitive intelligence —
+all feeding the **unified, deep-linked Action Plan** (`reopt_planner` →
+`pages/ActionPlan.tsx`). Authoritative doc:
+**`docs/modules/maps-geogrid-strategy-prd-v1_0.md`**.
+
+**What shipped:**
+- **Phase 1 — Maps Action Plan (hybrid).** Pure `build_maps_actions` (separate
+  from organic `build_actions`) feeds the **shared** `reopt_plans` store + view +
+  cadence (weekly digest + **silent on-drop rebuild** via `maps_analyzer`
+  `trigger="maps_drop"`). Reuses `maps_alerts` + geocoded weak areas. Actions are
+  tagged `source: organic|maps`; Maps declines are **not** deduped against organic
+  drops (distinct channels).
+- **Phase 2 — Tier A** (reuse existing data, no new fetch): **Share of Local
+  Voice** (`services/maps_solv.py`, derived on read) + **brand-search analysis**
+  (`services/brand_search.py`, branded vs non-branded GSC demand).
+- **Phase 3 — Tier B** (competitor intelligence; each = a deterministic service +
+  async job + migration + Maps-tab panel + an Action Plan action):
+  **B1** competitor GBP intelligence (`competitor_gbp.py`), **B2** GBP profile
+  audit (`gbp_audit.py`), **B3** review analytics (`review_analytics.py`), **B4**
+  backlink authority (`backlink_intel.py`), **B5** on-site content comparison
+  (`content_intel.py`), **B6** Local Relevance Scorecard (`local_relevance.py` —
+  does each signal align with the tracked service/location?) incl. **business
+  type** (SAB / physical / hybrid, `gbp_service.classify_business_type` via
+  Outscraper's `area_service` hidden-address flag).
+
+**New Action Plan action kinds:** `maps_decline`, `maps_competitor`,
+`maps_weak_area`, `maps_solv_drop`, `gbp_gap`, `review_gap`, `backlink_gap`,
+`content_gap`, `local_relevance`, `brand_search_decline` (all rendered generically
+in `ActionPlan.tsx`).
+
+**Verified:** ~105 pure-unit tests across the new services (mocked external
+APIs); frontend `tsc -b` clean; every commit's Netlify preview built green.
+
+**Deterministic trims (noted in the PRD, each a clean follow-up):** review
+sentiment/themes (B3 — `reviews.sentiment` column reserved), per-referring-domain
+backlink gap list (B4), semantic/entity content comparison (B5 — currently depth +
+heading coverage). Competitor GBP/reviews/backlinks/content/relevance refreshes
+are **on-demand** today (monthly auto-refresh via the scheduler is a follow-up).
+
+### ⚠️ Maps-strategy provisioning still required (one-time)
+
+The code is on `main` and deploy-ready, but inert until the migrations are applied.
+
+1. **Apply these migrations** to the live Supabase project (all additive — new
+   tables + a `job_type` CHECK widen), in order:
+   `20260629160000_competitor_gbp_profiles`, `20260629180000_reviews`,
+   `20260629190000_backlink_profiles`, `20260629200000_website_analyses`,
+   `20260629210000_local_relevance_scores`, `20260629220000_business_type`.
+   - **Note on the `async_jobs.job_type` CHECK:** each of the above rewrites it to
+     a **superset**. The merge reconciled a drift where `main`'s Asana migration
+     (`20260629130000`) had dropped `client_report` + `maps_analyze` from the list;
+     these migrations **restore** those and add `asana_monthly` + the six new Maps
+     job types (`competitor_gbp`, `review_intel`, `backlink_intel`, `content_intel`,
+     `local_relevance`). The final constraint (after `…210000`) is the complete
+     union — apply in timestamp order and the end state is correct.
+2. **No new env vars.** Every layer reuses already-provisioned creds on
+   **PLATFORM**: `DATAFORSEO_LOGIN/PASSWORD` (SoLV competitor data, backlinks,
+   reviews, SERP for content), `OUTSCRAPER_API_KEY` (competitor GBP + business
+   type), `SCRAPEOWL_API_KEY` (GBP-link + competitor page scrapes),
+   `GOOGLE_SERVICE_ACCOUNT_KEY` (brand-search reads `gsc_query_daily`).
+3. **Deferred — GBP engagement (#8):** profile views / calls / direction requests
+   over time. Needs Google **OAuth 2.0** (`business.manage`) per listing owner +
+   GCP provisioning — **incompatible** with the suite's service-account model.
+   Parked as its own project (would add `GOOGLE_CLIENT_ID/SECRET` + a per-client
+   refresh-token flow + a `gbp_engagement_metrics` table).
+
+---
+
+## ⏩ Update — 2026-06-29 · **Asana task integration**
 
 Connects AR Tools to the team's Asana workspace. **Two features, one token**
 (branch `claude/asana-integration-options-cp3zul` — **draft PR #170**; Phases 0–3
