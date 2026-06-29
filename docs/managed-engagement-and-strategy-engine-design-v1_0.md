@@ -282,6 +282,28 @@ Each keyword rolls up to a per‑module **attainment state** (`met` / `close` / 
 
 ---
 
+## 4.7 SerMaStr — the organic strategy input contract
+
+**Naming:** **SerMaStr** ("Search Engine Strategist") is the strategy **brain** (the §6.1 Strategy Engine + §6.9 optimizer). The existing Slack assistant **"SerMastr"** (`services/slack_assistant.py`) becomes its **voice** — i.e. SerMaStr reasons; SerMastr-the-bot reports/answers. *(Same portmanteau, near‑identical spelling — confirm we want them unified under one brand vs. distinct names; open question.)*
+
+Strategy = **method × evidence.** The **method** is the team's **SEO SOPs** (a `seo_sops` store, ingested later — loaded into SerMaStr's reasoning/system prompt as the house playbook for *how* to strategize). This section defines the **evidence** — what SerMaStr reads to *create or tweak an organic strategy* — and the few new inputs it needs. Decisions captured 2026‑06‑29:
+
+| Input | What SerMaStr uses | Source | Status / decision |
+|---|---|---|---|
+| **Ranking picture** | per‑keyword status/position/trend, alerts, striking distance, pages, the **Action Plan** (already‑synthesized reopt recommendations) | the rank tracker via the existing `organic_rank` context provider | ✅ Exists — richest of the three trackers (see the §4 rank‑module inventory) |
+| **Value weighting** | `est_monthly_value` = search_volume × position‑CTR curve × CPC | `keyword_market` | ✅ **Decided: CPC/volume proxy only** — no manual per‑service value capture, and **GA4 is not required** for organic prioritization (GA4 still feeds the baseline/monitoring, just not the weighting) |
+| **Demand map (generative)** | the **full** topic/keyword universe — discover what to target + which silos to build, not just tracked keywords | wire in **keyword research / Fanout** + striking distance + GSC Research | 🟡 **Decided: generative** — Strategy Engine pulls the demand universe and recommends targets; new wiring (Fanout exists, not yet a strategy input) |
+| **Competitive benchmark** | top‑10 incumbents, per‑page RD/UR/backlinks, per‑domain DR, specialist‑vs‑generalist | **SERP snapshots** | ✅ **Decided: SERP‑derived only** — no named‑competitor capture |
+| **Site & content state** | existing pages ↔ target keyword, silo/architecture, **internal‑link graph**, content age/quality | `site_page_index` + `page_structures` + GSC query×page (have); link graph + content audit (planned §6.2/§6.5) | 🟡 Partial — deepens as the audit modules land |
+| **Authority / off‑site** | client backlink profile, link gap, local citations | SERP snapshots (competitor + client ranking page) today; planned backlink/citation modules (§6.3/§6.4) | 🟡 Partial / planned |
+| **Technical / index baseline** | crawl, indexation, CWV, schema | URL Inspection (have) + planned site audit (§6.2) | 🟡 Partial / planned |
+| **Capacity & constraints** | content/month, publishing cadence, link/tool budget, **off‑limits tactics**, risk tolerance, dev resources | **NEW per‑client capture** | ❌ **Decided: capture per client** → store on `engagements.config` (or `clients`); SerMaStr plans **within** these limits and respects house rules |
+| **History & memory** | past actions + whether they worked; algo‑update timeline | `execution_events` + the monitor (forward‑looking); algo timeline optional | 🟡 Forward‑looking; historical import deferred |
+
+**Net‑new to build for the organic input contract:** (1) a **per‑client capacity/constraints** capture (small form + `engagements.config` fields); (2) the **`seo_sops` store** + its load into SerMaStr's reasoning (when you provide the SOPs); (3) **wiring keyword‑research/Fanout** in as the generative demand‑map source. Everything else SerMaStr already has or gets from planned modules — confirming that the organic side is mostly *consume, don't rebuild*.
+
+---
+
 ## 5. How autonomy rides existing infrastructure
 
 No new queue, no Redis/Celery (per locked decisions). The Executor is **just another `async_jobs` consumer**:
@@ -423,7 +445,10 @@ Large surface area — built in slices, each shippable and useful on its own.
 8. **Monitor cadence + signal severity thresholds** — default weekly per engagement; what magnitude of trend change counts as a `regression`/`win` worth a signal (to avoid noise), and which severities auto‑flow vs. re‑enter `plan_review`.
 9. **Strategist digest cadence/channel** — weekly Slack digest by default? (Email is still deferred per the notifications service status.)
 10. **Goal model specifics (§4.6) — ✅ RESOLVED 2026‑06‑29:** maps grids are already 5‑mile (3‑mi metric = inner subset); absent‑cell penalty = **21**; LLM bar = **all six engines, excluding any that didn't trigger** (esp. Google AI Overview). *Remaining small build item:* ensure `brand_scan` records a per‑engine `triggered`/`answered` flag so a non‑triggering engine is dropped from the bar rather than scored as a miss. Targets stay global constants (per‑client override deferred).
-11. **GBP Performance API auth** — the Business Profile Performance API is OAuth‑centric (manager access to the location), so it likely needs an **OAuth token store**, deviating from the locked "service account, no interactive OAuth" decision *for this one source*. Confirm: stand up a minimal OAuth connect flow for GBP Performance, or stay on the existing Outscraper/DataForSEO scrape (no first‑party performance metrics)? (GA4 stays on the agency service account — no deviation.)
+11. **SerMaStr naming** — unify the strategy brain (**SerMaStr**) and the existing Slack assistant (**SerMastr**) under one brand (brain + voice), or keep distinct names? (§4.7)
+12. **SEO SOP store (§4.7)** — format + ingest of the SOPs you'll provide (structured checklist vs. prose playbook), and how they load into SerMaStr (system‑prompt vs. retrieval). Pending your SOPs.
+13. **Capacity/constraints fields (§4.7)** — confirm the exact per‑client fields to capture: content pieces/month, publishing cadence, link/tool budget, off‑limits tactics, risk tolerance, dev resources available.
+14. **GBP Performance API auth** — the Business Profile Performance API is OAuth‑centric (manager access to the location), so it likely needs an **OAuth token store**, deviating from the locked "service account, no interactive OAuth" decision *for this one source*. Confirm: stand up a minimal OAuth connect flow for GBP Performance, or stay on the existing Outscraper/DataForSEO scrape (no first‑party performance metrics)? (GA4 stays on the agency service account — no deviation.)
 
 ---
 
