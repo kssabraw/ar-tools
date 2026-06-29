@@ -65,6 +65,7 @@ _MAPS_WITHIN = {
 _MAPS_WEAK_AREA_WITHIN = 1_000  # weak coverage areas sit at the bottom of the Maps tier
 _MAPS_GBP_WITHIN = 4_000        # a GBP-gap action sits mid Maps tier (above weak areas)
 _MAPS_REVIEW_WITHIN = 4_500     # a review-gap action sits just above the GBP-gap action
+_MAPS_CONTENT_WITHIN = 3_500    # a content-gap action sits just below the GBP-gap action
 _MAPS_SOLV_WITHIN = 8_500       # a SoLV drop sits near the top of the Maps tier (just under lost_pack)
 MAPS_WEAK_AREA_MAX = 5          # cap weak-area actions per plan
 SOLV_DROP_MIN_PCT = 10.0        # min Top-3 local-pack share lost (points) to flag a SoLV drop
@@ -393,6 +394,37 @@ def build_review_action(client_id: str, review_gap: "dict | None") -> list[dict]
     ]
 
 
+def build_content_action(client_id: str, content_gap: "dict | None") -> list[dict]:
+    """A page-expansion action when the client's page is thinner / misses topics
+    competitors cover for a keyword. Pure."""
+    if not content_gap:
+        return []
+    parts: list[str] = []
+    depth = content_gap.get("depth_behind")
+    if depth:
+        parts.append(f"~{int(depth)} words thinner than the competitor median")
+    gaps = content_gap.get("topic_gaps") or []
+    if gaps:
+        parts.append("missing topics: " + ", ".join(gaps[:3]))
+    if not parts:
+        return []
+    kw = content_gap.get("keyword")
+    return [
+        {
+            "kind": "content_gap",
+            "source": "maps",
+            "keyword": f'"{kw}" page' if kw else "Page content",
+            "diagnosis": ("Your page is " + "; ".join(parts) + "."),
+            "recommendation": "Expand the page to match the competitors ranking above you — add the missing "
+            "sections/topics and depth, keeping it genuinely useful (not padding).",
+            "cta_label": "Open Local SEO",
+            "cta_path": f"clients/{client_id}/local-seo",
+            "severity": "info",
+            "sort": _SORT_MAPS + _within(_MAPS_CONTENT_WITHIN),
+        }
+    ]
+
+
 def build_backlink_action(client_id: str, backlink_gap: "dict | None") -> list[dict]:
     """A link-building action when the client's domain authority trails the
     local-pack competitor median. Pure. Organic (links help web + local)."""
@@ -463,6 +495,7 @@ def summarize_plan(actions: list[dict]) -> dict:
         + by_kind.get("maps_solv_drop", 0)
         + by_kind.get("gbp_gap", 0)
         + by_kind.get("review_gap", 0)
+        + by_kind.get("content_gap", 0)
     )
     if maps:
         parts.append(f"{maps} local-pack issue{'s' if maps != 1 else ''}")
@@ -571,6 +604,29 @@ def _fetch_gbp_audit(supabase, client_id: str) -> "dict | None":
         return None
 
 
+def _fetch_content_gap(supabase, client_id: str) -> "dict | None":
+    """Best-effort content-gap signal from the latest stored website analysis."""
+    try:
+        from config import settings
+        from services import content_intel
+
+        analyses = content_intel.latest_analyses(client_id)
+        if not analyses:
+            return None
+        a = analyses[0]  # most recent keyword analysis
+        comparison = {
+            "depth_behind": a.get("depth_behind"),
+            "topic_gaps": a.get("topic_gaps") or [],
+            "keyword": a.get("keyword"),
+        }
+        return content_intel.detect_content_gap(
+            comparison, settings.content_depth_behind_min, settings.content_topic_gap_min
+        )
+    except Exception as exc:
+        logger.warning("reopt_plan_content_failed", extra={"client_id": client_id, "error": str(exc)})
+        return None
+
+
 def _fetch_review_gap(supabase, client_id: str) -> "dict | None":
     """Best-effort review-velocity/negatives signal from stored review analytics."""
     try:
@@ -654,12 +710,14 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     gbp_audit_result = _fetch_gbp_audit(supabase, client_id)
     review_gap = _fetch_review_gap(supabase, client_id)
     backlink_gap = _fetch_backlink_gap(supabase, client_id)
+    content_gap = _fetch_content_gap(supabase, client_id)
 
     # Build organic uncapped so Maps actions compete fairly for the combined cap.
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
     maps_actions += build_gbp_action(client_id, gbp_audit_result)
     maps_actions += build_review_action(client_id, review_gap)
+    maps_actions += build_content_action(client_id, content_gap)
     brand_actions = build_brand_action(client_id, brand_decline)
     brand_actions += build_backlink_action(client_id, backlink_gap)
     actions = organic + maps_actions + brand_actions

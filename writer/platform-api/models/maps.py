@@ -209,6 +209,22 @@ class MapsCompetitorIntelResponse(BaseModel):
     captured_at: Optional[str] = None    # most recent capture timestamp
 
 
+# --- On-site content comparison (Tier B / B5) -------------------------------
+class MapsContentAnalysis(BaseModel):
+    keyword: Optional[str] = None
+    client_url: Optional[str] = None
+    client_word_count: Optional[int] = None
+    competitor_median_word_count: Optional[int] = None
+    depth_behind: Optional[int] = None
+    topic_gaps: list[str] = Field(default_factory=list)
+    competitor_urls: list[str] = Field(default_factory=list)
+    captured_at: Optional[str] = None
+
+
+class MapsContentIntelResponse(BaseModel):
+    analyses: list[MapsContentAnalysis] = Field(default_factory=list)
+
+
 # --- Backlink profiling (Tier B / B4) ---------------------------------------
 class MapsBacklinkStats(BaseModel):
     domain: Optional[str] = None

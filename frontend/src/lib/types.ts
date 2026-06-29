@@ -1106,6 +1106,7 @@ export interface ReoptAction {
     | 'gbp_gap'
     | 'review_gap'
     | 'backlink_gap'
+    | 'content_gap'
     | 'brand_search_decline'
   source?: 'organic' | 'maps'
   keyword: string
@@ -1195,6 +1196,21 @@ export interface MapsGbpAuditResponse {
   gaps: string[]
   category_gaps: string[]
   review_gap: MapsGbpReviewGap | null
+}
+
+// On-site content comparison (Maps Tier B / B5).
+export interface MapsContentAnalysis {
+  keyword: string | null
+  client_url: string | null
+  client_word_count: number | null
+  competitor_median_word_count: number | null
+  depth_behind: number | null
+  topic_gaps: string[]
+  competitor_urls: string[]
+  captured_at: string | null
+}
+export interface MapsContentIntelResponse {
+  analyses: MapsContentAnalysis[]
 }
 
 // Backlink profiling (Maps Tier B / B4).

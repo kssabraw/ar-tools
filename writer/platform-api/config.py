@@ -247,6 +247,13 @@ class Settings(BaseSettings):
     backlink_dr_min_behind: float = 10.0
     backlink_rd_min_behind: int = 25
 
+    # On-site content comparison (Tier B / B5): how many competitor pages to
+    # scrape per keyword, and the thresholds to flag a content gap (words thinner
+    # than the competitor median; distinct topics competitors cover the client lacks).
+    content_intel_max_pages: int = 4
+    content_depth_behind_min: int = 300
+    content_topic_gap_min: int = 3
+
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
     # location). Set to 0 to disable caching.

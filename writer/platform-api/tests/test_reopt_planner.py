@@ -288,6 +288,23 @@ def test_review_action_empty_when_no_gap():
     assert reopt_planner.build_review_action(CLIENT, None) == []
 
 
+def test_content_action_on_depth_and_topic_gap():
+    gap = {"depth_behind": 600, "topic_gaps": ["pricing", "faq", "warranty"], "keyword": "emergency plumber"}
+    actions = reopt_planner.build_content_action(CLIENT, gap)
+    assert len(actions) == 1
+    a = actions[0]
+    assert a["kind"] == "content_gap" and a["source"] == "maps"
+    assert "600 words thinner" in a["diagnosis"]
+    assert "pricing" in a["diagnosis"]
+    assert "emergency plumber" in a["keyword"]
+    assert a["cta_path"] == f"clients/{CLIENT}/local-seo"
+
+
+def test_content_action_empty_when_no_gap():
+    assert reopt_planner.build_content_action(CLIENT, None) == []
+    assert reopt_planner.build_content_action(CLIENT, {"depth_behind": None, "topic_gaps": []}) == []
+
+
 def test_backlink_action_on_authority_gap():
     gap = {"dr_behind": 25, "referring_domains_behind": 100,
            "competitor_median_dr": 55, "competitor_median_referring_domains": 150}

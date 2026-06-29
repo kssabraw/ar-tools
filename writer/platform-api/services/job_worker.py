@@ -34,6 +34,7 @@ from services.maps_analyzer import run_maps_analyze_job
 from services.competitor_gbp import run_competitor_gbp_job
 from services.review_analytics import run_review_intel_job
 from services.backlink_intel import run_backlink_intel_job
+from services.content_intel import run_content_intel_job
 from services.page_structure_scraper import analyze_page_structure
 from services.silo_dedup import process_silo_dedup_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
@@ -313,6 +314,8 @@ async def _process_job(job: dict) -> None:
         await run_review_intel_job(job)
     elif job_type == "backlink_intel":
         await run_backlink_intel_job(job)
+    elif job_type == "content_intel":
+        await run_content_intel_job(job)
     elif job_type == "local_seo_silo":
         await run_silo_plan_job(job)
     elif job_type == "local_seo_generate":

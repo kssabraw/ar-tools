@@ -9,7 +9,8 @@ import type {
   MapsChangesResponse, MapsCompetitorTrendsResponse,
   MapsConfig, MapsKeyword, MapsKeywordChange, MapsPeriodMetric, MapsPeriodScope,
   MapsPeriodsResponse, MapsRadius, MapsRunResponse,
-  MapsBacklinkIntelResponse, MapsCompetitorIntelResponse, MapsGbpAuditResponse, MapsReviewIntelResponse,
+  MapsBacklinkIntelResponse, MapsCompetitorIntelResponse, MapsContentIntelResponse,
+  MapsGbpAuditResponse, MapsReviewIntelResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsSolvResponse, MapsTrendsResponse,
 } from '../lib/types'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
@@ -688,6 +689,7 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
       <CompetitorIntel clientId={clientId} />
       <ReviewIntel clientId={clientId} />
       <BacklinkIntel clientId={clientId} />
+      <ContentIntel clientId={clientId} />
       <GbpAudit clientId={clientId} />
       {scans.length === 0 ? (
         <div style={card}><p style={muted}>No scans yet.</p></div>
@@ -872,6 +874,66 @@ function SolvPanel({ clientId }: { clientId: string }) {
           )}
         </>
       )}
+    </div>
+  )
+}
+
+// ── On-site content comparison (page depth + topic gaps) ────────────────────
+function ContentIntel({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data } = useQuery<MapsContentIntelResponse>({
+    queryKey: ['maps-content-intel', clientId],
+    queryFn: () => api.get<MapsContentIntelResponse>(`/clients/${clientId}/maps/content-intel`),
+  })
+  const [queued, setQueued] = useState(false)
+  const refresh = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/maps/content-intel/refresh`, {}),
+    onSuccess: () => { setQueued(true); queryClient.invalidateQueries({ queryKey: ['maps-content-intel', clientId] }) },
+  })
+  const analyses = data?.analyses ?? []
+
+  return (
+    <div style={{ ...card, marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div>
+          <h2 style={{ ...sectionTitle, margin: '0 0 4px' }}>Content vs competitors</h2>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 12px' }}>
+            How your ranking page compares to the top organic pages for a keyword — content depth and topics
+            they cover that you don’t.
+          </p>
+        </div>
+        <button style={{ ...outlineBtn, padding: '5px 9px', fontSize: 12 }}
+          onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          title="Compare your page to the top competitor pages for your first Maps keyword">
+          {refresh.isPending ? 'Queuing…' : queued ? 'Refresh queued ✓' : 'Refresh'}
+        </button>
+      </div>
+      {analyses.length === 0 ? (
+        <p style={muted}>No content comparison yet. Click <strong>Refresh</strong> to analyze your first Maps keyword.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {analyses.map(a => (
+            <div key={a.keyword} style={{ borderTop: '1px solid #f1f5f9', paddingTop: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+                <span style={{ fontWeight: 600, fontSize: 14, color: '#0f172a' }}>{a.keyword}</span>
+                <span style={{ fontSize: 12, color: '#64748b' }}>
+                  your page {a.client_word_count?.toLocaleString() ?? '—'} words · competitor median{' '}
+                  {a.competitor_median_word_count?.toLocaleString() ?? '—'}
+                  {a.depth_behind != null && a.depth_behind > 0 && (
+                    <span style={{ color: '#b45309', fontWeight: 600 }}> · {a.depth_behind.toLocaleString()} thinner</span>
+                  )}
+                </span>
+              </div>
+              {a.topic_gaps.length > 0 && (
+                <div style={{ fontSize: 13, color: '#334155', marginTop: 4 }}>
+                  <strong>Missing topics:</strong> {a.topic_gaps.join(' · ')}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {refresh.error && <div style={{ ...errorBox, marginTop: 10 }}>{(refresh.error as Error).message}</div>}
     </div>
   )
 }

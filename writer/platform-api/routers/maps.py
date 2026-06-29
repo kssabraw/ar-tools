@@ -25,6 +25,7 @@ from models.maps import (
     MapsCompetitorIntelResponse,
     MapsCompetitorProfile,
     MapsBacklinkIntelResponse,
+    MapsContentIntelResponse,
     MapsGbpAuditResponse,
     MapsReviewIntelResponse,
     MapsCompetitorTrend,
@@ -51,6 +52,7 @@ from models.maps import (
 )
 from services import backlink_intel
 from services import competitor_gbp
+from services import content_intel
 from services import gbp_audit as gbp_audit_service
 from services import local_dominator
 from services import review_analytics
@@ -500,6 +502,25 @@ async def maps_competitor_intel(
         profiles=[MapsCompetitorProfile(**p) for p in profiles],
         captured_at=profiles[0]["captured_at"] if profiles else None,
     )
+
+
+@router.get("/clients/{client_id}/maps/content-intel", response_model=MapsContentIntelResponse)
+async def maps_content_intel(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> MapsContentIntelResponse:
+    """Latest per-keyword on-site content comparison (page depth + topic gaps vs
+    the top organic competitor pages)."""
+    return MapsContentIntelResponse(analyses=content_intel.latest_analyses(str(client_id)))
+
+
+@router.post("/clients/{client_id}/maps/content-intel/refresh", response_model=MapsRunResponse)
+async def refresh_content_intel(
+    client_id: UUID, keyword: Optional[str] = None, auth: dict = Depends(require_auth)
+) -> MapsRunResponse:
+    """Enqueue a content comparison for `keyword` (defaults to the client's first
+    active Maps keyword) — scrapes the client + top competitor pages."""
+    content_intel.enqueue_content_intel(str(client_id), keyword)
+    return MapsRunResponse(client_id=client_id, status="enqueued")
 
 
 @router.get("/clients/{client_id}/maps/backlink-intel", response_model=MapsBacklinkIntelResponse)
