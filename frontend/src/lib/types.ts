@@ -1337,6 +1337,11 @@ export interface AsanaLibraryTaskItem {
   active: boolean
 }
 
+export interface AsanaTaskTemplateRef {
+  gid: string
+  name: string | null
+}
+
 export interface AsanaUser {
   gid: string
   name: string | null

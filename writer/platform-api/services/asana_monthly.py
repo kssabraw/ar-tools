@@ -148,6 +148,27 @@ async def assign_auto_tasks(client_id: str, templates: list[dict]) -> int:
     return n
 
 
+async def _create_task_for_row(
+    row: dict, project_gid: str, section_gid: str, fields: dict, template_by_name: dict
+) -> None:
+    """Create one task: instantiate the matching Asana task template (preserving
+    its subtasks) then set assignee/fields + move into the section; otherwise
+    create a plain task."""
+    name = (row.get("name") or "").strip()
+    template_gid = template_by_name.get(name.casefold())
+    if template_gid:
+        new_task_gid = await asana_service.instantiate_task_template(template_gid, name)
+        if new_task_gid:
+            update = asana_service.build_task_update(row, fields)
+            if update:
+                await asana_service.update_task(new_task_gid, update)
+            await asana_service.add_task_to_section(section_gid, new_task_gid)
+            return
+        # Instantiation returned no task → fall back to a plain task below.
+    payload = asana_service.payload_from_template_row(row, project_gid, section_gid, fields=fields)
+    await asana_service.create_task(payload)
+
+
 # ---------------------------------------------------------------------------
 # Core: generate one month for one client
 # ---------------------------------------------------------------------------
@@ -187,6 +208,17 @@ async def generate_month_for_client(client_id: str, target: date) -> dict:
     # (mutates those rows' assignee_gid in place before payloads are built).
     await assign_auto_tasks(client_id, templates)
 
+    # A row whose name matches an Asana task template is INSTANTIATED (so its
+    # subtasks come along); others are created as plain tasks. Best-effort: if
+    # the template list can't be fetched, everything falls back to plain tasks.
+    template_by_name: dict[str, str] = {}
+    try:
+        for t in await asana_service.list_project_task_templates(project_gid):
+            if t.get("gid") and t.get("name"):
+                template_by_name[t["name"].strip().casefold()] = t["gid"]
+    except Exception as exc:
+        logger.warning("asana_monthly.task_templates_failed", extra={"client_id": client_id, "error": str(exc)})
+
     anchor = asana_service.month_insert_anchor_gid(sections)
     new_section = await asana_service.create_section(project_gid, label, insert_before=anchor)
     section_gid = new_section.get("gid")
@@ -194,9 +226,8 @@ async def generate_month_for_client(client_id: str, target: date) -> dict:
     created = 0
     errors: list[str] = []
     for row in templates:
-        payload = asana_service.payload_from_template_row(row, project_gid, section_gid, fields=fields)
         try:
-            await asana_service.create_task(payload)
+            await _create_task_for_row(row, project_gid, section_gid, fields, template_by_name)
             created += 1
         except Exception as exc:  # one bad task shouldn't abort the rest
             errors.append(f"{row.get('name')}: {str(exc)[:120]}")

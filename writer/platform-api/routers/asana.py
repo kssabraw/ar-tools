@@ -28,6 +28,7 @@ from models.asana import (
     AsanaTaskTemplateReplaceRequest,
     AsanaLibraryReplaceRequest,
     AsanaLibraryTaskItem,
+    AsanaTaskTemplateRef,
     AsanaTeamMemberItem,
     AsanaTeamMembersReplaceRequest,
     AsanaUser,
@@ -267,6 +268,28 @@ async def workspace_users(auth: dict = Depends(require_auth)) -> list[AsanaUser]
         logger.warning("asana_workspace_users_failed", extra={"error": str(exc)})
         return []
     return [AsanaUser(**u) for u in users]
+
+
+@router.get(
+    "/clients/{client_id}/asana/project-task-templates",
+    response_model=list[AsanaTaskTemplateRef],
+)
+async def project_task_templates(
+    client_id: UUID, auth: dict = Depends(require_auth)
+) -> list[AsanaTaskTemplateRef]:
+    """The Asana task templates on this client's project (names matching a
+    template row are instantiated with their subtasks)."""
+    if not asana_service.is_configured():
+        return []
+    project_gid = asana_monthly.get_project_gid(str(client_id))
+    if not project_gid:
+        return []
+    try:
+        rows = await asana_service.list_project_task_templates(project_gid)
+    except Exception as exc:
+        logger.warning("asana_project_task_templates_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        return []
+    return [AsanaTaskTemplateRef(gid=r["gid"], name=r.get("name")) for r in rows if r.get("gid")]
 
 
 @router.get(

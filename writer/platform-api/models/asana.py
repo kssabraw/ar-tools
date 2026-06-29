@@ -57,6 +57,12 @@ class AsanaCategoryOption(BaseModel):
     name: Optional[str] = None
 
 
+class AsanaTaskTemplateRef(BaseModel):
+    """An Asana native task template on a project (instantiated to keep subtasks)."""
+    gid: str
+    name: Optional[str] = None
+
+
 # ---------------------------------------------------------------------------
 # Team & capacity (Team Workload)
 # ---------------------------------------------------------------------------

@@ -83,6 +83,16 @@
 > project's Service Type options (best-effort). Effort read by name (`extract_number_field_by_name`)
 > so durations sum across project-local fields.
 >
+> *Task-template instantiation (built):* the team's recurring tasks are **Asana task templates
+> with subtasks**. For each template row whose name **matches an Asana task template** on the
+> project, the monthly job **instantiates** it (`instantiate_task_template` →
+> `POST /task_templates/{gid}/instantiateTask`) so the **subtasks come along**, then sets
+> assignee/category/status (`build_task_update` → `PUT /tasks`) and moves it into the month
+> section (`add_task_to_section`). No match → a plain task (prior path); template list
+> unfetchable → all plain (best-effort). Editor: the name datalist also lists the project's
+> Asana task templates, with a **⊟** marker on matching rows. Endpoint
+> `GET /clients/{id}/asana/project-task-templates`.
+>
 > **Provisioned (live):** all three migrations applied to Supabase; `ASANA_TOKEN` + workspace +
 > the pilot's Status/category field GIDs set on PLATFORM (the field *names* now drive
 > resolution, so those GIDs are just fallback). PR #170 merged to `main`.

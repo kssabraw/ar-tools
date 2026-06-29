@@ -210,6 +210,13 @@ client; (2) map it in the **Asana Tasks** page (paste project GID → Save); (3)
 its monthly **template** (tasks + assignee + Service Type [+ est. hrs]). Then the
 monthly job adds a `<Month YYYY>` section automatically each month.
 
+**Task-template instantiation (built, separate PR):** the team's recurring tasks
+are **Asana task templates with subtasks**. The monthly job now **instantiates**
+the matching Asana task template (by name) so subtasks come along, then sets
+assignee/category/status + moves it into the month section; rows with no matching
+template fall back to a plain task. The Asana Tasks editor marks matching rows
+with **⊟**. No migration. Endpoint `…/asana/project-task-templates`.
+
 **Task Library (built, separate PR):** a global `asana_task_library` (migration
 `20260629170000`, **applied to live**) — the single source of truth for standard
 task **durations** (+ default category), keyed by **task name**. Client template
