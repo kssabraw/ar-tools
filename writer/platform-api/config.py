@@ -347,6 +347,12 @@ class Settings(BaseSettings):
     # Max competitors classified against a single scan's response (no extra
     # search calls — the same raw response is re-classified per competitor).
     brand_scan_max_competitors: int = 5
+    # AI Visibility alerting: after a scan completes, compare it to the previous
+    # scan and emit a notification (in-app + Slack/email) on a regression — a
+    # visibility drop of at least this many points, an engine the brand went
+    # fully invisible on, or newly-detected misinformation. Set False to mute.
+    brand_alerts_enabled: bool = True
+    brand_alert_visibility_drop_pct: int = 15
 
     # Service Page scoring: after a service_page run generates, it auto-scores
     # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below

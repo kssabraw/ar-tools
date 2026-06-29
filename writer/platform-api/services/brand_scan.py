@@ -902,6 +902,14 @@ async def run_brand_scan_job(job: dict) -> None:
             "brand_scan.complete",
             extra={"job_id": job_id, "completed": counts["completed"], "failed": counts["failed"]},
         )
+
+        # Compare this scan to the previous one and notify on a regression
+        # (visibility drop / an engine gone dark / new misinformation). Best-
+        # effort — alerting never affects the scan's own success.
+        if counts["completed"]:
+            from services import brand_alerts
+
+            brand_alerts.emit_scan_alerts(client_id, scan_batch_id)
     except Exception as exc:
         logger.warning("brand_scan.failed", extra={"job_id": job_id, "error": str(exc)})
         # Don't leave half-created cells stuck as queued/processing — they'd
