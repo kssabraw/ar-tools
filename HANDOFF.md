@@ -3,8 +3,9 @@
 ## ⏩ Update — 2026-06-29 · **Asana task integration** (latest)
 
 Connects AR Tools to the team's Asana workspace. **Two features, one token**
-(branch `claude/asana-integration-options-cp3zul` — **draft PR #170**; Phases 0–3
-built, optional Phase 4 ahead):
+(**PR #170 merged to `main`**, squash `5587b0c`; Phases 0–3 built; a by-name
+field-resolution follow-up + optional Phase 4 ahead — see Provisioning progress
+below):
 
 - **A. Monthly section automation** — each client has an **app-defined task
   template** (its own editable monthly task list, edited in AR Tools). A job
@@ -87,12 +88,26 @@ mark Action Plan items done), per-client Asana-project mapping CRUD UI.
 
 ### 📍 Provisioning progress (2026-06-29) — where we are
 
-**⚠️ Code not deployed yet.** PLATFORM deploys from **`main`**; **PR #170 is NOT
-merged**, so the Asana routers/services + the AsanaTasks/TeamWorkload frontend are
-**not in the running build**. The DB + env below are pre-staged, so the integration
-goes live **the moment #170 merges to `main`** and PLATFORM + Netlify redeploy.
-Until then the `/asana/*` endpoints and the Asana Tasks / Workload pages don't
-exist in production — don't expect the in-app pages to work yet.
+**✅ Merged + deploying.** **PR #170 is merged to `main`** (squash `5587b0c`;
+resolved conflicts with main's Client Reports / `maps_analyze` work, keeping both
+sides). PLATFORM (deploys from `main`) + Netlify rebuilt from the merge commit, so
+the `/asana/*` endpoints and the Asana Tasks / Workload pages are now in the
+production build.
+
+**🔑 Key decisions (2026-06-29) that shape per-client setup:**
+- **One ongoing project per client** (decided with the user). Their Asana was
+  organized as **per-quarter** projects (e.g. "WheelHouse IT Q2 2026"); going
+  forward they move to a single long-lived project per client (months as
+  sections). So the integration's **fixed** client→project mapping is correct —
+  **no quarter-rollover logic needed**. (Team-side workflow change; no code impact.)
+- **Custom fields are project-local.** The pilot's "Status" + "Service Type" fields
+  are NOT workspace-library fields — each project has its own copies, so their GIDs
+  very likely **differ per client project**. The global `asana_status_field_gid` /
+  `asana_category_field_gid` therefore only match the pilot. **Planned next
+  (follow-up PR): resolve these fields BY NAME per project** ("Status" + its "Not
+  Started" option, "Service Type", + the hours number field) at task-creation time,
+  so onboarding a client is just *map project + build template* with no GID lookups.
+  Until that ships, only the pilot project's tasks get Status/Service Type stamped.
 
 **✅ Migrations applied to live Supabase** (`wvcthtmmcmhkybcesirb`, via MCP):
 `asana_client_projects`, `asana_client_task_templates` (+ `est_hours`),
@@ -114,21 +129,27 @@ widening (dropping them would fail constraint validation on existing rows).
   this GID. Until then Workload treats every task as `asana_default_task_hours`
   (1h).
 
-**Pilot project:** Asana project GID **`1214452202356916`** (URL form
-`app.asana.com/1/<workspace>/project/<project_gid>/...`). Its Status + Service Type
-fields are the GIDs above (they're **project-local** custom fields, not in the
-workspace library — so any new client project needs its own per-project field
-lookup unless it reuses the same fields).
+**Pilot project:** Asana project GID **`1214452202356916`** (Status field
+`1214452613145654`, "Not Started" option `1214452613145655`, Service Type
+`1214452613145672`). A second client checked ("WheelHouse IT") has the **same field
+names** but project-local GIDs — hence the by-name-resolution plan above.
 
-**⬜ Remaining once #170 is merged + deployed:**
-1. Smoke-test the token: open a client → **Asana Tasks**; the **Assignee** dropdown
-   should populate from Asana (proves the token works).
-2. **Map clients → projects** (in-app Asana Tasks editor, or insert
-   `asana_client_projects` rows). First pilot: project `1214452202356916`.
-3. **Build per-client task templates** (name + assignee + Service Type) and run
-   **Generate this month** to verify section + task creation.
-4. **Team & capacity** (Workload page) — add tracked members + weekly hours.
-5. *(optional)* effort field + per-task **Est. hrs** for hours-based workload.
+**Per-client onboarding flow (the end state):** (1) one ongoing Asana project per
+client; (2) map it in the **Asana Tasks** page (paste project GID → Save); (3) build
+its monthly **template** (tasks + assignee + Service Type [+ est. hrs]). Then the
+monthly job adds a `<Month YYYY>` section automatically each month.
+
+**⬜ Remaining:**
+1. **Ship the by-name field resolution** (follow-up PR) so per-client setup needs no
+   GID lookups — the next build step.
+2. Smoke-test the token: open a client → **Asana Tasks**; the **Assignee** dropdown
+   should populate from Asana (proves the live connection).
+3. **Map clients → projects** (in-app, one ongoing project each). Pilot:
+   `1214452202356916`.
+4. **Build per-client task templates** and run **Generate this month** to verify.
+5. **Team & capacity** (Workload page) — add tracked members + weekly hours.
+6. *(optional)* add an "Est. hours" **number** field to projects + per-task est. hrs
+   for hours-based workload (none on the pilot/WheelHouse projects today).
 
 ---
 
