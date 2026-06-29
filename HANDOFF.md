@@ -1,6 +1,6 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-29 · **Managed engagement + "SerMaStr" Strategy Engine — build started** (latest)
+## ⏩ Update — 2026-06-29 · **Managed engagement + "SerMaStr" Strategy Engine — build started** (latest, on branch `claude/unified-keyword-portal-m82e68` / PR #166 — NOT yet on `main`)
 
 The connective layer from `docs/managed-engagement-and-strategy-engine-design-v1_0.md`
 (the full design) is now being **built**, on branch `claude/unified-keyword-portal-m82e68`
@@ -71,6 +71,255 @@ discovery; a deep-link target for audit actions. See design §6.5–6.11.
 with **RLS disabled** (a shared cross-client cache; predates this work). Enable with
 `ALTER TABLE public.maps_geocode_cache ENABLE ROW LEVEL SECURITY;` **plus policies** if you
 want it locked down — not auto-applied.
+
+---
+
+## ⏩ Update — 2026-06-29 · **Maps geo-grid strategy & Action Plan** — **MERGED to `main`** (PR #182, squash `35394ae`)
+
+Brought the **Maps geo-grid tracker** to parity with the organic rank tracker's
+reoptimization guidance, then layered on strategic competitive intelligence —
+all feeding the **unified, deep-linked Action Plan** (`reopt_planner` →
+`pages/ActionPlan.tsx`). Authoritative doc:
+**`docs/modules/maps-geogrid-strategy-prd-v1_0.md`**.
+
+**What shipped:**
+- **Phase 1 — Maps Action Plan (hybrid).** Pure `build_maps_actions` (separate
+  from organic `build_actions`) feeds the **shared** `reopt_plans` store + view +
+  cadence (weekly digest + **silent on-drop rebuild** via `maps_analyzer`
+  `trigger="maps_drop"`). Reuses `maps_alerts` + geocoded weak areas. Actions are
+  tagged `source: organic|maps`; Maps declines are **not** deduped against organic
+  drops (distinct channels).
+- **Phase 2 — Tier A** (reuse existing data, no new fetch): **Share of Local
+  Voice** (`services/maps_solv.py`, derived on read) + **brand-search analysis**
+  (`services/brand_search.py`, branded vs non-branded GSC demand).
+- **Phase 3 — Tier B** (competitor intelligence; each = a deterministic service +
+  async job + migration + Maps-tab panel + an Action Plan action):
+  **B1** competitor GBP intelligence (`competitor_gbp.py`), **B2** GBP profile
+  audit (`gbp_audit.py`), **B3** review analytics (`review_analytics.py`), **B4**
+  backlink authority (`backlink_intel.py`), **B5** on-site content comparison
+  (`content_intel.py`), **B6** Local Relevance Scorecard (`local_relevance.py` —
+  does each signal align with the tracked service/location?) incl. **business
+  type** (SAB / physical / hybrid, `gbp_service.classify_business_type` via
+  Outscraper's `area_service` hidden-address flag).
+
+**New Action Plan action kinds:** `maps_decline`, `maps_competitor`,
+`maps_weak_area`, `maps_solv_drop`, `gbp_gap`, `review_gap`, `backlink_gap`,
+`content_gap`, `local_relevance`, `brand_search_decline` (all rendered generically
+in `ActionPlan.tsx`).
+
+**Verified:** ~105 pure-unit tests across the new services (mocked external
+APIs); frontend `tsc -b` clean; every commit's Netlify preview built green.
+
+**Deterministic trims (noted in the PRD, each a clean follow-up):** review
+sentiment/themes (B3 — `reviews.sentiment` column reserved), per-referring-domain
+backlink gap list (B4), semantic/entity content comparison (B5 — currently depth +
+heading coverage). Competitor GBP/reviews/backlinks/content/relevance refreshes
+are **on-demand** today (monthly auto-refresh via the scheduler is a follow-up).
+
+### ⚠️ Maps-strategy provisioning still required (one-time)
+
+The code is on `main` and deploy-ready, but inert until the migrations are applied.
+
+1. **Apply these migrations** to the live Supabase project (all additive — new
+   tables + a `job_type` CHECK widen), in order:
+   `20260629160000_competitor_gbp_profiles`, `20260629180000_reviews`,
+   `20260629190000_backlink_profiles`, `20260629200000_website_analyses`,
+   `20260629210000_local_relevance_scores`, `20260629220000_business_type`.
+   - **Note on the `async_jobs.job_type` CHECK:** each of the above rewrites it to
+     a **superset**. The merge reconciled a drift where `main`'s Asana migration
+     (`20260629130000`) had dropped `client_report` + `maps_analyze` from the list;
+     these migrations **restore** those and add `asana_monthly` + the six new Maps
+     job types (`competitor_gbp`, `review_intel`, `backlink_intel`, `content_intel`,
+     `local_relevance`). The final constraint (after `…210000`) is the complete
+     union — apply in timestamp order and the end state is correct.
+2. **No new env vars.** Every layer reuses already-provisioned creds on
+   **PLATFORM**: `DATAFORSEO_LOGIN/PASSWORD` (SoLV competitor data, backlinks,
+   reviews, SERP for content), `OUTSCRAPER_API_KEY` (competitor GBP + business
+   type), `SCRAPEOWL_API_KEY` (GBP-link + competitor page scrapes),
+   `GOOGLE_SERVICE_ACCOUNT_KEY` (brand-search reads `gsc_query_daily`).
+3. **Deferred — GBP engagement (#8):** profile views / calls / direction requests
+   over time. Needs Google **OAuth 2.0** (`business.manage`) per listing owner +
+   GCP provisioning — **incompatible** with the suite's service-account model.
+   Parked as its own project (would add `GOOGLE_CLIENT_ID/SECRET` + a per-client
+   refresh-token flow + a `gbp_engagement_metrics` table).
+
+---
+
+## ⏩ Update — 2026-06-29 · **Asana task integration**
+
+Connects AR Tools to the team's Asana workspace. **Two features, one token**
+(**PR #170 merged to `main`**, squash `5587b0c`; Phases 0–3 built; a by-name
+field-resolution follow-up + optional Phase 4 ahead — see Provisioning progress
+below):
+
+- **A. Monthly section automation** — each client has an **app-defined task
+  template** (its own editable monthly task list, edited in AR Tools). A job
+  creates those tasks in the client's Asana project under a new **`<Month YYYY>`**
+  section: assignee + category carried, **Status = Not Started**, **no due dates**,
+  inserted above the backlog, **idempotent** (re-run = no-op). Runs **auto on the
+  1st** (shared `gsc_scheduler` → `asana_monthly` job) **and** via a **"Generate
+  this month"** button. UI: client workspace → **Project Management → Asana Tasks**
+  (`/clients/:id/asana-tasks`) — the template editor (name + assignee + category
+  pickers populated from Asana) + project-GID field + generate button.
+- **B. Team Workload** — a suite-level **"Workload"** nav page (`/workload`,
+  `GET /asana/workload`) showing each tracked member's open **hours** across all
+  clients vs their **weekly capacity** (effort-weighted), with per-day due-hours
+  chips + over-capacity flags + a **Team & capacity** editor (pick members from
+  Asana, set weekly hours). A **daily** scheduler check
+  (`asana_workload.run_workload_alert`) emits one suite notification (in-app +
+  Slack) when anyone is over capacity. Effort per task = an **Asana number field**
+  the monthly job stamps from each template row's **Est. hrs**.
+
+**Code:** `services/asana_service.py` (REST client + pure helpers),
+`services/asana_monthly.py` (Feature A), `services/asana_workload.py` (Feature B),
+`routers/asana.py`, `models/asana.py`; frontend `pages/AsanaTasks.tsx` +
+`pages/TeamWorkload.tsx`. Migrations `20260629120000_asana_client_projects.sql`
+(client→project map) + `20260629130000_asana_task_templates.sql` (per-client
+template + widens `async_jobs.job_type` for `asana_monthly`) +
+`20260629140000_asana_effort_capacity.sql` (`est_hours` on templates +
+`asana_team_members` team/capacity table). Everything **degrades gracefully** —
+absent the token / mapping / team list, the relevant feature is skipped with a
+note, never an error (the GSC/Slack pattern).
+
+**Verified:** the Asana test suite is green (`test_asana_service`,
+`test_asana_monthly`, `test_asana_workload`); frontend typechecks + builds clean.
+Nothing runs live until the provisioning below is done.
+
+### ⚠️ Asana provisioning still required (one-time)
+
+The code is deployed-ready but inert until these are set. All secrets/vars go on
+the **PLATFORM** Railway service.
+
+1. **Apply the migrations** to the live Supabase project (all additive — new
+   tables + columns + a `job_type` constraint widen): `20260629120000_asana_client_projects`,
+   `20260629130000_asana_task_templates`, `20260629140000_asana_effort_capacity`.
+2. **Token + workspace** — create an Asana **Personal Access Token**
+   (developers.asana.com → *My access tokens*) → set **`ASANA_TOKEN`**. Set
+   **`asana_workspace_gid`** = your workspace GID (`GET https://app.asana.com/api/1.0/workspaces`
+   with `Authorization: Bearer <token>`).
+3. **Custom-field GIDs** — for any client project, call
+   `GET /projects/<project_gid>/custom_field_settings?opt_fields=custom_field.name,custom_field.gid,custom_field.resource_subtype,custom_field.enum_options.name,custom_field.enum_options.gid`
+   and read off: the **Status** field GID + its **"Not Started"** option GID, the
+   **category** field GID, and (for workload) a **number** field for effort. Set
+   **`asana_status_field_gid`**, **`asana_status_not_started_option_gid`**,
+   **`asana_category_field_gid`**, **`asana_effort_field_gid`**. (Absent these,
+   tasks are still created — just without that field stamped. For effort: create a
+   number custom field like "Est. hours" on the projects first if you don't have
+   one.)
+4. **Per-client project mapping** — in the app: open a client → **Asana Tasks** →
+   paste the project GID (from the Asana project URL `app.asana.com/0/<project_gid>/…`)
+   → **Save**. One per client.
+5. **Per-client task templates** — fill each client's monthly task list in the
+   **Asana Tasks** editor (no Asana "Template" section needed — the app is the
+   source of truth).
+6. **Team list + capacity (Feature B)** — add members in the **Workload** page
+   ("Team & capacity": pick from Asana users, set each one's weekly hours). The
+   env **`asana_team_member_gids`** is a fallback seed only (default capacity).
+7. **Effort estimates** — set **Est. hrs** per task in each client's **Asana Tasks**
+   editor. The monthly job stamps them into the effort field; the workload view is
+   blind to effort until they're filled (unestimated tasks count as
+   `asana_default_task_hours`, default 1h).
+8. *(Optional, no code)* install Asana's official **Slack app** for the Slack ⇄
+   Asana leg (task notifications in Slack + create-task-from-Slack).
+
+**Cadence / tunables (config.py, optional):** `asana_month_generate_day` (default
+`1`), `asana_month_target_offset` (default `0` = current month), feature toggles
+`asana_monthly_enabled` / `asana_workload_enabled`; workload capacity
+`asana_default_weekly_hours` (30), `asana_workload_daily_workdays` (5),
+`asana_workload_backlog_weeks` (2), `asana_default_task_hours` (1).
+
+**Next (optional Phase 4):** two-way sync (Asana webhook → close rank alerts /
+mark Action Plan items done), per-client Asana-project mapping CRUD UI.
+
+### 📍 Provisioning progress (2026-06-29) — where we are
+
+**✅ Merged + deploying.** **PR #170 is merged to `main`** (squash `5587b0c`;
+resolved conflicts with main's Client Reports / `maps_analyze` work, keeping both
+sides). PLATFORM (deploys from `main`) + Netlify rebuilt from the merge commit, so
+the `/asana/*` endpoints and the Asana Tasks / Workload pages are now in the
+production build.
+
+**🔑 Key decisions (2026-06-29) that shape per-client setup:**
+- **One ongoing project per client** (decided with the user). Their Asana was
+  organized as **per-quarter** projects (e.g. "WheelHouse IT Q2 2026"); going
+  forward they move to a single long-lived project per client (months as
+  sections). So the integration's **fixed** client→project mapping is correct —
+  **no quarter-rollover logic needed**. (Team-side workflow change; no code impact.)
+- **Custom fields are project-local.** The pilot's "Status" + "Service Type" fields
+  are NOT workspace-library fields — each project has its own copies, so their GIDs
+  very likely **differ per client project**. The global `asana_status_field_gid` /
+  `asana_category_field_gid` therefore only match the pilot. **Planned next
+  (follow-up PR): resolve these fields BY NAME per project** ("Status" + its "Not
+  Started" option, "Service Type", + the hours number field) at task-creation time,
+  so onboarding a client is just *map project + build template* with no GID lookups.
+  Until that ships, only the pilot project's tasks get Status/Service Type stamped.
+
+**✅ Migrations applied to live Supabase** (`wvcthtmmcmhkybcesirb`, via MCP):
+`asana_client_projects`, `asana_client_task_templates` (+ `est_hours`),
+`asana_team_members`, and `async_jobs.job_type` widened for `asana_monthly`.
+NB: the live `job_type` CHECK had two values **not** in any repo migration
+(`client_report`, `maps_analyze` — pre-existing drift); I preserved them when
+widening (dropping them would fail constraint validation on existing rows).
+
+**✅ Railway PLATFORM env set** (token by the user; the rest via the Railway MCP):
+- `ASANA_TOKEN` ✅ (secret, set by user)
+- `asana_workspace_gid` = `1143356380295200`
+- `asana_status_field_gid` = `1214452613145654` ("Status")
+- `asana_status_not_started_option_gid` = `1214452613145655` ("Not Started")
+- `asana_category_field_gid` = `1214452613145672` ("Service Type": Content /
+  Link Building / GBP Authority / Strategy)
+- `asana_effort_field_gid` = **not set** — the pilot project has no number custom
+  field. To enable effort-weighting: add an "Est. hours" **number** field to the
+  client projects, re-run the per-project `custom_field_settings` call, and set
+  this GID. Until then Workload treats every task as `asana_default_task_hours`
+  (1h).
+
+**Pilot project:** Asana project GID **`1214452202356916`** (Status field
+`1214452613145654`, "Not Started" option `1214452613145655`, Service Type
+`1214452613145672`). A second client checked ("WheelHouse IT") has the **same field
+names** but project-local GIDs — hence the by-name-resolution plan above.
+
+**Per-client onboarding flow (the end state):** (1) one ongoing Asana project per
+client; (2) map it in the **Asana Tasks** page (paste project GID → Save); (3) build
+its monthly **template** (tasks + assignee + Service Type [+ est. hrs]). Then the
+monthly job adds a `<Month YYYY>` section automatically each month.
+
+**Task-template instantiation (built, separate PR):** the team's recurring tasks
+are **Asana task templates with subtasks**. The monthly job now **instantiates**
+the matching Asana task template (by name) so subtasks come along, then sets
+assignee/category/status + moves it into the month section; rows with no matching
+template fall back to a plain task. The Asana Tasks editor marks matching rows
+with **⊟**. No migration. Endpoint `…/asana/project-task-templates`.
+
+**Task Library (built, separate PR):** a global `asana_task_library` (migration
+`20260629170000`, **applied to live**) — the single source of truth for standard
+task **durations** (+ default category), keyed by **task name**. Client template
+rows inherit `default_hours` / category by name when blank (override per client by
+filling the row). Managed at **`/asana/task-library`**; the template editor's
+task-name input has a datalist of library names + an inherited "(lib)" hours hint.
+Hours feed auto-distribution immediately; they reach Asana once the effort number
+field exists. (The workload read also now sums the effort field **by name**, so
+real hours work across project-local fields once that field is added + named.)
+
+**Auto-distribution (built, separate PR):** a template row's assignee can be set to
+**Auto-distribute** instead of a person; the monthly job spreads those tasks across
+the client's **eligible team subset** ("Auto-assign team" picker on the Asana Tasks
+page → `auto_assignee_gids`) by **remaining capacity** (weekly hours − current open
+hours across all clients, weighted by est. hrs). Pinned rows stay pinned. Migration
+`20260629160000` (`auto_assign` + `auto_assignee_gids`) — **applied to live
+Supabase**. Needs tracked team members with capacities set (Workload page).
+
+**⬜ Remaining:**
+1. **Ship the by-name field resolution** (follow-up PR) so per-client setup needs no
+   GID lookups — the next build step.
+2. Smoke-test the token: open a client → **Asana Tasks**; the **Assignee** dropdown
+   should populate from Asana (proves the live connection).
+3. **Map clients → projects** (in-app, one ongoing project each). Pilot:
+   `1214452202356916`.
+4. **Build per-client task templates** and run **Generate this month** to verify.
+5. **Team & capacity** (Workload page) — add tracked members + weekly hours.
+6. *(optional)* add an "Est. hours" **number** field to projects + per-task est. hrs
+   for hours-based workload (none on the pilot/WheelHouse projects today).
 
 ---
 

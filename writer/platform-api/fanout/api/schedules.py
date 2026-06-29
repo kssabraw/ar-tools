@@ -44,6 +44,10 @@ class ScheduleBody(BaseModel):
     content_type: str = "blog_post"             # blog_post | local_seo_page | service_page
     location: str | None = None                 # local_seo_page: target area
     location_code: int | None = None            # local_seo_page: optional DataForSEO city code
+    # Opt-in: publish each finished piece to the linked client's Google Drive
+    # folder as a Google Doc, right after it generates. Best-effort + requires a
+    # client-linked session (no-ops otherwise).
+    auto_publish: bool = False
 
 
 # ----- helpers --------------------------------------------------------------
@@ -206,6 +210,9 @@ def create_schedule(
         per_day=body.per_day, start_date=body.start_date, time_of_day=body.time_of_day,
         tz_name=body.timezone, content_type=body.content_type,
         location=resolved_location, location_code=resolved_location_code,
+        # Auto-publish only makes sense when the session is client-linked (the
+        # publish target is the client's Drive folder).
+        auto_publish=bool(body.auto_publish and session.get("client_id")),
     )
     logger.info("schedule_created", extra={"event": "schedule_created", "session_id": session_id,
                                            "mode": body.mode, "runs": len(runs), "skipped": skipped})

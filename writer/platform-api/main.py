@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import settings
+from routers.asana import router as asana_router
 from routers.brand import router as brand_router
 from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
@@ -32,6 +33,7 @@ from routers.notifications import router as notifications_router
 from routers.publish import router as publish_router
 from routers.rank import router as rank_router
 from routers.reopt import router as reopt_router
+from routers.reports import router as reports_router
 from routers.slack_events import router as slack_events_router
 from routers.strategy import router as strategy_router
 from routers.runs import router as runs_router
@@ -127,6 +129,7 @@ app.add_middleware(
 )
 
 
+app.include_router(asana_router)
 app.include_router(brand_router)
 app.include_router(brand_voice_router)
 app.include_router(briefs_router)
@@ -144,6 +147,7 @@ app.include_router(maps_router)
 app.include_router(notifications_router)
 app.include_router(rank_router)
 app.include_router(reopt_router)
+app.include_router(reports_router)
 app.include_router(slack_events_router)
 app.include_router(strategy_router)
 app.include_router(runs_router)

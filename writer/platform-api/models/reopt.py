@@ -9,7 +9,10 @@ from pydantic import BaseModel
 
 
 class ReoptAction(BaseModel):
-    kind: str                       # rank_drop | quick_win | cannibalization | opportunity
+    # rank_drop | quick_win | cannibalization | opportunity
+    # | maps_decline | maps_competitor | maps_weak_area
+    kind: str
+    source: Optional[str] = None    # organic | maps
     keyword: str
     diagnosis: str
     recommendation: str

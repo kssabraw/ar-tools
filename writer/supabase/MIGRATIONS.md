@@ -84,6 +84,7 @@ expected for a shared project, not a problem.
 | `20260628054924` | `notifications` (suite notifications service — in-app/email/Slack pipe + `notification_dispatch` job) |
 | `20260628055434` | `async_jobs_jobtype_complete` (drift fix — align job_type CHECK with the worker's actual set) |
 | `20260628060818` | `reopt_plans` (Organic Rank Tracker #4 — reoptimization planner / Action Plan store + `reopt_plan` job type) |
+| `20260628211200` | `client_reports` (Client Reporting module — generated PDF report store + `reports` storage bucket + `client_report` job type) |
 
 > A few `schema_migrations.name` values carry version suffixes (`_v1_4`, `_v2_0`)
 > from how they were originally applied. The CLI matches on the numeric version,
@@ -91,6 +92,13 @@ expected for a shared project, not a problem.
 > the same migration.
 
 ## Reconciliation log
+
+**2026-06-28** — Client Reporting (Phase 0): added `client_reports` (generated
+PDF report store), created the private **`reports`** storage bucket, and widened
+the `async_jobs.job_type` CHECK to include `client_report` (preserving the full
+set from `20260628211200`). Applied via the Supabase MCP; recorded version
+`20260628211200`, file named to match + `-- Migration:` header set. RLS on
+`client_reports`, no client-facing policies (service-role only).
 
 **2026-06-28** — Reoptimization planner (#4): added `reopt_plans` (per-client
 stored Action Plan — a ranked, recommend-only list of reoptimization actions

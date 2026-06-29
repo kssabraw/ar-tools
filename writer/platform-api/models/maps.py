@@ -152,6 +152,174 @@ class MapsCompetitorTrendsResponse(BaseModel):
     competitors: list[MapsCompetitorTrend] = Field(default_factory=list)
 
 
+# --- Share of Local Voice (SoLV) --------------------------------------------
+class MapsSolvCompetitorShare(BaseModel):
+    """One business's local-pack presence share (Top-3 pins / total pins)."""
+    place_id: Optional[str] = None
+    name: Optional[str] = None
+    top3_pins: int = 0
+    share_pct: Optional[float] = None
+
+
+class MapsSolvPoint(BaseModel):
+    """The client's overall Top-3 local-pack coverage at one completed scan."""
+    scan_id: UUID
+    completed_at: Optional[str] = None
+    trigger: str = "scheduled"
+    total_pins: int = 0
+    client_top3_pins: int = 0
+    client_coverage_pct: Optional[float] = None       # Top-3 presence %
+    client_coverage_top10_pct: Optional[float] = None
+
+
+class MapsSolvKeyword(BaseModel):
+    keyword: Optional[str] = None
+    total_pins: int = 0
+    client_top3_pins: int = 0
+    client_coverage_pct: Optional[float] = None
+    competitor_shares: list[MapsSolvCompetitorShare] = Field(default_factory=list)
+
+
+class MapsSolvResponse(BaseModel):
+    series: list[MapsSolvPoint] = Field(default_factory=list)              # oldest → newest
+    competitors: list[MapsSolvCompetitorShare] = Field(default_factory=list)  # latest scan, top N
+    keywords: list[MapsSolvKeyword] = Field(default_factory=list)         # latest scan per-keyword
+
+
+# --- Competitor GBP intelligence (Tier B / B1) ------------------------------
+class MapsCompetitorProfile(BaseModel):
+    place_id: Optional[str] = None
+    name: Optional[str] = None
+    primary_category: Optional[str] = None
+    gbp_categories: list[str] = Field(default_factory=list)
+    rating: Optional[float] = None
+    review_count: Optional[int] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    photo: Optional[str] = None
+    has_hours: Optional[bool] = None
+    business_type: Optional[str] = None    # sab | physical | hybrid | unknown
+    found_pins: Optional[int] = None
+    top3_pins: Optional[int] = None
+    captured_at: Optional[str] = None
+
+
+class MapsCompetitorIntelResponse(BaseModel):
+    profiles: list[MapsCompetitorProfile] = Field(default_factory=list)
+    captured_at: Optional[str] = None    # most recent capture timestamp
+
+
+# --- Local Relevance Scorecard (Tier B / B6) --------------------------------
+class MapsRelevanceRow(BaseModel):
+    place_id: Optional[str] = None
+    is_client: bool = False
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    gbp_url: Optional[str] = None
+    category: Optional[str] = None
+    category_match: Optional[str] = None          # exact | related | none
+    business_type: Optional[str] = None           # sab | physical | hybrid | unknown
+    reviews_total: Optional[int] = None
+    reviews_service_mentions: Optional[int] = None
+    reviews_location_mentions: Optional[int] = None
+    page_service_relevant: Optional[bool] = None
+    page_location_relevant: Optional[bool] = None
+    domain_rating: Optional[float] = None
+    page_ur: Optional[float] = None
+
+
+class MapsRelevanceResponse(BaseModel):
+    keyword: Optional[str] = None
+    location: Optional[str] = None
+    client: Optional[MapsRelevanceRow] = None
+    competitors: list[MapsRelevanceRow] = Field(default_factory=list)
+
+
+# --- On-site content comparison (Tier B / B5) -------------------------------
+class MapsContentAnalysis(BaseModel):
+    keyword: Optional[str] = None
+    client_url: Optional[str] = None
+    client_word_count: Optional[int] = None
+    competitor_median_word_count: Optional[int] = None
+    depth_behind: Optional[int] = None
+    topic_gaps: list[str] = Field(default_factory=list)
+    competitor_urls: list[str] = Field(default_factory=list)
+    captured_at: Optional[str] = None
+
+
+class MapsContentIntelResponse(BaseModel):
+    analyses: list[MapsContentAnalysis] = Field(default_factory=list)
+
+
+# --- Backlink profiling (Tier B / B4) ---------------------------------------
+class MapsBacklinkStats(BaseModel):
+    domain: Optional[str] = None
+    domain_rating: Optional[float] = None
+    referring_domains: Optional[int] = None
+    backlinks: Optional[int] = None
+
+
+class MapsBacklinkComparison(BaseModel):
+    competitor_median_dr: Optional[float] = None
+    competitor_median_referring_domains: Optional[float] = None
+    dr_behind: Optional[float] = None
+    referring_domains_behind: Optional[float] = None
+
+
+class MapsBacklinkIntelResponse(BaseModel):
+    client: MapsBacklinkStats = Field(default_factory=MapsBacklinkStats)
+    competitors: list[MapsBacklinkStats] = Field(default_factory=list)
+    comparison: MapsBacklinkComparison = Field(default_factory=MapsBacklinkComparison)
+
+
+# --- Review analytics (Tier B / B3) -----------------------------------------
+class MapsReviewStats(BaseModel):
+    place_id: Optional[str] = None
+    name: Optional[str] = None
+    count: int = 0
+    avg_rating: Optional[float] = None
+    rating_distribution: dict[str, int] = Field(default_factory=dict)
+    velocity_per_month: float = 0
+    recent_negatives: int = 0
+    last_review_date: Optional[str] = None
+
+
+class MapsReviewComparison(BaseModel):
+    competitor_median_velocity: Optional[float] = None
+    competitor_median_rating: Optional[float] = None
+    velocity_behind: Optional[float] = None
+
+
+class MapsReviewIntelResponse(BaseModel):
+    client: MapsReviewStats = Field(default_factory=MapsReviewStats)
+    competitors: list[MapsReviewStats] = Field(default_factory=list)
+    comparison: MapsReviewComparison = Field(default_factory=MapsReviewComparison)
+
+
+# --- GBP profile audit / gaps (Tier B / B2) ---------------------------------
+class MapsGbpAuditCheck(BaseModel):
+    key: str
+    label: str
+    ok: bool
+    detail: str = ""
+
+
+class MapsGbpReviewGap(BaseModel):
+    client: int = 0
+    competitor_median: int = 0
+    deficit: int = 0
+
+
+class MapsGbpAuditResponse(BaseModel):
+    score: Optional[int] = None              # 0–100 completeness
+    competitor_count: int = 0
+    checks: list[MapsGbpAuditCheck] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)            # failed-check labels
+    category_gaps: list[str] = Field(default_factory=list)   # categories competitors have, client lacks
+    review_gap: Optional[MapsGbpReviewGap] = None
+
+
 class MapsThreat(BaseModel):
     """One top-threat competitor for a dashboard tile."""
     name: Optional[str] = None
@@ -167,3 +335,103 @@ class MapsClientThreats(BaseModel):
 
 class MapsThreatsResponse(BaseModel):
     clients: list[MapsClientThreats] = Field(default_factory=list)
+
+
+# --- Scan-over-scan analyzer ("What changed") -------------------------------
+class MapsOctantChange(BaseModel):
+    """One compass octant that weakened vs the previous scan."""
+    sector: str
+    avg_rank_now: Optional[float] = None
+    avg_rank_prev: Optional[float] = None
+    top3_pct_now: Optional[float] = None
+    top3_pct_prev: Optional[float] = None
+
+
+class MapsKeywordChange(BaseModel):
+    keyword: str
+    average_rank_now: Optional[float] = None
+    average_rank_prev: Optional[float] = None
+    average_rank_delta: Optional[float] = None   # now − prev; positive = worse
+    found_pct_now: Optional[float] = None
+    found_pct_prev: Optional[float] = None
+    top3_pct_now: Optional[float] = None
+    top3_pct_prev: Optional[float] = None
+    top10_pct_now: Optional[float] = None
+    top10_pct_prev: Optional[float] = None
+    octants: list[MapsOctantChange] = Field(default_factory=list)   # weakened octants, worst first
+    alert_types: list[str] = Field(default_factory=list)            # decline rules that fired
+
+
+class MapsChangesResponse(BaseModel):
+    has_previous: bool = False
+    current_scan_id: Optional[UUID] = None
+    previous_scan_id: Optional[UUID] = None
+    keywords: list[MapsKeywordChange] = Field(default_factory=list)
+
+
+# --- In-app geo-grid alerts -------------------------------------------------
+class MapsAlert(BaseModel):
+    id: UUID
+    keyword: str
+    alert_type: Literal[
+        "grid_rank_drop", "coverage_drop", "lost_pack", "area_decline", "competitor_surge"
+    ]
+    sector: Optional[str] = None
+    from_value: Optional[float] = None
+    to_value: Optional[float] = None
+    delta: Optional[float] = None
+    message: str
+    severity: str = "warning"   # derived: 'critical' for lost_pack, else 'warning'
+    status: Literal["unread", "read", "dismissed"]
+    triggered_on: Optional[str] = None
+    resolved_at: Optional[str] = None
+    created_at: str
+
+
+class MapsAlertsResponse(BaseModel):
+    alerts: list[MapsAlert] = Field(default_factory=list)
+    unread_count: int = 0
+
+
+# --- Multi-window period summary (7/30/90/since-start) -----------------------
+class MapsPeriodDelta(BaseModel):
+    from_value: Optional[float] = None   # the baseline value for this window
+    now: Optional[float] = None
+    delta: Optional[float] = None        # now − from_value (sign meaning is per-metric)
+    baseline_at: Optional[str] = None    # date of the baseline scan
+
+
+class MapsPeriodMetric(BaseModel):
+    metric: str                          # 'average_rank' | 'top3_pct' | 'top10_pct' | 'found_pct'
+    label: str
+    now: Optional[float] = None
+    windows: dict[str, MapsPeriodDelta] = Field(default_factory=dict)  # keys: 7d/30d/90d/start
+
+
+class MapsPeriodScope(BaseModel):
+    keyword: Optional[str] = None        # None = overall client rollup
+    metrics: list[MapsPeriodMetric] = Field(default_factory=list)
+
+
+class MapsPeriodsResponse(BaseModel):
+    as_of: Optional[str] = None
+    scan_count: int = 0
+    overall: Optional[MapsPeriodScope] = None
+    keywords: list[MapsPeriodScope] = Field(default_factory=list)
+
+
+# --- Area-level (compass octant) trends + narrative -------------------------
+class MapsAreaTrend(BaseModel):
+    sector: str                          # N / NE / E / … / NW
+    sector_full: str                     # "Southwest"
+    city: Optional[str] = None           # nearest town for this octant (best-effort)
+    now_top3_pct: Optional[float] = None
+    now_avg_rank: Optional[float] = None
+    windows: dict[str, MapsPeriodDelta] = Field(default_factory=dict)  # Top-3 coverage deltas
+
+
+class MapsAreaTrendsResponse(BaseModel):
+    as_of: Optional[str] = None
+    scan_count: int = 0
+    areas: list[MapsAreaTrend] = Field(default_factory=list)
+    narrative: list[str] = Field(default_factory=list)

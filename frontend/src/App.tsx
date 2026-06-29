@@ -10,6 +10,7 @@ import { RunDetail } from './pages/RunDetail'
 import { Clients } from './pages/Clients'
 import { ClientForm } from './pages/ClientForm'
 import { ClientWorkspace } from './pages/ClientWorkspace'
+import { ClientContent } from './pages/ClientContent'
 import { BrandVoice } from './pages/BrandVoice'
 import { Icp } from './pages/Icp'
 import { KeywordPortal } from './pages/KeywordPortal'
@@ -20,6 +21,10 @@ import { StrategyPlan } from './pages/StrategyPlan'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
+import { AsanaTasks } from './pages/AsanaTasks'
+import { TeamWorkload } from './pages/TeamWorkload'
+import { TaskLibrary } from './pages/TaskLibrary'
+import { ClientReports } from './pages/ClientReports'
 import { GscResearch } from './pages/GscResearch'
 import { AiVisibility } from './pages/AiVisibility'
 import { MapsGeogrid } from './pages/MapsGeogrid'
@@ -58,6 +63,7 @@ export default function App() {
                       <Route path="/clients/:id" element={<ClientWorkspace />} />
                       <Route path="/clients/:id/brand-voice" element={<BrandVoice />} />
                       <Route path="/clients/:id/icp" element={<Icp />} />
+                      <Route path="/clients/:id/content" element={<ClientContent />} />
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
                       <Route path="/clients/:id/service-pages" element={<ServicePages />} />
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
@@ -67,6 +73,8 @@ export default function App() {
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
+                      <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />
+                      <Route path="/clients/:id/reports" element={<ClientReports />} />
                       <Route path="/clients/:id/ai-visibility" element={<AiVisibility />} />
                       <Route path="/clients/:id/maps" element={<MapsGeogrid />} />
                       <Route path="/clients/:id/maps/report" element={<MapsReport />} />
@@ -75,6 +83,8 @@ export default function App() {
                       <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
+                      <Route path="/workload" element={<TeamWorkload />} />
+                      <Route path="/asana/task-library" element={<TaskLibrary />} />
                       <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>

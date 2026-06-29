@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -13,6 +13,7 @@ const nav: NavItem[] = [
   { label: 'Articles', to: '/articles', icon: <BookOpen size={18} /> },
   { label: 'Silos', to: '/silos', icon: <Layers size={18} /> },
   { label: 'Clients', to: '/clients', icon: <Users size={18} /> },
+  { label: 'Workload', to: '/workload', icon: <Gauge size={18} /> },
 ]
 
 function isActive(pathname: string, to: string): boolean {

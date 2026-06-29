@@ -30,6 +30,9 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _UL_RE = re.compile(r"^[-*+]\s+(.*)$")
 _OL_RE = re.compile(r"^\d+[.)]\s+(.*)$")
 _HR_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
+# A GitHub-flavored-Markdown table delimiter row, e.g. "| --- | :--: | --: |".
+# Requires at least two cells (one internal pipe) so a lone "---" stays an <hr>.
+_TABLE_DELIM_RE = re.compile(r"^\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?$")
 
 
 def _escape(text: str) -> str:
@@ -66,73 +69,217 @@ def _inline(text: str) -> str:
     return text
 
 
-def markdown_to_html(markdown: str) -> str:
-    """Convert a Markdown string to an HTML fragment suitable for WP `content`."""
-    if not markdown:
-        return ""
+def _split_table_row(line: str) -> list[str]:
+    """Split a Markdown table row into trimmed cells, dropping the outer pipes."""
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip() for c in s.split("|")]
 
+
+def _table_alignments(delim_line: str) -> list[str | None]:
+    """Per-column text-align from a delimiter row's colons (:--- / :--: / ---:)."""
+    aligns: list[str | None] = []
+    for cell in _split_table_row(delim_line):
+        left, right = cell.startswith(":"), cell.endswith(":")
+        aligns.append("center" if left and right else "right" if right else "left" if left else None)
+    return aligns
+
+
+def _render_table(lines: list[str], start: int) -> tuple[str, int]:
+    """Render a GFM table starting at `start` (header row; start+1 is the
+    delimiter). Returns (html, index_after_table)."""
+    header = _split_table_row(lines[start])
+    aligns = _table_alignments(lines[start + 1])
+    cols = len(header)
+
+    def cell(tag: str, raw: str, idx: int) -> str:
+        align = aligns[idx] if idx < len(aligns) else None
+        style = f' style="text-align:{align}"' if align else ""
+        return f"<{tag}{style}>{_inline(raw)}</{tag}>"
+
+    parts = ["<table>", "<thead>", "<tr>"]
+    parts += [cell("th", h, i) for i, h in enumerate(header)]
+    parts += ["</tr>", "</thead>", "<tbody>"]
+
+    j = start + 2
+    while j < len(lines) and lines[j].strip() and "|" in lines[j]:
+        row = _split_table_row(lines[j])
+        parts.append("<tr>")
+        parts += [cell("td", row[i] if i < len(row) else "", i) for i in range(cols)]
+        parts.append("</tr>")
+        j += 1
+
+    parts += ["</tbody>", "</table>"]
+    return "\n".join(parts), j
+
+
+def _is_table_start(lines: list[str], i: int) -> bool:
+    """A table is a row line immediately followed by a delimiter row."""
+    return (
+        i + 1 < len(lines)
+        and "|" in lines[i]
+        and bool(_TABLE_DELIM_RE.match(lines[i + 1].strip()))
+    )
+
+
+def _parse_blocks(markdown: str) -> list[dict]:
+    """Parse Markdown into an ordered list of block dicts. Inline formatting is
+    already rendered to HTML in each block's text. The two renderers below turn
+    these into either semantic HTML (Google Docs) or Gutenberg block markup
+    (WordPress) without re-parsing.
+
+    Block shapes: {type: heading, level, html} | {type: paragraph, html} |
+    {type: list, ordered, items[]} | {type: blockquote, html} | {type: hr} |
+    {type: table, html} (inner <table>…</table>, identical for both renderers).
+    """
     lines = markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    html: list[str] = []
+    blocks: list[dict] = []
     paragraph: list[str] = []
-    list_type: str | None = None  # 'ul' | 'ol' | None
+    cur_list: dict | None = None
 
     def flush_paragraph() -> None:
         if paragraph:
-            html.append(f"<p>{_inline(' '.join(paragraph).strip())}</p>")
+            blocks.append({"type": "paragraph", "html": _inline(" ".join(paragraph).strip())})
             paragraph.clear()
 
     def close_list() -> None:
-        nonlocal list_type
-        if list_type:
-            html.append(f"</{list_type}>")
-            list_type = None
+        nonlocal cur_list
+        if cur_list:
+            blocks.append(cur_list)
+            cur_list = None
 
-    for raw in lines:
-        line = raw.rstrip()
-        stripped = line.strip()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
 
         if not stripped:
             flush_paragraph()
             close_list()
+            i += 1
+            continue
+
+        # Tables span multiple lines (header + delimiter + rows); detected with
+        # look-ahead and consumed as a block.
+        if _is_table_start(lines, i):
+            flush_paragraph()
+            close_list()
+            table_html, i = _render_table(lines, i)
+            blocks.append({"type": "table", "html": table_html})
             continue
 
         heading = _HEADING_RE.match(stripped)
         if heading:
             flush_paragraph()
             close_list()
-            level = len(heading.group(1))
-            html.append(f"<h{level}>{_inline(heading.group(2).strip())}</h{level}>")
+            blocks.append({
+                "type": "heading",
+                "level": len(heading.group(1)),
+                "html": _inline(heading.group(2).strip()),
+            })
+            i += 1
             continue
 
         if _HR_RE.match(stripped):
             flush_paragraph()
             close_list()
-            html.append("<hr />")
+            blocks.append({"type": "hr"})
+            i += 1
             continue
 
         ul = _UL_RE.match(stripped)
         ol = _OL_RE.match(stripped)
         if ul or ol:
             flush_paragraph()
-            want = "ul" if ul else "ol"
-            if list_type != want:
+            ordered = bool(ol)
+            if cur_list is None or cur_list["ordered"] != ordered:
                 close_list()
-                html.append(f"<{want}>")
-                list_type = want
-            item = (ul or ol).group(1).strip()
-            html.append(f"<li>{_inline(item)}</li>")
+                cur_list = {"type": "list", "ordered": ordered, "items": []}
+            cur_list["items"].append(_inline((ul or ol).group(1).strip()))
+            i += 1
             continue
 
         if stripped.startswith(">"):
             flush_paragraph()
             close_list()
-            html.append(f"<blockquote><p>{_inline(stripped[1:].strip())}</p></blockquote>")
+            blocks.append({"type": "blockquote", "html": _inline(stripped[1:].strip())})
+            i += 1
             continue
 
         # Plain text line — accumulate into the current paragraph.
         close_list()
         paragraph.append(stripped)
+        i += 1
 
     flush_paragraph()
     close_list()
-    return "\n".join(html)
+    return blocks
+
+
+def _render_block_html(b: dict) -> str:
+    t = b["type"]
+    if t == "heading":
+        return f'<h{b["level"]}>{b["html"]}</h{b["level"]}>'
+    if t == "paragraph":
+        return f'<p>{b["html"]}</p>'
+    if t == "hr":
+        return "<hr />"
+    if t == "blockquote":
+        return f'<blockquote><p>{b["html"]}</p></blockquote>'
+    if t == "table":
+        return b["html"]
+    if t == "list":
+        tag = "ol" if b["ordered"] else "ul"
+        items = "\n".join(f"<li>{it}</li>" for it in b["items"])
+        return f"<{tag}>\n{items}\n</{tag}>"
+    return ""
+
+
+def _render_block_gutenberg(b: dict) -> str:
+    t = b["type"]
+    if t == "heading":
+        level = b["level"]
+        # The Heading block defaults to <h2>; other levels carry a level attr.
+        attr = "" if level == 2 else f' {{"level":{level}}}'
+        return f'<!-- wp:heading{attr} -->\n<h{level}>{b["html"]}</h{level}>\n<!-- /wp:heading -->'
+    if t == "paragraph":
+        return f'<!-- wp:paragraph -->\n<p>{b["html"]}</p>\n<!-- /wp:paragraph -->'
+    if t == "hr":
+        return '<!-- wp:separator -->\n<hr class="wp-block-separator has-alpha-channel-opacity"/>\n<!-- /wp:separator -->'
+    if t == "blockquote":
+        return (
+            '<!-- wp:quote -->\n'
+            f'<blockquote class="wp-block-quote"><p>{b["html"]}</p></blockquote>\n'
+            '<!-- /wp:quote -->'
+        )
+    if t == "table":
+        return f'<!-- wp:table -->\n<figure class="wp-block-table">{b["html"]}</figure>\n<!-- /wp:table -->'
+    if t == "list":
+        ordered = b["ordered"]
+        tag = "ol" if ordered else "ul"
+        attr = ' {"ordered":true}' if ordered else ""
+        items = "\n".join(
+            f"<!-- wp:list-item -->\n<li>{it}</li>\n<!-- /wp:list-item -->" for it in b["items"]
+        )
+        return f"<!-- wp:list{attr} -->\n<{tag}>\n{items}\n</{tag}>\n<!-- /wp:list -->"
+    return ""
+
+
+def markdown_to_html(markdown: str) -> str:
+    """Convert Markdown to a semantic HTML fragment (headings, paragraphs, lists,
+    tables, …). Used for the Google Docs path (the Apps Script imports it as a
+    natively-formatted Doc) and as a fallback elsewhere."""
+    if not markdown:
+        return ""
+    return "\n".join(_render_block_html(b) for b in _parse_blocks(markdown))
+
+
+def markdown_to_gutenberg(markdown: str) -> str:
+    """Convert Markdown to WordPress Gutenberg block markup (the same HTML wrapped
+    in `<!-- wp:* -->` block delimiters) so a published post lands as native,
+    individually-editable blocks rather than a single Classic/HTML block."""
+    if not markdown:
+        return ""
+    return "\n\n".join(_render_block_gutenberg(b) for b in _parse_blocks(markdown))

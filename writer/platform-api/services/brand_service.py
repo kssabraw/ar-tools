@@ -209,7 +209,7 @@ def get_scan_status(client_id: str, job_id: str) -> dict:
 _HISTORY_COLS = (
     "id, keyword_id, scan_batch_id, engine, status, mention_found, mention_type, "
     "sentiment, confidence_score, citations, competitor_results, reasoning, snippet, "
-    "failure_reason, created_at"
+    "invisibility_diagnosis, response_analysis, failure_reason, created_at"
 )
 
 
@@ -288,6 +288,62 @@ def get_trends(client_id: str, limit: int = 2000) -> list[dict]:
     return compute_trends(rows)
 
 
+def aggregate_response_analysis(rows: list[dict]) -> dict:
+    """Roll the per-cell response_analysis blobs of one scan batch into batch-wide
+    insights: cross-engine consensus on which businesses the engines surface, the
+    de-duplicated discovered (untracked) competitors, an AIO mention-kind tally,
+    and a source-type tally. Pure (no DB) so it's unit-testable."""
+    from services import brand_analysis
+
+    brand_rows = [r for r in rows if not r.get("is_competitor_scan")]
+    consensus = brand_analysis.consensus_rollup(brand_rows, brand="")
+
+    discovered: dict[str, dict] = {}
+    aio_kinds: dict[str, int] = {}
+    source_types: dict[str, int] = {}
+    for r in brand_rows:
+        if r.get("status") != "completed":
+            continue
+        ra = r.get("response_analysis") or {}
+        for d in ra.get("discovered_competitors") or []:
+            name = (d.get("name") or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            entry = discovered.setdefault(key, {"name": name, "engines": set(), "attributes": []})
+            if r.get("engine"):
+                entry["engines"].add(r["engine"])
+            for a in d.get("attributes") or []:
+                if a and a not in entry["attributes"]:
+                    entry["attributes"].append(a)
+        aio = ra.get("aio") or {}
+        kind = aio.get("mention_kind")
+        if kind:
+            aio_kinds[kind] = aio_kinds.get(kind, 0) + 1
+        for t, n in (ra.get("sources") or {}).get("by_type", {}).items():
+            source_types[t] = source_types.get(t, 0) + n
+
+    discovered_list = [
+        {"name": v["name"], "engines": sorted(v["engines"]), "count": len(v["engines"]),
+         "attributes": v["attributes"][:6]}
+        for v in discovered.values()
+    ]
+    discovered_list.sort(key=lambda d: (-d["count"], d["name"].lower()))
+    return {
+        "consensus": consensus,
+        "discovered_competitors": discovered_list,
+        "aio_mention_kinds": aio_kinds,
+        "source_types": source_types,
+    }
+
+
+def get_scan_insights(client_id: str, scan_batch_id: str) -> dict:
+    """Batch-wide response-analysis insights for one scan (consensus, discovered
+    competitors, AIO mention-kind + source-type tallies)."""
+    rows = list_history(client_id, limit=1000, scan_batch_id=scan_batch_id)
+    return aggregate_response_analysis(rows)
+
+
 # ── insights (diagnose / suggest) ────────────────────────────────────────────
 async def diagnose_mention(client_id: str, mention_id: str) -> dict:
     """Explain why the brand was invisible for a given not-found scan result.
@@ -318,7 +374,10 @@ async def diagnose_mention(client_id: str, mention_id: str) -> dict:
         )
         keyword = kw[0]["keyword"] if kw else ""
     try:
-        diagnosis = await brand_insights.diagnose_invisibility(brand, keyword, row.get("raw_response") or "")
+        block = await brand_insights.build_signals_block(client_id, keyword)
+        diagnosis = await brand_insights.diagnose_invisibility(
+            brand, keyword, row.get("raw_response") or "", block
+        )
     except brand_insights.InsightUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 

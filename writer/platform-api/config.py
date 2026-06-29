@@ -146,6 +146,15 @@ class Settings(BaseSettings):
     gsc_research_auto_enabled: bool = True
     gsc_research_interval_days: int = 30
 
+    # Client Reporting — campaign-health narrative (Phase 4). One Claude call per
+    # report synthesizes the gathered sections + signals (open drops, Action Plan)
+    # into an executive summary (health label, headline, wins/risks/next steps).
+    # Best-effort: absent the Anthropic key or on failure, the section is omitted.
+    client_report_health_model: str = "claude-sonnet-4-6"
+    client_report_health_max_tokens: int = 1100
+    # White-label: the agency name shown in the client-facing report footer.
+    client_report_agency_name: str = "Amazing Rankings"
+
     # Reoptimization planner — turns rank-tracker signals (open drops, rankability
     # Quick wins, GSC-Research cannibalization/hidden-wins) into a ranked,
     # recommend-only action plan per client. A weekly digest (the only auto
@@ -226,6 +235,40 @@ class Settings(BaseSettings):
     maps_core_adjacency_floor: float = 0.5  # score a weak pin keeps when ALL 8 neighbors are in the pack
     maps_min_area_pins: int = 3  # a suburb needs >= this many weak pins to be flagged as a weak area
     maps_geocode_max_cells: int = 250  # safety bound on geocode calls (above any real grid's cell count)
+
+    # Geo-grid analyzer + alerting (maps_analyzer): scan-over-scan decline
+    # thresholds for the `maps_analyze` job (each keyword's newest scan vs its
+    # previous completed scan). Conservative defaults — tune to taste.
+    maps_alert_grid_rank_drop_min: float = 1.5      # avg grid-rank worsening (spots) to alert
+    maps_alert_coverage_drop_pct: float = 15.0      # Top-3/Top-10 coverage drop (pts) to alert
+    maps_alert_found_drop_pct: float = 20.0         # found-pin coverage collapse (pts) → lost_pack
+    maps_alert_area_coverage_drop_pct: float = 25.0  # per-octant Top-3 coverage drop (pts) → area_decline
+    maps_alert_area_rank_drop: float = 2.0          # per-octant avg-rank worsening (spots) → area_decline
+    maps_alert_competitor_surge_pins: int = 5       # min newly-above pins for competitor_surge
+
+    # Competitor GBP intelligence (Tier B / B1): how many of the latest scan's
+    # top local-pack competitors to fetch full GBP profiles for (each fetch is an
+    # Outscraper call — capped to bound spend), and the auto-refresh interval.
+    competitor_gbp_max: int = 8
+    competitor_gbp_interval_days: int = 30
+
+    # Review analytics (Tier B / B3): how many newest reviews to pull per listing
+    # (client + each competitor) for volume/velocity/rating analysis, and the min
+    # reviews/month the client must trail the competitor median by to flag a gap.
+    review_intel_depth: int = 100
+    review_gap_min_behind: float = 2.0
+
+    # Backlink profiling (Tier B / B4): thresholds for flagging an authority gap
+    # vs the competitor median (DR points behind; referring-domains behind).
+    backlink_dr_min_behind: float = 10.0
+    backlink_rd_min_behind: int = 25
+
+    # On-site content comparison (Tier B / B5): how many competitor pages to
+    # scrape per keyword, and the thresholds to flag a content gap (words thinner
+    # than the competitor median; distinct topics competitors cover the client lacks).
+    content_intel_max_pages: int = 4
+    content_depth_behind_min: int = 300
+    content_topic_gap_min: int = 3
 
     # SERP analysis cache (keyword_analyses): how long a cached AnalysisResponse
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
@@ -325,6 +368,12 @@ class Settings(BaseSettings):
     # tasks run on demand, not per-row, so flagship cost is fine).
     brand_diagnose_model: str = "gpt-5.4"
     brand_suggest_model: str = "gpt-5.4"
+    # Auto-generate the invisibility diagnosis during the scan for every
+    # completed not-found cell (vs. lazily on first click). Best-effort: a
+    # failed/unconfigured diagnose never fails the cell, and the on-demand
+    # /diagnose endpoint still backfills older rows. Set False to revert to
+    # purely on-demand diagnosis (one gpt-5.4 call per invisible cell saved).
+    brand_autodiagnose_enabled: bool = True
     # Visibility report narrative (published as a Google Doc). Suite-default
     # Claude, matching the Maps Local Rank Analysis report.
     brand_report_model: str = "claude-sonnet-4-6"
@@ -338,6 +387,12 @@ class Settings(BaseSettings):
     # Max competitors classified against a single scan's response (no extra
     # search calls — the same raw response is re-classified per competitor).
     brand_scan_max_competitors: int = 5
+    # AI Visibility alerting: after a scan completes, compare it to the previous
+    # scan and emit a notification (in-app + Slack/email) on a regression — a
+    # visibility drop of at least this many points, an engine the brand went
+    # fully invisible on, or newly-detected misinformation. Set False to mute.
+    brand_alerts_enabled: bool = True
+    brand_alert_visibility_drop_pct: int = 15
 
     # Service Page scoring: after a service_page run generates, it auto-scores
     # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below
@@ -349,6 +404,62 @@ class Settings(BaseSettings):
     # The rank check bills DataForSEO per page, so it's bounded per plan run.
     service_page_rank_top_n: int = 5
     service_page_plan_max_rank_checks: int = 25
+
+    # ------------------------------------------------------------------
+    # Asana task integration (docs/modules/asana-task-integration-plan-v1_0.md)
+    # ------------------------------------------------------------------
+    # Two features on one token: (A) monthly section automation — clone a
+    # hand-maintained "Template" section forward into a new "<Month YYYY>"
+    # section per client project; (B) Team Workload — read a defined team list's
+    # open tasks across all client projects + proactive overload alerts. Both
+    # degrade gracefully: absent the token / workspace the features are skipped
+    # with a note, never an error (the GSC / Slack provisioning pattern).
+    asana_token: str = ""          # Asana PAT / service-account token (Bearer)
+    asana_workspace_gid: str = ""  # scopes the per-assignee task queries
+    asana_monthly_enabled: bool = True
+    asana_workload_enabled: bool = True
+    # Auto-distribution: a template row marked auto_assign is handed to the
+    # client's eligible team member with the most remaining capacity at run time.
+    # When off, auto rows are created unassigned.
+    asana_auto_distribute_enabled: bool = True
+    # Monthly section automation cadence. The scheduler fires once per month on
+    # `asana_month_generate_day`; the target month = today shifted by
+    # `asana_month_target_offset` (0 = the month that just started, 1 = next
+    # month, to pre-stage ahead). Tasks come from each client's app-defined
+    # template (asana_client_task_templates) — there is no Asana "Template"
+    # section (the source of truth is the app).
+    asana_month_generate_day: int = 1
+    asana_month_target_offset: int = 0
+    # Custom-field resolution. Client-project custom fields are typically
+    # PROJECT-LOCAL (each project has its own copies → different GIDs), so the
+    # monthly job resolves them **by name** per project at task-creation time:
+    # find the field named `asana_status_field_name` (+ its option named
+    # `asana_status_not_started_option_name`), `asana_category_field_name`, and
+    # the number field `asana_effort_field_name`. The *_gid settings below are an
+    # optional explicit override / fallback when a name isn't found (or is blank).
+    asana_status_field_name: str = "Status"
+    asana_status_not_started_option_name: str = "Not Started"
+    asana_category_field_name: str = "Service Type"
+    asana_effort_field_name: str = ""   # e.g. "Hours" / "Estimated time"; blank = none
+    asana_status_field_gid: str = ""
+    asana_status_not_started_option_gid: str = ""
+    asana_category_field_gid: str = ""
+    # Team Workload: the Asana user GIDs to track (comma-separated). Used as a
+    # fallback seed only — the source of truth is the asana_team_members table
+    # (editable in the Workload page). Absent both → the feature is skipped.
+    asana_team_member_gids: str = ""
+    # Effort-weighting (Phase 3). Overload is computed from estimated *hours*,
+    # not task counts. The monthly job stamps each task's est_hours into this
+    # Asana number custom field; the workload read pulls it back off the task.
+    asana_effort_field_gid: str = ""
+    # Fallback hours for a task with no estimate (so the signal isn't blind).
+    asana_default_task_hours: float = 1.0
+    # Default weekly capacity for a tracked member with no weekly_hours set.
+    asana_default_weekly_hours: float = 30.0
+    # Workdays per week — daily capacity = weekly_hours / this (same-day check).
+    asana_workload_daily_workdays: int = 5
+    # Flag a member whose open backlog exceeds this many weeks of their capacity.
+    asana_workload_backlog_weeks: float = 2.0
 
     class Config:
         env_file = ".env"

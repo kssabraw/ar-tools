@@ -8,6 +8,8 @@ import { sectionsToMarkdown } from '../lib/sectionsToMarkdown'
 import { sectionsToHtml } from '../lib/sectionsToHtml'
 import { FeedbackButton } from '../components/FeedbackButton'
 import { FeaturedImagePicker } from '../components/FeaturedImagePicker'
+import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
+import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -19,9 +21,13 @@ function downloadFile(content: string, filename: string, mime: string) {
   URL.revokeObjectURL(url)
 }
 
-function ArticleCard({ run }: { run: any }) {
+function ArticleCard({ run, selected, onToggleSelect }: {
+  run: any
+  selected?: boolean
+  onToggleSelect?: (checked: boolean) => void
+}) {
   const [expanded, setExpanded] = useState(false)
-  const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(run.published_doc_url ?? null)
   const [wpUrl, setWpUrl] = useState<string | null>(null)
   const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
@@ -79,6 +85,15 @@ function ArticleCard({ run }: { run: any }) {
   return (
     <div style={cardStyle}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+        {onToggleSelect && (
+          <input
+            type="checkbox"
+            checked={selected ?? false}
+            onChange={e => onToggleSelect(e.target.checked)}
+            style={{ marginTop: 3, width: 16, height: 16, cursor: 'pointer', flexShrink: 0, accentColor: '#6366f1' }}
+            title="Select for bulk publish to Google Docs"
+          />
+        )}
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
             <FileText size={15} color="#6366f1" style={{ flexShrink: 0 }} />
@@ -247,6 +262,14 @@ export function Articles() {
     search === '' || r.keyword.toLowerCase().includes(search.toLowerCase()) || r.client_name.toLowerCase().includes(search.toLowerCase())
   )
 
+  const bulk = useBulkPublish()
+  const items: PublishItem[] = runs.map(r => ({
+    key: `run:${r.id}`,
+    type: 'run',
+    id: r.id,
+    label: r.title ?? r.keyword,
+  }))
+
   return (
     <div style={{ padding: 32, maxWidth: 860 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
@@ -273,9 +296,18 @@ export function Articles() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {runs.map(run => <ArticleCard key={run.id} run={run} />)}
+          {runs.map(run => (
+            <ArticleCard
+              key={run.id}
+              run={run}
+              selected={bulk.selected.has(`run:${run.id}`)}
+              onToggleSelect={(checked) => bulk.toggle(`run:${run.id}`, checked)}
+            />
+          ))}
         </div>
       )}
+
+      <BulkPublishBar items={items} bulk={bulk} />
     </div>
   )
 }

@@ -53,6 +53,9 @@ export function ScheduleModal(props: {
   const [location, setLocation] = useState(props.defaultLocation ?? "");
   const [locationInput, setLocationInput] = useState(props.defaultLocation ?? "");
   const effectiveLocation = (location.trim() || locationInput.trim());
+  // Auto-publish each finished piece to the client's Drive folder. Only offered
+  // for client-linked sessions (the publish target is the client's folder).
+  const [autoPublish, setAutoPublish] = useState(false);
 
   const isLocalSeo = contentType === "local_seo_page";
   const isServicePage = contentType === "service_page";
@@ -70,6 +73,7 @@ export function ScheduleModal(props: {
     // need a target area; service pages are keyword-only.
     site_base_url: contentType === "blog_post" ? baseUrl.trim() || undefined : undefined,
     location: isLocalSeo ? effectiveLocation || undefined : undefined,
+    auto_publish: clientId ? autoPublish : undefined,
   };
 
   // Live preview — re-estimates as the inputs change.
@@ -174,6 +178,24 @@ export function ScheduleModal(props: {
                 onChange={(e) => setBaseUrl(e.target.value)}
               />
               <span className="field-hint">Required — internal links are built as absolute URLs.</span>
+            </label>
+          )}
+
+          {clientId && (
+            <label className="field" style={{ flexDirection: "row", alignItems: "flex-start", gap: 8 }}>
+              <input
+                type="checkbox"
+                checked={autoPublish}
+                onChange={(e) => setAutoPublish(e.target.checked)}
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <span className="field-label">Auto-publish to Google Drive</span>
+                <span className="field-hint">
+                  Publish each piece to the client's Drive folder as a Google Doc as soon as it
+                  finishes — no manual “Save to Drive” needed.
+                </span>
+              </span>
             </label>
           )}
 

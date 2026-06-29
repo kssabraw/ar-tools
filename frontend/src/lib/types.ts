@@ -410,6 +410,7 @@ export interface Run {
   created_at: string
   started_at: string | null
   completed_at: string | null
+  published_doc_url?: string | null
 }
 
 // Service Page Writer output (module_outputs.service_writer.output_payload)
@@ -798,6 +799,105 @@ export interface MapsThreatsResponse {
   clients: MapsClientThreats[]
 }
 
+// Scan-over-scan analyzer ("What changed" tab).
+export interface MapsOctantChange {
+  sector: string
+  avg_rank_now: number | null
+  avg_rank_prev: number | null
+  top3_pct_now: number | null
+  top3_pct_prev: number | null
+}
+
+export interface MapsKeywordChange {
+  keyword: string
+  average_rank_now: number | null
+  average_rank_prev: number | null
+  average_rank_delta: number | null   // now − prev; positive = worse
+  found_pct_now: number | null
+  found_pct_prev: number | null
+  top3_pct_now: number | null
+  top3_pct_prev: number | null
+  top10_pct_now: number | null
+  top10_pct_prev: number | null
+  octants: MapsOctantChange[]         // weakened octants, worst first
+  alert_types: string[]               // decline rules that fired
+}
+
+export interface MapsChangesResponse {
+  has_previous: boolean
+  current_scan_id: string | null
+  previous_scan_id: string | null
+  keywords: MapsKeywordChange[]
+}
+
+export type MapsAlertType =
+  | 'grid_rank_drop' | 'coverage_drop' | 'lost_pack' | 'area_decline' | 'competitor_surge'
+
+export interface MapsAlert {
+  id: string
+  keyword: string
+  alert_type: MapsAlertType
+  sector: string | null
+  from_value: number | null
+  to_value: number | null
+  delta: number | null
+  message: string
+  severity: string                    // 'critical' | 'warning'
+  status: 'unread' | 'read' | 'dismissed'
+  triggered_on: string | null
+  resolved_at: string | null
+  created_at: string
+}
+
+export interface MapsAlertsResponse {
+  alerts: MapsAlert[]
+  unread_count: number
+}
+
+// Multi-window period summary (7/30/90/since-start).
+export interface MapsPeriodDelta {
+  from_value: number | null
+  now: number | null
+  delta: number | null
+  baseline_at: string | null
+}
+
+export interface MapsPeriodMetric {
+  metric: string          // 'average_rank' | 'top3_pct' | 'top10_pct' | 'found_pct'
+  label: string
+  now: number | null
+  windows: Record<string, MapsPeriodDelta>  // keys: 7d / 30d / 90d / start
+}
+
+export interface MapsPeriodScope {
+  keyword: string | null  // null = overall client rollup
+  metrics: MapsPeriodMetric[]
+}
+
+export interface MapsPeriodsResponse {
+  as_of: string | null
+  scan_count: number
+  overall: MapsPeriodScope | null
+  keywords: MapsPeriodScope[]
+}
+
+// Area-level (compass octant) trends + narrative.
+export interface MapsAreaTrend {
+  sector: string
+  sector_full: string
+  city: string | null
+  now_top3_pct: number | null
+  now_avg_rank: number | null
+  windows: Record<string, MapsPeriodDelta>  // Top-3 coverage deltas (7d/30d/90d/start)
+}
+
+export interface MapsAreaTrendsResponse {
+  as_of: string | null
+  scan_count: number
+  areas: MapsAreaTrend[]
+  narrative: string[]
+}
+
 // Dashboard ranking-health tile: average organic position + average maps rank,
 // latest run vs first. Lower rank numbers are better, so direction "up" = the
 // latest average is a smaller (better) number than the first.
@@ -994,7 +1094,22 @@ export interface UnreadCountsResponse {
 
 // Reoptimization planner (Action Plan).
 export interface ReoptAction {
-  kind: 'rank_drop' | 'quick_win' | 'cannibalization' | 'opportunity'
+  kind:
+    | 'rank_drop'
+    | 'quick_win'
+    | 'cannibalization'
+    | 'opportunity'
+    | 'maps_decline'
+    | 'maps_competitor'
+    | 'maps_weak_area'
+    | 'maps_solv_drop'
+    | 'gbp_gap'
+    | 'review_gap'
+    | 'backlink_gap'
+    | 'content_gap'
+    | 'local_relevance'
+    | 'brand_search_decline'
+  source?: 'organic' | 'maps'
   keyword: string
   diagnosis: string
   recommendation: string
@@ -1007,9 +1122,286 @@ export interface ReoptAction {
 export interface ReoptPlan {
   id: string
   client_id: string
-  trigger: 'scheduled' | 'drop' | 'manual'
+  trigger: 'scheduled' | 'drop' | 'maps_drop' | 'manual'
   summary: string | null
   items: ReoptAction[]
   action_count: number
   created_at: string
+}
+
+// Share of Local Voice (SoLV) — Maps geo-grid.
+export interface MapsSolvCompetitorShare {
+  place_id: string | null
+  name: string | null
+  top3_pins: number
+  share_pct: number | null
+}
+export interface MapsSolvPoint {
+  scan_id: string
+  completed_at: string | null
+  trigger: string
+  total_pins: number
+  client_top3_pins: number
+  client_coverage_pct: number | null
+  client_coverage_top10_pct: number | null
+}
+export interface MapsSolvKeyword {
+  keyword: string | null
+  total_pins: number
+  client_top3_pins: number
+  client_coverage_pct: number | null
+  competitor_shares: MapsSolvCompetitorShare[]
+}
+export interface MapsSolvResponse {
+  series: MapsSolvPoint[]
+  competitors: MapsSolvCompetitorShare[]
+  keywords: MapsSolvKeyword[]
+}
+
+// Competitor GBP intelligence (Maps Tier B / B1).
+export interface MapsCompetitorProfile {
+  place_id: string | null
+  name: string | null
+  primary_category: string | null
+  gbp_categories: string[]
+  rating: number | null
+  review_count: number | null
+  website: string | null
+  phone: string | null
+  address: string | null
+  photo: string | null
+  has_hours: boolean | null
+  business_type: string | null
+  found_pins: number | null
+  top3_pins: number | null
+  captured_at: string | null
+}
+export interface MapsCompetitorIntelResponse {
+  profiles: MapsCompetitorProfile[]
+  captured_at: string | null
+}
+export interface MapsGbpAuditCheck {
+  key: string
+  label: string
+  ok: boolean
+  detail: string
+}
+export interface MapsGbpReviewGap {
+  client: number
+  competitor_median: number
+  deficit: number
+}
+export interface MapsGbpAuditResponse {
+  score: number | null
+  competitor_count: number
+  checks: MapsGbpAuditCheck[]
+  gaps: string[]
+  category_gaps: string[]
+  review_gap: MapsGbpReviewGap | null
+}
+
+// Local Relevance Scorecard (Maps Tier B / B6).
+export interface MapsRelevanceRow {
+  place_id: string | null
+  is_client: boolean
+  name: string | null
+  domain: string | null
+  gbp_url: string | null
+  category: string | null
+  category_match: 'exact' | 'related' | 'none' | null
+  business_type: string | null
+  reviews_total: number | null
+  reviews_service_mentions: number | null
+  reviews_location_mentions: number | null
+  page_service_relevant: boolean | null
+  page_location_relevant: boolean | null
+  domain_rating: number | null
+  page_ur: number | null
+}
+export interface MapsRelevanceResponse {
+  keyword: string | null
+  location: string | null
+  client: MapsRelevanceRow | null
+  competitors: MapsRelevanceRow[]
+}
+
+// On-site content comparison (Maps Tier B / B5).
+export interface MapsContentAnalysis {
+  keyword: string | null
+  client_url: string | null
+  client_word_count: number | null
+  competitor_median_word_count: number | null
+  depth_behind: number | null
+  topic_gaps: string[]
+  competitor_urls: string[]
+  captured_at: string | null
+}
+export interface MapsContentIntelResponse {
+  analyses: MapsContentAnalysis[]
+}
+
+// Backlink profiling (Maps Tier B / B4).
+export interface MapsBacklinkStats {
+  domain: string | null
+  domain_rating: number | null
+  referring_domains: number | null
+  backlinks: number | null
+}
+export interface MapsBacklinkComparison {
+  competitor_median_dr: number | null
+  competitor_median_referring_domains: number | null
+  dr_behind: number | null
+  referring_domains_behind: number | null
+}
+export interface MapsBacklinkIntelResponse {
+  client: MapsBacklinkStats
+  competitors: MapsBacklinkStats[]
+  comparison: MapsBacklinkComparison
+}
+
+// Review analytics (Maps Tier B / B3).
+export interface MapsReviewStats {
+  place_id: string | null
+  name: string | null
+  count: number
+  avg_rating: number | null
+  rating_distribution: Record<string, number>
+  velocity_per_month: number
+  recent_negatives: number
+  last_review_date: string | null
+}
+export interface MapsReviewComparison {
+  competitor_median_velocity: number | null
+  competitor_median_rating: number | null
+  velocity_behind: number | null
+}
+export interface MapsReviewIntelResponse {
+  client: MapsReviewStats
+  competitors: MapsReviewStats[]
+  comparison: MapsReviewComparison
+}
+
+// Brand-search analysis (branded vs non-branded GSC demand).
+export interface BrandSearchWeek {
+  week: string
+  branded_impressions: number
+  nonbranded_impressions: number
+  branded_clicks: number
+  nonbranded_clicks: number
+  branded_share_pct: number | null
+}
+export interface BrandSearchTotals {
+  branded_impressions: number
+  nonbranded_impressions: number
+  branded_clicks: number
+  nonbranded_clicks: number
+  branded_share_pct: number | null
+}
+export interface BrandSearchResponse {
+  gsc_connected: boolean
+  brand_terms: string[]
+  series: BrandSearchWeek[]
+  totals: BrandSearchTotals
+}
+
+// Asana task integration.
+export interface AsanaProjectMapping {
+  client_id: string
+  project_gid: string
+  auto_assignee_gids: string[]
+}
+
+export interface AsanaTaskTemplateItem {
+  name: string
+  assignee_gid: string | null
+  assignee_name: string | null
+  category_option_gid: string | null
+  category_name: string | null
+  est_hours: number | null
+  auto_assign: boolean
+  sort_order: number
+  active: boolean
+}
+
+export interface AsanaTeamMember {
+  gid: string
+  name: string | null
+  weekly_hours: number | null
+  active: boolean
+}
+
+export interface AsanaLibraryTaskItem {
+  name: string
+  default_hours: number | null
+  default_category_name: string | null
+  active: boolean
+}
+
+export interface AsanaTaskTemplateRef {
+  gid: string
+  name: string | null
+}
+
+export interface AsanaUser {
+  gid: string
+  name: string | null
+  email: string | null
+}
+
+export interface AsanaCategoryOption {
+  gid: string
+  name: string | null
+}
+
+export interface AsanaGenerateMonthResponse {
+  status: 'created' | 'exists' | 'skipped'
+  section: string
+  created: number
+  reason: string | null
+  errors: string[]
+}
+
+export interface AsanaWorkloadMember {
+  gid: string
+  name: string
+  open_count: number
+  open_hours: number
+  unestimated: number
+  weekly_hours: number | null
+  daily_capacity: number | null
+  due_hours_by_day: Record<string, number>
+  worst_same_day: { date: string; hours: number } | null
+  overloaded: boolean
+  flags: string[]
+}
+
+export interface AsanaWorkloadReport {
+  configured: boolean
+  members: AsanaWorkloadMember[]
+  overloaded: AsanaWorkloadMember[]
+  thresholds: {
+    default_weekly_hours: number
+    daily_workdays: number
+    backlog_weeks: number
+    default_task_hours: number
+  }
+  note?: string
+}
+
+// Client Reporting module.
+export interface ClientReport {
+  id: string
+  client_id: string
+  report_type: 'monthly' | 'weekly'
+  period_start: string | null
+  period_end: string | null
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  storage_path: string | null
+  pdf_url: string | null
+  drive_doc_id: string | null
+  sections: Record<string, string> | null
+  title: string | null
+  error: string | null
+  created_at: string
+  completed_at: string | null
 }

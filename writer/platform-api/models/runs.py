@@ -46,6 +46,7 @@ class RunListItem(BaseModel):
     created_at: str
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
+    published_doc_url: Optional[str] = None
 
 
 class ModuleOutputSummary(BaseModel):

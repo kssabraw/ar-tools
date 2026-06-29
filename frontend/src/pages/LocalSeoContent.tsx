@@ -14,6 +14,8 @@ import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
 import { BulkCreateBar } from '../components/localseo/BulkCreateBar'
 import { useSiloPlan } from '../components/localseo/useSiloPlan'
 import { useBulkCreate } from '../components/localseo/useBulkCreate'
+import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
+import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { ReoptimizeView } from '../components/localseo/ReoptimizeView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
@@ -710,6 +712,14 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
 }) {
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const bulk = useBulkPublish()
+
+  const items: PublishItem[] = pages.map(p => ({
+    key: `lsp:${p.id}`,
+    type: 'local_seo_page',
+    id: p.id,
+    label: p.page_title || p.keyword,
+  }))
 
   const handleDelete = async (pid: string) => {
     setConfirmId(null)
@@ -724,9 +734,21 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
     return <p style={{ fontSize: 14, color: '#94a3b8', textAlign: 'center', padding: 32 }}>No saved pages yet. Generate one from the New Page tab.</p>
   }
   return (
+    <>
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
-      {pages.map((p, i) => (
-        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: '#fff', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+      {pages.map((p, i) => {
+        const key = `lsp:${p.id}`
+        const result = bulk.results[key]
+        return (
+        <div key={p.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', background: bulk.selected.has(key) ? '#f5f7ff' : '#fff', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+          <input
+            type="checkbox"
+            checked={bulk.selected.has(key)}
+            onChange={e => bulk.toggle(key, e.target.checked)}
+            disabled={bulk.publishing}
+            style={{ width: 16, height: 16, cursor: 'pointer', flexShrink: 0, accentColor: '#6366f1' }}
+            title="Select for bulk publish to Google Docs"
+          />
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 14, fontWeight: 600, color: '#0f172a', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.page_title || p.keyword}</span>
@@ -741,6 +763,11 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
               {p.keyword} · {p.location.split(',')[0]} <span style={{ marginLeft: 6, opacity: 0.7 }}>{relativeTime(p.created_at)}</span>
             </p>
           </div>
+          {result?.status === 'done' && (result.docUrl
+            ? <a href={result.docUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', textDecoration: 'none', flexShrink: 0 }}>Open Doc ↗</a>
+            : <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', flexShrink: 0 }}>Published</span>)}
+          {result?.status === 'failed' && <span style={{ fontSize: 12, color: '#dc2626', flexShrink: 0 }} title={result.error}>Failed</span>}
+          {result?.status === 'publishing' && <Spinner size={14} />}
           <button style={outlineBtn} onClick={() => onOpen(p.id)}>View <ArrowRight size={13} /></button>
           {confirmId === p.id ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#64748b' }}>
@@ -759,8 +786,11 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
             </button>
           )}
         </div>
-      ))}
+        )
+      })}
     </div>
+    <BulkPublishBar items={items} bulk={bulk} />
+    </>
   )
 }
 

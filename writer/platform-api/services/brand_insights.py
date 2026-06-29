@@ -6,11 +6,18 @@ diagnose-invisibility / suggest-keywords edge functions.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import time
 from typing import Optional
 
 from config import settings
+
+
+# How far back to summarize Google Search Console performance for the keyword
+# when grounding the diagnosis (matches the rank tracker's recent-window feel).
+_GSC_WINDOW_DAYS = 28
 
 
 class InsightUnavailable(Exception):
@@ -25,28 +32,361 @@ def _client():
     return openai.AsyncOpenAI(api_key=settings.openai_api_key)
 
 
-def _diagnosis_prompt(brand: str, keyword: str, raw_response: str) -> str:
-    return (
+def _diagnosis_prompt(brand: str, keyword: str, raw_response: str, signals_block: str = "") -> str:
+    prompt = (
         f'The brand "{brand}" was searched for using the query "{keyword}" but was '
         f"NOT found in the results.\n\nHere are the businesses that WERE found:\n"
         f'"""\n{(raw_response or "")[:4000]}\n"""\n\n'
+    )
+    if signals_block:
+        prompt += (
+            "REAL DATA about this client and the competitive landscape for this "
+            "query (from our own tracking — prefer these facts over assumptions and "
+            "do NOT contradict them):\n"
+            f"{signals_block}\n\n"
+        )
+    prompt += (
         f'Analyze why "{brand}" might be invisible to this AI search and provide:\n'
         "1. What types of businesses ARE appearing (and why they likely rank)\n"
-        "2. Specific reasons this brand might be missing (weak SEO, no reviews, no listings, etc.)\n"
-        "3. 2-3 actionable steps to improve AI visibility for this specific query\n\n"
-        "Be specific and reference the actual competitors shown. Keep the response "
-        "concise (under 250 words). Format with clear sections."
     )
+    if signals_block:
+        prompt += (
+            "2. Specific reasons this brand is missing — ground these in the REAL "
+            "DATA above (e.g. its review count/rating vs. what this query rewards, "
+            "category fit, the backlink/domain-authority gap vs. the competitors "
+            "shown, and whether it ranks organically at all)\n"
+        )
+    else:
+        prompt += (
+            "2. Specific reasons this brand might be missing (weak SEO, no reviews, no listings, etc.)\n"
+        )
+    prompt += (
+        "3. 2-3 actionable steps to improve AI visibility for this specific query\n\n"
+        "Be specific and reference the actual competitors shown"
+        f"{' and the real metrics provided' if signals_block else ''}. Keep the "
+        "response concise (under 250 words). Format with clear sections."
+    )
+    return prompt
 
 
-async def diagnose_invisibility(brand: str, keyword: str, raw_response: str) -> str:
+# ── real client signals (already-stored data, no live API calls) ──────────────
+
+def gather_client_signals(client_id: str, keyword: str) -> dict:
+    """Assemble real, already-captured client signals to ground the diagnosis:
+    the client's GBP strength (rating/reviews/categories) and the competitive
+    backlink authority + organic rank from the latest matching SERP snapshot.
+
+    Reads only stored tables (clients.gbp, serp_snapshot_*) — no external API
+    calls. Best-effort: each sub-source is isolated, so a missing GBP / no
+    snapshot / a query error yields a partial (or empty) dict, never raises."""
+    from db.supabase_client import get_supabase
+
+    supabase = get_supabase()
+    signals: dict = {}
+
+    # GBP strength — the dominant local AI-visibility factor.
+    try:
+        rows = supabase.table("clients").select("gbp").eq("id", client_id).limit(1).execute().data
+        gbp = (rows[0].get("gbp") if rows else None) or {}
+        if gbp.get("gbp_rating") is not None or gbp.get("gbp_review_count") is not None or gbp.get("gbp_category"):
+            signals["gbp"] = {
+                "rating": gbp.get("gbp_rating"),
+                "review_count": gbp.get("gbp_review_count"),
+                "primary_category": gbp.get("gbp_category") or "",
+                "categories": [c for c in (gbp.get("gbp_categories") or []) if c][:6],
+                "has_website": bool(gbp.get("website")),
+                "has_description": bool(gbp.get("description")),
+            }
+    except Exception:  # pragma: no cover - best-effort
+        pass
+
+    # Competitive authority + the client's own organic rank, from the latest
+    # SERP snapshot whose keyword matches this query (case-insensitive exact).
+    try:
+        snaps = (
+            supabase.table("serp_snapshots")
+            .select("id, captured_at, client_rank, status")
+            .eq("client_id", client_id)
+            .ilike("keyword", keyword)
+            .neq("status", "failed")
+            .order("captured_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+        ) or []
+        if snaps:
+            snap = snaps[0]
+            domains = (
+                supabase.table("serp_snapshot_domains")
+                .select("domain, is_client, domain_rating, referring_domains")
+                .eq("snapshot_id", snap["id"])
+                .execute()
+                .data
+            ) or []
+            client_dom = next((d for d in domains if d.get("is_client")), None)
+            competitors = sorted(
+                (d for d in domains if not d.get("is_client") and d.get("domain_rating") is not None),
+                key=lambda d: d["domain_rating"],
+                reverse=True,
+            )[:5]
+            signals["serp"] = {
+                "captured_at": snap.get("captured_at"),
+                "client_rank": snap.get("client_rank"),
+                "client_domain_rating": (client_dom or {}).get("domain_rating"),
+                "competitors": [
+                    {"domain": d.get("domain"), "dr": d.get("domain_rating"),
+                     "referring_domains": d.get("referring_domains")}
+                    for d in competitors
+                ],
+            }
+    except Exception:  # pragma: no cover - best-effort
+        pass
+
+    # Classic Google Search performance for this exact query (GSC), if the client
+    # has a verified property. Grounds the AI-answer gap against how the client
+    # actually performs in organic search (e.g. ranks well in Search but is
+    # invisible in AI answers — a very different problem than ranking nowhere).
+    try:
+        prop = (
+            supabase.table("gsc_properties")
+            .select("id")
+            .eq("client_id", client_id)
+            .eq("access_status", "ok")
+            .order("created_at")
+            .limit(1)
+            .execute()
+            .data
+        )
+        if prop:
+            from datetime import date, timedelta
+
+            since = (date.today() - timedelta(days=_GSC_WINDOW_DAYS)).isoformat()
+            rows = (
+                supabase.table("gsc_query_daily")
+                .select("clicks, impressions, position")
+                .eq("property_id", prop[0]["id"])
+                .ilike("query", keyword)
+                .gte("date", since)
+                .execute()
+                .data
+            ) or []
+            if rows:
+                clicks = sum(int(r.get("clicks") or 0) for r in rows)
+                impressions = sum(int(r.get("impressions") or 0) for r in rows)
+                weighted = [
+                    (float(r["position"]), int(r.get("impressions") or 0))
+                    for r in rows if r.get("position") is not None
+                ]
+                avg_pos = None
+                tot_imp = sum(i for _, i in weighted)
+                if weighted and tot_imp > 0:
+                    avg_pos = round(sum(p * i for p, i in weighted) / tot_imp, 1)
+                elif weighted:
+                    avg_pos = round(sum(p for p, _ in weighted) / len(weighted), 1)
+                signals["gsc"] = {
+                    "window_days": _GSC_WINDOW_DAYS,
+                    "clicks": clicks,
+                    "impressions": impressions,
+                    "avg_position": avg_pos,
+                }
+    except Exception:  # pragma: no cover - best-effort
+        pass
+
+    return signals
+
+
+def format_signals_block(signals: dict) -> str:
+    """Render gather_client_signals() output into a compact prompt block. Pure
+    (no DB) so it's unit-testable. Returns "" when there's nothing to show."""
+    lines: list[str] = []
+
+    gbp = signals.get("gbp")
+    if gbp:
+        bits = []
+        if gbp.get("rating") is not None and gbp.get("review_count") is not None:
+            bits.append(f"{gbp['rating']}★ from {gbp['review_count']} reviews")
+        elif gbp.get("review_count") is not None:
+            bits.append(f"{gbp['review_count']} reviews")
+        if gbp.get("primary_category"):
+            bits.append(f'primary category "{gbp["primary_category"]}"')
+        cats = [c for c in (gbp.get("categories") or []) if c and c != gbp.get("primary_category")]
+        if cats:
+            bits.append("also categorized as " + ", ".join(cats))
+        completeness = []
+        if not gbp.get("has_website"):
+            completeness.append("no website on the profile")
+        if not gbp.get("has_description"):
+            completeness.append("no description on the profile")
+        if completeness:
+            bits.append("; ".join(completeness))
+        if bits:
+            lines.append("- Google Business Profile: " + "; ".join(bits) + ".")
+
+    serp = signals.get("serp")
+    if serp:
+        rank = serp.get("client_rank")
+        rank_txt = (
+            f"the client's site ranks #{rank} organically"
+            if rank else "the client's site does NOT rank in the captured top results"
+        )
+        client_dr = serp.get("client_domain_rating")
+        dr_txt = f" (its domain rating is {client_dr})" if client_dr is not None else ""
+        comp = serp.get("competitors") or []
+        if comp:
+            comp_txt = ", ".join(
+                f"{c['domain']} DR {c['dr']}"
+                + (f"/{c['referring_domains']} ref. domains" if c.get("referring_domains") is not None else "")
+                for c in comp if c.get("domain")
+            )
+            comp_line = f" Competitors ranking for this query: {comp_txt}."
+        else:
+            comp_line = ""
+        lines.append(
+            f"- Organic SERP for this exact query: {rank_txt}{dr_txt}.{comp_line}"
+        )
+
+    gsc = signals.get("gsc")
+    if gsc:
+        bits = [f"{gsc['impressions']:,} impressions", f"{gsc['clicks']:,} clicks"]
+        pos = gsc.get("avg_position")
+        if pos is not None:
+            bits.append(f"average position {pos}")
+        lines.append(
+            f"- Google Search performance (last {gsc['window_days']} days, this exact query): "
+            + ", ".join(bits) + "."
+        )
+
+    fb = signals.get("search_fallback")
+    if fb:
+        bits = []
+        rank = fb.get("rank")
+        bits.append(
+            f"the client's site ranks #{rank} organically"
+            if rank else "the client's site does NOT rank in the top organic results"
+        )
+        vol = fb.get("search_volume")
+        if vol is not None:
+            comp = fb.get("competition")
+            comp_txt = f", {str(comp).lower()} competition" if comp else ""
+            bits.append(f"the keyword gets ~{vol:,} searches/mo{comp_txt}")
+        lines.append(
+            "- Classic Google Search (live DataForSEO check — no GSC connected): "
+            + "; ".join(bits) + "."
+        )
+
+    return "\n".join(lines)
+
+
+# ── live DataForSEO fallback for the GSC layer ────────────────────────────────
+# A keyword invisible across all engines triggers gather/diagnose once per cell,
+# so a naive live SERP call per cell would multiply by the engine count. Memoize
+# the (paid) lookup per (client, keyword, location) for a short TTL so those
+# concurrent cells share one call.
+_FALLBACK_TTL = 600.0
+_fallback_cache: dict[tuple, Optional[dict]] = {}
+_fallback_expiry: dict[tuple, float] = {}
+_fallback_locks: dict[tuple, "asyncio.Lock"] = {}
+
+
+async def _compute_search_fallback(supabase, keyword: str, domain: str, location_code: int) -> Optional[dict]:
+    """One live DataForSEO lookup: the client's organic rank + the keyword's
+    search volume (cached cross-client first, else one live call)."""
+    from services import dataforseo_rank, keyword_market
+
+    rank = None
+    if domain:
+        try:
+            rank = await dataforseo_rank.fetch_serp_rank(keyword, domain, location_code)
+        except Exception:  # pragma: no cover - provider hiccup
+            rank = None
+
+    row = None
+    try:
+        cached = keyword_market.fetch_cached_market(supabase, [keyword], location_code)
+        row = cached.get(keyword.lower())
+        if not row:
+            live = await keyword_market.fetch_market([keyword], location_code)
+            row = live.get(keyword.lower())
+    except Exception:  # pragma: no cover - provider hiccup
+        row = None
+
+    volume = (row or {}).get("search_volume")
+    if rank is None and volume is None:
+        return None
+    return {
+        "source": "dataforseo",
+        "rank": rank,
+        "search_volume": volume,
+        "competition": (row or {}).get("competition"),
+    }
+
+
+async def fetch_search_fallback(client_id: str, keyword: str) -> Optional[dict]:
+    """Live DataForSEO stand-in for the GSC layer when GSC isn't available: the
+    client's organic position for the keyword + the keyword's search volume.
+    Best-effort (returns None when DataForSEO isn't configured or the lookup
+    fails) and memoized per (client, keyword, location) so a keyword invisible
+    across engines costs a single paid lookup."""
+    if not settings.dataforseo_login or not settings.dataforseo_password:
+        return None
+    from db.supabase_client import get_supabase
+    from services import dataforseo_rank
+
+    supabase = get_supabase()
+    try:
+        rows = (
+            supabase.table("clients")
+            .select("website_url, gbp, rank_tracking_location_code")
+            .eq("id", client_id).limit(1).execute().data
+        )
+    except Exception:  # pragma: no cover - best-effort
+        return None
+    if not rows:
+        return None
+    client = rows[0]
+    domain = dataforseo_rank.extract_domain(
+        client.get("website_url") or (client.get("gbp") or {}).get("website") or ""
+    )
+    location_code = dataforseo_rank.location_code_for(client)
+    key = (client_id, keyword.lower(), location_code)
+
+    now = time.monotonic()
+    if key in _fallback_cache and _fallback_expiry.get(key, 0) > now:
+        return _fallback_cache[key]
+    lock = _fallback_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        if key in _fallback_cache and _fallback_expiry.get(key, 0) > now:
+            return _fallback_cache[key]
+        value = await _compute_search_fallback(supabase, keyword, domain, location_code)
+        _fallback_cache[key] = value
+        _fallback_expiry[key] = time.monotonic() + _FALLBACK_TTL
+        return value
+
+
+async def build_signals_block(client_id: str, keyword: str) -> str:
+    """Single entry point used by both diagnosis paths: gather the stored signals
+    (GBP + SERP snapshot + GSC) and, only when neither GSC nor a SERP snapshot
+    covers the keyword, fall back to a live DataForSEO rank/volume lookup. Returns
+    the formatted prompt block ("" when nothing is available). Never raises."""
+    signals = gather_client_signals(client_id, keyword)
+    if not signals.get("gsc") and not signals.get("serp"):
+        fb = await fetch_search_fallback(client_id, keyword)
+        if fb:
+            signals["search_fallback"] = fb
+    return format_signals_block(signals)
+
+
+async def diagnose_invisibility(
+    brand: str, keyword: str, raw_response: str, signals_block: str = ""
+) -> str:
     client = _client()
     try:
         resp = await client.chat.completions.create(
             model=settings.brand_diagnose_model,
             messages=[
                 {"role": "system", "content": "You are a local SEO and AI Answer Engine Optimization expert."},
-                {"role": "user", "content": _diagnosis_prompt(brand, keyword, raw_response)},
+                {"role": "user", "content": _diagnosis_prompt(brand, keyword, raw_response, signals_block)},
             ],
         )
     except Exception as exc:  # pragma: no cover - thin provider wrapper

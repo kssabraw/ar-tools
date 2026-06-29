@@ -1,7 +1,8 @@
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowRight, RefreshCw, AlertTriangle, TrendingUp, GitMerge, Sparkles, CheckCircle2,
+  ArrowLeft, ArrowRight, RefreshCw, AlertTriangle, TrendingUp, TrendingDown, GitMerge, Sparkles,
+  CheckCircle2, MapPin, Users, Star, Link2, FileText, Target,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, ReoptAction, ReoptPlan } from '../lib/types'
@@ -45,8 +46,9 @@ export function ActionPlan() {
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Action Plan</h1>
           <p style={{ fontSize: 13, color: '#94a3b8', margin: '4px 0 0' }}>
-            Prioritized reoptimization recommendations from this client’s rank-tracker signals — drops to fix,
-            winnable keywords, and Search Console opportunities. Each routes you into the tool that does it.
+            Prioritized reoptimization recommendations from this client’s rank-tracker signals — organic drops to
+            fix, winnable keywords, Search Console opportunities, and local-pack declines from the Maps geo-grid.
+            Each routes you into the tool that does it.
           </p>
         </div>
         <button style={refreshBtn} onClick={() => refresh.mutate()} disabled={refresh.isPending}>
@@ -58,7 +60,7 @@ export function ActionPlan() {
       {plan && (
         <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 20 }}>
           {plan.summary} · last built {new Date(plan.created_at).toLocaleString()}
-          {plan.trigger !== 'manual' && ` · ${plan.trigger === 'drop' ? 'after a ranking drop' : 'weekly digest'}`}
+          {plan.trigger !== 'manual' && ` · ${triggerLabel(plan.trigger)}`}
         </div>
       )}
 
@@ -111,7 +113,25 @@ function kindMeta(kind: string): { label: string; icon: React.ReactNode } {
     case 'rank_drop': return { label: 'Ranking drop', icon: <AlertTriangle size={18} /> }
     case 'quick_win': return { label: 'Quick win', icon: <Sparkles size={18} /> }
     case 'cannibalization': return { label: 'Cannibalization', icon: <GitMerge size={18} /> }
+    case 'maps_decline': return { label: 'Local pack decline', icon: <MapPin size={18} /> }
+    case 'maps_competitor': return { label: 'Local competitor', icon: <Users size={18} /> }
+    case 'maps_weak_area': return { label: 'Weak coverage area', icon: <MapPin size={18} /> }
+    case 'gbp_gap': return { label: 'GBP gap', icon: <MapPin size={18} /> }
+    case 'review_gap': return { label: 'Reviews', icon: <Star size={18} /> }
+    case 'backlink_gap': return { label: 'Backlinks', icon: <Link2 size={18} /> }
+    case 'content_gap': return { label: 'Content gap', icon: <FileText size={18} /> }
+    case 'local_relevance': return { label: 'Local relevance', icon: <Target size={18} /> }
+    case 'maps_solv_drop': return { label: 'Local share loss', icon: <TrendingDown size={18} /> }
+    case 'brand_search_decline': return { label: 'Brand search down', icon: <TrendingDown size={18} /> }
     default: return { label: 'Opportunity', icon: <TrendingUp size={18} /> }
+  }
+}
+
+function triggerLabel(trigger: string): string {
+  switch (trigger) {
+    case 'drop': return 'after a ranking drop'
+    case 'maps_drop': return 'after a local-pack drop'
+    default: return 'weekly digest'
   }
 }
 
