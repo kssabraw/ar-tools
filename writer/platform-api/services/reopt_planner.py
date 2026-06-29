@@ -346,13 +346,26 @@ def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[di
     if not parts:
         return []
     score = a.get("score")
+    comp_n = a.get("competitor_count", 0)
+    if score is not None:
+        # Only frame the score as competitor-relative when we actually captured
+        # competitor profiles to benchmark against — otherwise "vs 0 competitors"
+        # reads as a bug. With no competitor data the score is the client's own
+        # profile-completeness checks; flag that the benchmark isn't available yet.
+        diagnosis = (
+            f"GBP completeness {score}/100 vs {comp_n} competitor{'s' if comp_n != 1 else ''}."
+            if comp_n
+            else f"GBP completeness {score}/100 (profile-completeness only — no competitor "
+            "profiles captured yet to benchmark against; run the Maps 'Competitors' fetch)."
+        )
+    else:
+        diagnosis = "GBP has optimization gaps."
     return [
         {
             "kind": "gbp_gap",
             "source": "maps",
             "keyword": "Google Business Profile",
-            "diagnosis": f"GBP completeness {score}/100 vs {a.get('competitor_count', 0)} competitors."
-            if score is not None else "GBP has optimization gaps vs competitors.",
+            "diagnosis": diagnosis,
             "recommendation": "Strengthen the Google Business Profile: " + "; ".join(parts) + ".",
             "cta_label": "Open Maps tracker",
             "cta_path": f"clients/{client_id}/maps",
