@@ -159,4 +159,21 @@ def transition(engagement_id: str, to_status: str) -> dict:
             .eq("id", engagement_id)
             .execute().data[0]
         )
-    return _safe(_q)
+    updated = _safe(_q)
+
+    # Entering the auditing stage kicks off the three engagement audits.
+    if to_status == "auditing":
+        _enqueue_audits(engagement_id)
+    return updated
+
+
+def _enqueue_audits(engagement_id: str) -> None:
+    """Best-effort: kick off site / backlink / citation audits. Never blocks the transition."""
+    try:
+        from services import backlink_gap, citation_audit, site_audit
+
+        site_audit.enqueue_site_audit(engagement_id)
+        backlink_gap.enqueue_backlink_audit(engagement_id)
+        citation_audit.enqueue_citation_audit(engagement_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("engagement_service.audit_enqueue_failed", extra={"error": str(exc)})

@@ -32,6 +32,29 @@ interface StrategyPlan {
   created_at: string | null
   actions: StrategyAction[]
 }
+interface AuditRun {
+  id: string
+  kind: string
+  status: string
+  score: number | null
+  result: Record<string, any> | null
+  created_at: string | null
+}
+
+const AUDIT_KINDS: { key: string; label: string }[] = [
+  { key: 'site_technical', label: 'Site / technical' },
+  { key: 'backlink_gap', label: 'Backlink gap' },
+  { key: 'local_citation', label: 'Local citations' },
+]
+
+function auditSummary(a: AuditRun): string {
+  const r = a.result || {}
+  if (a.status !== 'complete') return a.status
+  if (a.kind === 'site_technical') return `score ${r.score ?? '—'} · ${r.issue_count ?? 0} issues · ${r.pages_scanned ?? 0} pages`
+  if (a.kind === 'backlink_gap') return `${r.gap_count ?? 0} link prospects · ${r.competitors_analyzed ?? 0} competitors`
+  if (a.kind === 'local_citation') return `${r.missing_count ?? 0} missing · ${r.listed_count ?? 0} listed`
+  return 'complete'
+}
 
 const MODULES: { key: string; label: string }[] = [
   { key: 'organic', label: 'Organic' },
@@ -69,6 +92,30 @@ export function StrategyPlan() {
     mutationFn: () => api.post<StrategyPlan>(`/engagements/${eid}/plan/refresh`, {}),
     onSuccess: (p) => qc.setQueryData(['strategy-plan', eid], p),
   })
+
+  const { data: audits } = useQuery<AuditRun[]>({
+    queryKey: ['audits', eid],
+    queryFn: () => api.get<AuditRun[]>(`/engagements/${eid}/audits`),
+    enabled: Boolean(eid),
+    // Poll while anything is in flight so completed results appear without a manual refresh.
+    refetchInterval: (q) =>
+      (q.state.data ?? []).some(a => a.status === 'pending' || a.status === 'running') ? 4000 : false,
+  })
+  const runAudits = useMutation({
+    mutationFn: async () => {
+      await Promise.all([
+        api.post(`/engagements/${eid}/audits/site`, {}),
+        api.post(`/engagements/${eid}/audits/backlinks`, {}),
+        api.post(`/engagements/${eid}/audits/citations`, {}),
+      ])
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['audits', eid] }),
+  })
+
+  const latestAudits = AUDIT_KINDS.map(k => ({
+    ...k,
+    run: (audits ?? []).find(a => a.kind === k.key),
+  }))
 
   return (
     <div style={{ maxWidth: 820, margin: '0 auto', padding: '24px 20px' }}>
@@ -117,6 +164,25 @@ export function StrategyPlan() {
             <span style={chip}>autonomy: <strong>{engagement.autonomy_level}</strong></span>
             {plan?.summary?.headline && <span style={{ ...chip, color: '#6366f1' }}>{plan.summary.headline}</span>}
           </div>
+
+          <section style={{ marginBottom: 22 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <h2 style={sectionTitle}>Audits</h2>
+              <button onClick={() => runAudits.mutate()} disabled={runAudits.isPending} style={{ ...buttonStyle, padding: '7px 12px', fontSize: 13, background: '#fff', color: '#0f172a', border: '1px solid #e2e8f0' }}>
+                {runAudits.isPending ? <Loader2 size={14} /> : <RefreshCw size={14} />} Run audits
+              </button>
+            </div>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {latestAudits.map(({ key, label, run }) => (
+                <div key={key} style={{ ...box, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '10px 14px' }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{label}</span>
+                  <span style={{ fontSize: 12, color: run?.status === 'complete' ? '#475569' : run ? '#b45309' : '#94a3b8' }}>
+                    {run ? auditSummary(run) : 'not run yet'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
 
           {planLoading && <div style={{ color: '#94a3b8', fontSize: 14 }}>Loading plan…</div>}
 

@@ -28,7 +28,8 @@ logger = logging.getLogger("strategy_engine")
 MAPS_AREA_MAX = 8
 LLM_GAP_MAX = 10
 
-_MODULE_LABELS = {"organic": "organic", "maps": "Maps", "ai_visibility": "LLM"}
+_MODULE_LABELS = {"organic": "organic", "maps": "Maps", "ai_visibility": "LLM", "cross": "cross-channel"}
+_SEVERITY_WEIGHT = {"high": 8, "medium": 4, "low": 1}
 
 # Organic reopt kind → unified action (category + the role that does the craft).
 _ORGANIC_CATEGORY = {
@@ -68,7 +69,7 @@ def summarize(actions: list[dict]) -> dict:
         counts[a["module"]] = counts.get(a["module"], 0) + 1
     parts = [
         f"{counts[m]} {_MODULE_LABELS[m]}"
-        for m in ("organic", "maps", "ai_visibility")
+        for m in ("organic", "maps", "ai_visibility", "cross")
         if counts.get(m)
     ]
     headline = " · ".join(parts) if parts else "No actions right now — everything looks healthy."
@@ -195,10 +196,94 @@ def _llm_actions(client_id: str) -> list[dict]:
     return actions[:LLM_GAP_MAX]
 
 
-def build_actions(client_id: str) -> list[dict]:
+# ── audit → action mappers (pure; from audit_runs results) ───────────────────
+def site_audit_actions(result: dict) -> list[dict]:
+    """Group a site_technical audit's issues by type → `technical_fix` actions (top 8)."""
+    by_type: dict[str, dict] = {}
+    for i in result.get("issues") or []:
+        info = by_type.setdefault(
+            i["type"], {"count": 0, "severity": i.get("severity", "low"), "detail": i.get("detail", i["type"]), "urls": []}
+        )
+        info["count"] += 1
+        if len(info["urls"]) < 10:
+            info["urls"].append(i.get("url"))
+    actions = []
+    for itype, info in by_type.items():
+        n = info["count"]
+        actions.append({
+            "module": "cross", "category": "technical_fix", "kind": "technical_fix",
+            "title": f"Fix: {info['detail']} ({n} page{'s' if n != 1 else ''})",
+            "rationale": f"Site audit flagged {n} page(s) — {itype} ({info['severity']}).",
+            "target": {"issue_type": itype, "count": n, "urls": info["urls"]},
+            "priority": _SEVERITY_WEIGHT.get(info["severity"], 1) * n,
+            "execution_mode": "assigned", "assignee_role": "seo_tech",
+            "source": "initial_plan", "status": "proposed",
+        })
+    actions.sort(key=lambda a: a["priority"], reverse=True)
+    return actions[:8]
+
+
+def backlink_audit_actions(result: dict) -> list[dict]:
+    """A single `backlink` prospect-list action from a backlink_gap audit."""
+    gaps = result.get("gaps") or []
+    if not gaps:
+        return []
+    top = gaps[:10]
+    return [{
+        "module": "organic", "category": "backlink", "kind": "backlink_gap",
+        "title": f"Pursue {result.get('gap_count', len(gaps))} link prospects competitors have and you don't",
+        "rationale": "Top: " + ", ".join(g["referring_domain"] for g in top[:5]),
+        "target": {"prospects": top},
+        "priority": int(result.get("gap_count") or len(gaps)),
+        "execution_mode": "assigned", "assignee_role": "link_builder",
+        "source": "initial_plan", "status": "proposed",
+    }]
+
+
+def citation_audit_actions(result: dict) -> list[dict]:
+    """A single `citation` action listing the directories the client is missing from."""
+    missing = result.get("missing") or []
+    if not missing:
+        return []
+    return [{
+        "module": "maps", "category": "citation", "kind": "citation_gap",
+        "title": f"Get listed on {len(missing)} missing director{'ies' if len(missing) != 1 else 'y'}",
+        "rationale": "Missing: " + ", ".join(missing[:8]),
+        "target": {"missing": missing},
+        "priority": len(missing) * 5,
+        "execution_mode": "assigned", "assignee_role": "va",
+        "source": "initial_plan", "status": "proposed",
+    }]
+
+
+_AUDIT_MAPPERS = {
+    "site_technical": site_audit_actions,
+    "backlink_gap": backlink_audit_actions,
+    "local_citation": citation_audit_actions,
+}
+
+
+def _audit_actions(engagement_id: str) -> list[dict]:
+    """Read the latest completed audit_runs for the engagement → strategy actions."""
+    runs = (
+        get_supabase().table("audit_runs").select("kind, result, created_at")
+        .eq("engagement_id", engagement_id).eq("status", "complete")
+        .order("created_at", desc=True).execute()
+    ).data or []
+    latest: dict[str, dict] = {}
+    for r in runs:
+        latest.setdefault(r["kind"], r)  # newest-first → first seen per kind is latest
+    out: list[dict] = []
+    for kind, mapper in _AUDIT_MAPPERS.items():
+        if kind in latest:
+            out.extend(mapper(latest[kind].get("result") or {}))
+    return out
+
+
+def build_actions(client_id: str, engagement_id: "str | None" = None) -> list[dict]:
     """Gather actions across every module; isolate each reader so one never aborts the rest."""
     out: list[dict] = []
-    # Resolved per call (via module globals) so each reader is independently patchable.
+    # Per-client readers resolved per call (via module globals) so each is patchable in tests.
     for reader in (_organic_actions, _maps_actions, _llm_actions):
         try:
             out.extend(reader(client_id))
@@ -207,6 +292,11 @@ def build_actions(client_id: str) -> list[dict]:
                 "strategy_engine.reader_failed",
                 extra={"reader": getattr(reader, "__name__", "reader"), "error": str(exc)},
             )
+    if engagement_id:  # engagement-scoped audit findings → technical_fix / backlink / citation
+        try:
+            out.extend(_audit_actions(engagement_id))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("strategy_engine.audit_reader_failed", extra={"error": str(exc)})
     out.sort(key=lambda a: a["priority"], reverse=True)
     return out
 
@@ -223,7 +313,7 @@ def build_plan(engagement_id: str) -> dict:
         raise HTTPException(status_code=404, detail="engagement_not_found")
     client_id = eng[0]["client_id"]
 
-    actions = build_actions(client_id)
+    actions = build_actions(client_id, engagement_id)
     summary = summarize(actions)
 
     # Supersede any prior still-proposed plan so "latest proposed" is unambiguous.
