@@ -13,6 +13,11 @@ from typing import Optional
 from config import settings
 
 
+# How far back to summarize Google Search Console performance for the keyword
+# when grounding the diagnosis (matches the rank tracker's recent-window feel).
+_GSC_WINDOW_DAYS = 28
+
+
 class InsightUnavailable(Exception):
     """OpenAI isn't configured or the call failed irrecoverably."""
 
@@ -135,6 +140,56 @@ def gather_client_signals(client_id: str, keyword: str) -> dict:
     except Exception:  # pragma: no cover - best-effort
         pass
 
+    # Classic Google Search performance for this exact query (GSC), if the client
+    # has a verified property. Grounds the AI-answer gap against how the client
+    # actually performs in organic search (e.g. ranks well in Search but is
+    # invisible in AI answers — a very different problem than ranking nowhere).
+    try:
+        prop = (
+            supabase.table("gsc_properties")
+            .select("id")
+            .eq("client_id", client_id)
+            .eq("access_status", "ok")
+            .order("created_at")
+            .limit(1)
+            .execute()
+            .data
+        )
+        if prop:
+            from datetime import date, timedelta
+
+            since = (date.today() - timedelta(days=_GSC_WINDOW_DAYS)).isoformat()
+            rows = (
+                supabase.table("gsc_query_daily")
+                .select("clicks, impressions, position")
+                .eq("property_id", prop[0]["id"])
+                .ilike("query", keyword)
+                .gte("date", since)
+                .execute()
+                .data
+            ) or []
+            if rows:
+                clicks = sum(int(r.get("clicks") or 0) for r in rows)
+                impressions = sum(int(r.get("impressions") or 0) for r in rows)
+                weighted = [
+                    (float(r["position"]), int(r.get("impressions") or 0))
+                    for r in rows if r.get("position") is not None
+                ]
+                avg_pos = None
+                tot_imp = sum(i for _, i in weighted)
+                if weighted and tot_imp > 0:
+                    avg_pos = round(sum(p * i for p, i in weighted) / tot_imp, 1)
+                elif weighted:
+                    avg_pos = round(sum(p for p, _ in weighted) / len(weighted), 1)
+                signals["gsc"] = {
+                    "window_days": _GSC_WINDOW_DAYS,
+                    "clicks": clicks,
+                    "impressions": impressions,
+                    "avg_position": avg_pos,
+                }
+    except Exception:  # pragma: no cover - best-effort
+        pass
+
     return signals
 
 
@@ -186,6 +241,17 @@ def format_signals_block(signals: dict) -> str:
             comp_line = ""
         lines.append(
             f"- Organic SERP for this exact query: {rank_txt}{dr_txt}.{comp_line}"
+        )
+
+    gsc = signals.get("gsc")
+    if gsc:
+        bits = [f"{gsc['impressions']:,} impressions", f"{gsc['clicks']:,} clicks"]
+        pos = gsc.get("avg_position")
+        if pos is not None:
+            bits.append(f"average position {pos}")
+        lines.append(
+            f"- Google Search performance (last {gsc['window_days']} days, this exact query): "
+            + ", ".join(bits) + "."
         )
 
     return "\n".join(lines)

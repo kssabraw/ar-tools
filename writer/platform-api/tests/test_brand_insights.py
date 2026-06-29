@@ -80,6 +80,7 @@ class _FakeQuery:
     def eq(self, *a, **k): return self
     def ilike(self, *a, **k): return self
     def neq(self, *a, **k): return self
+    def gte(self, *a, **k): return self
     def order(self, *a, **k): return self
     def limit(self, *a, **k): return self
     def execute(self):
@@ -121,6 +122,31 @@ def test_gather_client_signals_assembles_gbp_and_serp(monkeypatch):
 def test_gather_client_signals_best_effort_when_empty(monkeypatch):
     monkeypatch.setattr("db.supabase_client.get_supabase", lambda: _FakeSupabase({}))
     assert bi.gather_client_signals("c1", "kw") == {}
+
+
+def test_gather_client_signals_includes_gsc_when_property_verified(monkeypatch):
+    tables = {
+        "gsc_properties": [{"id": "p1"}],
+        "gsc_query_daily": [
+            {"clicks": 3, "impressions": 100, "position": 8.0},
+            {"clicks": 1, "impressions": 100, "position": 12.0},
+            {"clicks": 0, "impressions": 0, "position": None},  # no-impression day
+        ],
+    }
+    monkeypatch.setattr("db.supabase_client.get_supabase", lambda: _FakeSupabase(tables))
+    sig = bi.gather_client_signals("c1", "roof repair")
+    assert sig["gsc"]["clicks"] == 4 and sig["gsc"]["impressions"] == 200
+    assert sig["gsc"]["avg_position"] == 10.0  # impression-weighted (8*100 + 12*100)/200
+    assert sig["gsc"]["window_days"] == 28
+
+
+def test_format_signals_block_renders_gsc_performance():
+    block = bi.format_signals_block({"gsc": {
+        "window_days": 28, "clicks": 4, "impressions": 1200, "avg_position": 9.4,
+    }})
+    assert "Google Search performance (last 28 days, this exact query)" in block
+    assert "1,200 impressions" in block and "4 clicks" in block
+    assert "average position 9.4" in block
 
 
 def test_diagnosis_prompt_injects_signals_and_demands_grounding():
