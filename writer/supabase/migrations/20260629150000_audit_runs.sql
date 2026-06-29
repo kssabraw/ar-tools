@@ -29,17 +29,9 @@ create index if not exists idx_audit_runs_engagement
 
 alter table audit_runs enable row level security;
 
--- ── widen async_jobs.job_type for the audit jobs ─────────────────────────────
-alter table async_jobs drop constraint async_jobs_job_type_check;
-alter table async_jobs
-  add constraint async_jobs_job_type_check
-  check (job_type = any (array[
-    'website_scrape', 'page_structure_scrape', 'silo_dedup', 'gsc_ingest',
-    'gsc_page_ingest', 'gsc_materialize', 'dataforseo_rank', 'keyword_market',
-    'gsc_research', 'rank_report', 'serp_snapshot', 'maps_scan', 'maps_report',
-    'local_seo_silo', 'local_seo_generate', 'local_seo_reoptimize_url',
-    'local_seo_reoptimize_page', 'service_page_plan', 'rank_location_derive',
-    'brand_scan', 'brand_report', 'notification_dispatch', 'reopt_plan',
-    'client_report',
-    'site_audit', 'backlink_audit', 'citation_audit'
-  ]));
+-- NOTE: the async_jobs.job_type allow-list is widened for the audit jobs in a
+-- LATER migration (20260629220000_async_jobs_audit_jobtypes.sql) that sets the
+-- UNION of main's list + the audit types. Doing it here would drop main's newer
+-- job types (asana_monthly, *_intel, …) on a fresh/merged apply, since main's
+-- own later migrations also redefine this constraint. Keep this migration to the
+-- table only.
