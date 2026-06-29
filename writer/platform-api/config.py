@@ -361,13 +361,22 @@ class Settings(BaseSettings):
     asana_status_field_gid: str = ""
     asana_status_not_started_option_gid: str = ""
     asana_category_field_gid: str = ""
-    # Team Workload: the Asana user GIDs to track (comma-separated). Absent →
-    # the workload feature is skipped. Parsed via asana_service.parse_gids().
+    # Team Workload: the Asana user GIDs to track (comma-separated). Used as a
+    # fallback seed only — the source of truth is the asana_team_members table
+    # (editable in the Workload page). Absent both → the feature is skipped.
     asana_team_member_gids: str = ""
-    # Overload thresholds: flag a member with more than N open tasks, or more
-    # than M tasks due on the same calendar day.
-    asana_workload_max_open: int = 25
-    asana_workload_max_due_same_day: int = 4
+    # Effort-weighting (Phase 3). Overload is computed from estimated *hours*,
+    # not task counts. The monthly job stamps each task's est_hours into this
+    # Asana number custom field; the workload read pulls it back off the task.
+    asana_effort_field_gid: str = ""
+    # Fallback hours for a task with no estimate (so the signal isn't blind).
+    asana_default_task_hours: float = 1.0
+    # Default weekly capacity for a tracked member with no weekly_hours set.
+    asana_default_weekly_hours: float = 30.0
+    # Workdays per week — daily capacity = weekly_hours / this (same-day check).
+    asana_workload_daily_workdays: int = 5
+    # Flag a member whose open backlog exceeds this many weeks of their capacity.
+    asana_workload_backlog_weeks: float = 2.0
 
     class Config:
         env_file = ".env"

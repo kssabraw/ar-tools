@@ -131,11 +131,14 @@ def build_task_payload(
     category_option_gid: Optional[str] = None,
     status_field_gid: str = "",
     not_started_option_gid: str = "",
+    effort_field_gid: str = "",
+    est_hours: Optional[float] = None,
 ) -> dict:
     """Build the ``POST /tasks`` ``data`` body for one template row.
 
     Sets name + (optional) assignee + (optional) category; Status = Not Started
-    when both the field and option GIDs are configured; **no** due date (the
+    when both the field and option GIDs are configured; stamps the estimated
+    hours into the effort number field when configured; **no** due date (the
     team fills dates in). Places the task directly in ``section_gid``.
     """
     data: dict[str, Any] = {
@@ -146,11 +149,13 @@ def build_task_payload(
     if assignee_gid:
         data["assignee"] = assignee_gid
 
-    custom_fields: dict[str, str] = {}
+    custom_fields: dict[str, Any] = {}
     if status_field_gid and not_started_option_gid:
         custom_fields[status_field_gid] = not_started_option_gid
     if category_field_gid and category_option_gid:
         custom_fields[category_field_gid] = category_option_gid
+    if effort_field_gid and est_hours is not None:
+        custom_fields[effort_field_gid] = est_hours
     if custom_fields:
         data["custom_fields"] = custom_fields
 
@@ -159,7 +164,7 @@ def build_task_payload(
 
 def payload_from_template_row(row: dict, project_gid: str, section_gid: str) -> dict:
     """Adapt a DB ``asana_client_task_templates`` row into a create-task payload,
-    reading the Status / category field GIDs from config."""
+    reading the Status / category / effort field GIDs from config."""
     return build_task_payload(
         row.get("name") or "",
         project_gid,
@@ -169,51 +174,90 @@ def payload_from_template_row(row: dict, project_gid: str, section_gid: str) -> 
         category_option_gid=row.get("category_option_gid"),
         status_field_gid=settings.asana_status_field_gid,
         not_started_option_gid=settings.asana_status_not_started_option_gid,
+        effort_field_gid=settings.asana_effort_field_gid,
+        est_hours=row.get("est_hours"),
     )
+
+
+def extract_number_field(task: dict, field_gid: str) -> Optional[float]:
+    """The numeric value of a task's number custom field (None when unset)."""
+    if not field_gid:
+        return None
+    for cf in task.get("custom_fields") or []:
+        if cf.get("gid") == field_gid:
+            val = cf.get("number_value")
+            return float(val) if val is not None else None
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Workload aggregation (Feature B)
 # ---------------------------------------------------------------------------
+def task_hours(task: dict, effort_field_gid: str, default_task_hours: float) -> float:
+    """Estimated hours for one task — its effort number field, else the default."""
+    val = extract_number_field(task, effort_field_gid)
+    return float(val) if val is not None else float(default_task_hours)
+
+
 def aggregate_member_workload(
     gid: str,
     name: str,
     tasks: list[dict],
     *,
-    max_open: int,
-    max_due_same_day: int,
+    weekly_hours: float,
+    effort_field_gid: str,
+    default_task_hours: float,
+    daily_workdays: int,
+    backlog_weeks: float,
 ) -> dict:
-    """Summarise one member's open tasks: count, per-day due distribution, flags.
+    """Summarise one member's open tasks by estimated **hours** vs their capacity.
 
-    ``tasks`` are the member's incomplete tasks (each may carry ``due_on`` as a
-    'YYYY-MM-DD' string or null). Returns a dict with ``open_count``,
-    ``due_by_day`` (sorted), the worst same-day stack, and any overload flags.
+    ``tasks`` are the member's incomplete tasks (``due_on`` 'YYYY-MM-DD' or null;
+    effort read from the configured number field, else ``default_task_hours``).
+    Flags fire when a single day's due hours exceed daily capacity
+    (weekly/workdays), or the open backlog exceeds ``backlog_weeks`` of capacity.
     """
-    due_by_day: dict[str, int] = {}
+    due_hours_by_day: dict[str, float] = {}
+    open_hours = 0.0
+    unestimated = 0
     for t in tasks:
+        if extract_number_field(t, effort_field_gid) is None:
+            unestimated += 1
+        hrs = task_hours(t, effort_field_gid, default_task_hours)
+        open_hours += hrs
         due = t.get("due_on")
         if due:
-            due_by_day[due] = due_by_day.get(due, 0) + 1
+            due_hours_by_day[due] = due_hours_by_day.get(due, 0.0) + hrs
 
     worst_day: Optional[str] = None
-    worst_count = 0
-    for day, count in due_by_day.items():
-        if count > worst_count or (count == worst_count and (worst_day is None or day < worst_day)):
-            worst_day, worst_count = day, count
+    worst_hours = 0.0
+    for day, hrs in due_hours_by_day.items():
+        if hrs > worst_hours or (hrs == worst_hours and (worst_day is None or day < worst_day)):
+            worst_day, worst_hours = day, hrs
 
-    open_count = len(tasks)
+    daily_capacity = (weekly_hours / daily_workdays) if (weekly_hours and daily_workdays) else 0.0
+    backlog_capacity = (weekly_hours * backlog_weeks) if weekly_hours else 0.0
+
     flags: list[str] = []
-    if open_count > max_open:
-        flags.append(f"{open_count} open tasks (over {max_open})")
-    if worst_day and worst_count > max_due_same_day:
-        flags.append(f"{worst_count} tasks due {worst_day} (over {max_due_same_day})")
+    if daily_capacity and worst_day and worst_hours > daily_capacity:
+        flags.append(
+            f"{round(worst_hours, 1)}h due {worst_day} (over {round(daily_capacity, 1)}h/day)"
+        )
+    if backlog_capacity and open_hours > backlog_capacity:
+        flags.append(
+            f"{round(open_hours, 1)}h open (over {round(backlog_weeks, 1)} weeks at {round(weekly_hours, 1)}h/wk)"
+        )
 
     return {
         "gid": gid,
         "name": name,
-        "open_count": open_count,
-        "due_by_day": dict(sorted(due_by_day.items())),
-        "worst_same_day": ({"date": worst_day, "count": worst_count} if worst_day else None),
+        "open_count": len(tasks),
+        "open_hours": round(open_hours, 1),
+        "unestimated": unestimated,
+        "weekly_hours": round(float(weekly_hours), 1) if weekly_hours else None,
+        "daily_capacity": round(daily_capacity, 1) if daily_capacity else None,
+        "due_hours_by_day": {k: round(v, 1) for k, v in sorted(due_hours_by_day.items())},
+        "worst_same_day": ({"date": worst_day, "hours": round(worst_hours, 1)} if worst_day else None),
         "overloaded": bool(flags),
         "flags": flags,
     }
@@ -222,27 +266,40 @@ def aggregate_member_workload(
 def build_workload_report(
     members: list[dict],
     *,
-    max_open: int,
-    max_due_same_day: int,
+    effort_field_gid: str,
+    default_task_hours: float,
+    daily_workdays: int,
+    backlog_weeks: float,
+    default_weekly_hours: float,
 ) -> dict:
-    """Aggregate a defined team list into a workload report.
+    """Aggregate a defined team list into an effort-weighted workload report.
 
-    ``members`` is a list of ``{"gid", "name", "tasks": [...]}``. Returns
-    per-member summaries (most loaded first) + the subset that is overloaded.
+    ``members`` is a list of ``{"gid", "name", "tasks": [...], "weekly_hours"?}``
+    (a member with no ``weekly_hours`` uses ``default_weekly_hours``). Returns
+    per-member summaries (most loaded first by hours) + the overloaded subset.
     """
     summaries = [
         aggregate_member_workload(
             m["gid"], m.get("name") or m["gid"], m.get("tasks") or [],
-            max_open=max_open, max_due_same_day=max_due_same_day,
+            weekly_hours=(m.get("weekly_hours") or default_weekly_hours),
+            effort_field_gid=effort_field_gid,
+            default_task_hours=default_task_hours,
+            daily_workdays=daily_workdays,
+            backlog_weeks=backlog_weeks,
         )
         for m in members
     ]
-    summaries.sort(key=lambda s: s["open_count"], reverse=True)
+    summaries.sort(key=lambda s: s["open_hours"], reverse=True)
     overloaded = [s for s in summaries if s["overloaded"]]
     return {
         "members": summaries,
         "overloaded": overloaded,
-        "thresholds": {"max_open": max_open, "max_due_same_day": max_due_same_day},
+        "thresholds": {
+            "default_weekly_hours": default_weekly_hours,
+            "daily_workdays": daily_workdays,
+            "backlog_weeks": backlog_weeks,
+            "default_task_hours": default_task_hours,
+        },
     }
 
 
@@ -332,6 +389,6 @@ async def list_member_open_tasks(user_gid: str) -> list[dict]:
             "assignee": user_gid,
             "workspace": settings.asana_workspace_gid,
             "completed_since": "now",
-            "opt_fields": "name,due_on,completed",
+            "opt_fields": "name,due_on,completed,custom_fields.gid,custom_fields.number_value",
         },
     ) or []

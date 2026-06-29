@@ -30,6 +30,7 @@ class AsanaTaskTemplateItem(BaseModel):
     assignee_name: Optional[str] = None
     category_option_gid: Optional[str] = None
     category_name: Optional[str] = None
+    est_hours: Optional[float] = None
     sort_order: int = 0
     active: bool = True
 
@@ -51,6 +52,20 @@ class AsanaUser(BaseModel):
 class AsanaCategoryOption(BaseModel):
     gid: str
     name: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Team & capacity (Team Workload)
+# ---------------------------------------------------------------------------
+class AsanaTeamMemberItem(BaseModel):
+    gid: str
+    name: Optional[str] = None
+    weekly_hours: Optional[float] = None
+    active: bool = True
+
+
+class AsanaTeamMembersReplaceRequest(BaseModel):
+    members: list[AsanaTeamMemberItem] = []
 
 
 # ---------------------------------------------------------------------------

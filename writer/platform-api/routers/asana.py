@@ -26,6 +26,8 @@ from models.asana import (
     AsanaProjectMappingRequest,
     AsanaTaskTemplateItem,
     AsanaTaskTemplateReplaceRequest,
+    AsanaTeamMemberItem,
+    AsanaTeamMembersReplaceRequest,
     AsanaUser,
     GenerateMonthRequest,
     GenerateMonthResponse,
@@ -56,6 +58,47 @@ async def workload(auth: dict = Depends(require_auth)) -> dict:
     except Exception as exc:
         logger.error("asana_workload_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/asana/team-members", response_model=list[AsanaTeamMemberItem])
+async def list_team_members(auth: dict = Depends(require_auth)) -> list[AsanaTeamMemberItem]:
+    """The tracked team list + each member's weekly capacity."""
+    rows = (
+        get_supabase()
+        .table("asana_team_members")
+        .select("gid, name, weekly_hours, active")
+        .order("name")
+        .execute()
+    ).data or []
+    return [AsanaTeamMemberItem(**r) for r in rows]
+
+
+@router.put("/asana/team-members", response_model=list[AsanaTeamMemberItem])
+async def replace_team_members(
+    body: AsanaTeamMembersReplaceRequest,
+    auth: dict = Depends(require_auth),
+) -> list[AsanaTeamMemberItem]:
+    """Replace the tracked team list (gid + name + weekly capacity)."""
+    supabase = get_supabase()
+    try:
+        supabase.table("asana_team_members").delete().neq("gid", "").execute()
+        rows = [
+            {
+                "gid": m.gid,
+                "name": m.name,
+                "weekly_hours": m.weekly_hours,
+                "active": m.active,
+                "updated_at": "now()",
+            }
+            for m in body.members
+            if m.gid and m.gid.strip()
+        ]
+        if rows:
+            supabase.table("asana_team_members").upsert(rows).execute()
+    except Exception as exc:
+        logger.error("asana_replace_team_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return await list_team_members(auth)
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +179,7 @@ async def replace_task_templates(
                 "assignee_name": item.assignee_name,
                 "category_option_gid": item.category_option_gid,
                 "category_name": item.category_name,
+                "est_hours": item.est_hours,
                 "sort_order": idx,
                 "active": item.active,
             }

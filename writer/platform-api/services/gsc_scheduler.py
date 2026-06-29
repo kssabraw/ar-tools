@@ -271,6 +271,7 @@ async def gsc_scheduler() -> None:
     poll of in-flight Maps scans."""
     from services.asana_monthly import enqueue_due_asana_monthly
     from services.asana_service import shift_months
+    from services.asana_workload import run_workload_alert
     from services.brand_schedule import enqueue_due_brand_scans
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
 
@@ -284,6 +285,7 @@ async def gsc_scheduler() -> None:
     last_maps_date: Optional[date] = None
     last_reopt_date: Optional[date] = None
     last_asana_month: Optional[tuple] = None
+    last_asana_workload_date: Optional[date] = None
     logger.info("gsc_scheduler.started", extra={"poll_interval_s": interval, "hour_utc": hour})
     while True:
         await asyncio.sleep(interval)
@@ -329,6 +331,12 @@ async def gsc_scheduler() -> None:
                 target = shift_months(now.date(), settings.asana_month_target_offset)
                 enqueue_due_asana_monthly(target)
                 last_asana_month = (now.year, now.month)
+            # Daily Team Workload overload alert (effort-weighted): once per day
+            # after the target hour, emit one suite notification if anyone is
+            # over capacity. run_workload_alert self-guards when unconfigured.
+            if should_run(now, last_asana_workload_date, hour):
+                await run_workload_alert()
+                last_asana_workload_date = now.date()
             # Advance any in-flight Maps scans every tick (non-blocking GETs).
             await poll_pending_maps_scans()
             # AI Visibility scheduled scans are self-clocked via each schedule's

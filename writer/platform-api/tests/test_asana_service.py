@@ -138,40 +138,63 @@ def test_payload_from_template_row_reads_config(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Workload aggregation
+# Effort extraction + hours-based workload aggregation
 # ---------------------------------------------------------------------------
-def test_aggregate_member_workload_counts_and_flags():
-    tasks = [
-        {"due_on": "2026-07-09"}, {"due_on": "2026-07-09"}, {"due_on": "2026-07-09"},
-        {"due_on": "2026-07-13"}, {"due_on": None},
-    ]
-    summary = asana.aggregate_member_workload(
-        "minda", "Minda", tasks, max_open=4, max_due_same_day=2,
-    )
-    assert summary["open_count"] == 5
-    assert summary["due_by_day"] == {"2026-07-09": 3, "2026-07-13": 1}
-    assert summary["worst_same_day"] == {"date": "2026-07-09", "count": 3}
-    assert summary["overloaded"] is True
-    assert any("open tasks" in f for f in summary["flags"])
-    assert any("2026-07-09" in f for f in summary["flags"])
+def _task(due, hours=None):
+    cf = [{"gid": "f_hrs", "number_value": hours}] if hours is not None else []
+    return {"due_on": due, "custom_fields": cf}
 
 
-def test_aggregate_member_workload_not_overloaded():
-    summary = asana.aggregate_member_workload(
-        "ivy", "Ivy", [{"due_on": "2026-07-06"}], max_open=25, max_due_same_day=4,
-    )
-    assert summary["overloaded"] is False
-    assert summary["flags"] == []
+def test_extract_number_field_and_task_hours():
+    t = _task("2026-07-09", 3)
+    assert asana.extract_number_field(t, "f_hrs") == 3.0
+    assert asana.extract_number_field(_task("x"), "f_hrs") is None
+    assert asana.extract_number_field(t, "") is None
+    # task_hours falls back to default when unestimated.
+    assert asana.task_hours(t, "f_hrs", 1.0) == 3.0
+    assert asana.task_hours(_task("x"), "f_hrs", 1.5) == 1.5
 
 
-def test_build_workload_report_sorts_and_filters():
+_AGG = dict(effort_field_gid="f_hrs", default_task_hours=1.0, daily_workdays=5, backlog_weeks=2.0)
+
+
+def test_aggregate_same_day_hours_flag():
+    # 3×3h due the same day = 9h; weekly 30 → daily capacity 6h → 9 > 6 flags.
+    tasks = [_task("2026-07-09", 3), _task("2026-07-09", 3), _task("2026-07-09", 3)]
+    s = asana.aggregate_member_workload("minda", "Minda", tasks, weekly_hours=30, **_AGG)
+    assert s["open_hours"] == 9.0
+    assert s["worst_same_day"] == {"date": "2026-07-09", "hours": 9.0}
+    assert s["daily_capacity"] == 6.0
+    assert s["overloaded"] is True
+    assert any("due 2026-07-09" in f for f in s["flags"])
+
+
+def test_aggregate_unestimated_uses_default_and_counts():
+    tasks = [_task("2026-07-09", 2), _task("2026-07-09")]  # one unestimated → 1h
+    s = asana.aggregate_member_workload("x", "X", tasks, weekly_hours=100, **_AGG)
+    assert s["open_hours"] == 3.0
+    assert s["unestimated"] == 1
+    assert s["overloaded"] is False  # daily cap 20h, 3h fine
+
+
+def test_aggregate_backlog_flag():
+    # 70h open, weekly 30, backlog_weeks 2 → 60h cap → 70 > 60 flags.
+    tasks = [_task(None, 10) for _ in range(7)]
+    s = asana.aggregate_member_workload("y", "Y", tasks, weekly_hours=30, **_AGG)
+    assert s["open_hours"] == 70.0
+    assert s["overloaded"] is True
+    assert any("open" in f and "weeks" in f for f in s["flags"])
+
+
+def test_build_workload_report_sorts_by_hours_and_default_capacity():
     members = [
-        {"gid": "ivy", "name": "Ivy", "tasks": [{"due_on": "2026-07-06"}]},
-        {"gid": "minda", "name": "Minda", "tasks": [
-            {"due_on": "2026-07-09"}, {"due_on": "2026-07-09"}, {"due_on": "2026-07-09"},
-        ]},
+        {"gid": "ivy", "name": "Ivy", "weekly_hours": 40, "tasks": [_task("2026-07-06", 2)]},
+        {"gid": "minda", "name": "Minda", "tasks": [_task("2026-07-09", 9)]},  # no weekly → default
     ]
-    report = asana.build_workload_report(members, max_open=100, max_due_same_day=2)
+    report = asana.build_workload_report(
+        members, default_weekly_hours=30, **_AGG,
+    )
+    # Sorted by open_hours desc → Minda (9h) first; Minda over default daily cap (6h).
     assert [m["name"] for m in report["members"]] == ["Minda", "Ivy"]
     assert [m["name"] for m in report["overloaded"]] == ["Minda"]
-    assert report["thresholds"] == {"max_open": 100, "max_due_same_day": 2}
+    assert report["thresholds"]["default_weekly_hours"] == 30
