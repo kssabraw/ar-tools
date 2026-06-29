@@ -153,6 +153,11 @@ function ScheduleCard(p: {
       <div style={{ flex: 1 }}>
         <div style={{ fontWeight: 600 }}>
           {label} <span className={"badge " + scheduleBadge(s.status)}>{s.status}</span>
+          {s.auto_publish && (
+            <span className="badge badge-rel" style={{ marginLeft: 6 }} title="Each finished piece is auto-published to the client's Google Drive folder">
+              ⬆ Auto-publish
+            </span>
+          )}
         </div>
         <div className="muted" style={{ fontSize: 13 }}>
           {done} / {total} done

@@ -1068,6 +1068,7 @@ export interface ContentSchedule {
   total_count: number;
   created_at: string;
   progress?: Record<string, number>;
+  auto_publish?: boolean;
 }
 export interface ScheduledRun {
   id: string;

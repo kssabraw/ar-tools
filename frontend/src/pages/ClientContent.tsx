@@ -90,6 +90,7 @@ export function ClientContent() {
                 icon: <FileText size={15} color="#6366f1" />,
                 title: r.title ?? r.keyword,
                 meta: `${labelForContentType(r.content_type)} · ${formatDate(r.completed_at ?? r.created_at)}`,
+                publishedUrl: r.published_doc_url ?? null,
               }))}
               bulk={bulk}
             />
@@ -120,6 +121,9 @@ interface Row {
   icon: React.ReactNode
   title: string
   meta: string
+  // A previously-published Google Doc URL (persisted), shown when this row
+  // hasn't been (re)published in the current session.
+  publishedUrl?: string | null
 }
 
 function ContentSection({ title, subtitle, rows, bulk }: {
@@ -160,6 +164,8 @@ function ContentSection({ title, subtitle, rows, bulk }: {
                   <span style={{ color: '#dc2626' }} title={result.error}>Failed</span>
                 ) : result?.status === 'publishing' ? (
                   <span style={{ color: '#6366f1' }}>Publishing…</span>
+                ) : row.publishedUrl ? (
+                  <a href={row.publishedUrl} target="_blank" rel="noreferrer" style={{ color: '#16a34a', fontWeight: 600, textDecoration: 'none' }} title="Already published to Google Docs">Published · Open Doc ↗</a>
                 ) : row.meta}
               </span>
             </label>

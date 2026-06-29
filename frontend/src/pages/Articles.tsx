@@ -27,7 +27,7 @@ function ArticleCard({ run, selected, onToggleSelect }: {
   onToggleSelect?: (checked: boolean) => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [publishedUrl, setPublishedUrl] = useState<string | null>(run.published_doc_url ?? null)
   const [wpUrl, setWpUrl] = useState<string | null>(null)
   const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
