@@ -420,7 +420,7 @@ client_competitors
 - **Aggregator/directory exclusion:** drop Yelp / YellowPages / Facebook / Angi / etc. via a maintained list — they rank organically but are **citation surfaces, not business rivals** (this also keeps them out of the local‑citation module, §6.4).
 - **Maps competitor with no website** → stays **Maps‑only** (keyed by `place_id`); common for hyper‑local rivals.
 
-**AI‑visibility leg (deferred to the LLM pass):** brand competitors are **names** with no domain, so they fold in when we profile the AI‑Visibility tracker — with a name→entity resolution approach decided there (auto name/domain match + a manual link affordance; LLM‑assisted matching deferred). Until then the entity carries `present_ai=false` and the organic+maps unification stands on its own.
+**AI‑visibility leg — ✅ resolved in §4.9.4:** `brand_tracked_competitors` already carries `competitor_website` + `google_place_id` (stored today, just unused in scan logic), so the AI competitor joins **deterministically** on domain/place_id (name fallback) — no fuzzy matching needed. `present_ai` flips true when a unified competitor appears in `competitor_results`. See §4.9.4.
 
 **Consumers:** a build job on the monitor cadence upserts `client_competitors`; consumed by the **strategy engine/optimizer** (a unified "beats you across channels" view → *coordinated* actions, e.g. one competitor‑teardown brief instead of three disconnected ones), the **consolidated report** (one competitor table), and a Slack **`competitors`** context provider.
 
@@ -437,6 +437,58 @@ client_competitors
 - **Data‑model:** `strategy_actions` gains a **`module`** tag (`organic | maps | ai_visibility | cross`) for the filter views (added to §3.1).
 
 This is the last item on the Maps gap list — **the Maps ↔ SerMaStr contract is now complete** (alerting §4.8.1 · winnability §4.8.2 · goal rollup §4.8.3 · action vocabulary §4.8.4 · competitor unification §4.8.5 · plan integration §4.8.6).
+
+---
+
+## 4.9 LLM / AI‑Visibility — SerMaStr input contract
+
+AI‑Visibility hands SerMaStr, per **(keyword × engine × scan batch)**: presence (`mention_found` + `mention_type` direct/implied/none), **sentiment** (−1..1) + confidence, the **`citations`** the engine cited (its *trust set*), and **`competitor_results`** (the same answer re‑classified per tracked competitor) — plus per‑batch **trend** rollups (overall + per‑engine visibility %), the **mention matrix** (keyword × engine), and on‑demand **invisibility diagnoses**. It is the **thinnest tracker on synthesis** — measurement + diagnosis only (no goal‑tracking, alerting, winnability, value, or action generation today). SerMaStr drives it from the **LLM branch of the SOPs**. The goal (§4.6): **appears in every *triggered* engine** per keyword. Line‑by‑line decisions (2026‑06‑29):
+
+- **Value/demand weighting — ❌ won't apply (visibility‑only).** Even though LLM keywords are real queries, prioritization is by **goal‑gap** (engines missing) + **citation‑authority gap**, not $.
+- **Winnability band — ❌ won't build.** Visibility is treated as **binary**; prioritize invisible keywords by goal‑gap + how often the engine triggers + citation gap.
+- **`triggered`/`not_shown` flag — ✅ build (prerequisite)** · **Alerting — ✅ build** (mirror organic/Maps) — §4.9.1.
+- **Action vocabulary (LLM tactics)** — §4.9.2 · **Plan integration** — unified plan, `module=ai_visibility` — §4.9.3 · **Competitor unification (AI leg) — ✅ resolved** — §4.9.4.
+
+### 4.9.1 The `triggered` flag + AI‑visibility alerting — ✅ design settled
+
+**`triggered`/`not_shown` flag (the goal prerequisite):** add a boolean **`triggered`** (a.k.a. `answer_shown`) to `brand_mention_history`, set **deterministically at scan completion** — `true` for the four chat engines (they always answer); for `google_ai_overview`/`google_ai_mode`, **`false` when no AI block was present** (today that path synthesizes a "No Google…" `raw_response` in `_extract_dataforseo_ai` `brand_scan.py:147‑154` and mislabels it `mention_found=false`). Set the flag at extraction time instead of inferring from the synthetic text; the goal/visibility math then **excludes not‑triggered engines from the denominator** (the §4.6 LLM rule) — a non‑triggering AIO is *not* a miss.
+
+**Alerting** — new **`brand_alerts`** table mirroring `rank_alerts`/`maps_alerts` (same columns + episode model), produced by **`reconcile_brand_alerts(client_id)`** on the scan‑complete path (latest batch vs. prior), delivered via **`notifications.emit`**. Triggers (`brand_alert_*`, config‑tunable):
+
+| Alert type | Trigger (batch‑over‑batch) | Severity |
+|---|---|---|
+| `went_invisible` | a keyword that was visible in ≥ 1 engine is now **invisible across all triggered engines** | critical |
+| `visibility_drop` | overall visibility % fell ≥ N points | warning |
+| `engine_loss` | lost an engine you previously appeared in (for a keyword) | warning |
+| `competitor_overtake` | a tracked competitor now appears for a keyword where you don't (or newly across ≥ M keywords) | warning |
+
+Build timing: spec now; built **Phase 5** inside `strategist_monitor` (emits `brand_alerts` + `strategist_signals`: `goal_gap`/`regression`/`new_competitor`).
+
+### 4.9.2 LLM action vocabulary (tactics) — ✅ design settled
+
+From the invisibility diagnosis + the **citation gap** (what the engine trusts) + competitor presence → `strategy_actions` (`module=ai_visibility`, `category=llm_tactic`; content reuses `page`/`silo`). Mirrors Maps §4.8.4.
+
+| Action kind | Trigger | Recommendation | Routes to | mode · role |
+|---|---|---|---|---|
+| `llm_content_gap` | invisible for a keyword that **triggers** + has intent | create/optimize content that directly answers the query in the form assistants quote | Blog Writer / Local SEO | **auto** draft → **assigned** review · writer |
+| `llm_citation_gap` | invisible while rivals are cited; the engine trusts specific domains | earn presence on the **cited domains** (digital PR / get‑listed / guest) | assigned task (+ cited‑domain list) | **assigned** · link_builder/AM |
+| `llm_schema` | invisible + thin structured data / no FAQ | add schema / FAQ / entity markup so assistants can extract you | **assigned** (or auto draft) · seo_tech |
+| `llm_listings` | a **local** AI answer (AIO/AI‑mode) is invisible; GBP/citation weakness | strengthen GBP + local citations | **assigned** · AM — **deduped vs Maps** `gbp`/`reviews` |
+| `llm_competitor_threat` | `competitor_overtake` | diagnose why the rival surfaces (citations/content/reviews) and counter | assigned · AM |
+
+**Cross‑module synergy (important):** an `llm_content_gap` is often the **same content fix** that improves organic rank — so when the keyword/URL overlaps an organic action, SerMaStr **merges them into one `module=cross` action** serving both. `llm_listings` likewise **dedups against** Maps `maps_gbp_optimization`/`maps_review_gap`. Tiering: `went_invisible` (critical) > `competitor_overtake`/`visibility_drop` (warning) > content/citation gaps (by goal‑gap). Publishing stays a checkpoint (§8).
+
+### 4.9.3 Plan integration — ✅ unified plan only
+
+Same as Maps (§4.8.6): no per‑module store — LLM actions feed the **one unified `strategy_plan`** tagged `module=ai_visibility` (or `cross` when a content fix serves organic+LLM); an "AI Visibility" filter on the Action Plan view gives the slice. Cross‑module dedup ensures one content/listing fix isn't assigned three times.
+
+### 4.9.4 Competitor unification — AI leg resolved (closes §4.8.5)
+
+The §4.8.5 deferral is **resolved deterministically**: `brand_tracked_competitors` **already carries `competitor_website` + `google_place_id`** (stored, just unused in scan logic). The AI competitor joins `client_competitors` on **domain (`competitor_website` → eTLD+1) / `google_place_id`**, with **name fallback** to the unified entity's canonical name / GBP name; `present_ai` flips true when a unified competitor appears in `competitor_results`.
+- **Build action:** start **capturing + using** `competitor_website`/`place_id` in the competitor‑add UI (the columns already exist); a manual‑link affordance covers name‑only residuals; optional domain backfill from citations.
+- **New LLM‑authority signal:** the **`citations`** set (domains each engine trusts) is *distinct* from the tracked‑competitor list — when the client is invisible, SerMaStr mines the cited domains to (a) drive `llm_citation_gap` actions (earn presence there) and (b) surface frequently‑cited domains as **candidate competitors/authorities** to track.
+
+**This completes the trio** — the SerMaStr **evidence base is now fully specified** across **organic (§4.7)**, **Maps (§4.8)**, and **LLM (§4.9)**: every tracker's contract, gaps, goal wiring, alerting, action vocabulary, and competitor unification are defined.
 
 ---
 
