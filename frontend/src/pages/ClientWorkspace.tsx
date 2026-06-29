@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, Plus,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 
@@ -185,6 +185,14 @@ export function ClientWorkspace() {
         title="Rank Trackers"
         subtitle="Track organic and local-pack positions over time."
       >
+        <ActionCard
+          icon={<Plus size={22} />}
+          label="Add Keywords"
+          description="Enter keywords once and add them to organic rank tracking, the geo-grid, and LLM visibility in one step — with first scans kicked off automatically."
+          to={id ? `/clients/${id}/keyword-portal` : undefined}
+          cta="Open"
+          highlight
+        />
         <ActionCard
           icon={<TrendingUp size={22} />}
           label="Organic Rank Tracker"

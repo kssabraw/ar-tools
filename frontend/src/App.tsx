@@ -12,6 +12,7 @@ import { ClientForm } from './pages/ClientForm'
 import { ClientWorkspace } from './pages/ClientWorkspace'
 import { BrandVoice } from './pages/BrandVoice'
 import { Icp } from './pages/Icp'
+import { KeywordPortal } from './pages/KeywordPortal'
 import { LocalSeoContent } from './pages/LocalSeoContent'
 import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
@@ -58,6 +59,7 @@ export default function App() {
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
                       <Route path="/clients/:id/service-pages" element={<ServicePages />} />
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
+                      <Route path="/clients/:id/keyword-portal" element={<KeywordPortal />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />

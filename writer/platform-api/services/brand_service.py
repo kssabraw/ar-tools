@@ -56,6 +56,29 @@ def add_keyword(client_id: str, keyword: str, category: Optional[str]) -> dict:
     return _safe(_q)
 
 
+def add_keywords(client_id: str, keywords: list[str]) -> list[dict]:
+    """Bulk-add brand keywords, skipping any already tracked (case-insensitive).
+
+    Returns the rows actually created (with ids) so callers (the Unified Keyword
+    Portal) can scope a first scan to just the new keywords. Best-effort: a
+    per-row duplicate is skipped rather than failing the batch.
+    """
+    existing = {(k.get("keyword") or "").strip().lower() for k in list_keywords(client_id)}
+    created: list[dict] = []
+    for raw in keywords:
+        kw = raw.strip()
+        if not kw or kw.lower() in existing:
+            continue
+        existing.add(kw.lower())
+        try:
+            created.append(add_keyword(client_id, kw, None))
+        except HTTPException as exc:
+            if exc.detail == "keyword_exists":
+                continue
+            raise
+    return created
+
+
 def update_keyword(client_id: str, keyword_id: str, is_active: Optional[bool], category: Optional[str]) -> dict:
     patch: dict = {"updated_at": "now()"}
     if is_active is not None:
