@@ -426,7 +426,7 @@ def get_session(
         publish_config=session.get("publish_config") or {},
         publish_available={
             "github": bool(_s.github_publish_token),
-            "drive": bool(_s.google_oauth_client_id and _s.google_oauth_refresh_token),
+            "drive": _drive_publish_available(session),
         },
     )
 
@@ -1902,13 +1902,49 @@ def set_publish_config(
     return {"publish_config": cfg}
 
 
+def _drive_publish_available(session: dict) -> bool:
+    """Whether "Save to Drive" can run for this session.
+
+    Two paths: (1) the preferred one — the suite's Apps Script webhook is
+    configured AND the session is linked to an AR Tools client, so articles
+    publish into the client's Drive folder (same path as the blog writer / Local
+    SEO pages); or (2) the legacy per-session Drive-OAuth creds are set."""
+    from config import settings as suite_settings
+
+    _s = get_settings()
+    apps_script_ok = bool(getattr(suite_settings, "google_apps_script_url", None) and session.get("client_id"))
+    oauth_ok = bool(_s.google_oauth_client_id and _s.google_oauth_refresh_token)
+    return apps_script_ok or oauth_ok
+
+
+async def _publish_to_client_drive(client_id: str, title: str, html: str) -> dict | None:
+    """Publish article HTML into the linked client's Drive folder via the suite's
+    Apps Script webhook (the shared `google_docs` service the rest of the suite
+    uses). Returns the Fanout-shaped {doc_id, url} on success, or None when the
+    client has no Drive folder configured (the caller then falls back to the
+    per-session OAuth path). Raises HTTPException on a webhook failure."""
+    from services.google_docs import GoogleDocError
+    from fanout.writer.publish.client_drive import publish_html_to_client_drive
+
+    try:
+        return await publish_html_to_client_drive(client_id, title, html, content_type="blog_post")
+    except GoogleDocError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
 @router.post("/sessions/{session_id}/clusters/{cluster_id}/publish/drive")
-def publish_cluster_drive(
+async def publish_cluster_drive(
     session_id: str, cluster_id: str, user: AuthedUser = Depends(require_owner)
 ) -> dict:
-    """Save one article to Google Drive as a Google Doc (from its HTML)."""
+    """Save one article to Google Drive as a Google Doc (from its HTML).
+
+    Preferred path: when the session is linked to an AR Tools client, publish into
+    the *client's* Drive folder via the suite's Apps Script webhook — no per-session
+    folder or Drive-OAuth needed, and it reuses the creds already live for the rest
+    of the suite. Falls back to the legacy per-session Drive-OAuth path when the
+    session isn't client-linked (or the client has no folder configured)."""
+    from config import settings as suite_settings
     from fanout.writer import store as article_store
-    from fanout.writer.publish import drive as drive_pub
 
     session = _require_session(user, session_id)
     if store.cluster_session_id(cluster_id) != session_id:
@@ -1920,9 +1956,20 @@ def publish_cluster_drive(
     html = aj.get("article_html") or ""
     if not html:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Article has no HTML body")
+    title = aj.get("title") or "Article"
+
+    client_id = session.get("client_id")
+    if client_id and getattr(suite_settings, "google_apps_script_url", None):
+        res = await _publish_to_client_drive(client_id, title, html)
+        if res is not None:
+            return {"published": True, **res}
+        # Client has no Drive folder configured — fall through to the OAuth path.
+
+    from fanout.writer.publish import drive as drive_pub
+
     folder_id = ((session.get("publish_config") or {}).get("drive") or {}).get("folder_id") or None
     try:
-        res = drive_pub.create_doc_from_html(name=aj.get("title") or "Article", html=html, folder_id=folder_id)
+        res = drive_pub.create_doc_from_html(name=title, html=html, folder_id=folder_id)
     except drive_pub.DrivePublishError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"published": True, **res}

@@ -1042,6 +1042,9 @@ export interface ScheduleRequest {
   content_type?: "blog_post" | "local_seo_page" | "service_page";
   location?: string;
   location_code?: number;
+  // Opt-in: publish each finished piece to the linked client's Google Drive
+  // folder (a Google Doc) right after it generates. Needs a client-linked session.
+  auto_publish?: boolean;
 }
 export interface ScheduleEstimate {
   count: number;

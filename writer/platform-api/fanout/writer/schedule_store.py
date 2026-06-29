@@ -15,7 +15,7 @@ def create_schedule(
     per_day: int | None = None, start_date: date | None = None,
     time_of_day: time | None = None, tz_name: str = "UTC",
     content_type: str = "blog_post", location: str | None = None,
-    location_code: int | None = None,
+    location_code: int | None = None, auto_publish: bool = False,
 ) -> dict:
     """Insert the parent schedule + one queued run per planned cluster. Returns the parent
     row augmented with `run_count`. (Two statements — PostgREST has no multi-table txn; the
@@ -33,7 +33,7 @@ def create_schedule(
         "time_of_day": time_of_day.isoformat() if time_of_day else "09:00",
         "timezone": tz_name, "total_count": len(runs),
         "content_type": content_type, "location": location,
-        "location_code": location_code,
+        "location_code": location_code, "auto_publish": auto_publish,
     }).execute().data[0]
 
     rows = [{
