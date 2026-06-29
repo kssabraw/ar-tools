@@ -1,6 +1,80 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-28 · **Slack conversational assistant (SerMastr)** (latest)
+## ⏩ Update — 2026-06-29 · **Asana task integration** (latest)
+
+Connects AR Tools to the team's Asana workspace. **Two features, one token**
+(branch `claude/asana-integration-options-cp3zul` — **draft PR #170**; Phases 0–2
+built, Phase 3 ahead):
+
+- **A. Monthly section automation** — each client has an **app-defined task
+  template** (its own editable monthly task list, edited in AR Tools). A job
+  creates those tasks in the client's Asana project under a new **`<Month YYYY>`**
+  section: assignee + category carried, **Status = Not Started**, **no due dates**,
+  inserted above the backlog, **idempotent** (re-run = no-op). Runs **auto on the
+  1st** (shared `gsc_scheduler` → `asana_monthly` job) **and** via a **"Generate
+  this month"** button. UI: client workspace → **Project Management → Asana Tasks**
+  (`/clients/:id/asana-tasks`) — the template editor (name + assignee + category
+  pickers populated from Asana) + project-GID field + generate button.
+- **B. Team Workload** — a suite-level **"Workload"** nav page (`/workload`,
+  `GET /asana/workload`) showing each tracked member's open-task count across all
+  clients + per-day due-date chips with same-day-stack highlighting + overload
+  flags. Read-only (Phase 3 will add the daily Slack/in-app alert).
+
+**Code:** `services/asana_service.py` (REST client + pure helpers),
+`services/asana_monthly.py` (Feature A), `services/asana_workload.py` (Feature B),
+`routers/asana.py`, `models/asana.py`; frontend `pages/AsanaTasks.tsx` +
+`pages/TeamWorkload.tsx`. Migrations `20260629120000_asana_client_projects.sql`
+(client→project map) + `20260629130000_asana_task_templates.sql` (per-client
+template + widens `async_jobs.job_type` for `asana_monthly`). Everything **degrades
+gracefully** — absent the token / mapping / team list, the relevant feature is
+skipped with a note, never an error (the GSC/Slack pattern).
+
+**Verified:** the Asana test suite is green (`test_asana_service`,
+`test_asana_monthly`, `test_asana_workload`); frontend typechecks + builds clean.
+Nothing runs live until the provisioning below is done.
+
+### ⚠️ Asana provisioning still required (one-time)
+
+The code is deployed-ready but inert until these are set. All secrets/vars go on
+the **PLATFORM** Railway service.
+
+1. **Apply the migrations** to the live Supabase project (both are additive — a
+   new table + a `job_type` constraint widen): `20260629120000_asana_client_projects`
+   and `20260629130000_asana_task_templates`.
+2. **Token + workspace** — create an Asana **Personal Access Token**
+   (developers.asana.com → *My access tokens*) → set **`ASANA_TOKEN`**. Set
+   **`asana_workspace_gid`** = your workspace GID (`GET https://app.asana.com/api/1.0/workspaces`
+   with `Authorization: Bearer <token>`).
+3. **Custom-field GIDs** — for any client project, call
+   `GET /projects/<project_gid>/custom_field_settings?opt_fields=custom_field.name,custom_field.gid,custom_field.enum_options.name,custom_field.enum_options.gid`
+   and read off: the **Status** field GID + its **"Not Started"** option GID, and
+   the **category** field GID. Set **`asana_status_field_gid`**,
+   **`asana_status_not_started_option_gid`**, **`asana_category_field_gid`**.
+   (Absent these, tasks are still created — just without Status/category stamped.)
+4. **Per-client project mapping** — in the app: open a client → **Asana Tasks** →
+   paste the project GID (from the Asana project URL `app.asana.com/0/<project_gid>/…`)
+   → **Save**. One per client.
+5. **Per-client task templates** — fill each client's monthly task list in the
+   **Asana Tasks** editor (no Asana "Template" section needed — the app is the
+   source of truth).
+6. **Team list (Feature B)** — **`asana_team_member_gids`** = comma-separated Asana
+   user GIDs to track for workload (`GET /workspaces/<ws>/users?opt_fields=name,email`).
+7. *(Optional, no code)* install Asana's official **Slack app** for the Slack ⇄
+   Asana leg (task notifications in Slack + create-task-from-Slack).
+
+**Cadence / tunables (config.py, optional):** `asana_month_generate_day` (default
+`1`), `asana_month_target_offset` (default `0` = current month), feature toggles
+`asana_monthly_enabled` / `asana_workload_enabled`, thresholds
+`asana_workload_max_open` (25) / `asana_workload_max_due_same_day` (4).
+
+**Next:** Phase 3 — a daily scheduler due-check that pings Slack/in-app via the
+notifications service when a member is overloaded or has too many tasks due the
+same day. Later (optional Phase 4): two-way sync (Asana webhook → close rank
+alerts / mark Action Plan items done), per-client Asana-project mapping CRUD UI.
+
+---
+
+## ⏩ Update — 2026-06-28 · **Slack conversational assistant (SerMastr)**
 
 Two-way Slack: @mention **SerMastr** in a channel and it answers a
 natural-language question about a client's search performance, grounded in the
