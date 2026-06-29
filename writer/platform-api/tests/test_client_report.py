@@ -115,38 +115,83 @@ def test_build_html_includes_present_sections():
 
 
 # ---------------------------------------------------------------------------
-# campaign-health executive summary (Phase 4)
+# executive summary (Phase 4 — positive, owner-friendly, no health label)
 # ---------------------------------------------------------------------------
-def test_health_color():
-    assert cr._health_color("Strong") == "#16a34a"
-    assert cr._health_color("At risk") == "#ef4444"
-    assert cr._health_color(None) == "#6366f1"
+def test_section_exec_empty_without_data():
+    assert cr._section_exec(_data()) == ""
 
 
-def test_section_health_empty_without_data():
-    assert cr._section_health(_data()) == ""
-
-
-def test_section_health_renders_and_escapes():
-    data = _data(health={
-        "overall_health": "Needs attention", "health_score": 62,
-        "headline": "Rankings <b>steady</b> but local pack slipping.",
-        "wins": ["Top-3 for emergency plumber"],
-        "risks": ["Lost page 1 for blocked drains"],
-        "next_steps": ["Reoptimize the drains page"],
+def test_section_exec_renders_positive_no_health_label_and_escapes():
+    data = _data(exec={
+        "headline": "Strong month — visibility <b>up</b> across the board.",
+        "highlights": ["Impressions up 24% vs last month"],
+        "focus_next": ["Expand the drains page to win more local searches"],
     })
     out = cr.build_report_html(data)
     assert "Executive summary" in out
-    assert "Needs attention · 62/100" in out
-    assert "Top-3 for emergency plumber" in out and "Reoptimize the drains page" in out
-    # the executive summary renders first (before Organic etc.)
-    assert out.index("Executive summary") < out.index("No report data is available") \
-        if "No report data is available" in out else True
-    # headline is escaped
-    assert "<b>steady</b>" not in out and "&lt;b&gt;steady&lt;/b&gt;" in out
+    assert "Impressions up 24% vs last month" in out
+    assert "focused on next" in out and "Expand the drains page" in out
+    # no health label / score / risks wording
+    assert "/100" not in out and "Risks" not in out
+    # headline escaped
+    assert "<b>up</b>" not in out and "&lt;b&gt;up&lt;/b&gt;" in out
 
 
-def test_generate_health_narrative_no_key_returns_none(monkeypatch):
+def test_generate_exec_summary_no_key_returns_none(monkeypatch):
     from config import settings
     monkeypatch.setattr(settings, "anthropic_api_key", "")
-    assert cr.generate_health_narrative("Acme", {"start": "x", "end": "y"}, {}, {}) is None
+    assert cr.generate_exec_summary("Acme", {"start": "x", "end": "y"}, {}, {}) is None
+
+
+# ---------------------------------------------------------------------------
+# build_comparisons (30 / 90 / since-start) + performance section
+# ---------------------------------------------------------------------------
+def _series_rows():
+    """Daily rows over ~120 days: impressions climbing, rank improving."""
+    from datetime import date as _d, timedelta as _td
+    today = _d(2026, 6, 26)
+    rows = []
+    for i in range(120):  # oldest → newest
+        day = today - _td(days=119 - i)
+        rows.append({"date": day.isoformat(), "impressions": 100 + i, "clicks": None,
+                     "gsc_position": 30 - (i * 0.1)})
+    return rows, today
+
+
+def test_build_comparisons_volume_and_rank():
+    rows, today = _series_rows()
+    comp = cr.build_comparisons(rows, today)
+    assert comp is not None
+    assert comp["impressions"]["current"] is not None
+    # impressions trended up → all changes positive
+    ch = comp["impressions"]["changes"]
+    assert ch["30d"] > 0 and ch["90d"] > 0 and ch["start"] > 0
+    # rank improved (position number fell) → positive "positions gained"
+    assert comp["rank"]["changes_positions"]["start"] > 0
+    # clicks were all None → omitted
+    assert "clicks" not in comp
+
+
+def test_build_comparisons_empty():
+    assert cr.build_comparisons([], cr.date.today()) is None
+
+
+def test_section_performance_renders_changes():
+    rows, today = _series_rows()
+    data = _data(organic={"comparisons": cr.build_comparisons(rows, today)})
+    out = cr.build_report_html(data)
+    assert "Performance highlights" in out
+    assert "Impressions" in out and "Average ranking" in out
+    assert "Since we started" in out
+    assert "▲" in out  # positive change arrow
+
+
+# ---------------------------------------------------------------------------
+# AI visibility section (auto-populates once scans run)
+# ---------------------------------------------------------------------------
+def test_section_ai_visibility():
+    assert cr._section_ai_visibility(_data()) == ""
+    data = _data(ai_visibility={"engines": {"chatgpt": "3 of 5 answers", "perplexity": "1 of 5 answers"}})
+    out = cr.build_report_html(data)
+    assert "AI search visibility" in out
+    assert "ChatGPT" in out and "3 of 5 answers" in out

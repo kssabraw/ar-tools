@@ -56,13 +56,22 @@ delivered by email + saved to the client's Google Drive folder.
 - **Phase 2 — Google data:** GA4 connector (sessions/users/conversions/channels,
   MoM) + GBP Performance connector. Add both sections.
 - **Phase 3 — Asana:** completed-tasks connector + section; unlocks Report B.
-- **Phase 4 — Campaign-health & strategy overview (DONE):** a Claude (Sonnet)
-  narrative (`generate_health_narrative`, forced tool-use → `{overall_health,
-  health_score, headline, wins, risks, next_steps}`) synthesizing the gathered
-  sections + open `rank_alerts` + latest `reopt_plans`. Rendered as the
-  **Executive summary** at the top of the PDF. Best-effort — absent the Anthropic
-  key or on failure the section is omitted (`section_status.health`). Model:
-  `client_report_health_model` = `claude-sonnet-4-6`.
+- **Phase 4 — Executive summary + performance comparisons (DONE; client-facing,
+  positive):** the report is written **for the business owner** — plain, upbeat,
+  jargon-free, wins-focused, **no health label/score**.
+  - **Performance highlights** section: 30-day / 90-day / since-start comparisons
+    for **impressions, organic clicks, and average ranking** (`build_comparisons`
+    over `rank_keyword_metrics`). Clicks ("traffic") auto-populate once GSC clicks
+    / GA4 are connected (none today); GA4 sessions replace clicks in Phase 2.
+  - **AI search visibility** section (`_gather_ai_visibility`): per-engine
+    appearance counts from the latest brand scan — auto-populates once AI
+    Visibility scans run (none today).
+  - **Executive summary** (`generate_exec_summary`, Claude forced tool-use →
+    `{headline, highlights, focus_next}`) over the comparisons + sections + the
+    Action Plan (planned next steps). Best-effort (`section_status.exec`); model
+    `client_report_health_model` = `claude-sonnet-4-6`.
+  - **GBP metric growth** (calls/directions/searches over time) is the one piece
+    that genuinely waits for Phase 2 — no GBP time-series is stored yet.
 - **Phase 5 — Delivery + scheduling:** PDF email attachments + recipient routing
   (AM for A, team for B), Drive-folder copy (Apps Script extension), monthly +
   weekly schedules on `gsc_scheduler`, on-demand "Generate now."

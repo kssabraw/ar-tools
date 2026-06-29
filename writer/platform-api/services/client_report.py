@@ -3,8 +3,16 @@
 Phase 0–1: assemble a per-client report from data AR Tools already has (organic
 rankings, Maps geo-grids, GBP profile/reviews), render it to a **PDF**
 (WeasyPrint, HTML/CSS → PDF), store it in the private `reports` storage bucket,
-and record a `client_reports` row. Later phases add GA4 + GBP-performance
-(Phase 2), Asana (Phase 3), a campaign-health narrative (Phase 4), and
+and record a `client_reports` row.
+
+Phase 4 (this report is **client-facing & positive**): a **Performance
+highlights** section with 30-day / 90-day / since-start comparisons (impressions,
+organic clicks, average ranking — clicks auto-populate once GSC/GA4 traffic is
+connected), an **AI search visibility** section (auto-populates once AI Visibility
+scans run), and a Claude-written **executive summary** in plain, upbeat,
+business-owner language (no SEO jargon, wins-focused, no "health score").
+
+Later phases add GA4 + GBP-performance growth (Phase 2), Asana (Phase 3), and
 email + Drive-folder delivery + scheduling (Phase 5).
 
 Split for testability: data gathering + the pure HTML/SVG builders are
@@ -32,6 +40,7 @@ _SIGNED_URL_TTL = 60 * 60 * 24 * 7  # 7 days
 _LLM_TIMEOUT = 60.0                 # bound the campaign-health Claude call
 _MAX_KEYWORDS = 40
 _DEFAULT_PERIOD_DAYS = 30
+_COMPARISON_LOOKBACK_DAYS = 400  # history window for 30/90/since-start comparisons
 
 
 # ---------------------------------------------------------------------------
@@ -200,31 +209,182 @@ def _section_gbp(data: dict) -> str:
     )
 
 
-def _health_color(label) -> str:
-    return {
-        "Strong": "#16a34a", "Steady": "#84cc16",
-        "Needs attention": "#f59e0b", "At risk": "#ef4444",
-    }.get(label, "#6366f1")
+# --- Period comparisons (30-day / 90-day / since-start) — pure ---------------
+def _window_sum(by_date: dict, end: date, days: int) -> Optional[float]:
+    start = end - timedelta(days=days)
+    vals = [v for d, v in by_date.items() if start < d <= end]
+    return sum(vals) if vals else None
 
 
-def _section_health(data: dict) -> str:
-    h = data.get("health")
-    if not h:
+def _window_avg(by_date: dict, end: date, days: int) -> Optional[float]:
+    start = end - timedelta(days=days)
+    vals = [v for d, v in by_date.items() if start < d <= end]
+    return sum(vals) / len(vals) if vals else None
+
+
+def _pct(curr: Optional[float], prev: Optional[float]) -> Optional[float]:
+    if curr is None or not prev:
+        return None
+    return round((curr - prev) / prev * 100, 1)
+
+
+def _volume_changes(by_date: dict, today: date, earliest: date) -> Optional[dict]:
+    cur = _window_sum(by_date, today, 30)
+    if cur is None:
+        return None
+    return {"current": cur, "changes": {
+        "30d": _pct(cur, _window_sum(by_date, today - timedelta(days=30), 30)),
+        "90d": _pct(cur, _window_sum(by_date, today - timedelta(days=90), 30)),
+        "start": _pct(cur, _window_sum(by_date, earliest + timedelta(days=30), 30)),
+    }}
+
+
+def _rank_changes(by_date: dict, today: date, earliest: date) -> Optional[dict]:
+    cur = _window_avg(by_date, today, 7)
+    if cur is None:
+        return None
+
+    def improvement(prev):  # rank: lower is better → positive = positions gained
+        return None if prev is None else round(prev - cur, 1)
+
+    return {"current": cur, "changes_positions": {
+        "30d": improvement(_window_avg(by_date, today - timedelta(days=30), 7)),
+        "90d": improvement(_window_avg(by_date, today - timedelta(days=90), 7)),
+        "start": improvement(_window_avg(by_date, earliest + timedelta(days=7), 7)),
+    }}
+
+
+def build_comparisons(metric_rows: list[dict], today: date) -> Optional[dict]:
+    """30/90/since-start changes for impressions, organic clicks, and avg ranking.
+
+    Pure. Volume metrics compare the trailing-30-day total to the same window 30/90
+    days ago and to the first 30 days of data; ranking compares the trailing-7-day
+    average. A metric/window with no data is omitted (None) — never fabricated."""
+    impr, clk, rsum, rn = {}, {}, {}, {}
+    dates: set = set()
+    for r in metric_rows:
+        ds = r.get("date")
+        try:
+            d = date.fromisoformat(str(ds)[:10])
+        except (TypeError, ValueError):
+            continue
+        dates.add(d)
+        if r.get("impressions") is not None:
+            impr[d] = impr.get(d, 0) + (r["impressions"] or 0)
+        if r.get("clicks") is not None:
+            clk[d] = clk.get(d, 0) + (r["clicks"] or 0)
+        pos = r.get("gsc_position")
+        if pos is None:
+            pos = r.get("tracked_rank")
+        if pos is not None:
+            rsum[d] = rsum.get(d, 0) + pos
+            rn[d] = rn.get(d, 0) + 1
+    if not dates:
+        return None
+    earliest = min(dates)
+    rank = {d: rsum[d] / rn[d] for d in rsum}
+    out: dict = {}
+    if (v := _volume_changes(impr, today, earliest)):
+        out["impressions"] = v
+    if (v := _volume_changes(clk, today, earliest)):
+        out["clicks"] = v
+    if (v := _rank_changes(rank, today, earliest)):
+        out["rank"] = v
+    return out or None
+
+
+def _fmt_int(v) -> str:
+    try:
+        return f"{int(round(float(v))):,}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _fmt_pct(p) -> str:
+    if p is None:
+        return "—"
+    arrow = "▲" if p > 0 else ("▼" if p < 0 else "")
+    return f"{arrow} {'+' if p > 0 else ''}{round(p)}%"
+
+
+def _fmt_positions(d) -> str:
+    if d is None:
+        return "—"
+    if d > 0:
+        return f"▲ +{round(d, 1):g} positions"
+    if d < 0:
+        return f"▼ {round(d, 1):g} positions"
+    return "no change"
+
+
+def _perf_row(label, current, c30, c90, cstart) -> str:
+    return (f"<tr><td>{_esc(label)}</td><td class='num'>{_esc(current)}</td>"
+            f"<td class='num pos'>{_esc(c30)}</td><td class='num pos'>{_esc(c90)}</td>"
+            f"<td class='num pos'>{_esc(cstart)}</td></tr>")
+
+
+def _section_performance(data: dict) -> str:
+    comp = (data.get("organic") or {}).get("comparisons")
+    if not comp:
         return ""
-    label = h.get("overall_health")
-    score = h.get("health_score")
-    badge = _esc(label) + (f" · {_esc(score)}/100" if isinstance(score, int) else "")
-    color = _health_color(label)
+    rows = []
+    for key, label, fmt_val, change_key, fmt_change in (
+        ("impressions", "Impressions", _fmt_int, "changes", _fmt_pct),
+        ("clicks", "Organic clicks", _fmt_int, "changes", _fmt_pct),
+        ("rank", "Average ranking", _fmt_pos, "changes_positions", _fmt_positions),
+    ):
+        m = comp.get(key)
+        if not m or m.get("current") is None:
+            continue
+        ch = m.get(change_key, {})
+        rows.append(_perf_row(label, fmt_val(m["current"]),
+                              fmt_change(ch.get("30d")), fmt_change(ch.get("90d")), fmt_change(ch.get("start"))))
+    if not rows:
+        return ""
+    return (
+        "<section><h2>Performance highlights</h2>"
+        "<table><thead><tr><th>Metric</th><th class='num'>Last 30 days</th>"
+        "<th class='num'>vs 30 days ago</th><th class='num'>vs 90 days ago</th>"
+        "<th class='num'>Since we started</th></tr></thead><tbody>"
+        + "".join(rows) + "</tbody></table></section>"
+    )
+
+
+def _section_ai_visibility(data: dict) -> str:
+    a = data.get("ai_visibility")
+    if not a or not a.get("engines"):
+        return ""
+    items = "".join(
+        f"<li><strong>{_esc(_ENGINE_LABELS.get(e, e))}</strong>: appears in {_esc(v)}</li>"
+        for e, v in a["engines"].items()
+    )
+    return (
+        "<section><h2>AI search visibility</h2>"
+        "<p class='lead'>How often the brand shows up when AI assistants answer your keywords:</p>"
+        f"<ul class='reviews'>{items}</ul></section>"
+    )
+
+
+_ENGINE_LABELS = {
+    "chatgpt": "ChatGPT", "claude": "Claude", "gemini": "Gemini",
+    "perplexity": "Perplexity", "google_ai_overview": "Google AI Overviews",
+    "google_ai_mode": "Google AI Mode",
+}
+
+
+def _section_exec(data: dict) -> str:
+    e = data.get("exec")
+    if not e:
+        return ""
 
     def _list(title, items):
-        lis = "".join(f"<li>{_esc(x)}</li>" for x in (items or [])[:4])
+        lis = "".join(f"<li>{_esc(x)}</li>" for x in (items or [])[:5])
         return f"<div class='hcol'><h4>{title}</h4><ul>{lis}</ul></div>" if lis else ""
 
-    cols = _list("Wins", h.get("wins")) + _list("Risks", h.get("risks")) + _list("Next steps", h.get("next_steps"))
+    cols = _list("Highlights", e.get("highlights")) + _list("What we’re focused on next", e.get("focus_next"))
     return (
         "<section class='exec'><h2>Executive summary</h2>"
-        f"<div class='health-badge' style='background:{color}'>{badge}</div>"
-        f"<p class='headline'>{_esc(h.get('headline'))}</p>"
+        f"<p class='headline'>{_esc(e.get('headline'))}</p>"
         f"<div class='hcols'>{cols}</div></section>"
     )
 
@@ -243,8 +403,8 @@ def build_report_html(data: dict) -> str:
     client = data.get("client", {})
     period = data.get("period", {})
     sections = "".join(
-        s for s in (_section_health(data), _section_organic(data),
-                    _section_geogrid(data), _section_gbp(data)) if s
+        s for s in (_section_exec(data), _section_performance(data), _section_organic(data),
+                    _section_geogrid(data), _section_ai_visibility(data), _section_gbp(data)) if s
     )
     if not sections:
         sections = "<section><p class='lead'>No report data is available for this client yet.</p></section>"
@@ -289,8 +449,8 @@ td.num, th.num { text-align:right; }
 .legend .sw { display:inline-block; width:9px; height:9px; border-radius:2px; margin:0 3px 0 10px; vertical-align:middle; }
 .reviews { color:#334155; } .reviews li { margin-bottom:4px; }
 footer { margin-top:24px; padding-top:8px; border-top:1px solid #e2e8f0; color:#94a3b8; font-size:9px; text-align:center; }
-.exec .health-badge { display:inline-block; color:#fff; font-weight:700; font-size:11px; border-radius:999px; padding:4px 12px; margin:4px 0 8px; }
-.exec .headline { font-size:13px; color:#0f172a; }
+.exec .headline { font-size:13px; color:#0f172a; font-weight:600; }
+td.num.pos { font-weight:600; color:#166534; }
 .hcols { display:flex; gap:16px; margin-top:8px; }
 .hcol { flex:1; } .hcol h4 { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#94a3b8; margin:0 0 4px; }
 .hcol ul { margin:0; padding-left:16px; } .hcol li { margin-bottom:3px; color:#334155; }
@@ -316,15 +476,18 @@ def _gather_organic(supabase, client_id: str, today: date) -> Optional[dict]:
         return None
     kw_ids = [k["id"] for k in kws]
     metrics: dict[str, list[dict]] = {}
-    cutoff = date.fromordinal(today.toordinal() - 90).isoformat()
+    flat_rows: list[dict] = []
+    # Full history (capped) so the since-start comparison has a baseline.
+    cutoff = date.fromordinal(today.toordinal() - _COMPARISON_LOOKBACK_DAYS).isoformat()
     for r in (
         supabase.table("rank_keyword_metrics")
-        .select("keyword_id, date, gsc_position, tracked_rank")
+        .select("keyword_id, date, gsc_position, tracked_rank, impressions, clicks")
         .in_("keyword_id", kw_ids)
         .gte("date", cutoff)
         .execute()
     ).data or []:
         metrics.setdefault(r["keyword_id"], []).append(r)
+        flat_rows.append(r)
 
     keywords, top10, improved, declined = [], 0, 0, 0
     for k in kws:
@@ -347,6 +510,7 @@ def _gather_organic(supabase, client_id: str, today: date) -> Optional[dict]:
     return {
         "keywords": keywords,
         "summary": {"tracked": len(keywords), "top10": top10, "improved": improved, "declined": declined},
+        "comparisons": build_comparisons(flat_rows, today),
     }
 
 
@@ -434,6 +598,7 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
     for key, fn in (
         ("organic", lambda: _gather_organic(supabase, client_id, period_end)),
         ("geogrid", lambda: _gather_geogrid(supabase, client_id)),
+        ("ai_visibility", lambda: _gather_ai_visibility(supabase, client_id)),
         ("gbp", lambda: _gather_gbp(client)),
     ):
         try:
@@ -449,74 +614,82 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
     return data
 
 
+def _gather_ai_visibility(supabase, client_id: str) -> Optional[dict]:
+    """Latest AI-visibility scan, per-engine appearance counts. None until a scan
+    has run (auto-populates once AI Visibility is used for the client)."""
+    newest = (
+        supabase.table("brand_mention_history").select("scan_batch_id")
+        .eq("client_id", client_id).order("created_at", desc=True).limit(1).execute()
+    ).data
+    if not newest:
+        return None
+    rows = (
+        supabase.table("brand_mention_history").select("engine, mention_found")
+        .eq("client_id", client_id).eq("scan_batch_id", newest[0]["scan_batch_id"]).execute()
+    ).data or []
+    if not rows:
+        return None
+    per: dict[str, dict] = {}
+    for r in rows:
+        e = per.setdefault(r.get("engine") or "?", {"found": 0, "total": 0})
+        e["total"] += 1
+        if r.get("mention_found"):
+            e["found"] += 1
+    return {"engines": {e: f"{v['found']} of {v['total']} answers" for e, v in per.items()}}
+
+
 # ---------------------------------------------------------------------------
-# Campaign-health narrative (Phase 4) — one Claude call → executive summary.
+# Executive summary (Phase 4) — one Claude call, positive + owner-friendly.
 # ---------------------------------------------------------------------------
-_HEALTH_SYSTEM = (
-    "You are a senior SEO strategist writing the executive summary of a monthly "
-    "client report. You are given JSON describing one client's performance "
-    "(organic rankings, local-pack/Maps coverage, Google Business Profile) plus "
-    "open ranking-drop alerts and the current reoptimization Action Plan. Write a "
-    "concise, client-appropriate summary. Base everything ONLY on the data — never "
-    "invent numbers. Be honest but constructive: surface real wins and real risks. "
-    "Keep each bullet to one short sentence."
+_EXEC_SYSTEM = (
+    "You are an SEO account manager writing the executive summary of a monthly "
+    "report FOR THE BUSINESS OWNER — a smart non-specialist who is not an SEO "
+    "professional. Write in plain, warm, jargon-free language: avoid SEO jargon "
+    "(SERP, CTR, geo-grid, etc.) or explain it in everyday terms. Be POSITIVE and "
+    "upbeat — lead with wins and momentum, and celebrate improvements with their "
+    "specific numbers (e.g. 'impressions are up 24% this month'). Base everything "
+    "ONLY on the supplied data; never invent numbers. Keep each bullet to one "
+    "short, encouraging sentence. 'focus_next' should frame upcoming work as "
+    "opportunities, not problems."
 )
-_HEALTH_TOOL = {
-    "name": "emit_health",
-    "description": "Emit the campaign-health executive summary.",
+_EXEC_TOOL = {
+    "name": "emit_summary",
+    "description": "Emit the positive, owner-friendly executive summary.",
     "input_schema": {
         "type": "object",
         "properties": {
-            "overall_health": {
-                "type": "string",
-                "enum": ["Strong", "Steady", "Needs attention", "At risk"],
-                "description": "Overall campaign health for the period.",
-            },
-            "health_score": {"type": "integer", "description": "0–100 overall health score."},
-            "headline": {"type": "string", "description": "1–2 sentence headline summary."},
-            "wins": {"type": "array", "items": {"type": "string"}, "description": "Up to 4 wins."},
-            "risks": {"type": "array", "items": {"type": "string"}, "description": "Up to 4 risks/issues."},
-            "next_steps": {"type": "array", "items": {"type": "string"}, "description": "Up to 4 recommended next steps."},
+            "headline": {"type": "string", "description": "1–2 sentence upbeat headline of the month's progress."},
+            "highlights": {"type": "array", "items": {"type": "string"},
+                           "description": "Up to 5 concrete wins, each with its number where available."},
+            "focus_next": {"type": "array", "items": {"type": "string"},
+                           "description": "Up to 4 opportunities/next steps, framed positively."},
         },
-        "required": ["overall_health", "headline", "wins", "risks", "next_steps"],
+        "required": ["headline", "highlights", "focus_next"],
     },
 }
 
 
-def _gather_health_inputs(supabase, client_id: str) -> dict:
-    """Extra signals for the narrative beyond the rendered sections (best-effort)."""
+def _gather_exec_inputs(supabase, client_id: str) -> dict:
+    """Forward-looking signal for the summary: the current Action Plan (best-effort).
+    Kept positive — we surface planned next steps, not raw drop alerts."""
     out: dict = {}
     try:
-        alerts = (
-            supabase.table("rank_alerts").select("keyword, message")
-            .eq("client_id", client_id).is_("resolved_at", "null").execute()
-        ).data or []
-        if alerts:
-            out["open_drop_alerts"] = alerts[:10]
-    except Exception as exc:
-        logger.warning("report_health_alerts_failed", extra={"client_id": client_id, "error": str(exc)})
-    try:
         plan = (
-            supabase.table("reopt_plans").select("summary, action_count, items")
+            supabase.table("reopt_plans").select("summary, items")
             .eq("client_id", client_id).order("created_at", desc=True).limit(1).execute()
         ).data
         if plan:
-            p = plan[0]
-            out["action_plan"] = {
-                "summary": p.get("summary"),
-                "action_count": p.get("action_count"),
-                "top_actions": [
-                    {"keyword": a.get("keyword"), "recommendation": a.get("recommendation")}
-                    for a in (p.get("items") or [])[:6]
-                ],
-            }
+            out["planned_next_steps"] = [
+                {"keyword": a.get("keyword"), "recommendation": a.get("recommendation")}
+                for a in (plan[0].get("items") or [])[:6]
+            ]
     except Exception as exc:
-        logger.warning("report_health_plan_failed", extra={"client_id": client_id, "error": str(exc)})
+        logger.warning("report_exec_plan_failed", extra={"client_id": client_id, "error": str(exc)})
     return out
 
 
-def generate_health_narrative(client_name: Optional[str], period: dict, data: dict, signals: dict) -> Optional[dict]:
-    """Claude → {overall_health, health_score, headline, wins, risks, next_steps}.
+def generate_exec_summary(client_name: Optional[str], period: dict, data: dict, signals: dict) -> Optional[dict]:
+    """Claude → {headline, highlights, focus_next} (positive, owner-friendly).
 
     Best-effort: returns None when the Anthropic key is unset or the call fails, so
     the report still renders without the summary."""
@@ -527,17 +700,18 @@ def generate_health_narrative(client_name: Optional[str], period: dict, data: di
     context = {
         "client": client_name,
         "period": period,
-        "organic": data.get("organic", {}).get("summary"),
-        "organic_keywords": (data.get("organic", {}).get("keywords") or [])[:15],
-        "maps": {
+        "performance_changes": (data.get("organic") or {}).get("comparisons"),
+        "rankings_summary": (data.get("organic") or {}).get("summary"),
+        "top_keywords": ((data.get("organic") or {}).get("keywords") or [])[:15],
+        "local_maps": {
             "keywords": [
                 {"keyword": k.get("keyword"), "average_rank": k.get("average_rank"),
                  "top3_pins": k.get("top3_pins"), "total_pins": k.get("total_pins")}
-                for k in (data.get("geogrid", {}).get("keywords") or [])
+                for k in ((data.get("geogrid") or {}).get("keywords") or [])
             ],
-            "weak_areas": data.get("geogrid", {}).get("weak_areas"),
         },
-        "gbp": data.get("gbp"),
+        "google_business_profile": data.get("gbp"),
+        "ai_search_visibility": data.get("ai_visibility"),
         **signals,
     }
     try:
@@ -545,16 +719,16 @@ def generate_health_narrative(client_name: Optional[str], period: dict, data: di
         resp = client.messages.create(
             model=settings.client_report_health_model,
             max_tokens=settings.client_report_health_max_tokens,
-            system=_HEALTH_SYSTEM,
-            tools=[_HEALTH_TOOL],
-            tool_choice={"type": "tool", "name": "emit_health"},
+            system=_EXEC_SYSTEM,
+            tools=[_EXEC_TOOL],
+            tool_choice={"type": "tool", "name": "emit_summary"},
             messages=[{"role": "user", "content": json.dumps(context, default=str, ensure_ascii=False)}],
         )
         for b in resp.content:
-            if getattr(b, "type", None) == "tool_use" and b.name == "emit_health":
+            if getattr(b, "type", None) == "tool_use" and b.name == "emit_summary":
                 return b.input or None
     except Exception as exc:
-        logger.warning("report_health_narrative_failed", extra={"client_name": client_name, "error": str(exc)})
+        logger.warning("report_exec_summary_failed", extra={"client_name": client_name, "error": str(exc)})
     return None
 
 
@@ -602,20 +776,18 @@ def generate_client_report(
 
     data = gather_report_data(client_id, period_start, period_end)
 
-    # Phase 4: campaign-health executive summary (best-effort; prepended section).
+    # Phase 4: positive, owner-friendly executive summary (best-effort; first section).
     try:
-        signals = _gather_health_inputs(supabase, client_id)
-        narrative = generate_health_narrative(
-            data["client"].get("name"), data["period"], data, signals
-        )
-        if narrative:
-            data["health"] = narrative
-            data["section_status"]["health"] = "ok"
+        signals = _gather_exec_inputs(supabase, client_id)
+        summary = generate_exec_summary(data["client"].get("name"), data["period"], data, signals)
+        if summary:
+            data["exec"] = summary
+            data["section_status"]["exec"] = "ok"
         else:
-            data["section_status"]["health"] = "empty"
+            data["section_status"]["exec"] = "empty"
     except Exception as exc:
-        data["section_status"]["health"] = "failed"
-        logger.warning("report_health_failed", extra={"client_id": client_id, "error": str(exc)})
+        data["section_status"]["exec"] = "failed"
+        logger.warning("report_exec_failed", extra={"client_id": client_id, "error": str(exc)})
 
     title = f"{data['client'].get('name') or 'Client'} — SEO Report ({period_end.isoformat()})"
     pdf = render_pdf(build_report_html(data))
