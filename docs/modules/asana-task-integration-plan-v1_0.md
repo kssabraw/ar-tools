@@ -58,6 +58,7 @@ features, one Asana token:
 | 8 | Workload feature mode | **View + proactive alerts** — a Team Workload view *and* a daily check that pings Slack/in-app via the **notifications service**. |
 | 9 | Workload scope | **A defined team list** (configurable), not every workspace member. |
 | 10 | Graceful degradation | Absent token / project mapping / team list → the relevant feature is **skipped with a note**, never an error. Matches GSC / Slack provisioning behavior. |
+| 11 | Asana plan | **Starter** — no native Workload view and no native Rules/automation, so Feature B's view is built in full and the monthly spin-up is an API job (not native Asana automation). The Status + category custom fields already exist. |
 
 ---
 
@@ -121,11 +122,13 @@ there is no due-date clustering to guard against *at creation*. Workload is ther
 ongoing **monitoring** concern (view + daily alerts), which is what catches same-day
 stacking once the team fills dates in.
 
-**Native-Asana caveat:** Asana's **Workload** view (Portfolios, Business tier) covers part
-of this out of the box. The in-app version still earns its place — tied to the suite, custom
-thresholds, cross-client aggregation, and it can drive the proactive Slack/in-app alerts —
-but if the team is on that tier, scope Feature B's view against what the native view already
-gives them.
+**Native-Asana caveat — resolved (2026-06-29):** Asana's native **Workload** view is an
+**Advanced/Enterprise** feature. The team is on the **Starter** plan, which does **not**
+include it — so there is no native equivalent to lean on, and Feature B's read-view is built
+**in full**. (Starter also lacks custom Rules/automation, confirming the monthly spin-up must
+be the API job, not native Asana automation; and the **Status** + **category** custom fields
+the integration reads/writes already exist on the team's projects, so no field creation is
+needed.)
 
 ---
 
