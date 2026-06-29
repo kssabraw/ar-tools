@@ -11,7 +11,7 @@
 > - **Role:** this is **the Strategist** — it (1) creates strategy, (2) monitors campaigns, (3) suggests tweaks and fixes, (4) assigns tasks to Asana boards. It runs a **continuous loop**, not a one‑shot setup.
 > - **Auto‑vs‑assign split:** **auto the automatable, assign the craft.** The Strategist auto‑executes technical/repeatable work (tracking setup, internal‑link drafts, page generation drafts, on‑page fixes); human‑craft work (content review/publish, outreach, manual fixes) becomes Asana tasks. This is how the `execution_mode` of each action is set.
 > - **Asana: promoted from deferred to CORE.** Asana is the **human work surface**, with **role‑based auto‑assignment** (a role→assignee map: writer / SEO‑tech / link‑builder / VA / account‑manager) and **two‑way status sync**. The in‑app plan stays authoritative; Asana mirrors + assigns + reports status back.
-> - **Monitoring model:** **trend/anomaly only** — *no fixed numeric goal targets*. The monitor flags regressions and wins **relative to the baseline**, not progress toward set KPIs. (Simplifies the model: no campaign‑goal contract; a lightweight monitoring profile instead.)
+> - **Monitoring model:** measure every engagement against a **fixed, universal goal set** — agency standards baked into the system, applied to **every tracked keyword** automatically (not custom per‑campaign KPIs entered at intake): **organic** = rank in the **top 3**; **maps** = **avg top‑3 within a 3‑mile radius** AND **avg top‑5 within a 5‑mile radius**; **LLM** = **appears in every tracked engine** for each keyword (§4.6). **Trend/anomaly detection runs on top** to catch movement *between* passes (e.g. slipping #2→#4). *(This supersedes the earlier "trend/anomaly only, no fixed targets" note — the targets are standard constants, so there's still no per‑campaign goal contract to author.)*
 
 > **Revision history:** v1.0 (2026‑06‑28) — onboarding→audit→strategy→autonomous‑execution spine + first‑party data sources. **v1.1 (2026‑06‑29) — the Continuous Strategist: monitoring & signal bus, continuous‑optimization engine, the Strategist control loop, and Asana‑as‑core with role‑based assignment (§4.5, §6.8–6.10).** Filename retained at `-v1_0` for PR continuity.
 
@@ -124,10 +124,11 @@ execution_events
 
 strategist_signals                                 -- §6.8 the monitoring/anomaly bus
   id, engagement_id (FK), module (enum: organic|maps|ai_visibility|ga4|gbp_performance|content),
-  kind (enum: regression|win|anomaly|plateau|new_competitor|cannibalization|coverage_loss|...),
-  metric, direction, magnitude (numeric), baseline_ref (jsonb), detected_at,
+  kind (enum: goal_gap|regression|win|anomaly|plateau|new_competitor|cannibalization|coverage_loss|...),
+  metric, direction, magnitude (numeric), goal_target (numeric), goal_state (met|close|gap|null),
+  baseline_ref (jsonb), detected_at,
   status (open|actioned|dismissed|resolved), action_id (FK strategy_actions, when actioned)
-  -- trend/anomaly vs baseline; NO fixed-target goals (per 2026-06-29 decision)
+  -- goal_gap = distance from the fixed goal set (§4.6); others = trend/anomaly vs baseline
   -- generalizes the existing rank_alerts; feeds the continuous-optimization engine
 
 role_assignees                                     -- routing map for Asana auto-assignment
@@ -261,6 +262,26 @@ Material changes (a big new opportunity or a severe regression cluster) re‑ent
 
 ---
 
+## 4.6 The goal model — standard success definitions
+
+The Strategist measures every engagement against a **fixed, universal goal set** — agency standards (tunable constants in `config.py`, **not** authored per client). Goals are evaluated **per tracked keyword**, per module:
+
+| Module | Goal (per tracked keyword) | Source / computation |
+|---|---|---|
+| **Organic** | Rank in the **top 3** | latest position ≤ 3 from `rank_keyword_metrics` (GSC / DataForSEO via `rank_status`) |
+| **Maps** | **Avg top‑3 within 3 mi** **and** **avg top‑5 within 5 mi** | mean cell rank over the geo‑grid cells inside each radius ring (`maps_analytics` rollups); target mean ≤ 3 (3‑mi ring) and ≤ 5 (5‑mi ring) |
+| **LLM** | **Appears in every tracked engine** | `brand_mention_history`: `mentioned = true` for each engine in the latest scan batch |
+
+Each keyword rolls up to a per‑module **attainment state** (`met` / `close` / `gap`), and the engagement gets an overall **attainment %** = share of keyword×module goals met. The monitor (§6.8) recomputes attainment every pass and emits a `goal_gap` signal for any keyword×module not at target; the optimizer (§6.9) prioritizes the **largest gaps to goal** (weighted by `est_value`), so the plan is always driving toward these three bars. Trend/anomaly signals run alongside to catch *movement* even within a band (a slip from #2→#4 is still a regression worth acting on before it crosses the goal line).
+
+**Computation nuances (a few are open‑question‑worthy):**
+- **Maps radius coverage:** computing *both* the 3‑mile and 5‑mile metrics from one scan requires the grid to extend to ≥ 5 mi, so engagement geo‑grid scans default to the **5‑mile** (or 7‑mile) radius and the 3‑mile metric is the **inner subset** of cells. A 3‑mile‑only grid cannot produce the 5‑mile average. *(Existing config allows 3/5/7; the Strategist pins ≥5 for goal measurability.)*
+- **"Avg top‑N" definition:** the mean *position* across in‑ring grid cells must be ≤ N (so "avg top‑3" = average rank ≤ 3). Cells where the business doesn't appear in the local pack count as a worst‑case rank (e.g. 21) in the average, matching how `maps_analytics` already treats absent cells — confirm that penalty value.
+- **"Each LLM":** default bar = **all six tracked engines** (chatgpt, claude, gemini, perplexity, google_ai_overview, google_ai_mode); appearing in *every* one is "met." Confirm whether AI‑Overview + AI‑Mode count toward the bar or only the four chat engines.
+- **Scope:** targets are **global constants** (tunable); a per‑client override is deferred unless you want it.
+
+---
+
 ## 5. How autonomy rides existing infrastructure
 
 No new queue, no Redis/Celery (per locked decisions). The Executor is **just another `async_jobs` consumer**:
@@ -289,7 +310,7 @@ Check NAP presence/consistency across a directory set (DataForSEO Business Listi
 Analyzer builds the site's internal‑link graph from the crawl, finds orphan pages + missing topical links (silo‑aware) → `internal_link` actions. **Injector (autonomous):** for WordPress clients, applies approved link edits via the **existing** `wordpress_publish.py` REST/app‑password path, **as drafts/revisions**, never silently to live. Non‑WordPress → recommend‑only deep links.
 
 ### 6.6 Consolidated client report — `services/engagement_report.py`
-Composes the existing `rank_report`/`brand_report`/`maps_report` builders + the **first‑party performance baseline + deltas** (GSC/GA4/GBP‑Performance, §6.7) + plan progress + `execution_events` into one Google Doc via the shared `google_docs.py`. The baseline makes the report a **measurable before/after** in the client's own numbers (traffic, conversions, local actions), not just rank movement. Async `engagement_report` job; scheduled via `gsc_scheduler`.
+Composes the existing `rank_report`/`brand_report`/`maps_report` builders + the **first‑party performance baseline + deltas** (GSC/GA4/GBP‑Performance, §6.7) + the **goal‑attainment scorecard** (§4.6 — % of keywords at top‑3 organic, the 3mi/5mi maps averages, all‑engine LLM coverage) + plan progress + `execution_events` into one Google Doc via the shared `google_docs.py`. The baseline makes the report a **measurable before/after** in the client's own numbers, and the scorecard shows progress toward the three standard goals. Async `engagement_report` job; scheduled via `gsc_scheduler`.
 
 ### 6.7 First‑party data connectors (GSC existing; GA4 + GBP Performance NEW)
 The onboarding data layer (Stage 0b) + the periodic ingests + the performance baseline (audit 2d).
@@ -301,7 +322,7 @@ The onboarding data layer (Stage 0b) + the periodic ingests + the performance ba
 All three are read‑only, creds/connection‑gated, and degrade to "not configured" exactly like the current GSC path.
 
 ### 6.8 Cross‑module monitor + signal bus — `services/strategist_monitor.py`
-The "monitors campaigns" pillar. A scheduled job (`strategist_monitor`, on `gsc_scheduler`, default weekly per engagement) that reads every module via the existing `slack_assistant` context‑provider registry + the first‑party ingests, and emits `strategist_signals` by comparing **current vs. baseline** — **trend/anomaly detection, no fixed‑target goals**. Pure, testable detectors per module (e.g. `detect_organic`, `detect_ga4`, `detect_gbp`), each isolated so one failing module never blocks the pass. **Generalizes `rank_materialize`'s existing rank‑drop alerting** into a cross‑module bus; the existing `notifications.emit` is the delivery path for severe signals. No new external APIs (reuses the connected sources).
+The "monitors campaigns" pillar. A scheduled job (`strategist_monitor`, on `gsc_scheduler`, default weekly per engagement) that reads every module via the existing `slack_assistant` context‑provider registry + the first‑party ingests, and on each pass does **two** things: (1) computes **goal attainment** for every tracked keyword against the fixed goal set (§4.6) and emits a `goal_gap` signal for anything off‑target; (2) runs **trend/anomaly detection** vs. the prior pass / baseline and emits `regression`/`win`/`anomaly`/`plateau` signals. A pure `compute_goal_state(keyword, module)` helper per module (`organic` top‑3, `maps` 3mi/5mi ring averages, `llm` all‑engines) plus per‑module trend detectors, each isolated so one failing module never blocks the pass. **Generalizes `rank_materialize`'s existing rank‑drop alerting** into a cross‑module bus; `notifications.emit` delivers severe signals. No new external APIs (reuses the connected sources + the geo‑grid/brand scans).
 
 ### 6.9 Continuous‑optimization engine — `services/strategist_optimizer.py`
 The "suggests tweaks and fixes" pillar — the steady‑state twin of the Strategy Engine (§6.1), sharing its `build_actions` core. Input: open `strategist_signals`. Output: diagnosed `strategy_actions` (`source = strategist_signal`), **deduped against currently‑open actions** (so a persistent regression doesn't spawn duplicates each pass) and prioritized by signal magnitude × `est_value`. Sets each action's `execution_mode` (`auto` vs `assigned`) per the split rule. Claude‑Sonnet for the diagnosis narrative; deterministic signal grounding (every tweak cites the signal that triggered it).
@@ -401,7 +422,8 @@ Large surface area — built in slices, each shippable and useful on its own.
 7. **One engagement per client** assumption — confirm we never need concurrent engagements per client.
 8. **Monitor cadence + signal severity thresholds** — default weekly per engagement; what magnitude of trend change counts as a `regression`/`win` worth a signal (to avoid noise), and which severities auto‑flow vs. re‑enter `plan_review`.
 9. **Strategist digest cadence/channel** — weekly Slack digest by default? (Email is still deferred per the notifications service status.)
-10. **GBP Performance API auth** — the Business Profile Performance API is OAuth‑centric (manager access to the location), so it likely needs an **OAuth token store**, deviating from the locked "service account, no interactive OAuth" decision *for this one source*. Confirm: stand up a minimal OAuth connect flow for GBP Performance, or stay on the existing Outscraper/DataForSEO scrape (no first‑party performance metrics)? (GA4 stays on the agency service account — no deviation.)
+10. **Goal model specifics (§4.6)** — confirm: (a) **maps** engagement scans pin to **≥5‑mile** grids so both the 3‑mi and 5‑mi averages are computable; (b) the **absent‑cell penalty rank** used in the maps averages (e.g. 21); (c) **"each LLM"** = all six engines or just the four chat engines (do AI‑Overview + AI‑Mode count?); (d) targets stay **global constants** (no per‑client override) for v1.
+11. **GBP Performance API auth** — the Business Profile Performance API is OAuth‑centric (manager access to the location), so it likely needs an **OAuth token store**, deviating from the locked "service account, no interactive OAuth" decision *for this one source*. Confirm: stand up a minimal OAuth connect flow for GBP Performance, or stay on the existing Outscraper/DataForSEO scrape (no first‑party performance metrics)? (GA4 stays on the agency service account — no deviation.)
 
 ---
 
