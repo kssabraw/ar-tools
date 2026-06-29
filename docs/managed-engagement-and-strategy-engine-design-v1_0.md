@@ -395,6 +395,35 @@ Closes the Maps loop: the detectors (§4.8.1 alerts), winnability (§4.8.2), goa
 
 **Data‑model touch:** extend `strategy_actions.category` with **`gbp`** and **`reviews`** (local‑page create/reoptimize reuse `page`); the `maps_*` kinds live in the action's `kind`/`rationale`, mirroring how the organic reopt kinds do. **Build timing:** spec now; built with the Maps optimizer wiring (Phase 5).
 
+### 4.8.5 Cross‑channel competitor unification — ✅ design settled
+
+**Problem:** today the same rival is **three disconnected identities** — a **domain** in organic (`serp_snapshot_domains`: DR/RD/backlinks), a **GBP `place_id`** in Maps (`competitors`: rating/reviews/category/beats‑%/avg grid rank), and a **brand name** in AI‑visibility (`brand_tracked_competitors`). SerMaStr would treat one company as three separate threats and miss "this same competitor beats you *everywhere*."
+
+**Solution — a unified `client_competitors` entity** per client, keyed on the **registrable domain** (eTLD+1):
+
+```
+client_competitors
+  id, client_id (FK), canonical_name,
+  domain (eTLD+1 — the canonical join key), gbp_place_id (nullable),
+  present_organic (bool), present_maps (bool), present_ai (bool),
+  metrics (jsonb: organic {dr, rd, keywords_outranking}; maps {rating, reviews,
+     primary_category, beats_pct, avg_grid_rank, top3_pins}; ai {mention_rate, engines}),
+  source_refs (jsonb: back-links to the channel rows), updated_at
+```
+
+**Resolution** — `services/competitor_graph.py` (pure helpers):
+- **Domain normalization** to the registrable domain (eTLD+1) is the primary key. Maps `competitor.website` → domain ↔ organic `serp_snapshot_domains.domain`.
+- **Maps ↔ Organic auto‑merge** on matching domain — deterministic, no fuzz.
+- **Multi‑location collapse:** several GBP `place_id`s sharing one domain fold into **one** competitor (a multi‑branch brand).
+- **Aggregator/directory exclusion:** drop Yelp / YellowPages / Facebook / Angi / etc. via a maintained list — they rank organically but are **citation surfaces, not business rivals** (this also keeps them out of the local‑citation module, §6.4).
+- **Maps competitor with no website** → stays **Maps‑only** (keyed by `place_id`); common for hyper‑local rivals.
+
+**AI‑visibility leg (deferred to the LLM pass):** brand competitors are **names** with no domain, so they fold in when we profile the AI‑Visibility tracker — with a name→entity resolution approach decided there (auto name/domain match + a manual link affordance; LLM‑assisted matching deferred). Until then the entity carries `present_ai=false` and the organic+maps unification stands on its own.
+
+**Consumers:** a build job on the monitor cadence upserts `client_competitors`; consumed by the **strategy engine/optimizer** (a unified "beats you across channels" view → *coordinated* actions, e.g. one competitor‑teardown brief instead of three disconnected ones), the **consolidated report** (one competitor table), and a Slack **`competitors`** context provider.
+
+**Minor open items:** (1) registrable‑domain parsing needs public‑suffix handling — a small lib (`tldextract`) vs. an embedded PSL heuristic, decided at build; (2) the source/maintenance of the aggregator‑exclusion list. **Build timing:** spec now; Phase 5 (with the monitor); AI leg attaches during the LLM tracker pass.
+
 ---
 
 ## 5. How autonomy rides existing infrastructure
