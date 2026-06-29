@@ -269,6 +269,8 @@ async def gsc_scheduler() -> None:
     """Background loop: daily GSC ingest enqueue + per-client-scheduled DataForSEO
     rank enqueue (evaluated daily) + weekly Maps geo-grid scans, and a per-tick
     poll of in-flight Maps scans."""
+    from services.asana_monthly import enqueue_due_asana_monthly
+    from services.asana_service import shift_months
     from services.brand_schedule import enqueue_due_brand_scans
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
 
@@ -281,6 +283,7 @@ async def gsc_scheduler() -> None:
     last_df_date: Optional[date] = None
     last_maps_date: Optional[date] = None
     last_reopt_date: Optional[date] = None
+    last_asana_month: Optional[tuple] = None
     logger.info("gsc_scheduler.started", extra={"poll_interval_s": interval, "hour_utc": hour})
     while True:
         await asyncio.sleep(interval)
@@ -315,6 +318,17 @@ async def gsc_scheduler() -> None:
             if now.weekday() == reopt_weekday and should_run(now, last_reopt_date, hour):
                 enqueue_due_reopt_plans()
                 last_reopt_date = now.date()
+            # Monthly Asana section automation: once per month on the configured
+            # day-of-month, enqueue an asana_monthly job per mapped client (the
+            # job itself no-ops if the month's section already exists).
+            if (
+                now.day >= settings.asana_month_generate_day
+                and last_asana_month != (now.year, now.month)
+                and now.hour >= hour
+            ):
+                target = shift_months(now.date(), settings.asana_month_target_offset)
+                enqueue_due_asana_monthly(target)
+                last_asana_month = (now.year, now.month)
             # Advance any in-flight Maps scans every tick (non-blocking GETs).
             await poll_pending_maps_scans()
             # AI Visibility scheduled scans are self-clocked via each schedule's

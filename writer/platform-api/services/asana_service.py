@@ -1,20 +1,21 @@
 """Asana task integration — REST client + pure helpers.
 
-Phase 0 scaffolding for docs/modules/asana-task-integration-plan-v1_0.md.
+Backs docs/modules/asana-task-integration-plan-v1_0.md.
 
 Two features ride this module on one Asana token:
 
-  A. Monthly section automation (write) — clone a hand-maintained ``Template``
-     section forward into a new ``<Month YYYY>`` section per client project:
-     task name + assignee + category custom field carried over, Status reset to
-     "Not Started", no due dates, idempotent.
+  A. Monthly section automation (write) — for each client, create a new
+     ``<Month YYYY>`` section in its Asana project and populate it from the
+     client's **app-defined task template** (per-client task list, each row a
+     name + optional assignee + optional category). Status is set to
+     "Not Started", no due dates (the team fills dates in), idempotent.
 
   B. Team Workload (read + alerts) — pull a defined team list's open tasks
      across all client projects, aggregate per-person load + same-day due-date
-     clustering, and flag overloads (the daily alert producer comes in Phase 3).
+     clustering, and flag overloads (the daily alert producer is Phase 3).
 
 This file holds the async Asana REST client (thin httpx wrapper, no business
-logic) and the **pure helpers** (no I/O) that the jobs/routers in later phases
+logic) and the **pure helpers** (no I/O) that the monthly job / workload view
 compose. The pure helpers are independently unit-tested; the I/O methods are
 mocked in tests, never hit live.
 
@@ -42,6 +43,7 @@ _MONTHS = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
+_MONTH_INDEX = {name.casefold(): i + 1 for i, name in enumerate(_MONTHS)}
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +83,17 @@ def shift_months(d: date, months: int) -> date:
     return date(year, month + 1, 1)
 
 
+def is_month_label(name: Optional[str]) -> bool:
+    """True if ``name`` looks like a '<Month> <Year>' section label."""
+    if not name:
+        return False
+    parts = name.strip().split()
+    if len(parts) != 2:
+        return False
+    month, year = parts
+    return month.casefold() in _MONTH_INDEX and year.isdigit() and len(year) == 4
+
+
 def section_name_exists(sections: list[dict], name: str) -> bool:
     """True if a section with this exact name (case-insensitive) already exists.
 
@@ -91,70 +104,72 @@ def section_name_exists(sections: list[dict], name: str) -> bool:
     return any((s.get("name") or "").strip().casefold() == target for s in sections)
 
 
-# ---------------------------------------------------------------------------
-# Custom-field extraction (Feature A)
-# ---------------------------------------------------------------------------
-def extract_assignee_gid(task: dict) -> Optional[str]:
-    """The assignee GID from a task (None when unassigned)."""
-    assignee = task.get("assignee")
-    if isinstance(assignee, dict):
-        return assignee.get("gid")
-    return None
+def month_insert_anchor_gid(sections: list[dict]) -> Optional[str]:
+    """The section GID to insert a new month *before* (None → append at end).
 
-
-def extract_enum_option_gid(task: dict, field_gid: str) -> Optional[str]:
-    """The selected enum-option GID for ``field_gid`` on a task (None if unset).
-
-    Asana returns each custom field on a task as ``{gid, name, type,
-    enum_value: {gid, name}}`` (enum_value is null when nothing is selected).
+    Months are added newest-last each cycle, so the new month belongs right
+    after the existing month group and before any non-month section (e.g. an
+    "Untitled section" backlog). We return the first non-month section's GID;
+    if every section is a month label, append at the end (None).
     """
-    if not field_gid:
-        return None
-    for cf in task.get("custom_fields") or []:
-        if cf.get("gid") == field_gid:
-            enum_value = cf.get("enum_value")
-            if isinstance(enum_value, dict):
-                return enum_value.get("gid")
-            return None
+    for s in sections:
+        if not is_month_label(s.get("name")):
+            return s.get("gid")
     return None
 
 
+# ---------------------------------------------------------------------------
+# Task payload (Feature A) — built from an app-defined template row
+# ---------------------------------------------------------------------------
 def build_task_payload(
-    template_task: dict,
+    name: str,
     project_gid: str,
     section_gid: str,
     *,
+    assignee_gid: Optional[str] = None,
+    category_field_gid: str = "",
+    category_option_gid: Optional[str] = None,
     status_field_gid: str = "",
     not_started_option_gid: str = "",
-    category_field_gid: str = "",
 ) -> dict:
-    """Build the ``POST /tasks`` ``data`` body that clones a template task forward.
+    """Build the ``POST /tasks`` ``data`` body for one template row.
 
-    Carries name + assignee + category enum value; sets Status = Not Started;
-    sets **no** due date (the team fills dates in). Places the new task directly
-    in ``section_gid`` via a project membership.
+    Sets name + (optional) assignee + (optional) category; Status = Not Started
+    when both the field and option GIDs are configured; **no** due date (the
+    team fills dates in). Places the task directly in ``section_gid``.
     """
     data: dict[str, Any] = {
-        "name": template_task.get("name") or "",
+        "name": name or "",
         "projects": [project_gid],
         "memberships": [{"project": project_gid, "section": section_gid}],
     }
-
-    assignee = extract_assignee_gid(template_task)
-    if assignee:
-        data["assignee"] = assignee
+    if assignee_gid:
+        data["assignee"] = assignee_gid
 
     custom_fields: dict[str, str] = {}
     if status_field_gid and not_started_option_gid:
         custom_fields[status_field_gid] = not_started_option_gid
-    if category_field_gid:
-        category_option = extract_enum_option_gid(template_task, category_field_gid)
-        if category_option:
-            custom_fields[category_field_gid] = category_option
+    if category_field_gid and category_option_gid:
+        custom_fields[category_field_gid] = category_option_gid
     if custom_fields:
         data["custom_fields"] = custom_fields
 
     return data
+
+
+def payload_from_template_row(row: dict, project_gid: str, section_gid: str) -> dict:
+    """Adapt a DB ``asana_client_task_templates`` row into a create-task payload,
+    reading the Status / category field GIDs from config."""
+    return build_task_payload(
+        row.get("name") or "",
+        project_gid,
+        section_gid,
+        assignee_gid=row.get("assignee_gid"),
+        category_field_gid=settings.asana_category_field_gid,
+        category_option_gid=row.get("category_option_gid"),
+        status_field_gid=settings.asana_status_field_gid,
+        not_started_option_gid=settings.asana_status_not_started_option_gid,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -256,16 +271,8 @@ async def _post(path: str, data: dict) -> Any:
 
 
 async def list_sections(project_gid: str) -> list[dict]:
-    """All sections in a project (used to find Template + the insert anchor)."""
+    """All sections in a project (used to find the insert anchor + idempotency)."""
     return await _get(f"/projects/{project_gid}/sections", {"opt_fields": "name"}) or []
-
-
-async def list_section_tasks(section_gid: str) -> list[dict]:
-    """Tasks in a section, with the fields the monthly clone needs."""
-    return await _get(
-        f"/sections/{section_gid}/tasks",
-        {"opt_fields": "name,assignee.gid,custom_fields"},
-    ) or []
 
 
 async def create_section(
@@ -281,6 +288,36 @@ async def create_section(
 async def create_task(payload: dict) -> dict:
     """Create a task from a ``build_task_payload`` body."""
     return await _post("/tasks", payload)
+
+
+async def list_workspace_users() -> list[dict]:
+    """Workspace members [{gid, name, email}] — populates the assignee picker."""
+    users = await _get(
+        f"/workspaces/{settings.asana_workspace_gid}/users",
+        {"opt_fields": "name,email"},
+    ) or []
+    return [{"gid": u.get("gid"), "name": u.get("name"), "email": u.get("email")} for u in users]
+
+
+async def list_project_category_options(project_gid: str) -> list[dict]:
+    """The category custom field's enum options [{gid, name}] for a project —
+    populates the category picker. Empty when no category field is configured."""
+    field_gid = settings.asana_category_field_gid
+    if not field_gid:
+        return []
+    settings_rows = await _get(
+        f"/projects/{project_gid}/custom_field_settings",
+        {"opt_fields": "custom_field.gid,custom_field.name,custom_field.enum_options.name"},
+    ) or []
+    for s in settings_rows:
+        cf = s.get("custom_field") or {}
+        if cf.get("gid") == field_gid:
+            return [
+                {"gid": o.get("gid"), "name": o.get("name")}
+                for o in (cf.get("enum_options") or [])
+                if o.get("gid")
+            ]
+    return []
 
 
 async def list_member_open_tasks(user_gid: str) -> list[dict]:

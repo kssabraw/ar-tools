@@ -347,8 +347,14 @@ class Settings(BaseSettings):
     asana_workspace_gid: str = ""  # scopes the per-assignee task queries
     asana_monthly_enabled: bool = True
     asana_workload_enabled: bool = True
-    # The section the monthly job clones forward (the team maintains it by hand).
-    asana_template_section_name: str = "Template"
+    # Monthly section automation cadence. The scheduler fires once per month on
+    # `asana_month_generate_day`; the target month = today shifted by
+    # `asana_month_target_offset` (0 = the month that just started, 1 = next
+    # month, to pre-stage ahead). Tasks come from each client's app-defined
+    # template (asana_client_task_templates) — there is no Asana "Template"
+    # section (the source of truth is the app).
+    asana_month_generate_day: int = 1
+    asana_month_target_offset: int = 0
     # Custom-field GIDs on the client projects (Starter plan: these already
     # exist). The monthly job sets Status = Not Started on each new task and
     # carries the category enum value forward from the template task.

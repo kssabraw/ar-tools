@@ -1,18 +1,30 @@
 # Asana Task Integration — Plan (v1.0)
 
-**Authored:** 2026-06-29 · **Status:** **Phase 0 built** (scaffolding) · Phases 1–3 ahead · **New suite integration — "Asana"**
+**Authored:** 2026-06-29 · **Status:** **Phase 0 + Phase 1 backend built** · Phase 1 frontend + Phases 2–3 ahead · **New suite integration — "Asana"**
 
-> **Build status (2026-06-29).** **Phase 0 (scaffolding)** is implemented on branch
-> `claude/asana-integration-options-cp3zul` (PR #170): the `config.py` settings block, the
-> `asana_client_projects` mapping table migration (`20260629120000`), and
-> `services/asana_service.py` — the async Asana REST client (sections / tasks / per-member
-> open tasks) + the pure helpers (`is_configured`, `parse_gids`, `month_label`,
-> `shift_months`, `section_name_exists`, custom-field extraction, `build_task_payload`,
-> `aggregate_member_workload`, `build_workload_report`) with 14 unit tests
-> (`tests/test_asana_service.py`). Everything degrades gracefully — `is_configured()` gates
-> the features and returns False until the token + workspace are provisioned. **No code is
-> wired into the job worker / scheduler / routers yet** (Phases 1–3). The migration file is
-> committed but **not yet applied to the live Supabase project** (pending plan approval).
+> **Build status (2026-06-29).** **Phase 0 (scaffolding)** + **Phase 1 backend (monthly
+> automation)** are implemented on branch `claude/asana-integration-options-cp3zul`
+> (PR #170).
+>
+> *Phase 0:* `config.py` settings block; `asana_client_projects` migration (`20260629120000`);
+> `services/asana_service.py` — async Asana REST client + pure helpers, graceful-degrading via
+> `is_configured()`.
+>
+> *Phase 1 backend (design pivot — see decision #3):* the template source moved **from an
+> Asana `Template` section to an app-defined per-client task template**. Added:
+> `asana_client_task_templates` migration (`20260629130000`, also widens `async_jobs.job_type`
+> for `asana_monthly`); `services/asana_monthly.py` (`generate_month_for_client` + enqueue +
+> `run_asana_monthly_job` + `enqueue_due_asana_monthly`); `routers/asana.py` (status, mapping
+> GET/PUT, template GET/PUT, workspace-users + category-options pickers, synchronous
+> `generate-month`); `models/asana.py`; job-worker dispatch + scheduler monthly due-check +
+> `main.py` registration; new `month`/picker helpers in `asana_service.py`. Tests:
+> `tests/test_asana_service.py` (pure helpers) + `tests/test_asana_monthly.py` (create /
+> idempotency / skip branches) — **all green**.
+>
+> **Still ahead:** Phase 1 **frontend** (the per-client template editor + "Generate this
+> month" button), Phase 2 (workload view), Phase 3 (workload alerts). Migrations are committed
+> but **not yet applied to the live Supabase project** (pending plan approval). Everything
+> degrades gracefully until the Asana token + workspace + per-client mappings are provisioned.
 
 > Read alongside **`docs/suite-architecture-and-roadmap-v1_0.md`** (decision log + shared
 > infrastructure) and the **notifications service** section of `CLAUDE.md`. This document
@@ -62,9 +74,9 @@ features, one Asana token:
 |---|---|---|
 | 1 | Integrate vs build in-app board | **Integrate** — Asana stays the system of record. |
 | 2 | Project layout | **Existing** per-client project, **month sections** (`<Month YYYY>`). No per-quarter / per-month *projects*. |
-| 3 | Monthly template source | A hand-maintained **`Template` section** in each client project; the job **clones it forward**. Team edits the template in Asana — no code change to adjust the monthly set. |
+| 3 | Monthly template source | **REVISED 2026-06-29 (supersedes the Asana `Template` section):** an **app-defined per-client task template** — each client has its own editable task list in AR Tools (`asana_client_task_templates`); the monthly job creates those tasks in Asana. Source of truth is the app. Granularity: **per-client list** (not shared packages). |
 | 4 | Due dates on generated tasks | **None at creation.** Tasks are created with assignee + category + Status=Not Started; the team fills dates in. |
-| 5 | What carries forward | Task **name**, **assignee**, **category** custom field. Status reset to **Not Started**. No due date. |
+| 5 | Task fields | Each template row sets task **name** + **assignee** + **category** (assignee/category **picked in the app**, pickers populated from Asana — workspace users + the category field's enum options). Status set to **Not Started**, no due date. |
 | 6 | Trigger | **Both** — auto on the 1st of the month (shared `gsc_scheduler` → `async_jobs`) **and** a manual "Generate next month" button per client. |
 | 7 | Idempotency | If `<Month YYYY>` already exists in the project, the job is a **no-op** — auto + manual can't double up. |
 | 8 | Workload feature mode | **View + proactive alerts** — a Team Workload view *and* a daily check that pings Slack/in-app via the **notifications service**. |
@@ -77,33 +89,38 @@ features, one Asana token:
 ## 3. Feature A — Monthly section automation (write)
 
 **Goal:** each month, every mapped client project gets a new `<Month YYYY>` section populated
-from its `Template` section, so the team stops hand-copying tasks.
+from the **client's app-defined task template**, so the team stops hand-copying tasks — and
+the monthly deliverables for every client are defined/visible in one place in AR Tools.
 
 **Flow (per client project):**
 1. Resolve the client's Asana **project GID** (mapping table, §6).
 2. Compute the target month label `<Month YYYY>` (e.g. `July 2026`).
-3. If a section with that exact name already exists → **no-op** (idempotent).
-4. Read the project's **`Template` section** tasks (name, assignee, category custom field).
-5. Create the new `<Month YYYY>` section, **inserted above** the backlog ("Untitled
-   section") — Asana section create supports `insert_before`/`insert_after`.
-6. For each Template task, **create a task** in the new section with: same name, same
-   assignee, same category custom-field value, **Status = Not Started**, **no `due_on`**.
+3. List the project's sections; if one with that exact name exists → **no-op** (idempotent).
+4. Read the client's **active template rows** from `asana_client_task_templates` (sort order).
+5. Create the new `<Month YYYY>` section, **inserted before** the first non-month section
+   (so it lands after the month group and above an "Untitled section" backlog;
+   `month_insert_anchor_gid`).
+6. For each template row, **create a task** in the new section with: the row's name, its
+   assignee, its category enum value, **Status = Not Started**, **no `due_on`**. A failed
+   task doesn't abort the rest (collected into `errors`).
 
 **Asana API surface used:**
-- `GET /projects/{gid}/sections` — find `Template` + the insert anchor.
-- `GET /sections/{gid}/tasks?opt_fields=name,assignee,custom_fields` — read the template.
+- `GET /projects/{gid}/sections` — find the insert anchor + idempotency check.
 - `POST /projects/{gid}/sections` — create `<Month YYYY>`.
 - `POST /tasks` with `memberships: [{project, section}]`, `assignee`, `custom_fields`
-  (Status enum option = "Not Started", category enum option carried from template).
+  (Status enum option = "Not Started", category enum option from the template row).
+- `GET /workspaces/{gid}/users` + `GET /projects/{gid}/custom_field_settings` — populate the
+  template editor's assignee + category pickers.
 
 **Triggers:**
-- **Auto:** the shared in-process scheduler (`services/gsc_scheduler.py`) gains an
-  `enqueue_due_asana_monthly` due-check that, at month start, enqueues one
-  `asana_monthly` `async_jobs` job per mapped client.
-- **Manual:** `POST /clients/{id}/asana/generate-month` (optionally with a target month) —
-  enqueues the same job; surfaced as a **"Generate next month"** button in the client
-  workspace. Optionally renders each assignee's current load (Feature B) as pre-commit
-  context.
+- **Auto:** the shared in-process scheduler (`services/gsc_scheduler.py`) runs
+  `enqueue_due_asana_monthly` once per month on `asana_month_generate_day`, enqueuing one
+  `asana_monthly` `async_jobs` job per mapped client (target month =
+  `shift_months(today, asana_month_target_offset)`).
+- **Manual:** `POST /clients/{id}/asana/generate-month` (optional `month`) — runs the same
+  `generate_month_for_client` **synchronously** (one client, a handful of Asana calls) and
+  returns the summary; surfaced as a **"Generate this month"** button in the client
+  workspace (frontend = Phase 1 follow-up).
 
 ---
 
@@ -168,17 +185,31 @@ All on the current stack — **no new dependencies, no topology change.** Asana 
 
 ## 6. Data model
 
-A small mapping table (everything else lives in Asana):
+Two tables (the rest lives in Asana / config):
 
 ```
-asana_client_projects
-  client_id    uuid  → clients(id)   (unique)
-  project_gid  text  (the Asana project for this client)
-  created_at   timestamptz
+asana_client_projects                     -- migration 20260629120000
+  client_id    uuid  → clients(id)  PK     (one Asana project per client)
+  project_gid  text
+  created_at / updated_at  timestamptz
+
+asana_client_task_templates               -- migration 20260629130000
+  id                  uuid PK
+  client_id           uuid → clients(id)
+  name                text                 (task name)
+  assignee_gid        text                 (Asana user gid, nullable)
+  assignee_name       text                 (cached label for the editor)
+  category_option_gid text                 (Asana enum-option gid, nullable)
+  category_name       text                 (cached label for the editor)
+  sort_order          integer
+  active              boolean
+  created_at / updated_at  timestamptz
 ```
 
-- Populated once per client at onboarding (one row).
-- The **team list** (Feature B scope) and **custom-field GIDs** (Status / category, plus the
+- `asana_client_projects`: one row per client (PK enforces uniqueness), set at onboarding.
+- `asana_client_task_templates`: the client's monthly task list, edited in the app. The
+  monthly job reads the **active** rows in `sort_order` and creates one Asana task each.
+- The **team list** (Feature B scope) and **custom-field GIDs** (Status / category + the
   "Not Started" option GID) are configuration, not per-client data — held in `config.py`
   (§7), since they're workspace-level constants.
 
@@ -189,10 +220,10 @@ asana_client_projects
 | Setting | Purpose |
 |---|---|
 | `asana_token` (`ASANA_TOKEN`) | PAT / service-account token. **Absent → both features skipped.** |
-| `asana_workspace_gid` | Workspace to scope task queries. |
-| `asana_template_section_name` (default `"Template"`) | Which section the monthly job clones. |
+| `asana_workspace_gid` | Workspace to scope task/user queries + the editor pickers. |
+| `asana_month_generate_day` (default `1`) / `asana_month_target_offset` (default `0`) | When the scheduled monthly run fires, and which month it targets (0 = current). |
 | `asana_status_field_gid` / `asana_status_not_started_option_gid` | Set Status = Not Started on new tasks. |
-| `asana_category_field_gid` | Carry the category custom field forward (read from template). |
+| `asana_category_field_gid` | The category custom field (its enum options populate the editor; the row's chosen option is stamped on each task). |
 | `asana_team_member_gids` (list) | The defined team list for workload. |
 | `asana_workload_max_open` / `asana_workload_max_due_same_day` | Overload thresholds. |
 | `asana_monthly_enabled` / `asana_workload_enabled` | Feature toggles. |
@@ -207,12 +238,13 @@ These are external inputs the integration can't invent; code is built to degrade
 until they exist (so it ships safely before they're all in place). To go live:
 
 1. **Token** — create an Asana PAT (or service account) → set `ASANA_TOKEN` on `PLATFORM`.
-2. **`Template` section** — create a `Template` section in each client project, populated
-   with the recurring tasks + assignees + category. (These don't exist yet.)
-3. **Project mapping** — record each AR Tools client's Asana **project GID** (one
-   `asana_client_projects` row per client).
-4. **Custom-field GIDs** — pull the Status field GID + "Not Started" option GID + the
+2. **Project mapping** — record each AR Tools client's Asana **project GID** (one
+   `asana_client_projects` row per client; set in the workspace once the editor ships).
+3. **Custom-field GIDs** — pull the Status field GID + "Not Started" option GID + the
    category field GID from the Asana API once the token exists; set in config.
+4. **Per-client task templates** — fill in each client's monthly task list in the app
+   editor (Phase 1 frontend). No Asana `Template` section is needed — the app is the source
+   of truth.
 5. **Team list** — the Asana user GIDs to track for workload → `asana_team_member_gids`.
 6. *(Optional, no code)* install Asana's official **Slack app** for the Slack ⇄ Asana leg.
 
@@ -223,10 +255,14 @@ notifications setup.
 
 ## 9. Phasing
 
-- **Phase 0 — scaffolding:** config seams, `asana_client_projects` migration, `asana_service`
-  skeleton + pure helpers + tests. Graceful no-op when unprovisioned.
-- **Phase 1 — monthly automation:** template clone-forward, `asana_monthly` job, scheduler
-  month-start due-check, manual endpoint + "Generate next month" button. Idempotent.
+- **Phase 0 — scaffolding (built):** config seams, `asana_client_projects` migration,
+  `asana_service` + pure helpers + tests. Graceful no-op when unprovisioned.
+- **Phase 1 — monthly automation:**
+  - *Backend (built):* app-defined per-client template (`asana_client_task_templates`),
+    `generate_month_for_client`, `asana_monthly` job, scheduler monthly due-check, the
+    template/mapping/picker routes + synchronous `generate-month`. Idempotent.
+  - *Frontend (ahead):* the per-client **task template editor** (assignee/category pickers
+    from Asana) + a **"Generate this month"** button, in the client workspace.
 - **Phase 2 — workload view:** per-person aggregation + overload detection + read-only
   suite-level view.
 - **Phase 3 — workload alerts:** daily due-check → notifications service (Slack/in-app).
