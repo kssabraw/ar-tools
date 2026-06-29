@@ -62,9 +62,11 @@ delivered by email + saved to the client's Google Drive folder.
 - **Phase 5 — Delivery + scheduling:** PDF email attachments + recipient routing
   (AM for A, team for B), Drive-folder copy (Apps Script extension), monthly +
   weekly schedules on `gsc_scheduler`, on-demand "Generate now."
-- **Phase 6 — Frontend:** per-client report settings (GA4 property, Asana
-  projects, recipients/AM, schedule), report history + download/preview, "Generate
-  & send now."
+- **Phase 6 — Frontend (DONE for current scope):** a "Client Reports" workspace
+  card + `pages/ClientReports.tsx` (route `clients/:id/reports`) — generate
+  on-demand, history list with live status polling, download the PDF (detail
+  endpoint re-signs the URL on read). *Report settings (GA4 property, Asana
+  projects, recipients/AM, schedule) are deferred with Phases 2/3/5.*
 
 ## Open scope decisions (for later phases)
 

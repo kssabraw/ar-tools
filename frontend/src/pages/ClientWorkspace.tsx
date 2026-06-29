@@ -4,7 +4,7 @@ import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
-  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks,
+  ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 
@@ -218,6 +218,20 @@ export function ClientWorkspace() {
           label="Action Plan"
           description="A prioritized reoptimization to-do list built from this client's rank signals — drops to fix, winnable quick wins & Search Console opportunities, each linked to the tool that does it."
           to={id ? `/clients/${id}/action-plan` : undefined}
+          cta="Open"
+        />
+      </Section>
+
+      {/* ── Reporting ────────────────────────────────────────────────── */}
+      <Section
+        title="Reporting"
+        subtitle="Generate client-facing performance reports."
+      >
+        <ActionCard
+          icon={<FileBarChart size={22} />}
+          label="Client Reports"
+          description="Generate a PDF performance report — organic rankings, local-pack geo-grids & Google Business Profile. (Analytics, Asana & a campaign-health summary land in later phases.)"
+          to={id ? `/clients/${id}/reports` : undefined}
           cta="Open"
         />
       </Section>

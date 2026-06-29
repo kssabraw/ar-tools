@@ -1013,3 +1013,21 @@ export interface ReoptPlan {
   action_count: number
   created_at: string
 }
+
+// Client Reporting module.
+export interface ClientReport {
+  id: string
+  client_id: string
+  report_type: 'monthly' | 'weekly'
+  period_start: string | null
+  period_end: string | null
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  storage_path: string | null
+  pdf_url: string | null
+  drive_doc_id: string | null
+  sections: Record<string, string> | null
+  title: string | null
+  error: string | null
+  created_at: string
+  completed_at: string | null
+}
