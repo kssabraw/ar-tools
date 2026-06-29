@@ -40,5 +40,6 @@ alter table async_jobs
     'local_seo_silo', 'local_seo_generate', 'local_seo_reoptimize_url',
     'local_seo_reoptimize_page', 'service_page_plan', 'rank_location_derive',
     'brand_scan', 'brand_report', 'notification_dispatch', 'reopt_plan',
+    'client_report',
     'site_audit', 'backlink_audit', 'citation_audit'
   ]));

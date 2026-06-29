@@ -24,11 +24,22 @@ The connective layer from `docs/managed-engagement-and-strategy-engine-design-v1
   (begin engagement → approve brand voice + ICP → add targets), `onboarding_readiness` +
   the `onboarding→intake` transition **gated** on voice + ICP approved; workspace
   **Onboarding** card.
+- **Phase 3 — audit modules** (engagement-scoped `audit_runs`; the Strategy Engine reads
+  these later for richer actions): **site/technical** (`services/site_audit.py` — pure
+  parse/score of DataForSEO OnPage `checks` → typed severity-scored issues; best-effort
+  instant-pages crawl seeded from sitemap discovery, capped at `site_audit_max_pages`),
+  **backlink-gap** (`services/backlink_gap.py` — DataForSEO Backlinks: client profile +
+  referring domains linking to ≥N competitors but not the client, capped at top-N), and
+  **local-citation** (`services/citation_audit.py` — a curated target-directory checklist
+  checked via the existing DataForSEO SERP; gap = "where you need to be"). `routers/audits.py`
+  (`POST …/audits/{site|backlinks|citations}`, `GET …/audits`); async jobs `site_audit` /
+  `backlink_audit` / `citation_audit`. Config: `site_audit_max_pages`,
+  `backlink_max_competitors`, `citation_directories`. Pure parsers unit-tested.
 
-**Live DB:** migration `engagements_and_strategy` **applied to the live project**
-(`wvcthtmmcmhkybcesirb`) via the Supabase MCP — three new tables (`engagements`,
-`strategy_plans`, `strategy_actions`), RLS enabled. Other migrations on the branch are
-additive code only.
+**Live DB:** migrations **applied to the live project** (`wvcthtmmcmhkybcesirb`) via the
+Supabase MCP: `engagements_and_strategy` (`engagements`, `strategy_plans`,
+`strategy_actions`) and `audit_runs` (+ widened `async_jobs.job_type` for the audit jobs),
+all RLS-enabled. Other migrations on the branch are additive code only.
 
 **To go live:** the **`PLATFORM` Railway service must deploy this branch** for the new
 endpoints (`/keyword-portal`, `/engagements`, `/strategy`) to exist. Frontend is built on
@@ -41,8 +52,10 @@ above.
 already exists; their richer signals (winnability, alerting, goal-gaps) land with the
 monitor in Phase 5.
 
-**Next:** **Phase 3 — new audit modules** (site/technical via DataForSEO OnPage + PageSpeed;
-backlink-gap via DataForSEO Backlinks; local-citation static checklist). See design §6.2–6.4.
+**Next:** wire the three audits into the engagement **auditing** stage + surface them in the
+UI, and feed their findings into the Strategy Engine (`technical_fix` / `backlink` /
+`citation` actions). Then **Phase 4/5** (executor, monitor/alerting, Asana). PageSpeed
+(CWV) on top-traffic pages is a follow-up to the site audit. See design §6.2–6.4, §6.8–6.9.
 
 **Security note (pre-existing):** the Supabase advisor flags `public.maps_geocode_cache`
 with **RLS disabled** (a shared cross-client cache; predates this work). Enable with

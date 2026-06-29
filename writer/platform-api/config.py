@@ -96,6 +96,19 @@ class Settings(BaseSettings):
     # Site / technical audit (design §6.2) — DataForSEO OnPage instant-pages crawl.
     site_audit_max_pages: int = 20
 
+    # Backlink-gap audit (design §6.3) — DataForSEO Backlinks.
+    backlink_max_competitors: int = 5
+    backlink_min_competitors: int = 2
+    backlink_referring_domains_limit: int = 500
+
+    # Local-citation audit (design §6.4) — curated target-directory checklist,
+    # presence checked via the existing DataForSEO SERP. The gap = where you need to be.
+    citation_directories: list[str] = [
+        "yelp.com", "facebook.com", "bbb.org", "yellowpages.com", "mapquest.com",
+        "foursquare.com", "angi.com", "nextdoor.com", "manta.com", "superpages.com",
+        "hotfrog.com", "chamberofcommerce.com",
+    ]
+
     # Maps / local-pack geo-grid ranker (Module #5) — Local Dominator API.
     local_dominator_api_key: str = ""
     local_dominator_base_url: str = "https://api.localdominator.co"

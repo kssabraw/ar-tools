@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
-from services import site_audit
+from services import backlink_gap, citation_audit, site_audit
 
 router = APIRouter(tags=["audits"])
 
@@ -20,6 +20,18 @@ router = APIRouter(tags=["audits"])
 @router.post("/engagements/{engagement_id}/audits/site")
 async def trigger_site_audit(engagement_id: UUID, auth: dict = Depends(require_auth)):
     site_audit.enqueue_site_audit(str(engagement_id))
+    return {"status": "enqueued"}
+
+
+@router.post("/engagements/{engagement_id}/audits/backlinks")
+async def trigger_backlink_audit(engagement_id: UUID, auth: dict = Depends(require_auth)):
+    backlink_gap.enqueue_backlink_audit(str(engagement_id))
+    return {"status": "enqueued"}
+
+
+@router.post("/engagements/{engagement_id}/audits/citations")
+async def trigger_citation_audit(engagement_id: UUID, auth: dict = Depends(require_auth)):
+    citation_audit.enqueue_citation_audit(str(engagement_id))
     return {"status": "enqueued"}
 
 
