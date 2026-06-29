@@ -72,6 +72,20 @@ class AsanaTeamMembersReplaceRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Task Library (global standard durations, keyed by name)
+# ---------------------------------------------------------------------------
+class AsanaLibraryTaskItem(BaseModel):
+    name: str
+    default_hours: Optional[float] = None
+    default_category_name: Optional[str] = None
+    active: bool = True
+
+
+class AsanaLibraryReplaceRequest(BaseModel):
+    items: list[AsanaLibraryTaskItem] = []
+
+
+# ---------------------------------------------------------------------------
 # Monthly generation
 # ---------------------------------------------------------------------------
 class GenerateMonthRequest(BaseModel):

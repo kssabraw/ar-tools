@@ -8,7 +8,7 @@ import {
 import { api } from '../lib/api'
 import type {
   Client, AsanaProjectMapping, AsanaTaskTemplateItem, AsanaUser,
-  AsanaCategoryOption, AsanaGenerateMonthResponse, AsanaTeamMember,
+  AsanaCategoryOption, AsanaGenerateMonthResponse, AsanaTeamMember, AsanaLibraryTaskItem,
 } from '../lib/types'
 
 const AUTO = '__auto__'  // assignee-select sentinel for "auto-distribute"
@@ -62,6 +62,13 @@ export function AsanaTasks() {
     queryKey: ['asana-team-members'],
     queryFn: () => api.get<AsanaTeamMember[]>(`/asana/team-members`),
   })
+
+  const { data: library } = useQuery<AsanaLibraryTaskItem[]>({
+    queryKey: ['asana-task-library'],
+    queryFn: () => api.get<AsanaLibraryTaskItem[]>(`/asana/task-library`),
+  })
+  const libByName = (name: string) =>
+    (library ?? []).find((t) => t.name.trim().toLowerCase() === name.trim().toLowerCase())
 
   // ── Local editable state ────────────────────────────────────────────
   const [projectGid, setProjectGid] = useState('')
@@ -215,10 +222,17 @@ export function AsanaTasks() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <h2 style={cardTitle}>Monthly task template</h2>
-            <p style={cardSub}>One row per task. Order here is the order they’re created in Asana. Est. hrs (optional) feeds the Team Workload view.</p>
+            <p style={cardSub}>
+              One row per task. Type a name or pick from your{' '}
+              <Link to="/asana/task-library" style={{ color: '#4f46e5' }}>Task Library</Link>{' '}
+              — blank Est. hrs / Category inherit the library’s defaults.
+            </p>
           </div>
           <button style={ghostBtn} onClick={addRow}><Plus size={14} /> Add task</button>
         </div>
+        <datalist id="asana-task-library">
+          {(library ?? []).map((t) => <option key={t.name} value={t.name} />)}
+        </datalist>
 
         {rows.length === 0 ? (
           <div style={emptyBox}>No tasks yet. Click <strong>Add task</strong> to start the template.</div>
@@ -232,6 +246,7 @@ export function AsanaTasks() {
                 <input
                   style={input}
                   placeholder="Task name"
+                  list="asana-task-library"
                   value={r.name}
                   onChange={(e) => updateRow(i, { name: e.target.value })}
                 />
@@ -273,7 +288,11 @@ export function AsanaTasks() {
                   type="number"
                   min="0"
                   step="0.5"
-                  placeholder="—"
+                  placeholder={
+                    r.est_hours == null && libByName(r.name)?.default_hours != null
+                      ? `${libByName(r.name)!.default_hours} (lib)`
+                      : '—'
+                  }
                   value={r.est_hours ?? ''}
                   onChange={(e) => updateRow(i, { est_hours: e.target.value === '' ? null : Number(e.target.value) })}
                 />

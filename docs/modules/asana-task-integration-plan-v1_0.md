@@ -72,6 +72,17 @@
 > members → auto rows are left unassigned. (Effort read still uses the global effort GID until
 > a number field exists on projects.)
 >
+> *Task Library (built):* a global `asana_task_library` (migration `20260629170000`) — the
+> single source of truth for standard task **durations** (+ default category), **keyed by task
+> name**. A client template row inherits the library's `default_hours` / category when its own
+> value is blank (`asana_monthly.apply_library_defaults`, applied at generation; per-client
+> override always wins). Define "GBP Blast = 1.5h, GBP Authority" once → every client's "GBP
+> Blast" uses it. Editor: a `<datalist>` of library names on the task-name input + an inherited
+> "(lib)" hours placeholder + a link to the new **Task Library** page (`/asana/task-library`,
+> whole-list CRUD). Category inheritance resolves the library's category name against the
+> project's Service Type options (best-effort). Effort read by name (`extract_number_field_by_name`)
+> so durations sum across project-local fields.
+>
 > **Provisioned (live):** all three migrations applied to Supabase; `ASANA_TOKEN` + workspace +
 > the pilot's Status/category field GIDs set on PLATFORM (the field *names* now drive
 > resolution, so those GIDs are just fallback). PR #170 merged to `main`.

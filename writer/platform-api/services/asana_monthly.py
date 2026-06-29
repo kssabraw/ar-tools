@@ -50,6 +50,43 @@ def get_active_templates(client_id: str) -> list[dict]:
     ).data or []
 
 
+def get_task_library() -> dict:
+    """The active Task Library keyed by lowercased name → row (default hours +
+    category). The single source of truth for standard task durations."""
+    rows = (
+        get_supabase()
+        .table("asana_task_library")
+        .select("name, default_hours, default_category_name")
+        .eq("active", True)
+        .execute()
+    ).data or []
+    return {(r.get("name") or "").strip().casefold(): r for r in rows}
+
+
+def apply_library_defaults(templates: list[dict], library: dict, category_options: dict) -> int:
+    """Fill each template row's blank est_hours / category from the Task Library
+    (matched by task name), mutating rows in place. A row's own value always
+    wins (per-client override). Returns how many rows inherited something. Pure
+    — unit-tested."""
+    applied = 0
+    for row in templates:
+        lib = library.get((row.get("name") or "").strip().casefold())
+        if not lib:
+            continue
+        touched = False
+        if row.get("est_hours") is None and lib.get("default_hours") is not None:
+            row["est_hours"] = lib["default_hours"]
+            touched = True
+        if not row.get("category_option_gid") and lib.get("default_category_name"):
+            opt = (category_options or {}).get(lib["default_category_name"].strip().casefold())
+            if opt:
+                row["category_option_gid"] = opt
+                touched = True
+        if touched:
+            applied += 1
+    return applied
+
+
 def get_eligible_assignees(client_id: str) -> list[str]:
     """The per-client auto-distribution eligibility list (Asana user GIDs)."""
     rows = (
@@ -141,6 +178,10 @@ async def generate_month_for_client(client_id: str, target: date) -> dict:
     # Resolve this project's Status / category / effort field GIDs by name
     # (project-local fields differ per project), once for the whole batch.
     fields = await asana_service.resolve_project_fields(project_gid)
+
+    # Inherit standard durations / category from the Task Library (by task name)
+    # for any row that didn't set its own — the single source of truth.
+    apply_library_defaults(templates, get_task_library(), fields.get("category_options") or {})
 
     # Capacity-aware auto-distribution: fill in assignees for auto-assign rows
     # (mutates those rows' assignee_gid in place before payloads are built).

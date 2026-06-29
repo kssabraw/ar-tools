@@ -1330,6 +1330,13 @@ export interface AsanaTeamMember {
   active: boolean
 }
 
+export interface AsanaLibraryTaskItem {
+  name: string
+  default_hours: number | null
+  default_category_name: string | null
+  active: boolean
+}
+
 export interface AsanaUser {
   gid: string
   name: string | null

@@ -157,7 +157,8 @@ _NAMES = dict(status_field_name="Status", not_started_option_name="Not Started",
 def test_match_project_fields_resolves_all():
     m = asana.match_project_fields(_settings_rows(), **_NAMES)
     assert m == {"status_field_gid": "s", "not_started_option_gid": "ns",
-                 "category_field_gid": "cat", "effort_field_gid": "h"}
+                 "category_field_gid": "cat", "category_options": {"content": "o1"},
+                 "effort_field_gid": "h"}
 
 
 def test_match_project_fields_case_insensitive():
@@ -178,7 +179,7 @@ def test_match_project_fields_misses_return_none():
         category_field_name="Missing", effort_field_name="Hours",
     )
     assert m == {"status_field_gid": None, "not_started_option_gid": None,
-                 "category_field_gid": None, "effort_field_gid": None}
+                 "category_field_gid": None, "category_options": {}, "effort_field_gid": None}
 
 
 def test_match_project_fields_option_name_mismatch():

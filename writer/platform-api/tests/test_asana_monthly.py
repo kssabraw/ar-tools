@@ -36,6 +36,7 @@ def _patch_common(monkeypatch, sections, created_calls):
         }
 
     monkeypatch.setattr(asana_service, "resolve_project_fields", _resolve)
+    monkeypatch.setattr(asana_monthly, "get_task_library", lambda: {})
 
     async def _list_sections(project_gid):
         return sections
@@ -143,3 +144,38 @@ async def test_assign_auto_tasks_off(monkeypatch):
     monkeypatch.setattr(settings, "asana_auto_distribute_enabled", False)
     templates = [{"name": "x", "auto_assign": True}]
     assert await asana_monthly.assign_auto_tasks("c1", templates) == 0
+
+
+# ---------------------------------------------------------------------------
+# Task Library inheritance
+# ---------------------------------------------------------------------------
+def test_apply_library_defaults_fills_blanks_only():
+    library = {
+        "gbp blast": {"name": "GBP Blast", "default_hours": 1.5, "default_category_name": "GBP Authority"},
+        "40 citations": {"name": "40 Citations", "default_hours": 4, "default_category_name": "Link Building"},
+    }
+    category_options = {"gbp authority": "opt_gbp", "link building": "opt_links"}
+    templates = [
+        {"name": "GBP Blast", "est_hours": None, "category_option_gid": None},      # inherits both
+        {"name": "40 Citations", "est_hours": 6, "category_option_gid": "opt_x"},   # overridden — untouched
+        {"name": "Ad-hoc", "est_hours": None, "category_option_gid": None},         # not in library
+    ]
+    applied = asana_monthly.apply_library_defaults(templates, library, category_options)
+    assert applied == 1
+    assert templates[0]["est_hours"] == 1.5
+    assert templates[0]["category_option_gid"] == "opt_gbp"
+    # Overridden row keeps its own values.
+    assert templates[1]["est_hours"] == 6
+    assert templates[1]["category_option_gid"] == "opt_x"
+    # Ad-hoc row stays blank.
+    assert templates[2]["est_hours"] is None
+
+
+def test_apply_library_defaults_case_insensitive_and_partial():
+    library = {"map embeds": {"name": "Map Embeds", "default_hours": 2, "default_category_name": "Link Building"}}
+    # Category name not in this project's options → only hours inherited.
+    templates = [{"name": "map embeds", "est_hours": None, "category_option_gid": None}]
+    applied = asana_monthly.apply_library_defaults(templates, library, {})
+    assert applied == 1
+    assert templates[0]["est_hours"] == 2
+    assert templates[0]["category_option_gid"] is None

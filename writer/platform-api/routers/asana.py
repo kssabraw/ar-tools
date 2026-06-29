@@ -26,6 +26,8 @@ from models.asana import (
     AsanaProjectMappingRequest,
     AsanaTaskTemplateItem,
     AsanaTaskTemplateReplaceRequest,
+    AsanaLibraryReplaceRequest,
+    AsanaLibraryTaskItem,
     AsanaTeamMemberItem,
     AsanaTeamMembersReplaceRequest,
     AsanaUser,
@@ -99,6 +101,50 @@ async def replace_team_members(
         logger.error("asana_replace_team_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
     return await list_team_members(auth)
+
+
+# ---------------------------------------------------------------------------
+# Task Library (global standard durations)
+# ---------------------------------------------------------------------------
+@router.get("/asana/task-library", response_model=list[AsanaLibraryTaskItem])
+async def list_task_library(auth: dict = Depends(require_auth)) -> list[AsanaLibraryTaskItem]:
+    rows = (
+        get_supabase()
+        .table("asana_task_library")
+        .select("name, default_hours, default_category_name, active")
+        .order("sort_order")
+        .execute()
+    ).data or []
+    return [AsanaLibraryTaskItem(**r) for r in rows]
+
+
+@router.put("/asana/task-library", response_model=list[AsanaLibraryTaskItem])
+async def replace_task_library(
+    body: AsanaLibraryReplaceRequest,
+    auth: dict = Depends(require_auth),
+) -> list[AsanaLibraryTaskItem]:
+    """Replace the whole Task Library. Deduped by name (last wins)."""
+    supabase = get_supabase()
+    seen: dict[str, dict] = {}
+    for idx, item in enumerate(body.items):
+        if not item.name or not item.name.strip():
+            continue
+        seen[item.name.strip().casefold()] = {
+            "name": item.name.strip(),
+            "default_hours": item.default_hours,
+            "default_category_name": item.default_category_name,
+            "active": item.active,
+            "sort_order": idx,
+        }
+    try:
+        supabase.table("asana_task_library").delete().neq("name", "").execute()
+        rows = list(seen.values())
+        if rows:
+            supabase.table("asana_task_library").insert(rows).execute()
+    except Exception as exc:
+        logger.error("asana_replace_library_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return await list_task_library(auth)
 
 
 # ---------------------------------------------------------------------------

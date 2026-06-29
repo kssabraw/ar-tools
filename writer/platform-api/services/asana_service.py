@@ -238,10 +238,16 @@ def match_project_fields(
     status_cf = _match_field(settings_rows, status_field_name)
     category_cf = _match_field(settings_rows, category_field_name)
     effort_cf = _match_field(settings_rows, effort_field_name, subtype="number")
+    category_options = {
+        (o.get("name") or "").strip().casefold(): o.get("gid")
+        for o in ((category_cf or {}).get("enum_options") or [])
+        if o.get("gid")
+    }
     return {
         "status_field_gid": status_cf.get("gid") if status_cf else None,
         "not_started_option_gid": _match_option(status_cf, not_started_option_name),
         "category_field_gid": category_cf.get("gid") if category_cf else None,
+        "category_options": category_options,
         "effort_field_gid": effort_cf.get("gid") if effort_cf else None,
     }
 
