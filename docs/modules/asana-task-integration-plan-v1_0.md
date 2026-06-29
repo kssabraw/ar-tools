@@ -61,6 +61,17 @@
 > *Project model (decided):* **one ongoing project per client** (months as sections), not
 > per-quarter projects — so the fixed client→project mapping is correct with no rollover logic.
 >
+> *Auto-distribution (built):* a template row can be marked **Auto-distribute** (no fixed
+> assignee); the monthly job spreads those tasks across the client's **eligible team subset**
+> (`asana_client_projects.auto_assignee_gids`) by **remaining capacity** — each task goes to
+> whoever has the most room (weekly capacity − current open hours across all clients, weighted
+> by est. hours; `asana_service.distribute_tasks` greedy, heaviest-first). Pinned rows (a
+> specific assignee) are untouched. Migration `20260629160000` (`auto_assign` on templates +
+> `auto_assignee_gids` on the mapping). Editor: an "Auto-distribute" assignee option + an
+> "Auto-assign team" eligibility picker. Gated by `asana_auto_distribute_enabled`; no eligible
+> members → auto rows are left unassigned. (Effort read still uses the global effort GID until
+> a number field exists on projects.)
+>
 > **Provisioned (live):** all three migrations applied to Supabase; `ASANA_TOKEN` + workspace +
 > the pilot's Status/category field GIDs set on PLATFORM (the field *names* now drive
 > resolution, so those GIDs are just fallback). PR #170 merged to `main`.

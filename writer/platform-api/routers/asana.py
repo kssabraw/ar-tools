@@ -108,10 +108,21 @@ async def replace_team_members(
 async def get_project_mapping(
     client_id: UUID, auth: dict = Depends(require_auth)
 ) -> AsanaProjectMapping | None:
-    project_gid = asana_monthly.get_project_gid(str(client_id))
-    if not project_gid:
+    rows = (
+        get_supabase()
+        .table("asana_client_projects")
+        .select("project_gid, auto_assignee_gids")
+        .eq("client_id", str(client_id))
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
         return None
-    return AsanaProjectMapping(client_id=client_id, project_gid=project_gid)
+    return AsanaProjectMapping(
+        client_id=client_id,
+        project_gid=rows[0]["project_gid"],
+        auto_assignee_gids=list(rows[0].get("auto_assignee_gids") or []),
+    )
 
 
 @router.put("/clients/{client_id}/asana/project", response_model=AsanaProjectMapping)
@@ -121,18 +132,20 @@ async def set_project_mapping(
     auth: dict = Depends(require_auth),
 ) -> AsanaProjectMapping:
     supabase = get_supabase()
+    gids = [g.strip() for g in body.auto_assignee_gids if g and g.strip()]
     try:
         supabase.table("asana_client_projects").upsert(
             {
                 "client_id": str(client_id),
                 "project_gid": body.project_gid.strip(),
+                "auto_assignee_gids": gids,
                 "updated_at": "now()",
             }
         ).execute()
     except Exception as exc:
         logger.error("asana_set_mapping_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
-    return AsanaProjectMapping(client_id=client_id, project_gid=body.project_gid.strip())
+    return AsanaProjectMapping(client_id=client_id, project_gid=body.project_gid.strip(), auto_assignee_gids=gids)
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +193,7 @@ async def replace_task_templates(
                 "category_option_gid": item.category_option_gid,
                 "category_name": item.category_name,
                 "est_hours": item.est_hours,
+                "auto_assign": item.auto_assign,
                 "sort_order": idx,
                 "active": item.active,
             }

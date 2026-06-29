@@ -266,6 +266,36 @@ def task_hours(task: dict, effort_field_gid: str, default_task_hours: float) -> 
     return float(val) if val is not None else float(default_task_hours)
 
 
+def distribute_tasks(task_hours_list: list[float], members: list[dict]) -> list[Optional[str]]:
+    """Capacity-aware greedy distribution of tasks across eligible members.
+
+    ``members`` is ``[{"gid", "remaining"}]`` where ``remaining`` is each member's
+    free capacity (weekly_hours − current open hours; may be negative). Tasks are
+    assigned heaviest-first to whoever currently has the most remaining capacity,
+    decrementing as we go — so load evens out and the person with the most room
+    gets the most work. Returns the assigned gid per task in **original order**
+    (all None when there are no eligible members). Pure; unit-tested.
+    """
+    n = len(task_hours_list)
+    if not members:
+        return [None] * n
+    remaining = {m["gid"]: float(m.get("remaining") or 0.0) for m in members}
+    result: list[Optional[str]] = [None] * n
+    # Heaviest tasks first; stable on original index for ties.
+    order = sorted(range(n), key=lambda i: (-task_hours_list[i], i))
+    for i in order:
+        # Most remaining capacity; first member in list order wins ties.
+        best_gid = members[0]["gid"]
+        best_rem = remaining[best_gid]
+        for m in members[1:]:
+            r = remaining[m["gid"]]
+            if r > best_rem:
+                best_gid, best_rem = m["gid"], r
+        result[i] = best_gid
+        remaining[best_gid] -= float(task_hours_list[i])
+    return result
+
+
 def aggregate_member_workload(
     gid: str,
     name: str,

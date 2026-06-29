@@ -402,6 +402,10 @@ class Settings(BaseSettings):
     asana_workspace_gid: str = ""  # scopes the per-assignee task queries
     asana_monthly_enabled: bool = True
     asana_workload_enabled: bool = True
+    # Auto-distribution: a template row marked auto_assign is handed to the
+    # client's eligible team member with the most remaining capacity at run time.
+    # When off, auto rows are created unassigned.
+    asana_auto_distribute_enabled: bool = True
     # Monthly section automation cadence. The scheduler fires once per month on
     # `asana_month_generate_day`; the target month = today shifted by
     # `asana_month_target_offset` (0 = the month that just started, 1 = next
