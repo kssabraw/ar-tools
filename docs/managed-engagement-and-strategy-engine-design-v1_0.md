@@ -104,8 +104,9 @@ strategy_plans
   -- immutable once approved; amendments create a new version
 
 strategy_actions
-  id, plan_id (FK), category (enum: silo | page | onpage | internal_link | citation |
-     backlink | llm_tactic | technical_fix | tracking_setup | schedule),
+  id, plan_id (FK), module (enum: organic | maps | ai_visibility | cross),  -- powers per-module filter views
+  category (enum: silo | page | onpage | internal_link | citation |
+     backlink | llm_tactic | technical_fix | tracking_setup | schedule | gbp | reviews),
   title, rationale, target (jsonb: keyword/url/location/etc),
   priority (int), effort (enum), est_value (numeric),
   execution_mode (enum: auto | assigned),         -- auto → executor; assigned → Asana task (§4.5)
@@ -424,6 +425,18 @@ client_competitors
 **Consumers:** a build job on the monitor cadence upserts `client_competitors`; consumed by the **strategy engine/optimizer** (a unified "beats you across channels" view → *coordinated* actions, e.g. one competitor‑teardown brief instead of three disconnected ones), the **consolidated report** (one competitor table), and a Slack **`competitors`** context provider.
 
 **Minor open items:** (1) registrable‑domain parsing needs public‑suffix handling — a small lib (`tldextract`) vs. an embedded PSL heuristic, decided at build; (2) the source/maintenance of the aggregator‑exclusion list. **Build timing:** spec now; Phase 5 (with the monitor); AI leg attaches during the LLM tracker pass.
+
+### 4.8.6 Maps synthesized action plan — ✅ decided: feed the unified plan only
+
+§4.8.4 defined the Maps action *vocabulary*; the synthesized *plan* (organic's ranked, deduped, recommend‑only Action Plan artifact) is **not** rebuilt per‑module for Maps. **Decision (2026‑06‑29): Maps actions feed the one unified `strategy_plan`** (§6.1/§6.9) directly — no `maps_reopt_plans` store.
+
+- The optimizer (§6.9) emits the §4.8.4 Maps actions as `strategy_actions` tagged **`module = maps`**; a **"Maps" filter** on the unified Action Plan view (the generalized `ActionPlan.tsx`) gives a Maps‑only slice when wanted, without a second plan store.
+- The unified plan **ranks Maps actions alongside organic** (and later LLM) by severity/priority, and applies the **cross‑module dedup** from §4.8.4 (one company/page isn't actioned twice across channels) — the whole point of one plan.
+- **Consistency:** this is the same convergence the design already states for organic — the Strategy Engine (§6.1) generalizes the existing `reopt_planner`; rather than build a second per‑module silo for Maps and then merge it, Maps lands **straight in the unified model**.
+- **Build timing / interim:** the unified `strategy_plan` is established in **Phase 2** (recommend‑only); Maps actions join when the Maps optimizer wiring lands (**Phase 5**). Until then, organic keeps its existing `reopt_plans` Action Plan; there is **no interim Maps‑only plan** (deliberate — avoids throwaway).
+- **Data‑model:** `strategy_actions` gains a **`module`** tag (`organic | maps | ai_visibility | cross`) for the filter views (added to §3.1).
+
+This is the last item on the Maps gap list — **the Maps ↔ SerMaStr contract is now complete** (alerting §4.8.1 · winnability §4.8.2 · goal rollup §4.8.3 · action vocabulary §4.8.4 · competitor unification §4.8.5 · plan integration §4.8.6).
 
 ---
 
