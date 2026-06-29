@@ -271,6 +271,18 @@ async def publish_run(
     except GoogleDocError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    # Persist the publish target so the UI can show an "already published" badge +
+    # a link to the Doc (best-effort — the Doc already exists, so a failed write
+    # must not fail the publish).
+    try:
+        supabase.table("runs").update({
+            "published_doc_id": result.get("doc_id"),
+            "published_doc_url": result.get("doc_url"),
+            "published_at": "now()",
+        }).eq("id", str(run_id)).execute()
+    except Exception as exc:  # noqa: BLE001 — non-fatal bookkeeping
+        logger.warning("doc_publish_persist_failed", extra={"run_id": str(run_id), "error": str(exc)})
+
     logger.info(
         "doc_published",
         extra={"run_id": str(run_id), "doc_id": result.get("doc_id"), "user_id": auth["user_id"]},
