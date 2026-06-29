@@ -56,9 +56,13 @@ delivered by email + saved to the client's Google Drive folder.
 - **Phase 2 — Google data:** GA4 connector (sessions/users/conversions/channels,
   MoM) + GBP Performance connector. Add both sections.
 - **Phase 3 — Asana:** completed-tasks connector + section; unlocks Report B.
-- **Phase 4 — Campaign-health & strategy overview:** a Claude (Sonnet) narrative
-  synthesizing all sections (health score, wins/risks/next steps), reusing Action
-  Plan / alerts / rankability signals.
+- **Phase 4 — Campaign-health & strategy overview (DONE):** a Claude (Sonnet)
+  narrative (`generate_health_narrative`, forced tool-use → `{overall_health,
+  health_score, headline, wins, risks, next_steps}`) synthesizing the gathered
+  sections + open `rank_alerts` + latest `reopt_plans`. Rendered as the
+  **Executive summary** at the top of the PDF. Best-effort — absent the Anthropic
+  key or on failure the section is omitted (`section_status.health`). Model:
+  `client_report_health_model` = `claude-sonnet-4-6`.
 - **Phase 5 — Delivery + scheduling:** PDF email attachments + recipient routing
   (AM for A, team for B), Drive-folder copy (Apps Script extension), monthly +
   weekly schedules on `gsc_scheduler`, on-demand "Generate now."

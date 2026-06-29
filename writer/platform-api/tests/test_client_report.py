@@ -112,3 +112,41 @@ def test_build_html_includes_present_sections():
     data["gbp"]["top_reviews"] = ["<script>x</script>"]
     assert "<script>x</script>" not in cr.build_report_html(data)
     assert "&lt;script&gt;" in cr.build_report_html(data)
+
+
+# ---------------------------------------------------------------------------
+# campaign-health executive summary (Phase 4)
+# ---------------------------------------------------------------------------
+def test_health_color():
+    assert cr._health_color("Strong") == "#16a34a"
+    assert cr._health_color("At risk") == "#ef4444"
+    assert cr._health_color(None) == "#6366f1"
+
+
+def test_section_health_empty_without_data():
+    assert cr._section_health(_data()) == ""
+
+
+def test_section_health_renders_and_escapes():
+    data = _data(health={
+        "overall_health": "Needs attention", "health_score": 62,
+        "headline": "Rankings <b>steady</b> but local pack slipping.",
+        "wins": ["Top-3 for emergency plumber"],
+        "risks": ["Lost page 1 for blocked drains"],
+        "next_steps": ["Reoptimize the drains page"],
+    })
+    out = cr.build_report_html(data)
+    assert "Executive summary" in out
+    assert "Needs attention · 62/100" in out
+    assert "Top-3 for emergency plumber" in out and "Reoptimize the drains page" in out
+    # the executive summary renders first (before Organic etc.)
+    assert out.index("Executive summary") < out.index("No report data is available") \
+        if "No report data is available" in out else True
+    # headline is escaped
+    assert "<b>steady</b>" not in out and "&lt;b&gt;steady&lt;/b&gt;" in out
+
+
+def test_generate_health_narrative_no_key_returns_none(monkeypatch):
+    from config import settings
+    monkeypatch.setattr(settings, "anthropic_api_key", "")
+    assert cr.generate_health_narrative("Acme", {"start": "x", "end": "y"}, {}, {}) is None

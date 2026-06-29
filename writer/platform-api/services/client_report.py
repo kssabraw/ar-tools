@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import html as _html
+import json
 import logging
 from datetime import date, timedelta
 from typing import Optional
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 _REPORTS_BUCKET = "reports"
 _SIGNED_URL_TTL = 60 * 60 * 24 * 7  # 7 days
+_LLM_TIMEOUT = 60.0                 # bound the campaign-health Claude call
 _MAX_KEYWORDS = 40
 _DEFAULT_PERIOD_DAYS = 30
 
@@ -198,6 +200,35 @@ def _section_gbp(data: dict) -> str:
     )
 
 
+def _health_color(label) -> str:
+    return {
+        "Strong": "#16a34a", "Steady": "#84cc16",
+        "Needs attention": "#f59e0b", "At risk": "#ef4444",
+    }.get(label, "#6366f1")
+
+
+def _section_health(data: dict) -> str:
+    h = data.get("health")
+    if not h:
+        return ""
+    label = h.get("overall_health")
+    score = h.get("health_score")
+    badge = _esc(label) + (f" · {_esc(score)}/100" if isinstance(score, int) else "")
+    color = _health_color(label)
+
+    def _list(title, items):
+        lis = "".join(f"<li>{_esc(x)}</li>" for x in (items or [])[:4])
+        return f"<div class='hcol'><h4>{title}</h4><ul>{lis}</ul></div>" if lis else ""
+
+    cols = _list("Wins", h.get("wins")) + _list("Risks", h.get("risks")) + _list("Next steps", h.get("next_steps"))
+    return (
+        "<section class='exec'><h2>Executive summary</h2>"
+        f"<div class='health-badge' style='background:{color}'>{badge}</div>"
+        f"<p class='headline'>{_esc(h.get('headline'))}</p>"
+        f"<div class='hcols'>{cols}</div></section>"
+    )
+
+
 def _fmt_pos(v) -> str:
     if v is None:
         return "—"
@@ -212,7 +243,8 @@ def build_report_html(data: dict) -> str:
     client = data.get("client", {})
     period = data.get("period", {})
     sections = "".join(
-        s for s in (_section_organic(data), _section_geogrid(data), _section_gbp(data)) if s
+        s for s in (_section_health(data), _section_organic(data),
+                    _section_geogrid(data), _section_gbp(data)) if s
     )
     if not sections:
         sections = "<section><p class='lead'>No report data is available for this client yet.</p></section>"
@@ -257,6 +289,11 @@ td.num, th.num { text-align:right; }
 .legend .sw { display:inline-block; width:9px; height:9px; border-radius:2px; margin:0 3px 0 10px; vertical-align:middle; }
 .reviews { color:#334155; } .reviews li { margin-bottom:4px; }
 footer { margin-top:24px; padding-top:8px; border-top:1px solid #e2e8f0; color:#94a3b8; font-size:9px; text-align:center; }
+.exec .health-badge { display:inline-block; color:#fff; font-weight:700; font-size:11px; border-radius:999px; padding:4px 12px; margin:4px 0 8px; }
+.exec .headline { font-size:13px; color:#0f172a; }
+.hcols { display:flex; gap:16px; margin-top:8px; }
+.hcol { flex:1; } .hcol h4 { font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#94a3b8; margin:0 0 4px; }
+.hcol ul { margin:0; padding-left:16px; } .hcol li { margin-bottom:3px; color:#334155; }
 """
 
 
@@ -413,6 +450,115 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
 
 
 # ---------------------------------------------------------------------------
+# Campaign-health narrative (Phase 4) — one Claude call → executive summary.
+# ---------------------------------------------------------------------------
+_HEALTH_SYSTEM = (
+    "You are a senior SEO strategist writing the executive summary of a monthly "
+    "client report. You are given JSON describing one client's performance "
+    "(organic rankings, local-pack/Maps coverage, Google Business Profile) plus "
+    "open ranking-drop alerts and the current reoptimization Action Plan. Write a "
+    "concise, client-appropriate summary. Base everything ONLY on the data — never "
+    "invent numbers. Be honest but constructive: surface real wins and real risks. "
+    "Keep each bullet to one short sentence."
+)
+_HEALTH_TOOL = {
+    "name": "emit_health",
+    "description": "Emit the campaign-health executive summary.",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "overall_health": {
+                "type": "string",
+                "enum": ["Strong", "Steady", "Needs attention", "At risk"],
+                "description": "Overall campaign health for the period.",
+            },
+            "health_score": {"type": "integer", "description": "0–100 overall health score."},
+            "headline": {"type": "string", "description": "1–2 sentence headline summary."},
+            "wins": {"type": "array", "items": {"type": "string"}, "description": "Up to 4 wins."},
+            "risks": {"type": "array", "items": {"type": "string"}, "description": "Up to 4 risks/issues."},
+            "next_steps": {"type": "array", "items": {"type": "string"}, "description": "Up to 4 recommended next steps."},
+        },
+        "required": ["overall_health", "headline", "wins", "risks", "next_steps"],
+    },
+}
+
+
+def _gather_health_inputs(supabase, client_id: str) -> dict:
+    """Extra signals for the narrative beyond the rendered sections (best-effort)."""
+    out: dict = {}
+    try:
+        alerts = (
+            supabase.table("rank_alerts").select("keyword, message")
+            .eq("client_id", client_id).is_("resolved_at", "null").execute()
+        ).data or []
+        if alerts:
+            out["open_drop_alerts"] = alerts[:10]
+    except Exception as exc:
+        logger.warning("report_health_alerts_failed", extra={"client_id": client_id, "error": str(exc)})
+    try:
+        plan = (
+            supabase.table("reopt_plans").select("summary, action_count, items")
+            .eq("client_id", client_id).order("created_at", desc=True).limit(1).execute()
+        ).data
+        if plan:
+            p = plan[0]
+            out["action_plan"] = {
+                "summary": p.get("summary"),
+                "action_count": p.get("action_count"),
+                "top_actions": [
+                    {"keyword": a.get("keyword"), "recommendation": a.get("recommendation")}
+                    for a in (p.get("items") or [])[:6]
+                ],
+            }
+    except Exception as exc:
+        logger.warning("report_health_plan_failed", extra={"client_id": client_id, "error": str(exc)})
+    return out
+
+
+def generate_health_narrative(client_name: Optional[str], period: dict, data: dict, signals: dict) -> Optional[dict]:
+    """Claude → {overall_health, health_score, headline, wins, risks, next_steps}.
+
+    Best-effort: returns None when the Anthropic key is unset or the call fails, so
+    the report still renders without the summary."""
+    if not settings.anthropic_api_key:
+        return None
+    import anthropic  # noqa: PLC0415
+
+    context = {
+        "client": client_name,
+        "period": period,
+        "organic": data.get("organic", {}).get("summary"),
+        "organic_keywords": (data.get("organic", {}).get("keywords") or [])[:15],
+        "maps": {
+            "keywords": [
+                {"keyword": k.get("keyword"), "average_rank": k.get("average_rank"),
+                 "top3_pins": k.get("top3_pins"), "total_pins": k.get("total_pins")}
+                for k in (data.get("geogrid", {}).get("keywords") or [])
+            ],
+            "weak_areas": data.get("geogrid", {}).get("weak_areas"),
+        },
+        "gbp": data.get("gbp"),
+        **signals,
+    }
+    try:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
+        resp = client.messages.create(
+            model=settings.client_report_health_model,
+            max_tokens=settings.client_report_health_max_tokens,
+            system=_HEALTH_SYSTEM,
+            tools=[_HEALTH_TOOL],
+            tool_choice={"type": "tool", "name": "emit_health"},
+            messages=[{"role": "user", "content": json.dumps(context, default=str, ensure_ascii=False)}],
+        )
+        for b in resp.content:
+            if getattr(b, "type", None) == "tool_use" and b.name == "emit_health":
+                return b.input or None
+    except Exception as exc:
+        logger.warning("report_health_narrative_failed", extra={"client_name": client_name, "error": str(exc)})
+    return None
+
+
+# ---------------------------------------------------------------------------
 # PDF render + store + orchestration (I/O).
 # ---------------------------------------------------------------------------
 def render_pdf(html: str) -> bytes:
@@ -455,6 +601,22 @@ def generate_client_report(
     period_start = period_start or (period_end - timedelta(days=_DEFAULT_PERIOD_DAYS))
 
     data = gather_report_data(client_id, period_start, period_end)
+
+    # Phase 4: campaign-health executive summary (best-effort; prepended section).
+    try:
+        signals = _gather_health_inputs(supabase, client_id)
+        narrative = generate_health_narrative(
+            data["client"].get("name"), data["period"], data, signals
+        )
+        if narrative:
+            data["health"] = narrative
+            data["section_status"]["health"] = "ok"
+        else:
+            data["section_status"]["health"] = "empty"
+    except Exception as exc:
+        data["section_status"]["health"] = "failed"
+        logger.warning("report_health_failed", extra={"client_id": client_id, "error": str(exc)})
+
     title = f"{data['client'].get('name') or 'Client'} — SEO Report ({period_end.isoformat()})"
     pdf = render_pdf(build_report_html(data))
 
