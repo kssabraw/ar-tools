@@ -72,6 +72,21 @@ delivered by email + saved to the client's Google Drive folder.
     `client_report_health_model` = `claude-sonnet-4-6`.
   - **GBP metric growth** (calls/directions/searches over time) is the one piece
     that genuinely waits for Phase 2 — no GBP time-series is stored yet.
+  - **Owner-friendly layer** (built on Phase 4, for a non-SEO business owner who
+    "just wants to know the budget is working"): an **at-a-glance KPI strip** of
+    hero numbers at the top (`_kpi_strip` — search-visibility change, ranking
+    gains, keywords on page 1, content delivered; each card renders only when its
+    data exists); a **Work delivered this period** section (`_gather_work_delivered`
+    + `_section_work_delivered` — completed pipeline runs blog/service/location +
+    new Local SEO pages, head-only count queries, each source degrades
+    independently); the organic table trimmed to the **top movers** (`_keyword_change`
+    + `_TOP_MOVERS`=5, a Movement column + a "remaining N tracked" line, not all
+    40 rows); plain-English **captions** (`.note`) under each section; and a
+    **white-labeled** footer ("Prepared by &lt;agency&gt;", `client_report_agency_name`,
+    default "Amazing Rankings"). Report order: cover → KPI strip → executive
+    summary → performance highlights → work delivered → organic (top movers) →
+    Maps coverage → AI search visibility → GBP. **Live-verified** end-to-end (a
+    real First Class Roofing report rendered on the deployed worker).
 - **Phase 5 — Delivery + scheduling:** PDF email attachments + recipient routing
   (AM for A, team for B), Drive-folder copy (Apps Script extension), monthly +
   weekly schedules on `gsc_scheduler`, on-demand "Generate now."
@@ -86,4 +101,6 @@ delivered by email + saved to the client's Google Drive folder.
 - **Report B granularity:** per-client weekly to assigned team members, or one
   portfolio digest to the whole team. (Default: per-client.)
 - **Branding:** client white-label (client logo + agency footer) for Report A.
-  (Default: client-branded.)
+  (Default: client-branded.) **Partly built:** the footer is agency-white-labeled
+  (`client_report_agency_name`); the cover already uses the client logo. A
+  per-client/per-agency branding override is the remaining piece.
