@@ -6,8 +6,10 @@ diagnose-invisibility / suggest-keywords edge functions.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
+import time
 from typing import Optional
 
 from config import settings
@@ -254,7 +256,125 @@ def format_signals_block(signals: dict) -> str:
             + ", ".join(bits) + "."
         )
 
+    fb = signals.get("search_fallback")
+    if fb:
+        bits = []
+        rank = fb.get("rank")
+        bits.append(
+            f"the client's site ranks #{rank} organically"
+            if rank else "the client's site does NOT rank in the top organic results"
+        )
+        vol = fb.get("search_volume")
+        if vol is not None:
+            comp = fb.get("competition")
+            comp_txt = f", {str(comp).lower()} competition" if comp else ""
+            bits.append(f"the keyword gets ~{vol:,} searches/mo{comp_txt}")
+        lines.append(
+            "- Classic Google Search (live DataForSEO check — no GSC connected): "
+            + "; ".join(bits) + "."
+        )
+
     return "\n".join(lines)
+
+
+# ── live DataForSEO fallback for the GSC layer ────────────────────────────────
+# A keyword invisible across all engines triggers gather/diagnose once per cell,
+# so a naive live SERP call per cell would multiply by the engine count. Memoize
+# the (paid) lookup per (client, keyword, location) for a short TTL so those
+# concurrent cells share one call.
+_FALLBACK_TTL = 600.0
+_fallback_cache: dict[tuple, Optional[dict]] = {}
+_fallback_expiry: dict[tuple, float] = {}
+_fallback_locks: dict[tuple, "asyncio.Lock"] = {}
+
+
+async def _compute_search_fallback(supabase, keyword: str, domain: str, location_code: int) -> Optional[dict]:
+    """One live DataForSEO lookup: the client's organic rank + the keyword's
+    search volume (cached cross-client first, else one live call)."""
+    from services import dataforseo_rank, keyword_market
+
+    rank = None
+    if domain:
+        try:
+            rank = await dataforseo_rank.fetch_serp_rank(keyword, domain, location_code)
+        except Exception:  # pragma: no cover - provider hiccup
+            rank = None
+
+    row = None
+    try:
+        cached = keyword_market.fetch_cached_market(supabase, [keyword], location_code)
+        row = cached.get(keyword.lower())
+        if not row:
+            live = await keyword_market.fetch_market([keyword], location_code)
+            row = live.get(keyword.lower())
+    except Exception:  # pragma: no cover - provider hiccup
+        row = None
+
+    volume = (row or {}).get("search_volume")
+    if rank is None and volume is None:
+        return None
+    return {
+        "source": "dataforseo",
+        "rank": rank,
+        "search_volume": volume,
+        "competition": (row or {}).get("competition"),
+    }
+
+
+async def fetch_search_fallback(client_id: str, keyword: str) -> Optional[dict]:
+    """Live DataForSEO stand-in for the GSC layer when GSC isn't available: the
+    client's organic position for the keyword + the keyword's search volume.
+    Best-effort (returns None when DataForSEO isn't configured or the lookup
+    fails) and memoized per (client, keyword, location) so a keyword invisible
+    across engines costs a single paid lookup."""
+    if not settings.dataforseo_login or not settings.dataforseo_password:
+        return None
+    from db.supabase_client import get_supabase
+    from services import dataforseo_rank
+
+    supabase = get_supabase()
+    try:
+        rows = (
+            supabase.table("clients")
+            .select("website_url, gbp, rank_tracking_location_code")
+            .eq("id", client_id).limit(1).execute().data
+        )
+    except Exception:  # pragma: no cover - best-effort
+        return None
+    if not rows:
+        return None
+    client = rows[0]
+    domain = dataforseo_rank.extract_domain(
+        client.get("website_url") or (client.get("gbp") or {}).get("website") or ""
+    )
+    location_code = dataforseo_rank.location_code_for(client)
+    key = (client_id, keyword.lower(), location_code)
+
+    now = time.monotonic()
+    if key in _fallback_cache and _fallback_expiry.get(key, 0) > now:
+        return _fallback_cache[key]
+    lock = _fallback_locks.setdefault(key, asyncio.Lock())
+    async with lock:
+        now = time.monotonic()
+        if key in _fallback_cache and _fallback_expiry.get(key, 0) > now:
+            return _fallback_cache[key]
+        value = await _compute_search_fallback(supabase, keyword, domain, location_code)
+        _fallback_cache[key] = value
+        _fallback_expiry[key] = time.monotonic() + _FALLBACK_TTL
+        return value
+
+
+async def build_signals_block(client_id: str, keyword: str) -> str:
+    """Single entry point used by both diagnosis paths: gather the stored signals
+    (GBP + SERP snapshot + GSC) and, only when neither GSC nor a SERP snapshot
+    covers the keyword, fall back to a live DataForSEO rank/volume lookup. Returns
+    the formatted prompt block ("" when nothing is available). Never raises."""
+    signals = gather_client_signals(client_id, keyword)
+    if not signals.get("gsc") and not signals.get("serp"):
+        fb = await fetch_search_fallback(client_id, keyword)
+        if fb:
+            signals["search_fallback"] = fb
+    return format_signals_block(signals)
 
 
 async def diagnose_invisibility(
