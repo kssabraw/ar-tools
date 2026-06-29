@@ -295,7 +295,11 @@ async def diagnose_mention(client_id: str, mention_id: str) -> dict:
         )
         keyword = kw[0]["keyword"] if kw else ""
     try:
-        diagnosis = await brand_insights.diagnose_invisibility(brand, keyword, row.get("raw_response") or "")
+        signals = brand_insights.gather_client_signals(client_id, keyword)
+        block = brand_insights.format_signals_block(signals)
+        diagnosis = await brand_insights.diagnose_invisibility(
+            brand, keyword, row.get("raw_response") or "", block
+        )
     except brand_insights.InsightUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 

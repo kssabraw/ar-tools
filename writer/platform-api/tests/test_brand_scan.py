@@ -196,32 +196,40 @@ def test_scan_keyword_engine_empty_responses_fail(monkeypatch):
 
 # ── auto-diagnosis (per not-found cell, during the scan) ──────────────────────
 def test_autodiagnose_returns_diagnosis_on_success(monkeypatch):
-    async def fake_diagnose(brand, keyword, raw):
+    async def fake_diagnose(brand, keyword, raw, block):
         assert brand == "Acme" and keyword == "kw" and raw == "raw answer"
+        assert "4.6★ from 30 reviews" in block  # gathered signals reach the prompt
         return "Here is why you're invisible…"
 
+    monkeypatch.setattr(
+        "services.brand_insights.gather_client_signals",
+        lambda cid, kw: {"gbp": {"rating": 4.6, "review_count": 30,
+                                 "has_website": True, "has_description": True}},
+    )
     monkeypatch.setattr("services.brand_insights.diagnose_invisibility", fake_diagnose)
-    out = asyncio.run(bs._autodiagnose("Acme", "kw", "raw answer"))
+    out = asyncio.run(bs._autodiagnose("c1", "Acme", "kw", "raw answer"))
     assert out == "Here is why you're invisible…"
 
 
 def test_autodiagnose_returns_none_when_openai_unavailable(monkeypatch):
     from services import brand_insights
 
-    async def boom(brand, keyword, raw):
+    async def boom(brand, keyword, raw, block):
         raise brand_insights.InsightUnavailable("openai_not_configured")
 
+    monkeypatch.setattr("services.brand_insights.gather_client_signals", lambda cid, kw: {})
     monkeypatch.setattr("services.brand_insights.diagnose_invisibility", boom)
-    assert asyncio.run(bs._autodiagnose("Acme", "kw", "raw")) is None
+    assert asyncio.run(bs._autodiagnose("c1", "Acme", "kw", "raw")) is None
 
 
 def test_autodiagnose_swallows_unexpected_errors(monkeypatch):
-    async def boom(brand, keyword, raw):
+    async def boom(brand, keyword, raw, block):
         raise RuntimeError("transient blip")
 
+    monkeypatch.setattr("services.brand_insights.gather_client_signals", lambda cid, kw: {})
     monkeypatch.setattr("services.brand_insights.diagnose_invisibility", boom)
     # Best-effort: a diagnosis failure must never bubble up and fail the cell.
-    assert asyncio.run(bs._autodiagnose("Acme", "kw", "raw")) is None
+    assert asyncio.run(bs._autodiagnose("c1", "Acme", "kw", "raw")) is None
 
 
 # ── enqueue validation ───────────────────────────────────────────────────────

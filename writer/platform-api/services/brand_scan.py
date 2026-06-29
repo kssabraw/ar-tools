@@ -503,14 +503,19 @@ async def scan_keyword_engine(
 
 # ── auto-diagnosis (per not-found cell, during the scan) ──────────────────────
 
-async def _autodiagnose(brand: str, keyword: str, raw_response: str) -> Optional[str]:
-    """Generate the invisibility diagnosis for a not-found cell. Best-effort:
-    returns None (rather than raising) when OpenAI isn't configured or the call
-    fails, so a diagnosis hiccup never fails the scan cell."""
+async def _autodiagnose(client_id: str, brand: str, keyword: str, raw_response: str) -> Optional[str]:
+    """Generate the invisibility diagnosis for a not-found cell, grounded in the
+    client's real signals (GBP strength + competitor backlink authority + organic
+    rank). Best-effort: returns None (rather than raising) when OpenAI isn't
+    configured or the call fails, so a diagnosis hiccup never fails the scan cell.
+    Signal gathering is itself best-effort (an empty block just means a less
+    grounded diagnosis)."""
     from services import brand_insights
 
     try:
-        return await brand_insights.diagnose_invisibility(brand, keyword, raw_response or "")
+        signals = brand_insights.gather_client_signals(client_id, keyword)
+        block = brand_insights.format_signals_block(signals)
+        return await brand_insights.diagnose_invisibility(brand, keyword, raw_response or "", block)
     except brand_insights.InsightUnavailable:
         return None
     except Exception as exc:  # pragma: no cover - defensive; never fail the cell
@@ -665,7 +670,7 @@ async def run_brand_scan_job(job: dict) -> None:
                     # and the on-demand /diagnose endpoint can still backfill it.
                     diagnosis = None
                     if settings.brand_autodiagnose_enabled and not result["mention_found"]:
-                        diagnosis = await _autodiagnose(brand, keyword, result["raw_response"])
+                        diagnosis = await _autodiagnose(client_id, brand, keyword, result["raw_response"])
                     supabase.table("brand_mention_history").update({
                         "status": "completed",
                         "mention_found": result["mention_found"],
