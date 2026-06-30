@@ -737,6 +737,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured 
   }
   return (
     <>
+    <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={wordpressConfigured} placement="top" />
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
       {pages.map((p, i) => {
         const key = `lsp:${p.id}`
@@ -795,7 +796,6 @@ function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured 
         )
       })}
     </div>
-    <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={wordpressConfigured} />
     </>
   )
 }

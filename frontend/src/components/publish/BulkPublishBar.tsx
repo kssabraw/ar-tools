@@ -11,6 +11,10 @@ interface Props {
   // undefined when the items can span multiple clients (e.g. all saved articles),
   // where a single flag can't describe them — the per-item error covers it then.
   wordpressConfigured?: boolean
+  // Where the sticky bar anchors. 'bottom' (default) keeps it pinned to the
+  // bottom of the list; 'top' pins it to the top (e.g. directly under a tab row)
+  // so the publish controls are the first thing in view.
+  placement?: 'top' | 'bottom'
 }
 
 const DEST_OPTIONS: { value: PublishDestination; label: string }[] = [
@@ -23,7 +27,7 @@ const DEST_OPTIONS: { value: PublishDestination; label: string }[] = [
 // Docs / Website / Both), a select-all toggle, the publish button, live
 // progress, and a per-item outcome list with links to whatever was created.
 // Renders nothing until something is selected or a batch has produced results.
-export function BulkPublishBar({ items, bulk, wordpressConfigured }: Props) {
+export function BulkPublishBar({ items, bulk, wordpressConfigured, placement = 'bottom' }: Props) {
   const {
     selected, publishing, results, start, clear, setSelection,
     destination, setDestination, wpStatus, setWpStatus,
@@ -59,6 +63,10 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured }: Props) {
     destination === 'google_docs' ? 'Google Docs'
       : destination === 'wordpress' ? 'the website'
         : 'Docs + website'
+
+  const barStyle: React.CSSProperties = placement === 'top'
+    ? { ...barBaseStyle, top: 0, marginBottom: 16 }
+    : { ...barBaseStyle, bottom: 16, marginTop: 16 }
 
   return (
     <div style={barStyle}>
@@ -206,10 +214,12 @@ function OutcomeChips({ label, docUrl, siteUrl }: {
   )
 }
 
-const barStyle: React.CSSProperties = {
-  position: 'sticky', bottom: 16, zIndex: 10,
+// Position offset (top/bottom) + margin are applied per-placement at the call
+// site; this is the shared appearance.
+const barBaseStyle: React.CSSProperties = {
+  position: 'sticky', zIndex: 10,
   background: '#fff', border: '1px solid #c7d2fe', borderRadius: 12,
-  boxShadow: '0 8px 24px rgba(15,23,42,0.12)', padding: 14, marginTop: 16,
+  boxShadow: '0 8px 24px rgba(15,23,42,0.12)', padding: 14,
 }
 const primaryBtn: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 6, padding: '9px 16px',
