@@ -1150,6 +1150,22 @@ export interface Sop {
   updated_at: string | null
 }
 
+// In-app Guides portal (DB-backed, admin-editable).
+export type GuideCategory = 'Start here' | 'Content' | 'Tracking' | 'Reporting' | 'Setup'
+export interface Guide {
+  id: string
+  slug: string
+  title: string
+  category: GuideCategory
+  icon: string
+  summary: string
+  body: string
+  sort_order: number
+  enabled: boolean
+  created_at: string
+  updated_at: string | null
+}
+
 // Share of Local Voice (SoLV) — Maps geo-grid.
 export interface MapsSolvCompetitorShare {
   place_id: string | null
