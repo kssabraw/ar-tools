@@ -23,6 +23,7 @@ from routers.dashboard import router as dashboard_router
 from routers.files import router as files_router
 from routers.gsc import router as gsc_router
 from routers.gsc_research import router as gsc_research_router
+from routers.guides import router as guides_router
 from routers.icp import router as icp_router
 from routers.local_seo import router as local_seo_router
 from routers.maps import router as maps_router
@@ -69,6 +70,14 @@ def _new_request_id() -> str:
 async def lifespan(app: FastAPI):
     logger.info("platform-api starting up")
     await recover_stuck_runs()
+    # Seed the in-app Guides portal with default content (idempotent on slug;
+    # never overwrites edits). Best-effort — must not block startup.
+    try:
+        from services import guide_store
+
+        guide_store.seed_defaults()
+    except Exception as exc:  # pragma: no cover - startup best-effort
+        logger.warning("guides_seed_startup_failed", extra={"error": str(exc)})
     # Start background job worker + GSC ingest scheduler
     worker_task = asyncio.create_task(job_worker())
     scheduler_task = asyncio.create_task(gsc_scheduler())
@@ -135,6 +144,7 @@ app.include_router(dashboard_router)
 app.include_router(files_router)
 app.include_router(gsc_router)
 app.include_router(gsc_research_router)
+app.include_router(guides_router)
 app.include_router(icp_router)
 app.include_router(local_seo_router)
 app.include_router(maps_router)
