@@ -109,6 +109,15 @@ class Settings(BaseSettings):
         "hotfrog.com", "chamberofcommerce.com",
     ]
 
+    # Internal-linking analyzer + injector (design §6.5). WordPress (app-password)
+    # sources are injectable after approval; non-WP sites are crawled
+    # (sitemap + ScrapeOwl) for recommend-only suggestions.
+    internal_link_max_per_page: int = 3          # max new links added to one page
+    internal_link_max_inbound_per_target: int = 5  # cap links funnelled to one target
+    internal_link_min_anchor_words: int = 2      # anchors must be ≥ this many words
+    internal_link_wp_max_pages: int = 200        # WP inventory fetch cap
+    internal_link_crawl_max_pages: int = 40      # non-WP crawl cap
+
     # Maps / local-pack geo-grid ranker (Module #5) — Local Dominator API.
     local_dominator_api_key: str = ""
     local_dominator_base_url: str = "https://api.localdominator.co"

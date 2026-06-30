@@ -18,6 +18,7 @@ import { LocalSeoContent } from './pages/LocalSeoContent'
 import { OnboardingWizard } from './pages/OnboardingWizard'
 import { ServicePages } from './pages/ServicePages'
 import { StrategyPlan } from './pages/StrategyPlan'
+import { InternalLinks } from './pages/InternalLinks'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
@@ -70,6 +71,7 @@ export default function App() {
                       <Route path="/clients/:id/keyword-portal" element={<KeywordPortal />} />
                       <Route path="/clients/:id/onboarding" element={<OnboardingWizard />} />
                       <Route path="/clients/:id/strategy" element={<StrategyPlan />} />
+                      <Route path="/clients/:id/internal-links" element={<InternalLinks />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />

@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, Plus,
-  FileBarChart, UploadCloud, ClipboardList,
+  FileBarChart, UploadCloud, ClipboardList, Link2,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 
@@ -251,6 +251,13 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/strategy` : undefined}
           cta="Open"
           highlight
+        />
+        <ActionCard
+          icon={<Link2 size={22} />}
+          label="Internal Links"
+          description="Finds topical internal-link opportunities across the client's pages. WordPress sites get links written to the live page after you approve each one; others are recommend-only."
+          to={id ? `/clients/${id}/internal-links` : undefined}
+          cta="Open"
         />
       </Section>
 
