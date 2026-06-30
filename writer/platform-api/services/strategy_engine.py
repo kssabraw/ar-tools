@@ -21,7 +21,7 @@ import logging
 from fastapi import HTTPException
 
 from db.supabase_client import get_supabase
-from services import reopt_planner
+from services import brand_alerts, reopt_planner
 
 logger = logging.getLogger("strategy_engine")
 
@@ -120,28 +120,107 @@ def _reopt_actions(client_id: str) -> list[dict]:
     return [reopt_to_action(a) for a in reopt_planner.gather_actions(client_id)]
 
 
+def build_llm_actions(
+    client_id: str, curr: dict, prev: "dict | None", kw_name: dict
+) -> list[dict]:
+    """Turn an `index_batch` of the latest brand scan (curr) + the previous one
+    (prev, optional) into LLM strategy actions, reusing brand_alerts' diff logic
+    so the plan reflects the SAME regressions main alerts on. Pure (unit-tested):
+
+      - llm_misinfo (critical) — an AI engine newly stated wrong business info.
+      - llm_regression (warning) — a keyword lost AI visibility on ≥1 engine since
+        the last scan (but isn't fully invisible — that's superseded below).
+      - llm_content_gap (warning) — a standing gap: invisible across every engine.
+    """
+    base = {
+        "module": "ai_visibility", "category": "llm_tactic", "execution_mode": "assigned",
+        "assignee_role": "writer", "source": "initial_plan", "status": "proposed",
+        "deep_link": f"clients/{client_id}/ai-visibility",
+    }
+    # Per-keyword found/total over this batch's cells.
+    per_kw: dict[str, list[int]] = {}
+    for (kid, _engine), found in curr.get("cells", {}).items():
+        agg = per_kw.setdefault(kid, [0, 0])
+        agg[1] += 1
+        agg[0] += 1 if found else 0
+    invisible = {kid for kid, (f, t) in per_kw.items() if t > 0 and f == 0}
+
+    changes = brand_alerts.detect_changes(prev, curr) if prev else None
+    actions: list[dict] = []
+
+    # 1) Misinformation — most serious; dedup by (keyword, field).
+    if changes:
+        seen: set = set()
+        for m in changes["new_misinfo"]:
+            key = (m["keyword_id"], m.get("field"))
+            if key in seen:
+                continue
+            seen.add(key)
+            kw = kw_name.get(m["keyword_id"], "a tracked query")
+            actions.append({
+                **base, "kind": "llm_misinfo",
+                "title": f"Correct AI misinformation about your business ({kw})",
+                "rationale": f"An AI engine stated an incorrect {m.get('field')} "
+                             f"(said “{m.get('stated')}”, should be “{m.get('actual')}”).",
+                "target": {"keyword": kw, "keyword_id": m["keyword_id"],
+                           "engine": m.get("engine"), "field": m.get("field"), "severity": "critical"},
+                "priority": 140,
+            })
+
+    # 2) Regressions — lost visibility on some engine, but not fully invisible
+    # (the invisible-everywhere action below supersedes those keywords).
+    if changes:
+        regressed: dict[str, int] = {}
+        for (kid, _engine) in changes["lost_cells"]:
+            if kid in invisible:
+                continue
+            regressed[kid] = regressed.get(kid, 0) + 1
+        for kid, n in regressed.items():
+            kw = kw_name.get(kid, "a tracked query")
+            actions.append({
+                **base, "kind": "llm_regression",
+                "title": f"Recover lost AI visibility for '{kw}'",
+                "rationale": f"Lost AI-assistant visibility on {n} engine{'s' if n != 1 else ''} "
+                             "since the last scan.",
+                "target": {"keyword": kw, "keyword_id": kid, "severity": "warning"},
+                "priority": 120 + n,
+            })
+
+    # 3) Standing invisible-everywhere gaps.
+    for kid in invisible:
+        kw = kw_name.get(kid, "a tracked query")
+        engines = per_kw[kid][1]
+        actions.append({
+            **base, "kind": "llm_content_gap",
+            "title": f"Earn AI-assistant visibility for '{kw}'",
+            "rationale": f"Invisible across all {engines} engines in the latest scan.",
+            "target": {"keyword": kw, "keyword_id": kid, "severity": "warning"},
+            "priority": 100 + engines,
+        })
+
+    actions.sort(key=lambda a: a["priority"], reverse=True)
+    return actions[:LLM_GAP_MAX]
+
+
 def _llm_actions(client_id: str) -> list[dict]:
+    """AI-Visibility actions, reusing brand_alerts' batch indexing + regression
+    diff (the same logic the brand-alert notifications fire on) so the plan stays
+    consistent with main's alerting rather than re-deriving its own signals."""
     supabase = get_supabase()
     latest = (
         supabase.table("brand_mention_history").select("scan_batch_id, created_at")
-        .eq("client_id", client_id).eq("status", "completed")
+        .eq("client_id", client_id).eq("status", "completed").eq("is_competitor_scan", False)
         .order("created_at", desc=True).limit(1).execute()
     ).data
     if not latest:
         return []
-    rows = (
-        supabase.table("brand_mention_history")
-        .select("keyword_id, engine, mention_found, status")
-        .eq("client_id", client_id).eq("scan_batch_id", latest[0]["scan_batch_id"]).execute()
-    ).data or []
-    agg: dict[str, dict] = {}
-    for row in rows:
-        if row.get("status") != "completed" or not row.get("keyword_id"):
-            continue
-        a = agg.setdefault(row["keyword_id"], {"engines": 0, "found": 0})
-        a["engines"] += 1
-        if row.get("mention_found"):
-            a["found"] += 1
+    batch_id = latest[0]["scan_batch_id"]
+    curr = brand_alerts.index_batch(brand_alerts._batch_rows(supabase, client_id, batch_id))
+    prev_id = brand_alerts._previous_batch_id(supabase, client_id, batch_id)
+    prev = (
+        brand_alerts.index_batch(brand_alerts._batch_rows(supabase, client_id, prev_id))
+        if prev_id else None
+    )
     kw_name = {
         k["id"]: k["keyword"]
         for k in (
@@ -149,26 +228,7 @@ def _llm_actions(client_id: str) -> list[dict]:
             .eq("client_id", client_id).execute()
         ).data or []
     }
-    actions: list[dict] = []
-    for kid, a in agg.items():
-        if a["engines"] > 0 and a["found"] == 0:  # invisible across every engine this batch
-            kw = kw_name.get(kid, "a tracked query")
-            actions.append({
-                "module": "ai_visibility",
-                "category": "llm_tactic",
-                "kind": "llm_content_gap",
-                "title": f"Earn AI-assistant visibility for '{kw}'",
-                "rationale": f"Invisible across all {a['engines']} engines in the latest scan.",
-                "target": {"keyword": kw, "keyword_id": kid},
-                "priority": 100 + a["engines"],  # more engines missing → slightly higher
-                "execution_mode": "assigned",
-                "assignee_role": "writer",
-                "source": "initial_plan",
-                "status": "proposed",
-                "deep_link": f"clients/{client_id}/ai-visibility",
-            })
-    actions.sort(key=lambda a: a["priority"], reverse=True)
-    return actions[:LLM_GAP_MAX]
+    return build_llm_actions(client_id, curr, prev, kw_name)
 
 
 # ── audit → action mappers (pure; from audit_runs results) ───────────────────
@@ -199,13 +259,19 @@ def site_audit_actions(result: dict) -> list[dict]:
 
 
 def backlink_audit_actions(result: dict) -> list[dict]:
-    """A single `backlink` prospect-list action from a backlink_gap audit."""
+    """A single `backlink` prospect-list action from a backlink_gap audit.
+
+    Distinct from reopt_planner's authority-gap action (kind `backlink_gap`, "you're
+    N DR behind"): this is the per-domain *prospect list* (the specific domains to
+    pursue) — the follow-up backlink_intel explicitly defers. Kept on its own kind
+    (`backlink_prospects`) so both can coexist in the plan as complementary signals.
+    """
     gaps = result.get("gaps") or []
     if not gaps:
         return []
     top = gaps[:10]
     return [{
-        "module": "organic", "category": "backlink", "kind": "backlink_gap",
+        "module": "organic", "category": "backlink", "kind": "backlink_prospects",
         "title": f"Pursue {result.get('gap_count', len(gaps))} link prospects competitors have and you don't",
         "rationale": "Top: " + ", ".join(g["referring_domain"] for g in top[:5]),
         "target": {"prospects": top},

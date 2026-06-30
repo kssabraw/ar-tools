@@ -120,3 +120,54 @@ def test_citation_audit_actions_lists_missing():
     assert actions[0]["module"] == "maps" and actions[0]["category"] == "citation"
     assert actions[0]["priority"] == 10  # 2 missing × 5
     assert se.citation_audit_actions({"missing": []}) == []
+
+
+def test_backlink_audit_action_uses_distinct_kind_from_authority_gap():
+    # Prospect list must NOT collide with reopt_planner's authority-gap kind.
+    actions = se.backlink_audit_actions({"gap_count": 2, "gaps": [
+        {"referring_domain": "a.com"}, {"referring_domain": "b.com"}]})
+    assert actions[0]["kind"] == "backlink_prospects"
+
+
+# ── LLM actions (reuse brand_alerts diff logic) ──────────────────────────────
+def _idx(cells, misinfo=None):
+    """Minimal index_batch-shaped dict for build_llm_actions tests."""
+    return {"cells": cells, "misinfo": misinfo or []}
+
+
+def test_build_llm_actions_invisible_everywhere_is_a_standing_gap():
+    curr = _idx({("k1", "chatgpt"): False, ("k1", "claude"): False})
+    out = se.build_llm_actions("c", curr, None, {"k1": "roof repair"})
+    assert len(out) == 1
+    assert out[0]["kind"] == "llm_content_gap"
+    assert out[0]["target"]["severity"] == "warning"
+    assert "roof repair" in out[0]["title"]
+
+
+def test_build_llm_actions_regression_when_engine_goes_dark():
+    prev = _idx({("k1", "chatgpt"): True, ("k1", "claude"): True})
+    curr = _idx({("k1", "chatgpt"): True, ("k1", "claude"): False})  # lost claude, still visible
+    out = se.build_llm_actions("c", curr, prev, {"k1": "plumber"})
+    kinds = [a["kind"] for a in out]
+    assert "llm_regression" in kinds
+    reg = next(a for a in out if a["kind"] == "llm_regression")
+    assert reg["priority"] > 120  # regressions outrank standing gaps
+
+
+def test_build_llm_actions_misinfo_is_critical_and_ranks_first():
+    prev = _idx({("k1", "chatgpt"): True})
+    curr = _idx({("k1", "chatgpt"): True},
+                misinfo=[{"keyword_id": "k1", "engine": "chatgpt", "field": "phone",
+                          "stated": "111", "actual": "222"}])
+    out = se.build_llm_actions("c", curr, prev, {"k1": "dentist"})
+    assert out[0]["kind"] == "llm_misinfo"
+    assert out[0]["target"]["severity"] == "critical"
+
+
+def test_build_llm_actions_regression_superseded_by_full_invisibility():
+    # k1 was fully visible, now fully invisible → one standing-gap action, no
+    # duplicate regression action for the same keyword.
+    prev = _idx({("k1", "chatgpt"): True, ("k1", "claude"): True})
+    curr = _idx({("k1", "chatgpt"): False, ("k1", "claude"): False})
+    out = se.build_llm_actions("c", curr, prev, {"k1": "roofer"})
+    assert [a["kind"] for a in out] == ["llm_content_gap"]
