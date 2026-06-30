@@ -25,6 +25,7 @@ import { TeamWorkload } from './pages/TeamWorkload'
 import { TaskLibrary } from './pages/TaskLibrary'
 import { ClientReports } from './pages/ClientReports'
 import { GscResearch } from './pages/GscResearch'
+import { Syndication } from './pages/Syndication'
 import { AiVisibility } from './pages/AiVisibility'
 import { MapsGeogrid } from './pages/MapsGeogrid'
 import { MapsReport } from './pages/MapsReport'
@@ -68,6 +69,7 @@ export default function App() {
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
+                      <Route path="/clients/:id/syndication" element={<Syndication />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
                       <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />

@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen,
+  ClipboardList, BookOpen, Share2,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 
@@ -42,6 +42,15 @@ export function ClientWorkspace() {
     enabled: Boolean(id),
   })
   const savedLocationPageCount = locationPageRuns?.total ?? 0
+
+  // Count of syndication items already published (public Doc + Sheet) for this
+  // client, surfaced on the Content Syndication card.
+  const { data: syndicationItems } = useQuery<Array<{ id: string }>>({
+    queryKey: ['syndication-published', id],
+    queryFn: () => api.get<Array<{ id: string }>>(`/clients/${id}/syndication/items?status=published`),
+    enabled: Boolean(id),
+  })
+  const syndicationPublishedCount = syndicationItems?.length ?? 0
 
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
@@ -184,6 +193,17 @@ export function ClientWorkspace() {
           label="Publish to Google Docs"
           description="Select already-generated articles & Local SEO pages and publish them to this client's Drive folder in one batch."
           to={id ? `/clients/${id}/content` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Share2 size={22} />}
+          label="Content Syndication"
+          description={
+            syndicationPublishedCount > 0
+              ? `Auto-rewrites this client's new blog posts, pages & products into public Google Docs + Sheets that link back. ${syndicationPublishedCount} published.`
+              : "Auto-rewrites this client's new blog posts, pages & products into unique, search-discoverable Google Docs + Sheets that link back to the site."
+          }
+          to={id ? `/clients/${id}/syndication` : undefined}
           cta="Open"
         />
       </Section>

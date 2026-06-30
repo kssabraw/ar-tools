@@ -343,6 +343,21 @@ class Settings(BaseSettings):
     local_seo_overpass_mirror_url: str = "https://overpass.kumi.systems/api/interpreter"
     local_seo_overpass_place_types: str = "city,town"
 
+    # ── Content Syndication module ───────────────────────────────────────────
+    # Daily scan watches a client's site for new content (blog/pages/products),
+    # rewrites each new piece into a unique version, and publishes it as a public
+    # Google Doc + Google Sheet with a backlink to the source. Discovery reuses
+    # the sitemap crawler (local_seo_sitemap_* caps) + the DataForSEO `site:`
+    # fallback. The rewrite is a heavier, new-angle reworking (Sonnet). Per-item
+    # publish jobs are staggered (reuses the bulk-spacing idea) so a large first
+    # scan runs at background priority and each item stays under the stale-job
+    # reaper window.
+    syndication_rewrite_model: str = "claude-sonnet-4-6"
+    syndication_rewrite_max_tokens: int = 8192
+    syndication_scan_hour_utc: int = 9
+    syndication_default_interval_days: int = 1
+    syndication_item_job_spacing_seconds: int = 120
+
     # ── AI Visibility (Brand Strength) module ────────────────────────────────
     # Mention classifier (post-processes each engine's answer into mention/type/
     # sentiment via OpenAI function-calling). Runs once per keyword×engine plus

@@ -128,6 +128,52 @@ def enqueue_due_dataforseo() -> int:
     return due
 
 
+def enqueue_due_syndication_scans() -> int:
+    """Daily: enqueue a syndication_scan job for each client whose Content
+    Syndication is enabled and due today (last_scan_date older than its
+    interval_days). Bumps last_scan_date so a client scans once per interval.
+
+    A websiteless client is skipped (the scan would find nothing); once a website
+    is added the next tick picks it up. The scan job itself enqueues per-item
+    rewrite/publish jobs, so this pass stays cheap."""
+    from datetime import datetime, timezone
+
+    from services.syndication_service import enqueue_scan
+
+    supabase = get_supabase()
+    configs = (
+        supabase.table("syndication_config").select("*").eq("enabled", True).execute()
+    ).data or []
+    if not configs:
+        return 0
+
+    client_ids = [c["client_id"] for c in configs]
+    client_rows = (
+        supabase.table("clients").select("id, website_url").in_("id", client_ids).execute()
+    ).data or []
+    websites = {c["id"]: (c.get("website_url") or "").strip() for c in client_rows}
+
+    today = datetime.now(timezone.utc).date()
+    due = 0
+    for cfg in configs:
+        client_id = cfg["client_id"]
+        if not websites.get(client_id):
+            continue
+        interval = max(1, int(cfg.get("interval_days") or 1))
+        last = cfg.get("last_scan_date")
+        last_date = date.fromisoformat(last) if isinstance(last, str) else last
+        if last_date is not None and (today - last_date).days < interval:
+            continue
+        if enqueue_scan(client_id):
+            supabase.table("syndication_config").update(
+                {"last_scan_date": today.isoformat(), "updated_at": "now()"}
+            ).eq("client_id", client_id).execute()
+            due += 1
+    if due:
+        logger.info("gsc_scheduler.syndication_enqueued", extra={"clients": due})
+    return due
+
+
 def enqueue_due_serp_snapshots() -> int:
     """Weekly: enqueue a competitive SERP snapshot capture per client with
     active keywords (piggybacks the DataForSEO rank weekday). The job captures a
@@ -300,6 +346,8 @@ async def gsc_scheduler() -> None:
                 # monthly/interval/off); the enqueue helper decides who is due
                 # today, so it runs daily rather than on one global weekday.
                 enqueue_due_dataforseo()
+                # Daily Content Syndication scan (per-client interval-gated).
+                enqueue_due_syndication_scans()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,
