@@ -21,41 +21,71 @@ import logging
 from fastapi import HTTPException
 
 from db.supabase_client import get_supabase
-from services import rankability, reopt_planner
+from services import reopt_planner
 
 logger = logging.getLogger("strategy_engine")
 
-MAPS_AREA_MAX = 8
 LLM_GAP_MAX = 10
 
 _MODULE_LABELS = {"organic": "organic", "maps": "Maps", "ai_visibility": "LLM", "cross": "cross-channel"}
 _SEVERITY_WEIGHT = {"high": 8, "medium": 4, "low": 1}
 
-# Organic reopt kind → unified action (category + the role that does the craft).
-_ORGANIC_CATEGORY = {
-    "rank_drop": "onpage", "quick_win": "page",
-    "cannibalization": "internal_link", "opportunity": "onpage",
+# reopt_planner emits one action dict per signal, tagged source ∈ {organic, maps}
+# with a rich `kind`. The Strategy Engine consumes that single source of truth
+# (so the Action Plan and the cross-module plan never drift) and maps each into a
+# unified strategy_actions row. Per-kind: the suite module, the strategy category,
+# a concise title template, and the role that does the craft.
+_REOPT_MODULE = {"organic": "organic", "maps": "maps"}
+_REOPT_CATEGORY = {
+    "rank_drop": "onpage", "quick_win": "page", "cannibalization": "internal_link",
+    "opportunity": "onpage", "backlink_gap": "backlink", "brand_search_decline": "reviews",
+    "maps_decline": "gbp", "maps_competitor": "gbp", "maps_weak_area": "page",
+    "maps_solv_drop": "gbp", "gbp_gap": "gbp", "review_gap": "reviews",
+    "local_relevance": "gbp", "content_gap": "page",
 }
-_ORGANIC_ROLE = {
-    "rank_drop": "writer", "quick_win": "writer",
-    "cannibalization": "seo_tech", "opportunity": "writer",
+_REOPT_ROLE = {
+    "rank_drop": "writer", "quick_win": "writer", "opportunity": "writer",
+    "content_gap": "writer", "maps_weak_area": "writer", "cannibalization": "seo_tech",
+    "local_relevance": "seo_tech", "backlink_gap": "link_builder", "review_gap": "va",
+    "gbp_gap": "account_manager", "maps_decline": "account_manager",
+    "maps_competitor": "account_manager", "maps_solv_drop": "account_manager",
+    "brand_search_decline": "account_manager",
+}
+# Concise title per kind (keyword interpolated). Falls back to the cta_label.
+_REOPT_TITLE = {
+    "rank_drop": "Fix ranking drop: {kw}", "quick_win": "Quick win: {kw}",
+    "cannibalization": "Resolve cannibalization: {kw}", "opportunity": "Push to page 1: {kw}",
+    "backlink_gap": "Close backlink authority gap", "brand_search_decline": "Invest in brand-building",
+    "maps_decline": "Strengthen local pack: {kw}", "maps_competitor": "Counter local-pack competitor: {kw}",
+    "maps_weak_area": "Build local coverage: {kw}", "maps_solv_drop": "Win back local market share",
+    "gbp_gap": "Strengthen Google Business Profile", "review_gap": "Grow & manage reviews",
+    "local_relevance": "Improve local relevance: {kw}", "content_gap": "Expand page content: {kw}",
 }
 
 
 # ── pure mappers (unit-tested) ───────────────────────────────────────────────
-def organic_to_action(client_id: str, a: dict) -> dict:
-    """Map a reopt_planner action dict → a unified strategy_actions row (no plan_id)."""
+def reopt_to_action(a: dict) -> dict:
+    """Map a reopt_planner action dict → a unified strategy_actions row (no plan_id).
+
+    Preserves reopt's careful cross-tier `sort` as the unified `priority`, so the
+    organic + Maps ordering main computed survives into the engagement plan. Pure.
+    """
     kind = a.get("kind") or "page"
+    kw = a.get("keyword") or ""
+    title = _REOPT_TITLE.get(kind, "{cta}: {kw}").format(kw=kw, cta=a.get("cta_label") or kind)
+    diagnosis = a.get("diagnosis") or ""
+    recommendation = a.get("recommendation") or ""
+    rationale = f"{diagnosis} — {recommendation}".strip(" —") if (diagnosis or recommendation) else None
     return {
-        "module": "organic",
-        "category": _ORGANIC_CATEGORY.get(kind, "page"),
+        "module": _REOPT_MODULE.get(a.get("source"), "organic"),
+        "category": _REOPT_CATEGORY.get(kind, "page"),
         "kind": kind,
-        "title": a.get("recommendation") or kind,
-        "rationale": a.get("diagnosis"),
-        "target": {"keyword": a.get("keyword"), "severity": a.get("severity", "info")},
+        "title": title,
+        "rationale": rationale,
+        "target": {"keyword": kw, "severity": a.get("severity", "info")},
         "priority": int(a.get("sort") or 0),
         "execution_mode": "assigned",
-        "assignee_role": _ORGANIC_ROLE.get(kind, "writer"),
+        "assignee_role": _REOPT_ROLE.get(kind, "writer"),
         "source": "initial_plan",
         "status": "proposed",
         "deep_link": a.get("cta_path"),
@@ -83,66 +113,11 @@ def summarize(actions: list[dict]) -> dict:
 
 
 # ── per-module signal readers (best-effort, isolated) ────────────────────────
-def _organic_actions(client_id: str) -> list[dict]:
-    supabase = get_supabase()
-    drops = (
-        supabase.table("rank_alerts")
-        .select("keyword_id, keyword, alert_type, message")
-        .eq("client_id", client_id).is_("resolved_at", "null").execute()
-    ).data or []
-    try:
-        items = rankability.get_client_rankability(client_id).get("items", [])
-    except Exception as exc:  # best-effort input
-        logger.warning("strategy_engine.rankability_failed", extra={"error": str(exc)})
-        items = []
-    gsc_row = (
-        supabase.table("gsc_research_runs")
-        .select("cannibalization, hidden_wins, created_at")
-        .eq("client_id", client_id).eq("status", "complete")
-        .order("created_at", desc=True).limit(1).execute()
-    ).data
-    gsc = gsc_row[0] if gsc_row else {}
-    raw = reopt_planner.build_actions(client_id, drops, items, gsc)
-    return [organic_to_action(client_id, a) for a in raw]
-
-
-def _maps_actions(client_id: str) -> list[dict]:
-    supabase = get_supabase()
-    scan = (
-        supabase.table("maps_scans").select("id")
-        .eq("client_id", client_id).eq("status", "complete")
-        .order("completed_at", desc=True).limit(1).execute()
-    ).data
-    if not scan:
-        return []
-    results = (
-        supabase.table("maps_scan_results")
-        .select("keyword, report_weak_locations").eq("scan_id", scan[0]["id"]).execute()
-    ).data or []
-    actions: list[dict] = []
-    for r in results:
-        keyword = r.get("keyword")
-        for area in ((r.get("report_weak_locations") or {}).get("weak_areas") or [])[:3]:
-            city = area.get("city") or "a nearby area"
-            actions.append({
-                "module": "maps",
-                "category": "page",
-                "kind": "maps_coverage_gap",
-                "title": f"Build a local page for {city} ({keyword})",
-                "rationale": (
-                    f"Weak local-pack coverage near {city} — {area.get('pins')} weak pins, "
-                    f"worst rank {area.get('worst_rank')}."
-                ),
-                "target": {"keyword": keyword, "city": city, "priority": area.get("priority")},
-                "priority": int(area.get("priority") or 0),
-                "execution_mode": "assigned",
-                "assignee_role": "writer",
-                "source": "initial_plan",
-                "status": "proposed",
-                "deep_link": f"clients/{client_id}/maps",
-            })
-    actions.sort(key=lambda a: a["priority"], reverse=True)
-    return actions[:MAPS_AREA_MAX]
+def _reopt_actions(client_id: str) -> list[dict]:
+    """Organic + Maps actions, delegated to reopt_planner.gather_actions (the
+    single source of truth — it reads rank_alerts, maps_alerts, and every intel
+    signal), mapped into unified strategy_actions rows."""
+    return [reopt_to_action(a) for a in reopt_planner.gather_actions(client_id)]
 
 
 def _llm_actions(client_id: str) -> list[dict]:
@@ -284,7 +259,7 @@ def build_actions(client_id: str, engagement_id: "str | None" = None) -> list[di
     """Gather actions across every module; isolate each reader so one never aborts the rest."""
     out: list[dict] = []
     # Per-client readers resolved per call (via module globals) so each is patchable in tests.
-    for reader in (_organic_actions, _maps_actions, _llm_actions):
+    for reader in (_reopt_actions, _llm_actions):
         try:
             out.extend(reader(client_id))
         except Exception as exc:  # noqa: BLE001

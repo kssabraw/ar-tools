@@ -30,6 +30,7 @@ from services.reopt_planner import run_reopt_plan_job
 from services.site_audit import run_site_audit_job
 from services.backlink_gap import run_backlink_audit_job
 from services.citation_audit import run_citation_audit_job
+from services.engagement_asana import run_engagement_asana_job
 from services.asana_monthly import run_asana_monthly_job
 from services.serp_snapshot import run_serp_snapshot_job
 from services.local_dominator import run_maps_scan_job
@@ -349,6 +350,8 @@ async def _process_job(job: dict) -> None:
         await run_backlink_audit_job(job)
     elif job_type == "citation_audit":
         await run_citation_audit_job(job)
+    elif job_type == "engagement_asana_push":
+        await run_engagement_asana_job(job)
     elif job_type == "asana_monthly":
         await run_asana_monthly_job(job)
     elif job_type == "client_report":

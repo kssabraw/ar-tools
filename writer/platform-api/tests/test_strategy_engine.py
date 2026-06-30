@@ -28,39 +28,63 @@ def test_summarize_empty():
     assert "healthy" in s["headline"]
 
 
-# ── organic mapping ──────────────────────────────────────────────────────────
-def test_organic_to_action_maps_kind_to_category_and_role():
+# ── reopt → unified mapping ──────────────────────────────────────────────────
+def test_reopt_to_action_maps_organic_kind_to_category_and_role():
     a = {
-        "kind": "cannibalization", "keyword": "plumbing services",
+        "kind": "cannibalization", "source": "organic", "keyword": "plumbing services",
         "recommendation": "Consolidate", "diagnosis": "3 pages split this query",
         "cta_path": "clients/c/gsc-research", "severity": "warning", "sort": 33_000,
     }
-    out = se.organic_to_action("c", a)
+    out = se.reopt_to_action(a)
     assert out["module"] == "organic"
     assert out["category"] == "internal_link"      # cannibalization → consolidate
     assert out["assignee_role"] == "seo_tech"
-    assert out["priority"] == 33_000
+    assert out["priority"] == 33_000               # reopt's cross-tier sort is preserved
     assert out["execution_mode"] == "assigned"
     assert out["target"]["severity"] == "warning"
     assert out["deep_link"] == "clients/c/gsc-research"
+    assert out["title"] == "Resolve cannibalization: plumbing services"
+    assert "3 pages split this query" in out["rationale"] and "Consolidate" in out["rationale"]
 
 
-def test_organic_to_action_defaults_for_unknown_kind():
-    out = se.organic_to_action("c", {"kind": "mystery", "keyword": "x"})
+def test_reopt_to_action_maps_maps_source_to_maps_module():
+    a = {"kind": "maps_decline", "source": "maps", "keyword": "roofing",
+         "diagnosis": "Slipping", "cta_path": "clients/c/maps", "severity": "critical", "sort": 30_000}
+    out = se.reopt_to_action(a)
+    assert out["module"] == "maps" and out["category"] == "gbp"
+    assert out["assignee_role"] == "account_manager"
+    assert out["title"] == "Strengthen local pack: roofing"
+
+
+def test_reopt_to_action_defaults_for_unknown_kind():
+    out = se.reopt_to_action({"kind": "mystery", "source": "organic", "keyword": "x",
+                              "cta_label": "Do it"})
     assert out["category"] == "page" and out["assignee_role"] == "writer"
-    assert out["title"] == "mystery"               # falls back to kind when no recommendation
+    assert out["title"] == "Do it: x"              # falls back to cta_label template
 
 
 # ── reader isolation + ordering ──────────────────────────────────────────────
 def test_build_actions_isolates_failing_reader_and_sorts_by_priority():
-    with patch.object(se, "_organic_actions",
-                      return_value=[{"module": "organic", "priority": 5, "target": {}}]), \
-         patch.object(se, "_maps_actions", side_effect=RuntimeError("boom")), \
+    with patch.object(se, "_reopt_actions", side_effect=RuntimeError("boom")), \
          patch.object(se, "_llm_actions",
                       return_value=[{"module": "ai_visibility", "priority": 9, "target": {}}]):
         out = se.build_actions("c")  # no engagement_id → audit reader skipped
-    # Maps failed silently; the other two survive, sorted by priority desc.
-    assert [a["module"] for a in out] == ["ai_visibility", "organic"]
+    # The reopt reader failed silently; the LLM reader survives.
+    assert [a["module"] for a in out] == ["ai_visibility"]
+
+
+def test_reopt_actions_delegates_to_gather_actions():
+    raw = [
+        {"kind": "rank_drop", "source": "organic", "keyword": "k1", "sort": 60_000,
+         "severity": "warning", "cta_path": "p"},
+        {"kind": "maps_weak_area", "source": "maps", "keyword": "Newtown", "sort": 31_000,
+         "severity": "info", "cta_path": "m"},
+    ]
+    with patch.object(se.reopt_planner, "gather_actions", return_value=raw) as g:
+        out = se._reopt_actions("c")
+    g.assert_called_once_with("c")
+    assert [a["module"] for a in out] == ["organic", "maps"]
+    assert out[0]["title"] == "Fix ranking drop: k1"
 
 
 # ── audit → action mappers ───────────────────────────────────────────────────

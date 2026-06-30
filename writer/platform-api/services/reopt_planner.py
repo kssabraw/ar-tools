@@ -713,9 +713,14 @@ def _fetch_brand_decline(supabase, client_id: str) -> "dict | None":
         return None
 
 
-def build_plan(client_id: str, trigger: str = "manual") -> dict:
-    """Gather signals, build the ranked plan, store it, and (on the weekly
-    cadence) push a digest notification. Returns the stored plan summary."""
+def gather_actions(client_id: str, cap: "int | None" = TOTAL_MAX) -> list[dict]:
+    """Read every organic + Maps + intel signal and build the ranked, capped
+    action list — WITHOUT persisting a reopt_plans row or emitting a notification.
+
+    The single source of truth for the recommendation set, consumed by BOTH the
+    Action Plan (build_plan, which persists + notifies) AND the cross-module
+    Strategy Engine (strategy_engine, which maps these into unified
+    strategy_actions), so the two never drift. Read-only side effects only."""
     supabase = get_supabase()
 
     drops = (
@@ -762,7 +767,15 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     brand_actions += build_backlink_action(client_id, backlink_gap)
     actions = organic + maps_actions + brand_actions
     actions.sort(key=lambda a: a["sort"], reverse=True)
-    actions = actions[:TOTAL_MAX]
+    return actions if cap is None else actions[:cap]
+
+
+def build_plan(client_id: str, trigger: str = "manual") -> dict:
+    """Gather signals, build the ranked plan, store it, and (on the weekly
+    cadence) push a digest notification. Returns the stored plan summary."""
+    supabase = get_supabase()
+
+    actions = gather_actions(client_id)
     digest = summarize_plan(actions)
 
     latest = (

@@ -80,6 +80,16 @@ def approve_plan(engagement_id: str, user_id: Optional[str]) -> dict:
 
     record_event(engagement_id, "approved", detail={"plan_id": plan["id"], "actions": len(actions)})
 
+    # Hand the `assigned` actions to Asana off the request path (best-effort —
+    # rides main's Asana integration; skips cleanly when Asana isn't configured).
+    if any(a["execution_mode"] != "auto" for a in actions):
+        try:
+            from services import engagement_asana  # lazy: avoids an import cycle
+
+            engagement_asana.enqueue_asana_push(engagement_id)
+        except Exception as exc:  # noqa: BLE001 — approval succeeds even if the push can't enqueue
+            logger.warning("approve_plan.asana_enqueue_skipped", extra={"error": str(exc)})
+
     # Advance the engagement out of plan_review (best-effort; only if it's there).
     try:
         eng = engagement_service.get_engagement(engagement_id)

@@ -1,6 +1,18 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-29 · **Managed engagement + "SerMaStr" Strategy Engine — build started** (latest, on branch `claude/unified-keyword-portal-m82e68` / PR #166 — NOT yet on `main`)
+## ⏩ Update — 2026-06-30 · **`main` merged into the SerMaStr branch + first reconciliation** (latest, on branch `claude/unified-keyword-portal-m82e68` / PR #166)
+
+`origin/main` was **merged into `claude/unified-keyword-portal-m82e68`** (the branch was 29 ahead / 24 behind with overlapping work — main had shipped real Asana (#170), Maps alerting (#182, `maps_alerts`), brand alerting (#186), and the intel subsystem (`*_intel`), while this branch had only *designed* those). Merge resolved 4 conflicts (CLAUDE.md, HANDOFF.md, `ClientWorkspace.tsx`, `job_worker.py`); the `audit_runs` migration's stale `async_jobs` CHECK block was already removed and a union migration (`…220000_async_jobs_audit_jobtypes`) is the last word. Frontend `tsc -b` clean, all branch tests green. Branch is now 0 behind main.
+
+**Reconciliation done (build on main's real services, not the branch's parallel designs):**
+1. **Executor → Asana** (Phase-4 PR-B): approving a plan now hands every `assigned` action to **main's** `asana_service`. New `services/engagement_asana.py` (`push_assigned_actions` + the `engagement_asana_push` async job): for each approved `assigned` action with no task yet, it resolves the client's mapped project (`asana_client_projects`), routes to the team member whose **role** matches `assignee_role` (new `asana_team_members.role` column), creates an Asana task (in the current-month section if it exists), and stamps `strategy_actions.asana_task_id`. Best-effort — Asana unconfigured / no project mapping leaves actions `assigned` for a human, recording an `asana_skipped`/`asana_task_created` `execution_events` row. `engagement_executor.approve_plan` enqueues it off the request path. Migration `20260629230000_engagement_asana_push` (role column + `engagement_asana_push` job type) **applied live**. 10 unit tests. *(Outbound only; Asana→action two-way status sync is a follow-up.)*
+2. **Strategy Engine ⟵ reopt_planner (single source of truth):** extracted a non-persisting `reopt_planner.gather_actions(client_id)` from `build_plan` (reads `rank_alerts` + `maps_alerts` + every intel signal: GBP/review/relevance/content/backlink/SoLV). `strategy_engine` now **delegates organic + Maps** to it via `_reopt_actions` + a `reopt_to_action` mapper (preserving main's cross-tier `sort` as `priority`), replacing the branch's thin re-derivation from raw `maps_scan_results`. The LLM leg still derives from `brand_mention_history` (brand alerts are notification-only — no queryable table to fold). Audit readers unchanged.
+
+**Still open (next reconciliation):** the branch's `backlink_gap.py` audit vs main's `backlink_intel`/`backlink_profiles` (decide which is the engagement-audit entry point); then resume Phase 4 (autonomous executor PR-C internal-linking, consolidated report PR-D).
+
+---
+
+## ⏩ Update — 2026-06-29 · **Managed engagement + "SerMaStr" Strategy Engine — build started** (on branch `claude/unified-keyword-portal-m82e68` / PR #166 — NOT yet on `main`)
 
 The connective layer from `docs/managed-engagement-and-strategy-engine-design-v1_0.md`
 (the full design) is now being **built**, on branch `claude/unified-keyword-portal-m82e68`
