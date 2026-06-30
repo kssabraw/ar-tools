@@ -130,12 +130,12 @@ def enqueue_due_dataforseo() -> int:
 
 def enqueue_due_syndication_scans() -> int:
     """Daily: enqueue a syndication_scan job for each client whose Content
-    Syndication is enabled and due today (last_scan_date older than its
-    interval_days). Bumps last_scan_date so a client scans once per interval.
+    Syndication is enabled and due (last_scan_date older than its interval_days).
 
-    A websiteless client is skipped (the scan would find nothing); once a website
-    is added the next tick picks it up. The scan job itself enqueues per-item
-    rewrite/publish jobs, so this pass stays cheap."""
+    `last_scan_date` is advanced by the scan job on success (not here), so a scan
+    that fails re-runs next cycle rather than being skipped. enqueue_scan dedupes
+    against an in-flight scan, so re-evaluating a still-pending client is a no-op.
+    A websiteless client is skipped (the scan would find nothing)."""
     from datetime import datetime, timezone
 
     from services.syndication_service import enqueue_scan
@@ -165,9 +165,6 @@ def enqueue_due_syndication_scans() -> int:
         if last_date is not None and (today - last_date).days < interval:
             continue
         if enqueue_scan(client_id):
-            supabase.table("syndication_config").update(
-                {"last_scan_date": today.isoformat(), "updated_at": "now()"}
-            ).eq("client_id", client_id).execute()
             due += 1
     if due:
         logger.info("gsc_scheduler.syndication_enqueued", extra={"clients": due})

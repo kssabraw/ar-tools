@@ -124,7 +124,10 @@ async def create_google_sheet(
     `rows` is a list of rows, each a list of cell strings, written top-to-bottom.
     `share` matches create_google_doc. Requires a webhook deployment that handles
     `type: "sheet"` + the Sheets/Drive scopes (see writer/apps-script/
-    publish_webhook.gs); older deployments raise apps_script_returned_error."""
+    publish_webhook.gs). An OLD deployment ignores `type` and silently makes a Doc
+    instead (no `sheet_id` in the reply); we treat a missing `sheet_id` as a hard
+    error (`sheet_not_supported`) so the caller fails loudly rather than recording
+    a phantom 'published' Sheet — the signal to redeploy the webhook."""
     if not folder_id:
         raise GoogleDocError("missing_google_drive_folder_id")
     body = {
@@ -135,4 +138,9 @@ async def create_google_sheet(
         "share": share if share in SHARE_MODES else "private",
     }
     result = await _call_apps_script(body)
-    return {"sheet_id": result.get("sheet_id"), "sheet_url": result.get("sheet_url")}
+    sheet_id = result.get("sheet_id")
+    if not sheet_id:
+        # success=true but no sheet_id ⇒ the deployed webhook predates the Sheets
+        # support and made a Doc. Fail clearly so the item is marked failed.
+        raise GoogleDocError("sheet_not_supported: redeploy the Apps Script webhook (no sheet_id returned)")
+    return {"sheet_id": sheet_id, "sheet_url": result.get("sheet_url")}

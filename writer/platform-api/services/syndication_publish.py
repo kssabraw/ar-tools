@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from html import escape
 
-from services.google_docs import create_google_doc, create_google_sheet
 from services.markdown_html import markdown_to_html
 
 logger = logging.getLogger(__name__)
@@ -48,28 +47,3 @@ def build_sheet_rows(title: str, markdown: str, source_url: str) -> list[list[st
         if stripped:
             rows.append([stripped])
     return rows
-
-
-async def publish_item(
-    folder_id: str,
-    title: str,
-    markdown: str,
-    source_url: str,
-    *,
-    share: str = "public",
-) -> dict:
-    """Publish the rewritten piece as a Doc and a Sheet in `folder_id`.
-
-    Returns {doc_id, doc_url, sheet_id, sheet_url}. Raises GoogleDocError from the
-    underlying helpers when the webhook is unconfigured / a publish fails."""
-    doc_html = build_doc_html(title, markdown, source_url)
-    rows = build_sheet_rows(title, markdown, source_url)
-
-    doc = await create_google_doc(folder_id, title, doc_html, content_format="html", share=share)
-    sheet = await create_google_sheet(folder_id, title, rows, share=share)
-    return {
-        "doc_id": doc.get("doc_id"),
-        "doc_url": doc.get("doc_url"),
-        "sheet_id": sheet.get("sheet_id"),
-        "sheet_url": sheet.get("sheet_url"),
-    }

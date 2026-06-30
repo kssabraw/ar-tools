@@ -204,7 +204,7 @@ export function Syndication() {
                     </div>
                   </td>
                   <td style={{ ...td, textAlign: 'right' }}>
-                    {item.status === 'failed' && (
+                    {(item.status === 'failed' || item.status === 'rewriting') && (
                       <button
                         style={retryBtn}
                         disabled={retry.isPending}

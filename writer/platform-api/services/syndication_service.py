@@ -18,9 +18,9 @@ from datetime import datetime, timedelta, timezone
 
 from config import settings
 from db.supabase_client import get_supabase
-from services.google_docs import resolve_drive_folder
+from services.google_docs import create_google_doc, create_google_sheet, resolve_drive_folder
 from services.syndication_discovery import scan_client
-from services.syndication_publish import publish_item
+from services.syndication_publish import build_doc_html, build_sheet_rows
 from services.syndication_rewrite import extract_source_content, rewrite_unique
 
 logger = logging.getLogger(__name__)
@@ -47,8 +47,16 @@ def get_or_create_config(client_id: str) -> dict:
         inserted = supabase.table("syndication_config").insert(row).execute()
         if inserted.data:
             return inserted.data[0]
-    except Exception as exc:  # noqa: BLE001 — fall back to the in-memory default
+    except Exception as exc:  # noqa: BLE001 — likely a concurrent insert (PK clash)
         logger.warning("syndication_config_create_failed", extra={"client_id": client_id, "error": str(exc)})
+        # A concurrent caller may have created the row between our select and
+        # insert; re-read so we return the real (possibly enabled) row, not the
+        # disabled in-memory default.
+        again = (
+            supabase.table("syndication_config").select("*").eq("client_id", client_id).execute()
+        ).data or []
+        if again:
+            return again[0]
     return row
 
 
@@ -101,34 +109,61 @@ def _item_scheduled_at(index: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=index * spacing)).isoformat()
 
 
+def _active_item_entity_ids(supabase, client_id: str) -> set[str]:
+    """The item ids that already have a pending/running syndication_item job
+    (one query, not one-per-item)."""
+    rows = (
+        supabase.table("async_jobs")
+        .select("entity_id")
+        .eq("job_type", "syndication_item")
+        .in_("status", ["pending", "running"])
+        .execute()
+    ).data or []
+    return {r["entity_id"] for r in rows}
+
+
 def enqueue_item_jobs(client_id: str) -> int:
-    """Enqueue one syndication_item job per discovered, not-yet-queued item."""
+    """Enqueue one syndication_item job per item that needs publishing and has no
+    active job. Picks 'discovered' items plus 'rewriting' items whose job died
+    (reclaim — re-running is idempotent, see run_syndication_item_job). Throttled
+    to `syndication_max_new_per_scan` per call; the remainder go out next scan."""
     supabase = get_supabase()
     items = (
         supabase.table("syndication_items")
         .select("id")
         .eq("client_id", client_id)
-        .eq("status", "discovered")
+        .in_("status", ["discovered", "rewriting"])
+        .order("first_seen_at")
         .execute()
     ).data or []
-    enqueued = 0
+    active = _active_item_entity_ids(supabase, client_id)
+    cap = max(1, int(settings.syndication_max_new_per_scan))
+
     rows = []
+    skipped_for_cap = 0
     for item in items:
         item_id = item["id"]
-        if _has_active_job(supabase, "syndication_item", item_id):
+        if item_id in active:
+            continue
+        if len(rows) >= cap:
+            skipped_for_cap += 1
             continue
         rows.append(
             {
                 "job_type": "syndication_item",
                 "entity_id": item_id,
                 "payload": {"item_id": item_id, "client_id": client_id},
-                "scheduled_at": _item_scheduled_at(enqueued),
+                "scheduled_at": _item_scheduled_at(len(rows)),
             }
         )
-        enqueued += 1
     if rows:
         supabase.table("async_jobs").insert(rows).execute()
-    return enqueued
+    if skipped_for_cap:
+        logger.info(
+            "syndication_item_jobs_capped",
+            extra={"client_id": client_id, "enqueued": len(rows), "deferred": skipped_for_cap, "cap": cap},
+        )
+    return len(rows)
 
 
 def retry_item(item_id: str) -> str | None:
@@ -172,8 +207,15 @@ async def run_syndication_scan_job(job: dict) -> None:
             raise ValueError("client_not_found")
         config = get_or_create_config(client_id)
         result = await scan_client(client, config)
+        # Baseline scans seed 'skipped' rows and publish nothing; only later scans
+        # enqueue item jobs.
         queued = enqueue_item_jobs(client_id)
         result["queued"] = queued
+        # Mark the scan done on success (not at enqueue time) so a failed scan
+        # re-runs next cycle instead of being skipped by the interval gate.
+        supabase.table("syndication_config").update(
+            {"last_scan_date": datetime.now(timezone.utc).date().isoformat(), "updated_at": "now()"}
+        ).eq("client_id", client_id).execute()
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job_id).execute()
@@ -201,6 +243,10 @@ async def run_syndication_item_job(job: dict) -> None:
             {"status": "failed", "error": error[:500], "completed_at": "now()"}
         ).eq("id", job_id).execute()
 
+    def _patch(fields: dict) -> None:
+        fields["updated_at"] = "now()"
+        supabase.table("syndication_items").update(fields).eq("id", item_id).execute()
+
     try:
         rows = (
             supabase.table("syndication_items").select("*").eq("id", item_id).execute()
@@ -208,6 +254,7 @@ async def run_syndication_item_job(job: dict) -> None:
         if not rows:
             raise ValueError("item_not_found")
         item = rows[0]
+        source_url = item["source_url"]
         if item.get("status") == "published":
             # Idempotent: a requeued job for an already-published item is a no-op.
             supabase.table("async_jobs").update(
@@ -225,35 +272,45 @@ async def run_syndication_item_job(job: dict) -> None:
         if not folder_id:
             raise ValueError("missing_google_drive_folder_id")
 
-        supabase.table("syndication_items").update(
-            {"status": "rewriting", "updated_at": "now()"}
-        ).eq("id", item_id).execute()
+        _patch({"status": "rewriting"})
 
-        source_title, source_md = await extract_source_content(item["source_url"])
-        new_title, new_md = await rewrite_unique(source_title, source_md)
-        published = await publish_item(
-            folder_id, new_title, new_md, item["source_url"], share=share
-        )
-
-        supabase.table("syndication_items").update(
-            {
-                "status": "published",
+        # Reuse a prior attempt's rewrite if present (a requeue after a partial
+        # publish must not re-run the LLM, nor re-create an output that already
+        # has an id — that would leak duplicate public Docs/Sheets).
+        new_title = item.get("rewritten_title")
+        new_md = item.get("rewritten_markdown")
+        if not new_md:
+            source_title, source_md = await extract_source_content(source_url)
+            new_title, new_md = await rewrite_unique(source_title, source_md)
+            _patch({
                 "title": source_title or item.get("title"),
                 "rewritten_title": new_title,
                 "rewritten_markdown": new_md,
-                "doc_id": published.get("doc_id"),
-                "doc_url": published.get("doc_url"),
-                "sheet_id": published.get("sheet_id"),
-                "sheet_url": published.get("sheet_url"),
-                "error": None,
-                "published_at": "now()",
-                "updated_at": "now()",
-            }
-        ).eq("id", item_id).execute()
+            })
+
+        doc_id, doc_url = item.get("doc_id"), item.get("doc_url")
+        if not doc_id:
+            doc = await create_google_doc(
+                folder_id, new_title, build_doc_html(new_title, new_md, source_url),
+                content_format="html", share=share,
+            )
+            doc_id, doc_url = doc.get("doc_id"), doc.get("doc_url")
+            _patch({"doc_id": doc_id, "doc_url": doc_url})
+
+        sheet_id, sheet_url = item.get("sheet_id"), item.get("sheet_url")
+        if not sheet_id:
+            sheet = await create_google_sheet(
+                folder_id, new_title, build_sheet_rows(new_title, new_md, source_url), share=share,
+            )
+            sheet_id, sheet_url = sheet.get("sheet_id"), sheet.get("sheet_url")
+            _patch({"sheet_id": sheet_id, "sheet_url": sheet_url})
+
+        _patch({"status": "published", "error": None, "published_at": "now()"})
+        result = {"doc_url": doc_url, "sheet_url": sheet_url}
         supabase.table("async_jobs").update(
-            {"status": "complete", "result": published, "completed_at": "now()"}
+            {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job_id).execute()
-        logger.info("syndication_item_published", extra={"item_id": item_id, "doc_url": published.get("doc_url")})
+        logger.info("syndication_item_published", extra={"item_id": item_id, "doc_url": doc_url})
     except Exception as exc:  # noqa: BLE001
         logger.warning("syndication_item_failed", extra={"item_id": item_id, "error": str(exc)})
         try:
