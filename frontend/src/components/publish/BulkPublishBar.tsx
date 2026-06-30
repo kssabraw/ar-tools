@@ -40,7 +40,11 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured }: Props) {
   const wpDisabled = wordpressConfigured === false
   const wantsWp = destination !== 'google_docs'
 
-  if (selectedCount === 0 && total === 0) return null
+  // Stay visible whenever there's anything publishable in view (or a finished
+  // batch to show), so the publish controls are discoverable without first
+  // having to guess that ticking a checkbox reveals them. The button itself is
+  // disabled until at least one item is selected.
+  if (items.length === 0 && total === 0) return null
 
   // Outcomes are keyed by item key — pair them back with labels for display.
   const byKey = new Map(items.map(i => [i.key, i]))
@@ -105,8 +109,8 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured }: Props) {
         >
           {allSelected ? 'Deselect all' : `Select all (${items.length})`}
         </button>
-        <span style={{ fontSize: 13, color: '#475569', fontWeight: 600 }}>
-          {selectedCount} selected
+        <span style={{ fontSize: 13, color: selectedCount === 0 ? '#94a3b8' : '#475569', fontWeight: 600 }}>
+          {selectedCount === 0 ? 'Tick pages to publish' : `${selectedCount} selected`}
         </span>
 
         {publishing && total > 0 && (
@@ -132,7 +136,11 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured }: Props) {
           title={`Publish each selected item to ${destNoun}`}
         >
           <ExternalLink size={15} />
-          {publishing ? 'Publishing…' : `Publish ${selectedCount} to ${destNoun}`}
+          {publishing
+            ? 'Publishing…'
+            : selectedCount === 0
+              ? `Publish to ${destNoun}`
+              : `Publish ${selectedCount} to ${destNoun}`}
         </button>
       </div>
 
