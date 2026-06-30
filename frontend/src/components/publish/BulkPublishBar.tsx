@@ -144,7 +144,9 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured }: Props) {
                 {succeeded.length} published
               </span>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {succeeded.map(s => <OutcomeChips key={s.key} {...s} />)}
+                {succeeded.map(s => (
+                  <OutcomeChips key={s.key} label={s.label} docUrl={s.docUrl} siteUrl={s.siteUrl} />
+                ))}
               </div>
             </div>
           )}
