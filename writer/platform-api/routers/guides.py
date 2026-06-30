@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from middleware.auth import require_admin, require_auth
 from models.guides import Guide, GuideCreateRequest, GuideUpdateRequest
@@ -52,6 +52,7 @@ async def update_guide(guide_id: UUID, body: GuideUpdateRequest, auth: dict = De
     return Guide(**guide_store.update_guide(str(guide_id), updates))
 
 
-@router.delete("/guides/{guide_id}", status_code=204)
-async def delete_guide(guide_id: UUID, auth: dict = Depends(require_admin)) -> None:
+@router.delete("/guides/{guide_id}", status_code=204, response_class=Response)
+async def delete_guide(guide_id: UUID, auth: dict = Depends(require_admin)) -> Response:
     guide_store.delete_guide(str(guide_id))
+    return Response(status_code=204)
