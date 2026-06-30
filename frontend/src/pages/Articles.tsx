@@ -91,7 +91,7 @@ function ArticleCard({ run, selected, onToggleSelect }: {
             checked={selected ?? false}
             onChange={e => onToggleSelect(e.target.checked)}
             style={{ marginTop: 3, width: 16, height: 16, cursor: 'pointer', flexShrink: 0, accentColor: '#6366f1' }}
-            title="Select for bulk publish to Google Docs"
+            title="Select for bulk publish"
           />
         )}
         <div style={{ flex: 1, minWidth: 0 }}>

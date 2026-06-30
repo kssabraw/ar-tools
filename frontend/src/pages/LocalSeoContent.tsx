@@ -449,6 +449,7 @@ export function LocalSeoContent() {
           loading={loadingSaved}
           onOpen={openSaved}
           onDelete={async (pid) => { await localSeoApi.deletePage(pid); refreshSaved() }}
+          wordpressConfigured={Boolean(client?.wordpress_site_url && client?.wordpress_app_password_set)}
         />
       ) : tab === 'drafts' ? (
         <DraftsList
@@ -704,11 +705,12 @@ export function LocalSeoContent() {
   )
 }
 
-function SavedPagesList({ pages, loading, onOpen, onDelete }: {
+function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured }: {
   pages: LocalSeoPageListItem[]
   loading: boolean
   onOpen: (id: string) => void
   onDelete: (id: string) => Promise<void>
+  wordpressConfigured?: boolean
 }) {
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -747,7 +749,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
             onChange={e => bulk.toggle(key, e.target.checked)}
             disabled={bulk.publishing}
             style={{ width: 16, height: 16, cursor: 'pointer', flexShrink: 0, accentColor: '#6366f1' }}
-            title="Select for bulk publish to Google Docs"
+            title="Select for bulk publish"
           />
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -763,9 +765,13 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
               {p.keyword} · {p.location.split(',')[0]} <span style={{ marginLeft: 6, opacity: 0.7 }}>{relativeTime(p.created_at)}</span>
             </p>
           </div>
-          {result?.status === 'done' && (result.docUrl
-            ? <a href={result.docUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', textDecoration: 'none', flexShrink: 0 }}>Open Doc ↗</a>
-            : <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', flexShrink: 0 }}>Published</span>)}
+          {result?.status === 'done' && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              {result.docUrl && <a href={result.docUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', textDecoration: 'none' }}>Open Doc ↗</a>}
+              {result.siteUrl && <a href={result.siteUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, fontWeight: 600, color: '#2563eb', textDecoration: 'none' }}>Open page ↗</a>}
+              {!result.docUrl && !result.siteUrl && <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>Published</span>}
+            </span>
+          )}
           {result?.status === 'failed' && <span style={{ fontSize: 12, color: '#dc2626', flexShrink: 0 }} title={result.error}>Failed</span>}
           {result?.status === 'publishing' && <Spinner size={14} />}
           <button style={outlineBtn} onClick={() => onOpen(p.id)}>View <ArrowRight size={13} /></button>
@@ -789,7 +795,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
         )
       })}
     </div>
-    <BulkPublishBar items={items} bulk={bulk} />
+    <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={wordpressConfigured} />
     </>
   )
 }

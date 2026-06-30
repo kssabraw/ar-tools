@@ -1,19 +1,33 @@
-import { ExternalLink, FileText } from 'lucide-react'
-import type { PublishItem, useBulkPublish } from './useBulkPublish'
+import { ExternalLink, FileText, Globe } from 'lucide-react'
+import type { PublishDestination, PublishItem, useBulkPublish } from './useBulkPublish'
 
 interface Props {
   // The full set of selectable items in view (used for select-all + to know what
   // "publish selected" should send).
   items: PublishItem[]
   bulk: ReturnType<typeof useBulkPublish>
+  // Whether the (single) client these items belong to has WordPress publishing
+  // configured. `false` disables the Website / Both options with a hint; leave
+  // undefined when the items can span multiple clients (e.g. all saved articles),
+  // where a single flag can't describe them — the per-item error covers it then.
+  wordpressConfigured?: boolean
 }
 
-// A sticky action bar for multi-select "publish to Google Docs": a select-all
-// toggle, the publish button, live progress, and a per-item outcome list with
-// links to the created Docs. Renders nothing until something is selected or a
-// batch has produced results.
-export function BulkPublishBar({ items, bulk }: Props) {
-  const { selected, publishing, results, start, clear, setSelection } = bulk
+const DEST_OPTIONS: { value: PublishDestination; label: string }[] = [
+  { value: 'google_docs', label: 'Google Docs' },
+  { value: 'wordpress', label: 'Website' },
+  { value: 'both', label: 'Both' },
+]
+
+// A sticky action bar for multi-select publishing: a destination picker (Google
+// Docs / Website / Both), a select-all toggle, the publish button, live
+// progress, and a per-item outcome list with links to whatever was created.
+// Renders nothing until something is selected or a batch has produced results.
+export function BulkPublishBar({ items, bulk, wordpressConfigured }: Props) {
+  const {
+    selected, publishing, results, start, clear, setSelection,
+    destination, setDestination, wpStatus, setWpStatus,
+  } = bulk
   const selectedCount = selected.size
   const resultEntries = Object.entries(results)
   const done = resultEntries.filter(([, r]) => r.status === 'done').length
@@ -21,6 +35,10 @@ export function BulkPublishBar({ items, bulk }: Props) {
   const total = resultEntries.length
   const finished = done + failed
   const allSelected = items.length > 0 && items.every(i => selected.has(i.key))
+  // Only gate when we actually know the client lacks WordPress (single-client
+  // views pass the flag; multi-client views leave it undefined).
+  const wpDisabled = wordpressConfigured === false
+  const wantsWp = destination !== 'google_docs'
 
   if (selectedCount === 0 && total === 0) return null
 
@@ -28,14 +46,58 @@ export function BulkPublishBar({ items, bulk }: Props) {
   const byKey = new Map(items.map(i => [i.key, i]))
   const succeeded = resultEntries
     .filter(([, r]) => r.status === 'done')
-    .map(([key, r]) => ({ key, label: byKey.get(key)?.label ?? key, docUrl: r.docUrl }))
+    .map(([key, r]) => ({ key, label: byKey.get(key)?.label ?? key, docUrl: r.docUrl, siteUrl: r.siteUrl }))
   const failures = resultEntries
     .filter(([, r]) => r.status === 'failed')
-    .map(([key, r]) => ({ key, label: byKey.get(key)?.label ?? key, error: r.error }))
+    .map(([key, r]) => ({ key, label: byKey.get(key)?.label ?? key, error: r.error, docUrl: r.docUrl, siteUrl: r.siteUrl }))
+
+  const destNoun =
+    destination === 'google_docs' ? 'Google Docs'
+      : destination === 'wordpress' ? 'the website'
+        : 'Docs + website'
 
   return (
     <div style={barStyle}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+        {/* Destination picker */}
+        <div style={{ display: 'inline-flex', border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+          {DEST_OPTIONS.map(opt => {
+            const isWp = opt.value !== 'google_docs'
+            const optDisabled = publishing || (isWp && wpDisabled)
+            const active = destination === opt.value
+            return (
+              <button
+                key={opt.value}
+                onClick={() => setDestination(opt.value)}
+                disabled={optDisabled}
+                title={isWp && wpDisabled ? 'Connect WordPress in client settings to publish to the website' : undefined}
+                style={{
+                  padding: '6px 12px', fontSize: 12, fontWeight: 600, border: 'none',
+                  cursor: optDisabled ? 'not-allowed' : 'pointer',
+                  background: active ? '#6366f1' : '#fff',
+                  color: active ? '#fff' : optDisabled ? '#cbd5e1' : '#64748b',
+                }}
+              >
+                {opt.label}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* WordPress draft/publish selector — only when a WP target is chosen */}
+        {wantsWp && !wpDisabled && (
+          <select
+            value={wpStatus}
+            onChange={e => setWpStatus(e.target.value as 'draft' | 'publish')}
+            disabled={publishing}
+            style={{ border: '1px solid #c7d2fe', borderRadius: 8, background: '#fff', color: '#6366f1', fontSize: 12, fontWeight: 600, padding: '6px 8px', cursor: 'pointer' }}
+            title="Draft saves to WordPress unpublished; Publish goes live"
+          >
+            <option value="draft">WP: Draft</option>
+            <option value="publish">WP: Publish</option>
+          </select>
+        )}
+
         <button
           onClick={() => (allSelected ? clear() : setSelection(items.map(i => i.key)))}
           disabled={publishing || items.length === 0}
@@ -67,12 +129,10 @@ export function BulkPublishBar({ items, bulk }: Props) {
           onClick={() => void start(items)}
           disabled={publishing || selectedCount === 0}
           style={{ ...primaryBtn, marginLeft: 'auto', opacity: publishing || selectedCount === 0 ? 0.6 : 1 }}
-          title="Publish each selected item to a Google Doc in the client's Drive folder"
+          title={`Publish each selected item to ${destNoun}`}
         >
           <ExternalLink size={15} />
-          {publishing
-            ? 'Publishing…'
-            : `Publish ${selectedCount} to Google Docs`}
+          {publishing ? 'Publishing…' : `Publish ${selectedCount} to ${destNoun}`}
         </button>
       </div>
 
@@ -81,19 +141,11 @@ export function BulkPublishBar({ items, bulk }: Props) {
           {succeeded.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>
-                {succeeded.length} published to Google Docs
+                {succeeded.length} published
               </span>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {succeeded.map(s => (
-                  s.docUrl ? (
-                    <a key={s.key} href={s.docUrl} target="_blank" rel="noreferrer" style={docChip}>
-                      <FileText size={12} /> {s.label}
-                    </a>
-                  ) : (
-                    <span key={s.key} style={{ ...docChip, color: '#16a34a' }}>
-                      <FileText size={12} /> {s.label}
-                    </span>
-                  )
+                  <OutcomeChips key={s.key} label={s.label} docUrl={s.docUrl} siteUrl={s.siteUrl} />
                 ))}
               </div>
             </div>
@@ -118,6 +170,34 @@ export function BulkPublishBar({ items, bulk }: Props) {
   )
 }
 
+// Per-item success row: a chip for the Google Doc and/or the WordPress page,
+// whichever the publish produced.
+function OutcomeChips({ label, docUrl, siteUrl }: {
+  label: string
+  docUrl?: string | null
+  siteUrl?: string | null
+}) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+      {docUrl ? (
+        <a href={docUrl} target="_blank" rel="noreferrer" style={docChip}>
+          <FileText size={12} /> {label}
+        </a>
+      ) : null}
+      {siteUrl ? (
+        <a href={siteUrl} target="_blank" rel="noreferrer" style={siteChip}>
+          <Globe size={12} /> {docUrl ? 'Website' : label}
+        </a>
+      ) : null}
+      {!docUrl && !siteUrl ? (
+        <span style={{ ...docChip, color: '#16a34a' }}>
+          <FileText size={12} /> {label}
+        </span>
+      ) : null}
+    </span>
+  )
+}
+
 const barStyle: React.CSSProperties = {
   position: 'sticky', bottom: 16, zIndex: 10,
   background: '#fff', border: '1px solid #c7d2fe', borderRadius: 12,
@@ -136,5 +216,11 @@ const docChip: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px',
   background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 6,
   fontSize: 12, color: '#16a34a', textDecoration: 'none', maxWidth: 240,
+  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+}
+const siteChip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px',
+  background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6,
+  fontSize: 12, color: '#2563eb', textDecoration: 'none', maxWidth: 240,
   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 }
