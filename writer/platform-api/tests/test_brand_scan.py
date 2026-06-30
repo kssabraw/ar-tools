@@ -7,6 +7,7 @@ the classifier and dispatch are monkeypatched for the orchestration tests.
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -125,7 +126,8 @@ def test_analyze_mention_without_openai_key_uses_fallback(monkeypatch):
 
 # ── scan_keyword_engine orchestration ────────────────────────────────────────
 def _stub_analyze(found=True):
-    async def _fn(response_text, brand, citations, raw_response, extract_rich=False):
+    async def _fn(response_text, brand, citations, raw_response, extract_rich=False,
+                  competitor_names=None):
         out = {
             "mention_found": found, "mention_type": "direct" if found else "none",
             "sentiment": 0.5, "confidence_score": 0.9, "snippet": "snip",
@@ -133,6 +135,14 @@ def _stub_analyze(found=True):
         }
         if extract_rich:
             out["rich"] = {"businesses": [], "mention_rank": 1 if found else None}
+        # Mirror the real analyze_mention: competitor classification is folded
+        # into this single call (no per-competitor round-trips).
+        if competitor_names:
+            out["competitor_results"] = [
+                {"name": n, "found": True, "mention_type": "direct",
+                 "sentiment": 0.1, "confidence": 0.8, "snippet": "snip"}
+                for n in competitor_names
+            ]
         return out
     return _fn
 
@@ -149,6 +159,85 @@ def test_scan_keyword_engine_happy_path_with_competitors(monkeypatch):
     assert result["retry_count"] == 0
     assert len(result["competitor_results"]) == 1
     assert result["competitor_results"][0]["name"] == "Rival Co"
+
+
+# ── folded competitor classification (one call, not N) ───────────────────────
+def test_clean_competitor_results_shapes_and_fills_missing():
+    raw = [
+        {"name": "Rival Co", "mention_found": True, "mention_type": "direct",
+         "sentiment": 0.5, "confidence": 0.9, "evidence_snippet": "x" * 400},
+        {"name": "", "mention_found": True},   # blank name → dropped
+        "garbage",                              # non-dict → dropped
+    ]
+    out = bs._clean_competitor_results(raw, ["Rival Co", "Missing Inc"])
+    assert [c["name"] for c in out] == ["Rival Co", "Missing Inc"]
+    assert out[0]["found"] is True
+    assert len(out[0]["snippet"]) == 300        # snippet clamped to 300 chars
+    assert out[1]["found"] is False             # name the model omitted → degraded
+
+
+def test_analyze_mention_folds_competitors_into_one_call(monkeypatch):
+    # The single rich classifier call classifies the brand AND every competitor;
+    # there must be exactly ONE create() call, not one-per-competitor.
+    calls = {"n": 0, "messages": None}
+    tool_args = json.dumps({
+        "mention_found": True, "mention_type": "direct", "sentiment": 0.5,
+        "confidence": 0.9, "evidence_snippet": "Acme listed", "reasoning": "ok",
+        "businesses": [{"name": "Acme"}, {"name": "Rival Co"}],
+        "competitors": [
+            {"name": "Rival Co", "mention_found": True, "mention_type": "direct",
+             "sentiment": 0.2, "confidence": 0.8, "evidence_snippet": "Rival listed"},
+            {"name": "Ghost LLC", "mention_found": False, "mention_type": "none",
+             "sentiment": 0, "confidence": 0.6, "evidence_snippet": "absent"},
+        ],
+    })
+
+    class _Fn:
+        name = "report_brand_visibility"
+        arguments = tool_args
+
+    class _TC:
+        function = _Fn()
+
+    class _Completions:
+        async def create(self, **kwargs):
+            calls["n"] += 1
+            calls["messages"] = kwargs["messages"]
+            msg = type("M", (), {"tool_calls": [_TC()]})()
+            choice = type("C", (), {"message": msg})()
+            return type("R", (), {"choices": [choice]})()
+
+    class _FakeClient:
+        def __init__(self, **kw):
+            self.chat = type("Chat", (), {"completions": _Completions()})()
+
+    import openai
+    monkeypatch.setattr(bs.settings, "openai_api_key", "sk-test")
+    monkeypatch.setattr(bs.settings, "brand_scan_max_competitors", 5)
+    monkeypatch.setattr(openai, "AsyncOpenAI", _FakeClient)
+
+    r = asyncio.run(bs.analyze_mention(
+        "Acme Plumbing leads. Rival Co also listed.", "Acme", [], "raw",
+        extract_rich=True, competitor_names=["Rival Co", "Ghost LLC"],
+    ))
+    assert calls["n"] == 1                       # ONE call covers brand + 2 competitors
+    comp = {c["name"]: c for c in r["competitor_results"]}
+    assert comp["Rival Co"]["found"] is True
+    assert comp["Ghost LLC"]["found"] is False
+    assert "Rival Co" in calls["messages"][1]["content"]   # names reach the prompt
+
+
+def test_scan_keyword_engine_competitors_via_regex_fallback_when_no_key(monkeypatch):
+    # No OpenAI key → analyze_mention falls back to regex (no API call), and
+    # scan_keyword_engine still produces competitor_results via the regex path.
+    async def fake_dispatch(engine, keyword, brand):
+        return ("Acme Plumbing leads. Rival Co also listed.", [])
+
+    monkeypatch.setattr(bs, "_dispatch", fake_dispatch)
+    monkeypatch.setattr(bs.settings, "openai_api_key", "")
+    result = asyncio.run(bs.scan_keyword_engine("kw", "Acme Plumbing", "chatgpt", ["Rival Co"]))
+    names = [c["name"] for c in result["competitor_results"]]
+    assert names == ["Rival Co"]                 # complete matrix, zero extra API calls
 
 
 def test_scan_keyword_engine_terminal_error_raises(monkeypatch):
