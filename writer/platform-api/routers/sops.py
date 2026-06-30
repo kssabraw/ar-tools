@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from middleware.auth import require_admin, require_auth
 from models.sops import Sop, SopCreateRequest, SopUpdateRequest
@@ -70,6 +70,7 @@ async def update_sop(sop_id: UUID, body: SopUpdateRequest, auth: dict = Depends(
     return Sop(**sop_store.update_sop(str(sop_id), updates))
 
 
-@router.delete("/sops/{sop_id}", status_code=204)
-async def delete_sop(sop_id: UUID, auth: dict = Depends(require_admin)) -> None:
+@router.delete("/sops/{sop_id}", status_code=204, response_class=Response)
+async def delete_sop(sop_id: UUID, auth: dict = Depends(require_admin)) -> Response:
     sop_store.delete_sop(str(sop_id))
+    return Response(status_code=204)
