@@ -356,10 +356,12 @@ class Settings(BaseSettings):
     syndication_rewrite_max_tokens: int = 8192
     syndication_default_interval_days: int = 1
     # Manual select-and-publish: the scan only lists discovered pages; the user
-    # ticks pages and publishes them. Selected items are enqueued as staggered
-    # per-item jobs (this spacing) so a large selection runs at background
-    # priority without monopolizing the single worker.
-    syndication_item_job_spacing_seconds: int = 120
+    # ticks pages and publishes them. Selected items are enqueued as lightly
+    # staggered per-item jobs (this spacing) — kept ≈ the worker poll interval so
+    # the selection processes about as fast as the single worker can drain it,
+    # while staying >0 so a now-dated interactive job still interleaves ahead of
+    # the rest of a large batch.
+    syndication_item_job_spacing_seconds: int = 10
 
     # ── AI Visibility (Brand Strength) module ────────────────────────────────
     # Mention classifier (post-processes each engine's answer into mention/type/

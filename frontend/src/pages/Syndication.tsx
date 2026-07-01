@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Share2, RefreshCw, ExternalLink, FileText, Table2, AlertTriangle, Globe } from 'lucide-react'
@@ -61,6 +61,9 @@ export function Syndication() {
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [scanning, setScanning] = useState(false)
+  // Ids the user just submitted to Publish — used to keep polling until each one
+  // reaches a terminal state (published/failed), so progress shows live.
+  const [queued, setQueued] = useState<Set<string>>(new Set())
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', clientId],
@@ -78,11 +81,14 @@ export function Syndication() {
     queryKey: ['syndication-items', clientId],
     queryFn: () => api.get<SyndicationItem[]>(`/clients/${clientId}/syndication/items`),
     enabled: Boolean(clientId),
-    // Poll while a scan is in flight (new rows appear) or any item is publishing.
+    // Poll while a scan is in flight (new rows appear) or any just-published item
+    // hasn't reached a terminal state yet (so the list updates live).
     refetchInterval: (query) => {
-      const data = query.state.data as SyndicationItem[] | undefined
-      const publishing = (data ?? []).some(i => i.status === 'rewriting')
-      return scanning || publishing ? 4000 : false
+      const data = (query.state.data as SyndicationItem[] | undefined) ?? []
+      const working = data.some(
+        i => (queued.has(i.id) || i.status === 'rewriting') && i.status !== 'published' && i.status !== 'failed',
+      )
+      return scanning || working ? 4000 : false
     },
   })
 
@@ -104,7 +110,10 @@ export function Syndication() {
 
   const publish = useMutation({
     mutationFn: (ids: string[]) => api.post<{ queued: number }>(`/clients/${clientId}/syndication/publish`, { item_ids: ids }),
-    onSuccess: () => {
+    onSuccess: (_data, ids) => {
+      // Track the submitted ids so polling continues until they finish, then
+      // clear the checkboxes.
+      setQueued(prev => new Set([...prev, ...ids]))
       setSelected(new Set())
       queryClient.invalidateQueries({ queryKey: ['syndication-items', clientId] })
     },
@@ -112,10 +121,30 @@ export function Syndication() {
 
   const retry = useMutation({
     mutationFn: (itemId: string) => api.post(`/clients/${clientId}/syndication/items/${itemId}/retry`, {}),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['syndication-items', clientId] }),
+    onSuccess: (_data, itemId) => {
+      setQueued(prev => new Set([...prev, itemId]))
+      queryClient.invalidateQueries({ queryKey: ['syndication-items', clientId] })
+    },
   })
 
   const rows = items ?? []
+
+  // Drop ids from `queued` once their item reaches a terminal state (or vanishes)
+  // so the "Publishing…" indicator and polling stop exactly when work finishes.
+  useEffect(() => {
+    setQueued(prev => {
+      if (prev.size === 0) return prev
+      const next = new Set<string>()
+      for (const it of (items ?? [])) {
+        if (prev.has(it.id) && it.status !== 'published' && it.status !== 'failed') next.add(it.id)
+      }
+      return next.size === prev.size ? prev : next
+    })
+  }, [items])
+
+  const activeCount = rows.filter(
+    i => (queued.has(i.id) || i.status === 'rewriting') && i.status !== 'published' && i.status !== 'failed',
+  ).length
   const publishableRows = rows.filter(i => PUBLISHABLE.includes(i.status))
   const publishedCount = rows.filter(i => i.status === 'published').length
   const allSelected = publishableRows.length > 0 && publishableRows.every(i => selected.has(i.id))
@@ -142,7 +171,9 @@ export function Syndication() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
         <Share2 size={22} color="#6366f1" />
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Content Syndication</h1>
-        {(scanning || publish.isPending) && <span style={pill}>{scanning ? 'Scanning…' : 'Publishing…'}</span>}
+        {(scanning || activeCount > 0) && (
+          <span style={pill}>{scanning ? 'Scanning…' : `Publishing ${activeCount}…`}</span>
+        )}
       </div>
       <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 20px', maxWidth: 780 }}>
         {client?.name ?? 'This client'} · scan the site for content, then pick the pages to rewrite into unique versions and
