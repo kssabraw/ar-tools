@@ -18,6 +18,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from models.syndication import (
+    PublishRequest,
+    PublishResponse,
     ScanResponse,
     SyndicationConfigResponse,
     SyndicationConfigUpdate,
@@ -94,6 +96,18 @@ async def scan_now(client_id: UUID, auth: dict = Depends(require_auth)) -> ScanR
     return ScanResponse(job_id=job_id, status="enqueued" if job_id else "already_running")
 
 
+@router.post("/clients/{client_id}/syndication/publish", response_model=PublishResponse)
+async def publish_selected(
+    client_id: UUID, body: PublishRequest, auth: dict = Depends(require_auth)
+) -> PublishResponse:
+    """Rewrite + publish the selected discovered items (to Doc / Sheet / Both per
+    the client's publish_target setting), public per share_mode."""
+    _require_client(str(client_id))
+    ids = [str(i) for i in body.item_ids]
+    queued = syndication_service.publish_items(str(client_id), ids)
+    return PublishResponse(queued=queued)
+
+
 @router.post("/clients/{client_id}/syndication/items/{item_id}/retry", response_model=ScanResponse)
 async def retry_item(
     client_id: UUID, item_id: UUID, auth: dict = Depends(require_auth)
@@ -124,5 +138,6 @@ def _config_view(cfg: dict) -> dict:
         "include_pages": bool(cfg.get("include_pages", True)),
         "include_products": bool(cfg.get("include_products", True)),
         "share_mode": cfg.get("share_mode") or "public",
+        "publish_target": cfg.get("publish_target") or "both",
         "last_scan_date": str(last) if last else None,
     }

@@ -355,13 +355,11 @@ class Settings(BaseSettings):
     syndication_rewrite_model: str = "claude-sonnet-4-6"
     syndication_rewrite_max_tokens: int = 8192
     syndication_default_interval_days: int = 1
+    # Manual select-and-publish: the scan only lists discovered pages; the user
+    # ticks pages and publishes them. Selected items are enqueued as staggered
+    # per-item jobs (this spacing) so a large selection runs at background
+    # priority without monopolizing the single worker.
     syndication_item_job_spacing_seconds: int = 120
-    # First scan of a client records the existing site as a baseline WITHOUT
-    # publishing (only content found on later scans is syndicated). As a safety
-    # throttle, at most this many new items are published per scan — any extra
-    # stay queued and go out on subsequent scans (so a site that dumps hundreds
-    # of pages at once can't trigger a publish storm).
-    syndication_max_new_per_scan: int = 50
 
     # ── AI Visibility (Brand Strength) module ────────────────────────────────
     # Mention classifier (post-processes each engine's answer into mention/type/
