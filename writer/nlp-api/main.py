@@ -504,12 +504,18 @@ PLACEMENT RULES FOR NEW CONTENT:
 
 AEO / LLM WRITING RULES — apply to all text and any new content added:
 1. ANSWER-FIRST: Open every section and FAQ answer with a direct claim.
-2. ONE IDEA PER PARAGRAPH: Each <p> covers exactly one point. 3–5 sentences max.
+2. ONE IDEA PER PARAGRAPH — KEEP PARAGRAPHS SHORT: Each <p> covers exactly one point in
+   1–2 sentences (never exceed 3, never past ~45 words). When you rewrite or add text,
+   split long paragraphs into multiple short <p> blocks rather than lengthening one.
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
 4. DIRECT FAQ ANSWERS: Every FAQ answer opens with a direct yes/no or factual statement.
 5. BULLETED LISTS — use <ul> for features, services, inclusions, what-to-expect items.
 6. NUMBERED LISTS — use <ol> for processes, steps, how-it-works sequences.
-7. TABLES — only when content is genuinely comparative. Never force a table.
+7. TABLES — preserve any existing <table> in the page. If the page has NONE and its content
+   is genuinely comparative (service tiers, repair vs. replace, response time / coverage by
+   area), add ONE <table><thead><tbody> with specific column headers (≥2 columns, ≥3 rows),
+   introduced by a <p> sentence. Do not fabricate prices or timeframes, and don't force a
+   table where a list or prose is more natural.
 8. SPECIFIC FACTS OVER VAGUE CLAIMS — cite numbers, timeframes, named places.
 9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur.
 10. SECTION LENGTH ≤300 words.
