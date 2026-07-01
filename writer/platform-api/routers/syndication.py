@@ -23,7 +23,9 @@ from models.syndication import (
     ScanResponse,
     SyndicationConfigResponse,
     SyndicationConfigUpdate,
+    SyndicationCounts,
     SyndicationItem,
+    SyndicationItemsResponse,
 )
 from services import syndication_service
 
@@ -68,24 +70,67 @@ async def update_config(
     return SyndicationConfigResponse(**_config_view(cfg))
 
 
-@router.get("/clients/{client_id}/syndication/items", response_model=list[SyndicationItem])
+# Filter tab → the item statuses it covers. None = all.
+_FILTER_STATUSES: dict[str, Optional[list[str]]] = {
+    "all": None,
+    "published": ["published"],
+    "failed": ["failed"],
+    "not_published": ["discovered", "rewriting", "skipped"],
+}
+
+
+def _count(supabase, client_id: str, statuses: Optional[list[str]]) -> int:
+    q = (
+        supabase.table("syndication_items")
+        .select("id", count="exact")
+        .eq("client_id", client_id)
+    )
+    if statuses is not None:
+        q = q.in_("status", statuses)
+    res = q.limit(1).execute()
+    return res.count or 0
+
+
+@router.get("/clients/{client_id}/syndication/items", response_model=SyndicationItemsResponse)
 async def list_items(
     client_id: UUID,
-    status: Optional[str] = Query(default=None),
-    content_type: Optional[str] = Query(default=None),
+    filter: str = Query(default="all"),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     auth: dict = Depends(require_auth),
-) -> list[SyndicationItem]:
-    query = (
-        get_supabase().table("syndication_items")
-        .select(_ITEM_FIELDS)
-        .eq("client_id", str(client_id))
+) -> SyndicationItemsResponse:
+    """Paginated items for one tab, plus per-tab counts for the filter bar."""
+    supabase = get_supabase()
+    cid = str(client_id)
+
+    total = _count(supabase, cid, None)
+    published = _count(supabase, cid, ["published"])
+    failed = _count(supabase, cid, ["failed"])
+    counts = SyndicationCounts(
+        all=total,
+        published=published,
+        failed=failed,
+        not_published=max(0, total - published - failed),
     )
-    if status:
-        query = query.eq("status", status)
-    if content_type:
-        query = query.eq("content_type", content_type)
-    rows = query.order("first_seen_at", desc=True).limit(500).execute().data or []
-    return [SyndicationItem(**r) for r in rows]
+
+    statuses = _FILTER_STATUSES.get(filter, None)
+    query = (
+        supabase.table("syndication_items")
+        .select(_ITEM_FIELDS)
+        .eq("client_id", cid)
+    )
+    if statuses is not None:
+        query = query.in_("status", statuses)
+    rows = (
+        query.order("first_seen_at", desc=True)
+        .range(offset, offset + limit - 1)
+        .execute()
+        .data
+        or []
+    )
+    return SyndicationItemsResponse(
+        items=[SyndicationItem(**r) for r in rows], counts=counts
+    )
 
 
 @router.post("/clients/{client_id}/syndication/scan", response_model=ScanResponse)

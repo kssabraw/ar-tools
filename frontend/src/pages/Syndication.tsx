@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Share2, RefreshCw, ExternalLink, FileText, Table2, AlertTriangle, Globe } from 'lucide-react'
+import { ArrowLeft, Share2, RefreshCw, ExternalLink, FileText, Table2, AlertTriangle, Globe, Download } from 'lucide-react'
 import { api } from '../lib/api'
+import { toCsv, downloadCsv } from '../lib/csv'
 import type { Client } from '../lib/types'
 
 // ── Types (mirror models/syndication.py) ────────────────────────────────────
@@ -32,6 +33,17 @@ interface SyndicationItem {
   first_seen_at: string | null
   published_at: string | null
 }
+interface Counts { all: number; published: number; not_published: number; failed: number }
+interface ItemsResponse { items: SyndicationItem[]; counts: Counts }
+
+type Filter = 'all' | 'published' | 'not_published' | 'failed'
+const PAGE_SIZE = 50
+const FILTERS: { key: Filter; label: string }[] = [
+  { key: 'all', label: 'All' },
+  { key: 'published', label: 'Published' },
+  { key: 'not_published', label: 'Not published' },
+  { key: 'failed', label: 'Failed' },
+]
 
 const TYPE_LABEL: Record<SyndicationItem['content_type'], string> = {
   blog_post: 'Blog post',
@@ -44,7 +56,7 @@ const PUBLISHABLE: ItemStatus[] = ['discovered', 'failed', 'skipped']
 // Turn a source URL into a readable label when we don't yet have the page's real
 // title (that's captured when the page is rewritten). Falls back to the URL.
 function displayTitle(item: SyndicationItem): string {
-  if (item.title) return item.title
+  if (item.rewritten_title || item.title) return (item.rewritten_title || item.title) as string
   try {
     const u = new URL(item.source_url)
     const seg = u.pathname.split('/').filter(Boolean).pop()
@@ -61,6 +73,9 @@ export function Syndication() {
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [scanning, setScanning] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [filter, setFilter] = useState<Filter>('all')
+  const [page, setPage] = useState(0)
   // Ids the user just submitted to Publish — used to keep polling until each one
   // reaches a terminal state (published/failed), so progress shows live.
   const [queued, setQueued] = useState<Set<string>>(new Set())
@@ -77,76 +92,90 @@ export function Syndication() {
     enabled: Boolean(clientId),
   })
 
-  const { data: items } = useQuery<SyndicationItem[]>({
-    queryKey: ['syndication-items', clientId],
-    queryFn: () => api.get<SyndicationItem[]>(`/clients/${clientId}/syndication/items`),
+  const { data } = useQuery<ItemsResponse>({
+    queryKey: ['syndication-items', clientId, filter, page],
+    queryFn: () => api.get<ItemsResponse>(
+      `/clients/${clientId}/syndication/items?filter=${filter}&limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`,
+    ),
     enabled: Boolean(clientId),
     // Poll while a scan is in flight (new rows appear) or any just-published item
-    // hasn't reached a terminal state yet (so the list updates live).
+    // on this page hasn't reached a terminal state yet (so the list updates live).
     refetchInterval: (query) => {
-      const data = (query.state.data as SyndicationItem[] | undefined) ?? []
-      const working = data.some(
+      const items = (query.state.data as ItemsResponse | undefined)?.items ?? []
+      const working = items.some(
         i => (queued.has(i.id) || i.status === 'rewriting') && i.status !== 'published' && i.status !== 'failed',
       )
       return scanning || working ? 4000 : false
     },
   })
 
+  const rows = data?.items ?? []
+  const counts = data?.counts
+  const tabTotal =
+    filter === 'published' ? counts?.published
+    : filter === 'failed' ? counts?.failed
+    : filter === 'not_published' ? counts?.not_published
+    : counts?.all
+  const total = tabTotal ?? 0
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+  const invalidateItems = () => queryClient.invalidateQueries({ queryKey: ['syndication-items', clientId] })
+
   const saveConfig = useMutation({
     mutationFn: (patch: Partial<SyndicationConfig>) =>
       api.put<SyndicationConfig>(`/clients/${clientId}/syndication/config`, patch),
-    onSuccess: (data) => queryClient.setQueryData(['syndication-config', clientId], data),
+    onSuccess: (d) => queryClient.setQueryData(['syndication-config', clientId], d),
   })
 
   const scan = useMutation({
     mutationFn: () => api.post(`/clients/${clientId}/syndication/scan`, {}),
     onSuccess: () => {
       setScanning(true)
-      // Poll for a window while the background scan discovers pages, then stop.
       window.setTimeout(() => setScanning(false), 45000)
-      queryClient.invalidateQueries({ queryKey: ['syndication-items', clientId] })
+      invalidateItems()
     },
   })
 
   const publish = useMutation({
     mutationFn: (ids: string[]) => api.post<{ queued: number }>(`/clients/${clientId}/syndication/publish`, { item_ids: ids }),
-    onSuccess: (_data, ids) => {
-      // Track the submitted ids so polling continues until they finish, then
-      // clear the checkboxes.
+    onSuccess: (_d, ids) => {
       setQueued(prev => new Set([...prev, ...ids]))
       setSelected(new Set())
-      queryClient.invalidateQueries({ queryKey: ['syndication-items', clientId] })
+      invalidateItems()
     },
   })
 
   const retry = useMutation({
     mutationFn: (itemId: string) => api.post(`/clients/${clientId}/syndication/items/${itemId}/retry`, {}),
-    onSuccess: (_data, itemId) => {
+    onSuccess: (_d, itemId) => {
       setQueued(prev => new Set([...prev, itemId]))
-      queryClient.invalidateQueries({ queryKey: ['syndication-items', clientId] })
+      invalidateItems()
     },
   })
 
-  const rows = items ?? []
-
-  // Drop ids from `queued` once their item reaches a terminal state (or vanishes)
-  // so the "Publishing…" indicator and polling stop exactly when work finishes.
+  // Drop ids from `queued` once their item leaves this page's non-terminal set
+  // (published/failed, or filtered off) so the "Publishing…" indicator + polling
+  // stop exactly when the visible work finishes.
   useEffect(() => {
     setQueued(prev => {
       if (prev.size === 0) return prev
       const next = new Set<string>()
-      for (const it of (items ?? [])) {
+      for (const it of (data?.items ?? [])) {
         if (prev.has(it.id) && it.status !== 'published' && it.status !== 'failed') next.add(it.id)
       }
       return next.size === prev.size ? prev : next
     })
-  }, [items])
+  }, [data])
+
+  // Keep the page in range as counts shift (e.g. items move to the Published tab).
+  useEffect(() => {
+    if (page > 0 && page >= pageCount) setPage(pageCount - 1)
+  }, [page, pageCount])
 
   const activeCount = rows.filter(
     i => (queued.has(i.id) || i.status === 'rewriting') && i.status !== 'published' && i.status !== 'failed',
   ).length
   const publishableRows = rows.filter(i => PUBLISHABLE.includes(i.status))
-  const publishedCount = rows.filter(i => i.status === 'published').length
   const allSelected = publishableRows.length > 0 && publishableRows.every(i => selected.has(i.id))
   const target = config?.publish_target ?? 'both'
   const targetLabel = target === 'both' ? 'Google Doc + Sheet' : target === 'doc' ? 'Google Doc' : 'Google Sheet'
@@ -160,6 +189,31 @@ export function Syndication() {
   }
   const toggleAll = () => {
     setSelected(allSelected ? new Set() : new Set(publishableRows.map(i => i.id)))
+  }
+  const pick = (f: Filter) => { setFilter(f); setPage(0) }
+
+  // Export all published rows (across pages) to CSV.
+  const exportPublished = async () => {
+    setExporting(true)
+    try {
+      const all: SyndicationItem[] = []
+      for (let off = 0; off < 10000; off += 500) {
+        const res = await api.get<ItemsResponse>(
+          `/clients/${clientId}/syndication/items?filter=published&limit=500&offset=${off}`,
+        )
+        const batch = res.items ?? []
+        all.push(...batch)
+        if (batch.length < 500) break
+      }
+      const headers = ['Title', 'Source URL', 'Type', 'Doc URL', 'Sheet URL', 'Published at']
+      const body = all.map(i => [
+        i.rewritten_title || i.title || '', i.source_url, TYPE_LABEL[i.content_type],
+        i.doc_url || '', i.sheet_url || '', i.published_at || '',
+      ])
+      downloadCsv(`syndication-published-${new Date().toISOString().slice(0, 10)}.csv`, toCsv(headers, body))
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -266,80 +320,108 @@ export function Syndication() {
         </div>
       )}
 
-      {/* ── Items ────────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', margin: '18px 2px 12px' }}>
-        <h2 style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', margin: 0 }}>Discovered pages</h2>
-        <span style={{ fontSize: 12, color: '#94a3b8' }}>
-          {rows.length} found · {publishedCount} published
-        </span>
+      {/* ── Filter tabs ──────────────────────────────────────────────────── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '18px 2px 12px', flexWrap: 'wrap' }}>
+        {FILTERS.map(f => {
+          const n = f.key === 'all' ? counts?.all : f.key === 'published' ? counts?.published : f.key === 'failed' ? counts?.failed : counts?.not_published
+          return (
+            <button key={f.key} onClick={() => pick(f.key)} style={filter === f.key ? tabActive : tab}>
+              {f.label} {n !== undefined ? `(${n})` : ''}
+            </button>
+          )
+        })}
+        <span style={{ flex: 1 }} />
+        {(counts?.published ?? 0) > 0 && (
+          <button style={{ ...ghostBtn, opacity: exporting ? 0.6 : 1 }} disabled={exporting} onClick={exportPublished}>
+            <Download size={14} /> {exporting ? 'Exporting…' : 'Export published CSV'}
+          </button>
+        )}
       </div>
 
       {rows.length === 0 ? (
         <div style={empty}>
-          No pages discovered yet. Hit <strong>Scan now</strong> — the site's blog posts, pages &amp; products (from its sitemap)
-          will be listed here for you to pick and publish.
+          {filter === 'all'
+            ? <>No pages discovered yet. Hit <strong>Scan now</strong> — the site's blog posts, pages &amp; products (from its sitemap) will be listed here for you to pick and publish.</>
+            : 'Nothing in this view.'}
         </div>
       ) : (
-        <div style={tableWrap}>
-          <table style={table}>
-            <thead>
-              <tr>
-                <th style={{ ...th, width: 34 }} />
-                <th style={th}>Page</th>
-                <th style={th}>Type</th>
-                <th style={th}>Status</th>
-                <th style={th}>Outputs</th>
-                <th style={th} />
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map(item => {
-                const selectable = PUBLISHABLE.includes(item.status)
-                return (
-                  <tr key={item.id}>
-                    <td style={{ ...td, textAlign: 'center' }}>
-                      {selectable && (
-                        <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} />
-                      )}
-                    </td>
-                    <td style={td}>
-                      <div style={{ fontWeight: 500, color: '#0f172a', marginBottom: 2 }}>{displayTitle(item)}</div>
-                      <a href={item.source_url} target="_blank" rel="noreferrer" style={link}>
-                        {item.source_url} <ExternalLink size={11} />
-                      </a>
-                    </td>
-                    <td style={td}>{TYPE_LABEL[item.content_type]}</td>
-                    <td style={td}><StatusBadge status={item.status} error={item.error} /></td>
-                    <td style={td}>
-                      <div style={{ display: 'flex', gap: 10 }}>
-                        {item.doc_url && (
-                          <a href={item.doc_url} target="_blank" rel="noreferrer" style={outLink}><FileText size={13} /> Doc</a>
+        <>
+          <div style={tableWrap}>
+            <table style={table}>
+              <thead>
+                <tr>
+                  <th style={{ ...th, width: 34 }} />
+                  <th style={th}>Page</th>
+                  <th style={th}>Type</th>
+                  <th style={th}>Status</th>
+                  <th style={th} />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(item => {
+                  const selectable = PUBLISHABLE.includes(item.status)
+                  return (
+                    <tr key={item.id}>
+                      <td style={{ ...td, textAlign: 'center' }}>
+                        {selectable && (
+                          <input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} />
                         )}
-                        {item.sheet_url && (
-                          <a href={item.sheet_url} target="_blank" rel="noreferrer" style={outLink}><Table2 size={13} /> Sheet</a>
+                      </td>
+                      <td style={td}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 2 }}>
+                          <span style={{ fontWeight: 500, color: '#0f172a' }}>{displayTitle(item)}</span>
+                          {item.doc_url && <OutChip href={item.doc_url} icon={<FileText size={11} />} label="Doc" />}
+                          {item.sheet_url && <OutChip href={item.sheet_url} icon={<Table2 size={11} />} label="Sheet" />}
+                        </div>
+                        <a href={item.source_url} target="_blank" rel="noreferrer" style={link}>
+                          {item.source_url} <ExternalLink size={11} />
+                        </a>
+                      </td>
+                      <td style={td}>{TYPE_LABEL[item.content_type]}</td>
+                      <td style={td}><StatusBadge status={item.status} error={item.error} /></td>
+                      <td style={{ ...td, textAlign: 'right' }}>
+                        {item.status === 'failed' && (
+                          <button style={retryBtn} disabled={retry.isPending} onClick={() => retry.mutate(item.id)}>
+                            <RefreshCw size={12} /> Retry
+                          </button>
                         )}
-                        {!item.doc_url && !item.sheet_url && <span style={{ color: '#cbd5e1' }}>—</span>}
-                      </div>
-                    </td>
-                    <td style={{ ...td, textAlign: 'right' }}>
-                      {item.status === 'failed' && (
-                        <button style={retryBtn} disabled={retry.isPending} onClick={() => retry.mutate(item.id)}>
-                          <RefreshCw size={12} /> Retry
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* ── Pagination ─────────────────────────────────────────────── */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>
+              {total === 0 ? '0' : `${page * PAGE_SIZE + 1}–${Math.min((page + 1) * PAGE_SIZE, total)}`} of {total}
+            </span>
+            {pageCount > 1 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button style={{ ...pageBtn, opacity: page === 0 ? 0.4 : 1 }} disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>Prev</button>
+                <span style={{ fontSize: 12, color: '#64748b' }}>Page {page + 1} of {pageCount}</span>
+                <button style={{ ...pageBtn, opacity: page + 1 >= pageCount ? 0.4 : 1 }} disabled={page + 1 >= pageCount} onClick={() => setPage(p => p + 1)}>Next</button>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </div>
   )
 }
 
 // ── Small components ─────────────────────────────────────────────────────────
+function OutChip({ href, icon, label }: { href: string; icon: React.ReactNode; label: string }) {
+  return (
+    <a href={href} target="_blank" rel="noreferrer"
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '1px 7px', borderRadius: 999, fontSize: 11, fontWeight: 600, background: '#ecfdf5', color: '#047857', textDecoration: 'none', border: '1px solid #a7f3d0' }}>
+      {icon} {label}
+    </a>
+  )
+}
+
 function ToggleRow({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (v: boolean) => void }) {
   return (
     <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', fontSize: 13, color: '#334155' }}>
@@ -382,11 +464,14 @@ const card: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8
 const bulkBar: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 14, background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: '12px 16px', position: 'sticky', top: 12, zIndex: 5, boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }
 const runBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 7, background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }
 const retryBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, background: '#fff', color: '#b91c1c', border: '1px solid #fecaca', borderRadius: 7, padding: '5px 10px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }
+const ghostBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, background: '#fff', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }
+const tab: React.CSSProperties = { background: 'none', border: '1px solid transparent', borderRadius: 8, padding: '6px 12px', fontSize: 13, fontWeight: 600, color: '#64748b', cursor: 'pointer' }
+const tabActive: React.CSSProperties = { ...tab, background: '#eef2ff', color: '#4f46e5', border: '1px solid #c7d2fe' }
+const pageBtn: React.CSSProperties = { background: '#fff', color: '#334155', border: '1px solid #cbd5e1', borderRadius: 7, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }
 const select: React.CSSProperties = { padding: '7px 10px', borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 13, color: '#0f172a', background: '#fff' }
 const empty: React.CSSProperties = { background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 12, padding: 28, textAlign: 'center', color: '#64748b', fontSize: 14 }
 const tableWrap: React.CSSProperties = { border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden', background: '#fff' }
 const table: React.CSSProperties = { width: '100%', borderCollapse: 'collapse', fontSize: 13 }
 const th: React.CSSProperties = { textAlign: 'left', padding: '11px 14px', background: '#f8fafc', color: '#64748b', fontWeight: 600, fontSize: 12, borderBottom: '1px solid #e2e8f0' }
 const td: React.CSSProperties = { padding: '11px 14px', borderBottom: '1px solid #f1f5f9', color: '#334155', verticalAlign: 'top' }
-const link: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, color: '#4f46e5', textDecoration: 'none', maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }
-const outLink: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, color: '#0f172a', textDecoration: 'none', fontWeight: 600 }
+const link: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 4, color: '#4f46e5', textDecoration: 'none', maxWidth: 460, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 12 }

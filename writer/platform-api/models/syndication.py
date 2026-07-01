@@ -54,3 +54,15 @@ class SyndicationItem(BaseModel):
 class ScanResponse(BaseModel):
     job_id: Optional[str] = None
     status: str
+
+
+class SyndicationCounts(BaseModel):
+    all: int
+    published: int
+    not_published: int  # discovered + rewriting + skipped
+    failed: int
+
+
+class SyndicationItemsResponse(BaseModel):
+    items: list[SyndicationItem]
+    counts: SyndicationCounts
