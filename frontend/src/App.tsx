@@ -34,6 +34,7 @@ import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
 import { Team } from './pages/Team'
 import { SetPassword } from './pages/SetPassword'
+import FanoutApp from './fanout/FanoutApp'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -49,6 +50,17 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/set-password" element={<SetPassword />} />
+            {/* Topic Fan-out is a native route subtree (merged in — Option C).
+                It renders full-bleed with its own chrome, so it sits outside the
+                suite Layout but still behind auth. */}
+            <Route
+              path="/fanout/*"
+              element={
+                <ProtectedRoute>
+                  <FanoutApp />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/*"
               element={

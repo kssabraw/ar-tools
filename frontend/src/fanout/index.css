@@ -1,0 +1,1501 @@
+/* Fan-out app styles — scoped under .fanout-app so they never bleed onto
+   suite pages. Auto-generated from the vendored fanout-frontend index.css
+   by scratchpad/scope_css.py during the frontend merge (Option C). */
+
+.fanout-app {
+  
+  --bg: #f8fafc;          
+  --surface: #ffffff;
+  --border: #e2e8f0;      
+  --text: #0f172a;        
+  --text-muted: #64748b;  
+  --accent: #6366f1;      
+  --accent-hover: #4f46e5;
+  --accent-soft: #eef2ff; 
+  --danger: #dc2626;      
+  --radius: 12px;
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.06);
+  --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+}
+.fanout-app, .fanout-app * {
+  box-sizing: border-box;
+}
+.fanout-app {
+  height: 100%;
+}
+.fanout-app {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+.fanout-app .btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.fanout-app .btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.fanout-app .btn-primary {
+  background: var(--accent);
+  color: #fff;
+  width: 100%;
+}
+.fanout-app .btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+.fanout-app .btn-ghost {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text);
+  padding: 8px 14px;
+}
+.fanout-app .btn-ghost:hover {
+  background: var(--bg);
+}
+.fanout-app .btn-danger {
+  background: var(--danger);
+  color: #fff;
+  border-color: var(--danger);
+  padding: 8px 14px;
+}
+.fanout-app .btn-danger:hover:not(:disabled) {
+  filter: brightness(0.92);
+}
+.fanout-app .btn-sm {
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.fanout-app .login-wrap {
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.fanout-app .login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 32px;
+}
+.fanout-app .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.fanout-app .brand-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--accent);
+  flex: none;
+}
+.fanout-app .brand-name {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.fanout-app .login-sub {
+  color: var(--text-muted);
+  font-size: 14px;
+  margin: 0 0 24px;
+}
+.fanout-app .field {
+  display: block;
+  margin-bottom: 16px;
+}
+.fanout-app .field-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.fanout-app .input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.fanout-app .input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.fanout-app .form-error {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: var(--danger);
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+}
+.fanout-app .app-shell {
+  display: flex;
+  min-height: 100vh;
+}
+.fanout-app .sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  width: 220px;
+  flex: none;
+  background: #0f172a;            
+  color: #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 0;
+}
+.fanout-app .sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px 20px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #1e293b;
+  text-decoration: none;
+  color: inherit;
+}
+.fanout-app .sidebar-brand .brand-mark {
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+.fanout-app .sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.fanout-app .sidebar .brand-name {
+  font-size: 16px;
+  color: #f1f5f9;
+}
+.fanout-app .sidebar-module {
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 600;
+}
+.fanout-app .sidebar-nav {
+  flex: 1;
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+}
+.fanout-app .sidebar-group {
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid #1e293b;
+}
+.fanout-app .sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 20px;
+  color: #94a3b8;                
+  background: transparent;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+.fanout-app .sidebar-link:hover {
+  color: #e2e8f0;
+}
+.fanout-app .sidebar-link.active {
+  color: #a5b4fc;                
+  background: #1e293b;
+  font-weight: 600;
+}
+.fanout-app .sidebar-link .nav-badge {
+  margin-left: auto;
+}
+.fanout-app .sidebar-foot {
+  padding: 16px 20px 0;
+  border-top: 1px solid #1e293b;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.fanout-app .sidebar-user {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+.fanout-app .sidebar-email {
+  font-size: 11px;
+  color: #64748b;
+  word-break: break-all;
+}
+.fanout-app .sidebar-signout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 0;
+}
+.fanout-app .sidebar-signout:hover {
+  color: #e2e8f0;
+}
+.fanout-app .app-main {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+}
+.fanout-app .role-badge {
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.fanout-app .content {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 32px 24px;
+}
+.fanout-app .page-title {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 20px;
+}
+.fanout-app .project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 14px;
+}
+.fanout-app .project-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+.fanout-app .project-card-name {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.fanout-app .project-card-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.fanout-app .tag-scratch {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 7px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+.fanout-app .muted {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.fanout-app .state-center {
+  display: grid;
+  place-items: center;
+  min-height: 100%;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.fanout-app .skeleton {
+  height: 86px;
+  border-radius: var(--radius);
+  background: linear-gradient(90deg, #e2e8f0 25%, #f1f5f9 37%, #e2e8f0 63%);
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+@keyframes shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -100% 0;
+  }
+}
+.fanout-app .link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0;
+}
+.fanout-app .link-btn:hover {
+  text-decoration: underline;
+}
+.fanout-app .card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 24px;
+}
+.fanout-app .textarea {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  resize: vertical;
+  min-height: 64px;
+}
+.fanout-app .textarea:focus, .fanout-app .select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.fanout-app .select {
+  width: 100%;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+}
+.fanout-app .row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.fanout-app .row > .field {
+  flex: 1;
+  min-width: 160px;
+}
+.fanout-app .collapse-link {
+  margin-bottom: 14px;
+}
+.fanout-app .banner {
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  color: #92400e;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
+.fanout-app .audience-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 14px;
+  margin-bottom: 18px;
+}
+.fanout-app .audience-bar strong {
+  color: var(--accent);
+}
+.fanout-app .silo-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  margin-bottom: 12px;
+  box-shadow: var(--shadow);
+}
+.fanout-app .silo-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fanout-app .silo-name {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+.fanout-app .silo-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+.fanout-app .badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.fanout-app .badge-rel {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+}
+.fanout-app .badge-warn {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+.fanout-app .silo-text {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 6px 0 0;
+}
+.fanout-app .silo-evidence {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 8px 0 0;
+  font-style: italic;
+}
+.fanout-app .silo-actions {
+  display: flex;
+  gap: 12px;
+}
+.fanout-app .interp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0;
+}
+.fanout-app .interp-option {
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+}
+.fanout-app .interp-option:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.fanout-app .intent-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 18px;
+}
+@media (max-width: 560px) {
+.fanout-app .intent-grid {
+    grid-template-columns: 1fr;
+  }
+}
+.fanout-app .intent-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  height: 100%;
+}
+.fanout-app .intent-card:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.fanout-app .intent-card-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.fanout-app .intent-card-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.fanout-app .toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+.fanout-app .inline-form {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-top: 8px;
+}
+.fanout-app .progress-wrap {
+  max-width: 420px;
+  margin: 12vh auto;
+  text-align: center;
+}
+.fanout-app .spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 18px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.fanout-app .progress-track {
+  height: 6px;
+  background: var(--accent-soft);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 16px 0 10px;
+}
+.fanout-app .progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.5s ease;
+}
+.fanout-app .progress-stage {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.fanout-app .progress-meta {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+.fanout-app .keyword-grid {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.fanout-app .keyword-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 12px;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border);
+}
+.fanout-app .keyword-row:last-child {
+  border-bottom: none;
+}
+.fanout-app .keyword-sources {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.fanout-app .spinner-sm {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-top-color: #fff;
+  border-radius: 50%;
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 8px;
+  animation: spin 0.8s linear infinite;
+}
+.fanout-app .spinner-sm.on-ghost {
+  border-color: var(--accent-soft);
+  border-top-color: var(--accent);
+}
+.fanout-app .status-pill {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.fanout-app .status-ok {
+  background: #dcfce7;
+  color: #15803d;
+}
+.fanout-app .status-bad {
+  background: #fef2f2;
+  color: var(--danger);
+}
+.fanout-app .status-busy {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.fanout-app .status-neutral {
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.fanout-app .browser-layout {
+  display: flex;
+  min-height: calc(100% - 60px);
+}
+.fanout-app .browser-rail {
+  width: 240px;
+  flex: none;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  padding: 16px 8px;
+}
+.fanout-app .browser-rail-head {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  padding: 0 10px 10px;
+}
+.fanout-app .rail-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+.fanout-app .rail-item:hover {
+  background: var(--bg);
+}
+.fanout-app .rail-item-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.fanout-app .rail-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fanout-app .browser-main {
+  flex: 1;
+  padding: 32px 28px;
+  max-width: 900px;
+}
+.fanout-app .session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fanout-app .session-row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  position: relative;
+}
+.fanout-app .session-row:hover {
+  border-color: var(--accent);
+}
+.fanout-app .session-row-archived {
+  opacity: 0.62;
+}
+.fanout-app .session-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 14px 16px;
+  cursor: pointer;
+  font: inherit;
+}
+.fanout-app .session-row-actions {
+  display: flex;
+  align-items: center;
+  padding-right: 10px;
+}
+.fanout-app .row-menu-btn {
+  padding: 4px 10px;
+  font-size: 18px;
+  line-height: 1;
+}
+.fanout-app .row-menu {
+  position: absolute;
+  right: 10px;
+  top: 44px;
+  z-index: 5;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+}
+.fanout-app .row-menu button {
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text);
+}
+.fanout-app .row-menu button:hover {
+  background: var(--bg);
+}
+.fanout-app .row-menu-danger {
+  color: var(--danger) !important;
+}
+.fanout-app .row-menu-sub {
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  margin: 4px 0;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.fanout-app .row-menu-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 4px 10px;
+}
+.fanout-app .archived-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+.fanout-app .session-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fanout-app .session-row-seed {
+  font-size: 15px;
+  font-weight: 600;
+}
+.fanout-app .session-row-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.fanout-app .workspace-head {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 16px 28px 0;
+}
+.fanout-app .workspace-head-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.fanout-app .segmented {
+  display: flex;
+  gap: 4px;
+}
+.fanout-app .segmented-item {
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+.fanout-app .segmented-item:hover {
+  color: var(--text);
+}
+.fanout-app .segmented-item-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.fanout-app .content-wide {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px 28px;
+}
+.fanout-app .filter-bar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.fanout-app .chip-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.fanout-app .chip-row-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-right: 4px;
+}
+.fanout-app .chip {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+.fanout-app .chip-on {
+  background: var(--accent-soft);
+  border-color: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}
+.fanout-app .table-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.fanout-app .kw-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.fanout-app .kw-table th, .fanout-app .kw-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.fanout-app .kw-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-muted);
+  z-index: 1;
+}
+.fanout-app .kw-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.fanout-app .kw-table td:first-child {
+  white-space: normal;
+}
+.fanout-app .kw-table .num {
+  text-align: right;
+}
+.fanout-app .cell-muted {
+  color: var(--text-muted);
+}
+.fanout-app .cell-sources {
+  font-size: 11px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fanout-app .status-tag {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+.fanout-app .status-active {
+  background: #dcfce7;
+  color: #15803d;
+  border-color: transparent;
+}
+.fanout-app .status-excluded {
+  background: #fef2f2;
+  color: var(--danger);
+  border-color: transparent;
+}
+.fanout-app .status-covered {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: transparent;
+}
+.fanout-app .cluster-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.fanout-app .topic-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.fanout-app .topic-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 14px;
+}
+.fanout-app .topic-group-toggle, .fanout-app .article-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 12px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+.fanout-app .topic-group-toggle:hover, .fanout-app .article-head:hover {
+  background: var(--bg);
+}
+.fanout-app .tree-caret {
+  color: var(--text-muted);
+  font-size: 10px;
+  width: 12px;
+}
+.fanout-app .topic-group-name {
+  font-weight: 600;
+  font-size: 15px;
+}
+.fanout-app .topic-group-count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.fanout-app .topic-group-body {
+  padding: 0 14px 10px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fanout-app .article-row {
+  border-top: 1px solid var(--border);
+}
+.fanout-app .article-name {
+  font-weight: 500;
+  font-size: 14px;
+}
+.fanout-app .article-detail {
+  padding: 4px 0 12px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fanout-app .detail-line {
+  display: flex;
+  gap: 10px;
+  font-size: 13px;
+}
+.fanout-app .detail-label {
+  flex: none;
+  width: 130px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.fanout-app .detail-value {
+  flex: 1;
+}
+.fanout-app .gap-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  font-size: 13px;
+}
+.fanout-app .gap-mark {
+  font-size: 12px;
+  font-weight: 700;
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+.fanout-app .arch-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.fanout-app .arch-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.fanout-app .arch-tree {
+  width: 320px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 8px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.fanout-app .arch-pillar {
+  margin-bottom: 4px;
+}
+.fanout-app .arch-node {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text);
+}
+.fanout-app .arch-node:hover {
+  background: var(--bg);
+}
+.fanout-app .arch-node-pillar {
+  font-weight: 600;
+}
+.fanout-app .arch-node-article {
+  padding-left: 24px;
+  color: var(--text-muted);
+}
+.fanout-app .arch-node-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.fanout-app .arch-detail {
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 20px 24px;
+}
+.fanout-app .arch-detail-title {
+  font-size: 18px;
+  margin: 0 0 16px;
+}
+.fanout-app .split-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.fanout-app .split-pane {
+  flex: 1;
+  min-width: 0;
+}
+.fanout-app .split-pane-title {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+@media (max-width: 900px) {
+.fanout-app .split-layout, .fanout-app .arch-layout {
+    flex-direction: column;
+  }
+.fanout-app .arch-tree, .fanout-app .browser-rail {
+    width: 100%;
+  }
+}
+.fanout-app .link-danger {
+  color: var(--danger);
+}
+.fanout-app .edit-toolbar, .fanout-app .arch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.fanout-app .seg-radios {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.fanout-app .seg-radio {
+  flex: 1;
+  min-width: 110px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.fanout-app .seg-radio-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.fanout-app .schedule-preview {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.fanout-app .bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  background: var(--accent-soft);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.fanout-app .col-check {
+  width: 32px;
+  text-align: center !important;
+}
+.fanout-app .row-selected {
+  background: var(--accent-soft);
+}
+.fanout-app .inline-input {
+  padding: 4px 8px;
+  font-size: 14px;
+  max-width: 360px;
+}
+.fanout-app .inline-select {
+  width: auto;
+  padding: 4px 8px;
+}
+.fanout-app .article-head-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 14px;
+}
+.fanout-app .article-head-wrap .article-head {
+  padding-left: 0;
+}
+.fanout-app .article-gen-btn {
+  flex: none;
+}
+.fanout-app .kw-edit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.fanout-app .kw-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.fanout-app .kw-edit-text {
+  flex: 1;
+}
+.fanout-app .kw-move-select {
+  width: auto;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+.fanout-app .inline-actions, .fanout-app .article-actions, .fanout-app .gap-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-top: 8px;
+}
+.fanout-app .article-actions {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.fanout-app .wizard-rail {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0;
+  margin: 0 0 20px;
+}
+.fanout-app .wizard-rail-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.fanout-app .wizard-rail-current {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.fanout-app .wizard-rail-done {
+  color: var(--text);
+}
+.fanout-app .wizard-rail-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--bg);
+  font-size: 12px;
+  font-weight: 600;
+}
+.fanout-app .wizard-rail-current .wizard-rail-num {
+  background: var(--accent);
+  color: #fff;
+}
+.fanout-app .field-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+.fanout-app .locked-settings {
+  margin-top: 14px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fanout-app .locked-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.fanout-app .nav-badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.fanout-app .cost-summary {
+  margin: 8px 0 12px;
+}
+.fanout-app .cost-figure {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.fanout-app .approval-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+  cursor: pointer;
+  font: inherit;
+}
+.fanout-app .approval-row:hover {
+  border-color: var(--accent);
+}
+.fanout-app .approval-row-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fanout-app .approval-cost {
+  margin-left: auto;
+  font-weight: 700;
+  font-size: 15px;
+}
+.fanout-app .modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 50;
+}
+.fanout-app .modal-card {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 24px;
+  width: 100%;
+  max-width: 480px;
+}
+.fanout-app .approval-detail {
+  margin: 0 0 16px;
+  display: grid;
+  gap: 6px;
+}
+.fanout-app .approval-detail > div {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+.fanout-app .approval-detail dt {
+  color: var(--text-muted);
+}
+.fanout-app .approval-detail dd {
+  margin: 0;
+  font-weight: 600;
+}
+.fanout-app .export-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.fanout-app .cost-banner {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+.fanout-app .cost-banner-over {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+.fanout-app .cost-banner-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fanout-app .cost-banner-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.fanout-app .cost-banner-figures {
+  font-size: 15px;
+}
+.fanout-app .cost-banner-track {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(79, 70, 229, 0.15);
+  overflow: hidden;
+}
+.fanout-app .cost-banner-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+.fanout-app .cost-banner-over .cost-banner-fill {
+  background: var(--danger);
+}
+.fanout-app .cost-banner-note {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--danger);
+}
+.fanout-app .debug-link {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+}
+.fanout-app .debug-link:hover {
+  text-decoration: underline;
+}
+.fanout-app .debug-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.fanout-app .debug-table th, .fanout-app .debug-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.fanout-app .debug-json {
+  max-height: 480px;
+  overflow: auto;
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: var(--radius);
+  padding: 14px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre;
+}
+.fanout-app .plan-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
