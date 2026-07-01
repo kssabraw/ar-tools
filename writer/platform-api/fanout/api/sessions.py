@@ -440,8 +440,8 @@ async def search_locations(
 ) -> list[LocationSuggestion]:
     """Location typeahead for the Local SEO new-session form (Service + location
     autocomplete, mirroring the Local SEO writer). DataForSEO location suggestions
-    served by a thin /fanout wrapper so the fanout-frontend — mounted under /fanout
-    — doesn't reach a suite path outside its prefix.
+    served by a thin /fanout wrapper so the Fan-out frontend — the suite's
+    /fanout route subtree — doesn't reach a suite path outside its prefix.
 
     Scoped by `country` (ISO-2, from the form's selected market) when given, else
     by the client's country (`client_id`). The country path needs no client, so the
