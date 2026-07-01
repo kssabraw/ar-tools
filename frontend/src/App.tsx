@@ -50,17 +50,6 @@ export default function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/set-password" element={<SetPassword />} />
-            {/* Topic Fan-out is a native route subtree (merged in — Option C).
-                It renders full-bleed with its own chrome, so it sits outside the
-                suite Layout but still behind auth. */}
-            <Route
-              path="/fanout/*"
-              element={
-                <ProtectedRoute>
-                  <FanoutApp />
-                </ProtectedRoute>
-              }
-            />
             <Route
               path="/*"
               element={
@@ -68,6 +57,10 @@ export default function App() {
                   <Layout>
                     <Routes>
                       <Route path="/" element={<Home />} />
+                      {/* Topic Fan-out, merged in (Option C) — a native route
+                          subtree that renders inside the suite Layout, so it
+                          shares the suite sidebar. */}
+                      <Route path="/fanout/*" element={<FanoutApp />} />
                       <Route path="/runs" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
