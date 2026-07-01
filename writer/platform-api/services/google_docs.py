@@ -50,20 +50,19 @@ def resolve_drive_folder(client: dict, content_type: str | None) -> str | None:
     return None
 
 
-async def create_google_doc(
-    folder_id: str, title: str, content: str, *, content_format: str = "markdown"
-) -> dict:
-    """Create a Google Doc in `folder_id`; returns {doc_id, doc_url}.
+# Valid `share` values understood by the Apps Script webhook. "private" keeps the
+# legacy behaviour (no sharing change); "link" = anyone with the link can view;
+# "public" = anyone on the internet can find + view (search-discoverable).
+SHARE_MODES = ("private", "link", "public")
 
-    `content_format` is "markdown" (default) or "html" — see the module docstring.
+
+async def _call_apps_script(body: dict) -> dict:
+    """POST `body` to the Apps Script webhook and return the parsed result dict.
+
     Raises GoogleDocError on missing config or a webhook/transport failure so
     callers can map it to their own error envelope (HTTP route vs. async job)."""
     if not settings.google_apps_script_url:
         raise GoogleDocError("publish_not_configured: GOOGLE_APPS_SCRIPT_URL is not set")
-    if not folder_id:
-        raise GoogleDocError("missing_google_drive_folder_id")
-
-    body = {"folder_id": folder_id, "title": title, "content": content, "format": content_format}
     try:
         async with httpx.AsyncClient(timeout=60, follow_redirects=True) as http:
             response = await http.post(settings.google_apps_script_url, json=body)
@@ -82,5 +81,66 @@ async def create_google_doc(
     except Exception as exc:
         logger.error("apps_script_call_failed", extra={"error": str(exc)})
         raise GoogleDocError(f"apps_script_call_failed: {exc}") from exc
+    return result
 
+
+async def create_google_doc(
+    folder_id: str,
+    title: str,
+    content: str,
+    *,
+    content_format: str = "markdown",
+    share: str = "private",
+) -> dict:
+    """Create a Google Doc in `folder_id`; returns {doc_id, doc_url}.
+
+    `content_format` is "markdown" (default) or "html" — see the module docstring.
+    `share` is one of SHARE_MODES — "private" (default, unchanged), "link"
+    (anyone with the link can view), or "public" (findable/indexable by search
+    engines). Sharing requires a webhook deployment that honours the `share`
+    field; older deployments ignore it and the Doc stays private."""
+    if not folder_id:
+        raise GoogleDocError("missing_google_drive_folder_id")
+    body = {
+        "folder_id": folder_id,
+        "title": title,
+        "content": content,
+        "format": content_format,
+        "share": share if share in SHARE_MODES else "private",
+    }
+    result = await _call_apps_script(body)
     return {"doc_id": result.get("doc_id"), "doc_url": result.get("doc_url")}
+
+
+async def create_google_sheet(
+    folder_id: str,
+    title: str,
+    rows: list[list[str]],
+    *,
+    share: str = "private",
+) -> dict:
+    """Create a Google Sheet in `folder_id` from `rows`; returns {sheet_id, sheet_url}.
+
+    `rows` is a list of rows, each a list of cell strings, written top-to-bottom.
+    `share` matches create_google_doc. Requires a webhook deployment that handles
+    `type: "sheet"` + the Sheets/Drive scopes (see writer/apps-script/
+    publish_webhook.gs). An OLD deployment ignores `type` and silently makes a Doc
+    instead (no `sheet_id` in the reply); we treat a missing `sheet_id` as a hard
+    error (`sheet_not_supported`) so the caller fails loudly rather than recording
+    a phantom 'published' Sheet — the signal to redeploy the webhook."""
+    if not folder_id:
+        raise GoogleDocError("missing_google_drive_folder_id")
+    body = {
+        "type": "sheet",
+        "folder_id": folder_id,
+        "title": title,
+        "rows": rows,
+        "share": share if share in SHARE_MODES else "private",
+    }
+    result = await _call_apps_script(body)
+    sheet_id = result.get("sheet_id")
+    if not sheet_id:
+        # success=true but no sheet_id ⇒ the deployed webhook predates the Sheets
+        # support and made a Doc. Fail clearly so the item is marked failed.
+        raise GoogleDocError("sheet_not_supported: redeploy the Apps Script webhook (no sheet_id returned)")
+    return {"sheet_id": sheet_id, "sheet_url": result.get("sheet_url")}

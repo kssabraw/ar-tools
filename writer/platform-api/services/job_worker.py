@@ -39,6 +39,7 @@ from services.content_intel import run_content_intel_job
 from services.local_relevance import run_local_relevance_job
 from services.page_structure_scraper import analyze_page_structure
 from services.silo_dedup import process_silo_dedup_job
+from services.syndication_service import run_syndication_item_job, run_syndication_scan_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
 
 logger = logging.getLogger(__name__)
@@ -344,6 +345,10 @@ async def _process_job(job: dict) -> None:
         await run_asana_monthly_job(job)
     elif job_type == "client_report":
         await run_client_report_job(job)
+    elif job_type == "syndication_scan":
+        await run_syndication_scan_job(job)
+    elif job_type == "syndication_item":
+        await run_syndication_item_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 
