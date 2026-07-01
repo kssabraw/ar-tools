@@ -411,6 +411,7 @@ export interface Run {
   started_at: string | null
   completed_at: string | null
   published_doc_url?: string | null
+  published_url?: string | null
 }
 
 // Service Page Writer output (module_outputs.service_writer.output_payload)

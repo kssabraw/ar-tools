@@ -80,7 +80,7 @@ async def list_runs(
     supabase = get_supabase()
     query = supabase.table("runs").select(
         "id, keyword, client_id, content_type, status, sie_cache_hit, total_cost_usd, "
-        "created_at, started_at, completed_at, published_doc_url, clients(name)",
+        "created_at, started_at, completed_at, published_doc_url, published_url, clients(name)",
         count="exact",
     )
 
@@ -136,6 +136,7 @@ async def list_runs(
                 started_at=r.get("started_at"),
                 completed_at=r.get("completed_at"),
                 published_doc_url=r.get("published_doc_url"),
+                published_url=r.get("published_url"),
             )
         )
 

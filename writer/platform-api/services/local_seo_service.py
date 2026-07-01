@@ -963,7 +963,8 @@ async def social_posts(
 # Columns returned for the page-list views (Saved Pages + Drafts).
 _LIST_COLUMNS = (
     "id, client_id, keyword, location, page_title, composite_score, "
-    "composite_status, mode, created_at, deleted_at"
+    "composite_status, mode, created_at, deleted_at, "
+    "published_doc_url, published_url, published_at"
 )
 
 

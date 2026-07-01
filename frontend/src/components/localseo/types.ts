@@ -29,6 +29,10 @@ export interface LocalSeoPageListItem {
   created_at: string
   // Set when soft-deleted (moved to Drafts); null = active (Saved Pages).
   deleted_at?: string | null
+  // Publish state (for the Saved Pages "published" badge).
+  published_doc_url?: string | null
+  published_url?: string | null
+  published_at?: string | null
 }
 
 export interface LocalSeoPageDetail extends LocalSeoPageListItem {

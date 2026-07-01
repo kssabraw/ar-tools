@@ -341,3 +341,7 @@ class LocalSeoPageListItem(BaseModel):
     created_at: str
     # Set when the page has been soft-deleted (moved to Drafts); null = active.
     deleted_at: Optional[str] = None
+    # Publish state (for the "published" badge on the Saved Pages list).
+    published_doc_url: Optional[str] = None
+    published_url: Optional[str] = None
+    published_at: Optional[str] = None
