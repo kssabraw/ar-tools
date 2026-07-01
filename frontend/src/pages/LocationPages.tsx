@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, MapPin, ArrowRight, Loader, Plus, X, RotateCw } from 'lucide-react'
 import { api } from '../lib/api'
 import { LocationAutocomplete } from '../components/localseo/LocationAutocomplete'
+import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
+import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import type { Client, RunListResponse, RunStatus } from '../lib/types'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
@@ -133,6 +135,13 @@ export function LocationPages() {
 
   const list = runs?.data ?? []
 
+  // Bulk-publish the completed pages to Google Docs / the client's website / both.
+  const bulk = useBulkPublish()
+  const publishItems: PublishItem[] = list
+    .filter((r) => r.status === 'complete')
+    .map((r) => ({ key: `run:${r.id}`, type: 'run', id: r.id, label: r.title || r.keyword }))
+  const wpConfigured = Boolean(client?.wordpress_site_url && client?.wordpress_app_password_set)
+
   return (
     <div style={{ padding: 32, maxWidth: 900 }}>
       <Link to={id ? `/clients/${id}` : '/'} style={backLinkStyle}>
@@ -233,27 +242,49 @@ export function LocationPages() {
       {list.length === 0 ? (
         <div style={{ color: '#94a3b8', fontSize: 14, padding: '12px 0' }}>No location pages yet.</div>
       ) : (
+        <>
+        <BulkPublishBar items={publishItems} bulk={bulk} wordpressConfigured={wpConfigured} placement="top" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {list.map((r) => {
             const running = !TERMINAL.includes(r.status)
+            const key = `run:${r.id}`
+            const result = bulk.results[key]
             return (
-              <Link key={r.id} to={`/runs/${r.id}`} style={rowStyle}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: '#0f172a', fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {r.title || r.keyword}
+              <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {r.status === 'complete' ? (
+                  <input
+                    type="checkbox"
+                    checked={bulk.selected.has(key)}
+                    onChange={(e) => bulk.toggle(key, e.target.checked)}
+                    disabled={bulk.publishing}
+                    style={{ width: 16, height: 16, accentColor: '#6366f1', cursor: 'pointer', flexShrink: 0 }}
+                    title="Select for bulk publish"
+                  />
+                ) : (
+                  <span style={{ width: 16, flexShrink: 0 }} />
+                )}
+                <Link to={`/runs/${r.id}`} style={{ ...rowStyle, flex: 1, minWidth: 0 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: '#0f172a', fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {r.title || r.keyword}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#94a3b8' }}>{new Date(r.created_at).toLocaleString()}</div>
                   </div>
-                  <div style={{ fontSize: 12, color: '#94a3b8' }}>{new Date(r.created_at).toLocaleString()}</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: statusColor(r.status) }}>
-                    {running && <Loader size={13} />} {r.status.replace(/_/g, ' ')}
-                  </span>
-                  <ArrowRight size={15} color="#cbd5e1" />
-                </div>
-              </Link>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {result?.status === 'done' && <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>Published</span>}
+                    {result?.status === 'failed' && <span style={{ fontSize: 12, color: '#dc2626' }} title={result.error}>Failed</span>}
+                    {result?.status === 'publishing' && <Loader size={13} />}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: statusColor(r.status) }}>
+                      {running && <Loader size={13} />} {r.status.replace(/_/g, ' ')}
+                    </span>
+                    <ArrowRight size={15} color="#cbd5e1" />
+                  </div>
+                </Link>
+              </div>
             )
           })}
         </div>
+        </>
       )}
     </div>
   )

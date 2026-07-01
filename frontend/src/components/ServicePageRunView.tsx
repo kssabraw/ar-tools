@@ -56,6 +56,8 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
   const queryClient = useQueryClient()
   const [fmt, setFmt] = useState<Fmt>('wordpress')
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
+  const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
+  const [wpUrl, setWpUrl] = useState<string | null>(null)
 
   // A location page is the multi-service hub variant — same pipeline + view,
   // only the labels + scoring mode differ (local engines, incl. geo).
@@ -71,6 +73,17 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
     onSuccess: (data) => {
       setPublishedUrl(data.doc_url)
       window.open(data.doc_url, '_blank')
+    },
+  })
+  // Publish straight to the client's WordPress site (as a Page), draft or live.
+  const wpPublishMutation = useMutation({
+    mutationFn: () => api.post<{ url: string; edit_url: string }>(
+      `/runs/${run.id}/publish`, { destination: 'wordpress', status: wpStatus },
+    ),
+    onSuccess: (data) => {
+      const link = data.edit_url || data.url
+      setWpUrl(link)
+      if (link) window.open(link, '_blank')
     },
   })
   const cancelMutation = useMutation({
@@ -165,7 +178,38 @@ export function ServicePageRunView({ run }: { run: RunDetailType }) {
                 <ExternalLink size={14} /> Open Doc
               </a>
             )}
+            {wpUrl ? (
+              <a href={wpUrl} target="_blank" rel="noreferrer" style={{ ...btnStyle, textDecoration: 'none', color: '#16a34a', borderColor: '#bbf7d0' }}>
+                <ExternalLink size={14} /> Open in WP
+              </a>
+            ) : (
+              <div style={{ display: 'inline-flex', border: '1px solid #c7d2fe', borderRadius: 8, overflow: 'hidden' }}>
+                <select
+                  value={wpStatus}
+                  onChange={(e) => setWpStatus(e.target.value as 'draft' | 'publish')}
+                  style={{ border: 'none', background: '#fff', color: '#6366f1', fontSize: 13, fontWeight: 600, padding: '0 6px', cursor: 'pointer' }}
+                  title="Draft saves to WordPress unpublished; Publish goes live"
+                >
+                  <option value="draft">Draft</option>
+                  <option value="publish">Publish</option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => wpPublishMutation.mutate()}
+                  disabled={wpPublishMutation.isPending}
+                  style={{ ...btnStyle, border: 'none', borderLeft: '1px solid #c7d2fe', borderRadius: 0, color: '#6366f1' }}
+                  title="Publish directly to the client's WordPress site"
+                >
+                  <ExternalLink size={14} /> {wpPublishMutation.isPending ? 'Publishing…' : 'Publish to Website'}
+                </button>
+              </div>
+            )}
           </div>
+          {(publishMutation.error || wpPublishMutation.error) && (
+            <div style={errStyle}>
+              {((publishMutation.error || wpPublishMutation.error) as Error).message}
+            </div>
+          )}
           {fmt === 'wordpress' && (
             <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 8px' }}>
               Gutenberg block markup — paste into the WordPress block editor (Code editor) and it converts to native blocks.
