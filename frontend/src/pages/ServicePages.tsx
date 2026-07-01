@@ -5,9 +5,12 @@ import { ArrowLeft, FileText, ArrowRight, Loader, Sparkles, Check, RefreshCw } f
 import { api } from '../lib/api'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
+import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
 import type { Client, RunListResponse, RunStatus } from '../lib/types'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
+const runPublished = (r: { published_doc_url?: string | null; published_url?: string | null }) =>
+  Boolean(r.published_doc_url || r.published_url)
 
 type PlanStatus = 'pending' | 'running' | 'complete' | 'failed'
 interface PlanItem { keyword: string; group: string; status: 'found' | 'missing' | 'reoptimize'; url: string | null; rank: number | null }
@@ -51,7 +54,7 @@ export function ServicePages() {
 
   const { data: runs } = useQuery<RunListResponse>({
     queryKey: ['service-page-runs', id],
-    queryFn: () => api.get<RunListResponse>(`/runs?client_id=${id}&content_type=service_page&page_size=100`),
+    queryFn: () => api.get<RunListResponse>(`/runs?client_id=${id}&content_type=service_page&page_size=200`),
     enabled: Boolean(id),
     refetchInterval: (query) => {
       const list = query.state.data?.data ?? []
@@ -155,6 +158,7 @@ export function ServicePages() {
   }
 
   const list = runs?.data ?? []
+  const pub = usePagedPublish(list, runPublished)
 
   // Bulk-publish the completed pages to Google Docs / the client's website / both.
   const bulk = useBulkPublish()
@@ -355,8 +359,14 @@ export function ServicePages() {
       ) : (
         <>
         <BulkPublishBar items={publishItems} bulk={bulk} wordpressConfigured={wpConfigured} githubConfigured={ghConfigured} placement="top" />
+        <div style={{ margin: '4px 0 12px' }}>
+          <PublishTabs counts={pub.counts} active={pub.filter} onPick={pub.pick} />
+        </div>
+        {pub.total === 0 ? (
+          <div style={{ color: '#94a3b8', fontSize: 14, padding: '12px 0' }}>Nothing in this view.</div>
+        ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {list.map((r) => {
+          {pub.pageItems.map((r) => {
             const running = !TERMINAL.includes(r.status)
             const key = `run:${r.id}`
             const result = bulk.results[key]
@@ -382,7 +392,6 @@ export function ServicePages() {
                     <div style={{ fontSize: 12, color: '#94a3b8' }}>{new Date(r.created_at).toLocaleString()}</div>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    {result?.status === 'done' && <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>Published</span>}
                     {result?.status === 'failed' && <span style={{ fontSize: 12, color: '#dc2626' }} title={result.error}>Failed</span>}
                     {result?.status === 'publishing' && <Loader size={13} />}
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: statusColor(r.status) }}>
@@ -391,10 +400,13 @@ export function ServicePages() {
                     <ArrowRight size={15} color="#cbd5e1" />
                   </div>
                 </Link>
+                <PublishBadges docUrl={r.published_doc_url} siteUrl={r.published_url} />
               </div>
             )
           })}
         </div>
+        )}
+        <Pager page={pub.page} pageCount={pub.pageCount} total={pub.total} pageSize={pub.pageSize} onPage={pub.setPage} />
         </>
       )}
     </div>

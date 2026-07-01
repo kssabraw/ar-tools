@@ -16,6 +16,7 @@ import { useSiloPlan } from '../components/localseo/useSiloPlan'
 import { useBulkCreate } from '../components/localseo/useBulkCreate'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
+import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { ReoptimizeView } from '../components/localseo/ReoptimizeView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
@@ -717,6 +718,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured,
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const bulk = useBulkPublish()
+  const pub = usePagedPublish(pages, p => Boolean(p.published_doc_url || p.published_url))
 
   const items: PublishItem[] = pages.map(p => ({
     key: `lsp:${p.id}`,
@@ -740,8 +742,14 @@ function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured,
   return (
     <>
     <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={wordpressConfigured} githubConfigured={githubConfigured} placement="top" />
+    <div style={{ margin: '4px 0 12px' }}>
+      <PublishTabs counts={pub.counts} active={pub.filter} onPick={pub.pick} />
+    </div>
+    {pub.total === 0 ? (
+      <p style={{ fontSize: 14, color: '#94a3b8', textAlign: 'center', padding: 24 }}>Nothing in this view.</p>
+    ) : (
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
-      {pages.map((p, i) => {
+      {pub.pageItems.map((p, i) => {
         const key = `lsp:${p.id}`
         const result = bulk.results[key]
         return (
@@ -777,6 +785,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured,
           )}
           {result?.status === 'failed' && <span style={{ fontSize: 12, color: '#dc2626', flexShrink: 0 }} title={result.error}>Failed</span>}
           {result?.status === 'publishing' && <Spinner size={14} />}
+          {!result && <span style={{ flexShrink: 0 }}><PublishBadges docUrl={p.published_doc_url} siteUrl={p.published_url} /></span>}
           <button style={outlineBtn} onClick={() => onOpen(p.id)}>View <ArrowRight size={13} /></button>
           {confirmId === p.id ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#64748b' }}>
@@ -798,6 +807,8 @@ function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured,
         )
       })}
     </div>
+    )}
+    <Pager page={pub.page} pageCount={pub.pageCount} total={pub.total} pageSize={pub.pageSize} onPage={pub.setPage} />
     </>
   )
 }

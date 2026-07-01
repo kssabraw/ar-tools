@@ -262,6 +262,16 @@ async def publish_run(
             }
             status = 422 if str(exc) in client_errors else 502
             raise HTTPException(status_code=status, detail=str(exc)) from exc
+        # Persist the site URL so the content lists can show a durable "published
+        # to website" badge (best-effort — the post is already live, so a failed
+        # write must not fail the publish).
+        try:
+            supabase.table("runs").update({
+                "published_url": result.get("link"),
+                "published_at": "now()",
+            }).eq("id", str(run_id)).execute()
+        except Exception as exc:  # noqa: BLE001 — non-fatal bookkeeping
+            logger.warning("wp_publish_persist_failed", extra={"run_id": str(run_id), "error": str(exc)})
         logger.info(
             "wordpress_published",
             extra={
