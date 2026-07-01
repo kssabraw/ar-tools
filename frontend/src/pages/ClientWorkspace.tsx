@@ -45,12 +45,12 @@ export function ClientWorkspace() {
 
   // Count of syndication items already published (public Doc + Sheet) for this
   // client, surfaced on the Content Syndication card.
-  const { data: syndicationItems } = useQuery<Array<{ id: string }>>({
-    queryKey: ['syndication-published', id],
-    queryFn: () => api.get<Array<{ id: string }>>(`/clients/${id}/syndication/items?status=published`),
+  const { data: syndicationData } = useQuery<{ counts: { published: number } }>({
+    queryKey: ['syndication-counts', id],
+    queryFn: () => api.get<{ counts: { published: number } }>(`/clients/${id}/syndication/items?limit=1`),
     enabled: Boolean(id),
   })
-  const syndicationPublishedCount = syndicationItems?.length ?? 0
+  const syndicationPublishedCount = syndicationData?.counts?.published ?? 0
 
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
