@@ -295,6 +295,8 @@ export function Articles() {
           {search ? 'No articles match your search.' : 'No completed articles yet. Start a run to generate content.'}
         </div>
       ) : (
+        <>
+        <BulkPublishBar items={items} bulk={bulk} placement="top" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {runs.map(run => (
             <ArticleCard
@@ -305,9 +307,8 @@ export function Articles() {
             />
           ))}
         </div>
+        </>
       )}
-
-      <BulkPublishBar items={items} bulk={bulk} />
     </div>
   )
 }
