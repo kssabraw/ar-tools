@@ -1,4 +1,4 @@
-import { ExternalLink, FileText, Globe } from 'lucide-react'
+import { ExternalLink, FileText, GitBranch, Globe } from 'lucide-react'
 import type { PublishDestination, PublishItem, useBulkPublish } from './useBulkPublish'
 
 interface Props {
@@ -11,6 +11,9 @@ interface Props {
   // undefined when the items can span multiple clients (e.g. all saved articles),
   // where a single flag can't describe them — the per-item error covers it then.
   wordpressConfigured?: boolean
+  // Whether the (single) client has GitHub publishing configured (a repo set).
+  // `false` disables the GitHub option; undefined leaves it enabled (multi-client).
+  githubConfigured?: boolean
   // Where the sticky bar anchors. 'bottom' (default) keeps it pinned to the
   // bottom of the list; 'top' pins it to the top (e.g. directly under a tab row)
   // so the publish controls are the first thing in view.
@@ -20,6 +23,7 @@ interface Props {
 const DEST_OPTIONS: { value: PublishDestination; label: string }[] = [
   { value: 'google_docs', label: 'Google Docs' },
   { value: 'wordpress', label: 'Website' },
+  { value: 'github', label: 'GitHub' },
   { value: 'both', label: 'Both' },
 ]
 
@@ -27,7 +31,7 @@ const DEST_OPTIONS: { value: PublishDestination; label: string }[] = [
 // Docs / Website / Both), a select-all toggle, the publish button, live
 // progress, and a per-item outcome list with links to whatever was created.
 // Renders nothing until something is selected or a batch has produced results.
-export function BulkPublishBar({ items, bulk, wordpressConfigured, placement = 'bottom' }: Props) {
+export function BulkPublishBar({ items, bulk, wordpressConfigured, githubConfigured, placement = 'bottom' }: Props) {
   const {
     selected, publishing, results, start, clear, setSelection,
     destination, setDestination, wpStatus, setWpStatus,
@@ -42,7 +46,9 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured, placement = '
   // Only gate when we actually know the client lacks WordPress (single-client
   // views pass the flag; multi-client views leave it undefined).
   const wpDisabled = wordpressConfigured === false
-  const wantsWp = destination !== 'google_docs'
+  const ghDisabled = githubConfigured === false
+  // The WordPress draft/publish selector applies to WP targets only (not GitHub).
+  const wantsWp = destination === 'wordpress' || destination === 'both'
 
   // Stay visible whenever there's anything publishable in view (or a finished
   // batch to show), so the publish controls are discoverable without first
@@ -54,7 +60,7 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured, placement = '
   const byKey = new Map(items.map(i => [i.key, i]))
   const succeeded = resultEntries
     .filter(([, r]) => r.status === 'done')
-    .map(([key, r]) => ({ key, label: byKey.get(key)?.label ?? key, docUrl: r.docUrl, siteUrl: r.siteUrl }))
+    .map(([key, r]) => ({ key, label: byKey.get(key)?.label ?? key, docUrl: r.docUrl, siteUrl: r.siteUrl, repoUrl: r.repoUrl }))
   const failures = resultEntries
     .filter(([, r]) => r.status === 'failed')
     .map(([key, r]) => ({ key, label: byKey.get(key)?.label ?? key, error: r.error, docUrl: r.docUrl, siteUrl: r.siteUrl }))
@@ -62,7 +68,8 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured, placement = '
   const destNoun =
     destination === 'google_docs' ? 'Google Docs'
       : destination === 'wordpress' ? 'the website'
-        : 'Docs + website'
+        : destination === 'github' ? 'GitHub'
+          : 'Docs + website'
 
   const barStyle: React.CSSProperties = placement === 'top'
     ? { ...barBaseStyle, top: 0, marginBottom: 16 }
@@ -74,15 +81,20 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured, placement = '
         {/* Destination picker */}
         <div style={{ display: 'inline-flex', border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
           {DEST_OPTIONS.map(opt => {
-            const isWp = opt.value !== 'google_docs'
-            const optDisabled = publishing || (isWp && wpDisabled)
+            const isWp = opt.value === 'wordpress' || opt.value === 'both'
+            const isGh = opt.value === 'github'
+            const optDisabled = publishing || (isWp && wpDisabled) || (isGh && ghDisabled)
             const active = destination === opt.value
             return (
               <button
                 key={opt.value}
                 onClick={() => setDestination(opt.value)}
                 disabled={optDisabled}
-                title={isWp && wpDisabled ? 'Connect WordPress in client settings to publish to the website' : undefined}
+                title={
+                  isWp && wpDisabled ? 'Connect WordPress in client settings to publish to the website'
+                    : isGh && ghDisabled ? 'Set a GitHub repo in client settings to publish to GitHub'
+                      : undefined
+                }
                 style={{
                   padding: '6px 12px', fontSize: 12, fontWeight: 600, border: 'none',
                   cursor: optDisabled ? 'not-allowed' : 'pointer',
@@ -161,7 +173,7 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured, placement = '
               </span>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                 {succeeded.map(s => (
-                  <OutcomeChips key={s.key} label={s.label} docUrl={s.docUrl} siteUrl={s.siteUrl} />
+                  <OutcomeChips key={s.key} label={s.label} docUrl={s.docUrl} siteUrl={s.siteUrl} repoUrl={s.repoUrl} />
                 ))}
               </div>
             </div>
@@ -186,13 +198,15 @@ export function BulkPublishBar({ items, bulk, wordpressConfigured, placement = '
   )
 }
 
-// Per-item success row: a chip for the Google Doc and/or the WordPress page,
-// whichever the publish produced.
-function OutcomeChips({ label, docUrl, siteUrl }: {
+// Per-item success row: a chip for the Google Doc, the WordPress page, and/or
+// the GitHub file, whichever the publish produced.
+function OutcomeChips({ label, docUrl, siteUrl, repoUrl }: {
   label: string
   docUrl?: string | null
   siteUrl?: string | null
+  repoUrl?: string | null
 }) {
+  const hasAny = Boolean(docUrl || siteUrl || repoUrl)
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
       {docUrl ? (
@@ -205,7 +219,12 @@ function OutcomeChips({ label, docUrl, siteUrl }: {
           <Globe size={12} /> {docUrl ? 'Website' : label}
         </a>
       ) : null}
-      {!docUrl && !siteUrl ? (
+      {repoUrl ? (
+        <a href={repoUrl} target="_blank" rel="noreferrer" style={repoChip}>
+          <GitBranch size={12} /> {docUrl || siteUrl ? 'GitHub' : label}
+        </a>
+      ) : null}
+      {!hasAny ? (
         <span style={{ ...docChip, color: '#16a34a' }}>
           <FileText size={12} /> {label}
         </span>
@@ -240,5 +259,11 @@ const siteChip: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px',
   background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 6,
   fontSize: 12, color: '#2563eb', textDecoration: 'none', maxWidth: 240,
+  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+}
+const repoChip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 8px',
+  background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 6,
+  fontSize: 12, color: '#334155', textDecoration: 'none', maxWidth: 240,
   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 }

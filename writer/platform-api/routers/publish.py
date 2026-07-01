@@ -15,6 +15,7 @@ from typing import Literal, Optional
 from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
+from services.github_publish import GitHubPublishError, publish_to_github
 from services.google_docs import GoogleDocError, create_google_doc, resolve_drive_folder
 from services.markdown_html import markdown_to_gutenberg, markdown_to_html
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -26,7 +27,7 @@ router = APIRouter(tags=["publish"])
 
 class PublishRequest(BaseModel):
     # Default keeps the original Google Docs behavior for callers that POST {}.
-    destination: Literal["google_docs", "wordpress"] = "google_docs"
+    destination: Literal["google_docs", "wordpress", "github"] = "google_docs"
     # WordPress only: draft (default, safe) or publish (live).
     status: Literal["draft", "publish"] = "draft"
 
@@ -153,6 +154,32 @@ def _resolve_blog_title_h1(supabase, run_id: UUID) -> tuple[str | None, str | No
     return title, h1
 
 
+def _resolve_markdown(supabase, run_id: UUID, content_type: str) -> str:
+    """The run's content as Markdown (for the GitHub content-file body)."""
+    if content_type in ("service_page", "location_page"):
+        rows = (
+            supabase.table("module_outputs")
+            .select("output_payload, attempt_number")
+            .eq("run_id", str(run_id)).eq("module", "service_writer").eq("status", "complete")
+            .order("attempt_number", desc=True).execute()
+        ).data or []
+        if not rows:
+            return ""
+        payload = rows[0].get("output_payload") or {}
+        renderings = payload.get("renderings") or {}
+        return renderings.get("markdown") or _sections_to_markdown(payload.get("sections") or [])
+
+    rows = (
+        supabase.table("module_outputs")
+        .select("output_payload").eq("run_id", str(run_id))
+        .eq("module", "sources_cited").eq("status", "complete").execute()
+    ).data or []
+    if not rows:
+        return ""
+    article = ((rows[0].get("output_payload") or {}).get("enriched_article") or {}).get("article") or []
+    return _sections_to_markdown(article)
+
+
 @router.post("/runs/{run_id}/publish", response_model=dict)
 async def publish_run(
     run_id: UUID,
@@ -180,7 +207,8 @@ async def publish_run(
         supabase.table("clients")
         .select(
             "name, google_drive_folder_id, drive_folders, "
-            "wordpress_site_url, wordpress_username, wordpress_app_password"
+            "wordpress_site_url, wordpress_username, wordpress_app_password, "
+            "github_repo, github_branch, github_content_path"
         )
         .eq("id", run["client_id"])
         .single()
@@ -250,6 +278,29 @@ async def publish_run(
             "url": result.get("link"),
             "edit_url": result.get("edit_link"),
             "status": result.get("status"),
+        }
+
+    if body.destination == "github":
+        markdown = _resolve_markdown(supabase, run_id, content_type)
+        if not markdown.strip():
+            raise HTTPException(status_code=422, detail="content_is_empty")
+        try:
+            result = await publish_to_github(
+                client=client, title=title, body=markdown, slug=run["keyword"],
+            )
+        except GitHubPublishError as exc:
+            client_errors = {"github_not_configured", "github_repo_not_set", "content_is_empty"}
+            code = 422 if str(exc) in client_errors else 502
+            raise HTTPException(status_code=code, detail=str(exc)) from exc
+        logger.info(
+            "github_published",
+            extra={"run_id": str(run_id), "path": result.get("path"), "user_id": auth["user_id"]},
+        )
+        return {
+            "success": True,
+            "destination": "github",
+            "url": result.get("html_url"),
+            "path": result.get("path"),
         }
 
     # Google Docs (default).

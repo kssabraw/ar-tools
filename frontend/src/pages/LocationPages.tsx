@@ -141,6 +141,7 @@ export function LocationPages() {
     .filter((r) => r.status === 'complete')
     .map((r) => ({ key: `run:${r.id}`, type: 'run', id: r.id, label: r.title || r.keyword }))
   const wpConfigured = Boolean(client?.wordpress_site_url && client?.wordpress_app_password_set)
+  const ghConfigured = Boolean(client?.github_repo)
 
   return (
     <div style={{ padding: 32, maxWidth: 900 }}>
@@ -243,7 +244,7 @@ export function LocationPages() {
         <div style={{ color: '#94a3b8', fontSize: 14, padding: '12px 0' }}>No location pages yet.</div>
       ) : (
         <>
-        <BulkPublishBar items={publishItems} bulk={bulk} wordpressConfigured={wpConfigured} placement="top" />
+        <BulkPublishBar items={publishItems} bulk={bulk} wordpressConfigured={wpConfigured} githubConfigured={ghConfigured} placement="top" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {list.map((r) => {
             const running = !TERMINAL.includes(r.status)

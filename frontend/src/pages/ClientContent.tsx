@@ -111,7 +111,7 @@ export function ClientContent() {
         </div>
       )}
 
-      <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={Boolean(client?.wordpress_site_url && client?.wordpress_app_password_set)} />
+      <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={Boolean(client?.wordpress_site_url && client?.wordpress_app_password_set)} githubConfigured={Boolean(client?.github_repo)} />
     </div>
   )
 }

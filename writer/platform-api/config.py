@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     # as-is. Set max_images to 0 to disable sideloading entirely.
     wordpress_media_max_images: int = 20
     wordpress_media_max_bytes: int = 15_000_000  # 15 MB per image
+    # GitHub direct publishing — commit finished content to the client's repo as
+    # Astro content Markdown (matches the Topic Fan-out convention). Dormant until
+    # a token is set; each client supplies the target repo/branch/content_path.
+    github_publish_token: str = ""
+    github_default_branch: str = "main"
+    github_default_content_path: str = "src/content/blog"
     outscraper_api_key: str = ""
     # Google Search Console — Organic Rank Tracker (Module #4).
     # The service-account key JSON (the entire downloaded key file, as a single

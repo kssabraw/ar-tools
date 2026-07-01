@@ -13,8 +13,8 @@ import { api } from '../../lib/api'
 
 export type PublishItemType = 'run' | 'local_seo_page'
 // Where a batch publishes to. 'both' fans out to Google Docs *and* WordPress
-// per item (two calls).
-export type PublishDestination = 'google_docs' | 'wordpress' | 'both'
+// per item (two calls). 'github' commits to the client's repo.
+export type PublishDestination = 'google_docs' | 'wordpress' | 'github' | 'both'
 // WordPress only: save as an unpublished draft or go live immediately.
 export type WpStatus = 'draft' | 'publish'
 
@@ -31,6 +31,7 @@ export interface ItemResult {
   status: ItemStatus
   docUrl?: string | null // Google Doc link
   siteUrl?: string | null // WordPress link (edit link preferred, else live URL)
+  repoUrl?: string | null // GitHub committed-file link
   error?: string
 }
 
@@ -48,9 +49,9 @@ function endpointFor(item: PublishItem): string {
 // produced. Throws on failure (caller records the error).
 async function publishToTarget(
   item: PublishItem,
-  target: 'google_docs' | 'wordpress',
+  target: 'google_docs' | 'wordpress' | 'github',
   wpStatus: WpStatus,
-): Promise<{ docUrl?: string | null; siteUrl?: string | null }> {
+): Promise<{ docUrl?: string | null; siteUrl?: string | null; repoUrl?: string | null }> {
   const path = endpointFor(item)
   if (target === 'wordpress') {
     const res = await api.post<{ url?: string | null; edit_url?: string | null }>(
@@ -59,13 +60,18 @@ async function publishToTarget(
     )
     return { siteUrl: res?.edit_url ?? res?.url ?? null }
   }
+  if (target === 'github') {
+    const res = await api.post<{ url?: string | null }>(path, { destination: 'github' })
+    return { repoUrl: res?.url ?? null }
+  }
   const res = await api.post<{ doc_url?: string | null }>(path, { destination: 'google_docs' })
   return { docUrl: res?.doc_url ?? null }
 }
 
-const TARGET_LABEL: Record<'google_docs' | 'wordpress', string> = {
+const TARGET_LABEL: Record<'google_docs' | 'wordpress' | 'github', string> = {
   google_docs: 'Google Docs',
   wordpress: 'Website',
+  github: 'GitHub',
 }
 
 // Publish one item to the requested destination(s), aggregating the outcome into
@@ -77,11 +83,12 @@ async function publishItem(
   destination: PublishDestination,
   wpStatus: WpStatus,
 ): Promise<ItemResult> {
-  const targets: ('google_docs' | 'wordpress')[] =
+  const targets: ('google_docs' | 'wordpress' | 'github')[] =
     destination === 'both' ? ['google_docs', 'wordpress'] : [destination]
 
   let docUrl: string | null | undefined
   let siteUrl: string | null | undefined
+  let repoUrl: string | null | undefined
   const errors: string[] = []
 
   for (const target of targets) {
@@ -89,6 +96,7 @@ async function publishItem(
       const r = await publishToTarget(item, target, wpStatus)
       if ('docUrl' in r) docUrl = r.docUrl
       if ('siteUrl' in r) siteUrl = r.siteUrl
+      if ('repoUrl' in r) repoUrl = r.repoUrl
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'publish_failed'
       errors.push(targets.length > 1 ? `${TARGET_LABEL[target]}: ${msg}` : msg)
@@ -105,6 +113,7 @@ async function publishItem(
     status: errors.length ? 'failed' : 'done',
     docUrl,
     siteUrl,
+    repoUrl,
     error: errors.length ? errors.join(' · ') : undefined,
   }
 }

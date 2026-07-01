@@ -402,7 +402,7 @@ async def purge_local_seo_drafts(
 
 
 class PublishPageRequest(BaseModel):
-    destination: Literal["google_docs", "wordpress"] = "google_docs"
+    destination: Literal["google_docs", "wordpress", "github"] = "google_docs"
     status: Literal["draft", "publish"] = "draft"
 
 
