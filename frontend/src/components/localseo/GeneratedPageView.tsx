@@ -16,6 +16,24 @@ import {
   primaryBtn, relativeTime, scoreBg, scoreBorder, scoreColor, statusLabel, wordCount,
 } from './shared'
 
+// Scoped article styling for the rendered page HTML. Class-prefixed so it can't
+// leak past the preview; hoisted to a module const (matches e.g. MapsReport's
+// PRINT_CSS) so it isn't re-created on every render. Tables get display:block +
+// overflow-x so a wide table scrolls inside the card instead of overflowing it.
+const PREVIEW_CSS = `
+  .seo-preview { line-height: 1.7; color: #1e293b; font-size: 15px; }
+  .seo-preview h1 { font-size: 24px; font-weight: 700; color: #0f172a; margin: 0 0 16px; line-height: 1.25; }
+  .seo-preview h2 { font-size: 19px; font-weight: 700; color: #0f172a; margin: 32px 0 12px; line-height: 1.3; }
+  .seo-preview h3 { font-size: 16px; font-weight: 600; color: #0f172a; margin: 24px 0 10px; }
+  .seo-preview p { margin: 0 0 18px; }
+  .seo-preview ul, .seo-preview ol { margin: 0 0 18px; padding-left: 22px; }
+  .seo-preview li { margin: 0 0 8px; }
+  .seo-preview table { display: block; overflow-x: auto; border-collapse: collapse; width: 100%; margin: 8px 0 22px; font-size: 14px; }
+  .seo-preview th, .seo-preview td { border: 1px solid #e2e8f0; padding: 8px 12px; text-align: left; vertical-align: top; }
+  .seo-preview th { background: #f8fafc; font-weight: 600; color: #0f172a; }
+  .seo-preview a { color: #6366f1; }
+`
+
 interface Props {
   clientId: string
   page: LocalSeoPageDetail
@@ -255,10 +273,10 @@ export function GeneratedPageView({
               <span style={{ fontSize: 14, color: '#0f172a' }}>{page_title}</span>
             </div>
           )}
-          <div
-            style={{ ...card, padding: 28, lineHeight: 1.7, color: '#1e293b', fontSize: 15 }}
-            dangerouslySetInnerHTML={{ __html: content_html.replace(/<\/p>\s*<p/g, '</p><br /><p') }}
-          />
+          <div style={{ ...card, padding: 28 }}>
+            <style>{PREVIEW_CSS}</style>
+            <div className="seo-preview" dangerouslySetInnerHTML={{ __html: content_html }} />
+          </div>
           {content_gaps && content_gaps.length > 0 && (
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
               <div style={{ background: '#f8fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0' }}>

@@ -181,10 +181,13 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    ✗ Bad:  "Tree service is a complex process that requires professional expertise..."
    ✓ Good: "[Brand] handles tree removal in Anaheim — including emergency situations."
 
-2. ONE IDEA PER PARAGRAPH: Each <p> covers exactly one point. 2–3 sentences max —
-   aim for 2, never exceed 3. Wall-of-text paragraphs are not cited by LLMs. Short,
-   focused, well-spaced paragraphs are. Split a longer thought into two <p> blocks
-   rather than packing it into one.
+2. ONE IDEA PER PARAGRAPH — KEEP PARAGRAPHS SHORT: Each <p> covers exactly one point in
+   1–2 sentences. Never exceed 3 sentences, and never let a single <p> run past ~45 words.
+   Wall-of-text paragraphs are not cited by LLMs and read as cramped on the page — short,
+   well-separated paragraphs are. Whenever a thought needs more than two sentences, split
+   it into two or more separate <p> blocks so each renders as its own visually distinct
+   paragraph. This applies to EVERY section without exception — the intro, USP, service
+   descriptions, and the local/geo section included.
 
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
    e.g. "Do you offer emergency tree removal in Anaheim?"
@@ -208,23 +211,34 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    - Include what the customer does AND what [Brand] does at each step
    - 3–5 steps is ideal; never exceed 7
 
-7. TABLES — use <table><thead><tbody> only when content is genuinely comparative or multi-attribute.
-   Do NOT force a table where a list or prose is more natural.
-   USE a table when the page has data that fits 2–4 columns and ≥3 rows, such as:
-   - Service tiers (e.g. trim vs. removal vs. emergency) with price range, timeline, availability
-   - Response time by area/neighbourhood
+7. TABLES — REQUIRED: every page MUST include at least ONE <table><thead><tbody> that
+   presents genuinely comparative or multi-attribute information relevant to the query.
+   Place it wherever it fits most naturally (usually inside the Main Service Body).
+   Pick the comparison that best fits THIS service, e.g.:
+   - Service tiers/options (e.g. restoration vs. replacement, repair vs. replace) with
+     when-to-choose / typical timeline / what's included
+   - Two or more service types side by side (e.g. tile vs. Colorbond vs. metal) by attribute
    - What's included vs. excluded for a service
-   - Side-by-side comparison of two or more service types
-   DO NOT use a table for:
+   - Response time / turnaround or coverage by area/neighbourhood
+   When you build it:
+   - Real <thead> with SPECIFIC column headers (never "Option A / Option B")
+   - Include a locally-relevant column where it fits naturally (e.g. city, area, timeline)
+   - 2–4 columns (never exceed 6) and ≥3 rows
+   - Precede the table with a <p> sentence introducing what it shows
+   - Use only facts consistent with the business data — never fabricate prices or timeframes
+   Do NOT turn these into a table (use the right element instead):
    - A simple list of services (use <ul> instead)
    - FAQ entries (question/answer is not tabular)
    - Step-by-step processes (use <ol> instead)
    - Geographic coverage lists (use prose or <ul> instead)
-   When you do use a table:
-   - Column headers must be specific (never "Option A / Option B")
-   - Include a locally-relevant column where it fits naturally (e.g. city, response time)
-   - Keep to 2–4 columns; never exceed 6
-   - Precede every table with a <p> sentence introducing what it shows
+   If nothing on the page looks obviously tabular, build a "when to choose which" comparison
+   from the services you ARE describing — there is always at least one valid comparison for
+   a local service page, so a table is never optional.
+   EXCEPTION — CLIENT STRUCTURE MIRRORING: if a "STRUCTURE TO MIRROR" block appears later in
+   this prompt, that client's reference layout governs tables. Include a table only where the
+   reference structure has one (or where a block it defines is genuinely comparative) — do NOT
+   force an extra table the client's reference layout does not contain. Matching their layout
+   wins over this default requirement.
 
 8. SPECIFIC FACTS OVER VAGUE CLAIMS — LLMs cite specificity, not generalities:
    ✗ "We respond quickly."              → ✓ "Call us to confirm response time in Anaheim." (only use a specific timeframe if it is in the business data)
@@ -292,8 +306,10 @@ Section 1 — Intro / Direct Answer Block (100–150 words)
 <section id="intro">
   <h1>[Exact Match Keyword] + [1–2 entities that reinforce location or service scope]</h1>
   H1 FORMULA: Write the primary keyword verbatim, then append relevant entities naturally (e.g. "Emergency Plumber Anaheim — Serving Anaheim Hills, Yorba Linda & Orange County")
-  <p>[Brand] provides [service] to [city] — [primary differentiator stated in first sentence]. [Availability signal with specific timeframe, e.g. "available 24/7 with crews on-site within 2 hours".] [Phone number as a CTA, e.g. "Call [phone] now".] [Close with direct service claim + city + 1 neighborhood.]</p>
-  NOTE: Phone number MUST appear in this paragraph. This section must mention city + ≥1 neighborhood.
+  <p>[Brand] provides [service] to [city] — [primary differentiator stated in the first sentence]. [One short supporting sentence with a proof point.]</p>
+  <p>[Availability / scope signal — use a specific timeframe ONLY if it is in the business data, otherwise a coverage or credential proof point.] [Phone number as a CTA, e.g. "Call [phone] now".]</p>
+  <p>[Direct service claim + city + 1 neighborhood.]</p>
+  NOTE: split the intro into SHORT paragraphs (1–2 sentences each) — do NOT emit one long <p>. Phone number MUST appear in this section. This section must mention city + ≥1 neighborhood.
 </section>
 
 Section 2 — USP / Value Proposition (150–200 words)
@@ -493,12 +509,18 @@ PLACEMENT RULES FOR NEW CONTENT:
 
 AEO / LLM WRITING RULES — apply to all text and any new content added:
 1. ANSWER-FIRST: Open every section and FAQ answer with a direct claim.
-2. ONE IDEA PER PARAGRAPH: Each <p> covers exactly one point. 3–5 sentences max.
+2. ONE IDEA PER PARAGRAPH — KEEP PARAGRAPHS SHORT: Each <p> covers exactly one point in
+   1–2 sentences (never exceed 3, never past ~45 words). When you rewrite or add text,
+   split long paragraphs into multiple short <p> blocks rather than lengthening one.
 3. QUESTION-FORMAT H3s: Where natural, write H3s as questions a real searcher would type.
 4. DIRECT FAQ ANSWERS: Every FAQ answer opens with a direct yes/no or factual statement.
 5. BULLETED LISTS — use <ul> for features, services, inclusions, what-to-expect items.
 6. NUMBERED LISTS — use <ol> for processes, steps, how-it-works sequences.
-7. TABLES — only when content is genuinely comparative. Never force a table.
+7. TABLES — preserve any existing <table> in the page. If the page has NONE and its content
+   is genuinely comparative (service tiers, repair vs. replace, response time / coverage by
+   area), add ONE <table><thead><tbody> with specific column headers (≥2 columns, ≥3 rows),
+   introduced by a <p> sentence. Do not fabricate prices or timeframes, and don't force a
+   table where a list or prose is more natural.
 8. SPECIFIC FACTS OVER VAGUE CLAIMS — cite numbers, timeframes, named places.
 9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur.
 10. SECTION LENGTH ≤300 words.
@@ -5640,6 +5662,19 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
                 "\"which is right for you\" / condition->option choice treatment for this page."
             )
 
+        # This path is a full REWRITE of an existing page (from its stripped text),
+        # so the system prompt's default "a table is REQUIRED" rule is relaxed here to
+        # match the in-place reoptimize semantics: add a table only when the content is
+        # genuinely comparative, never force one. (No STRUCTURE TO MIRROR block is
+        # injected on this path, so the required-table exception can't apply.)
+        table_formatting_text = (
+            "FORMATTING OVERRIDE FOR THIS REOPTIMIZE: the default \"a table is REQUIRED\" "
+            "rule does NOT apply here — you are rewriting an existing page. Add a <table> "
+            "only if the content is genuinely comparative (service tiers, repair vs. replace, "
+            "coverage/response by area); otherwise use lists or prose. Do not force a table. "
+            "Still keep every paragraph short per rule 2 (1–2 sentences)."
+        )
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -5652,6 +5687,8 @@ Full location: {body.location}
 {serp_ctx}
 
 {decision_map_text}
+
+{table_formatting_text}
 
 SEO DEFICIENCIES TO FIX — address ALL of these in the new page:
 {deficiency_text}
