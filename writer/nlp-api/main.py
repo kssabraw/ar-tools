@@ -4786,8 +4786,14 @@ _AUGMENT_SYSTEM_PROMPT = (
     "that wasn't supplied in the manifest.\n"
     "5. Do not fabricate reviews, response times, certifications, prices, or "
     "guarantees not present in the original page or the supplied data.\n"
-    "6. Track every change you make in applied_changes — every weave, every "
-    "insertion, every heading rewrite."
+    "6. TABLES — preserve any existing <table> in the page. If the page has NONE and its "
+    "services/options are genuinely comparative (service tiers, repair vs. replace, coverage "
+    "or response by area), add ONE <table><thead><tbody> with specific column headers "
+    "(≥2 columns, ≥3 rows) built ONLY from options already described on the page — do not "
+    "fabricate prices, timeframes, or any option the page doesn't mention, and don't force a "
+    "table where a list or prose is more natural.\n"
+    "7. Track every change you make in applied_changes — every weave, every "
+    "insertion (including any table added), every heading rewrite."
 )
 
 
@@ -4850,6 +4856,7 @@ _AUGMENT_TOOL = {
                             "landmarks":     {"type": "integer"},
                         },
                     },
+                    "table_added":                {"type": "boolean", "description": "True if a comparative table was inserted (none existed before)."},
                     "title_rewritten":            {"type": "boolean"},
                     "meta_description_rewritten": {"type": "boolean"},
                     "headings_rewritten": {
