@@ -5662,6 +5662,19 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
                 "\"which is right for you\" / condition->option choice treatment for this page."
             )
 
+        # This path is a full REWRITE of an existing page (from its stripped text),
+        # so the system prompt's default "a table is REQUIRED" rule is relaxed here to
+        # match the in-place reoptimize semantics: add a table only when the content is
+        # genuinely comparative, never force one. (No STRUCTURE TO MIRROR block is
+        # injected on this path, so the required-table exception can't apply.)
+        table_formatting_text = (
+            "FORMATTING OVERRIDE FOR THIS REOPTIMIZE: the default \"a table is REQUIRED\" "
+            "rule does NOT apply here — you are rewriting an existing page. Add a <table> "
+            "only if the content is genuinely comparative (service tiers, repair vs. replace, "
+            "coverage/response by area); otherwise use lists or prose. Do not force a table. "
+            "Still keep every paragraph short per rule 2 (1–2 sentences)."
+        )
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -5674,6 +5687,8 @@ Full location: {body.location}
 {serp_ctx}
 
 {decision_map_text}
+
+{table_formatting_text}
 
 SEO DEFICIENCIES TO FIX — address ALL of these in the new page:
 {deficiency_text}
