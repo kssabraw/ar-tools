@@ -15,6 +15,7 @@ class SyndicationConfigResponse(BaseModel):
     include_pages: bool
     include_products: bool
     share_mode: Literal["public", "link"]
+    publish_target: Literal["doc", "sheet", "both"]
     last_scan_date: Optional[str] = None
 
 
@@ -25,6 +26,15 @@ class SyndicationConfigUpdate(BaseModel):
     include_pages: Optional[bool] = None
     include_products: Optional[bool] = None
     share_mode: Optional[Literal["public", "link"]] = None
+    publish_target: Optional[Literal["doc", "sheet", "both"]] = None
+
+
+class PublishRequest(BaseModel):
+    item_ids: list[str]
+
+
+class PublishResponse(BaseModel):
+    queued: int
 
 
 class SyndicationItem(BaseModel):

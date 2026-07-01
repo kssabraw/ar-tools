@@ -1,14 +1,14 @@
 """Content Syndication — async job handlers + enqueue helpers.
 
-Two job types drive the module:
-  * syndication_scan — discover new site URLs for one client, record them as
-    items, then enqueue one syndication_item job per new item (staggered so a
-    big first scan runs at background priority and each item stays under the
-    stale-job reaper window).
-  * syndication_item — for one item: extract → unique rewrite → publish a public
-    Google Doc + Sheet (each with a backlink), persisting the result.
+Manual select-and-publish model. Two job types drive the module:
+  * syndication_scan — discover the client's site URLs and record any new ones as
+    ``discovered`` candidates. Discovery only; it never publishes.
+  * syndication_item — for one user-selected item: extract → unique rewrite →
+    publish a public Google Doc and/or Sheet (per the client's publish_target),
+    each with a backlink, persisting the result.
 
-Publishing is fully automatic (no review step) per the module's design decision.
+Nothing publishes on its own — the user ticks candidates and hits Publish, which
+enqueues one syndication_item job per selection (`publish_items`).
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ def get_or_create_config(client_id: str) -> dict:
         "enabled": False,
         "interval_days": settings.syndication_default_interval_days,
         "share_mode": "public",
+        "publish_target": "both",
     }
     try:
         inserted = supabase.table("syndication_config").insert(row).execute()
@@ -122,48 +123,61 @@ def _active_item_entity_ids(supabase, client_id: str) -> set[str]:
     return {r["entity_id"] for r in rows}
 
 
-def enqueue_item_jobs(client_id: str) -> int:
-    """Enqueue one syndication_item job per item that needs publishing and has no
-    active job. Picks 'discovered' items plus 'rewriting' items whose job died
-    (reclaim — re-running is idempotent, see run_syndication_item_job). Throttled
-    to `syndication_max_new_per_scan` per call; the remainder go out next scan."""
+def _needs_publish(item: dict, want_doc: bool, want_sheet: bool) -> bool:
+    """True when the item still lacks a wanted output. A 'published' item that is
+    missing an output the current publish_target wants (e.g. target switched from
+    doc → both) can be re-published to fill the gap; one that already has every
+    wanted output is done."""
+    if want_doc and not item.get("doc_id"):
+        return True
+    if want_sheet and not item.get("sheet_id"):
+        return True
+    return False
+
+
+def publish_items(client_id: str, item_ids: list[str]) -> int:
+    """Enqueue a syndication_item (rewrite + publish) job for each selected item.
+
+    Manual action: the user ticks candidates and hits Publish. Only the client's
+    own items are considered; an item with an active job is skipped (dedup), and
+    an already-published item is skipped UNLESS it's missing an output the current
+    publish_target wants. Jobs are lightly staggered. Returns the count enqueued."""
+    if not item_ids:
+        return 0
     supabase = get_supabase()
-    items = (
+    config = get_or_create_config(client_id)
+    target = config.get("publish_target") or "both"
+    want_doc = target in ("doc", "both")
+    want_sheet = target in ("sheet", "both")
+
+    rows_data = (
         supabase.table("syndication_items")
-        .select("id")
+        .select("id, status, doc_id, sheet_id")
         .eq("client_id", client_id)
-        .in_("status", ["discovered", "rewriting"])
-        .order("first_seen_at")
+        .in_("id", item_ids)
         .execute()
     ).data or []
     active = _active_item_entity_ids(supabase, client_id)
-    cap = max(1, int(settings.syndication_max_new_per_scan))
 
-    rows = []
-    skipped_for_cap = 0
-    for item in items:
+    jobs = []
+    for item in rows_data:
         item_id = item["id"]
         if item_id in active:
             continue
-        if len(rows) >= cap:
-            skipped_for_cap += 1
+        if item.get("status") == "published" and not _needs_publish(item, want_doc, want_sheet):
             continue
-        rows.append(
+        jobs.append(
             {
                 "job_type": "syndication_item",
                 "entity_id": item_id,
                 "payload": {"item_id": item_id, "client_id": client_id},
-                "scheduled_at": _item_scheduled_at(len(rows)),
+                "scheduled_at": _item_scheduled_at(len(jobs)),
             }
         )
-    if rows:
-        supabase.table("async_jobs").insert(rows).execute()
-    if skipped_for_cap:
-        logger.info(
-            "syndication_item_jobs_capped",
-            extra={"client_id": client_id, "enqueued": len(rows), "deferred": skipped_for_cap, "cap": cap},
-        )
-    return len(rows)
+    if jobs:
+        supabase.table("async_jobs").insert(jobs).execute()
+        logger.info("syndication_publish_selected", extra={"client_id": client_id, "queued": len(jobs)})
+    return len(jobs)
 
 
 def retry_item(item_id: str) -> str | None:
@@ -195,8 +209,8 @@ def retry_item(item_id: str) -> str | None:
 # ── job handlers ─────────────────────────────────────────────────────────────
 
 async def run_syndication_scan_job(job: dict) -> None:
-    """Handler for job_type='syndication_scan'. Discover new content, then
-    enqueue an item job per new piece."""
+    """Handler for job_type='syndication_scan'. Discover the site's pages and
+    record any new ones as candidates. Discovery only — it never publishes."""
     payload = job.get("payload") or {}
     client_id = payload.get("client_id")
     job_id = job["id"]
@@ -207,10 +221,8 @@ async def run_syndication_scan_job(job: dict) -> None:
             raise ValueError("client_not_found")
         config = get_or_create_config(client_id)
         result = await scan_client(client, config)
-        # Baseline scans seed 'skipped' rows and publish nothing; only later scans
-        # enqueue item jobs.
-        queued = enqueue_item_jobs(client_id)
-        result["queued"] = queued
+        # The scan only discovers candidates; publishing is a manual action, so
+        # nothing is enqueued here.
         # Mark the scan done on success (not at enqueue time) so a failed scan
         # re-runs next cycle instead of being skipped by the interval gate.
         supabase.table("syndication_config").update(
@@ -255,18 +267,23 @@ async def run_syndication_item_job(job: dict) -> None:
             raise ValueError("item_not_found")
         item = rows[0]
         source_url = item["source_url"]
-        if item.get("status") == "published":
-            # Idempotent: a requeued job for an already-published item is a no-op.
-            supabase.table("async_jobs").update(
-                {"status": "complete", "result": {"skipped": "already_published"}, "completed_at": "now()"}
-            ).eq("id", job_id).execute()
-            return
 
         client = _get_client(item["client_id"])
         if not client:
             raise ValueError("client_not_found")
         config = get_or_create_config(item["client_id"])
         share = config.get("share_mode") or "public"
+        target = config.get("publish_target") or "both"
+        want_doc = target in ("doc", "both")
+        want_sheet = target in ("sheet", "both")
+
+        if item.get("status") == "published" and not _needs_publish(item, want_doc, want_sheet):
+            # Idempotent: an already-published item with every wanted output is a
+            # no-op (a requeue, or a re-select that changed nothing).
+            supabase.table("async_jobs").update(
+                {"status": "complete", "result": {"skipped": "already_published"}, "completed_at": "now()"}
+            ).eq("id", job_id).execute()
+            return
 
         folder_id = resolve_drive_folder(client, item.get("content_type"))
         if not folder_id:
@@ -288,22 +305,22 @@ async def run_syndication_item_job(job: dict) -> None:
                 "rewritten_markdown": new_md,
             })
 
-        doc_id, doc_url = item.get("doc_id"), item.get("doc_url")
-        if not doc_id:
+        doc_url = item.get("doc_url")
+        if want_doc and not item.get("doc_id"):
             doc = await create_google_doc(
                 folder_id, new_title, build_doc_html(new_title, new_md, source_url),
                 content_format="html", share=share,
             )
-            doc_id, doc_url = doc.get("doc_id"), doc.get("doc_url")
-            _patch({"doc_id": doc_id, "doc_url": doc_url})
+            doc_url = doc.get("doc_url")
+            _patch({"doc_id": doc.get("doc_id"), "doc_url": doc_url})
 
-        sheet_id, sheet_url = item.get("sheet_id"), item.get("sheet_url")
-        if not sheet_id:
+        sheet_url = item.get("sheet_url")
+        if want_sheet and not item.get("sheet_id"):
             sheet = await create_google_sheet(
                 folder_id, new_title, build_sheet_rows(new_title, new_md, source_url), share=share,
             )
-            sheet_id, sheet_url = sheet.get("sheet_id"), sheet.get("sheet_url")
-            _patch({"sheet_id": sheet_id, "sheet_url": sheet_url})
+            sheet_url = sheet.get("sheet_url")
+            _patch({"sheet_id": sheet.get("sheet_id"), "sheet_url": sheet_url})
 
         _patch({"status": "published", "error": None, "published_at": "now()"})
         result = {"doc_url": doc_url, "sheet_url": sheet_url}

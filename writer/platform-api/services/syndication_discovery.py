@@ -61,24 +61,21 @@ def _included_types(config: dict) -> set[str]:
 
 
 async def scan_client(client: dict, config: dict | None = None) -> dict:
-    """Discover the client's site URLs and record any not seen before.
+    """Discover the client's site URLs and record any not seen before as
+    candidates (status ``discovered``).
 
-    **First scan** (the client has no prior items): every existing URL is
-    recorded as a *baseline* — status ``skipped`` — and nothing is published.
-    Only content that appears on a LATER scan (i.e. published after the baseline)
-    is syndicated. This means enabling the tool never mass-publishes a site's
-    existing back catalogue; it only acts on genuinely new content going forward.
-
-    Returns {discovered, new, baseline, source}. ``new`` is the count of
-    newly-syndicatable items (always 0 on the baseline scan). Best-effort — a
-    site with no readable sitemap/index yields all-zero counts."""
+    The scan only DISCOVERS — it never publishes. Each newly-seen URL is listed
+    for the user to review and select; publishing is a manual action. Both the
+    first scan and later scans behave the same (later scans just surface pages
+    added since the last scan). Returns {discovered, new, source}. Best-effort —
+    a site with no readable sitemap/index yields all-zero counts."""
     from services import site_page_index
     from services.dataforseo_rank import location_code_for
 
     client_id = client["id"]
     website = (client.get("website_url") or "").strip()
     if not website:
-        return {"discovered": 0, "new": 0, "baseline": False, "source": "none", "note": "no_website"}
+        return {"discovered": 0, "new": 0, "source": "none", "note": "no_website"}
 
     config = config or {}
     included = _included_types(config)
@@ -86,7 +83,7 @@ async def scan_client(client: dict, config: dict | None = None) -> dict:
     code = location_code_for(client)
     urls, source = await site_page_index.discover_site_urls(website, code)
     if not urls:
-        return {"discovered": 0, "new": 0, "baseline": False, "source": source}
+        return {"discovered": 0, "new": 0, "source": source}
 
     supabase = get_supabase()
     existing = (
@@ -96,10 +93,6 @@ async def scan_client(client: dict, config: dict | None = None) -> dict:
         .execute()
     ).data or []
     seen = {row["source_url"] for row in existing}
-    # No prior items → this is the baseline scan: seed everything as 'skipped' so
-    # the existing site is remembered but never published.
-    is_baseline = not seen
-    seed_status = "skipped" if is_baseline else "discovered"
 
     new_rows: list[dict] = []
     batch_seen: set[str] = set()
@@ -115,7 +108,7 @@ async def scan_client(client: dict, config: dict | None = None) -> dict:
                 "client_id": client_id,
                 "source_url": url,
                 "content_type": content_type,
-                "status": seed_status,
+                "status": "discovered",
             }
         )
 
@@ -129,22 +122,8 @@ async def scan_client(client: dict, config: dict | None = None) -> dict:
         except Exception as exc:  # noqa: BLE001 — degrade rather than abort the scan
             logger.warning("syndication_insert_failed", extra={"client_id": client_id, "error": str(exc)})
 
-    # On the baseline scan nothing is publishable; otherwise the new rows are.
-    new_count = 0 if is_baseline else len(new_rows)
     logger.info(
         "syndication_scan",
-        extra={
-            "client_id": client_id,
-            "discovered": len(urls),
-            "new": new_count,
-            "baseline": is_baseline,
-            "seeded": len(new_rows),
-            "source": source,
-        },
+        extra={"client_id": client_id, "discovered": len(urls), "new": len(new_rows), "source": source},
     )
-    return {
-        "discovered": len(urls),
-        "new": new_count,
-        "baseline": is_baseline,
-        "source": source,
-    }
+    return {"discovered": len(urls), "new": len(new_rows), "source": source}
