@@ -234,6 +234,11 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
    If nothing on the page looks obviously tabular, build a "when to choose which" comparison
    from the services you ARE describing — there is always at least one valid comparison for
    a local service page, so a table is never optional.
+   EXCEPTION — CLIENT STRUCTURE MIRRORING: if a "STRUCTURE TO MIRROR" block appears later in
+   this prompt, that client's reference layout governs tables. Include a table only where the
+   reference structure has one (or where a block it defines is genuinely comparative) — do NOT
+   force an extra table the client's reference layout does not contain. Matching their layout
+   wins over this default requirement.
 
 8. SPECIFIC FACTS OVER VAGUE CLAIMS — LLMs cite specificity, not generalities:
    ✗ "We respond quickly."              → ✓ "Call us to confirm response time in Anaheim." (only use a specific timeframe if it is in the business data)
