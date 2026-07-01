@@ -450,6 +450,7 @@ export function LocalSeoContent() {
           onOpen={openSaved}
           onDelete={async (pid) => { await localSeoApi.deletePage(pid); refreshSaved() }}
           wordpressConfigured={Boolean(client?.wordpress_site_url && client?.wordpress_app_password_set)}
+          githubConfigured={Boolean(client?.github_repo)}
         />
       ) : tab === 'drafts' ? (
         <DraftsList
@@ -705,12 +706,13 @@ export function LocalSeoContent() {
   )
 }
 
-function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured }: {
+function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured, githubConfigured }: {
   pages: LocalSeoPageListItem[]
   loading: boolean
   onOpen: (id: string) => void
   onDelete: (id: string) => Promise<void>
   wordpressConfigured?: boolean
+  githubConfigured?: boolean
 }) {
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -737,7 +739,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured 
   }
   return (
     <>
-    <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={wordpressConfigured} placement="top" />
+    <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={wordpressConfigured} githubConfigured={githubConfigured} placement="top" />
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
       {pages.map((p, i) => {
         const key = `lsp:${p.id}`

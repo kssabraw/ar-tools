@@ -58,7 +58,7 @@ export interface SiloDiscovery {
     github?: { repo?: string; branch?: string; content_path?: string };
     drive?: { folder_id?: string };
   };
-  publish_available?: { github?: boolean; drive?: boolean };
+  publish_available?: { github?: boolean; drive?: boolean; wordpress?: boolean };
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -1005,6 +1005,15 @@ export const publishAllGithub = (sessionId: string) =>
 export const publishClusterDrive = (sessionId: string, clusterId: string) =>
   request<{ published: boolean; doc_id: string; url: string | null }>(
     `/sessions/${sessionId}/clusters/${clusterId}/publish/drive`, { method: "POST" });
+export const publishClusterWordpress = (
+  sessionId: string,
+  clusterId: string,
+  wpStatus: "draft" | "publish" = "draft",
+) =>
+  request<{ published: boolean; url: string | null; edit_url: string | null; status: string }>(
+    `/sessions/${sessionId}/clusters/${clusterId}/publish/wordpress?wp_status=${wpStatus}`,
+    { method: "POST" },
+  );
 
 export interface BulkGenerateResponse {
   submitted: string[];

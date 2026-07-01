@@ -7,6 +7,7 @@ import {
   publishAllGithub,
   publishClusterDrive,
   publishClusterGithub,
+  publishClusterWordpress,
   setPublishConfig,
   type ArticleListItem,
 } from "../../shared/api";
@@ -48,6 +49,16 @@ export function ArticlesView() {
     onSuccess: (res) => res.url && window.open(res.url, "_blank", "noopener"),
     onError: (e: Error) => alert(e.message),
   });
+  // Publish straight to the linked client's WordPress site as a draft (reuses the
+  // suite's WordPress publish); opens the WP editor on success.
+  const publishWp = useMutation({
+    mutationFn: (clusterId: string) => publishClusterWordpress(sessionId, clusterId, "draft"),
+    onSuccess: (res) => {
+      const link = res.edit_url || res.url;
+      if (link) window.open(link, "_blank", "noopener");
+    },
+    onError: (e: Error) => alert(e.message),
+  });
 
   // Bulk "Save to Drive": tick articles, then publish them all to Google Docs in
   // one action. Client-side fan-out over the per-article endpoint (small
@@ -66,6 +77,7 @@ export function ArticlesView() {
   const gh = session.data?.publish_config?.github ?? {};
   const repoConfigured = !!gh.repo;
   const driveAvailable = !!session.data?.publish_available?.drive;
+  const wordpressAvailable = !!session.data?.publish_available?.wordpress;
 
   const allIds = articles.map((a: ArticleListItem) => a.cluster_id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selected.has(id));
@@ -231,6 +243,17 @@ export function ArticlesView() {
                       onClick={() => saveDrive.mutate(a.cluster_id)}
                     >
                       Drive
+                    </button>
+                  )}
+                  {wordpressAvailable && (
+                    <button
+                      className="link-btn"
+                      style={{ marginLeft: 10 }}
+                      disabled={publishWp.isPending}
+                      title="Publish this article to the client's WordPress site as a draft"
+                      onClick={() => publishWp.mutate(a.cluster_id)}
+                    >
+                      Website
                     </button>
                   )}
                   {dr?.status === "done" && (

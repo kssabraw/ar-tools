@@ -1066,6 +1066,33 @@ def set_featured_image(page_id: str, url: Optional[str]) -> dict:
     return {"featured_image_url": url or None}
 
 
+async def _publish_page_to_github(page: dict, client: dict, user_id: str) -> dict:
+    """Commit a Local SEO page to the client's GitHub repo as a content Markdown
+    file. The page body is HTML (valid inside a Markdown file), wrapped with
+    frontmatter by the shared github service."""
+    from services.github_publish import GitHubPublishError, publish_to_github
+
+    title = page.get("page_title") or f"{page.get('keyword', '')} — {client.get('name', '')}"
+    html = page.get("content_html") or ""
+    slug = f"{page.get('keyword', '')}-{page.get('location', '')}".strip("-")
+    try:
+        result = await publish_to_github(client=client, title=title, body=html, slug=slug)
+    except GitHubPublishError as exc:
+        client_errors = {"github_not_configured", "github_repo_not_set", "content_is_empty"}
+        code = 422 if str(exc) in client_errors else 502
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    logger.info(
+        "local_seo.page_published_github",
+        extra={"page_id": page["id"], "path": result.get("path"), "user_id": user_id},
+    )
+    return {
+        "success": True,
+        "destination": "github",
+        "url": result.get("html_url"),
+        "path": result.get("path"),
+    }
+
+
 async def _publish_page_to_wordpress(
     page: dict, client: dict, user_id: str, status: str
 ) -> dict:
@@ -1124,11 +1151,23 @@ async def publish_page(
     HTML is converted to Markdown (the webhook's expected `content` format); for
     WordPress the HTML is posted as-is. The publish target is persisted on the row."""
     # Fail fast on unconfigured Google Docs before any DB work.
-    if destination != "wordpress" and not settings.google_apps_script_url:
+    if destination == "google_docs" and not settings.google_apps_script_url:
         raise HTTPException(status_code=503, detail="publish_not_configured")
 
     supabase = get_supabase()
     page = get_page(page_id)  # 404s if missing
+
+    if destination == "github":
+        client_res = (
+            supabase.table("clients")
+            .select("name, github_repo, github_branch, github_content_path")
+            .eq("id", page["client_id"])
+            .single()
+            .execute()
+        )
+        if not client_res.data:
+            raise HTTPException(status_code=404, detail="client_not_found")
+        return await _publish_page_to_github(page, client_res.data, user_id)
 
     if destination == "wordpress":
         client_res = (
