@@ -1,8 +1,7 @@
-# One Netlify site for the whole AR Tools suite. The build assembles two SPAs:
-#   /         → frontend/        (the suite app, React 19 / Vite 8)
-#   /fanout/  → fanout-frontend/ (vendored Topic Fanout app, React 18 / Vite 5)
-# See netlify-build.sh. `base` is intentionally unset so the command runs at the
-# repo root and can build both apps.
+# One Netlify site for the whole AR Tools suite — a single SPA (React 19 / Vite
+# 8). The Topic Fan-out app is merged in as a native route subtree under /fanout
+# (Option C), so there's no longer a separate build or a /fanout/* fallback: the
+# suite's own index.html serves every route, Fan-out included.
 [build]
   command = "bash netlify-build.sh"
   publish = "frontend/dist"
@@ -10,14 +9,7 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# SPA fallbacks — order matters (first match wins). The /fanout/* rule must come
-# before the catch-all so deep links into the Fanout app resolve to its own
-# index.html rather than the suite's.
-[[redirects]]
-  from = "/fanout/*"
-  to = "/fanout/index.html"
-  status = 200
-
+# SPA fallback — every deep link resolves to the single app shell.
 [[redirects]]
   from = "/*"
   to = "/index.html"
