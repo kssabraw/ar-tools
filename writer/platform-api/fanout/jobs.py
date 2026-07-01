@@ -1029,14 +1029,35 @@ def generate_article_core(
 
     cost = round((meter.snapshot()[0] if meter else 0.0) - before, 6)
     from fanout.writer import store as article_store
-    article_store.save_article(
-        cluster_id=cluster_id, session_id=session_id, article_json=article.model_dump(),
+    article_payload = article.model_dump()
+    saved = article_store.save_article(
+        cluster_id=cluster_id, session_id=session_id, article_json=article_payload,
         article_markdown=article.article_markdown, article_html=article.article_html,
         total_word_count=article.metadata.get("total_word_count"), cost_usd=cost,
         schema_version_effective=article.client_context_summary.get(
             "schema_version_effective", "1.7-no-context"),
         scheduled_article_run_id=scheduled_article_run_id,
     )
+    # Convergence: when the session is linked to a suite client, mirror the
+    # article into the suite as a first-class completed blog run so it shows up
+    # in Saved Articles and is publishable (Docs / WordPress) like any other blog
+    # post. Best-effort — a mirror failure must never fail article generation.
+    try:
+        from fanout.storage import silo as store
+        from fanout.suite_mirror import mirror_blog_article_to_suite
+        session = store.get_session(session_id)
+        suite_run_id = mirror_blog_article_to_suite(
+            session=session or {}, keyword=keyword,
+            article_json=article_payload, cost_usd=cost,
+        )
+        if suite_run_id and saved and saved.get("id"):
+            article_store.set_suite_run_id(saved["id"], suite_run_id)
+    except Exception as exc:  # noqa: BLE001 — mirror is best-effort
+        logger.warning(
+            "fanout.blog_mirror_failed",
+            extra={"event": "fanout.blog_mirror_failed", "keyword": keyword,
+                   "reason": repr(exc)},
+        )
     logger.info(
         "step_complete",
         extra={"event": "step_complete", "step": "article_job", "keyword": keyword,
