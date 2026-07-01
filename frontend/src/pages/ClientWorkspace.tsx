@@ -182,6 +182,13 @@ export function ClientWorkspace() {
           }
         />
         <ActionCard
+          icon={<CalendarClock size={22} />}
+          label="Create Mass Posts"
+          description="Plan and mass-generate this client's blog posts & Local SEO pages on a monthly schedule — opens the Topic Fan-out keyword-research, planning & scheduling tool."
+          href={id ? `/fanout/?client_id=${id}&client_name=${encodeURIComponent(client?.name ?? '')}` : '/fanout/'}
+          cta="Open"
+        />
+        <ActionCard
           icon={<FileSearch size={22} />}
           label="Plan a Content Silo"
           description="Research the parent, sibling & neighbourhood pages a topic needs — and see which already exist on this client’s site."
@@ -351,12 +358,6 @@ const moreTools: { label: string; description: string; icon: React.ReactNode; hr
     label: 'Ranking-Drop Agent',
     description: 'Detects ranking drops and recommends fixes from your SOPs.',
     icon: <Activity size={20} />,
-  },
-  {
-    label: 'Content Scheduler',
-    description: 'Plan and auto-publish monthly blog and local SEO content. Opens the Topic Fanout keyword-research, planning & scheduling tool.',
-    icon: <CalendarClock size={20} />,
-    href: '/fanout/',
   },
 ]
 
