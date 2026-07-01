@@ -33,12 +33,6 @@ const FolderIcon = () => (
     <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
   </Icon>
 );
-const PlusIcon = () => (
-  <Icon>
-    <path d="M5 12h14" />
-    <path d="M12 5v14" />
-  </Icon>
-);
 const CheckIcon = () => (
   <Icon>
     <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
@@ -88,7 +82,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const nav: NavItem[] = isOwner
     ? [
         { label: "Sessions", to: "/fanout/sessions", icon: <FolderIcon /> },
-        { label: "New session", to: "/fanout/session/new", icon: <PlusIcon /> },
         { label: "Approvals", to: "/fanout/approvals", icon: <CheckIcon />, badge: pendingCount },
       ]
     : [{ label: "New keyword map", to: "/fanout/wizard", icon: <SparkIcon /> }];
@@ -100,7 +93,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <div className="app-main">
       <div style={topBarStyle}>
-        <span style={moduleLabelStyle}>Topic Fan-out</span>
         <nav style={navRowStyle}>
           {nav.map((item) => {
             const active = navActive(pathname, item.to);
@@ -129,12 +121,6 @@ const topBarStyle: CSSProperties = {
   position: "sticky",
   top: 0,
   zIndex: 5,
-};
-const moduleLabelStyle: CSSProperties = {
-  fontSize: 13,
-  fontWeight: 700,
-  color: "var(--text)",
-  letterSpacing: "-0.01em",
 };
 const navRowStyle: CSSProperties = { display: "flex", alignItems: "center", gap: 4 };
 function navLinkStyle(active: boolean): CSSProperties {
