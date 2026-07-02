@@ -238,7 +238,7 @@ async def generate_month_for_client(client_id: str, target: date) -> dict:
 
     logger.info(
         "asana_monthly.generated",
-        extra={"client_id": client_id, "section": label, "created": created, "errors": len(errors)},
+        extra={"client_id": client_id, "section": label, "created_count": created, "errors": len(errors)},
     )
     return {
         "status": "created",

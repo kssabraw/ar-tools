@@ -136,6 +136,26 @@ app.add_middleware(
 )
 
 
+# Last-resort handler for unhandled exceptions. Starlette serves this response
+# from ServerErrorMiddleware — OUTSIDE CORSMiddleware — so without the manual
+# CORS header below the browser drops the 500 and reports "Failed to fetch",
+# hiding the real error from the frontend.
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception(
+        "unhandled_exception",
+        extra={
+            "request_id": getattr(request.state, "request_id", None),
+            "path": request.url.path,
+        },
+    )
+    response = JSONResponse(status_code=500, content={"detail": "internal_error"})
+    origin = request.headers.get("origin")
+    if origin and ("*" in settings.allowed_origins or origin in settings.allowed_origins):
+        response.headers["Access-Control-Allow-Origin"] = origin
+    return response
+
+
 app.include_router(asana_router)
 app.include_router(brand_router)
 app.include_router(brand_voice_router)
