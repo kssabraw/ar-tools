@@ -180,7 +180,7 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
                     if step == "error":
                         logger.warning(
                             "local_seo.stream_worker_error",
-                            extra={"path": path, "message": event.get("message")},
+                            extra={"path": path, "error": event.get("message")},
                         )
                         raise HTTPException(status_code=502, detail="local_seo_generation_failed")
                     if step == "done":

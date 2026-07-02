@@ -50,11 +50,13 @@ async def upload_file(
     mime_type = file.content_type or ""
     filename = file.filename or "upload"
 
+    # "filename" is a reserved LogRecord attribute — using it as an extra key
+    # raises KeyError inside logging and 500s the request.
     logger.info(
         "file_uploaded",
         extra={
             "user_id": auth["user_id"],
-            "filename": filename,
+            "upload_filename": filename,
             "mime_type": mime_type,
             "size_bytes": len(data),
             "field": field,
