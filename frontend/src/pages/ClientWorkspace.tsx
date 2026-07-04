@@ -215,6 +215,13 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/syndication` : undefined}
           cta="Open"
         />
+        <ActionCard
+          icon={<BookOpen size={22} />}
+          label="Citations"
+          description="Liveness tracking for ordered citations — paste the URLs from vendor deliverables; a weekly sweep flags listings that stop resolving."
+          to={id ? `/clients/${id}/citations` : undefined}
+          cta="Open"
+        />
       </Section>
 
       {/* ── Rank Trackers ───────────────────────────────────────────── */}

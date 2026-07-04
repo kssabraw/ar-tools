@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # Response-episode tracking: the SOPs' verify loop (2-week rechecks, 6-week
     # escalation) over open rank/maps drop responses.
     episode_tracking_enabled: bool = True
+    # Offpage agent extensions: weekly citation-liveness sweep + monthly
+    # page-level RD-imbalance capture (paid DataForSEO page summaries).
+    citation_check_enabled: bool = True
+    page_backlink_intel_enabled: bool = True
     allowed_origins: List[str] = ["*"]
     log_level: str = "INFO"
     google_apps_script_url: str = ""

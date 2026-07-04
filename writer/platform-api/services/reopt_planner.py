@@ -272,6 +272,40 @@ def build_offpage_actions(client_id: str, offpage_alerts: list[dict]) -> list[di
                     "sort": _SORT_OFFPAGE + _within(5_000 + abs(a.get("delta_pct") or 0)),
                 }
             )
+        elif alert_type == "citation_loss":
+            dead = (a.get("details") or {}).get("dead_count") or 0
+            actions.append(
+                {
+                    "kind": "citation_loss",
+                    "source": "organic",
+                    "keyword": "Citations",
+                    "diagnosis": a.get("message") or "Citations no longer resolve.",
+                    "recommendation": "Dead citations (SOP §A.8 'citations still live') — fix or reorder "
+                    "the dead listings. Citations are in the monthly baseline stack ($40/40, Minda); "
+                    "replacements are already funded — this is a re-order, not new budget.",
+                    "cta_label": "Citations",
+                    "cta_path": f"clients/{client_id}/citations",
+                    "severity": "warning",
+                    "sort": _SORT_OFFPAGE + _within(4_000 + dead * 10),
+                }
+            )
+        elif alert_type == "rd_imbalance":
+            actions.append(
+                {
+                    "kind": "rd_imbalance",
+                    "source": "organic",
+                    "keyword": "Backlink profile",
+                    "diagnosis": a.get("message") or "An inner page carries more RD than the home page.",
+                    "recommendation": "Entity-balance hygiene (Link Building SOP health check) — build "
+                    "more RD to the home page, or ease off the inner page, until the home page leads "
+                    "again. Non-escalating: the SEO NEO assignee self-corrects with rebalanced link "
+                    "building.",
+                    "cta_label": "Action Plan",
+                    "cta_path": f"clients/{client_id}/action-plan",
+                    "severity": "info",
+                    "sort": _SORT_OFFPAGE + _within(2_000),
+                }
+            )
     return actions
 
 
