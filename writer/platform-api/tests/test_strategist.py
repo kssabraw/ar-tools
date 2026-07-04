@@ -120,18 +120,31 @@ def test_sanitize_grounds_recipe_cost():
     assert p["costed_items"] == [{"task_type": "content_page", "quantity": 5.0}]
 
 
-def test_sanitize_unverified_tool_op_shows_no_dollar():
-    # a geo-grid scan is a tool op whose price isn't researched yet → no $0.
+def test_sanitize_grounds_verified_tool_op():
+    # a geo-grid scan is now a researched, verified tool op → real dollars.
     out = strategist.sanitize_review(
         {"assessment": "a", "proposals": [
-            _proposal(cost_basis="operational", costed_items=[{"task_type": "geo_grid_scan", "quantity": 1}]),
+            _proposal(cost_basis="operational", costed_items=[{"task_type": "geo_grid_scan", "quantity": 3}]),
         ]},
         frozen=False,
     )
     p = out["proposals"][0]
-    assert p["est_cost_usd"] is None          # not $0 — unpriced
+    assert p["est_cost_usd"] == round(3 * 0.37, 2)   # 3 keyword-scans @ $0.37
     assert p["cost_basis"] == "operational"
-    assert p["costed_items"] == [{"task_type": "geo_grid_scan", "quantity": 1.0}]
+
+
+def test_sanitize_unverified_tool_op_shows_no_dollar():
+    # keyword_research is an LLM-token op still unverified → "tool cost", never $0.
+    out = strategist.sanitize_review(
+        {"assessment": "a", "proposals": [
+            _proposal(cost_basis="operational", costed_items=[{"task_type": "keyword_research", "quantity": 1}]),
+        ]},
+        frozen=False,
+    )
+    p = out["proposals"][0]
+    assert p["est_cost_usd"] is None          # not $0 — unpriced (unverified)
+    assert p["cost_basis"] == "operational"
+    assert p["costed_items"] == [{"task_type": "keyword_research", "quantity": 1.0}]
 
 
 def test_sanitize_ignores_unknown_task_type_and_bad_qty():
@@ -162,8 +175,9 @@ def test_sanitize_no_items_defaults_cost_none():
 
 def test_render_price_list_has_both_catalogs():
     pl = strategist.render_price_list()
-    assert "content_page" in pl and "$5" in pl          # a real deliverable price
-    assert "geo_grid_scan" in pl and "price pending" in pl   # an unverified tool op
+    assert "content_page" in pl and "$5" in pl              # a real deliverable price
+    assert "geo_grid_scan" in pl and "$0.37" in pl          # a researched, verified tool op
+    assert "keyword_research" in pl and "price pending" in pl  # a still-unverified LLM op
 
 
 # ---------------------------------------------------------------------------

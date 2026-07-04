@@ -49,15 +49,18 @@ def test_cost_of_accepts_a_supplied_catalog():
 # ---------------------------------------------------------------------------
 # tool_costs
 # ---------------------------------------------------------------------------
-def test_tool_catalog_seeded_unverified():
+def test_tool_catalog_researched_prices():
     cat = tool_costs.tool_catalog()
-    assert "geo_grid_scan" in cat and "backlink_intel" in cat and "keyword_research" in cat
-    # every seeded op is unverified until the team researches real prices
-    assert all(not e["verified"] for e in cat.values())
-    assert tool_costs.RESEARCHED_AT is None
+    # the solid vendor-priced ops are verified with real dollars
+    assert cat["geo_grid_scan"]["verified"] and cat["geo_grid_scan"]["unit_cost"] == 0.37
+    assert cat["backlink_intel"]["verified"] and cat["backlink_intel"]["unit_cost"] == 0.03
+    assert cat["serp_snapshot"]["verified"] and cat["competitor_gbp"]["verified"]
+    assert tool_costs.RESEARCHED_AT == "2026-07-04"
 
 
-def test_unverified_operations_lists_everything_pending():
+def test_llm_token_ops_stay_unverified():
+    # the LLM-token ops keep an estimate but stay unverified (shown as "tool cost")
     pending = {o["task_type"] for o in tool_costs.unverified_operations()}
-    assert pending == set(tool_costs.TOOL_COSTS)
-    assert "geo_grid_scan" in pending
+    assert pending == {"brand_scan", "page_audit", "keyword_research"}
+    cat = tool_costs.tool_catalog()
+    assert not cat["brand_scan"]["verified"]
