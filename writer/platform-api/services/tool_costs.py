@@ -24,48 +24,65 @@ the team to confirm/replace, and is NOT used to display a dollar while
 
 from __future__ import annotations
 
-# Set to the ISO date of the last real cost research pass when the numbers below
-# are verified (kept None while every row is still an unverified placeholder).
-RESEARCHED_AT: "str | None" = None
+# ISO date of the last real cost research pass. Prices below were researched on
+# this date from public vendor pricing × the suite's actual per-op call counts.
+RESEARCHED_AT: "str | None" = "2026-07-04"
 
-# task_type → {label, unit_cost (placeholder until verified), unit, verified, note}
-# The `note` names the vendor/driver so the researcher knows exactly what to price.
+# task_type → {label, unit_cost, unit, verified, note}
+# `verified` True → the strategist shows the real dollar. False → still shows
+# "tool cost" (a researched estimate is kept in unit_cost as a starting point,
+# but isn't displayed until confirmed). The `note` documents the derivation +
+# confidence so the next research pass can confirm/refine each line.
+#
+# The three LLM-token-driven ops (brand_scan, page_audit, keyword_research) stay
+# UNVERIFIED: their cost is dominated by model token prices sourced from
+# secondary aggregators (the official pages blocked scraping) and depend on the
+# suite's actual configured models — confirm those rates, then flip verified.
 TOOL_COSTS: dict[str, dict] = {
     "geo_grid_scan": {
-        "label": "Maps geo-grid scan", "unit_cost": 0.0, "unit": "scan", "verified": False,
-        "note": "Local Dominator — per full grid scan (grid size × keywords).",
+        "label": "Maps geo-grid scan", "unit_cost": 0.37, "unit": "keyword (5-mi grid)", "verified": True,
+        "note": "Local Dominator: 1 credit = 1 keyword×coordinate; $197/mo ÷ 65,000 credits = "
+                "$0.00303/credit. 5-mi grid = 121 pins → ~$0.37/keyword (3-mi ≈ $0.15, 7-mi ≈ $0.68).",
     },
     "serp_snapshot": {
-        "label": "Competitive SERP snapshot", "unit_cost": 0.0, "unit": "keyword", "verified": False,
-        "note": "DataForSEO SERP (depth) + Backlinks enrichment on the top results, per keyword.",
+        "label": "Competitive SERP snapshot", "unit_cost": 0.50, "unit": "keyword", "verified": True,
+        "note": "DataForSEO SERP Live Advanced (~$0.004) + ~10 Backlinks summaries on the top results "
+                "+ ~10 domain-DR pulls (~$0.02–0.05 each) ≈ $0.50/keyword.",
     },
     "backlink_intel": {
-        "label": "Offpage / referring-domain pull", "unit_cost": 0.0, "unit": "domain", "verified": False,
-        "note": "DataForSEO Backlinks summary, per domain (client + each competitor).",
+        "label": "Offpage / referring-domain pull", "unit_cost": 0.03, "unit": "domain", "verified": True,
+        "note": "DataForSEO Backlinks summary: $0.02/request + $0.00003/row ≈ $0.03 per domain "
+                "(client + each competitor).",
     },
     "competitor_gbp": {
-        "label": "Competitor GBP profile fetch", "unit_cost": 0.0, "unit": "listing", "verified": False,
-        "note": "Outscraper — per competitor GBP profile (+ review enrichment via DataForSEO).",
-    },
-    "keyword_research": {
-        "label": "Keyword research run (Topic Fanout)", "unit_cost": 0.0, "unit": "run", "verified": False,
-        "note": "OpenAI Responses + ScrapeOwl + TextRazor per fanout/cluster run.",
+        "label": "Competitor GBP profile fetch", "unit_cost": 0.30, "unit": "listing", "verified": True,
+        "note": "Outscraper place ($3/1k = $0.003) + ~100 reviews ($3/1k = $0.30) + DataForSEO business "
+                "($0.0015) ≈ $0.30/listing (reviews dominate).",
     },
     "keyword_market": {
-        "label": "Keyword market data (CPC/volume)", "unit_cost": 0.0, "unit": "keyword", "verified": False,
-        "note": "DataForSEO Keywords/Labs, per keyword (cached cross-client).",
-    },
-    "brand_scan": {
-        "label": "AI-visibility scan (LABS)", "unit_cost": 0.0, "unit": "keyword-engine", "verified": False,
-        "note": "Per keyword × engine cell across the 6 engines (OpenAI/Anthropic/Gemini/Perplexity/DataForSEO AIO).",
-    },
-    "page_audit": {
-        "label": "On-page audit (nlp 8-engine)", "unit_cost": 0.0, "unit": "page", "verified": False,
-        "note": "ScrapeOwl + TextRazor + Claude scoring, per page scored.",
+        "label": "Keyword market data (CPC/volume)", "unit_cost": 0.001, "unit": "keyword", "verified": True,
+        "note": "DataForSEO Labs: $0.01/task + $0.0001/result, batched + cached cross-client ≈ "
+                "$0.001/keyword marginal.",
     },
     "gsc_research": {
-        "label": "GSC Research run", "unit_cost": 0.0, "unit": "run", "verified": False,
-        "note": "GSC API (free) + DataForSEO market enrichment on the win candidates.",
+        "label": "GSC Research run", "unit_cost": 0.05, "unit": "run", "verified": True,
+        "note": "GSC API (free) + DataForSEO market enrichment on the win candidates ≈ $0.05/run.",
+    },
+    # --- unverified: LLM-token-driven, pending confirmation of the real model rates ---
+    "brand_scan": {
+        "label": "AI-visibility scan (LABS)", "unit_cost": 0.02, "unit": "keyword-engine", "verified": False,
+        "note": "ESTIMATE ~$0.02/cell (web-search LLM answer ~$0.005–0.03 + gpt-5.4-mini classifier "
+                "~$0.002); ~$0.12/keyword across 6 engines. Confirm OpenAI/Anthropic/Gemini/Perplexity rates.",
+    },
+    "page_audit": {
+        "label": "On-page audit (nlp 8-engine)", "unit_cost": 0.07, "unit": "page", "verified": False,
+        "note": "ESTIMATE ~$0.07/page (ScrapeOwl fetch + TextRazor + Claude scoring ~5k in/3k out). "
+                "Confirm the scoring model + ScrapeOwl JS-render credit rate.",
+    },
+    "keyword_research": {
+        "label": "Keyword research run (Topic Fanout)", "unit_cost": 1.00, "unit": "run", "verified": False,
+        "note": "ESTIMATE ~$1.00/run (OpenAI Responses silo discovery + dozens of ScrapeOwl/TextRazor "
+                "calls) — highly variable. Confirm against a real fanout run's spend.",
     },
 }
 
