@@ -100,7 +100,7 @@ def test_generate_service_page_core_success():
             session={"client_id": "c1"}, keyword="drain cleaning", user_id="u1",
         )
 
-    assert ok is True
+    assert ok == "run-1"  # returns the suite run id (truthy) on success
     assert mk.call_args.kwargs["content_type"] == "service_page"
     assert mk.call_args.kwargs["keyword"] == "drain cleaning"
 
@@ -115,11 +115,11 @@ def test_generate_service_page_core_failed_run():
         ok = jobs.generate_service_page_core(
             session={"client_id": "c1"}, keyword="x", user_id=None,
         )
-    assert ok is False
+    assert ok is None
 
 
 def test_generate_service_page_core_no_client():
     from fanout import jobs
 
     ok = jobs.generate_service_page_core(session={}, keyword="x", user_id=None)
-    assert ok is False
+    assert ok is None
