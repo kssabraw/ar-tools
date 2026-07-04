@@ -4,7 +4,11 @@ no network (publish_review's I/O is covered by integration testing)."""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from services import strategy_report as sr
+
+NOW = datetime(2026, 7, 4, 12, 0, tzinfo=timezone.utc)
 
 
 def _review(**over) -> dict:
@@ -83,3 +87,27 @@ def test_doc_title_shape():
     assert sr._doc_title("Acme", "escalation", "5 Jul 2026") == (
         "Strategist Review — Acme — Escalation brief — 5 Jul 2026"
     )
+
+
+# ---------------------------------------------------------------------------
+# _review_date — the doc is dated when the review RAN, not when it's exported.
+# ---------------------------------------------------------------------------
+def test_review_date_uses_created_at_not_export_time():
+    review = {"created_at": "2026-07-01T17:57:07.83+00:00"}
+    assert sr._review_date(review, NOW).strftime("%-d %b %Y") == "1 Jul 2026"
+
+
+def test_review_date_handles_z_suffix():
+    review = {"created_at": "2026-06-30T09:00:00Z"}
+    assert sr._review_date(review, NOW).date().isoformat() == "2026-06-30"
+
+
+def test_review_date_naive_timestamp_gets_utc():
+    d = sr._review_date({"created_at": "2026-06-30T09:00:00"}, NOW)
+    assert d.tzinfo is not None
+
+
+def test_review_date_falls_back_to_now_on_bad_value():
+    assert sr._review_date({"created_at": "not-a-date"}, NOW) == NOW
+    assert sr._review_date({}, NOW) == NOW
+    assert sr._review_date({"created_at": None}, NOW) == NOW
