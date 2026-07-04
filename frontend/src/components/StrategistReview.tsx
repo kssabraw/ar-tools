@@ -14,6 +14,7 @@ import type { StrategyProposal, StrategyReview, StrategyReviewList } from '../li
 export function StrategistReview({ clientId }: { clientId: string }) {
   const queryClient = useQueryClient()
   const [showHistoryNote, setShowHistoryNote] = useState(false)
+  const [expanded, setExpanded] = useState(false)  // collapsed by default — it's a big card
 
   const { data } = useQuery<StrategyReviewList>({
     queryKey: ['strategy-reviews', clientId],
@@ -50,6 +51,22 @@ export function StrategistReview({ clientId }: { clientId: string }) {
 
   const latestComplete = reviews.find((r) => r.status === 'complete')
   const running = latest?.status === 'running'
+
+  // One-line summary shown while collapsed.
+  const openCount = latestComplete ? latestComplete.proposals.filter((p) => p.status === 'proposed').length : 0
+  const qCount = latestComplete ? (latestComplete.questions ?? []).length : 0
+  const summary = running
+    ? 'Reviewing…'
+    : !latest
+      ? 'No review yet — run one to get a strategic read.'
+      : !latestComplete && latest.status === 'failed'
+        ? 'Last review failed'
+        : latestComplete
+          ? [
+              openCount ? `${openCount} proposal${openCount !== 1 ? 's' : ''}` : 'no open proposals',
+              qCount ? `${qCount} question${qCount !== 1 ? 's' : ''}` : null,
+            ].filter(Boolean).join(' · ')
+          : 'Review in progress…'
 
   return (
     <div style={card}>
@@ -90,6 +107,13 @@ export function StrategistReview({ clientId }: { clientId: string }) {
         )}
       </div>
 
+      {/* Collapse toggle — the card is minimized by default; the summary line
+          doubles as the expand control. */}
+      <button style={collapseToggle} onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
+        <ChevronDown size={14} style={{ transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform .15s', flexShrink: 0 }} />
+        <span>{expanded ? 'Hide review' : summary}</span>
+      </button>
+
       {publish.isError && (
         <div style={{ ...noteBox, color: '#b45309', background: '#fffbeb', borderColor: '#fde68a' }}>
           {publishErrorMessage((publish.error as Error)?.message)}
@@ -119,7 +143,7 @@ export function StrategistReview({ clientId }: { clientId: string }) {
         </div>
       )}
 
-      {!latest ? (
+      {expanded && (!latest ? (
         <div style={smallMuted}>
           No strategist review yet. Run one to get a cross-channel strategic read of this client.
         </div>
@@ -135,15 +159,15 @@ export function StrategistReview({ clientId }: { clientId: string }) {
           onDecide={(idx, status) => decide.mutate({ reviewId: latestComplete.id, idx, status })}
           deciding={decide.isPending}
         />
-      )}
+      ))}
 
-      {reviews.length > 1 && latestComplete && (
+      {expanded && reviews.length > 1 && latestComplete && (
         <button style={disclose} onClick={() => setShowHistoryNote((v) => !v)}>
           <ChevronDown size={12} style={{ transform: showHistoryNote ? 'rotate(180deg)' : 'none' }} />
           {showHistoryNote ? 'Hide' : `${reviews.length - 1} earlier review${reviews.length > 2 ? 's' : ''}`}
         </button>
       )}
-      {showHistoryNote && (
+      {expanded && showHistoryNote && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {reviews.slice(1).map((r) => (
             <div key={r.id} style={smallMuted}>
@@ -254,7 +278,11 @@ function ProposalRow({
             {p.requires === 'senior' && (
               <span style={seniorPill}><ShieldAlert size={10} style={{ verticalAlign: -1 }} /> Kyle/Ryan only</span>
             )}
-            {p.est_cost_usd != null && <span style={metaPill}>~${Math.round(p.est_cost_usd)}</span>}
+            {p.est_cost_usd != null ? (
+              <span style={metaPill}>~${Math.round(p.est_cost_usd)}</span>
+            ) : p.cost_basis === 'operational' ? (
+              <span style={metaPill} title="A paid tool/API run — per-run price pending research">tool cost</span>
+            ) : null}
             {p.effort && <span style={metaPill}>{p.effort} effort</span>}
             {p.assignee_hint && <span style={metaPill}>{p.assignee_hint}</span>}
           </div>
@@ -369,4 +397,9 @@ const disclose: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
   fontSize: 11.5, fontWeight: 600, color: '#6366f1', background: 'transparent',
   border: 'none', padding: '3px 0 0', cursor: 'pointer',
+}
+const collapseToggle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+  fontSize: 12.5, fontWeight: 600, color: '#475569', background: 'transparent',
+  border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left',
 }

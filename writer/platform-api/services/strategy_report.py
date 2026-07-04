@@ -90,6 +90,8 @@ def render_markdown(client_name: str, review: dict, date_str: str) -> str:
                 meta.append(f"{_esc(p['effort'])} effort")
             if isinstance(p.get("est_cost_usd"), (int, float)):
                 meta.append(f"~${round(p['est_cost_usd']):,}")
+            elif p.get("cost_basis") == "operational":
+                meta.append("tool cost")
             if meta:
                 lines.append(" · ".join(meta))
             if p.get("action"):

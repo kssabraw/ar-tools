@@ -92,7 +92,27 @@ _EMIT_TOOL = {
                         "action": {"type": "string", "description": "What a human would do, concretely."},
                         "rationale": {"type": "string"},
                         "sop_citation": {"type": "string"},
-                        "est_cost_usd": {"type": "number"},
+                        "cost_basis": {
+                            "type": "string", "enum": ["recipe", "operational", "none"],
+                            "description": "How this proposal is costed: 'recipe' = costed agency deliverable "
+                            "tactics (name them in costed_items); 'operational' = a paid tool/API run "
+                            "(scan / research / backlink pull — name the operation in costed_items); 'none' = "
+                            "labor/variable, not costable. NEVER write a dollar figure — the system computes it.",
+                        },
+                        "costed_items": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "task_type": {"type": "string", "description": "A task_type from the AGENCY PRICE LIST in your input."},
+                                    "quantity": {"type": "number"},
+                                },
+                                "required": ["task_type", "quantity"],
+                            },
+                            "description": "The costed tactics/operations this proposal entails, by task_type "
+                            "from the AGENCY PRICE LIST. The system computes the dollar total from the real "
+                            "price list — do not put dollar amounts here or anywhere.",
+                        },
                         "effort": {"type": "string", "enum": ["low", "medium", "high"]},
                         "assignee_hint": {
                             "type": "string",
@@ -146,6 +166,10 @@ output; you are part of "decide").
 theory, not fact.
 - Never invent numbers, keywords, or modules. A signal marked STALE is not current truth. \
 "insufficient_data" means exactly that.
+- COSTING: never write a dollar amount. For each proposal set cost_basis and, for recipe/ \
+operational proposals, name the costed task_types + quantities from the AGENCY PRICE LIST in \
+your input; the system computes the real cost. If a proposal doesn't map to a priced item, \
+use cost_basis="none".
 
 HOW TO READ THE INSTRUMENTS: module cards are included in your input — follow them exactly \
 (they exist because the common failure is misreading, not mis-reasoning: average_rank without \
@@ -156,6 +180,91 @@ enough — they are capped per run (the cap is in your input); the paid audit_pa
 still. Prefer emitting with what you have over burning drill-downs on curiosity.
 
 When done, call emit_strategy_review exactly once."""
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cost grounding — the LLM never writes a dollar figure. It names costed
+# task_types (from the merged price list); the code computes the money from the
+# Recipe Engine's real deliverable prices + the tool_costs API/tool prices. A
+# tool op whose price isn't researched yet is kept (so the proposal still shows
+# what it maps to) but contributes no dollars — rendered "tool cost", never $0.
+# ─────────────────────────────────────────────────────────────────────────────
+def _cost_catalog() -> dict:
+    """Merged {task_type: {..., unit_cost, unit, kind, verified}} across the
+    Recipe Engine deliverables (always real/verified) and the tool_costs API
+    operations (verified only once researched). Pure."""
+    from services import recipe_engine, tool_costs
+
+    catalog: dict = {}
+    for tt, entry in recipe_engine.price_catalog().items():
+        catalog[tt] = {**entry, "kind": "recipe", "verified": True}
+    for tt, entry in tool_costs.tool_catalog().items():
+        catalog.setdefault(tt, {**entry, "kind": "tool"})
+    return catalog
+
+
+def ground_proposal_cost(raw_items, declared_basis=None) -> tuple:
+    """(est_cost_usd, costed_items, cost_basis) for one proposal. Pure.
+
+    - costed_items: the model's items filtered to real catalog task_types with a
+      positive quantity;
+    - est_cost_usd: the dollar total over the VERIFIED entries only (None when
+      nothing priced maps — an un-researched tool op yields None, not $0);
+    - cost_basis: derived from what the items map to (recipe if any deliverable,
+      else operational if any tool op), falling back to the model's declared
+      basis, else 'none'.
+    """
+    from services import recipe_engine
+
+    catalog = _cost_catalog()
+    costed_items = []
+    for it in raw_items or []:
+        if not isinstance(it, dict):
+            continue
+        tt = it.get("task_type")
+        if tt not in catalog:
+            continue
+        try:
+            qty = float(it.get("quantity") or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0:
+            continue
+        costed_items.append({"task_type": str(tt), "quantity": qty})
+
+    verified = {tt: e for tt, e in catalog.items() if e.get("verified")}
+    est = recipe_engine.cost_of(costed_items, verified)
+
+    kinds = {catalog[it["task_type"]]["kind"] for it in costed_items}
+    if "recipe" in kinds:
+        basis = "recipe"
+    elif "tool" in kinds:
+        basis = "operational"
+    else:
+        basis = declared_basis if declared_basis in ("recipe", "operational", "none") else "none"
+    return est, costed_items, basis
+
+
+def render_price_list() -> str:
+    """The AGENCY PRICE LIST block for the run prompt — the task_types the model
+    may reference in costed_items, with real prices (tool ops show 'price
+    pending' until researched). Pure."""
+    from services import recipe_engine, tool_costs
+
+    lines = [
+        "Ground every proposal cost by naming task_types from this list in costed_items — "
+        "the SYSTEM computes the dollars; never write a $ figure yourself.",
+        "",
+        "Deliverable tactics (real agency prices):",
+    ]
+    for tt, e in recipe_engine.price_catalog().items():
+        lines.append(f"- {tt}: {e['label']} — ${e['unit_cost']:.0f}/{e['unit']}")
+    lines += ["", "Tool / API operations (per run; some prices are pending research — still "
+              "name them, the system labels un-priced ones 'tool cost'):"]
+    for tt, e in tool_costs.tool_catalog().items():
+        price = f"${e['unit_cost']:.2f}/{e['unit']}" if e["verified"] else "price pending"
+        lines.append(f"- {tt}: {e['label']} — {price}")
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -204,14 +313,20 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
         if _SENIOR_PATTERNS.search(blob):
             requires = "senior"
         effort = p.get("effort") if p.get("effort") in ("low", "medium", "high") else None
-        est = p.get("est_cost_usd")
+        # Cost is GROUNDED, never taken from the model: it names costed task_types
+        # and the code computes the dollars from the real price list.
+        est, costed_items, cost_basis = ground_proposal_cost(
+            p.get("costed_items"), p.get("cost_basis")
+        )
         proposals.append(
             {
                 "title": title,
                 "action": action,
                 "rationale": (p.get("rationale") or "").strip(),
                 "sop_citation": (p.get("sop_citation") or "").strip(),
-                "est_cost_usd": float(est) if isinstance(est, (int, float)) else None,
+                "est_cost_usd": est,
+                "cost_basis": cost_basis,
+                "costed_items": costed_items,
                 "effort": effort,
                 "assignee_hint": (p.get("assignee_hint") or "").strip() or None,
                 "status": "proposed",
@@ -244,6 +359,7 @@ def build_run_prompt(
     max_drilldowns: int,
     max_paid: int,
     escalation_context: Optional[dict] = None,
+    price_list: str = "",
 ) -> str:
     """Assemble the single user message for the run. Pure."""
     parts = [
@@ -266,6 +382,8 @@ def build_run_prompt(
         parts.append("MODULE CARDS (how to read each instrument):\n" + cards_text)
     if sops_text:
         parts.append("AGENCY SOPs (selected for this client's active signals):\n" + sops_text)
+    if price_list:
+        parts.append("AGENCY PRICE LIST:\n" + price_list)
     parts.append("CLIENT DIGEST (JSON — every status is precomputed; staleness is flagged):\n" + digest_json)
     return "\n\n".join(parts)
 
@@ -348,7 +466,7 @@ async def run_strategy_review(
     user = build_run_prompt(
         digest_json, sops_text, cards_text,
         trigger=trigger, frozen=frozen, max_drilldowns=max_dd, max_paid=max_paid,
-        escalation_context=escalation_context,
+        escalation_context=escalation_context, price_list=render_price_list(),
     )
 
     tools = strategist_tools.anthropic_tool_defs() + [_EMIT_TOOL]

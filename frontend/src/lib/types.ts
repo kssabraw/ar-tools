@@ -1455,12 +1455,23 @@ export interface StrategyFinding {
   sop_citation: string
 }
 
+export interface StrategyCostedItem {
+  task_type: string
+  quantity: number
+}
+
 export interface StrategyProposal {
   title: string
   action: string
   rationale: string
   sop_citation: string
+  // Cost is grounded in the agency price list, computed server-side (the LLM
+  // never writes a dollar). null = not priced (an un-researched tool op or a
+  // 'none'-basis proposal); the card shows "tool cost" for operational, else
+  // just the effort tag.
   est_cost_usd: number | null
+  cost_basis?: 'recipe' | 'operational' | 'none'
+  costed_items?: StrategyCostedItem[]
   effort: 'low' | 'medium' | 'high' | null
   assignee_hint: string | null
   status: 'proposed' | 'approved' | 'dismissed' | 'expired'
