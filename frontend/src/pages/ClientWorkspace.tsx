@@ -8,6 +8,7 @@ import {
   ClipboardList, BookOpen, Share2,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
+import { FreezeBanner } from '../components/FreezeBanner'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
@@ -78,6 +79,7 @@ export function ClientWorkspace() {
         </div>
       </div>
 
+      {id && <FreezeBanner clientId={id} />}
       {id && <ClientNotifications clientId={id} />}
 
       {/* ── Client setup ─────────────────────────────────────────────── */}
@@ -211,6 +213,13 @@ export function ClientWorkspace() {
               : "Auto-rewrites this client's new blog posts, pages & products into unique, search-discoverable Google Docs + Sheets that link back to the site."
           }
           to={id ? `/clients/${id}/syndication` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<BookOpen size={22} />}
+          label="Citations"
+          description="Liveness tracking for ordered citations — paste the URLs from vendor deliverables; a weekly sweep flags listings that stop resolving."
+          to={id ? `/clients/${id}/citations` : undefined}
           cta="Open"
         />
       </Section>

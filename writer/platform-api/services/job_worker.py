@@ -24,6 +24,9 @@ from services.rank_location import run_rank_location_derive_job
 from services.service_page_plan import run_service_plan_job
 from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
+from services.citation_check import run_citation_check_job
+from services.freeze import FREEZE_GATED_JOB_TYPES, is_frozen, job_client_id, run_freeze_check_job
+from services.page_backlink_intel import run_page_backlink_job
 from services.notifications import run_notification_dispatch_job
 from services.client_report import run_client_report_job
 from services.reopt_planner import run_reopt_plan_job
@@ -283,7 +286,27 @@ async def _run_page_structure_scrape(job: dict) -> None:
 
 async def _process_job(job: dict) -> None:
     job_type = job.get("job_type")
-    if job_type == "website_scrape":
+    # Freeze Protocol gate: content-creating / link-building jobs do not run for
+    # a frozen client (Link Building SOP §Freeze). Jobs queued before the freeze
+    # fail fast with a clear code; analysis/monitoring jobs keep running.
+    if job_type in FREEZE_GATED_JOB_TYPES:
+        client_id = job_client_id(job)
+        if client_id and is_frozen(client_id):
+            logger.warning(
+                "job_worker.blocked_by_freeze",
+                extra={"job_id": job["id"], "job_type": job_type, "client_id": client_id},
+            )
+            get_supabase().table("async_jobs").update(
+                {"status": "failed", "error": "client_frozen", "completed_at": "now()"}
+            ).eq("id", job["id"]).execute()
+            return
+    if job_type == "freeze_check":
+        await run_freeze_check_job(job)
+    elif job_type == "citation_check":
+        await run_citation_check_job(job)
+    elif job_type == "page_backlink_intel":
+        await run_page_backlink_job(job)
+    elif job_type == "website_scrape":
         await _run_website_scrape(job)
     elif job_type == "page_structure_scrape":
         await _run_page_structure_scrape(job)

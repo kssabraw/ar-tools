@@ -316,7 +316,12 @@ async def gsc_scheduler() -> None:
     from services.asana_service import shift_months
     from services.asana_workload import run_workload_alert
     from services.brand_schedule import enqueue_due_brand_scans
+    from services.freeze import enqueue_due_freeze_checks
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
+    from services.citation_check import enqueue_due_citation_checks
+    from services.offpage_agent import run_offpage_sweep
+    from services.page_backlink_intel import enqueue_due_page_backlinks
+    from services.response_episodes import run_episode_sync
 
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
@@ -345,6 +350,16 @@ async def gsc_scheduler() -> None:
                 enqueue_due_dataforseo()
                 # Daily Content Syndication scan (per-client interval-gated).
                 enqueue_due_syndication_scans()
+                # Daily Freeze Protocol check (homepage deindex detection).
+                enqueue_due_freeze_checks()
+                # Daily response-episode sync (the SOPs' 2-week/6-week verify loop).
+                run_episode_sync()
+                # Daily offpage sweep (RD loss / unnatural spike — SOP §A.5).
+                run_offpage_sweep()
+                # Weekly citation liveness (per-client interval-gated) +
+                # monthly page-level RD-imbalance captures.
+                enqueue_due_citation_checks()
+                enqueue_due_page_backlinks()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,

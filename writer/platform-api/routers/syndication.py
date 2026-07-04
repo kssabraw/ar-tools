@@ -28,6 +28,7 @@ from models.syndication import (
     SyndicationItemsResponse,
 )
 from services import syndication_service
+from services.freeze import assert_not_frozen
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,7 @@ async def publish_selected(
     """Rewrite + publish the selected discovered items (to Doc / Sheet / Both per
     the client's publish_target setting), public per share_mode."""
     _require_client(str(client_id))
+    assert_not_frozen(str(client_id))  # Freeze Protocol: publishing paused
     ids = [str(i) for i in body.item_ids]
     queued = syndication_service.publish_items(str(client_id), ids)
     return PublishResponse(queued=queued)

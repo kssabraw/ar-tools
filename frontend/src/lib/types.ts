@@ -86,6 +86,10 @@ export interface Client extends ClientListItem {
   page_structures: Record<string, PageStructureEntry> | null
   // Manual extra cities to plan location pages for (silo planner target-city source).
   target_cities: string[] | null
+  // Recipe Engine budget inputs (66% margin target → 34% deployable).
+  retainer_monthly: number | null
+  is_sab: boolean
+  client_type: 'local' | 'enterprise'
   updated_at: string
 }
 

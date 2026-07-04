@@ -113,6 +113,10 @@ class ClientDetail(BaseModel):
     # Cities the team explicitly wants location pages for, beyond the primary —
     # one source feeding the silo planner's target-city discovery.
     target_cities: list[str] = Field(default_factory=list)
+    # Recipe Engine budget inputs (docs/sops/Link_Building_Recipe_Engine.md §1–§2).
+    retainer_monthly: Optional[float] = None
+    is_sab: bool = False
+    client_type: Literal["local", "enterprise"] = "local"
 
     @field_validator("drive_folders", mode="before")
     @classmethod
@@ -155,6 +159,10 @@ class ClientCreateRequest(BaseModel):
     gbp_place_id: Optional[str] = None
     gbp: Optional[GbpProfile] = None
     target_cities: Optional[list[str]] = None
+    # Recipe Engine budget inputs.
+    retainer_monthly: Optional[float] = None
+    is_sab: Optional[bool] = None
+    client_type: Optional[Literal["local", "enterprise"]] = None
     # Reference page URLs to scrape + analyze for structure mirroring.
     page_structure_urls: Optional[PageStructureUrls] = None
 
@@ -187,3 +195,7 @@ class ClientUpdateRequest(BaseModel):
     business_location: Optional[str] = None
     gbp_place_id: Optional[str] = None
     gbp: Optional[GbpProfile] = None
+    # Recipe Engine budget inputs.
+    retainer_monthly: Optional[float] = None
+    is_sab: Optional[bool] = None
+    client_type: Optional[Literal["local", "enterprise"]] = None

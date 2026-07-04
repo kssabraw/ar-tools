@@ -28,6 +28,16 @@ class Settings(BaseSettings):
     # few minutes; maps_scan's 30-min poll lives on a separate table, not here).
     # Set to 0 to disable the reaper.
     job_stale_timeout_minutes: int = 30
+    # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
+    # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.
+    freeze_check_enabled: bool = True
+    # Response-episode tracking: the SOPs' verify loop (2-week rechecks, 6-week
+    # escalation) over open rank/maps drop responses.
+    episode_tracking_enabled: bool = True
+    # Offpage agent extensions: weekly citation-liveness sweep + monthly
+    # page-level RD-imbalance capture (paid DataForSEO page summaries).
+    citation_check_enabled: bool = True
+    page_backlink_intel_enabled: bool = True
     allowed_origins: List[str] = ["*"]
     log_level: str = "INFO"
     google_apps_script_url: str = ""

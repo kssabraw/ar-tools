@@ -51,6 +51,7 @@ from models.local_seo import (
     PageTemplateDefaultRequest,
 )
 from services import local_seo_precheck, local_seo_service, local_seo_silo
+from services.freeze import assert_not_frozen
 from sse import sse_response
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ async def generate_local_seo_page_async(
 ) -> LocalSeoGenerateJob:
     """Kick off page generation as a background job (runs minutes; poll for the
     result). Lets the UI navigate away — even to other clients — while it runs."""
+    assert_not_frozen(str(client_id))  # Freeze Protocol: content creation paused
     job_id = await local_seo_service.enqueue_generate(
         client_id=str(client_id),
         keyword=body.keyword,
@@ -100,6 +102,7 @@ async def generate_local_seo_pages_bulk(
 ) -> LocalSeoBulkGenerateJob:
     """Enqueue background generation for several keywords (bulk-create). The UI
     polls the returned job ids and can leave while they run."""
+    assert_not_frozen(str(client_id))  # Freeze Protocol: content creation paused
     job_ids = await local_seo_service.enqueue_generate_bulk(
         client_id=str(client_id),
         keywords=body.keywords,
@@ -120,6 +123,7 @@ async def reoptimize_local_seo_pages_bulk(
 ) -> LocalSeoReoptimizeBulkJob:
     """Enqueue background reoptimization for several page URLs. The UI polls the
     returned jobs (paired with their URLs) and can leave while they run."""
+    assert_not_frozen(str(client_id))  # Freeze Protocol: content creation paused
     jobs = await local_seo_service.enqueue_reoptimize_bulk(
         client_id=str(client_id),
         targets=[t.model_dump() for t in body.targets],
