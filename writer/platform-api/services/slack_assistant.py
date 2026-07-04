@@ -552,8 +552,9 @@ def _act_strategy_review(client_id: str) -> str:
         )
     review_id = strategist.enqueue_strategy_review(client_id, trigger="on_demand", notify=True)
     return (
-        "🧠 Strategist review started — I'll post the digest here when it's done; "
-        "the full review (with Approve/Dismiss) lands on the client's Action Plan page."
+        "🧠 Strategist review started — the digest will post to the alerts channel "
+        "when it's done; the full review (with Approve/Dismiss) lands on the client's "
+        "Action Plan page."
         if review_id
         else "A strategist review is already running for this client."
     )

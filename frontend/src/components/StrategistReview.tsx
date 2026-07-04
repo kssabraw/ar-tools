@@ -66,6 +66,14 @@ export function StrategistReview({ clientId }: { clientId: string }) {
         )}
       </div>
 
+      {decide.isError && (
+        <div style={{ ...noteBox, color: '#b45309', background: '#fffbeb', borderColor: '#fde68a' }}>
+          {(decide.error as Error)?.message === 'senior_approval_required'
+            ? 'This proposal is marked Kyle/Ryan only — an admin has to approve or dismiss it.'
+            : `Couldn’t save that decision: ${(decide.error as Error)?.message}`}
+        </div>
+      )}
+
       {run.isError && (
         <div style={{ ...noteBox, color: '#b45309', background: '#fffbeb', borderColor: '#fde68a' }}>
           {(run.error as Error)?.message === 'strategist_disabled'

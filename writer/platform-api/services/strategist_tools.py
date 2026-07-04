@@ -228,7 +228,7 @@ async def _run_geogrid_history(client_id: str, args: dict) -> str:
     supabase = get_supabase()
     results = (
         supabase.table("maps_scan_results")
-        .select("scan_id, average_rank, found_pins, total_pins, top3_pins, top10_pins, created_at")
+        .select("scan_id, average_rank, found_pins, total_pins, top3_pins, created_at")
         .eq("client_id", client_id).ilike("keyword", keyword)
         .order("created_at", desc=True).limit(8).execute()
     ).data or []

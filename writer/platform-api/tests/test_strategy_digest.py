@@ -196,3 +196,10 @@ def test_render_trims_passports_to_fit():
     out = sd.render_digest(digest, 5000)
     assert len(out) <= 5000 + 50
     assert "trimmed_to_fit_budget" in out or "TRUNCATED_TO_BUDGET" in out
+
+
+def test_budget_domain_from_client_retainer():
+    # retainer lives on the client section (not the task plan) — a retainer
+    # client with an unflagged plan still activates the budget domain.
+    digest = {"client": {"retainer_monthly": 2000}, "task_plan": {"flags": []}}
+    assert "budget" in sd.active_signal_domains(digest)

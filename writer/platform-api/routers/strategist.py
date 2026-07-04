@@ -85,6 +85,11 @@ async def set_proposal_status(
     proposals = rows[0].get("proposals") or []
     if not (0 <= idx < len(proposals)):
         raise HTTPException(status_code=404, detail="proposal_not_found")
+    # §3 passthroughs: a requires='senior' proposal is Kyle/Ryan territory —
+    # enforce at the state-change chokepoint, not just the emit-time label.
+    # (Admins are the senior owners in this suite's role model.)
+    if proposals[idx].get("requires") == "senior" and auth.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="senior_approval_required")
     proposals[idx]["status"] = body.status
     proposals[idx]["decided_by"] = auth.get("user_id")
     try:

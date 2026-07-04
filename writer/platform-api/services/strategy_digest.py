@@ -234,7 +234,7 @@ def active_signal_domains(digest: dict) -> set[str]:
     ):
         domains.add("content")
     task_plan = digest.get("task_plan") or {}
-    if task_plan.get("flags") or task_plan.get("retainer_monthly"):
+    if task_plan.get("flags") or (digest.get("client") or {}).get("retainer_monthly"):
         domains.add("budget")
     return domains
 
@@ -262,9 +262,8 @@ def render_digest(digest: dict, budget_chars: int) -> str:
     out = _dump(digest)
     if len(out) <= budget_chars:
         return out
-    d = dict(digest)
     for kw_cap, item_cap in ((25, 10), (15, 8), (8, 5)):
-        d = dict(d)
+        d = dict(digest)
         if d.get("keyword_passports"):
             d["keyword_passports"] = d["keyword_passports"][:kw_cap]
         if (d.get("action_plan") or {}).get("items"):
@@ -339,7 +338,7 @@ def _prov_organic(supabase, client_id: str, today: date, now: datetime) -> Optio
 
     kws = (
         supabase.table("tracked_keywords")
-        .select("id, keyword, canonical_url")
+        .select("id, keyword")
         .eq("client_id", client_id).eq("active", True)
         .order("keyword").limit(MAX_PASSPORT_KEYWORDS)
         .execute()
@@ -490,14 +489,14 @@ def _prov_maps(supabase, client_id: str, today: date, now: datetime) -> Optional
         return None
     latest = (
         supabase.table("maps_scan_results")
-        .select("keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins")
+        .select("keyword, average_rank, found_pins, total_pins, top3_pins")
         .eq("scan_id", scans[0]["id"]).execute()
     ).data or []
     prev_by_kw: dict[str, dict] = {}
     if len(scans) > 1:
         for r in (
             supabase.table("maps_scan_results")
-            .select("keyword, average_rank, found_pins, total_pins, top3_pins")
+            .select("keyword, total_pins, top3_pins")
             .eq("scan_id", scans[1]["id"]).execute()
         ).data or []:
             prev_by_kw[_norm_kw(r.get("keyword"))] = r

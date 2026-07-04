@@ -32,7 +32,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import notifications, sop_library, strategy_digest
+from services import notifications, sop_library, sop_store, strategy_digest
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +44,15 @@ VALID_TRIGGERS = ("scheduled", "escalation", "on_demand")
 # model set. Patterns are deliberately narrow (decision territory, not mere
 # topic mentions of e.g. "margin").
 _SENIOR_PATTERNS = re.compile(
-    r"(freeze|unfreeze|lift the freeze|manual action|deindex"
-    r"|suspension|suspended listing|duplicate listing"
+    r"(freeze|unfreeze|lift the freeze|manual action|deindex|reconsideration"
+    r"|suspension|suspended listing|reinstatement|duplicate listing"
     r"|separate entity|second entity|new entity|dba"
     r"|overclock|hydra|das v2"
     r"|below 50% margin|margin below 50|sub-50% margin)",
     re.IGNORECASE,
 )
+# Checked against title+action only (what the proposal would DO) — a rationale
+# that merely mentions disavow to rule it out must not kill the proposal.
 _DISAVOW = re.compile(r"disavow", re.IGNORECASE)
 
 _EMIT_TOOL = {
@@ -191,7 +193,7 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
         if not (title and action):
             continue
         blob = f"{title} {action} {p.get('rationale') or ''}"
-        if _DISAVOW.search(blob):
+        if _DISAVOW.search(f"{title} {action}"):
             questions.append(
                 f"[dropped proposal — we never disavow] {title}: {action} — if link toxicity is "
                 "the real concern, the SOP levers are anchor dilution / velocity throttling / "
@@ -316,7 +318,6 @@ async def run_strategy_review(
     from services import strategist_tools
 
     supabase = get_supabase()
-    now = datetime.now(timezone.utc).isoformat()
     if review_id is None:
         review_id = (
             supabase.table("strategy_reviews")
@@ -332,6 +333,13 @@ async def run_strategy_review(
     total_chars = settings.strategist_digest_budget_tokens * 4
     cards_text = sop_library.load_module_cards()
     sops_text = sop_library.select_sops_text(domains, budget_chars=min(36_000, total_chars // 3))
+    # The DB sop_store layer too (spec §2): agency-wide uploads + PER-CLIENT
+    # overrides — the strategist must see the same playbook the Action Plan
+    # enrichment honors, not just the repo corpus. Best-effort ('' on failure).
+    db_sops = sop_store.resolve_sops_text(client_id, budget_chars=12_000)
+    if db_sops:
+        sops_text = (sops_text + "\n\n### UPLOADED SOPs (DB store — per-client entries "
+                     "take precedence over the repo corpus)\n" + db_sops).strip()
     digest_budget = max(20_000, total_chars - len(sops_text) - len(cards_text))
     digest_json = strategy_digest.render_digest(digest, digest_budget)
 
@@ -418,7 +426,7 @@ async def run_strategy_review(
                 "questions": review_body["questions"],
                 "input_digest": digest,
                 "token_usage": usage,
-                "completed_at": now,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
             }
         )
         .eq("id", review_id)
@@ -533,11 +541,15 @@ def enqueue_strategy_review(
     if trigger not in VALID_TRIGGERS:
         trigger = "on_demand"
     supabase = get_supabase()
+    # Dedup per trigger, not globally: an escalation brief must not be silently
+    # swallowed because the weekly scheduled run happens to be in flight (the
+    # single worker serializes them anyway).
     existing = (
         supabase.table("async_jobs")
         .select("id")
         .eq("job_type", "strategy_review")
         .eq("entity_id", client_id)
+        .eq("payload->>trigger", trigger)
         .in_("status", ["pending", "running"])
         .limit(1)
         .execute()
@@ -555,9 +567,17 @@ def enqueue_strategy_review(
         payload["escalation_context"] = escalation_context
     if notify:
         payload["notify"] = True
-    supabase.table("async_jobs").insert(
-        {"job_type": "strategy_review", "entity_id": client_id, "payload": payload}
-    ).execute()
+    try:
+        supabase.table("async_jobs").insert(
+            {"job_type": "strategy_review", "entity_id": client_id, "payload": payload}
+        ).execute()
+    except Exception:
+        # Don't orphan the review row as 'running' forever — no worker will
+        # ever pick it up if the job insert failed.
+        supabase.table("strategy_reviews").update(
+            {"status": "failed", "error": "job_enqueue_failed", "completed_at": "now()"}
+        ).eq("id", review["id"]).execute()
+        raise
     return review["id"]
 
 
