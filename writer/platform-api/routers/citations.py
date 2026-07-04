@@ -91,9 +91,13 @@ async def add_citations(
     return {"added": added, "parsed": len(urls)}
 
 
-@router.delete("/citations/{citation_id}", status_code=204)
-async def delete_citation(citation_id: UUID, auth: dict = Depends(require_auth)) -> None:
+@router.delete("/citations/{citation_id}")
+async def delete_citation(citation_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    # 200 + body (not 204): FastAPI 0.115 asserts at route registration when a
+    # 204 route can have a response body, and the frontend api helper parses
+    # JSON from every response.
     get_supabase().table("client_citations").delete().eq("id", str(citation_id)).execute()
+    return {"deleted": True}
 
 
 @router.post("/clients/{client_id}/citations/check")
