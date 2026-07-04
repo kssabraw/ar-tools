@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
+import { StrategistReview } from '../components/StrategistReview'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
@@ -80,6 +81,11 @@ export function ClientWorkspace() {
       </div>
 
       {id && <FreezeBanner clientId={id} />}
+      {/* SerMaStr — strategist review as its own section, directly under the
+          Freeze Protocol banner and above Client setup. Renders nothing when
+          the strategist is off and no review exists (so quiet clients stay
+          clean). */}
+      {id && <StrategistReview clientId={id} />}
       {id && <ClientNotifications clientId={id} />}
 
       {/* ── Client setup ─────────────────────────────────────────────── */}
