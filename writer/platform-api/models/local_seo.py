@@ -317,6 +317,8 @@ class LocalSeoPageDetail(BaseModel):
     content_gaps: list[dict[str, Any]] = Field(default_factory=list)
     composite_score: Optional[float] = None
     composite_status: Optional[str] = None
+    # Full per-engine scoring verdict (nlp surfaces it on generate/reoptimize).
+    engine_scores: Optional[dict[str, Any]] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None

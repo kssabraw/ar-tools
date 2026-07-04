@@ -208,6 +208,9 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         "content_gaps": result.get("content_gaps") or [],
         "composite_score": result.get("composite_score"),
         "composite_status": result.get("composite_status"),
+        # Full per-engine verdict (nlp surfaces this on generate/reoptimize). None
+        # on older nlp builds that don't emit it — the column is nullable.
+        "engine_scores": result.get("engine_scores"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -219,7 +222,64 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         "local_seo.page_persisted",
         extra={"client_id": client_id, "page_id": page["id"], "mode": mode, "run_analysis": run_analysis},
     )
+    # Log the run's verdict to the score history (best-effort — never fail the run).
+    _record_score_run(
+        client_id, keyword, location, mode, result,
+        page_id=page["id"], page_url=None, user_id=user_id,
+    )
     return page
+
+
+# ── score-run history ─────────────────────────────────────────────────────────
+# Every scoring run (standalone score, generate, reoptimize before/after) logs its
+# full verdict to `local_seo_page_scores` so the per-engine breakdown is kept, not
+# just the composite. Writes are best-effort: a history-log failure must never
+# break the actual generation/scoring the user asked for.
+
+def _score_run_row(
+    client_id: str, keyword: str, location: Optional[str], mode: str, result: dict,
+    *, page_id: Optional[str], page_url: Optional[str], user_id: Optional[str],
+) -> dict:
+    """Build a `local_seo_page_scores` row from a score/generate/reoptimize result.
+    Pure (no I/O) so it's unit-testable. `deficiencies` falls back to `content_gaps`
+    for result shapes (generate) that carry the engine failures under that key."""
+    return {
+        "client_id": client_id,
+        "page_id": page_id,
+        "keyword": keyword,
+        "location": location,
+        "page_url": page_url,
+        "mode": mode,
+        "composite_score": result.get("composite_score"),
+        "composite_status": result.get("composite_status"),
+        "engine_scores": result.get("engine_scores"),
+        "deficiencies": result.get("deficiencies") or result.get("content_gaps") or [],
+        "token_usage": result.get("token_usage"),
+        "created_by": user_id,
+    }
+
+
+def _record_score_run(
+    client_id: str, keyword: str, location: Optional[str], mode: str, result: dict,
+    *, page_id: Optional[str] = None, page_url: Optional[str] = None, user_id: Optional[str] = None,
+) -> None:
+    """Insert one score-history row. Best-effort: logs and swallows any failure so
+    the surrounding generate/score/reoptimize operation is never lost to a history
+    write. Skips silently when there's no verdict to record (no engine_scores and
+    no composite)."""
+    if result.get("engine_scores") is None and result.get("composite_score") is None:
+        return
+    try:
+        row = _score_run_row(
+            client_id, keyword, location, mode, result,
+            page_id=page_id, page_url=page_url, user_id=user_id,
+        )
+        get_supabase().table("local_seo_page_scores").insert(row).execute()
+    except Exception:  # noqa: BLE001 — history logging must never break the run
+        logger.warning(
+            "local_seo.score_run_record_failed",
+            extra={"client_id": client_id, "mode": mode, "page_id": page_id},
+        )
 
 
 # ── public operations ───────────────────────────────────────────────────────
@@ -733,7 +793,7 @@ async def score_page(
         serp_analysis = await _get_or_compute_analysis(
             keyword, location, location_code, force_refresh, user_id, required=False
         )
-    return await _post_nlp("/score-page", {
+    result = await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,
         "location_code": location_code,
@@ -743,7 +803,14 @@ async def score_page(
         "gbp_category": fields["gbp_category"],
         "address": fields["address"],
         "serp_analysis": serp_analysis,
-    })
+    }, user_id=user_id)
+    # A standalone score has no page row — log it against page_url (may be None
+    # when scoring raw HTML) so the verdict is still kept in the run history.
+    _record_score_run(
+        client_id, keyword, location, "score", result,
+        page_id=None, page_url=page_url, user_id=user_id,
+    )
+    return result
 
 
 async def related_pages(client_id: str, keyword: str, location: str) -> dict:
@@ -808,6 +875,8 @@ async def reoptimize_page(
             })
             result["composite_score"] = score.get("composite_score")
             result["composite_status"] = score.get("composite_status")
+            result["engine_scores"] = score.get("engine_scores")
+            result["deficiencies"] = score.get("deficiencies")
         except Exception:
             # Non-fatal — the expensive rewrite already succeeded, so persist the
             # reoptimized page without a fresh score rather than losing the work.
@@ -868,6 +937,13 @@ async def reoptimize_url(
         "address": fields["address"],
         "serp_analysis": serp,
     }, user_id=user_id)
+
+    # Record the "before" verdict of the live page (whether or not we go on to
+    # reoptimize) so the history captures what the page scored at as found.
+    _record_score_run(
+        client_id, keyword, location, "reoptimize_before", score_result,
+        page_id=None, page_url=page_url, user_id=user_id,
+    )
 
     composite = score_result.get("composite_score")
     # Gate: a page already at/above the threshold is left untouched.
@@ -991,6 +1067,24 @@ def get_page(page_id: str) -> dict:
     if not res.data:
         raise HTTPException(status_code=404, detail="local_seo_page_not_found")
     return res.data
+
+
+def list_score_history(
+    client_id: str, page_id: Optional[str] = None, limit: int = 100,
+) -> list[dict]:
+    """Return a client's score-run history (newest first), including the full
+    per-engine `engine_scores` verdict for each run. Optionally scoped to one
+    page. `limit` is clamped to a sane ceiling."""
+    limit = max(1, min(limit, 500))
+    supabase = get_supabase()
+    query = (
+        supabase.table("local_seo_page_scores")
+        .select("*")
+        .eq("client_id", client_id)
+    )
+    if page_id:
+        query = query.eq("page_id", page_id)
+    return query.order("created_at", desc=True).limit(limit).execute().data or []
 
 
 def delete_page(page_id: str) -> None:

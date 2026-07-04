@@ -34,16 +34,20 @@ def _client_row(**overrides):
 
 def _supabase_for_client(client_row, insert_row=None):
     """A chainable supabase mock. `execute` returns the client row first, then
-    the inserted row (for the persist path)."""
+    the inserted row (for the persist path). Any further calls (e.g. the
+    best-effort score-history insert) get a permissive default so the mock never
+    runs out."""
     supabase = MagicMock()
     table = MagicMock()
     supabase.table.return_value = table
-    for method in ("select", "eq", "single", "insert", "order", "delete"):
+    for method in ("select", "eq", "single", "insert", "order", "limit", "delete"):
         getattr(table, method).return_value = table
     results = [MagicMock(data=client_row)]
     if insert_row is not None:
         results.append(MagicMock(data=[insert_row]))
-    table.execute.side_effect = results
+    it = iter(results)
+    default = MagicMock(data=[insert_row] if insert_row is not None else None)
+    table.execute.side_effect = lambda *a, **k: next(it, default)
     return supabase
 
 
@@ -93,7 +97,7 @@ async def test_generate_page_persists_row():
     # analysis always runs → the cached analysis is fetched and passed to nlp
     cache_get.assert_called_once()
     assert stream.await_args[0][1]["serp_analysis"] == cached_analysis
-    persisted = supabase.table.return_value.insert.call_args[0][0]
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
     assert persisted["mode"] == "generate"
     assert persisted["composite_score"] == 88.0
     assert persisted["created_by"] == "user-9"
@@ -203,7 +207,7 @@ async def test_reoptimize_uses_surfaced_score_and_skips_rescore():
         )
 
     post.assert_not_awaited()  # surfaced score → no redundant /score-page call
-    persisted = supabase.table.return_value.insert.call_args[0][0]
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
     assert persisted["mode"] == "reoptimize"
     assert persisted["composite_score"] == 91.0
 
@@ -223,7 +227,7 @@ async def test_reoptimize_falls_back_to_rescore_when_score_absent():
 
     post.assert_awaited_once()
     assert post.await_args[0][0] == "/score-page"
-    persisted = supabase.table.return_value.insert.call_args[0][0]
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
     assert persisted["composite_score"] == 84.0
 
 
@@ -443,7 +447,7 @@ async def test_generate_degrades_when_analysis_unavailable():
     payload = stream.await_args[0][1]
     assert payload["run_analysis"] is False     # degraded → nlp won't re-attempt the scrape
     assert "serp_analysis" not in payload
-    persisted = supabase.table.return_value.insert.call_args[0][0]
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
     assert persisted["run_analysis"] is True    # provenance: analysis always runs first
 
 
@@ -564,6 +568,65 @@ def test_set_page_template_default_clears_with_blank():
         out = local_seo_service.set_page_template_default("client-1", "   ")
     assert out == {"local_seo_page_template_url": None}
     assert table.update.call_args[0][0]["local_seo_page_template_url"] is None
+
+
+# ── score-run history ────────────────────────────────────────────────────────
+
+def _score_result(**overrides):
+    result = {
+        "composite_score": 47.4,
+        "composite_status": "fail",
+        "engine_scores": {"organic_ranking": {"score": 52, "issues": [], "recommendations": []}},
+        "deficiencies": [{"engine_key": "organic_ranking", "score": 52}],
+        "token_usage": {"model": "claude-sonnet-4-6", "cost_usd": 0.067},
+    }
+    result.update(overrides)
+    return result
+
+
+def test_score_run_row_maps_full_verdict():
+    row = local_seo_service._score_run_row(
+        "client-1", "roof restoration", "Melbourne,Victoria,Australia", "score",
+        _score_result(), page_id=None, page_url="https://x.example/", user_id="u-1",
+    )
+    assert row["client_id"] == "client-1"
+    assert row["mode"] == "score"
+    assert row["page_id"] is None
+    assert row["page_url"] == "https://x.example/"
+    assert row["composite_score"] == 47.4
+    assert row["engine_scores"]["organic_ranking"]["score"] == 52
+    assert row["deficiencies"][0]["engine_key"] == "organic_ranking"
+    assert row["created_by"] == "u-1"
+
+
+def test_score_run_row_falls_back_to_content_gaps_for_deficiencies():
+    # generate results carry the engine failures under content_gaps, not deficiencies.
+    result = _score_result(deficiencies=None, content_gaps=[{"engine_key": "aeo_llm_retrieval"}])
+    row = local_seo_service._score_run_row(
+        "c", "kw", "loc", "generate", result, page_id="p-1", page_url=None, user_id=None,
+    )
+    assert row["deficiencies"] == [{"engine_key": "aeo_llm_retrieval"}]
+    assert row["page_id"] == "p-1"
+
+
+def test_record_score_run_skips_when_no_verdict():
+    # No engine_scores and no composite → nothing written (and no supabase call).
+    with patch.object(local_seo_service, "get_supabase") as gs:
+        local_seo_service._record_score_run(
+            "c", "kw", "loc", "score", {"content_html": "<p>x</p>"},
+        )
+    gs.assert_not_called()
+
+
+def test_record_score_run_swallows_db_errors():
+    # A history-write failure must never propagate out of the run.
+    supabase = MagicMock()
+    supabase.table.side_effect = RuntimeError("db down")
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        # Should not raise.
+        local_seo_service._record_score_run(
+            "c", "kw", "loc", "score", _score_result(), page_url="https://x.example/",
+        )
 
 
 # ── publish to Google Doc ────────────────────────────────────────────────────
