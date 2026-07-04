@@ -1,6 +1,99 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-29 · **Maps geo-grid strategy & Action Plan** (latest) — **MERGED to `main`** (PR #182, squash `35394ae`)
+## ⏩ Update — 2026-07-04 · **SOP library + 24/7 SEO agent phase 1** (latest) — **MERGED to `main`** (PRs #215 `3e3c828` + #216 `73e6e15`, both deployed & live)
+
+The session that turned the agency's SOP corpus into a running machine. Two
+merged PRs: **#215** (the SOP library + the whole agent loop) and **#216** (the
+Recipe Engine frontend + a production hotfix). Everything below is **live** —
+all six migrations were applied to the live Supabase project during the build,
+and the PLATFORM deploy of `main` is healthy.
+
+**The agent loop (all built, all running on the shared scheduler):**
+
+```
+detect      trackers + daily freeze check + offpage/citation/imbalance sweeps
+classify    B1–B5 + §A sitewide scope (drop_classifier.py)
+decide      SOP response playbooks rendered in the Action Plan
+cost/assign Recipe Engine → monthly task plan (margin-aware, roles-matrix)
+verify      response episodes: 2-week rechecks / 6-week escalate → Kyle/Ryan
+kill switch Freeze Protocol (freeze pauses all content + link output)
+```
+
+**What shipped, by module** (full detail in each CLAUDE.md paragraph):
+
+1. **`docs/sops/`** — the 11-doc SOP library imported with a consistency pass:
+   drift fixes across every doc, the On-Page thresholds resolved from the live
+   nlp-api scoring code (bands ≥90/≥80/≥70/≥60; deficiency bar = engine < 80;
+   operational pass line 90), four owner rulings (plan-time Step 8 gate;
+   threshold-gated overclock self-serve; RD 250 = guideline not cap; LABS
+   engine list aligned to the built module), and the capacity workbook's dead
+   formulas wired. **Read `docs/sops/README.md` first** — `_ORCHESTRATOR.md`
+   is the router.
+2. **Freeze Protocol** — `client_freezes`, router/worker/fanout gates
+   (409 `client_frozen`), daily `freeze_check` (GSC URL-Inspection → auto
+   deindexing-freeze; DataForSEO `site:` probe warn-only), `FreezeBanner` on
+   the workspace (admin freeze/lift). Manual actions have no Google API — a
+   human confirms via the banner.
+3. **Recipe Engine** — SOP §1–§5 as code, conformance-tested against the §4
+   worked example ($2,000 → $0 remaining, exact). Auto-diagnosis from suite
+   data. **Frontend:** workspace "Monthly Task Plan" card → generate (66%/50%
+   margin), summary strip, flags, assigned task table, CSV, history.
+4. **Drop classifier** — open rank alerts arrive classified (B1 cannibalization
+   / B2 SERP-shift / B3 CTR / B4 indexing / B5 position; §A sitewide banner);
+   the Action Plan renders each classification's SOP protocol + right-tool CTA.
+5. **Response episodes** — every drop response has the SOP clock: baseline at
+   open (organic weighted position / maps geo-grid `average_rank`), 14-day
+   rechecks, recovered when the tracker resolves the alert, **escalated once
+   at 6 weeks** with no improvement (critical notification; improving episodes
+   never escalate). Clock notes append to Action Plan rows.
+6. **Offpage agent** — RD loss / unnatural spike from `backlink_profiles`
+   (both relative + absolute bars), **citation liveness** (paste-in list at
+   `clients/:id/citations`; fail-open — only hard 404/410/DNS ×2 consecutive
+   = dead; bot-blocks count alive), **per-page RD imbalance** (monthly page
+   summaries, inner page > homepage RD × 1.5 → info-severity rebalance).
+   Every new alert triggers a silent Action Plan rebuild (`trigger="offpage"`).
+
+### ⚠️ Incident (resolved) — PLATFORM crash-loop after the #215 deploy
+
+The `DELETE /citations/{id}` route used `status_code=204`, which the pinned
+`fastapi==0.115.0` rejects **at import time** → the whole API crash-looped
+~07:34–07:45 UTC ("client cards aren't loading"). Fixed in #216 (200 + JSON
+body), verified by importing all 30 suite modules under the pinned FastAPI.
+**Process rule going forward:** backend changes are import-checked under the
+pinned requirements before push (the sandbox's newer FastAPI had masked it),
+and frontend changes run the real `npm run build` (which also caught a React
+19 `JSX` namespace break earlier).
+
+### 🔧 Operator to-dos (the loop idles until these are done)
+
+1. **Set each client's budget** — client form → "Budget & Campaign Type"
+   (monthly budget with live 34%-deployable readout; local/enterprise funding
+   order; SAB toggle → $130 baseline).
+2. **Paste citation lists** — client workspace → Citations card → paste the
+   URLs from vendor deliverables (weekly liveness sweep starts from there).
+3. **Smoke-test one client** — generate a Monthly Task Plan and gut-check it;
+   open + lift a manual freeze and confirm the Slack ping + the 409 gates.
+
+No migrations to apply — unlike prior handoffs, **all schema is already live**
+(`client_freezes`, `recipe_engine`, `response_episodes`, `offpage_alerts`,
+`citations_page_backlinks`).
+
+### Deferred / next builds (each a clean follow-up PR)
+
+- **Asana task push** — one Asana task per plan line, assigned per the roles
+  matrix (the Asana integration already exists). Highest-leverage next step:
+  closes the loop from "plan generated" to "task in Minda's queue".
+- Algo-update detection (cross-client drop correlation).
+- On-page coverage audit (blog/service/location scoring parity with local).
+- LABS "mention AND link" win rollup + AIO Fork A/B classification.
+- Recipe Engine refinements: gap-sized funding quantities; cross-client
+  capacity from the workbook; per-person escalation routing.
+- SOP paper debt: anchor-ratio ledger (the freeze health check references it),
+  T1 Booster spec, LB recipe decision matrix.
+
+---
+
+## ⏩ Update — 2026-06-29 · **Maps geo-grid strategy & Action Plan** — **MERGED to `main`** (PR #182, squash `35394ae`)
 
 Brought the **Maps geo-grid tracker** to parity with the organic rank tracker's
 reoptimization guidance, then layered on strategic competitive intelligence —
