@@ -5525,9 +5525,10 @@ Full location: {body.location}
         # retrying cannot fix — those are reported in content_gaps instead.
         await q.put({"step": "progress", "progress": 90, "message": "Scoring your page…"})
         inline_score = None
+        inline_scores = None  # full per-engine verdict (surfaced below for persistence)
         for _score_attempt in range(3):
             try:
-                inline_score, _, _, score_tok = await _score_html_inline(
+                inline_score, _, inline_scores, score_tok = await _score_html_inline(
                     content_html, body.keyword, body.location, body.business_name,
                     body.gbp_category, body.address, serp_analysis_dict, client,
                 )
@@ -5566,6 +5567,11 @@ Full location: {body.location}
                 "page_title": page_title,
                 "composite_score": inline_score,
                 "composite_status": _status_for_score(inline_score) if inline_score is not None else None,
+                # Full per-engine verdict + deficiencies, so the caller can persist
+                # the whole scoring breakdown (not just the composite). `content_gaps`
+                # are business-data gaps; `deficiencies` are the per-engine failures.
+                "engine_scores": inline_scores,
+                "deficiencies": _build_deficiencies(inline_scores) if inline_scores else [],
                 "token_usage": token_rec,
                 "cost_breakdown": cost_breakdown,
                 "serp_analysis": serp_analysis_dict,
@@ -5753,9 +5759,11 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
         MAX_AUTO_PASSES = 2
 
         inline_score = None  # final composite after the auto-retry loop (surfaced below)
+        inline_scores = None  # full per-engine verdict for the final page (surfaced below)
+        inline_defs = []      # per-engine deficiencies for the final page
         await q.put({"step": "progress", "progress": 78, "message": "Scoring your page…"})
         try:
-            inline_score, inline_defs, _, score_tok = await _score_html_inline(
+            inline_score, inline_defs, inline_scores, score_tok = await _score_html_inline(
                 current_html, body.keyword, body.location, body.business_name,
                 body.gbp_category, body.address, body.serp_analysis, client,
             )
@@ -5812,7 +5820,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                     break
 
                 try:
-                    inline_score, inline_defs, _, score_tok = await _score_html_inline(
+                    inline_score, inline_defs, inline_scores, score_tok = await _score_html_inline(
                         current_html, body.keyword, body.location, body.business_name,
                         body.gbp_category, body.address, body.serp_analysis, client,
                     )
@@ -5844,6 +5852,10 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 # caller doesn't have to re-score the page (avoids a 2nd LLM call).
                 "composite_score": inline_score,
                 "composite_status": _status_for_score(inline_score) if inline_score is not None else None,
+                # Full per-engine verdict + deficiencies for the final page, so the
+                # caller can persist the whole scoring breakdown.
+                "engine_scores": inline_scores,
+                "deficiencies": inline_defs if inline_scores else [],
                 "token_usage": token_rec,
                 "html_css_notes": [],
                 "original_html": original_content_html,
