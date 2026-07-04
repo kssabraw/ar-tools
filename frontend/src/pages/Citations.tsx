@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, BookMarked, CheckCircle2, HelpCircle, RefreshCw, ShieldAlert, Trash2, XCircle } from 'lucide-react'
@@ -26,7 +26,7 @@ interface CitationsResponse {
   counts: Partial<Record<CitationStatus, number>>
 }
 
-const STATUS_META: Record<CitationStatus, { label: string; color: string; bg: string; icon: JSX.Element }> = {
+const STATUS_META: Record<CitationStatus, { label: string; color: string; bg: string; icon: ReactNode }> = {
   live: { label: 'Live', color: '#15803d', bg: '#f0fdf4', icon: <CheckCircle2 size={13} /> },
   dead: { label: 'Dead', color: '#b91c1c', bg: '#fef2f2', icon: <XCircle size={13} /> },
   blocked: { label: 'Bot-blocked', color: '#b45309', bg: '#fffbeb', icon: <ShieldAlert size={13} /> },
