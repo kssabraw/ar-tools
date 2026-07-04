@@ -48,6 +48,7 @@ TOTAL_MAX = 25
 # quick win must not leapfrog an urgent drop, and same-kind rows must not all tie.)
 _TIER = 10_000
 _WITHIN_MAX = 9_999          # within-tier term is clamped to [0, _WITHIN_MAX]
+_SORT_SITEWIDE = 8 * _TIER   # §A sitewide-decline banner sits above everything
 _SORT_DROP = 6 * _TIER
 _SORT_DEINDEX_BONUS = _TIER  # deindex sits in its own band above ordinary drops
 _SORT_CANNIBAL = 4 * _TIER
@@ -121,25 +122,35 @@ def build_actions(
     actions: list[dict] = []
     dropped_keywords: set[str] = set()
 
-    # 1) Open rank-drop alerts — urgent.
+    # 1) Open rank-drop alerts — urgent. When the drop classifier has attached a
+    # B1–B5 classification (docs/sops/Rank_Drop_Mitigation_SOP_Organic.md), the
+    # action carries that classification's SOP response protocol; unclassified
+    # drops keep the generic guidance.
     for d in drops:
         kw = d.get("keyword") or ""
         dropped_keywords.add(kw.lower())
         deindex = d.get("alert_type") == "deindexed"
+        response = d.get("response") or {}
+        classification = d.get("classification")
+        diagnosis = d.get("message") or "Ranking dropped."
+        if classification and response.get("label"):
+            diagnosis = f"[{classification} — {response['label']}] {diagnosis}"
         actions.append(
             {
                 "kind": "rank_drop",
                 "source": "organic",
                 "keyword": kw,
-                "diagnosis": d.get("message") or "Ranking dropped.",
-                "recommendation": (
+                "classification": classification,
+                "diagnosis": diagnosis,
+                "recommendation": response.get("recommendation")
+                or (
                     "Confirm indexing — run URL Inspection and check robots/noindex/canonical, then resubmit."
                     if deindex
                     else "Diagnose & reoptimize — capture a SERP snapshot to see what changed (AI Overview, "
                     "a stronger competitor, an intent shift), then reoptimize the ranking page."
                 ),
-                "cta_label": "Open rank tracker",
-                "cta_path": f"clients/{client_id}/rankings",
+                "cta_label": response.get("cta_label") or "Open rank tracker",
+                "cta_path": response.get("cta_path") or f"clients/{client_id}/rankings",
                 "severity": "critical" if deindex else "warning",
                 "sort": _SORT_DROP + (_SORT_DEINDEX_BONUS if deindex else 0),
             }
@@ -219,6 +230,30 @@ def build_actions(
 
     actions.sort(key=lambda a: a["sort"], reverse=True)
     return actions if cap is None else actions[:cap]
+
+
+def build_sitewide_action(client_id: str, scope_info: dict) -> dict:
+    """The §A sitewide-decline banner action (Organic Rank Drop SOP): many
+    keywords down together means a systemic cause — the per-keyword responses
+    below it still apply, but §A's ordered ladder is worked first. Pure."""
+    from services.drop_classifier import SITEWIDE_PLAYBOOK, cta_path
+
+    open_drops = scope_info.get("open_drops") or 0
+    tracked = scope_info.get("tracked_count") or 0
+    return {
+        "kind": "sitewide_decline",
+        "source": "organic",
+        "keyword": "Sitewide",
+        "classification": "A",
+        "diagnosis": f"[§A — {SITEWIDE_PLAYBOOK['label']}] {open_drops} of {tracked} tracked "
+        "keywords have open drops — this pattern points at a systemic cause, not "
+        "per-keyword problems.",
+        "recommendation": SITEWIDE_PLAYBOOK["recommendation"],
+        "cta_label": SITEWIDE_PLAYBOOK["cta_label"],
+        "cta_path": cta_path(SITEWIDE_PLAYBOOK["cta_kind"], client_id),
+        "severity": "critical",
+        "sort": _SORT_SITEWIDE,
+    }
 
 
 def build_maps_actions(
@@ -798,6 +833,17 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
         .execute()
     ).data or []
 
+    # Classify each open drop per the Organic Rank Drop SOP (B1–B5 + scope) so
+    # the actions carry the SOP's response protocols. Best-effort — an
+    # unclassified drop keeps the generic guidance.
+    scope_info: dict = {}
+    try:
+        from services import drop_classifier
+
+        scope_info = drop_classifier.classify_client_drops(client_id, drops)
+    except Exception as exc:
+        logger.warning("reopt_plan_classify_failed", extra={"client_id": client_id, "error": str(exc)})
+
     try:
         rankability_items = rankability.get_client_rankability(client_id).get("items", [])
     except Exception as exc:  # rankability is best-effort input
@@ -825,6 +871,8 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
 
     # Build organic uncapped so Maps actions compete fairly for the combined cap.
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
+    if scope_info.get("sitewide"):
+        organic.insert(0, build_sitewide_action(client_id, scope_info))
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
     maps_actions += build_relevance_action(client_id, relevance_gap)
     maps_actions += build_gbp_action(client_id, gbp_audit_result)
