@@ -883,6 +883,22 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     actions = organic + maps_actions + brand_actions
     actions.sort(key=lambda a: a["sort"], reverse=True)
     actions = actions[:TOTAL_MAX]
+
+    # Verify-loop notes: append each open response episode's clock (2-week
+    # recheck / 6-week escalation state) to its keyword's action rows —
+    # organic and maps alike. Best-effort.
+    try:
+        from services.response_episodes import open_episode_notes
+
+        notes = open_episode_notes(client_id)
+        if notes:
+            for a in actions:
+                note = notes.get((a.get("keyword") or "").lower())
+                if note:
+                    a["episode_note"] = note
+                    a["diagnosis"] = f"{a['diagnosis']} {note}"
+    except Exception as exc:
+        logger.warning("reopt_plan_episode_notes_failed", extra={"client_id": client_id, "error": str(exc)})
     digest = summarize_plan(actions)
 
     latest = (

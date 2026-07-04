@@ -318,6 +318,7 @@ async def gsc_scheduler() -> None:
     from services.brand_schedule import enqueue_due_brand_scans
     from services.freeze import enqueue_due_freeze_checks
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
+    from services.response_episodes import run_episode_sync
 
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
@@ -348,6 +349,8 @@ async def gsc_scheduler() -> None:
                 enqueue_due_syndication_scans()
                 # Daily Freeze Protocol check (homepage deindex detection).
                 enqueue_due_freeze_checks()
+                # Daily response-episode sync (the SOPs' 2-week/6-week verify loop).
+                run_episode_sync()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,
