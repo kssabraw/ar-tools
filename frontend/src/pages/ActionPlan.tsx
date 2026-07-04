@@ -6,6 +6,7 @@ import {
   CheckCircle2, MapPin, Users, Star, Link2, FileText, Target, ChevronDown, Globe, Bot,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { StrategistReview } from '../components/StrategistReview'
 import type { Client, ReoptAction, ReoptPlan } from '../lib/types'
 
 // Action Plan — the reoptimization planner's surface. Reads the latest stored
@@ -75,6 +76,10 @@ export function ActionPlan() {
           {plan.trigger !== 'manual' && ` · ${triggerLabel(plan.trigger)}`}
         </div>
       )}
+
+      {/* SerMaStr — strategist review card (renders nothing while the feature
+          flag is off and no reviews exist). Strategy sits above the task list. */}
+      {id && <StrategistReview clientId={id} />}
 
       {isLoading ? (
         <div style={emptyBox}>Loading…</div>
