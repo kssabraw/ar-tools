@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
-  AlertTriangle, CheckCircle, ChevronDown, ChevronRight, RefreshCw, XCircle,
+  AlertTriangle, CheckCircle, ChevronDown, ChevronRight, FileText, Link2, RefreshCw, XCircle,
 } from 'lucide-react'
 import { localSeoApi } from './api'
 import type { ScoreHistoryRow, ScoreRunMode } from './types'
@@ -132,7 +132,7 @@ function HistoryRow({ row }: { row: ScoreHistoryRow }) {
               {row.keyword}
             </span>
             {row.composite_status && (
-              <span style={{ fontSize: 12, fontWeight: 600, textTransform: 'capitalize', color: scoreColor(score) }}>
+              <span style={{ fontSize: 12, fontWeight: 600, textTransform: 'capitalize', color: scoreColor(score), flexShrink: 0 }}>
                 {statusLabel(row.composite_status)}
               </span>
             )}
@@ -140,10 +140,35 @@ function HistoryRow({ row }: { row: ScoreHistoryRow }) {
           <div style={{ fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {relativeTime(row.created_at)}
             {deficiencyCount > 0 && <> · {deficiencyCount} engine{deficiencyCount === 1 ? '' : 's'} below target</>}
-            {row.page_url && <> · {row.page_url.replace(/^https?:\/\//, '')}</>}
           </div>
         </div>
       </button>
+
+      {/* The measured URL — always visible, outside the toggle button so the link
+          is a valid, independently-clickable anchor. The keyword is the bold
+          title above. */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px',
+        borderTop: '1px solid #f1f5f9', background: '#fbfcfe', fontSize: 12, minWidth: 0,
+      }}>
+        <span style={{ color: '#94a3b8', flexShrink: 0 }}>URL</span>
+        {row.page_url ? (
+          <a
+            href={row.page_url}
+            target="_blank"
+            rel="noreferrer"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#6366f1', fontWeight: 500, wordBreak: 'break-all' }}
+          >
+            <Link2 size={12} style={{ flexShrink: 0 }} />
+            {row.page_url}
+          </a>
+        ) : (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#94a3b8' }}>
+            <FileText size={12} /> In-tool page (no live URL)
+          </span>
+        )}
+      </div>
+
       {open && <EngineBreakdown row={row} />}
     </div>
   )
