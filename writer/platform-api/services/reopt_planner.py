@@ -50,6 +50,7 @@ _TIER = 10_000
 _WITHIN_MAX = 9_999          # within-tier term is clamped to [0, _WITHIN_MAX]
 _SORT_SITEWIDE = 8 * _TIER   # §A sitewide-decline banner sits above everything
 _SORT_DROP = 6 * _TIER
+_SORT_OFFPAGE = 5 * _TIER    # aggregate link loss / RD spike: between drops and cannibalization
 _SORT_DEINDEX_BONUS = _TIER  # deindex sits in its own band above ordinary drops
 _SORT_CANNIBAL = 4 * _TIER
 _SORT_MAPS = 3 * _TIER       # local-pack declines: below cannibalization, above quick wins
@@ -230,6 +231,48 @@ def build_actions(
 
     actions.sort(key=lambda a: a["sort"], reverse=True)
     return actions if cap is None else actions[:cap]
+
+
+def build_offpage_actions(client_id: str, offpage_alerts: list[dict]) -> list[dict]:
+    """Map open offpage-agent alerts (RD loss / unnatural spike) to actions per
+    the Organic Rank Drop SOP §A.5. Pure (unit-tested)."""
+    actions: list[dict] = []
+    for a in offpage_alerts:
+        alert_type = a.get("alert_type")
+        if alert_type == "rd_loss":
+            actions.append(
+                {
+                    "kind": "rd_loss",
+                    "source": "organic",
+                    "keyword": "Backlink profile",
+                    "diagnosis": a.get("message") or "Referring domains fell between captures.",
+                    "recommendation": "Aggregate link loss (SOP §A.5) — build a replacement plan via the "
+                    "Recipe Engine: generate this month's task plan and fund the referring-domains "
+                    "variable (the lost RD marks it deficient automatically).",
+                    "cta_label": "Action Plan",
+                    "cta_path": f"clients/{client_id}/action-plan",
+                    "severity": "warning",
+                    "sort": _SORT_OFFPAGE + _within(9_000 + abs(a.get("delta_pct") or 0)),
+                }
+            )
+        elif alert_type == "rd_spike":
+            actions.append(
+                {
+                    "kind": "rd_spike",
+                    "source": "organic",
+                    "keyword": "Backlink profile",
+                    "diagnosis": a.get("message") or "Referring domains spiked between captures.",
+                    "recommendation": "Unnatural RD spike (SOP §A.5) — check for negative SEO or an "
+                    "unintended blast. We never disavow: response levers are anchor dilution, velocity "
+                    "throttling, stopping builds, and letting the page settle. MC4 judgment call — "
+                    "escalate to the senior SEOs if unclear.",
+                    "cta_label": "Action Plan",
+                    "cta_path": f"clients/{client_id}/action-plan",
+                    "severity": "warning",
+                    "sort": _SORT_OFFPAGE + _within(5_000 + abs(a.get("delta_pct") or 0)),
+                }
+            )
+    return actions
 
 
 def build_sitewide_action(client_id: str, scope_info: dict) -> dict:
@@ -873,6 +916,13 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
     if scope_info.get("sitewide"):
         organic.insert(0, build_sitewide_action(client_id, scope_info))
+    # Offpage-agent alerts (aggregate RD loss / unnatural spike — SOP §A.5).
+    try:
+        from services.offpage_agent import open_offpage_alerts
+
+        organic += build_offpage_actions(client_id, open_offpage_alerts(client_id))
+    except Exception as exc:
+        logger.warning("reopt_plan_offpage_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
     maps_actions += build_relevance_action(client_id, relevance_gap)
     maps_actions += build_gbp_action(client_id, gbp_audit_result)

@@ -326,6 +326,18 @@ def build_diagnosis(client_id: str) -> dict:
     except Exception as exc:
         logger.warning("recipe.diagnosis_rd_failed", extra={"client_id": client_id, "error": str(exc)})
 
+    # Offpage agent: an open aggregate RD-loss alert marks referring_domains
+    # deficient outright (SOP §A.5 — lost links get a replacement plan).
+    try:
+        from services.offpage_agent import open_offpage_alerts
+
+        for a in open_offpage_alerts(client_id):
+            if a.get("alert_type") == "rd_loss" and "referring_domains" not in diagnosis["deficient"]:
+                diagnosis["deficient"].append("referring_domains")
+                diagnosis["signals"]["rd_loss"] = a.get("message")
+    except Exception as exc:
+        logger.warning("recipe.diagnosis_offpage_failed", extra={"client_id": client_id, "error": str(exc)})
+
     # A drop with no identified RD gap → fund link juice (strength) next.
     if (diagnosis.get("organic_drop") or diagnosis.get("maps_drop")) and \
             "referring_domains" not in diagnosis["deficient"]:

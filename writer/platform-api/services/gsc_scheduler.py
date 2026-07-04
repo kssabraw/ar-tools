@@ -318,6 +318,7 @@ async def gsc_scheduler() -> None:
     from services.brand_schedule import enqueue_due_brand_scans
     from services.freeze import enqueue_due_freeze_checks
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
+    from services.offpage_agent import run_offpage_sweep
     from services.response_episodes import run_episode_sync
 
     interval = settings.gsc_scheduler_poll_interval_seconds
@@ -351,6 +352,8 @@ async def gsc_scheduler() -> None:
                 enqueue_due_freeze_checks()
                 # Daily response-episode sync (the SOPs' 2-week/6-week verify loop).
                 run_episode_sync()
+                # Daily offpage sweep (RD loss / unnatural spike — SOP §A.5).
+                run_offpage_sweep()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,
