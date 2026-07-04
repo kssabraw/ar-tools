@@ -1,16 +1,19 @@
-# Search Marketing Strategist Agent — Module Plan v1.0
+# SerMaStr — the Search Marketing Strategist Agent — Module Plan v1.0
 
 **Date:** 2026-07-04
 **Status:** Proposed (spec for review — nothing built yet)
-**Depends on:** the 24/7 agent phase 1 stack (PRs #215/#216 — all live), the SOP library (`docs/sops/`), the notifications service, SerMastr (`services/slack_assistant.py`).
+**Depends on:** the 24/7 agent phase 1 stack (PRs #215/#216 — all live), the SOP library (`docs/sops/`), the notifications service, SerMaStr (`services/slack_assistant.py`).
 
-> **Naming note.** This is the **search-marketing strategist** — its scope is
-> the client's entire search surface: organic SERPs, the local pack / Maps,
-> AI-answer visibility (AEO/AIO), content, links/offpage, and budget
-> allocation. It is *not* "a strategist for LLM visibility" (that's one input
-> among many — the LABS module), and the phrase "LLM strategist" is avoided
-> throughout to keep the two ideas apart. Conversational surface: SerMastr's
-> strategist mode.
+> **Naming note.** The agent's name is **SerMaStr** — **SE**arch
+> **MA**rketing **STR**ategist. Its scope is the client's entire search
+> surface: organic SERPs, the local pack / Maps, AI-answer visibility
+> (AEO/AIO), content, links/offpage, and budget allocation. It is *not* "a
+> strategist for LLM visibility" (that's one input among many — the LABS
+> module), and the phrase "LLM strategist" is avoided throughout to keep the
+> two ideas apart. The existing Slack assistant (`services/slack_assistant.py`,
+> installed in Slack as "SerMaStr") **is this agent's conversational
+> surface** — one identity: the Q&A/actions bot today, plus the strategist
+> mode this plan adds. Canonical capitalization going forward: **SerMaStr**.
 
 ---
 
@@ -54,7 +57,7 @@ client**, with **bounded drill-down tools** where depth is needed.
 
 ```
 deterministic monitors (built) → structured signals (built)
-    → digest assembler (pure; reuses SerMastr's provider pattern)
+    → digest assembler (pure; reuses SerMaStr's provider pattern)
         → ONE strategist run per client (Claude, tool-use loop)
             → drill-down tools on demand (bounded contexts)
                 → strategy_reviews row → Action Plan card + Slack digest
@@ -67,7 +70,7 @@ deterministic monitors (built) → structured signals (built)
 |---|---|---|
 | `scheduled` | Weekly, after the weekly reopt-plan build, **only for clients with active signals** (open alerts/episodes/flags) | Quiet clients skip → cost + noise control |
 | `escalation` | On `episode_escalated`, `sitewide_decline`, `freeze_suspect`, Recipe Engine `escalate_margin_below_50` | Prepares the human-review brief while the alert is hot |
-| `on_demand` | SerMastr ("strategy review for Acme") or the Action Plan page button | Human pulls a review whenever |
+| `on_demand` | SerMaStr ("strategy review for Acme") or the Action Plan page button | Human pulls a review whenever |
 
 ### Inputs (all pre-digested — the strategist never reads raw tables)
 
@@ -137,7 +140,7 @@ LLM strategists fail on *misreading instruments* more than on reasoning: a
 geo-grid `average_rank` of 2.0 over 3/25 pins read as "ranking #2," a null
 GSC position read as a rank loss, one ChatGPT answer-flip read as a trend.
 Five mechanisms make the measuring modules legible; the first two also
-upgrade SerMastr's existing Q&A *before* the strategist ships.
+upgrade SerMaStr's existing Q&A *before* the strategist ships.
 
 1. **Module cards** — a compact "how to read this instrument" doc per
    measuring module, written for agents (what it measures, direction,
@@ -145,7 +148,7 @@ upgrade SerMastr's existing Q&A *before* the strategist ships.
    Live at **`docs/agents/module-cards/`** (rank-tracker, geogrid-tracker,
    labs-ai-visibility; extend with gsc-research / offpage / episodes as the
    digest grows). Injected into every strategist run and loadable by
-   SerMastr's context providers today.
+   SerMaStr's context providers today.
 2. **Standard signal envelope** — the digest normalizes every module's output
    to one shape:
    `{module, keyword, metric, value, baseline, delta, direction
@@ -169,7 +172,7 @@ upgrade SerMastr's existing Q&A *before* the strategist ships.
    `found_pins` before comparing across scans").
 
 All five are **Phase 0 deliverables** (the assembler implements 2–4; the cards
-are 1; tool descriptions are 5). Feedback loop: deliberately tricky SerMastr
+are 1; tool descriptions are 5). Feedback loop: deliberately tricky SerMaStr
 questions ("how are we doing on maps for X?") surface misreadings; each
 misreading becomes a line in a module card.
 
@@ -204,7 +207,7 @@ The strategist's system prompt AND the surrounding code both enforce:
   proposals with Approve / Dismiss, open questions highlighted. (The Action
   Plan is already the team's to-do surface; strategy lives next to the tasks
   it shapes.)
-- **Slack (SerMastr)**: weekly digest per reviewed client (only when the run
+- **Slack (SerMaStr)**: weekly digest per reviewed client (only when the run
   produced non-obvious findings — an empty/confirmatory review posts nothing);
   `strategy review for <client>` runs one on demand; approvals reuse the
   existing reply-*yes* confirm pattern.
@@ -223,7 +226,7 @@ The strategist's system prompt AND the surrounding code both enforce:
   brief trigger may warrant an Opus-class override later), `strategist_max_drilldowns`
   (4), `strategist_weekly_weekday`, `strategist_digest_budget_tokens` (25k).
 - Runs as an `async_jobs` job (`strategy_review`), enqueued by the shared
-  scheduler / SerMastr / the API — same infra as everything else. API:
+  scheduler / SerMaStr / the API — same infra as everything else. API:
   `POST /clients/{id}/strategy-review` + `GET /clients/{id}/strategy-reviews`
   + `POST /strategy-proposals/{review_id}/{idx}` (approve/dismiss).
 
@@ -251,13 +254,13 @@ numbers on the 1–2 briefs/mo they'd apply to.
 - **Phase 0** — migration + `build_strategy_digest` (pure: signal envelope,
   keyword passport, staleness flags — §2b) + SOP section retrieval over
   `docs/sops/` + module-card injection (`docs/agents/module-cards/`, written).
-  Optional quick win: wire the cards into SerMastr's context providers now.
+  Optional quick win: wire the cards into SerMaStr's context providers now.
   Unit tests on the digest budgeting + envelope normalization.
 - **Phase 1** — the strategist run (on-demand API only, `strategist_enabled`
   gate), output to `strategy_reviews`; Action Plan "Strategist Review" card
   with Approve/Dismiss.
 - **Phase 2** — weekly scheduled runs (active-signal-gated) + Slack digest +
-  SerMastr `strategy review for <client>`.
+  SerMaStr `strategy review for <client>`.
 - **Phase 3** — drill-down tools (start with `serp_deep_dive` +
   `geogrid_history`; `audit_page` behind a per-run paid-call cap).
 - **Phase 4** — escalation briefs riding `episode_escalated` /
