@@ -176,3 +176,40 @@ def test_findings_only_review_still_posts_info():
     )
     assert note is not None and note["severity"] == "info"
     assert "1 finding" in note["title"]
+
+
+# ---------------------------------------------------------------------------
+# strategist_enabled gating (the smoke-gate safety rail): with the flag off —
+# its default — every trigger path no-ops before touching the DB.
+# ---------------------------------------------------------------------------
+def test_enqueue_returns_none_while_disabled():
+    from config import settings
+
+    assert settings.strategist_enabled is False  # the shipped default
+    # No DB mock on purpose: a DB touch would blow up, proving the gate is
+    # checked first.
+    assert strategist.enqueue_strategy_review("client-1") is None
+
+
+def test_weekly_pass_noops_while_disabled():
+    assert strategist.enqueue_due_strategy_reviews() == 0
+
+
+def test_job_handler_fails_cleanly_while_disabled():
+    import asyncio
+    from unittest.mock import MagicMock, patch
+
+    supabase = MagicMock()
+    updates: list[dict] = []
+    chain = supabase.table.return_value
+    chain.update.side_effect = lambda payload: (updates.append(payload), chain)[1]
+    chain.eq.return_value = chain
+    chain.execute.return_value = MagicMock(data=[])
+
+    job = {"id": "job-1", "payload": {"client_id": "c-1", "review_id": "r-1"}}
+    with patch.object(strategist, "get_supabase", return_value=supabase):
+        asyncio.get_event_loop().run_until_complete(strategist.run_strategy_review_job(job))
+
+    assert any(u.get("error") == "strategist_disabled" and u.get("status") == "failed" for u in updates)
+    # Both the job row and the pre-created review row are closed out.
+    assert len([u for u in updates if u.get("status") == "failed"]) == 2

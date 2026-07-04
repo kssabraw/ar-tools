@@ -307,6 +307,7 @@ async def run_strategy_review(
     trigger: str = "on_demand",
     review_id: Optional[str] = None,
     escalation_context: Optional[dict] = None,
+    notify: bool = False,
 ) -> dict:
     """Execute one strategist run and persist the strategy_reviews row.
     Returns the completed row. Raises on hard failure (caller marks the job)."""
@@ -425,8 +426,10 @@ async def run_strategy_review(
     ).data[0]
 
     # Digest notification (Slack rides the notifications service). Scheduled +
-    # escalation runs only — an on-demand run means a human is already looking.
-    if trigger in ("scheduled", "escalation"):
+    # escalation runs only — an on-demand run from the UI means a human is
+    # already looking. `notify` forces it (Slack-triggered on-demand runs, so
+    # the answer comes back to the channel that asked).
+    if trigger in ("scheduled", "escalation") or notify:
         note = review_notification({**updated, "trigger": trigger},
                                    (digest.get("client") or {}).get("name") or "client")
         if note:
@@ -452,12 +455,75 @@ async def run_strategy_review(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Weekly scheduling (Phase 2) — active-signal clients only (spec §9 default:
+# quiet clients skip → cost + noise control). Runs the day after the weekly
+# reopt-plan build so the strategist reads a fresh Action Plan.
+# ─────────────────────────────────────────────────────────────────────────────
+def clients_with_active_signals() -> set[str]:
+    """Client ids with anything open: rank/maps/offpage alerts, open or
+    escalated response episodes, or a flagged latest monthly task plan.
+    Best-effort per source — one failing read never empties the set."""
+    supabase = get_supabase()
+    ids: set[str] = set()
+    for table in ("rank_alerts", "maps_alerts", "offpage_alerts"):
+        try:
+            rows = (
+                supabase.table(table).select("client_id")
+                .is_("resolved_at", "null").execute()
+            ).data or []
+            ids |= {r["client_id"] for r in rows if r.get("client_id")}
+        except Exception as exc:
+            logger.warning("strategist.active_signals_read_failed", extra={"table": table, "error": str(exc)})
+    try:
+        rows = (
+            supabase.table("response_episodes").select("client_id")
+            .in_("status", ["open", "escalated"]).execute()
+        ).data or []
+        ids |= {r["client_id"] for r in rows if r.get("client_id")}
+    except Exception as exc:
+        logger.warning("strategist.active_signals_read_failed", extra={"table": "response_episodes", "error": str(exc)})
+    try:
+        # Latest plan per client (newest-first, first-seen wins); flagged → active.
+        rows = (
+            supabase.table("monthly_task_plans")
+            .select("client_id, flags, created_at")
+            .order("created_at", desc=True).limit(200).execute()
+        ).data or []
+        seen: set[str] = set()
+        for r in rows:
+            cid = r.get("client_id")
+            if not cid or cid in seen:
+                continue
+            seen.add(cid)
+            if r.get("flags"):
+                ids.add(cid)
+    except Exception as exc:
+        logger.warning("strategist.active_signals_read_failed", extra={"table": "monthly_task_plans", "error": str(exc)})
+    return ids
+
+
+def enqueue_due_strategy_reviews() -> int:
+    """Weekly scheduler pass: one scheduled strategist run per active-signal
+    client. No-ops entirely while strategist_enabled is false."""
+    if not settings.strategist_enabled:
+        return 0
+    enqueued = 0
+    for client_id in sorted(clients_with_active_signals()):
+        if enqueue_strategy_review(client_id, trigger="scheduled"):
+            enqueued += 1
+    if enqueued:
+        logger.info("strategist.weekly_enqueued", extra={"clients": enqueued})
+    return enqueued
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Enqueue + job handler (async_jobs job_type='strategy_review')
 # ─────────────────────────────────────────────────────────────────────────────
 def enqueue_strategy_review(
     client_id: str,
     trigger: str = "on_demand",
     escalation_context: Optional[dict] = None,
+    notify: bool = False,
 ) -> Optional[str]:
     """Create the strategy_reviews row (status=running, so the UI can show it
     immediately) and enqueue the job. Deduped against an in-flight run for the
@@ -487,6 +553,8 @@ def enqueue_strategy_review(
     payload: dict = {"client_id": client_id, "trigger": trigger, "review_id": review["id"]}
     if escalation_context:
         payload["escalation_context"] = escalation_context
+    if notify:
+        payload["notify"] = True
     supabase.table("async_jobs").insert(
         {"job_type": "strategy_review", "entity_id": client_id, "payload": payload}
     ).execute()
@@ -520,6 +588,7 @@ async def run_strategy_review_job(job: dict) -> None:
         result = await run_strategy_review(
             client_id, trigger=trigger, review_id=review_id,
             escalation_context=payload.get("escalation_context"),
+            notify=bool(payload.get("notify")),
         )
     except Exception as exc:
         logger.warning(
