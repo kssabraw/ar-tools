@@ -291,6 +291,32 @@ def _apply_result(supabase, episode: dict, result: dict, current_pos: Optional[f
             severity="critical",
             payload={"link": f"clients/{episode['client_id']}/action-plan", "episode_id": episode["id"]},
         )
+        # SerMaStr escalation brief (Phase 4): prepare the case file for the
+        # senior review while the alert is hot — what was tried, what moved,
+        # what the strategist recommends. The enqueue no-ops while
+        # strategist_enabled is false; best-effort — never breaks the sweep.
+        try:
+            from services.strategist import enqueue_strategy_review
+
+            enqueue_strategy_review(
+                episode["client_id"],
+                trigger="escalation",
+                escalation_context={
+                    "kind": "episode_escalated",
+                    "episode_id": episode.get("id"),
+                    "keyword": episode.get("keyword"),
+                    "channel": episode.get("channel"),
+                    "classification": episode.get("classification"),
+                    "baseline": episode.get("baseline"),
+                    "opened_at": episode.get("opened_at"),
+                    "checks": checks[-4:],
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "episodes.escalation_brief_enqueue_failed",
+                extra={"episode_id": episode.get("id"), "error": str(exc)},
+            )
     else:
         # improving / no_improvement → schedule the next recheck.
         updates["next_check_at"] = (now + timedelta(days=CHECK_INTERVAL_DAYS)).isoformat()

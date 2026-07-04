@@ -440,6 +440,37 @@ class Settings(BaseSettings):
     service_page_plan_max_rank_checks: int = 25
 
     # ------------------------------------------------------------------
+    # SerMaStr — Search Marketing Strategist Agent
+    # (docs/modules/seo-strategist-agent-plan-v1_0.md)
+    # ------------------------------------------------------------------
+    # Master switch. DEFAULT FALSE until the smoke gate (spec §7): with it off,
+    # nothing runs — the on-demand API returns 409, the weekly scheduler pass
+    # and the escalation-event triggers all no-op, and the Slack action refuses.
+    # Flip STRATEGIST_ENABLED=true on PLATFORM to activate.
+    strategist_enabled: bool = False
+    # Sonnet-class everywhere (spec §9 default; revisit Opus for escalation
+    # briefs after the smoke gate).
+    strategist_model: str = "claude-sonnet-4-6"
+    strategist_max_tokens: int = 4096
+    # Drill-down bounds (spec §2): ≤ N tool calls per run; the paid one
+    # (audit_page → an nlp-api scoring run) is capped separately and tighter.
+    strategist_max_drilldowns: int = 4
+    strategist_max_paid_drilldowns: int = 1
+    # Each drill-down result is truncated to ~this many characters (~2k tokens).
+    strategist_tool_result_chars: int = 8_000
+    # The two LLM drill-down subagents (serp_deep_dive / geogrid_history).
+    strategist_subagent_model: str = "claude-sonnet-4-6"
+    strategist_subagent_max_tokens: int = 1200
+    # Weekly scheduled runs: the day after the Monday reopt-plan build so the
+    # strategist reads a fresh Action Plan (0=Mon..6=Sun). Active-signal
+    # clients only (spec §9 default).
+    strategist_weekly_weekday: int = 1
+    # Input budget per run before drill-downs (spec §2: ≤ ~25k tokens). The
+    # digest assembler converts at ~4 chars/token and splits this between the
+    # signal digest and the SOP block.
+    strategist_digest_budget_tokens: int = 25_000
+
+    # ------------------------------------------------------------------
     # Asana task integration (docs/modules/asana-task-integration-plan-v1_0.md)
     # ------------------------------------------------------------------
     # Two features on one token: (A) monthly section automation — clone a

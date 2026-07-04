@@ -36,6 +36,7 @@ from routers.recipe import router as recipe_router
 from routers.reopt import router as reopt_router
 from routers.reports import router as reports_router
 from routers.slack_events import router as slack_events_router
+from routers.strategist import router as strategist_router
 from routers.runs import router as runs_router
 from routers.silos import router as silos_router
 from routers.sops import router as sops_router
@@ -180,6 +181,7 @@ app.include_router(recipe_router)
 app.include_router(reopt_router)
 app.include_router(reports_router)
 app.include_router(slack_events_router)
+app.include_router(strategist_router)
 app.include_router(runs_router)
 app.include_router(silos_router)
 app.include_router(sops_router)

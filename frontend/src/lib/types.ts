@@ -1447,3 +1447,44 @@ export interface ClientReport {
   created_at: string
   completed_at: string | null
 }
+
+// SerMaStr — strategist reviews (docs/modules/seo-strategist-agent-plan-v1_0.md).
+export interface StrategyFinding {
+  signal_refs: string[]
+  synthesis: string
+  sop_citation: string
+}
+
+export interface StrategyProposal {
+  title: string
+  action: string
+  rationale: string
+  sop_citation: string
+  est_cost_usd: number | null
+  effort: 'low' | 'medium' | 'high' | null
+  assignee_hint: string | null
+  status: 'proposed' | 'approved' | 'dismissed' | 'expired'
+  requires: 'none' | 'approval' | 'senior'
+  decided_by?: string | null
+}
+
+export interface StrategyReview {
+  id: string
+  client_id: string
+  trigger: 'scheduled' | 'escalation' | 'on_demand'
+  status: 'running' | 'complete' | 'failed'
+  model: string | null
+  assessment: string | null
+  findings: StrategyFinding[]
+  proposals: StrategyProposal[]
+  questions: string[]
+  token_usage: Record<string, unknown> | null
+  error: string | null
+  created_at: string
+  completed_at: string | null
+}
+
+export interface StrategyReviewList {
+  reviews: StrategyReview[]
+  enabled: boolean
+}

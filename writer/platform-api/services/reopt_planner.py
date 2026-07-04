@@ -987,13 +987,19 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
 
     latest = (
         supabase.table("reopt_plans")
-        .select("id, action_count")
+        .select("id, action_count, items")
         .eq("client_id", client_id)
         .order("created_at", desc=True)
         .limit(1)
         .execute()
     ).data
     latest_count = latest[0]["action_count"] if latest else None
+    # Sitewide-decline TRANSITION detection for the strategist escalation brief:
+    # fire only when this build turns sitewide on and the previous plan wasn't —
+    # a client sitting in a sitewide state doesn't re-brief on every rebuild.
+    prev_had_sitewide = bool(latest) and any(
+        a.get("kind") == "sitewide_decline" for a in (latest[0].get("items") or [])
+    )
 
     if _should_store(len(actions), latest_count):
         plan = (
@@ -1026,6 +1032,29 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
             severity=digest["severity"],
             payload={"link": _plan_path(client_id), "plan_id": plan["id"]},
         )
+
+    # SerMaStr escalation brief (Phase 4): a §A sitewide decline just opened —
+    # a systemic cause needs a strategic read, not per-keyword fixes. The
+    # enqueue no-ops while strategist_enabled is false; best-effort.
+    if scope_info.get("sitewide") and not prev_had_sitewide:
+        try:
+            from services.strategist import enqueue_strategy_review
+
+            enqueue_strategy_review(
+                client_id,
+                trigger="escalation",
+                escalation_context={
+                    "kind": "sitewide_decline",
+                    "open_drops": scope_info.get("open_drops"),
+                    "tracked_count": scope_info.get("tracked_count"),
+                    "plan_id": plan["id"],
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "reopt_plan_sitewide_brief_failed",
+                extra={"client_id": client_id, "error": str(exc)},
+            )
 
     logger.info(
         "reopt_plan_built",

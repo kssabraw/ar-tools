@@ -1,6 +1,63 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-07-04 · **SerMaStr — Search Marketing Strategist Agent, spec approved** (latest) — **MERGED to `main`** (PRs #218 `c7254fd` + #219 `2166a03`; spec only, nothing built yet)
+## ⏩ Update — 2026-07-05 · **SerMaStr Phases 0–4 BUILT — dormant behind `strategist_enabled=false`** (latest)
+
+The strategist agent from `docs/modules/seo-strategist-agent-plan-v1_0.md` is
+**built end-to-end (Phases 0–4; Phase 5 Asana push deliberately out of scope)**
+in one overnight autonomous run. Migration `20260704180000_strategy_reviews`
+is **applied to the live Supabase project**. Nothing is active in production:
+every trigger path (on-demand API, weekly scheduler pass, both escalation
+hooks, the Slack action) checks `strategist_enabled`, which ships **FALSE**.
+
+**What exists now (detail in the CLAUDE.md paragraph):**
+- **Phase 0** — `services/strategy_digest.py` (signal envelope w/ deterministic
+  `status`, keyword passports, staleness flags, isolated providers) +
+  `services/sop_library.py` (active-domain SOP selection over `docs/sops/` +
+  the DB `sop_store` layer + module cards; corpus **vendored** at
+  `writer/platform-api/agent_docs/` because the Docker build context can't see
+  repo-root `docs/` — a unit test keeps the copies byte-identical).
+- **Phases 1+3** — `services/strategist.py` (bounded tool-use run →
+  `strategy_reviews` row; `sanitize_review` enforces §3 in code) +
+  `services/strategist_tools.py` (serp_deep_dive / geogrid_history LLM
+  subagents; episode_timeline / read_sop / client_capacity deterministic;
+  audit_page paid+capped) + `routers/strategist.py` + the Action Plan
+  **Strategist Review card** (Approve/Dismiss; senior proposals need admin).
+- **Phases 2+4** — weekly active-signal-only pass on the shared scheduler
+  (Tuesday, day after the reopt build); SerMaStr Slack action
+  ("strategy review for <client>", reply-*yes*); escalation briefs riding
+  `episode_escalated` + the new sitewide-decline transition detector.
+
+**Verification done:** 994 pytest green under the pinned `fastapi==0.115.0`
+import-check; real `npm run build` clean; an 8-angle code review ran before
+push — 6 confirmed findings fixed (senior-approval now enforced at the API,
+per-trigger job dedup so escalation briefs can't be swallowed, DB sop_store
+folded into the run, dead budget-domain read, orphaned-review cleanup,
+completed_at timing). Also fixed 3 pre-existing drifted `test_run_dispatch`
+assertions (fanout `generate_service_page_core` returns a run id now).
+
+### 🚦 To activate (the smoke gate — spec §7)
+1. Set `STRATEGIST_ENABLED=true` on the **PLATFORM** Railway service (env var
+   → redeploy). Nothing else is needed — schema is live, Slack/notifications
+   already provisioned.
+2. Smoke-test: open a client's **Action Plan** page → "Strategist Review" card
+   → **Run review** (or in Slack: "strategy review for <client>" → reply
+   *yes*). Expect a review in 1–3 minutes: assessment, findings w/ SOP
+   citations, proposals (senior-only badged), questions.
+3. Judge 2–3 real clients' reviews (Kyle/Ryan). If they'd have been your
+   calls, leave it on — the weekly pass (active-signal clients only) and the
+   escalation briefs are then live automatically. If not, set the flag back
+   to false; everything goes dormant again.
+
+**Deferred / notes:** Phase 5 (approved proposal → Asana task) rides the
+Asana-push build. `docs/sops/` + module-card edits must be re-copied into
+`writer/platform-api/agent_docs/` (pytest fails loudly if you forget).
+Weekly-scope/model/digest-destination/approval-surface all use the spec §9
+defaults (Sonnet everywhere; shared Slack channel; active-signal only;
+Action-Plan-first).
+
+---
+
+## ⏩ Update — 2026-07-04 · **SerMaStr — Search Marketing Strategist Agent, spec approved** — **MERGED to `main`** (PRs #218 `c7254fd` + #219 `2166a03`; spec only, nothing built yet)
 
 The reasoning layer atop the deterministic agent loop now has an **approved
 plan of record**: **`docs/modules/seo-strategist-agent-plan-v1_0.md`**. The

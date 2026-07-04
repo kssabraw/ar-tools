@@ -64,10 +64,21 @@ _SYSTEM = (
     "answer. As a strategist, you may connect signals across modules when relevant "
     "(e.g. a ranking drop + a content gap). Never invent numbers or modules.\n\n"
     "You can also TAKE ACTIONS via the provided tools (rebuild the Action Plan, "
-    "run a Maps geo-grid scan, run GSC Research, run an AI Visibility scan). If the "
-    "teammate is clearly asking you to run/start/trigger/rebuild one of these for the "
-    "client, call the matching tool instead of answering. If they're only asking about "
-    "results or anything else, answer normally — do NOT call a tool for a question."
+    "run a Maps geo-grid scan, run GSC Research, run an AI Visibility scan, run a "
+    "strategist review). If the teammate is clearly asking you to run/start/trigger/"
+    "rebuild one of these for the client, call the matching tool instead of answering. "
+    "If they're only asking about results or anything else, answer normally — do NOT "
+    "call a tool for a question.\n\n"
+    "HOW TO READ THE INSTRUMENTS (module-card rules — never misread these):\n"
+    "- Rank tracker: position is lower=better. A null GSC position means NO DATA that "
+    "day (no impressions / not connected), never 'dropped out'; read positions with "
+    "their impressions; don't splice GSC and DataForSEO reads into one trend.\n"
+    "- Maps geo-grid: average_rank is computed over FOUND pins only — always read it "
+    "with found/total pin coverage (3/25 pins at average 2.0 = barely present, not "
+    "'ranking #2'); top-3 pins / total pins is the honest pack-presence number.\n"
+    "- AI visibility: single results are noisy by design — one engine flipping on one "
+    "keyword is NOT a trend; read batch rollups and cross-batch trends; engines are "
+    "not interchangeable (AIO/AI-Mode lean on GBP + top organic, ChatGPT leans Bing)."
 )
 
 
@@ -531,6 +542,24 @@ def _act_gsc_research(client_id: str) -> str:
     )
 
 
+def _act_strategy_review(client_id: str) -> str:
+    from services import strategist
+
+    if not settings.strategist_enabled:
+        return (
+            "The strategist is currently disabled (`strategist_enabled` is off) — "
+            "it activates once the smoke gate is passed."
+        )
+    review_id = strategist.enqueue_strategy_review(client_id, trigger="on_demand", notify=True)
+    return (
+        "🧠 Strategist review started — the digest will post to the alerts channel "
+        "when it's done; the full review (with Approve/Dismiss) lands on the client's "
+        "Action Plan page."
+        if review_id
+        else "A strategist review is already running for this client."
+    )
+
+
 def _act_ai_scan(client_id: str) -> str:
     from fastapi import HTTPException
 
@@ -551,6 +580,9 @@ _ACTIONS: dict[str, dict] = {
     "run_maps_scan": {"label": "run a Maps geo-grid scan", "paid": True, "run": _act_maps_scan},
     "run_gsc_research": {"label": "run a GSC Research analysis", "paid": True, "run": _act_gsc_research},
     "run_ai_visibility_scan": {"label": "run an AI Visibility scan", "paid": True, "run": _act_ai_scan},
+    # SerMaStr strategist mode: "strategy review for <client>". Paid gating =
+    # the reply-*yes* confirm (an LLM run + up to one paid nlp audit call).
+    "run_strategy_review": {"label": "run a strategist review", "paid": True, "run": _act_strategy_review},
 }
 _ACTION_TOOLS = [
     {"name": name, "description": meta["label"].capitalize() + " for the client.",

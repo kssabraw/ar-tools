@@ -323,15 +323,19 @@ async def gsc_scheduler() -> None:
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.response_episodes import run_episode_sync
 
+    from services.strategist import enqueue_due_strategy_reviews
+
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
     weekday = settings.dataforseo_rank_weekday
     maps_weekday = settings.maps_scan_weekday
     reopt_weekday = settings.reopt_plan_weekday
+    strategist_weekday = settings.strategist_weekly_weekday
     last_run_date: Optional[date] = None
     last_df_date: Optional[date] = None
     last_maps_date: Optional[date] = None
     last_reopt_date: Optional[date] = None
+    last_strategist_date: Optional[date] = None
     last_asana_month: Optional[tuple] = None
     last_asana_workload_date: Optional[date] = None
     logger.info("gsc_scheduler.started", extra={"poll_interval_s": interval, "hour_utc": hour})
@@ -380,6 +384,12 @@ async def gsc_scheduler() -> None:
             if now.weekday() == reopt_weekday and should_run(now, last_reopt_date, hour):
                 enqueue_due_reopt_plans()
                 last_reopt_date = now.date()
+            # Weekly SerMaStr strategist reviews (active-signal clients only,
+            # the day after the reopt build so the plan is fresh). The enqueue
+            # helper no-ops entirely while strategist_enabled is false.
+            if now.weekday() == strategist_weekday and should_run(now, last_strategist_date, hour):
+                enqueue_due_strategy_reviews()
+                last_strategist_date = now.date()
             # Monthly Asana section automation: once per month on the configured
             # day-of-month, enqueue an asana_monthly job per mapped client (the
             # job itself no-ops if the month's section already exists).
