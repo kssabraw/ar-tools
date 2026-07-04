@@ -133,18 +133,18 @@ def test_sanitize_grounds_verified_tool_op():
     assert p["cost_basis"] == "operational"
 
 
-def test_sanitize_unverified_tool_op_shows_no_dollar():
-    # keyword_research is an LLM-token op still unverified → "tool cost", never $0.
+def test_sanitize_unpriced_operational_shows_no_dollar():
+    # an operational proposal that names no known priced op → "tool cost", never $0.
     out = strategist.sanitize_review(
         {"assessment": "a", "proposals": [
-            _proposal(cost_basis="operational", costed_items=[{"task_type": "keyword_research", "quantity": 1}]),
+            _proposal(cost_basis="operational", costed_items=[{"task_type": "some_new_tool", "quantity": 1}]),
         ]},
         frozen=False,
     )
     p = out["proposals"][0]
-    assert p["est_cost_usd"] is None          # not $0 — unpriced (unverified)
-    assert p["cost_basis"] == "operational"
-    assert p["costed_items"] == [{"task_type": "keyword_research", "quantity": 1.0}]
+    assert p["est_cost_usd"] is None          # not $0 — unknown/unpriced
+    assert p["cost_basis"] == "operational"   # preserved from the declared basis
+    assert p["costed_items"] == []            # the unknown task_type is filtered out
 
 
 def test_sanitize_ignores_unknown_task_type_and_bad_qty():
@@ -175,9 +175,10 @@ def test_sanitize_no_items_defaults_cost_none():
 
 def test_render_price_list_has_both_catalogs():
     pl = strategist.render_price_list()
-    assert "content_page" in pl and "$5" in pl              # a real deliverable price
-    assert "geo_grid_scan" in pl and "$0.37" in pl          # a researched, verified tool op
-    assert "keyword_research" in pl and "price pending" in pl  # a still-unverified LLM op
+    assert "content_page" in pl and "$5" in pl        # a real deliverable price
+    assert "geo_grid_scan" in pl and "$0.37" in pl    # a researched tool op
+    assert "keyword_research" in pl and "$0.50" in pl  # LLM op now priced
+    assert "price pending" not in pl                  # everything is researched now
 
 
 # ---------------------------------------------------------------------------

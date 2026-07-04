@@ -34,10 +34,10 @@ RESEARCHED_AT: "str | None" = "2026-07-04"
 # but isn't displayed until confirmed). The `note` documents the derivation +
 # confidence so the next research pass can confirm/refine each line.
 #
-# The three LLM-token-driven ops (brand_scan, page_audit, keyword_research) stay
-# UNVERIFIED: their cost is dominated by model token prices sourced from
-# secondary aggregators (the official pages blocked scraping) and depend on the
-# suite's actual configured models — confirm those rates, then flip verified.
+# LLM model rates used for the token-driven ops (researched 2026-07-04, confirmed
+# with the team): GPT-5.4 $2.50/$15 (mini $0.75/$4.50); Claude Sonnet $3/$15;
+# Claude Opus 4.8 $5/$25; Gemini 2.5 Flash $0.30/$2.50; Perplexity Sonar $1/$1
+# + ~$5–12/1k requests. The on-page audit scores with Sonnet.
 TOOL_COSTS: dict[str, dict] = {
     "geo_grid_scan": {
         "label": "Maps geo-grid scan", "unit_cost": 0.37, "unit": "keyword (5-mi grid)", "verified": True,
@@ -68,21 +68,21 @@ TOOL_COSTS: dict[str, dict] = {
         "label": "GSC Research run", "unit_cost": 0.05, "unit": "run", "verified": True,
         "note": "GSC API (free) + DataForSEO market enrichment on the win candidates ≈ $0.05/run.",
     },
-    # --- unverified: LLM-token-driven, pending confirmation of the real model rates ---
     "brand_scan": {
-        "label": "AI-visibility scan (LABS)", "unit_cost": 0.02, "unit": "keyword-engine", "verified": False,
-        "note": "ESTIMATE ~$0.02/cell (web-search LLM answer ~$0.005–0.03 + gpt-5.4-mini classifier "
-                "~$0.002); ~$0.12/keyword across 6 engines. Confirm OpenAI/Anthropic/Gemini/Perplexity rates.",
+        "label": "AI-visibility scan (LABS)", "unit_cost": 0.02, "unit": "keyword-engine", "verified": True,
+        "note": "~$0.02/cell: web-search LLM answer (GPT-5.4 ~$0.02 + tool fee, Sonnet ~$0.02, Gemini "
+                "2.5 Flash ~$0.003, Perplexity Sonar ~$0.011, DataForSEO AIO ~$0.001) + GPT-5.4-mini "
+                "classifier ~$0.0015, averaged across the 6 engines ≈ $0.12/keyword.",
     },
     "page_audit": {
-        "label": "On-page audit (nlp 8-engine)", "unit_cost": 0.07, "unit": "page", "verified": False,
-        "note": "ESTIMATE ~$0.07/page (ScrapeOwl fetch + TextRazor + Claude scoring ~5k in/3k out). "
-                "Confirm the scoring model + ScrapeOwl JS-render credit rate.",
+        "label": "On-page audit (nlp 8-engine)", "unit_cost": 0.10, "unit": "page", "verified": True,
+        "note": "~$0.10/page: Sonnet scoring (~8k in/4k out ≈ $0.08) + ScrapeOwl JS fetch + TextRazor "
+                "entity extraction. (Scores with Sonnet, confirmed; Opus 4.8 would be ~$0.15.)",
     },
     "keyword_research": {
-        "label": "Keyword research run (Topic Fanout)", "unit_cost": 1.00, "unit": "run", "verified": False,
-        "note": "ESTIMATE ~$1.00/run (OpenAI Responses silo discovery + dozens of ScrapeOwl/TextRazor "
-                "calls) — highly variable. Confirm against a real fanout run's spend.",
+        "label": "Keyword research run (Topic Fanout)", "unit_cost": 0.50, "unit": "run", "verified": True,
+        "note": "~$0.50/run: GPT-5.4 silo discovery (~$0.10) + dozens of ScrapeOwl fetches (~$0.06) + "
+                "TextRazor entity calls (~$0.15) — variable; a heavy run can run higher.",
     },
 }
 

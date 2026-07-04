@@ -58,9 +58,11 @@ def test_tool_catalog_researched_prices():
     assert tool_costs.RESEARCHED_AT == "2026-07-04"
 
 
-def test_llm_token_ops_stay_unverified():
-    # the LLM-token ops keep an estimate but stay unverified (shown as "tool cost")
-    pending = {o["task_type"] for o in tool_costs.unverified_operations()}
-    assert pending == {"brand_scan", "page_audit", "keyword_research"}
+def test_all_ops_now_verified():
+    # every tool op has a researched, confirmed price (LLM rates confirmed too)
+    assert tool_costs.unverified_operations() == []
     cat = tool_costs.tool_catalog()
-    assert not cat["brand_scan"]["verified"]
+    assert all(e["verified"] for e in cat.values())
+    assert cat["brand_scan"]["unit_cost"] == 0.02
+    assert cat["page_audit"]["unit_cost"] == 0.10
+    assert cat["keyword_research"]["unit_cost"] == 0.50
