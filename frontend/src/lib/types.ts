@@ -1482,6 +1482,9 @@ export interface StrategyReview {
   error: string | null
   created_at: string
   completed_at: string | null
+  published_doc_id?: string | null
+  published_doc_url?: string | null
+  published_at?: string | null
 }
 
 export interface StrategyReviewList {

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  BrainCircuit, Check, ChevronDown, HelpCircle, Pin, RefreshCw, ShieldAlert, X,
+  BrainCircuit, Check, ChevronDown, ExternalLink, FileText, HelpCircle, Pin, RefreshCw, ShieldAlert, X,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { StrategyProposal, StrategyReview, StrategyReviewList } from '../lib/types'
@@ -35,6 +35,13 @@ export function StrategistReview({ clientId }: { clientId: string }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategy-reviews', clientId] }),
   })
 
+  // Save the internal review to the client's Drive folder as a Google Doc.
+  const publish = useMutation({
+    mutationFn: (reviewId: string) =>
+      api.post<{ doc_url: string }>(`/strategy-reviews/${reviewId}/publish`, {}),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategy-reviews', clientId] }),
+  })
+
   if (!data) return null
   const reviews = data.reviews ?? []
   const latest = reviews[0]
@@ -51,6 +58,23 @@ export function StrategistReview({ clientId }: { clientId: string }) {
         <span style={{ fontWeight: 700, fontSize: 15, color: '#0f172a' }}>Strategist Review</span>
         <span style={smallMuted}>SerMaStr — proposes only; nothing runs without your approval</span>
         <span style={{ flex: 1 }} />
+        {latestComplete && (
+          latestComplete.published_doc_url ? (
+            <a style={docLink} href={latestComplete.published_doc_url} target="_blank" rel="noreferrer">
+              <ExternalLink size={13} /> Open Doc
+            </a>
+          ) : (
+            <button
+              style={saveBtn}
+              onClick={() => publish.mutate(latestComplete.id)}
+              disabled={publish.isPending}
+              title="Save this review as an internal Google Doc in the client's Drive folder"
+            >
+              <FileText size={13} style={publish.isPending ? { animation: 'spin 1s linear infinite' } : undefined} />
+              {publish.isPending ? 'Saving…' : 'Save to Drive'}
+            </button>
+          )
+        )}
         {data.enabled && (
           <button
             style={runBtn}
@@ -65,6 +89,17 @@ export function StrategistReview({ clientId }: { clientId: string }) {
           </button>
         )}
       </div>
+
+      {publish.isError && (
+        <div style={{ ...noteBox, color: '#b45309', background: '#fffbeb', borderColor: '#fde68a' }}>
+          {publishErrorMessage((publish.error as Error)?.message)}
+        </div>
+      )}
+      {publish.isSuccess && !publish.isPending && (
+        <div style={{ ...noteBox, color: '#16a34a', background: '#f0fdf4', borderColor: '#bbf7d0' }}>
+          Saved to the client’s Drive folder as an internal Google Doc.
+        </div>
+      )}
 
       {decide.isError && (
         <div style={{ ...noteBox, color: '#b45309', background: '#fffbeb', borderColor: '#fde68a' }}>
@@ -260,6 +295,19 @@ function triggerLabel(trigger: string): string {
   }
 }
 
+function publishErrorMessage(code?: string): string {
+  switch (code) {
+    case 'missing_google_drive_folder_id':
+      return 'This client has no Drive folder set — add one on the client form first.'
+    case 'publish_not_configured':
+      return 'Google Docs publishing isn’t configured (GOOGLE_APPS_SCRIPT_URL is not set).'
+    case 'review_not_complete':
+      return 'The review has to finish before it can be saved.'
+    default:
+      return `Couldn’t save to Drive: ${code ?? 'unknown error'}`
+  }
+}
+
 const card: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 10, padding: '14px 16px',
   border: '1px solid #ddd6fe', borderRadius: 10, background: '#fff', marginBottom: 20,
@@ -292,6 +340,17 @@ const runBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
   fontSize: 12.5, fontWeight: 600, color: '#7c3aed', background: '#f5f3ff',
   border: '1px solid #ddd6fe', borderRadius: 8, padding: '6px 12px', cursor: 'pointer',
+}
+const saveBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
+  fontSize: 12.5, fontWeight: 600, color: '#334155', background: '#fff',
+  border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 12px', cursor: 'pointer',
+}
+const docLink: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0,
+  fontSize: 12.5, fontWeight: 600, color: '#16a34a', background: '#f0fdf4',
+  border: '1px solid #bbf7d0', borderRadius: 8, padding: '6px 12px',
+  textDecoration: 'none',
 }
 const approveBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4,
