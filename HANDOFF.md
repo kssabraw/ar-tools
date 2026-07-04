@@ -1,6 +1,55 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-07-04 · **SOP library + 24/7 SEO agent phase 1** (latest) — **MERGED to `main`** (PRs #215 `3e3c828` + #216 `73e6e15`, both deployed & live)
+## ⏩ Update — 2026-07-04 · **SerMaStr — Search Marketing Strategist Agent, spec approved** (latest) — **MERGED to `main`** (PRs #218 `c7254fd` + #219 `2166a03`; spec only, nothing built yet)
+
+The reasoning layer atop the deterministic agent loop now has an **approved
+plan of record**: **`docs/modules/seo-strategist-agent-plan-v1_0.md`**. The
+agent's name is **SerMaStr** — **SE**arch **MA**rketing **STR**ategist (owner
+ruling, #219). The existing Slack assistant is this agent's conversational
+surface — one identity: the Q&A/actions bot today, plus the strategist mode
+the plan adds. Scope is the whole search surface (organic, local pack/maps,
+AI-answer visibility, content, links/offpage, budget) — deliberately *not*
+"a strategist for LLM visibility."
+
+**Locked decisions (decision records in the spec):**
+- **Per-domain standing LLM monitors rejected** — monitoring stays
+  deterministic (already built); strategy is the cross-domain part (one
+  shared budget, interlocking SOPs). Architecture: **one strategist run per
+  client**, event-driven (weekly for active-signal clients + escalation
+  events + on-demand), with **bounded drill-down tools** (≤4/run; only
+  `serp_deep_dive` + `geogrid_history` are true LLM subagents).
+- **Proposes, never executes.** Advice objects with SOP citations, staged for
+  Approve/Dismiss; six hard-coded human passthroughs from `_ORCHESTRATOR.md`
+  §3 (freeze, GBP suspension, sub-50% margin, separate-entity calls,
+  overclock, the 6-week review itself). Unowned decisions → questions.
+- **Escalation briefs:** the 6-week rule's critical notification gains a
+  prepared case file (what was tried / what moved / recommendation) instead
+  of a bare alert.
+- **Module legibility (spec §2b):** module cards + a standard signal envelope
+  (`direction` + deterministically-computed `status` — the LLM never does
+  trend arithmetic) + the **keyword passport** (digest grouped by keyword
+  across channels) + explicit staleness + self-documenting tools. First three
+  **module cards written** at **`docs/agents/module-cards/`** (rank-tracker,
+  geogrid-tracker, labs-ai-visibility — each with a worked misreading, e.g.
+  "average_rank without found_pins", "null GSC position ≠ rank loss", "one
+  AI answer-flip ≠ trend"). Cards can be wired into SerMaStr's Slack context
+  providers immediately, before the strategist ships.
+- **Cost:** ≈ $1–2/client/mo typical (Sonnet-class), $0 for quiet clients.
+- **Smoke gate:** Phase 1 is on-demand only (`strategist_enabled` default
+  false); weekly scheduling only after Kyle/Ryan judge 2–3 real reviews.
+
+**Next build (on "go"):** Phase 0–1 — `build_strategy_digest` (signal
+envelope + keyword passport + staleness + SOP/module-card retrieval),
+`strategy_reviews` migration, the on-demand run, and the Action Plan
+"Strategist Review" card. The **Asana task push** (plan lines → assigned
+Asana tasks) remains queued as its own build and later becomes SerMaStr
+Phase 5. Open §9 defaults to confirm at build time: Sonnet everywhere;
+digests to the shared Slack channel; weekly = active-signal clients only;
+approvals Action-Plan-first.
+
+---
+
+## ⏩ Update — 2026-07-04 · **SOP library + 24/7 SEO agent phase 1** — **MERGED to `main`** (PRs #215 `3e3c828` + #216 `73e6e15`, both deployed & live)
 
 The session that turned the agency's SOP corpus into a running machine. Two
 merged PRs: **#215** (the SOP library + the whole agent loop) and **#216** (the
