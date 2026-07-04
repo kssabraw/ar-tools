@@ -76,6 +76,28 @@ export interface ScoreResult {
   serp_analysis?: AnalysisResult | null
 }
 
+// One run in the per-run score history (local_seo_page_scores). Each row carries
+// the full 8-engine verdict for a run — standalone score, generate, or the
+// reoptimize before/after — so the per-engine breakdown is kept, not just the
+// composite.
+export type ScoreRunMode = 'score' | 'generate' | 'reoptimize' | 'reoptimize_before'
+
+export interface ScoreHistoryRow {
+  id: string
+  client_id: string
+  page_id: string | null
+  keyword: string
+  location: string | null
+  page_url: string | null
+  mode: ScoreRunMode
+  composite_score: number | null
+  composite_status: string | null
+  engine_scores: Record<string, EngineScore> | null
+  deficiencies: Deficiency[] | null
+  token_usage?: (Record<string, unknown>) | null
+  created_at: string
+}
+
 export interface FindPageResult {
   found: boolean
   page?: { url: string; title: string; h1?: string }

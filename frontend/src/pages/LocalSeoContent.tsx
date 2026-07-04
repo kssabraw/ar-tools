@@ -19,6 +19,7 @@ import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { ReoptimizeView } from '../components/localseo/ReoptimizeView'
+import { ScoreHistoryView } from '../components/localseo/ScoreHistoryView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
 import {
@@ -58,12 +59,13 @@ export function LocalSeoContent() {
     enabled: Boolean(clientId),
   })
 
-  const [tab, setTab] = useState<'new' | 'plan' | 'reopt' | 'saved' | 'drafts'>(
-    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / reopt / drafts).
+  const [tab, setTab] = useState<'new' | 'plan' | 'reopt' | 'saved' | 'drafts' | 'history'>(
+    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / reopt / drafts / history).
     searchParams.get('tab') === 'saved' ? 'saved'
       : searchParams.get('tab') === 'plan' ? 'plan'
       : searchParams.get('tab') === 'reopt' ? 'reopt'
       : searchParams.get('tab') === 'drafts' ? 'drafts'
+      : searchParams.get('tab') === 'history' ? 'history'
       : 'new',
   )
   const [view, setView] = useState<View>({ kind: 'form' })
@@ -431,7 +433,7 @@ export function LocalSeoContent() {
 
       {/* Tabs */}
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-        {(['new', 'plan', 'reopt', 'saved', 'drafts'] as const).map(t => (
+        {(['new', 'plan', 'reopt', 'saved', 'drafts', 'history'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -440,7 +442,7 @@ export function LocalSeoContent() {
               background: tab === t ? '#fff' : 'transparent', color: tab === t ? '#0f172a' : '#64748b',
               boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
             }}
-          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}`}</button>
+          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : t === 'drafts' ? `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}` : 'Score History'}</button>
         ))}
       </div>
 
@@ -462,6 +464,8 @@ export function LocalSeoContent() {
           onPurge={async (pid) => { await localSeoApi.purgePage(pid); refreshSaved() }}
           onPurgeAll={async () => { await localSeoApi.purgeDrafts(clientId); refreshSaved() }}
         />
+      ) : tab === 'history' ? (
+        <ScoreHistoryView clientId={clientId} />
       ) : tab === 'reopt' ? (
         <ReoptimizeView
           clientId={clientId}
