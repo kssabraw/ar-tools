@@ -21,6 +21,7 @@ from routers.briefs import router as briefs_router
 from routers.clients import router as clients_router
 from routers.dashboard import router as dashboard_router
 from routers.files import router as files_router
+from routers.freeze import router as freeze_router
 from routers.gsc import router as gsc_router
 from routers.gsc_research import router as gsc_research_router
 from routers.guides import router as guides_router
@@ -30,6 +31,7 @@ from routers.maps import router as maps_router
 from routers.notifications import router as notifications_router
 from routers.publish import router as publish_router
 from routers.rank import router as rank_router
+from routers.recipe import router as recipe_router
 from routers.reopt import router as reopt_router
 from routers.reports import router as reports_router
 from routers.slack_events import router as slack_events_router
@@ -163,6 +165,7 @@ app.include_router(briefs_router)
 app.include_router(clients_router)
 app.include_router(dashboard_router)
 app.include_router(files_router)
+app.include_router(freeze_router)
 app.include_router(gsc_router)
 app.include_router(gsc_research_router)
 app.include_router(guides_router)
@@ -171,6 +174,7 @@ app.include_router(local_seo_router)
 app.include_router(maps_router)
 app.include_router(notifications_router)
 app.include_router(rank_router)
+app.include_router(recipe_router)
 app.include_router(reopt_router)
 app.include_router(reports_router)
 app.include_router(slack_events_router)

@@ -8,6 +8,7 @@ import {
   ClipboardList, BookOpen, Share2,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
+import { FreezeBanner } from '../components/FreezeBanner'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
@@ -78,6 +79,7 @@ export function ClientWorkspace() {
         </div>
       </div>
 
+      {id && <FreezeBanner clientId={id} />}
       {id && <ClientNotifications clientId={id} />}
 
       {/* ── Client setup ─────────────────────────────────────────────── */}

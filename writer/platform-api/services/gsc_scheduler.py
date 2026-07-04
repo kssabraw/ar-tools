@@ -316,6 +316,7 @@ async def gsc_scheduler() -> None:
     from services.asana_service import shift_months
     from services.asana_workload import run_workload_alert
     from services.brand_schedule import enqueue_due_brand_scans
+    from services.freeze import enqueue_due_freeze_checks
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
 
     interval = settings.gsc_scheduler_poll_interval_seconds
@@ -345,6 +346,8 @@ async def gsc_scheduler() -> None:
                 enqueue_due_dataforseo()
                 # Daily Content Syndication scan (per-client interval-gated).
                 enqueue_due_syndication_scans()
+                # Daily Freeze Protocol check (homepage deindex detection).
+                enqueue_due_freeze_checks()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,
