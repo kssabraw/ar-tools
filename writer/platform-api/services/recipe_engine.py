@@ -102,6 +102,65 @@ GBP_SNIPER_COST = 10.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Price catalog — the canonical {task_type: unit_cost} the strategist grounds
+# proposal costs in (so the LLM never invents a dollar figure: it names costed
+# tactics, and `cost_of` computes the money from these real SOP prices). Pure.
+# ─────────────────────────────────────────────────────────────────────────────
+def price_catalog() -> dict[str, dict]:
+    """Canonical {task_type: {task_type, label, unit_cost, unit, assignee}} for
+    the agency's costed *deliverable* tactics (links, content, reviews, GBP,
+    CTR). Single source of truth, assembled from the SOP constants above so it
+    can't drift. Pure. (Tool/API operation costs live in services/tool_costs.)"""
+    catalog: dict[str, dict] = {}
+
+    def _put(task_type: str, label: str, unit_cost: float, unit: str, assignee: str) -> None:
+        # First writer wins — a task_type appearing in several menus (same price)
+        # is registered once.
+        catalog.setdefault(task_type, {
+            "task_type": task_type, "label": label,
+            "unit_cost": float(unit_cost), "unit": unit, "assignee": assignee,
+        })
+
+    _put("reporting", "Monthly reporting", REPORTING_COST, "month", "—")
+    _put("reviews", "Reviews to threshold (GBP/Trustpilot)", REVIEW_UNIT_COST, "review", "Minda")
+    _put("content_page", "On-vector content / location page", CONTENT_PAGE_COST, "page", "Minda / Ivy")
+    _put("agency_assassin", "Agency Assassin (CTR)", AGENCY_ASSASSIN_COST, "run", "Kyle")
+    _put("gbp_sniper", "GBP Sniper", GBP_SNIPER_COST, "run", "Minda → Ivy")
+    for item in BASELINE_STACK:
+        _put(item["task_type"], item["label"], item["unit_cost"], "unit", item["assignee"])
+    for tools in FUNDING_MENU.values():
+        for tool in tools:
+            _put(tool["task_type"], tool["label"], tool["unit_cost"], "unit", tool["assignee"])
+    return catalog
+
+
+def cost_of(costed_items: "list[dict] | None", catalog: "dict[str, dict] | None" = None) -> "float | None":
+    """Deterministic dollar total for a list of ``{task_type, quantity}`` against
+    a price catalog (defaults to ``price_catalog()``; callers can pass a merged
+    catalog that also includes tool/API costs). Unknown task_types and
+    non-positive quantities are skipped. Returns None when nothing maps — so the
+    caller shows 'not estimated' rather than a misleading $0. Pure."""
+    catalog = catalog if catalog is not None else price_catalog()
+    total = 0.0
+    matched = False
+    for item in costed_items or []:
+        if not isinstance(item, dict):
+            continue
+        entry = catalog.get(item.get("task_type"))
+        if not entry:
+            continue
+        try:
+            qty = float(item.get("quantity") or 0)
+        except (TypeError, ValueError):
+            continue
+        if qty <= 0:
+            continue
+        total += entry["unit_cost"] * qty
+        matched = True
+    return round(total, 2) if matched else None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Pure allocation engine (§1–§5) — conformance-tested against the worked example
 # ─────────────────────────────────────────────────────────────────────────────
 def allocate(

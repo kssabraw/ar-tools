@@ -90,18 +90,80 @@ def test_sanitize_skips_malformed_entries():
     assert out["questions"] == ["real q"]
 
 
-def test_sanitize_coerces_cost_and_effort():
+def test_sanitize_coerces_effort():
     out = strategist.sanitize_review(
         {"assessment": "a", "proposals": [
-            _proposal(est_cost_usd="not a number", effort="massive"),
-            _proposal(est_cost_usd=135, effort="low"),
+            _proposal(effort="massive"),
+            _proposal(effort="low"),
         ]},
         frozen=False,
     )
-    assert out["proposals"][0]["est_cost_usd"] is None
     assert out["proposals"][0]["effort"] is None
-    assert out["proposals"][1]["est_cost_usd"] == 135.0
     assert out["proposals"][1]["effort"] == "low"
+
+
+# ---------------------------------------------------------------------------
+# cost grounding — the LLM never writes a dollar; the code computes it from the
+# real price list (Recipe Engine deliverables + tool_costs API ops).
+# ---------------------------------------------------------------------------
+def test_sanitize_grounds_recipe_cost():
+    # 5 content/location pages @ $5 each = $25, from the Recipe Engine price list.
+    out = strategist.sanitize_review(
+        {"assessment": "a", "proposals": [
+            _proposal(cost_basis="recipe", costed_items=[{"task_type": "content_page", "quantity": 5}]),
+        ]},
+        frozen=False,
+    )
+    p = out["proposals"][0]
+    assert p["est_cost_usd"] == 25.0
+    assert p["cost_basis"] == "recipe"
+    assert p["costed_items"] == [{"task_type": "content_page", "quantity": 5.0}]
+
+
+def test_sanitize_unverified_tool_op_shows_no_dollar():
+    # a geo-grid scan is a tool op whose price isn't researched yet → no $0.
+    out = strategist.sanitize_review(
+        {"assessment": "a", "proposals": [
+            _proposal(cost_basis="operational", costed_items=[{"task_type": "geo_grid_scan", "quantity": 1}]),
+        ]},
+        frozen=False,
+    )
+    p = out["proposals"][0]
+    assert p["est_cost_usd"] is None          # not $0 — unpriced
+    assert p["cost_basis"] == "operational"
+    assert p["costed_items"] == [{"task_type": "geo_grid_scan", "quantity": 1.0}]
+
+
+def test_sanitize_ignores_unknown_task_type_and_bad_qty():
+    out = strategist.sanitize_review(
+        {"assessment": "a", "proposals": [
+            _proposal(cost_basis="recipe", costed_items=[
+                {"task_type": "made_up_tactic", "quantity": 3},
+                {"task_type": "content_page", "quantity": 0},   # non-positive dropped
+                {"task_type": "content_page", "quantity": 2},
+            ]),
+        ]},
+        frozen=False,
+    )
+    p = out["proposals"][0]
+    assert p["costed_items"] == [{"task_type": "content_page", "quantity": 2.0}]
+    assert p["est_cost_usd"] == 10.0
+
+
+def test_sanitize_no_items_defaults_cost_none():
+    out = strategist.sanitize_review(
+        {"assessment": "a", "proposals": [_proposal()]}, frozen=False
+    )
+    p = out["proposals"][0]
+    assert p["est_cost_usd"] is None
+    assert p["cost_basis"] == "none"
+    assert p["costed_items"] == []
+
+
+def test_render_price_list_has_both_catalogs():
+    pl = strategist.render_price_list()
+    assert "content_page" in pl and "$5" in pl          # a real deliverable price
+    assert "geo_grid_scan" in pl and "price pending" in pl   # an unverified tool op
 
 
 # ---------------------------------------------------------------------------
