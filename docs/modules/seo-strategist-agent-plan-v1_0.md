@@ -1,8 +1,16 @@
-# SEO Strategist Agent — Module Plan v1.0
+# Search Marketing Strategist Agent — Module Plan v1.0
 
 **Date:** 2026-07-04
 **Status:** Proposed (spec for review — nothing built yet)
 **Depends on:** the 24/7 agent phase 1 stack (PRs #215/#216 — all live), the SOP library (`docs/sops/`), the notifications service, SerMastr (`services/slack_assistant.py`).
+
+> **Naming note.** This is the **search-marketing strategist** — its scope is
+> the client's entire search surface: organic SERPs, the local pack / Maps,
+> AI-answer visibility (AEO/AIO), content, links/offpage, and budget
+> allocation. It is *not* "a strategist for LLM visibility" (that's one input
+> among many — the LABS module), and the phrase "LLM strategist" is avoided
+> throughout to keep the two ideas apart. Conversational surface: SerMastr's
+> strategist mode.
 
 ---
 
@@ -123,6 +131,50 @@ separate Asana-push build.
 
 ---
 
+## 2b. Module legibility — how the strategist reads the instruments
+
+LLM strategists fail on *misreading instruments* more than on reasoning: a
+geo-grid `average_rank` of 2.0 over 3/25 pins read as "ranking #2," a null
+GSC position read as a rank loss, one ChatGPT answer-flip read as a trend.
+Five mechanisms make the measuring modules legible; the first two also
+upgrade SerMastr's existing Q&A *before* the strategist ships.
+
+1. **Module cards** — a compact "how to read this instrument" doc per
+   measuring module, written for agents (what it measures, direction,
+   field-by-field semantics, known blind spots, one worked misreading).
+   Live at **`docs/agents/module-cards/`** (rank-tracker, geogrid-tracker,
+   labs-ai-visibility; extend with gsc-research / offpage / episodes as the
+   digest grows). Injected into every strategist run and loadable by
+   SerMastr's context providers today.
+2. **Standard signal envelope** — the digest normalizes every module's output
+   to one shape:
+   `{module, keyword, metric, value, baseline, delta, direction
+   (lower_is_better|higher_is_better), status (improving|stable|declining|
+   insufficient_data — computed deterministically, never by the LLM),
+   coverage ("22/25 pins" | "14d GSC" | "6 engines"), measured_at, cadence,
+   stale}`.
+   `direction` kills position-vs-visibility mix-ups; `status` keeps trend
+   arithmetic out of the LLM entirely.
+3. **The keyword passport** — the digest groups by **keyword, not module**:
+   one entry per keyword showing organic + maps + AI-answer state side by
+   side. Cross-channel synthesis is the strategist's job; the passport makes
+   the join free ("organic #4 stable · maps 22/25 pins declining, episode
+   open 2wk · invisible in 4/6 AI engines").
+4. **Explicit staleness** — every signal carries `measured_at` + expected
+   cadence; the assembler flags violations ("grid scan 19 days old on a
+   weekly cadence — stale") so the strategist can't reason confidently over
+   dead data.
+5. **Self-documenting drill-down tools** — each tool description restates its
+   semantics and traps (e.g. "`average_rank` is over found pins only — check
+   `found_pins` before comparing across scans").
+
+All five are **Phase 0 deliverables** (the assembler implements 2–4; the cards
+are 1; tool descriptions are 5). Feedback loop: deliberately tricky SerMastr
+questions ("how are we doing on maps for X?") surface misreadings; each
+misreading becomes a line in a module card.
+
+---
+
 ## 3. Halt-and-ask boundaries (hard-coded, from `_ORCHESTRATOR.md` §3/§6)
 
 The strategist's system prompt AND the surrounding code both enforce:
@@ -196,8 +248,11 @@ numbers on the 1–2 briefs/mo they'd apply to.
 
 ## 7. Phasing
 
-- **Phase 0** — migration + `build_strategy_digest` (pure) + SOP section
-  retrieval over `docs/sops/`. Unit tests on the digest budgeting.
+- **Phase 0** — migration + `build_strategy_digest` (pure: signal envelope,
+  keyword passport, staleness flags — §2b) + SOP section retrieval over
+  `docs/sops/` + module-card injection (`docs/agents/module-cards/`, written).
+  Optional quick win: wire the cards into SerMastr's context providers now.
+  Unit tests on the digest budgeting + envelope normalization.
 - **Phase 1** — the strategist run (on-demand API only, `strategist_enabled`
   gate), output to `strategy_reviews`; Action Plan "Strategist Review" card
   with Approve/Dismiss.
