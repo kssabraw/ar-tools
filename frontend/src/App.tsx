@@ -27,6 +27,7 @@ import { ClientReports } from './pages/ClientReports'
 import { GscResearch } from './pages/GscResearch'
 import { Syndication } from './pages/Syndication'
 import { Citations } from './pages/Citations'
+import { TaskPlan } from './pages/TaskPlan'
 import { AiVisibility } from './pages/AiVisibility'
 import { MapsGeogrid } from './pages/MapsGeogrid'
 import { MapsReport } from './pages/MapsReport'
@@ -77,6 +78,7 @@ export default function App() {
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/syndication" element={<Syndication />} />
                       <Route path="/clients/:id/citations" element={<Citations />} />
+                      <Route path="/clients/:id/task-plan" element={<TaskPlan />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
                       <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />

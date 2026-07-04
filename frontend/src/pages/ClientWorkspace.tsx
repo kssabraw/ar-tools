@@ -265,6 +265,13 @@ export function ClientWorkspace() {
           cta="Open"
         />
         <ActionCard
+          icon={<ClipboardList size={22} />}
+          label="Monthly Task Plan"
+          description="The Recipe Engine: budget + diagnosis → a costed, assigned month of work — baseline stack, Diagnose-and-Fund, capacity-capped content, every line with an owner."
+          to={id ? `/clients/${id}/task-plan` : undefined}
+          cta="Open"
+        />
+        <ActionCard
           icon={<BookOpen size={22} />}
           label="SOPs & Playbook"
           description="This client's SOPs plus the agency-wide playbook & theories. Loaded SOPs ground the Action Plan's recommendations in your own methodology and voice."
