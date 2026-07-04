@@ -125,15 +125,33 @@ def _doc_title(client_name: str, trigger: str, date_str: str) -> str:
     return f"Strategist Review — {client_name} — {label} — {date_str}".replace("  ", " ").strip(" —")
 
 
+def _review_date(review: dict, now: datetime) -> datetime:
+    """The date to stamp on the doc: when the review was RUN (its created_at),
+    not when it's exported. Falls back to `now` on a missing/unparseable value.
+    Pure."""
+    raw = review.get("created_at")
+    if isinstance(raw, str):
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return now
+
+
 async def publish_review(review_id: str) -> dict:
     """Render + publish one completed strategy review as a Google Doc in the
     client's Drive folder, and persist the doc link back on the row. Returns
-    {doc_id, doc_url}. Raises GoogleDocError (mapped by the caller) on any
-    missing prerequisite or webhook failure."""
+    {doc_id, doc_url, published_at}. Idempotent: a review that already has a
+    published Doc returns the existing link instead of creating a duplicate
+    (the UI has no re-publish path, and a completed review's content is fixed).
+    Raises GoogleDocError (mapped by the caller) on any missing prerequisite or
+    webhook failure."""
     supabase = get_supabase()
     rows = (
         supabase.table("strategy_reviews")
-        .select("id, client_id, trigger, status, model, assessment, findings, proposals, questions, created_at")
+        .select("id, client_id, trigger, status, model, assessment, findings, proposals, "
+                "questions, created_at, published_doc_id, published_doc_url, published_at")
         .eq("id", review_id).limit(1).execute()
     ).data
     if not rows:
@@ -141,6 +159,16 @@ async def publish_review(review_id: str) -> dict:
     review = rows[0]
     if review.get("status") != "complete":
         raise GoogleDocError("review_not_complete")
+
+    # Idempotency: already published → return the stored link, don't re-create.
+    # This collapses a double-submit / retry (issue: duplicate Docs) to a no-op.
+    if review.get("published_doc_id") and review.get("published_doc_url"):
+        return {
+            "doc_id": review["published_doc_id"],
+            "doc_url": review["published_doc_url"],
+            "published_at": review.get("published_at"),
+            "already_published": True,
+        }
 
     client_rows = (
         supabase.table("clients")
@@ -154,14 +182,21 @@ async def publish_review(review_id: str) -> dict:
     if not folder_id:
         raise GoogleDocError("missing_google_drive_folder_id")
 
+    now = datetime.now(timezone.utc)
     client_name = client.get("name") or "Client"
-    date_str = datetime.now(timezone.utc).strftime("%-d %b %Y")
+    date_str = _review_date(review, now).strftime("%-d %b %Y")
     markdown = render_markdown(client_name, review, date_str)
     title = _doc_title(client_name, review.get("trigger") or "on_demand", date_str)
 
     doc = await create_google_doc(folder_id, title, markdown)
+    # A "success" reply with no doc id means the webhook didn't actually create
+    # the Doc (e.g. an un-redeployed script). Fail loudly rather than persist a
+    # phantom-published row (published_at set, url null) that the UI would then
+    # offer to "Save" again — creating a real duplicate on the retry.
+    if not doc.get("doc_id"):
+        raise GoogleDocError("doc_not_created: webhook returned no document id")
 
-    published_at = datetime.now(timezone.utc).isoformat()
+    published_at = now.isoformat()
     try:
         supabase.table("strategy_reviews").update({
             "published_doc_id": doc.get("doc_id"),
