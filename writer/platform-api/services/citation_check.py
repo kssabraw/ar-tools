@@ -192,6 +192,12 @@ def _sync_citation_alert(supabase, client_id: str, dead_count: int, newly_dead: 
             "details": {"dead_count": dead_count, "newly_dead": newly_dead[:20]},
         }
     ).execute()
+    try:  # refresh the Action Plan silently so the re-order action shows now
+        from services.reopt_planner import enqueue_reopt_plan
+
+        enqueue_reopt_plan(client_id, trigger="offpage")
+    except Exception:
+        logger.warning("citation_check.plan_refresh_enqueue_failed", extra={"client_id": client_id})
     notifications.emit(
         client_id,
         kind="offpage_citation_loss",

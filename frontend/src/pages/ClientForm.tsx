@@ -37,6 +37,9 @@ interface FormData {
   ps_blog_post: string
   ps_product: string
   ps_solution: string
+  retainer_monthly: string
+  is_sab: boolean
+  client_type: 'local' | 'enterprise'
 }
 
 const empty: FormData = {
@@ -46,6 +49,7 @@ const empty: FormData = {
   wordpress_site_url: '', wordpress_username: '', wordpress_app_password: '', wordpress_app_password_set: false,
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
+  retainer_monthly: '', is_sab: false, client_type: 'local',
 }
 
 // Per-content-type Drive folders. `type` is the backend content_type slug used
@@ -154,6 +158,9 @@ export function ClientForm() {
         ps_blog_post: existing.page_structures?.blog_post?.url ?? '',
         ps_product: existing.page_structures?.product?.url ?? '',
         ps_solution: existing.page_structures?.solution?.url ?? '',
+        retainer_monthly: existing.retainer_monthly != null ? String(existing.retainer_monthly) : '',
+        is_sab: existing.is_sab ?? false,
+        client_type: existing.client_type ?? 'local',
       })
     }
   }, [existing])
@@ -225,6 +232,10 @@ export function ClientForm() {
         target_cities: form.target_cities.split(',').map(s => s.trim()).filter(Boolean),
         gbp_place_id: form.gbp_place_id,
         gbp: form.gbp,
+        // Recipe Engine budget inputs (66% margin target → 34% deployable).
+        ...(form.retainer_monthly.trim() !== '' ? { retainer_monthly: Number(form.retainer_monthly) } : {}),
+        is_sab: form.is_sab,
+        client_type: form.client_type,
         page_structure_urls: {
           local_landing: form.ps_local_landing.trim() || null,
           service: form.ps_service.trim() || null,
@@ -429,6 +440,61 @@ export function ClientForm() {
               style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
             />
             <p style={hintStyle}>Comma-separated. Extra cities the Local SEO silo planner should build location pages for, beyond the seed city. The planner also pulls cities from the GBP service area, this client's own site, and a ~10-mile radius — these are added on top.</p>
+          </div>
+        </div>
+
+        <div style={sectionStyle}>
+          <h2 style={sectionTitle}>Budget &amp; Campaign Type</h2>
+          <div style={{ marginBottom: 16 }}>
+            <label style={labelStyle}>Monthly Budget (retainer)</label>
+            <input
+              type="number"
+              min="0"
+              step="50"
+              value={form.retainer_monthly}
+              onChange={set('retainer_monthly')}
+              placeholder="e.g. 2000"
+              style={{ ...inputStyle, width: 200, boxSizing: 'border-box' }}
+            />
+            <p style={hintStyle}>
+              The client's total monthly budget. The Recipe Engine plans at the <strong>66% margin
+              target</strong> — only <strong>34%</strong> is deployable on tasks
+              {form.retainer_monthly.trim() !== '' && Number(form.retainer_monthly) > 0 && (
+                <>
+                  : <strong>${Math.round(Number(form.retainer_monthly) * 0.34).toLocaleString()}/mo deployable</strong>
+                  {' '}(${Math.round(Number(form.retainer_monthly) * 0.34) - 150 >= 0
+                    ? (Math.round(Number(form.retainer_monthly) * 0.34) - 150).toLocaleString()
+                    : 0} after the $150 reporting line)
+                </>
+              )}
+              . Stagnating / drop months may run at 50% margin — chosen when generating the plan, not here.
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+            <div>
+              <label style={labelStyle}>Client Type</label>
+              <select
+                value={form.client_type}
+                onChange={(e) => setForm(f => ({ ...f, client_type: e.target.value as FormData['client_type'] }))}
+                style={{ ...inputStyle, width: 220, boxSizing: 'border-box' }}
+              >
+                <option value="local">Local (fund RD first)</option>
+                <option value="enterprise">Enterprise / e-commerce (fund Entity first)</option>
+              </select>
+              <p style={hintStyle}>Sets the Recipe Engine's Diagnose-and-Fund order.</p>
+            </div>
+            <div>
+              <label style={labelStyle}>Service-Area Business (SAB)</label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155', marginTop: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={form.is_sab}
+                  onChange={(e) => setForm(f => ({ ...f, is_sab: e.target.checked }))}
+                />
+                Hidden address / service-area GBP
+              </label>
+              <p style={hintStyle}>SABs skip the GBP Blast in the monthly baseline stack ($130 vs $135).</p>
+            </div>
           </div>
         </div>
 

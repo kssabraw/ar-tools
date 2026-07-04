@@ -189,6 +189,12 @@ def _sync_imbalance_alert(supabase, client_id: str, offenders: list[dict]) -> No
             "details": {"offenders": offenders},
         }
     ).execute()
+    try:  # refresh the Action Plan silently so the rebalance action shows now
+        from services.reopt_planner import enqueue_reopt_plan
+
+        enqueue_reopt_plan(client_id, trigger="offpage")
+    except Exception:
+        logger.warning("page_backlinks.plan_refresh_enqueue_failed", extra={"client_id": client_id})
     notifications.emit(
         client_id,
         kind="offpage_rd_imbalance",

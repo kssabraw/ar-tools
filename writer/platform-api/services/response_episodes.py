@@ -132,6 +132,36 @@ def _current_position(supabase, keyword_id: Optional[str]) -> Optional[float]:
         return None
 
 
+def _current_maps_rank(supabase, client_id: Optional[str], keyword: Optional[str]) -> Optional[float]:
+    """Latest geo-grid average rank for a maps episode's keyword (lower =
+    better, same direction as organic position). Best-effort."""
+    if not client_id or not keyword:
+        return None
+    try:
+        rows = (
+            supabase.table("maps_scan_results")
+            .select("average_rank")
+            .eq("client_id", client_id)
+            .eq("keyword", keyword)
+            .not_.is_("average_rank", "null")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        ).data or []
+        return float(rows[0]["average_rank"]) if rows else None
+    except Exception:
+        return None
+
+
+def _episode_position(supabase, channel: str, *, client_id: Optional[str] = None,
+                      keyword: Optional[str] = None, keyword_id: Optional[str] = None) -> Optional[float]:
+    """Channel-appropriate 'position' read: organic → recent 7-day weighted GSC/
+    tracked position; maps → latest geo-grid average rank."""
+    if channel == "maps":
+        return _current_maps_rank(supabase, client_id, keyword)
+    return _current_position(supabase, keyword_id)
+
+
 def _open_alerts(supabase, table: str) -> list[dict]:
     cols = "id, client_id, keyword, alert_type" + (", keyword_id" if table == "rank_alerts" else "")
     return (
@@ -184,7 +214,10 @@ def run_episode_sync() -> dict:
                 continue
             try:
                 keyword_id = a.get("keyword_id")
-                baseline_pos = _current_position(supabase, keyword_id) if channel == "organic" else None
+                baseline_pos = _episode_position(
+                    supabase, channel,
+                    client_id=a.get("client_id"), keyword=a.get("keyword"), keyword_id=keyword_id,
+                )
                 supabase.table("response_episodes").insert(
                     {
                         "client_id": a["client_id"],
@@ -208,7 +241,11 @@ def run_episode_sync() -> dict:
                 due = (_parse_ts(ep.get("next_check_at")) or now) <= now
                 if not resolved and not due:
                     continue
-                current_pos = _current_position(supabase, ep.get("keyword_id")) if channel == "organic" else None
+                current_pos = _episode_position(
+                    supabase, channel,
+                    client_id=ep.get("client_id"), keyword=ep.get("keyword"),
+                    keyword_id=ep.get("keyword_id"),
+                )
                 result = evaluate_episode(
                     ep, alert_resolved=resolved, current_position=current_pos, now=now
                 )

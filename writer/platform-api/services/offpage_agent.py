@@ -162,6 +162,15 @@ def analyze_client(client_id: str) -> dict:
     ).execute()
     opened.append(change["type"])
 
+    # A new offpage alert refreshes the Action Plan silently (same pattern as
+    # the rank/maps drop triggers — no week-long lag before the action shows).
+    try:
+        from services.reopt_planner import enqueue_reopt_plan
+
+        enqueue_reopt_plan(client_id, trigger="offpage")
+    except Exception:
+        logger.warning("offpage.plan_refresh_enqueue_failed", extra={"client_id": client_id})
+
     if change["type"] == "rd_loss":
         notifications.emit(
             client_id,
