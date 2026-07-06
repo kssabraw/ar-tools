@@ -150,6 +150,17 @@ async def get_brand_scan_results(
     return brand_service.list_history(str(client_id), limit=1000, scan_batch_id=str(scan_batch_id))
 
 
+@router.get("/clients/{client_id}/brand/mentions/{mention_id}")
+async def get_brand_mention(
+    client_id: UUID,
+    mention_id: UUID,
+    auth: dict = Depends(require_auth),
+):
+    """Single mention incl. raw_response/retry_count (omitted from the history
+    list for payload size) — fetched lazily by the frontend detail sheet."""
+    return brand_service.get_mention(str(client_id), str(mention_id))
+
+
 @router.get("/clients/{client_id}/brand/trends")
 async def get_brand_trends(client_id: UUID, auth: dict = Depends(require_auth)):
     return brand_service.get_trends(str(client_id))

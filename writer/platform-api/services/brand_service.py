@@ -260,6 +260,25 @@ def compute_trends(rows: list[dict]) -> list[dict]:
     return out
 
 
+def get_mention(client_id: str, mention_id: str) -> dict:
+    """One mention row incl. the heavy fields (raw_response, retry_count) the
+    history list deliberately omits — fetched lazily by the detail sheet."""
+    def _q():
+        rows = (
+            get_supabase().table("brand_mention_history")
+            .select(_HISTORY_COLS + ", raw_response, retry_count")
+            .eq("id", mention_id)
+            .eq("client_id", client_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="mention_not_found")
+        return rows[0]
+    return _safe(_q)
+
+
 def get_trends(client_id: str, limit: int = 2000) -> list[dict]:
     rows = list_history(client_id, limit=limit)
     return compute_trends(rows)

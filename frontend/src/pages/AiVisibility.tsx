@@ -2,20 +2,23 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, Eye, Zap, AlertTriangle, Plus, Trash2, Check, X, CalendarClock, Sparkles, FileText, Download,
+  ArrowLeft, Eye, Zap, AlertTriangle, Plus, Trash2, Check, CalendarClock, Sparkles, FileText, Download,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type { Client } from '../lib/types'
 // Shared AI Visibility building blocks (LABS-style dashboard rebuild).
-import { engineMeta } from '../components/aivisibility/engines'
+import { ENGINE_ORDER, engineMeta } from '../components/aivisibility/engines'
 import {
-  AIO_ENGINES, AIO_KIND_LABELS, SOURCE_TYPE_LABELS, computeHealthScore,
+  SOURCE_TYPE_LABELS, computeHealthScore,
   type CompResult, type Keyword, type Mention, type ScanStatus, type TrendBatch,
 } from '../components/aivisibility/types'
+import { Chip } from '../components/aivisibility/bits'
 import { StatsRow } from '../components/aivisibility/StatsRow'
 import { ScanDialog } from '../components/aivisibility/ScanDialog'
 import { RecentScansMatrix } from '../components/aivisibility/RecentScansMatrix'
+import { ScanResultCards } from '../components/aivisibility/ScanResultCards'
+import { ScanDetailSheet } from '../components/aivisibility/ScanDetailSheet'
 import '../components/aivisibility/animations.css'
 
 // ── page-local types (shared data types live in components/aivisibility) ─────
@@ -179,6 +182,18 @@ function Overview(props: {
     return out
   }, [latestBatch])
 
+  // Latest batch's rows as LABS-style result cards (keyword order, then engine order).
+  const latestBatchMentions = useMemo(() => {
+    if (!latestBatch?.scan_batch_id) return []
+    const kwOrder = new Map(activeKeywords.map((k, i) => [k.id, i]))
+    const engOrder = new Map<string, number>(ENGINE_ORDER.map((e, i) => [e, i]))
+    return history
+      .filter(h => h.scan_batch_id === latestBatch.scan_batch_id)
+      .sort((a, b) =>
+        ((kwOrder.get(a.keyword_id ?? '') ?? 999) - (kwOrder.get(b.keyword_id ?? '') ?? 999))
+        || ((engOrder.get(a.engine) ?? 99) - (engOrder.get(b.engine) ?? 99)))
+  }, [history, latestBatch, activeKeywords])
+
   // Matrix view: the client's own brand, or a tracked competitor's mentions
   // (re-classified from the same answers, available only on competitor-included scans).
   const [view, setView] = useState<string>('brand')
@@ -325,11 +340,26 @@ function Overview(props: {
               ? <>Tip: click any cell for the full breakdown — position, sources the AI trusted, competitor reasons, and (for not-found cells) why the brand is invisible. On Google columns, <span style={{ color: '#7c3aed' }}>🔗</span> = linked inline in the answer, <span style={{ color: '#94a3b8' }}>◦</span> = cited in the sources strip only.</>
               : <>Showing where <strong>{viewing}</strong> appears. A dimmed engine means that keyword×engine wasn't scanned with competitors included.</>}
           </p>
+
+          {/* Latest scan results — LABS-style cards (brand view only; the cards show brand analysis) */}
+          {viewing === 'brand' && latestBatchMentions.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 10 }}>
+                Latest scan results
+              </div>
+              <ScanResultCards
+                mentions={latestBatchMentions}
+                keywordById={keywordById}
+                onOpen={(m, keyword) => setDiagnose({ m, keyword })}
+              />
+            </div>
+          )}
+
           <BatchInsights clientId={clientId} scanBatchId={latestBatch.scan_batch_id} />
         </>
       )}
       {diagnose && (
-        <CellDetailsModal clientId={clientId} mention={diagnose.m} keyword={diagnose.keyword} onClose={() => setDiagnose(null)} />
+        <ScanDetailSheet clientId={clientId} mention={diagnose.m} keyword={diagnose.keyword} onClose={() => setDiagnose(null)} />
       )}
       {scanOpen && (
         <ScanDialog
@@ -344,123 +374,6 @@ function Overview(props: {
     </div>
   )
 }
-
-function Chip({ children, tone = 'slate' }: { children: React.ReactNode; tone?: 'slate' | 'violet' | 'amber' | 'green' | 'red' }) {
-  const tones = {
-    slate: { bg: '#f1f5f9', fg: '#475569' }, violet: { bg: '#f5f3ff', fg: '#6d28d9' },
-    amber: { bg: '#fffbeb', fg: '#b45309' }, green: { bg: '#f0fdf4', fg: '#15803d' },
-    red: { bg: '#fef2f2', fg: '#b91c1c' },
-  }[tone]
-  return <span style={{ display: 'inline-block', fontSize: 11, padding: '2px 8px', borderRadius: 10, background: tones.bg, color: tones.fg, marginRight: 6, marginBottom: 4 }}>{children}</span>
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ marginTop: 14 }}>
-      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>{title}</div>
-      {children}
-    </div>
-  )
-}
-
-function CellDetailsModal({ clientId, mention, keyword, onClose }: { clientId: string; mention: Mention; keyword: string; onClose: () => void }) {
-  // New scans auto-diagnose during the scan, so the explanation is already on
-  // the row — show it instantly. Only fall back to the on-demand endpoint for
-  // older rows scanned before auto-diagnosis (or when it was disabled/failed).
-  const found = mention.mention_found === true
-  const precomputed = mention.invisibility_diagnosis
-  const { data, isLoading, isError, error } = useQuery<{ diagnosis: string }>({
-    queryKey: ['brand-diagnose', clientId, mention.id],
-    queryFn: () => api.post<{ diagnosis: string }>(`/clients/${clientId}/brand/mentions/${mention.id}/diagnose`, {}),
-    retry: false,
-    enabled: !found && !precomputed,  // diagnosis is only for not-found cells
-  })
-  const diagnosis = precomputed ?? data?.diagnosis
-  const ra = mention.response_analysis ?? undefined
-  const isAio = AIO_ENGINES.has(mention.engine)
-  const rank = ra?.position?.rank
-  const total = ra?.position?.total_businesses
-  return (
-    <div style={overlay} onClick={onClose}>
-      <div style={modal} onClick={e => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-          <strong style={{ fontSize: 15, color: '#0f172a' }}>
-            {engineMeta(mention.engine).fullLabel} · {found ? 'Mentioned' : 'Not mentioned'}
-          </strong>
-          <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }} onClick={onClose}><X size={18} /></button>
-        </div>
-        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 4 }}>“{keyword}”</div>
-
-        {/* At-a-glance chips */}
-        <div style={{ marginTop: 8 }}>
-          {found && rank != null && <Chip tone="green">Position {rank}{total ? ` of ${total}` : ''}</Chip>}
-          {found && ra?.prominence && ra.prominence !== 'none' && <Chip tone={ra.prominence === 'leading' ? 'green' : ra.prominence === 'caveated' ? 'amber' : 'slate'}>{ra.prominence} mention</Chip>}
-          {!found && total != null && <Chip tone="slate">{total} businesses listed, none of them this brand</Chip>}
-          {isAio && ra?.aio && <Chip tone={ra.aio.mention_kind === 'in_content_link' || ra.aio.mention_kind === 'both' ? 'violet' : 'slate'}>{AIO_KIND_LABELS[ra.aio.mention_kind]}</Chip>}
-          {ra?.sources?.client_cited && <Chip tone="green">Your site was cited as a source</Chip>}
-        </div>
-
-        {/* Accuracy flags — AI stated something wrong about the brand */}
-        {ra?.accuracy_flags && ra.accuracy_flags.length > 0 && (
-          <Section title="⚠ Possible misinformation">
-            {ra.accuracy_flags.map((f, i) => (
-              <div key={i} style={{ fontSize: 12, color: '#b91c1c', marginBottom: 3 }}>
-                <strong>{f.field}:</strong> AI said “{f.stated}” — on file: “{f.actual}”
-              </div>
-            ))}
-          </Section>
-        )}
-
-        {/* Why the brand is invisible (not-found cells) */}
-        {!found && (
-          <Section title="Why invisible">
-            {isLoading && <div style={{ fontSize: 13, color: '#64748b' }}>Analyzing the competitors that did appear…</div>}
-            {isError && <Banner kind="error">{(error as Error).message}</Banner>}
-            {diagnosis && <div style={{ fontSize: 13, color: '#334155', whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>{diagnosis}</div>}
-          </Section>
-        )}
-
-        {/* Competitor reasons — what the answer rewarded */}
-        {ra?.competitor_attributes && ra.competitor_attributes.length > 0 && (
-          <Section title="Who appeared & why">
-            {ra.competitor_attributes.slice(0, 8).map((b, i) => (
-              <div key={i} style={{ fontSize: 12, color: '#334155', marginBottom: 5 }}>
-                <strong>{b.name}</strong>{b.attributes.length > 0 && <> — {b.attributes.join(', ')}</>}
-              </div>
-            ))}
-          </Section>
-        )}
-
-        {/* Sources the AI trusted */}
-        {ra?.sources && ra.sources.domains.length > 0 && (
-          <Section title="Sources the AI cited">
-            <div>
-              {ra.sources.domains.slice(0, 12).map((d, i) => (
-                <Chip key={i} tone={d.is_client ? 'green' : d.is_competitor ? 'amber' : 'slate'}>
-                  {d.domain}{d.is_client ? ' (you)' : d.is_competitor ? ' (competitor)' : ''}
-                </Chip>
-              ))}
-            </div>
-            {ra.sources.competitor_only_sources.length > 0 && (
-              <div style={{ fontSize: 12, color: '#b45309', marginTop: 6 }}>
-                Cites a competitor but not you: {ra.sources.competitor_only_sources.join(', ')} — get listed/mentioned here.
-              </div>
-            )}
-          </Section>
-        )}
-
-        {/* How the AI read the query */}
-        {ra?.intent && (ra.intent.inferred || ra.intent.locations.length > 0) && (
-          <Section title="How the AI read the query">
-            {ra.intent.inferred && <div style={{ fontSize: 12, color: '#334155' }}>{ra.intent.inferred}</div>}
-            {ra.intent.locations.length > 0 && <div style={{ fontSize: 12, color: '#64748b', marginTop: 3 }}>Places named: {ra.intent.locations.join(', ')}</div>}
-          </Section>
-        )}
-      </div>
-    </div>
-  )
-}
-
 function BatchInsights({ clientId, scanBatchId }: { clientId: string; scanBatchId: string | null }) {
   const qc = useQueryClient()
   const { data } = useQuery<{
@@ -778,5 +691,3 @@ const card: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8
 const badgeOn: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#15803d', background: '#dcfce7', borderRadius: 999, padding: '2px 8px' }
 const badgeOff: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#64748b', background: '#f1f5f9', borderRadius: 999, padding: '2px 8px' }
 const chip: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, background: '#f8fafc', color: '#334155', border: '1px solid #e2e8f0', borderRadius: 999, padding: '5px 12px', fontSize: 12, fontWeight: 600 }
-const overlay: React.CSSProperties = { position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20, zIndex: 50 }
-const modal: React.CSSProperties = { background: '#fff', borderRadius: 14, padding: 22, maxWidth: 560, width: '100%', maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 10px 40px rgba(15,23,42,0.2)' }

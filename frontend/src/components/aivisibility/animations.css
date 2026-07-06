@@ -34,3 +34,14 @@
 
 /* Confidence-bar segment — animates its width on value change */
 .aiv-confidence-seg { transition: width 0.6s ease-out; }
+
+/* Detail sheet — slides in from the right edge */
+@keyframes aiv-sheet-enter {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.aiv-sheet-enter { animation: aiv-sheet-enter 0.25s ease-out both; }
+
+@media (prefers-reduced-motion: reduce) {
+  .aiv-card-enter, .aiv-gauge-fill, .aiv-scan-pulse, .aiv-sheet-enter { animation: none; }
+}
