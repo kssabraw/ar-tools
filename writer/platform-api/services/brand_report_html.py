@@ -49,29 +49,29 @@ _BOX = "#f8fafc"
 _TABLE_HEAD = "#f1f5f9"
 _CELL_BORDER = "#e2e8f0"
 _YOU_HIGHLIGHT = "#f0fdf4"
-_RED = "#b91c1c"
-_RED_BG = "#fef2f2"
-_RED_BORDER = "#fecaca"
 
 
 def _esc(v) -> str:
     return html_mod.escape(str(v)) if v is not None else ""
 
 
+# Client-facing tone (Client Reporting PRD Phase 4 ruling: plain, upbeat,
+# wins-focused): low scores read as headroom, not alarm — no red bands, no
+# "invisible" language. The internal dashboard keeps its own diagnostic labels.
 def score_color(score: float) -> str:
     if score >= 70:
         return "#15803d"
     if score >= 40:
         return "#b45309"
-    return _RED
+    return _MUTED
 
 
 def score_label(score: float) -> str:
     if score >= 70:
-        return "Healthy Visibility"
+        return "Strong Visibility"
     if score >= 40:
-        return "Partial Visibility"
-    return "Critically Invisible"
+        return "Growing Visibility"
+    return "Room to Grow"
 
 
 # health_score is re-exported from brand_service — the single formula both the
@@ -294,18 +294,19 @@ def render_html(*, client: dict, agency_name: str, date_range_label: str,
 <thead><tr><th style="{_TH};background:{_TABLE_HEAD}">Competitor</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Visibility Share</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Mentions</th></tr></thead>
 <tbody>{"".join(comp_rows)}</tbody></table>''')
 
-    # 8 — lead valuation
+    # 8 — growth opportunity (upbeat framing per the client-report tone ruling:
+    # the same volume × CPC × gap math, presented as value to capture, not loss)
     if valuation and valuation["total"] > 0:
-        parts.append(f'''<div style="background:{_RED_BG};border:1px solid {_RED_BORDER};border-radius:8px;padding:20px;margin-bottom:24px">
-  <h2 style="color:{_RED};font-size:18px;margin:0 0 8px">Estimated Monthly Visibility Opportunity Cost</h2>
-  <div style="font-size:42px;font-weight:bold;color:{_RED}">${valuation["total"]:,}<span style="font-size:16px;font-weight:normal">/mo</span></div>
-  <div style="font-size:12px;color:{_MUTED};margin-bottom:14px">What replacing this lost AI visibility with paid clicks would cost.</div>
+        parts.append(f'''<div style="background:{_BOX};border:1px solid {_H2_UNDERLINE};border-radius:8px;padding:20px;margin-bottom:24px">
+  <h2 style="color:{_BRAND};font-size:18px;margin:0 0 8px">Monthly Growth Opportunity</h2>
+  <div style="font-size:42px;font-weight:bold;color:{_BRAND}">${valuation["total"]:,}<span style="font-size:16px;font-weight:normal">/mo</span></div>
+  <div style="font-size:12px;color:{_MUTED};margin-bottom:14px">The estimated monthly value of the AI answers these keywords can still win — measured by what the equivalent paid clicks would cost.</div>
   <div style="display:flex;justify-content:space-around;text-align:center">
     <div><div style="font-size:11px;color:{_MUTED}">Avg. CPC</div><div style="font-size:20px;font-weight:600">${valuation["avg_cpc"]:.2f}</div></div>
     <div><div style="font-size:11px;color:{_MUTED}">Monthly Searches</div><div style="font-size:20px;font-weight:600">{valuation["monthly_searches"]:,}</div></div>
-    <div><div style="font-size:11px;color:{_MUTED}">Visibility Gap</div><div style="font-size:20px;font-weight:600;color:{_RED}">{valuation["gap_pct"]}%</div></div>
+    <div><div style="font-size:11px;color:{_MUTED}">Room to Grow</div><div style="font-size:20px;font-weight:600;color:{_BRAND}">{valuation["gap_pct"]}%</div></div>
   </div>
-  <div style="font-size:11px;color:{_FAINT};margin-top:14px">This estimate reflects the cost to replace lost AI visibility through paid demand. It is not a guarantee of revenue.</div>
+  <div style="font-size:11px;color:{_FAINT};margin-top:14px">Estimated from search volume × CPC × current AI visibility per keyword — a prioritisation guide, not a revenue guarantee.</div>
 </div>''')
 
     # 9 — footer

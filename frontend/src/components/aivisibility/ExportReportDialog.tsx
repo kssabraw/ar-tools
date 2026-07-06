@@ -25,7 +25,7 @@ const INCLUDES = [
   'Performance by AI engine',
   'Keyword performance',
   'Competitor benchmarking',
-  'Monthly visibility opportunity cost',
+  'Monthly growth opportunity',
   'White-label agency header',
 ]
 

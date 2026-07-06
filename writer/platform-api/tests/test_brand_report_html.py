@@ -31,9 +31,10 @@ def test_health_score_formula():
 
 
 def test_score_bands():
-    assert score_label(75) == "Healthy Visibility"
-    assert score_label(45) == "Partial Visibility"
-    assert score_label(10) == "Critically Invisible"
+    # Client-facing tone ruling: upbeat band labels, no "invisible"/alarm language.
+    assert score_label(75) == "Strong Visibility"
+    assert score_label(45) == "Growing Visibility"
+    assert score_label(10) == "Room to Grow"
     assert score_color(75) != score_color(45) != score_color(10)
 
 
@@ -106,7 +107,7 @@ def test_render_html_structure():
     # section order markers
     for marker in ("AI Visibility Report", "Business Profile", "Global Health Score",
                    "Performance by AI Engine", "Keyword Performance",
-                   "Competitor Benchmarking", "Opportunity Cost", "Report generated on"):
+                   "Competitor Benchmarking", "Monthly Growth Opportunity", "Report generated on"):
         assert marker in html, marker
     # white-label agency name + escaped client name (no raw angle brackets)
     assert "Amazing Rankings" in html
