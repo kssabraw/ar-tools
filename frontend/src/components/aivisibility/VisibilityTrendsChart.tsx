@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { TrendingUp } from 'lucide-react'
 import { TrendsChart, type ChartSeries } from './TrendsChart'
 import { ENGINE_ORDER, ENGINES, EngineIcon } from './engines'
-import type { TrendBatch } from './types'
+import { batchLabel, type TrendBatch } from './types'
 import './animations.css'
 
 // LABS' "Visibility Trends" card: per-engine visibility % over time with an
@@ -12,12 +12,6 @@ import './animations.css'
 
 type Range = '30d' | '90d' | 'all'
 const RANGE_DAYS: Record<Range, number | null> = { '30d': 30, '90d': 90, all: null }
-
-function batchLabel(iso: string | null): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : `${d.getMonth() + 1}/${d.getDate()}`
-}
 
 export function VisibilityTrendsChart({ trends }: { trends: TrendBatch[] }) {
   const [range, setRange] = useState<Range>('all')

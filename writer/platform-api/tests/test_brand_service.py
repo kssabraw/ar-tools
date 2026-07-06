@@ -34,6 +34,38 @@ def test_compute_trends_rolls_up_per_engine_and_overall():
     assert b["created_at"] == "2026-06-01T10:00:00Z"
 
 
+def test_compute_trends_health_score_and_competitors():
+    rows = [
+        {**_row("b1", "chatgpt", True, "2026-06-01T10:00:00Z"),
+         "confidence_score": 0.8,
+         "competitor_results": [{"name": "Rival Co", "found": True, "confidence": 0.9}]},
+        {**_row("b1", "claude", False, "2026-06-01T10:00:05Z"),
+         "confidence_score": 0.6,
+         "competitor_results": [{"name": "Rival Co", "found": False, "confidence": 0.7}]},
+    ]
+    b = bsvc.compute_trends(rows)[0]
+    assert b["avg_confidence"] == 0.7
+    # 50% visibility * 0.7 + 0.7 confidence * 30 = 56
+    assert b["health_score"] == 56
+    comp = b["competitors"]["Rival Co"]
+    assert comp["total"] == 2 and comp["found"] == 1 and comp["visibility_pct"] == 50.0
+    assert comp["health_score"] == bsvc.health_score(50.0, 0.8)
+
+
+def test_compute_trends_no_competitors_yields_empty_map():
+    b = bsvc.compute_trends([_row("b1", "chatgpt", True, "2026-06-01T10:00:00Z")])[0]
+    assert b["competitors"] == {}
+    assert b["avg_confidence"] is None
+    # No confidence recorded → score is visibility-only.
+    assert b["health_score"] == 70
+
+
+def test_health_score_formula_bounds():
+    assert bsvc.health_score(None, 0.9) is None
+    assert bsvc.health_score(0.0, None) == 0
+    assert bsvc.health_score(100.0, 1.0) == 100
+
+
 def test_compute_trends_orders_batches_by_time_and_skips_incomplete():
     rows = [
         _row("late", "chatgpt", True, "2026-06-10T10:00:00Z"),

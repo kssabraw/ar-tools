@@ -10,7 +10,7 @@ import type { Client } from '../lib/types'
 // Shared AI Visibility building blocks (LABS-style dashboard rebuild).
 import { ENGINE_ORDER, engineMeta } from '../components/aivisibility/engines'
 import {
-  SOURCE_TYPE_LABELS, computeHealthScore,
+  SOURCE_TYPE_LABELS,
   type CompResult, type Keyword, type Mention, type ScanStatus, type TrendBatch,
 } from '../components/aivisibility/types'
 import { Chip } from '../components/aivisibility/bits'
@@ -175,18 +175,9 @@ function Overview(props: {
   const [includeCompetitors, setIncludeCompetitors] = useState(false)
   const keywordById = useMemo(() => new Map(keywords.map(k => [k.id, k.keyword])), [keywords])
 
-  // LABS health score = visibility share (0.7) + avg classifier confidence (30×),
-  // computed over the latest batch's completed cells (already in `history`).
-  const latestBatchStats = useMemo(() => {
-    if (!latestBatch?.scan_batch_id) return { avgConfidence: null as number | null, completed: 0 }
-    const rows = history.filter(h => h.scan_batch_id === latestBatch.scan_batch_id && h.status === 'completed')
-    const confs = rows.map(r => r.confidence_score).filter((c): c is number => c != null)
-    return {
-      avgConfidence: confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null,
-      completed: rows.length,
-    }
-  }, [history, latestBatch])
-  const healthScore = computeHealthScore(latestBatch?.visibility_pct ?? null, latestBatchStats.avgConfidence)
+  // LABS health score — computed server-side in the trends rollup (the single
+  // source shared with the HTML report).
+  const healthScore = latestBatch?.health_score ?? null
   const enginePcts = useMemo(() => {
     const out: Record<string, number | null> = {}
     for (const [engine, stat] of Object.entries(latestBatch?.engines ?? {})) out[engine] = stat.visibility_pct
@@ -311,7 +302,7 @@ function Overview(props: {
       <StatsRow
         healthScore={healthScore}
         visibilityPct={latestBatch?.visibility_pct ?? null}
-        scansCount={latestBatchStats.completed}
+        scansCount={latestBatch?.total ?? 0}
         activeKeywordCount={activeCount}
         enginePcts={enginePcts}
         onKeywordsClick={onManageKeywords}
@@ -327,7 +318,6 @@ function Overview(props: {
               <VisibilityTrendsChart trends={trends} />
               <CompetitorTrendsChart
                 trends={trends}
-                history={history}
                 competitorNames={competitors.map(c => c.competitor_name)}
               />
             </div>
@@ -338,7 +328,7 @@ function Overview(props: {
             brandName={brandName}
             healthScore={healthScore}
             latestBatch={latestBatch}
-            history={history}
+            trends={trends}
             competitorNames={competitors.map(c => c.competitor_name)}
             onManageCompetitors={onManageCompetitors}
           />

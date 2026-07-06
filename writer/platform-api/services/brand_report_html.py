@@ -28,7 +28,7 @@ from config import settings
 from db.supabase_client import get_supabase
 from services.brand_scan import ENGINE_ORDER
 from services.brand_report import ENGINE_LABELS
-from services.brand_service import _safe
+from services.brand_service import _safe, health_score
 
 logger = logging.getLogger("brand_report_html")
 
@@ -74,12 +74,8 @@ def score_label(score: float) -> str:
     return "Critically Invisible"
 
 
-def health_score(visibility_pct: float | None, avg_confidence: float | None) -> int | None:
-    """LABS formula: visibility share (0-100) x 0.7 + avg confidence (0-1) x 30."""
-    if visibility_pct is None:
-        return None
-    return max(0, min(100, round(visibility_pct * 0.7 + (avg_confidence or 0.0) * 30)))
-
+# health_score is re-exported from brand_service — the single formula both the
+# dashboard trends rollup and this report read.
 
 # ── pure aggregation ─────────────────────────────────────────────────────────
 def aggregate_range(rows: list[dict], keyword_labels: dict[str, str]) -> dict:

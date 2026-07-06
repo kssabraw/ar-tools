@@ -51,6 +51,10 @@ export function ScanDetailSheet({ clientId, mention, keyword, onClose }: {
     queryKey: ['brand-diagnose', clientId, mention.id],
     queryFn: () => api.post<{ diagnosis: string }>(`/clients/${clientId}/brand/mentions/${mention.id}/diagnose`, {}),
     retry: false,
+    // Never refire on window refocus: a failed diagnosis isn't cached server-side,
+    // so each refetch would re-run the paid signals lookup + LLM attempt.
+    refetchOnWindowFocus: false,
+    staleTime: Infinity,
     enabled: !found && !precomputed && mention.status === 'completed',
   })
   const diagnosis = precomputed ?? diagnosed?.diagnosis ?? null

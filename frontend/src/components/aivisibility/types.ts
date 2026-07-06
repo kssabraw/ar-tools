@@ -101,19 +101,24 @@ export function compResultFor(m: Mention | undefined, name: string): CompResult 
   return (m.competitor_results as CompResult[]).find(c => c?.name === name)
 }
 
+// Per-batch rollup from GET /brand/trends (brand_service.compute_trends).
+// health_score is computed server-side — the LABS formula's single source —
+// so the dashboard gauge and the HTML report can't drift apart.
 export interface TrendBatch {
   scan_batch_id: string | null
   created_at: string | null
   total: number
   found: number
   visibility_pct: number
+  avg_confidence: number | null
+  health_score: number | null
   engines: Record<string, { total: number; found: number; visibility_pct: number }>
+  competitors: Record<string, { total: number; found: number; visibility_pct: number; health_score: number | null }>
 }
 
-// LABS health-score formula: weighted blend of visibility share (0–100) and
-// average classifier confidence (0–1), clamped to 0–100. Null when no scans.
-export function computeHealthScore(visibilityPct: number | null, avgConfidence: number | null): number | null {
-  if (visibilityPct == null) return null
-  const conf = avgConfidence ?? 0
-  return Math.max(0, Math.min(100, Math.round(visibilityPct * 0.7 + conf * 30)))
+// Format a batch timestamp for chart x-axes ("6/28").
+export function batchLabel(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : `${d.getMonth() + 1}/${d.getDate()}`
 }

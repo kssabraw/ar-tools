@@ -1,47 +1,50 @@
 import { useMemo } from 'react'
 import { Users } from 'lucide-react'
 import { HealthScoreGauge } from './HealthScoreGauge'
-import { computeHealthScore, compResultFor, type Mention, type TrendBatch } from './types'
+import { batchLabel, type TrendBatch } from './types'
 import './animations.css'
 
 // LABS' "Competitive Visibility" card: side-by-side health-score tiles — your
-// brand vs tracked competitors — from the latest scan batch. Competitor stats
-// come from the competitor_results re-classifications on the brand's own rows
-// (no extra API); a competitor scanned without "include competitors" simply
-// has no data yet. Dashed placeholder slots invite adding competitors.
+// brand vs tracked competitors — from the latest COMPETITOR-INCLUDED scan
+// batch (a brand-only scan in between doesn't blank the tiles). Stats come
+// from the server-side trends rollup (compute_trends aggregates the
+// competitor_results re-classifications). Dashed placeholder slots invite
+// adding competitors.
 
 interface CompStat { name: string; healthScore: number | null; visibilityPct: number | null; cells: number }
 
 const MAX_TILES = 2 // competitors shown beside the brand (LABS layout: 3 tiles)
 
-export function CompetitorComparisonCard({ brandName, healthScore, latestBatch, history, competitorNames, onManageCompetitors }: {
+export function CompetitorComparisonCard({ brandName, healthScore, latestBatch, trends, competitorNames, onManageCompetitors }: {
   brandName: string
   healthScore: number | null
   latestBatch: TrendBatch | null
-  history: Mention[]
+  trends: TrendBatch[]
   competitorNames: string[]
   onManageCompetitors: () => void
 }) {
+  // Newest batch that actually carries competitor re-classifications.
+  const compBatch = useMemo(() => {
+    for (let i = trends.length - 1; i >= 0; i--) {
+      if (Object.keys(trends[i].competitors ?? {}).length > 0) return trends[i]
+    }
+    return null
+  }, [trends])
+
   const compStats = useMemo<CompStat[]>(() => {
-    if (!latestBatch?.scan_batch_id) return []
-    const rows = history.filter(h => h.scan_batch_id === latestBatch.scan_batch_id && h.status === 'completed')
+    if (!compBatch) return []
     return competitorNames.map(name => {
-      let total = 0, found = 0
-      const confs: number[] = []
-      for (const m of rows) {
-        const cr = compResultFor(m, name)
-        if (!cr) continue
-        total += 1
-        if (cr.found) found += 1
-        if (cr.confidence != null) confs.push(cr.confidence)
+      const c = compBatch.competitors?.[name]
+      return {
+        name,
+        healthScore: c?.health_score ?? null,
+        visibilityPct: c && c.total > 0 ? Math.round(c.visibility_pct) : null,
+        cells: c?.total ?? 0,
       }
-      const vis = total > 0 ? Math.round((found / total) * 100) : null
-      const avgConf = confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null
-      return { name, healthScore: computeHealthScore(vis, avgConf), visibilityPct: vis, cells: total }
     })
       // Strongest competitors first; unscanned ones sink.
       .sort((a, b) => (b.visibilityPct ?? -1) - (a.visibilityPct ?? -1))
-  }, [latestBatch, history, competitorNames])
+  }, [compBatch, competitorNames])
 
   const shown = compStats.slice(0, MAX_TILES)
   const extra = Math.max(0, compStats.length - MAX_TILES)
@@ -55,6 +58,7 @@ export function CompetitorComparisonCard({ brandName, healthScore, latestBatch, 
       </div>
       <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 14 }}>
         Side-by-side health score comparison, from the latest competitor-included scan
+        {compBatch && compBatch.scan_batch_id !== latestBatch?.scan_batch_id && <> ({batchLabel(compBatch.created_at)})</>}
         {extra > 0 && <> · top {MAX_TILES} of {compStats.length} tracked shown</>}
       </div>
 
@@ -79,7 +83,7 @@ export function CompetitorComparisonCard({ brandName, healthScore, latestBatch, 
               {c.visibilityPct == null ? '—' : `${c.visibilityPct}%`}
             </span>
             <span style={tileSub}>
-              {c.cells > 0 ? `${c.cells} answers checked` : 'not in the latest scan — run one with competitors'}
+              {c.cells > 0 ? `${c.cells} answers checked` : 'not scanned yet — run a scan with competitors'}
             </span>
           </div>
         ))}
