@@ -21,6 +21,8 @@ import { ScanResultCards } from '../components/aivisibility/ScanResultCards'
 import { ScanDetailSheet } from '../components/aivisibility/ScanDetailSheet'
 import { VisibilityTrendsChart } from '../components/aivisibility/VisibilityTrendsChart'
 import { CompetitorTrendsChart } from '../components/aivisibility/CompetitorTrendsChart'
+import { CompetitorComparisonCard } from '../components/aivisibility/CompetitorComparisonCard'
+import { LeadValuationCard } from '../components/aivisibility/LeadValuationCard'
 import '../components/aivisibility/animations.css'
 
 // ── page-local types (shared data types live in components/aivisibility) ─────
@@ -130,6 +132,7 @@ export function AiVisibility() {
       {tab === 'overview' && (
         <Overview
           clientId={clientId!}
+          brandName={client?.name ?? 'This brand'}
           activeCount={activeKeywords.length}
           keywords={keywords}
           competitors={competitors}
@@ -142,6 +145,7 @@ export function AiVisibility() {
           onRun={(engines, includeCompetitors) => runMut.mutate({ engines, include_competitors: includeCompetitors })}
           runError={runMut.isError ? (runMut.error as Error).message : null}
           onManageKeywords={() => setTab('keywords')}
+          onManageCompetitors={() => setTab('competitors')}
         />
       )}
       {tab === 'keywords' && <Keywords clientId={clientId!} keywords={keywords} />}
@@ -153,14 +157,14 @@ export function AiVisibility() {
 
 // ── Overview ─────────────────────────────────────────────────────────────────
 function Overview(props: {
-  clientId: string; activeCount: number; keywords: Keyword[]; competitors: Competitor[]; history: Mention[]
+  clientId: string; brandName: string; activeCount: number; keywords: Keyword[]; competitors: Competitor[]; history: Mention[]
   latestByCell: Map<string, Mention>
   latestBatch: TrendBatch | null; trends: TrendBatch[]; running: boolean
   jobStatus: ScanStatus | undefined
   onRun: (engines: string[], includeCompetitors: boolean) => void
-  runError: string | null; onManageKeywords: () => void
+  runError: string | null; onManageKeywords: () => void; onManageCompetitors: () => void
 }) {
-  const { clientId, activeCount, keywords, competitors, history, latestByCell, latestBatch, trends, running, jobStatus, onRun, runError, onManageKeywords } = props
+  const { clientId, brandName, activeCount, keywords, competitors, history, latestByCell, latestBatch, trends, running, jobStatus, onRun, runError, onManageKeywords, onManageCompetitors } = props
   const activeKeywords = keywords.filter(k => k.is_active)
   const [diagnose, setDiagnose] = useState<{ m: Mention; keyword: string } | null>(null)
   const [scanOpen, setScanOpen] = useState(false)
@@ -318,6 +322,17 @@ function Overview(props: {
               />
             </div>
           )}
+
+          {/* Competitive comparison + lead valuation */}
+          <CompetitorComparisonCard
+            brandName={brandName}
+            healthScore={healthScore}
+            latestBatch={latestBatch}
+            history={history}
+            competitorNames={competitors.map(c => c.competitor_name)}
+            onManageCompetitors={onManageCompetitors}
+          />
+          <LeadValuationCard clientId={clientId} activeKeywords={activeKeywords} latestByCell={latestByCell} />
 
           {/* Whose mentions the matrix shows: this brand, or a tracked competitor. */}
           {competitors.length > 0 && (

@@ -150,6 +150,13 @@ async def get_brand_scan_results(
     return brand_service.list_history(str(client_id), limit=1000, scan_batch_id=str(scan_batch_id))
 
 
+@router.get("/clients/{client_id}/brand/keyword-market")
+async def get_brand_keyword_market(client_id: UUID, auth: dict = Depends(require_auth)):
+    """CPC/volume/competition for active brand keywords (Lead Valuation card).
+    Cache-first via the shared keyword_market table; best-effort live fill."""
+    return await brand_service.get_keyword_market(str(client_id))
+
+
 @router.get("/clients/{client_id}/brand/mentions/{mention_id}")
 async def get_brand_mention(
     client_id: UUID,

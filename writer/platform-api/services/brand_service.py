@@ -260,6 +260,84 @@ def compute_trends(rows: list[dict]) -> list[dict]:
     return out
 
 
+async def get_keyword_market(client_id: str) -> dict:
+    """CPC / search volume / competition for the client's active brand keywords,
+    powering the Lead Valuation card. Reuses the rank tracker's cross-client
+    keyword_market cache (services/keyword_market): cached rows first, one live
+    DataForSEO batch for missing/stale keywords, best-effort — a failed live
+    fetch degrades to cache-only rather than erroring."""
+    from datetime import datetime, timedelta, timezone
+
+    from config import settings
+    from services.dataforseo_rank import location_code_for
+    from services.keyword_market import fetch_cached_market, fetch_market
+
+    supabase = get_supabase()
+    client_res = _safe(lambda: (
+        supabase.table("clients").select("id, website_url, gbp, rank_tracking_location_code")
+        .eq("id", client_id).limit(1).execute()
+    ))
+    if not client_res.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    location_code = location_code_for(client_res.data[0])
+
+    kw_list = [k["keyword"] for k in list_keywords(client_id, include_inactive=False)]
+    if not kw_list:
+        return {"location_code": location_code, "degraded": None, "keywords": []}
+
+    cached = _safe(lambda: fetch_cached_market(supabase, kw_list, location_code))
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.keyword_market_refresh_days)
+    to_fetch: list[str] = []
+    for kw in kw_list:
+        row = cached.get(kw.lower())
+        if not row:
+            to_fetch.append(kw)
+            continue
+        refreshed = row.get("refreshed_at")
+        if refreshed and datetime.fromisoformat(refreshed.replace("Z", "+00:00")) < stale_cutoff:
+            to_fetch.append(kw)
+
+    degraded: Optional[str] = None
+    if to_fetch:
+        if not (settings.dataforseo_login and settings.dataforseo_password):
+            degraded = "dataforseo_not_configured"
+        else:
+            try:
+                market = await fetch_market(to_fetch, location_code)
+                now_iso = datetime.now(timezone.utc).isoformat()
+                records = [
+                    {
+                        "keyword": kw,
+                        "location_code": location_code,
+                        "search_volume": market.get(kw.lower(), {}).get("search_volume"),
+                        "cpc": market.get(kw.lower(), {}).get("cpc"),
+                        "competition": market.get(kw.lower(), {}).get("competition"),
+                        "refreshed_at": now_iso,
+                    }
+                    for kw in to_fetch
+                ]
+                supabase.table("keyword_market").upsert(records, on_conflict="keyword,location_code").execute()
+                for r in records:
+                    cached[r["keyword"].lower()] = r
+            except Exception as exc:
+                logger.warning("brand_keyword_market_failed", extra={"client_id": client_id, "error": str(exc)})
+                degraded = "market_fetch_failed"
+
+    return {
+        "location_code": location_code,
+        "degraded": degraded,
+        "keywords": [
+            {
+                "keyword": kw,
+                "search_volume": cached.get(kw.lower(), {}).get("search_volume"),
+                "cpc": cached.get(kw.lower(), {}).get("cpc"),
+                "competition": cached.get(kw.lower(), {}).get("competition"),
+            }
+            for kw in kw_list
+        ],
+    }
+
+
 def get_mention(client_id: str, mention_id: str) -> dict:
     """One mention row incl. the heavy fields (raw_response, retry_count) the
     history list deliberately omits — fetched lazily by the detail sheet."""
