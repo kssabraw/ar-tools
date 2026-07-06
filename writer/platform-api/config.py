@@ -212,6 +212,14 @@ class Settings(BaseSettings):
     # Slack app bot token (xoxb-…) + default channel id/name.
     slack_bot_token: str = ""
     slack_default_channel: str = ""
+    # Broadcast mention on Slack notifications. slack_mention_token picks the
+    # broadcast — "here" (<!here>, pings active members only), "channel"
+    # (<!channel>, pings every member incl. away/offline), or "" (off). It is
+    # applied only to notifications whose severity is in slack_mention_severities
+    # (comma-separated), so info-level items never ping. Default: @here on
+    # critical + warning (owner decision).
+    slack_mention_token: str = "here"
+    slack_mention_severities: str = "critical,warning"
     # Slack conversational assistant (SerMastr): respond to @mentions in channels
     # with a Claude answer grounded in the client's rank/GSC data. The signing
     # secret (Basic Information → App Credentials) verifies inbound Slack events;
