@@ -49,7 +49,70 @@ _ELEMENT_FLAGS = (
     ("has_lists", "lists"),
 )
 
+# Human labels for the controlled intent vocabulary (page_structure_scraper.INTENT_TAGS).
+_INTENT_LABELS = {
+    "hero": "hero / value prop",
+    "value_prop": "benefits",
+    "service_detail": "service detail",
+    "process": "how it works",
+    "trust": "trust / social proof",
+    "objection": "objection handling",
+    "pricing": "pricing",
+    "coverage": "service area",
+    "comparison": "comparison",
+    "faq": "FAQ",
+    "cta": "call to action",
+    "about": "about the business",
+    "other": "",
+}
+
+# Tolerance we allow the writer around a section's reference word count.
+_WORD_TOLERANCE_PCT = 15
+
 RenderMode = Literal["full", "opening", "structure"]
+
+
+def _section_words(item: dict[str, Any]) -> int:
+    """Word count for one section — new `word_count` (exact) or legacy
+    `approx_words` (LLM estimate on pre-upgrade analyses)."""
+    val = item.get("word_count")
+    if not isinstance(val, int):
+        val = item.get("approx_words")
+    return val if isinstance(val, int) else 0
+
+
+def _intent_label(item: dict[str, Any]) -> str:
+    intent = str(item.get("intent") or "").strip().lower()
+    if not intent:
+        return ""
+    return _INTENT_LABELS.get(intent, intent.replace("_", " "))
+
+
+def _format_blocks(blocks: Any) -> str:
+    """Compact human string for a section's block composition, for both the new
+    detailed shape (list of {type, count, words, items}) and the legacy list of
+    type strings."""
+    if not isinstance(blocks, list) or not blocks:
+        return ""
+    parts: list[str] = []
+    for b in blocks:
+        if isinstance(b, dict):
+            t = str(b.get("type") or "")
+            if not t:
+                continue
+            count = b.get("count") or 1
+            piece = f"{count}× {t}" if count and count != 1 else t
+            detail_bits = []
+            if isinstance(b.get("words"), int) and b["words"]:
+                detail_bits.append(f"~{b['words']}w")
+            if isinstance(b.get("items"), int) and b["items"]:
+                detail_bits.append(f"{b['items']} items")
+            if detail_bits:
+                piece += f" ({', '.join(detail_bits)})"
+            parts.append(piece)
+        elif b:
+            parts.append(str(b))
+    return ", ".join(parts)
 
 
 def _usable(entry: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
@@ -66,6 +129,18 @@ def _usable(entry: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
 
 def _present_flags(elements: dict[str, Any]) -> list[str]:
     return [label for key, label in _ELEMENT_FLAGS if elements.get(key)]
+
+
+def _block_type_list(blocks: Any) -> list[str]:
+    """Ordered, de-duplicated block type names for both schema shapes."""
+    out: list[str] = []
+    if not isinstance(blocks, list):
+        return out
+    for b in blocks:
+        t = b.get("type") if isinstance(b, dict) else b
+        if t and str(t) not in out:
+            out.append(str(t))
+    return out
 
 
 def render_reference_structure(
@@ -89,9 +164,13 @@ def render_reference_structure(
     return _render_full(analysis, page_type)
 
 
-def _outline_lines(outline: Any) -> list[str]:
-    """Render an outline (list of {level, heading, blocks, approx_words}) into
-    indented bullet lines. Shared by the full + structure renderers."""
+def _outline_lines(outline: Any, with_targets: bool = False) -> list[str]:
+    """Render an outline into indented bullet lines. Shared by the full +
+    structure renderers.
+
+    When `with_targets` is set (whole-page mirror), each line carries the
+    section's intent, exact word count, and block composition as concrete
+    targets. Otherwise it stays a lighter style reference."""
     lines: list[str] = []
     if not isinstance(outline, list):
         return lines
@@ -101,14 +180,16 @@ def _outline_lines(outline: Any) -> list[str]:
         level = str(item.get("level") or "H2").upper()
         indent = _LEVEL_INDENT.get(level, "  ")
         heading = (item.get("heading") or "").strip()
-        blocks = item.get("blocks") or []
-        blocks_txt = (
-            f" [{', '.join(str(b) for b in blocks)}]"
-            if isinstance(blocks, list) and blocks else ""
-        )
-        words = item.get("approx_words")
-        words_txt = f" (~{words} words)" if isinstance(words, int) and words else ""
-        lines.append(f"{indent}- {level}: {heading}{blocks_txt}{words_txt}")
+        intent = _intent_label(item)
+        intent_txt = f" · {intent}" if intent else ""
+        words = _section_words(item)
+        words_txt = f" (~{words} words)" if words else ""
+        blocks_txt = _format_blocks(item.get("blocks"))
+        blocks_part = f" [{blocks_txt}]" if blocks_txt else ""
+        if with_targets:
+            lines.append(f"{indent}- {level}: {heading}{intent_txt} — target{words_txt}{blocks_part}")
+        else:
+            lines.append(f"{indent}- {level}: {heading}{intent_txt}{words_txt}{blocks_part}")
     return lines
 
 
@@ -121,16 +202,19 @@ def _render_full(analysis: dict[str, Any], page_type: str) -> str:
 
     lines: list[str] = [
         f"REFERENCE STRUCTURE — mirror how the client's own {label} pages are organized. "
-        "Match the section layout, ordering, and heading hierarchy below; adapt ALL wording "
-        "to this topic. Do not copy the reference's wording or topic. Still follow every "
-        "other writing rule for this module."
+        "Match the section layout, ordering, heading hierarchy, and per-section SIZE below; "
+        "adapt ALL wording to this topic. Do not copy the reference's wording or topic. Still "
+        "follow every other writing rule for this module."
     ]
     if summary:
         lines.append(f"Summary: {summary}")
 
-    outline_lines = _outline_lines(outline)
+    outline_lines = _outline_lines(outline, with_targets=True)
     if outline_lines:
-        lines.append("Outline:")
+        lines.append(
+            "Outline: each section lists its purpose, target word count, and the content "
+            "blocks to include — treat these as targets to hit."
+        )
         lines.extend(outline_lines)
 
     if isinstance(elements, dict) and elements:
@@ -158,6 +242,17 @@ def _render_full(analysis: dict[str, Any], page_type: str) -> str:
     else:
         checklist.append("Keep the same number, order, and purpose of main sections.")
     checklist.append("Preserve the heading hierarchy depth (H2 vs H3 nesting) shown above.")
+    checklist.append(
+        f"Hit each section's target word count within about {_WORD_TOLERANCE_PCT}% — do not pad a "
+        "short section or truncate a long one."
+    )
+    checklist.append(
+        "Reproduce each section's block composition: the same number of paragraphs, lists "
+        "(with a similar item count), tables, and CTAs shown in that section's target."
+    )
+    total_words = elements.get("approx_total_words") if isinstance(elements, dict) else None
+    if isinstance(total_words, int) and total_words:
+        checklist.append(f"Aim for roughly {total_words} total words across the page.")
     flags = _present_flags(elements) if isinstance(elements, dict) else []
     if flags:
         checklist.append(
@@ -167,10 +262,6 @@ def _render_full(analysis: dict[str, Any], page_type: str) -> str:
     intro_pattern = elements.get("intro_pattern") if isinstance(elements, dict) else None
     if intro_pattern:
         checklist.append(f"Open with the same pattern: {intro_pattern}.")
-    checklist.append(
-        "Keep each section's relative length proportional to the reference (longer where it's "
-        "longer, shorter where it's shorter)."
-    )
     lines.append("Replication checklist:")
     lines.extend(f"  - {c}" for c in checklist)
 
@@ -205,9 +296,9 @@ def _render_opening(analysis: dict[str, Any], page_type: str) -> str:
         None,
     )
     if first:
-        blocks = first.get("blocks") or []
-        if isinstance(blocks, list) and blocks:
-            lines.append("Opening blocks: " + ", ".join(str(b) for b in blocks))
+        block_types = _block_type_list(first.get("blocks"))
+        if block_types:
+            lines.append("Opening blocks: " + ", ".join(block_types))
 
     return "\n".join(lines)
 
@@ -228,7 +319,7 @@ def _render_structure(analysis: dict[str, Any], page_type: str) -> str:
 
     items = [it for it in outline if isinstance(it, dict)]
     levels = {str(it.get("level") or "").upper() for it in items}
-    word_vals = [it.get("approx_words") for it in items if isinstance(it.get("approx_words"), int)]
+    word_vals = [w for w in (_section_words(it) for it in items) if w]
     short_sections = [w for w in word_vals if w <= _SHORT_SECTION_WORDS]
 
     lines: list[str] = [

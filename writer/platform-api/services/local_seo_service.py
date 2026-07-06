@@ -23,6 +23,7 @@ from fastapi import HTTPException
 from config import settings
 from db.supabase_client import get_supabase
 from services import analysis_cache, locations_service
+from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
 
@@ -54,7 +55,11 @@ def _business_fields(client: dict) -> dict:
         "gbp_category": gbp.get("gbp_category") or "",
         "address": gbp.get("address") or client.get("business_location") or "",
         "phone": gbp.get("phone"),
-        "website": gbp.get("website") or client.get("website_url"),
+        # Repair/clean the stored URL defensively — historic rows may carry a
+        # GBP tracking link whose query was percent-encoded into the path
+        # (`…/page/%3Futm_source%3D…`), which 404s and breaks every downstream
+        # scrape/probe (brand voice, page generation, …).
+        "website": normalize_website_url(gbp.get("website") or client.get("website_url")),
     }
 
 
@@ -138,6 +143,20 @@ async def _post_nlp(
                     "local_seo.nlp_http_error",
                     extra={"path": path, "status_code": response.status_code, "body": response.text[:500]},
                 )
+                # A 4xx from nlp is client-actionable — e.g. a 422 "Your website
+                # returned a 404 error. Check that the URL is correct and the
+                # site is live." Surface that message (and status) so the user
+                # knows what to fix, instead of the opaque provider error. 5xx
+                # stays a generic provider error (nothing the user can do).
+                if 400 <= response.status_code < 500:
+                    detail = "local_seo_provider_error"
+                    try:
+                        body = response.json()
+                        if isinstance(body, dict) and body.get("detail"):
+                            detail = str(body["detail"])
+                    except ValueError:
+                        pass
+                    raise HTTPException(status_code=response.status_code, detail=detail)
                 raise HTTPException(status_code=502, detail="local_seo_provider_error")
             try:
                 return response.json()

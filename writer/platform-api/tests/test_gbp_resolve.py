@@ -76,3 +76,41 @@ async def test_resolve_business_delegates_to_details():
         out = await gbp_service.resolve_business("Joe's Coffee Austin")
     mock_details.assert_awaited_once_with("Joe's Coffee Austin")
     assert out == {"place_id": "X"}
+
+
+# ── normalize_website_url ────────────────────────────────────────────────────
+
+def test_normalize_website_repairs_encoded_query_in_path():
+    # A GBP tracking link whose `?…` was percent-encoded into the path (the
+    # WheelHouse IT bug): `%3F`=`?`, `%3D`=`=`, `%26`=`&`. The encoded `?`
+    # never separates the query, so the URL 404s. Decode it, then strip the
+    # tracking params → the clean canonical page.
+    bad = (
+        "https://www.wheelhouseit.com/it-support-fort-lauderdale/"
+        "%3Futm_source%3Dgoogle%26utm_medium%3Dorganic%26utm_campaign%3Dgbp"
+    )
+    assert (
+        gbp_service.normalize_website_url(bad)
+        == "https://www.wheelhouseit.com/it-support-fort-lauderdale/"
+    )
+
+
+def test_normalize_website_strips_tracking_params_from_real_query():
+    url = "https://ex.com/page/?utm_source=google&gclid=abc&id=7"
+    # Non-tracking params are preserved; tracking ones dropped.
+    assert gbp_service.normalize_website_url(url) == "https://ex.com/page/?id=7"
+
+
+def test_normalize_website_leaves_clean_url_untouched():
+    for url in (
+        "https://ex.com/",
+        "https://ex.com/services/plumbing",
+        "https://ex.com/search?q=hello",
+    ):
+        assert gbp_service.normalize_website_url(url) == url
+
+
+def test_normalize_website_handles_empty_and_none():
+    assert gbp_service.normalize_website_url(None) is None
+    assert gbp_service.normalize_website_url("") == ""
+    assert gbp_service.normalize_website_url("   ") == ""

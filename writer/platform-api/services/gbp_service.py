@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Optional
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
 import httpx
 from fastapi import HTTPException
@@ -12,6 +13,53 @@ from fastapi import HTTPException
 from config import settings
 
 logger = logging.getLogger(__name__)
+
+# Query params that are pure tracking noise on a stored website URL (a GBP
+# listing's website link routinely carries these). Dropped by
+# `normalize_website_url` so the value we crawl / probe / sitemap-discover from
+# is the clean canonical page.
+_TRACKING_PARAM_PREFIXES = ("utm_",)
+_TRACKING_PARAMS = {"gclid", "fbclid", "gclsrc", "dclid", "mc_cid", "mc_eid", "_ga"}
+
+
+def normalize_website_url(url: Optional[str]) -> Optional[str]:
+    """Clean a website URL captured from a GBP listing (or user input).
+
+    Two repairs, both best-effort (never raises — returns the input on any
+    surprise):
+
+    1. **Decode a query string that was percent-encoded into the path.** GBP
+       tracking links arrive as e.g.
+       `https://ex.com/page/%3Futm_source%3Dgoogle%26utm_medium%3Dorganic`
+       (`%3F`=`?`, `%3D`=`=`, `%26`=`&`). The encoded `?` never separates the
+       query, so the whole thing is one bogus path segment that 404s. When an
+       encoded `?` appears in a URL with no real one, decode it back.
+    2. **Strip tracking params** (`utm_*`, `gclid`, `fbclid`, …) — noise for a
+       URL we only fetch/crawl from.
+    """
+    if not url:
+        return url
+    cleaned = url.strip()
+    if not cleaned:
+        return cleaned
+    if "%3f" in cleaned.lower() and "?" not in cleaned:
+        cleaned = unquote(cleaned)
+    try:
+        parts = urlsplit(cleaned)
+        if parts.query:
+            kept = [
+                (k, v)
+                for k, v in parse_qsl(parts.query, keep_blank_values=True)
+                if not (
+                    k.lower().startswith(_TRACKING_PARAM_PREFIXES)
+                    or k.lower() in _TRACKING_PARAMS
+                )
+            ]
+            cleaned = urlunsplit(parts._replace(query=urlencode(kept)))
+    except ValueError:
+        return cleaned
+    return cleaned
+
 
 _OUTSCRAPER_BASE_URL = "https://api.app.outscraper.com"
 _SEARCH_ENDPOINT = f"{_OUTSCRAPER_BASE_URL}/maps/search-v3"
@@ -409,7 +457,7 @@ async def get_business_details(query: str) -> dict:
         "description": description,
         "address": p.get("full_address") or p.get("address") or "",
         "phone": p.get("phone") or "",
-        "website": p.get("site") or p.get("website") or "",
+        "website": normalize_website_url(p.get("site") or p.get("website") or ""),
         "logo": p.get("logo") or "",
         "photo": p.get("photo") or "",
         "gbp_category": p.get("category") or p.get("type") or "",

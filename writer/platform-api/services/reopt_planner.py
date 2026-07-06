@@ -1237,9 +1237,41 @@ async def enrich_plan(client_id: str, plan_id: "str | None" = None) -> bool:
 
 
 def enqueue_reopt_plan(client_id: str, trigger: str = "manual") -> None:
-    """Enqueue a reopt_plan job (deduped against any in-flight one for the client)."""
+    """Enqueue a reopt_plan job, deduped so a client's action plan isn't rebuilt
+    many times a day.
+
+    Cadence (owner decision — strictly weekly + manual):
+
+    0. Event-trigger gate: ``drop``/``maps_drop``/``offpage`` rebuilds are
+       suppressed unless ``reopt_plan_event_refresh_enabled`` is set. The drop
+       still surfaces via the alert/notifications path; the plan just folds it in
+       on the next weekly run or a manual refresh. ``manual`` and ``scheduled``
+       are never gated here.
+
+    Then two guards, both skipped for a user-initiated ``manual`` refresh (that
+    always runs):
+
+    1. In-flight dedup (all triggers): never stack a second job while one is
+       already pending/running for the client.
+    2. Recency debounce (automated triggers): the scheduler's weekly day-gate is
+       held in an in-memory variable, so every platform-api restart on the weekly
+       day re-fires the ``scheduled`` pass — producing several identical rebuilds
+       in one day. So a ``scheduled`` rebuild is collapsed to at most one per UTC
+       day (which, given the weekday gate, is effectively once per week). When
+       event refreshes are re-enabled, an event-driven rebuild is likewise skipped
+       when a plan already completed within ``reopt_plan_min_interval_hours``.
+    """
+    from config import settings
+
+    if trigger not in ("manual", "scheduled") and not settings.reopt_plan_event_refresh_enabled:
+        logger.info(
+            "reopt_plan_event_refresh_disabled",
+            extra={"client_id": client_id, "trigger": trigger},
+        )
+        return
+
     supabase = get_supabase()
-    existing = (
+    in_flight = (
         supabase.table("async_jobs")
         .select("id")
         .eq("job_type", "reopt_plan")
@@ -1248,8 +1280,33 @@ def enqueue_reopt_plan(client_id: str, trigger: str = "manual") -> None:
         .limit(1)
         .execute()
     )
-    if existing.data:
+    if in_flight.data:
         return
+
+    if trigger != "manual":
+        now = datetime.now(timezone.utc)
+        if trigger == "scheduled":
+            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            cutoff = now - timedelta(hours=max(0, settings.reopt_plan_min_interval_hours))
+        if cutoff < now:
+            recent = (
+                supabase.table("async_jobs")
+                .select("id")
+                .eq("job_type", "reopt_plan")
+                .eq("entity_id", client_id)
+                .eq("status", "complete")
+                .gte("created_at", cutoff.isoformat())
+                .limit(1)
+                .execute()
+            )
+            if recent.data:
+                logger.info(
+                    "reopt_plan_debounced",
+                    extra={"client_id": client_id, "trigger": trigger},
+                )
+                return
+
     supabase.table("async_jobs").insert(
         {"job_type": "reopt_plan", "entity_id": client_id, "payload": {"client_id": client_id, "trigger": trigger}}
     ).execute()
