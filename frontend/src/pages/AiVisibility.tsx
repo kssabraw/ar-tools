@@ -2,70 +2,25 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, Eye, RefreshCw, AlertTriangle, Plus, Trash2, Check, X, CalendarClock, Sparkles, FileText, Download,
+  ArrowLeft, Eye, Zap, AlertTriangle, Plus, Trash2, Check, X, CalendarClock, Sparkles, FileText, Download,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type { Client } from '../lib/types'
+// Shared AI Visibility building blocks (LABS-style dashboard rebuild).
+import { engineMeta } from '../components/aivisibility/engines'
+import {
+  AIO_ENGINES, AIO_KIND_LABELS, SOURCE_TYPE_LABELS, computeHealthScore,
+  type CompResult, type Keyword, type Mention, type ScanStatus, type TrendBatch,
+} from '../components/aivisibility/types'
+import { StatsRow } from '../components/aivisibility/StatsRow'
+import { ScanDialog } from '../components/aivisibility/ScanDialog'
+import { RecentScansMatrix } from '../components/aivisibility/RecentScansMatrix'
+import '../components/aivisibility/animations.css'
 
-// ── engine taxonomy (mirrors services/brand_scan.ENGINE_ORDER) ───────────────
-const ENGINE_ORDER = ['chatgpt', 'claude', 'gemini', 'perplexity', 'google_ai_overview', 'google_ai_mode'] as const
-const ENGINE_LABELS: Record<string, string> = {
-  chatgpt: 'ChatGPT', claude: 'Claude', gemini: 'Gemini', perplexity: 'Perplexity',
-  google_ai_overview: 'Google AIO', google_ai_mode: 'Google AI Mode',
-}
-
-// ── types (mirror models/brand.py) ───────────────────────────────────────────
-interface Keyword { id: string; keyword: string; category: string | null; is_active: boolean; created_at: string | null }
+// ── page-local types (shared data types live in components/aivisibility) ─────
 interface Competitor { id: string; competitor_name: string; competitor_website: string | null; google_place_id: string | null; created_at: string | null }
 interface ScanStart { job_id: string; scan_batch_id: string; status: string }
-interface ScanStatus { status: string; total: number; completed: number; failed: number; scan_batch_id: string | null; error: string | null }
-interface Mention {
-  id: string; keyword_id: string | null; scan_batch_id: string | null; engine: string; status: string
-  mention_found: boolean | null; mention_type: string | null; sentiment: number | null
-  confidence_score: number | null; citations: string[]; competitor_results: unknown[] | null
-  reasoning: string | null; snippet: string | null; invisibility_diagnosis: string | null
-  response_analysis: RespAnalysis | null
-  failure_reason: string | null; created_at: string | null
-}
-// Structured per-answer analysis mined at scan time (services/brand_analysis.py).
-interface RespSource { domain: string; type: string; is_client: boolean; is_competitor: boolean }
-interface NamedBusiness { name: string; attributes: string[] }
-interface RespAnalysis {
-  position?: { rank: number | null; total_businesses: number | null }
-  prominence?: string | null
-  sources?: { client_cited: boolean; domains: RespSource[]; by_type: Record<string, number>; competitor_only_sources: string[] }
-  discovered_competitors?: NamedBusiness[]
-  competitor_attributes?: NamedBusiness[]
-  accuracy_flags?: { field: string; stated: string; actual: string }[]
-  intent?: { inferred: string | null; locations: string[] }
-  aio?: { mention_kind: AioKind }
-}
-type AioKind = 'none' | 'citation_only' | 'in_content_link' | 'both'
-const AIO_KIND_LABELS: Record<AioKind, string> = {
-  none: 'Not in the AI Overview',
-  citation_only: 'Cited in the sources strip only',
-  in_content_link: 'Linked inline in the answer',
-  both: 'Linked inline + cited as a source',
-}
-// Google's AI surfaces — the only engines where the in-content-link vs citation
-// distinction exists (the others don't expose that structure).
-const AIO_ENGINES = new Set(['google_ai_overview', 'google_ai_mode'])
-const SOURCE_TYPE_LABELS: Record<string, string> = {
-  directory: 'Directories', review: 'Review sites', social: 'Social', forum: 'Forums/Q&A',
-  search: 'Search/Maps', editorial: 'Editorial/brand sites',
-}
-// One competitor's re-classification of the same AI answer (stored on the
-// client mention's competitor_results JSONB by services/brand_scan.py).
-interface CompResult { name: string; found: boolean | null; mention_type: string | null; sentiment: number | null; confidence: number | null; snippet: string | null }
-function compResultFor(m: Mention | undefined, name: string): CompResult | undefined {
-  if (!m || !Array.isArray(m.competitor_results)) return undefined
-  return (m.competitor_results as CompResult[]).find(c => c?.name === name)
-}
-interface TrendBatch {
-  scan_batch_id: string | null; created_at: string | null; total: number; found: number
-  visibility_pct: number; engines: Record<string, { total: number; found: number; visibility_pct: number }>
-}
 interface Schedule {
   cadence: string; day_of_week: number | null; day_of_month: number | null; hour_utc: number
   selected_engines: string[]; include_competitors: boolean; is_active: boolean
@@ -80,7 +35,6 @@ export function AiVisibility() {
   const qc = useQueryClient()
   const [tab, setTab] = useState<Tab>('overview')
   const [jobId, setJobId] = useState<string | null>(null)
-  const [includeCompetitors, setIncludeCompetitors] = useState(false)
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', clientId],
@@ -129,7 +83,8 @@ export function AiVisibility() {
 
   const activeKeywords = keywords.filter(k => k.is_active)
   const runMut = useMutation({
-    mutationFn: () => api.post<ScanStart>(`/clients/${clientId}/brand/scan`, { include_competitors: includeCompetitors }),
+    mutationFn: (body: { engines: string[]; include_competitors: boolean }) =>
+      api.post<ScanStart>(`/clients/${clientId}/brand/scan`, body),
     onSuccess: (r) => setJobId(r.job_id),
   })
 
@@ -179,9 +134,7 @@ export function AiVisibility() {
           trends={trends}
           running={running}
           jobStatus={jobStatus}
-          includeCompetitors={includeCompetitors}
-          setIncludeCompetitors={setIncludeCompetitors}
-          onRun={() => runMut.mutate()}
+          onRun={(engines, includeCompetitors) => runMut.mutate({ engines, include_competitors: includeCompetitors })}
           runError={runMut.isError ? (runMut.error as Error).message : null}
           onManageKeywords={() => setTab('keywords')}
         />
@@ -198,14 +151,33 @@ function Overview(props: {
   clientId: string; activeCount: number; keywords: Keyword[]; competitors: Competitor[]; history: Mention[]
   latestByCell: Map<string, Mention>
   latestBatch: TrendBatch | null; trends: TrendBatch[]; running: boolean
-  jobStatus: ScanStatus | undefined; includeCompetitors: boolean
-  setIncludeCompetitors: (v: boolean) => void; onRun: () => void
+  jobStatus: ScanStatus | undefined
+  onRun: (engines: string[], includeCompetitors: boolean) => void
   runError: string | null; onManageKeywords: () => void
 }) {
-  const { clientId, activeCount, keywords, competitors, history, latestByCell, latestBatch, trends, running, jobStatus, includeCompetitors, setIncludeCompetitors, onRun, runError, onManageKeywords } = props
+  const { clientId, activeCount, keywords, competitors, history, latestByCell, latestBatch, trends, running, jobStatus, onRun, runError, onManageKeywords } = props
   const activeKeywords = keywords.filter(k => k.is_active)
   const [diagnose, setDiagnose] = useState<{ m: Mention; keyword: string } | null>(null)
+  const [scanOpen, setScanOpen] = useState(false)
   const keywordById = useMemo(() => new Map(keywords.map(k => [k.id, k.keyword])), [keywords])
+
+  // LABS health score = visibility share (0.7) + avg classifier confidence (30×),
+  // computed over the latest batch's completed cells (already in `history`).
+  const latestBatchStats = useMemo(() => {
+    if (!latestBatch?.scan_batch_id) return { avgConfidence: null as number | null, completed: 0 }
+    const rows = history.filter(h => h.scan_batch_id === latestBatch.scan_batch_id && h.status === 'completed')
+    const confs = rows.map(r => r.confidence_score).filter((c): c is number => c != null)
+    return {
+      avgConfidence: confs.length ? confs.reduce((a, b) => a + b, 0) / confs.length : null,
+      completed: rows.length,
+    }
+  }, [history, latestBatch])
+  const healthScore = computeHealthScore(latestBatch?.visibility_pct ?? null, latestBatchStats.avgConfidence)
+  const enginePcts = useMemo(() => {
+    const out: Record<string, number | null> = {}
+    for (const [engine, stat] of Object.entries(latestBatch?.engines ?? {})) out[engine] = stat.visibility_pct
+    return out
+  }, [latestBatch])
 
   // Matrix view: the client's own brand, or a tracked competitor's mentions
   // (re-classified from the same answers, available only on competitor-included scans).
@@ -227,7 +199,7 @@ function Overview(props: {
       return [
         h.created_at ? new Date(h.created_at).toLocaleString() : '',
         keywordById.get(h.keyword_id ?? '') ?? '',
-        ENGINE_LABELS[h.engine] ?? h.engine,
+        engineMeta(h.engine).label,
         h.mention_found == null ? '' : h.mention_found ? 'Yes' : 'No',
         h.mention_type ?? '',
         h.sentiment == null ? '' : h.sentiment.toFixed(2),
@@ -264,12 +236,14 @@ function Overview(props: {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 18, flexWrap: 'wrap' }}>
-        <button style={{ ...runBtn, opacity: running || activeCount === 0 ? 0.6 : 1 }} disabled={running || activeCount === 0} onClick={onRun}>
-          <RefreshCw size={15} /> {running ? 'Scanning…' : 'Run scan now'}
+        <button
+          className={history.length === 0 && activeCount > 0 ? 'aiv-scan-pulse' : undefined}
+          style={{ ...runBtn, opacity: activeCount === 0 ? 0.6 : 1 }}
+          disabled={activeCount === 0}
+          onClick={() => setScanOpen(true)}
+        >
+          <Zap size={15} /> {running ? 'Scanning…' : 'Run scan'}
         </button>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#475569', cursor: 'pointer' }}>
-          <input type="checkbox" checked={includeCompetitors} onChange={e => setIncludeCompetitors(e.target.checked)} /> Include competitors
-        </label>
         {running && jobStatus && (
           <span style={{ fontSize: 12, color: '#94a3b8' }}>{jobStatus.completed + jobStatus.failed}/{jobStatus.total || '…'} done</span>
         )}
@@ -302,19 +276,20 @@ function Overview(props: {
         </div>
       )}
       {report?.status === 'failed' && <Banner kind="error">Report failed: {report.error ?? 'unknown_error'}</Banner>}
+      {/* LABS-style stats row: health gauge, visibility share, keywords, engines */}
+      <StatsRow
+        healthScore={healthScore}
+        visibilityPct={latestBatch?.visibility_pct ?? null}
+        scansCount={latestBatchStats.completed}
+        activeKeywordCount={activeCount}
+        enginePcts={enginePcts}
+        onKeywordsClick={onManageKeywords}
+      />
+
       {latestBatch === null ? (
-        <EmptyState title="No scans yet" body="Run a scan to see whether this brand appears in each AI engine's answers for your tracked keywords." />
+        <EmptyState title="No visibility data yet" body="Run a scan to see whether this brand appears in each AI engine's answers for your tracked keywords." />
       ) : (
         <>
-          {/* Per-engine visibility from the latest scan */}
-          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 22 }}>
-            {ENGINE_ORDER.map(e => {
-              const stat = latestBatch.engines[e]
-              return <EngineStat key={e} label={ENGINE_LABELS[e]} pct={stat ? stat.visibility_pct : null} />
-            })}
-            <EngineStat label="Overall" pct={latestBatch.visibility_pct} highlight />
-          </div>
-
           {/* Trend sparkline */}
           {trends.length > 1 && (
             <div style={{ ...card, marginBottom: 22 }}>
@@ -338,42 +313,33 @@ function Overview(props: {
             </div>
           )}
 
-          {/* Visibility matrix: keyword × engine */}
-          <div style={tableWrap}>
-            <table style={table}>
-              <thead>
-                <tr>
-                  <Th>Keyword</Th>
-                  {ENGINE_ORDER.map(e => <Th key={e} center>{ENGINE_LABELS[e]}</Th>)}
-                </tr>
-              </thead>
-              <tbody>
-                {activeKeywords.map((k, i) => (
-                  <tr key={k.id} style={i % 2 ? rowAlt : undefined}>
-                    <Td><strong>{k.keyword}</strong></Td>
-                    {ENGINE_ORDER.map(e => (
-                      <MentionCell
-                        key={e}
-                        m={latestByCell.get(`${k.id}::${e}`)}
-                        competitor={viewing === 'brand' ? undefined : viewing}
-                        onOpen={(m) => setDiagnose({ m, keyword: keywordById.get(k.id) ?? k.keyword })}
-                      />
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          {/* Visibility matrix: keyword × engine (LABS icon-badge rows) */}
+          <RecentScansMatrix
+            keywords={activeKeywords}
+            latestByCell={latestByCell}
+            viewing={viewing}
+            onOpenCell={(m, keyword) => setDiagnose({ m, keyword })}
+          />
           <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 10 }}>
             {viewing === 'brand'
               ? <>Tip: click any cell for the full breakdown — position, sources the AI trusted, competitor reasons, and (for not-found cells) why the brand is invisible. On Google columns, <span style={{ color: '#7c3aed' }}>🔗</span> = linked inline in the answer, <span style={{ color: '#94a3b8' }}>◦</span> = cited in the sources strip only.</>
-              : <>Showing where <strong>{viewing}</strong> appears. A — means that keyword×engine wasn't scanned with competitors included.</>}
+              : <>Showing where <strong>{viewing}</strong> appears. A dimmed engine means that keyword×engine wasn't scanned with competitors included.</>}
           </p>
           <BatchInsights clientId={clientId} scanBatchId={latestBatch.scan_batch_id} />
         </>
       )}
       {diagnose && (
         <CellDetailsModal clientId={clientId} mention={diagnose.m} keyword={diagnose.keyword} onClose={() => setDiagnose(null)} />
+      )}
+      {scanOpen && (
+        <ScanDialog
+          activeKeywordCount={activeCount}
+          competitorCount={competitors.length}
+          running={running}
+          jobStatus={jobStatus}
+          onRun={onRun}
+          onClose={() => setScanOpen(false)}
+        />
       )}
     </div>
   )
@@ -419,7 +385,7 @@ function CellDetailsModal({ clientId, mention, keyword, onClose }: { clientId: s
       <div style={modal} onClick={e => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
           <strong style={{ fontSize: 15, color: '#0f172a' }}>
-            {ENGINE_LABELS[mention.engine] ?? mention.engine} · {found ? 'Mentioned' : 'Not mentioned'}
+            {engineMeta(mention.engine).fullLabel} · {found ? 'Mentioned' : 'Not mentioned'}
           </strong>
           <button style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }} onClick={onClose}><X size={18} /></button>
         </div>
@@ -518,7 +484,7 @@ function BatchInsights({ clientId, scanBatchId }: { clientId: string; scanBatchI
   if (consensus.length === 0 && discovered.length === 0 && sourceTypes.length === 0) return null
 
   return (
-    <div style={{ ...card, marginTop: 20 }}>
+    <div className="aiv-card-enter" style={{ ...card, marginTop: 20 }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 12 }}>Latest scan — cross-engine insights</div>
 
       {discovered.length > 0 && (
@@ -551,68 +517,6 @@ function BatchInsights({ clientId, scanBatchId }: { clientId: string; scanBatchI
         </div>
       )}
     </div>
-  )
-}
-
-function EngineStat({ label, pct, highlight }: { label: string; pct: number | null; highlight?: boolean }) {
-  const color = pct === null ? '#94a3b8' : pct >= 60 ? '#15803d' : pct >= 25 ? '#b45309' : '#b91c1c'
-  return (
-    <div style={{ ...card, minWidth: 120, flex: '1 1 120px', borderColor: highlight ? '#c7d2fe' : '#e2e8f0', background: highlight ? '#eef2ff' : '#fff' }}>
-      <div style={{ fontSize: 12, color: '#64748b', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, color }}>{pct === null ? '—' : `${pct}%`}</div>
-    </div>
-  )
-}
-
-// Small corner marker on the AIO columns: was the client linked inline in the
-// answer (🔗, the strong signal) or only listed in the sources strip (◦)?
-function AioBadge({ kind }: { kind: AioKind }) {
-  if (kind === 'none') return null
-  const inline = kind === 'in_content_link' || kind === 'both'
-  return (
-    <span title={AIO_KIND_LABELS[kind]} style={{ fontSize: 9, marginLeft: 3, verticalAlign: 'super', color: inline ? '#7c3aed' : '#94a3b8' }}>
-      {inline ? '🔗' : '◦'}
-    </span>
-  )
-}
-
-function MentionCell({ m, onOpen, competitor }: { m: Mention | undefined; onOpen?: (m: Mention) => void; competitor?: string }) {
-  let content: React.ReactNode = <span style={{ color: '#cbd5e1' }}>—</span>
-  let title = 'Not scanned'
-
-  // Competitor view: read the competitor's re-classification off the same row.
-  // No detail panel here (analysis is brand-specific), so cells aren't clickable.
-  if (competitor) {
-    const cr = m && m.status === 'completed' ? compResultFor(m, competitor) : undefined
-    if (!m || m.status !== 'completed') { title = m ? m.status : 'Not scanned' }
-    else if (!cr) { title = 'Competitor not included in this scan' }
-    else if (cr.found) { content = <Check size={16} color="#15803d" />; title = `Found (${cr.mention_type ?? 'direct'})` }
-    else { content = <X size={15} color="#94a3b8" />; title = 'Not found' }
-    return (
-      <td style={{ textAlign: 'center', padding: '8px 12px', borderBottom: '1px solid #f1f5f9' }} title={title}>
-        {content}
-      </td>
-    )
-  }
-
-  const completed = m?.status === 'completed'
-  if (m) {
-    if (m.status === 'failed') { content = <span style={{ color: '#cbd5e1' }}>—</span>; title = m.failure_reason ?? 'failed' }
-    else if (m.status === 'queued' || m.status === 'processing') { content = <span style={{ color: '#94a3b8' }}>…</span>; title = m.status }
-    else if (m.mention_found) { content = <Check size={16} color="#15803d" />; title = 'Found — click for details' }
-    else { content = <X size={15} color="#dc2626" />; title = 'Not found — click for why + details' }
-  }
-  const aioKind = m && completed && AIO_ENGINES.has(m.engine) ? m.response_analysis?.aio?.mention_kind : undefined
-  const clickable = completed && onOpen && m
-  return (
-    <td
-      style={{ textAlign: 'center', padding: '8px 12px', borderBottom: '1px solid #f1f5f9', cursor: clickable ? 'pointer' : 'default' }}
-      title={title}
-      onClick={clickable ? () => onOpen!(m!) : undefined}
-    >
-      {content}
-      {aioKind && <AioBadge kind={aioKind} />}
-    </td>
   )
 }
 
