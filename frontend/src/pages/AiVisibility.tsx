@@ -19,6 +19,8 @@ import { ScanDialog } from '../components/aivisibility/ScanDialog'
 import { RecentScansMatrix } from '../components/aivisibility/RecentScansMatrix'
 import { ScanResultCards } from '../components/aivisibility/ScanResultCards'
 import { ScanDetailSheet } from '../components/aivisibility/ScanDetailSheet'
+import { VisibilityTrendsChart } from '../components/aivisibility/VisibilityTrendsChart'
+import { CompetitorTrendsChart } from '../components/aivisibility/CompetitorTrendsChart'
 import '../components/aivisibility/animations.css'
 
 // ── page-local types (shared data types live in components/aivisibility) ─────
@@ -305,12 +307,15 @@ function Overview(props: {
         <EmptyState title="No visibility data yet" body="Run a scan to see whether this brand appears in each AI engine's answers for your tracked keywords." />
       ) : (
         <>
-          {/* Trend sparkline */}
+          {/* Trend charts: multi-engine visibility + competitor comparison */}
           {trends.length > 1 && (
-            <div style={{ ...card, marginBottom: 22 }}>
-              <div style={{ fontSize: 12, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>Overall visibility over time</div>
-              <TrendLine points={trends.map(t => t.visibility_pct)} />
-              <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>{trends.length} scans · latest {latestBatch.visibility_pct}%</div>
+            <div style={{ marginBottom: 22 }}>
+              <VisibilityTrendsChart trends={trends} />
+              <CompetitorTrendsChart
+                trends={trends}
+                history={history}
+                competitorNames={competitors.map(c => c.competitor_name)}
+              />
             </div>
           )}
 
@@ -430,21 +435,6 @@ function BatchInsights({ clientId, scanBatchId }: { clientId: string; scanBatchI
         </div>
       )}
     </div>
-  )
-}
-
-function TrendLine({ points }: { points: number[] }) {
-  const w = 480, h = 48, pad = 4
-  if (points.length < 2) return null
-  const max = 100, min = 0
-  const dx = (w - pad * 2) / (points.length - 1)
-  const y = (v: number) => h - pad - ((v - min) / (max - min)) * (h - pad * 2)
-  const d = points.map((v, i) => `${i === 0 ? 'M' : 'L'} ${pad + i * dx} ${y(v)}`).join(' ')
-  return (
-    <svg width="100%" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-      <path d={d} fill="none" stroke="#6366f1" strokeWidth={2} />
-      {points.map((v, i) => <circle key={i} cx={pad + i * dx} cy={y(v)} r={2.5} fill="#6366f1" />)}
-    </svg>
   )
 }
 
