@@ -10,6 +10,8 @@ from config import settings
 from db.supabase_client import get_supabase
 from services.brand_scan import run_brand_scan_job
 from services.brand_report import run_brand_report_job
+from services.brand_voice_service import run_brand_voice_scan_job
+from services.icp_service import run_icp_scan_job
 from services.dataforseo_rank import run_dataforseo_rank_job
 from services.gsc_ingest import run_gsc_ingest_job, run_gsc_page_ingest_job
 from services.gsc_research import run_gsc_research_job
@@ -359,6 +361,10 @@ async def _process_job(job: dict) -> None:
         await run_rank_location_derive_job(job)
     elif job_type == "brand_scan":
         await run_brand_scan_job(job)
+    elif job_type == "brand_voice_scan":
+        await run_brand_voice_scan_job(job)
+    elif job_type == "icp_scan":
+        await run_icp_scan_job(job)
     elif job_type == "brand_report":
         await run_brand_report_job(job)
     elif job_type == "notification_dispatch":

@@ -268,3 +268,187 @@ def test_score_accepts_full_page_structures_entry():
     entry = {"status": "complete", "analysis": gen}
     result = score_structural_fidelity(entry, gen)
     assert result["composite"] >= 95.0
+
+
+# ── deterministic detail: exact word counts + per-block composition ──────────
+
+def test_extract_detailed_blocks_and_word_counts():
+    from services.page_structure_eval import extract_outline_from_html
+
+    html = """
+    <article>
+      <div class="hero"><h1>Roof Restoration in Denver</h1>
+        <div><p>We restore tile and metal roofs fast.</p></div></div>
+      <section><h2>Our Services</h2>
+        <div class="wrap"><ul><li>Repair</li><li>Replace</li><li>Coat</li></ul></div></section>
+      <h2>Contact Us</h2>
+      <p>Call us today for a free quote.</p>
+    </article>
+    """
+    analysis = extract_outline_from_html(html)
+    outline = analysis["outline"]
+    # Document-order segmentation works despite the div nesting.
+    assert [it["level"] for it in outline] == ["H1", "H2", "H2"]
+
+    # Word counts are exact (deterministic), not estimates.
+    hero = outline[0]
+    assert hero["word_count"] == 7  # "We restore tile and metal roofs fast."
+    para_blocks = [b for b in hero["blocks"] if b["type"] == "paragraph"]
+    assert para_blocks and para_blocks[0]["count"] == 1 and para_blocks[0]["words"] == 7
+
+    # A list block carries its item count.
+    services = outline[1]
+    list_blocks = [b for b in services["blocks"] if b["type"] == "list"]
+    assert list_blocks and list_blocks[0]["items"] == 3
+
+    # A short CTA-flavored paragraph classifies as a cta block, not prose.
+    contact = outline[2]
+    assert any(b["type"] == "cta" for b in contact["blocks"])
+
+
+def test_extract_does_not_double_count_nested_content():
+    from services.page_structure_eval import extract_outline_from_html
+
+    # A <p> inside an <li> must count once (via the list), not twice.
+    html = "<article><h2>Items</h2><ul><li><p>alpha beta</p></li><li>gamma</li></ul></article>"
+    outline = extract_outline_from_html(html)["outline"]
+    section = outline[0]
+    assert section["word_count"] == 3  # alpha beta gamma
+    assert [b["type"] for b in section["blocks"]] == ["list"]
+    assert section["blocks"][0]["items"] == 2
+
+
+def test_word_fit_dimension_in_scoring():
+    from services.page_structure_eval import extract_outline_from_html, score_structural_fidelity
+
+    long_html = (
+        "<article><h1>T</h1><p>" + "word " * 100 + "</p>"
+        "<h2>A</h2><p>" + "word " * 100 + "</p></article>"
+    )
+    reference = extract_outline_from_html(long_html)
+
+    # Identical -> perfect word fit.
+    same = score_structural_fidelity(reference, reference)
+    assert same["dimensions"]["word_fit"] == 100.0
+    assert any(n.startswith("words:") for n in same["notes"])
+
+    # Same layout but each section a fraction of the size -> word fit drops.
+    short_html = (
+        "<article><h1>T</h1><p>" + "word " * 10 + "</p>"
+        "<h2>A</h2><p>" + "word " * 10 + "</p></article>"
+    )
+    generated = extract_outline_from_html(short_html)
+    diverged = score_structural_fidelity(reference, generated)
+    assert diverged["dimensions"]["word_fit"] < 40.0
+    # Section count + heading order still perfect -> word-fit is what separates them.
+    assert diverged["dimensions"]["section_count"] == 100.0
+
+
+# ── scraper: deterministic + LLM-annotation merge ───────────────────────────
+
+def test_merge_annotations_keeps_deterministic_fields():
+    from services.page_structure_scraper import _merge_annotations
+
+    outline = [
+        {"level": "H2", "heading": "Our Amazing Roof Repair in Denver",
+         "word_count": 120, "blocks": [{"type": "paragraph", "count": 2, "words": 120}]},
+        {"level": "H2", "heading": "Testimonials", "word_count": 60, "blocks": []},
+    ]
+    annotations = {
+        "sections": [
+            {"index": 0, "generalized_heading": "Service overview",
+             "intent": "service_detail", "intent_note": "describes the offering"},
+            {"index": 1, "generalized_heading": "Reviews", "intent": "BOGUS", "intent_note": ""},
+        ],
+    }
+    merged = _merge_annotations(outline, annotations)
+
+    # Deterministic fields are untouched.
+    assert merged[0]["word_count"] == 120
+    assert merged[0]["blocks"] == [{"type": "paragraph", "count": 2, "words": 120}]
+    # LLM semantics overlaid.
+    assert merged[0]["heading"] == "Service overview"
+    assert merged[0]["intent"] == "service_detail"
+    assert merged[0]["intent_note"] == "describes the offering"
+    # An out-of-vocabulary intent falls back to "other".
+    assert merged[1]["intent"] == "other"
+
+
+def test_merge_annotations_missing_section_keeps_real_heading():
+    from services.page_structure_scraper import _merge_annotations
+
+    outline = [{"level": "H2", "heading": "Real Heading", "word_count": 30, "blocks": []}]
+    merged = _merge_annotations(outline, {"sections": []})
+    assert merged[0]["heading"] == "Real Heading"
+    assert "intent" not in merged[0]
+
+
+def test_intent_tags_include_expected_vocab():
+    from services.page_structure_scraper import INTENT_TAGS
+
+    assert {"hero", "trust", "cta", "faq", "pricing", "other"} <= set(INTENT_TAGS)
+
+
+# ── render: intent + hard targets (new schema) + back-compat ────────────────
+
+def _rich_entry():
+    return {
+        "status": "complete",
+        "analysis": {
+            "outline": [
+                {"level": "H1", "heading": "Service overview", "intent": "hero",
+                 "intent_note": "opening pitch", "word_count": 60,
+                 "blocks": [{"type": "paragraph", "count": 1, "words": 60}]},
+                {"level": "H2", "heading": "What we do", "intent": "service_detail",
+                 "word_count": 180,
+                 "blocks": [{"type": "paragraph", "count": 2, "words": 140},
+                            {"type": "list", "count": 1, "words": 40, "items": 5}]},
+            ],
+            "structure_summary": "Hero, then service detail with a list.",
+            "elements": {"section_count": 2, "approx_total_words": 240,
+                         "has_lists": True, "intro_pattern": "hero + value prop"},
+        },
+    }
+
+
+def test_render_full_emits_intent_and_hard_targets():
+    out = render_reference_structure(_rich_entry(), "service", mode="full")
+    assert out is not None
+    # Section intent surfaced with a human label.
+    assert "hero / value prop" in out
+    assert "service detail" in out
+    # Per-section targets: word count + block composition with item count.
+    assert "~180 words" in out
+    assert "5 items" in out
+    # Hard-target directives in the checklist.
+    assert "within about 15%" in out
+    assert "block composition" in out
+    assert "240 total words" in out
+
+
+def test_render_structure_mode_uses_exact_word_count():
+    # New-shape entry with a deliberately tiny section -> brevity is preserved.
+    entry = {
+        "status": "complete",
+        "analysis": {
+            "outline": [
+                {"level": "H2", "heading": "Quick note", "word_count": 20, "blocks": []},
+                {"level": "H3", "heading": "Detail", "word_count": 30, "blocks": []},
+            ],
+            "structure_summary": "Tight.",
+            "elements": {},
+        },
+    }
+    out = render_reference_structure(entry, "blog_post", mode="structure")
+    assert out is not None
+    assert "1–2 sentences" in out  # word_count (not approx_words) drives brevity
+
+
+def test_render_back_compat_with_legacy_analysis():
+    # A pre-upgrade analysis (approx_words + string blocks, no intent) still renders
+    # in every mode without error.
+    legacy = _complete_entry()
+    for mode in ("full", "opening", "structure"):
+        out = render_reference_structure(legacy, "service", mode=mode)
+        assert out is not None
+        assert "Why it matters" in out or mode == "opening"

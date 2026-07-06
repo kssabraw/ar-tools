@@ -146,6 +146,50 @@ def test_scan_forwards_user_id_for_rate_limiting():
     assert captured["user_id"] == "user-42"
 
 
+# ── run_brand_voice_scan_job (auto-generate at client creation) ──────────────
+
+def test_run_brand_voice_scan_job_marks_complete_on_success():
+    supabase = _supabase()
+    job = {"id": "job-1", "payload": {"client_id": "client-1", "user_id": "u1"}}
+    with patch.object(brand_voice_service, "scan",
+                      new=AsyncMock(return_value={"brand_voice": {}, "pages_sampled": 5})), \
+         patch.object(brand_voice_service, "get_supabase", return_value=supabase):
+        import asyncio
+        asyncio.run(brand_voice_service.run_brand_voice_scan_job(job))
+    update = supabase.table.return_value.update.call_args[0][0]
+    assert update["status"] == "complete"
+    assert update["result"] == {"pages_sampled": 5}
+
+
+def test_run_brand_voice_scan_job_treats_409_as_complete_noop():
+    # A user-authored structured voice legitimately blocks the auto-scan — that's
+    # not a failure worth flagging on the job.
+    supabase = _supabase()
+    job = {"id": "job-1", "payload": {"client_id": "client-1", "user_id": "u1"}}
+    with patch.object(brand_voice_service, "scan",
+                      new=AsyncMock(side_effect=HTTPException(
+                          status_code=409, detail="brand_voice_user_authored"))), \
+         patch.object(brand_voice_service, "get_supabase", return_value=supabase):
+        import asyncio
+        asyncio.run(brand_voice_service.run_brand_voice_scan_job(job))
+    update = supabase.table.return_value.update.call_args[0][0]
+    assert update["status"] == "complete"
+    assert update["error"] == "brand_voice_user_authored"
+
+
+def test_run_brand_voice_scan_job_marks_failed_on_provider_error():
+    supabase = _supabase()
+    job = {"id": "job-1", "payload": {"client_id": "client-1", "user_id": "u1"}}
+    with patch.object(brand_voice_service, "scan",
+                      new=AsyncMock(side_effect=HTTPException(
+                          status_code=502, detail="local_seo_provider_error"))), \
+         patch.object(brand_voice_service, "get_supabase", return_value=supabase):
+        import asyncio
+        asyncio.run(brand_voice_service.run_brand_voice_scan_job(job))
+    update = supabase.table.return_value.update.call_args[0][0]
+    assert update["status"] == "failed"
+
+
 # ── ensure_scannable (router pre-flight → real HTTP 409) ─────────────────────
 
 def test_ensure_scannable_blocks_user_structured_voice():

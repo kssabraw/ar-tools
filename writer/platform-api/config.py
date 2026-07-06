@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # page-level RD-imbalance capture (paid DataForSEO page summaries).
     citation_check_enabled: bool = True
     page_backlink_intel_enabled: bool = True
+    # Auto-generate a new client's brand voice + ICP at creation (async, best-
+    # effort) so the assets exist without a manual scan. Skips clients with no
+    # website and no GBP (nothing to analyze). Never overrides user-authored
+    # structured voice/ICP.
+    auto_generate_brand_voice_icp: bool = True
     allowed_origins: List[str] = ["*"]
     log_level: str = "INFO"
     google_apps_script_url: str = ""
@@ -176,6 +181,21 @@ class Settings(BaseSettings):
     # alert. On-demand always works regardless.
     reopt_plan_auto_enabled: bool = True
     reopt_plan_weekday: int = 0    # Monday=0 … Sunday=6 (weekly digest day, UTC)
+    # Debounce for automated (non-manual) action-plan rebuilds. The scheduler's
+    # weekly day-gate is in-memory, so every platform-api restart on the weekly
+    # day re-fires the "scheduled" pass; event triggers (drop/maps_drop/offpage)
+    # can also fire several times a day. A "scheduled" rebuild is collapsed to at
+    # most once per UTC day; event-driven rebuilds are collapsed within this many
+    # hours of the last completed plan. A user-initiated "manual" refresh is never
+    # debounced. Set to 0 to disable the event-trigger window (day-gate stays).
+    reopt_plan_min_interval_hours: int = 6
+    # Strict weekly cadence (owner decision): only the weekly "scheduled" pass and
+    # user-initiated "manual" refreshes rebuild the Action Plan. Event triggers
+    # (drop/maps_drop/offpage) are suppressed by default — the drop still notifies
+    # via the alert/notifications path; the plan just folds it in on the next
+    # weekly run or a manual refresh. Flip to True to restore the on-drop
+    # auto-refresh (still debounced by reopt_plan_min_interval_hours).
+    reopt_plan_event_refresh_enabled: bool = False
 
     # Notifications service — shared delivery pipe (in-app card/feed + email +
     # Slack). In-app always works (DB row); email/Slack are best-effort and only
@@ -192,6 +212,14 @@ class Settings(BaseSettings):
     # Slack app bot token (xoxb-…) + default channel id/name.
     slack_bot_token: str = ""
     slack_default_channel: str = ""
+    # Broadcast mention on Slack notifications. slack_mention_token picks the
+    # broadcast — "here" (<!here>, pings active members only), "channel"
+    # (<!channel>, pings every member incl. away/offline), or "" (off). It is
+    # applied only to notifications whose severity is in slack_mention_severities
+    # (comma-separated), so info-level items never ping. Default: @here on
+    # critical + warning (owner decision).
+    slack_mention_token: str = "here"
+    slack_mention_severities: str = "critical,warning"
     # Slack conversational assistant (SerMastr): respond to @mentions in channels
     # with a Claude answer grounded in the client's rank/GSC data. The signing
     # secret (Basic Information → App Credentials) verifies inbound Slack events;

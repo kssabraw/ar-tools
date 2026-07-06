@@ -484,6 +484,61 @@ async def test_analyze_propagates_provider_failure():
     assert exc.value.status_code == 502
 
 
+def _nlp_response(status_code, *, json_body=None, text=""):
+    """A fake httpx response for _post_nlp: minimal .status_code/.text/.json()."""
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.text = text
+    if json_body is None:
+        resp.json.side_effect = ValueError("no json")
+    else:
+        resp.json.return_value = json_body
+    return resp
+
+
+def _patch_nlp_post(resp):
+    """Patch httpx.AsyncClient so _post_nlp's client.post returns `resp`."""
+    client = AsyncMock()
+    client.post.return_value = resp
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return patch.object(local_seo_service.httpx, "AsyncClient", return_value=ctx)
+
+
+@pytest.mark.asyncio
+async def test_post_nlp_propagates_actionable_4xx_message():
+    # nlp's friendly 422 (e.g. unreachable website) must reach the user instead
+    # of being flattened to the opaque local_seo_provider_error.
+    msg = "Your website returned a 404 error. Check that the URL is correct and the site is live."
+    resp = _nlp_response(422, json_body={"detail": msg})
+    with _patch_nlp_post(resp):
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service._post_nlp("/analyze-brand-voice", {})
+    assert exc.value.status_code == 422
+    assert exc.value.detail == msg
+
+
+@pytest.mark.asyncio
+async def test_post_nlp_4xx_without_detail_falls_back_to_provider_error():
+    resp = _nlp_response(400, text="Bad Request")
+    with _patch_nlp_post(resp):
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service._post_nlp("/analyze-brand-voice", {})
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "local_seo_provider_error"
+
+
+@pytest.mark.asyncio
+async def test_post_nlp_5xx_stays_generic_provider_error():
+    resp = _nlp_response(500, json_body={"detail": "boom"})
+    with _patch_nlp_post(resp):
+        with pytest.raises(HTTPException) as exc:
+            await local_seo_service._post_nlp("/analyze-brand-voice", {})
+    assert exc.value.status_code == 502
+    assert exc.value.detail == "local_seo_provider_error"
+
+
 @pytest.mark.asyncio
 async def test_get_or_compute_single_flight_collapses_concurrent_misses():
     # 5 concurrent misses for the same key → exactly ONE nlp compute (single-flight).

@@ -31,9 +31,32 @@ def test_format_email_no_client_no_link():
 # ---------------------------------------------------------------------------
 def test_format_slack_severity_icon_and_link():
     text = notifications.format_slack("Drop", "summary", "Acme", "https://app/x", "critical")
-    assert text.startswith("🔴")
+    # Critical is in the default mention allowlist, so it leads with the broadcast.
+    assert text.startswith("<!here>")
+    assert "🔴" in text
     assert "*Drop*" in text and "_Acme_" in text
     assert "<https://app/x|Open in AR Tools>" in text
+
+
+def test_format_slack_pings_warning_but_not_info(monkeypatch):
+    monkeypatch.setattr(settings, "slack_mention_token", "here")
+    monkeypatch.setattr(settings, "slack_mention_severities", "critical,warning")
+    warn = notifications.format_slack("W", None, None, None, "warning")
+    info = notifications.format_slack("I", None, None, None, "info")
+    assert warn.startswith("<!here>")
+    assert "<!here>" not in info and "<!channel>" not in info
+    assert info.startswith("🔵")
+
+
+def test_format_slack_mention_token_channel_and_off(monkeypatch):
+    monkeypatch.setattr(settings, "slack_mention_severities", "critical,warning")
+    monkeypatch.setattr(settings, "slack_mention_token", "channel")
+    assert notifications.format_slack("C", None, None, None, "critical").startswith("<!channel>")
+    # Empty token disables all broadcasts, even for critical.
+    monkeypatch.setattr(settings, "slack_mention_token", "")
+    off = notifications.format_slack("C", None, None, None, "critical")
+    assert "<!here>" not in off and "<!channel>" not in off
+    assert off.startswith("🔴")
 
 
 # ---------------------------------------------------------------------------
