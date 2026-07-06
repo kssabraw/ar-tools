@@ -411,8 +411,9 @@ def _suggest_prompt(brand: str, business_types: list[str], address: Optional[str
     )
 
 
-def _parse_keyword_list(text: str) -> list[str]:
-    """Pull a JSON array of strings out of the model's reply, tolerating fences."""
+def _parse_string_list(text: str, cap: int) -> list[str]:
+    """Pull a JSON array of strings out of the model's reply, tolerating fences,
+    trim/drop blanks, and cap the length."""
     if not text:
         return []
     match = re.search(r"\[.*\]", text, re.DOTALL)
@@ -422,7 +423,12 @@ def _parse_keyword_list(text: str) -> list[str]:
         data = json.loads(match.group(0))
     except json.JSONDecodeError:
         return []
-    return [str(k).strip() for k in data if isinstance(k, (str, int)) and str(k).strip()][:5]
+    return [str(k).strip() for k in data if isinstance(k, (str, int)) and str(k).strip()][:cap]
+
+
+def _parse_keyword_list(text: str) -> list[str]:
+    """Pull a JSON array of up to 5 keyword strings out of the model's reply."""
+    return _parse_string_list(text, cap=5)
 
 
 async def suggest_keywords(brand: str, business_types: list[str], address: Optional[str]) -> list[str]:
@@ -438,3 +444,78 @@ async def suggest_keywords(brand: str, business_types: list[str], address: Optio
     except Exception as exc:  # pragma: no cover
         raise InsightUnavailable(str(exc))
     return _parse_keyword_list(resp.choices[0].message.content or "")
+
+
+# ── conversational-query suggestions from tracked keywords ────────────────────
+# Per-seed-keyword count of natural-language AI queries to generate.
+_QUERIES_PER_KEYWORD_MIN = 3
+_QUERIES_PER_KEYWORD_MAX = 5
+
+
+def _conversational_prompt(
+    brand: str, business_context: str, icp_text: str, seed_keywords: list[str]
+) -> str:
+    """Prompt to expand each tracked ranking keyword into 3-5 conversational,
+    ICP-grounded queries someone would actually type/ask an AI assistant."""
+    ctx = business_context.strip() or brand or "this local business"
+    icp_block = (
+        "The ideal customer (ICP) for this business:\n" + icp_text.strip() + "\n\n"
+        if icp_text.strip()
+        else "No explicit ICP is on file — infer the realistic ideal customer from the "
+        "business context above.\n\n"
+    )
+    seeds = "\n".join(f"- {k}" for k in seed_keywords)
+    return (
+        "You are an expert in AI Answer Engine Optimization (AEO) and local SEO. "
+        "The business below is tracked for a set of ranking keywords. For EACH seed "
+        "keyword, write natural-language, conversational queries that its ideal "
+        "customer would actually ask an AI assistant (ChatGPT, Gemini, Perplexity, "
+        "Google AI Overviews) when they have the need behind that keyword.\n\n"
+        f"Business: {ctx}\n\n"
+        f"{icp_block}"
+        "Seed keywords (from the organic + geo-grid rank trackers):\n"
+        f"{seeds}\n\n"
+        "Requirements:\n"
+        f"- Produce {_QUERIES_PER_KEYWORD_MIN}-{_QUERIES_PER_KEYWORD_MAX} conversational "
+        "queries per seed keyword.\n"
+        "- Write full natural questions/requests, the way a real person talks to an AI "
+        '(e.g. "who\'s the best emergency plumber in Sydney for a burst pipe at night?"), '
+        "NOT keyword fragments.\n"
+        "- Ground each query in the ideal customer's real situation, intent, and "
+        "priorities from the ICP above.\n"
+        "- Preserve the seed keyword's location and qualifier (an emergency/near-me/"
+        "suburb term stays that specific).\n"
+        "- Keep them commercial/high-intent (finding or choosing a provider), not "
+        "generic informational trivia.\n"
+        "- Return ONLY a flat JSON array of all the query strings, nothing else."
+    )
+
+
+async def suggest_conversational_queries(
+    brand: str, business_context: str, icp_text: str, seed_keywords: list[str]
+) -> list[str]:
+    """Expand tracked ranking keywords into ICP-grounded conversational AI queries.
+    One flagship call; returns a flat, de-duplicated list (case-insensitive)."""
+    if not seed_keywords:
+        return []
+    client = _client()
+    try:
+        resp = await client.chat.completions.create(
+            model=settings.brand_suggest_model,
+            messages=[
+                {"role": "system", "content": "You are an AEO/local SEO expert. Return only valid JSON arrays."},
+                {"role": "user", "content": _conversational_prompt(brand, business_context, icp_text, seed_keywords)},
+            ],
+        )
+    except Exception as exc:  # pragma: no cover
+        raise InsightUnavailable(str(exc))
+    cap = len(seed_keywords) * _QUERIES_PER_KEYWORD_MAX
+    parsed = _parse_string_list(resp.choices[0].message.content or "", cap=cap)
+    seen: set[str] = set()
+    out: list[str] = []
+    for q in parsed:
+        key = q.lower()
+        if key not in seen:
+            seen.add(key)
+            out.append(q)
+    return out
