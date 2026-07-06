@@ -73,12 +73,14 @@ export function RankKeywords({ clientId, gscConnected }: {
 
   const exportCsv = () => {
     const headers = [
-      'Keyword', 'Status', 'Source', 'Today (live rank)', 'CPC', 'Volume', 'Est. monthly value',
+      'Keyword', 'Status', 'Source', 'Today (live rank)', 'Prev rank', 'Prev rank date',
+      'CPC', 'Volume', 'Est. monthly value',
       'Avg 7d', 'Avg 30d', 'Avg 60d', 'Avg 90d', 'Clicks 30d', 'Impr 30d', 'CTR 30d',
       'Canonical URL', 'Pages', 'Index status',
     ]
     const data = rows.map(k => [
       k.keyword, STATUS_META[k.status].label, k.primary_source, k.today_rank,
+      k.prev_rank, k.prev_rank_date,
       k.cpc, k.search_volume, k.est_monthly_value,
       k.avg_7, k.avg_30, k.avg_60, k.avg_90,
       k.clicks_30d, k.impressions_30d, k.ctr_30d,
@@ -287,7 +289,14 @@ function KeywordRow({ k, clientId, showGsc }: {
         </td>
         <td style={td}><Sparkline values={k.sparkline} color={meta.color} /></td>
         <td style={td}><span style={{ ...badge, color: meta.color, background: meta.bg }}>{meta.label}</span></td>
-        <td style={td}>{k.today_rank != null ? <RankPill rank={k.today_rank} /> : <Dash />}</td>
+        <td style={td}>
+          {k.today_rank != null ? (
+            <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+              <RankPill rank={k.today_rank} />
+              {k.prev_rank != null && <WeekDelta prev={k.prev_rank} now={k.today_rank} date={k.prev_rank_date} />}
+            </div>
+          ) : <Dash />}
+        </td>
         <td style={td}>{k.cpc != null ? `$${k.cpc.toFixed(2)}` : <Dash />}</td>
         <td style={td}>{k.search_volume != null ? k.search_volume.toLocaleString() : <Dash />}</td>
         <td style={td}>{k.est_monthly_value != null
@@ -506,6 +515,22 @@ function RankPill({ rank }: { rank: number }) {
   return (
     <span style={{ display: 'inline-block', minWidth: 30, textAlign: 'center', borderRadius: 6, padding: '3px 9px', fontWeight: 800, fontSize: 14, background: bg, color }}>
       {rank}
+    </span>
+  )
+}
+
+// Week-over-week movement vs the previous DataForSEO check. Lower rank = better,
+// so a decrease is an improvement (green up).
+function WeekDelta({ prev, now, date }: { prev: number; now: number; date: string | null }) {
+  const delta = prev - now
+  const flat = delta === 0
+  const improved = delta > 0
+  const color = flat ? '#94a3b8' : improved ? '#15803d' : '#c2410c'
+  const Icon = flat ? Minus : improved ? TrendingUp : TrendingDown
+  const title = `Previous check: #${prev}${date ? ` on ${new Date(date).toLocaleDateString()}` : ''}`
+  return (
+    <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 11, fontWeight: 700, color }}>
+      <Icon size={11} /> {flat ? '0' : Math.abs(delta)}
     </span>
   )
 }

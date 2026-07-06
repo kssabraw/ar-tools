@@ -144,6 +144,7 @@ def compute_keyword_summary(rows: Sequence[dict], today: date, coverage_days: in
         "avg_7": None, "avg_30": None, "avg_60": None, "avg_90": None,
         "clicks_30d": 0, "impressions_30d": 0, "ctr_30d": 0.0,
         "sparkline": [], "direction": None, "today_rank": today_rank,
+        "prev_rank": None, "prev_rank_date": None,
     }
 
     if source == "gsc":
@@ -171,6 +172,11 @@ def compute_keyword_summary(rows: Sequence[dict], today: date, coverage_days: in
         if len(non_null) >= 2:
             diff = non_null[-1] - non_null[0]  # later − earlier; negative = improved
             base["direction"] = "up" if diff < -0.5 else "down" if diff > 0.5 else "flat"
+        # Previous check (the prior weekly pull) for the row's week-over-week delta.
+        nn_dated = [(d, v) for d, v in vals if v is not None]
+        if len(nn_dated) >= 2:
+            base["prev_rank"] = nn_dated[-2][1]
+            base["prev_rank_date"] = _to_date(nn_dated[-2][0]).isoformat()
 
     return base
 
