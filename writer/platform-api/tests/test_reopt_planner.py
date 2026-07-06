@@ -490,19 +490,23 @@ class _FakeSupabase:
         return _FakeQuery(self, "select")
 
 
-def _run_enqueue(monkeypatch, trigger, *, in_flight=False, has_recent=False, window=6):
+def _run_enqueue(
+    monkeypatch, trigger, *, in_flight=False, has_recent=False, window=6, event_refresh=True
+):
     fake = _FakeSupabase(in_flight=in_flight, has_recent=has_recent)
     monkeypatch.setattr(reopt_planner, "get_supabase", lambda: fake)
     # enqueue_reopt_plan resolves settings via a local `from config import settings`.
     import config
 
     monkeypatch.setattr(config.settings, "reopt_plan_min_interval_hours", window)
+    monkeypatch.setattr(config.settings, "reopt_plan_event_refresh_enabled", event_refresh)
     reopt_planner.enqueue_reopt_plan(CLIENT, trigger=trigger)
     return fake
 
 
 def test_enqueue_manual_always_inserts_even_with_recent_plan(monkeypatch):
-    fake = _run_enqueue(monkeypatch, "manual", has_recent=True)
+    # manual bypasses both the event-refresh gate and the recency debounce.
+    fake = _run_enqueue(monkeypatch, "manual", has_recent=True, event_refresh=False)
     assert len(fake.inserts) == 1
     assert fake.inserts[0]["payload"]["trigger"] == "manual"
 
@@ -518,16 +522,24 @@ def test_enqueue_scheduled_debounced_when_plan_built_today(monkeypatch):
 
 
 def test_enqueue_scheduled_inserts_when_no_recent_plan(monkeypatch):
-    fake = _run_enqueue(monkeypatch, "scheduled", has_recent=False)
+    # scheduled runs even with event refresh disabled (the weekly cadence).
+    fake = _run_enqueue(monkeypatch, "scheduled", has_recent=False, event_refresh=False)
     assert len(fake.inserts) == 1
 
 
+def test_enqueue_event_trigger_suppressed_when_refresh_disabled(monkeypatch):
+    # Default owner policy: drop/maps_drop/offpage never rebuild the plan.
+    fake = _run_enqueue(monkeypatch, "drop", has_recent=False, event_refresh=False)
+    assert fake.inserts == []
+
+
 def test_enqueue_event_trigger_debounced_within_window(monkeypatch):
-    fake = _run_enqueue(monkeypatch, "drop", has_recent=True, window=6)
+    # With event refresh re-enabled, the recency debounce still applies.
+    fake = _run_enqueue(monkeypatch, "drop", has_recent=True, window=6, event_refresh=True)
     assert fake.inserts == []
 
 
 def test_enqueue_event_trigger_window_zero_disables_debounce(monkeypatch):
-    # window=0 → no recency query; the event rebuild is allowed.
-    fake = _run_enqueue(monkeypatch, "maps_drop", has_recent=True, window=0)
+    # event refresh on + window=0 → no recency query; the event rebuild is allowed.
+    fake = _run_enqueue(monkeypatch, "maps_drop", has_recent=True, window=0, event_refresh=True)
     assert len(fake.inserts) == 1

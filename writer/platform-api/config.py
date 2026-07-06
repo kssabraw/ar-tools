@@ -189,6 +189,13 @@ class Settings(BaseSettings):
     # hours of the last completed plan. A user-initiated "manual" refresh is never
     # debounced. Set to 0 to disable the event-trigger window (day-gate stays).
     reopt_plan_min_interval_hours: int = 6
+    # Strict weekly cadence (owner decision): only the weekly "scheduled" pass and
+    # user-initiated "manual" refreshes rebuild the Action Plan. Event triggers
+    # (drop/maps_drop/offpage) are suppressed by default — the drop still notifies
+    # via the alert/notifications path; the plan just folds it in on the next
+    # weekly run or a manual refresh. Flip to True to restore the on-drop
+    # auto-refresh (still debounced by reopt_plan_min_interval_hours).
+    reopt_plan_event_refresh_enabled: bool = False
 
     # Notifications service — shared delivery pipe (in-app card/feed + email +
     # Slack). In-app always works (DB row); email/Slack are best-effort and only
