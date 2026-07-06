@@ -64,6 +64,12 @@ class BrandScanStatusResponse(BaseModel):
     error: Optional[str] = None
 
 
+class BrandHtmlReportRequest(BaseModel):
+    # ISO dates (YYYY-MM-DD); omitted → last 30 days ending today.
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
 # ── schedule ─────────────────────────────────────────────────────────────────
 class BrandScheduleUpdateRequest(BaseModel):
     cadence: str = "weekly"  # weekly | monthly | disabled

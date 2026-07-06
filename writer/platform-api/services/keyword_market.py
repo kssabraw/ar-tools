@@ -126,43 +126,40 @@ def fetch_cached_market(supabase, keywords: list[str], location_code: int) -> di
     return {r["keyword"].lower(): r for r in rows}
 
 
-async def refresh_client_market(client_id: str, today: Optional[date] = None) -> dict:
-    """Refresh stale/missing market data for a client's keywords (monthly cadence)."""
-    supabase = get_supabase()
-    today = today or date.today()
-
-    client_res = supabase.table("clients").select(
-        "id, website_url, gbp, rank_tracking_location_code"
-    ).eq("id", client_id).limit(1).execute()
-    if not client_res.data:
-        return {"status": "failed", "error": "client_not_found", "fetched": 0}
-    location_code = location_code_for(client_res.data[0])
-
-    keywords = (
-        supabase.table("tracked_keywords").select("keyword").eq("client_id", client_id).eq("active", True).execute()
-    ).data or []
-    kw_list = [k["keyword"] for k in keywords]
-    if not kw_list:
-        return {"status": "ok", "fetched": 0}
-
-    cached = fetch_cached_market(supabase, kw_list, location_code)
-    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.keyword_market_refresh_days)
-    to_fetch = []
+def stale_keywords(kw_list: list[str], cached: dict[str, dict], stale_cutoff: datetime) -> list[str]:
+    """Keywords with no cache row, or one refreshed before the cutoff."""
+    out: list[str] = []
     for kw in kw_list:
         row = cached.get(kw.lower())
         if not row:
-            to_fetch.append(kw)
+            out.append(kw)
             continue
         refreshed = row.get("refreshed_at")
         if refreshed and datetime.fromisoformat(refreshed.replace("Z", "+00:00")) < stale_cutoff:
-            to_fetch.append(kw)
+            out.append(kw)
+    return out
+
+
+async def refresh_keywords(supabase, kw_list: list[str], location_code: int, *, force: bool = False) -> dict:
+    """Stale-check → one batched DataForSEO fetch → cache upsert, for any keyword
+    list. The shared core of the rank tracker's and the brand module's market
+    refreshes. force=True re-fetches every keyword — including rows cached with
+    null volume/cpc, which the staleness pass deliberately treats as fresh."""
+    if not kw_list:
+        return {"status": "ok", "fetched": 0}
+    cached = fetch_cached_market(supabase, kw_list, location_code)
+    if force:
+        to_fetch = list(kw_list)
+    else:
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.keyword_market_refresh_days)
+        to_fetch = stale_keywords(kw_list, cached, stale_cutoff)
     if not to_fetch:
         return {"status": "ok", "fetched": 0, "skipped": len(kw_list)}
 
     try:
         market = await fetch_market(to_fetch, location_code)
     except Exception as exc:
-        logger.warning("keyword_market_failed", extra={"client_id": client_id, "error": str(exc)})
+        logger.warning("keyword_market_failed", extra={"error": str(exc)})
         return {"status": "failed", "error": str(exc), "fetched": 0}
 
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -178,25 +175,84 @@ async def refresh_client_market(client_id: str, today: Optional[date] = None) ->
         for kw in to_fetch
     ]
     supabase.table("keyword_market").upsert(records, on_conflict="keyword,location_code").execute()
-    logger.info("keyword_market_complete", extra={"client_id": client_id, "fetched": len(records)})
     return {"status": "ok", "fetched": len(records), "skipped": len(kw_list) - len(to_fetch)}
 
 
-def enqueue_keyword_market(client_id: str) -> None:
+def _client_location_code(supabase, client_id: str) -> Optional[int]:
+    res = supabase.table("clients").select(
+        "id, website_url, gbp, rank_tracking_location_code"
+    ).eq("id", client_id).limit(1).execute()
+    if not res.data:
+        return None
+    return location_code_for(res.data[0])
+
+
+async def refresh_client_market(client_id: str, today: Optional[date] = None) -> dict:
+    """Refresh stale/missing market data for a client's rank-tracker keywords
+    (monthly cadence)."""
     supabase = get_supabase()
-    existing = (
+    location_code = _client_location_code(supabase, client_id)
+    if location_code is None:
+        return {"status": "failed", "error": "client_not_found", "fetched": 0}
+
+    keywords = (
+        supabase.table("tracked_keywords").select("keyword").eq("client_id", client_id).eq("active", True).execute()
+    ).data or []
+    kw_list = [k["keyword"] for k in keywords]
+    if not kw_list:
+        return {"status": "ok", "fetched": 0}
+
+    result = await refresh_keywords(supabase, kw_list, location_code)
+    if result.get("status") == "ok" and result.get("fetched"):
+        logger.info("keyword_market_complete", extra={"client_id": client_id, "fetched": result["fetched"]})
+    return result
+
+
+async def refresh_brand_market(client_id: str, *, force: bool = False) -> dict:
+    """The same refresh for the AI Visibility module's active brand keywords
+    (Lead Valuation card) — scope='brand' of the keyword_market job."""
+    supabase = get_supabase()
+    location_code = _client_location_code(supabase, client_id)
+    if location_code is None:
+        return {"status": "failed", "error": "client_not_found", "fetched": 0}
+
+    keywords = (
+        supabase.table("brand_tracked_keywords").select("keyword")
+        .eq("client_id", client_id).eq("is_active", True).execute()
+    ).data or []
+    kw_list = [k["keyword"] for k in keywords]
+    if not kw_list:
+        return {"status": "ok", "fetched": 0}
+    return await refresh_keywords(supabase, kw_list, location_code, force=force)
+
+
+def market_job_pending(supabase, client_id: str, scope: str) -> bool:
+    """Is a keyword_market job for this client+scope already pending/running?"""
+    rows = (
         supabase.table("async_jobs")
         .select("id")
         .eq("job_type", "keyword_market")
         .eq("entity_id", client_id)
+        .eq("payload->>scope", scope)
         .in_("status", ["pending", "running"])
         .limit(1)
         .execute()
-    )
-    if existing.data:
+    ).data
+    return bool(rows)
+
+
+def enqueue_keyword_market(client_id: str, *, scope: str = "rank", force: bool = False) -> None:
+    """Enqueue a market refresh (idempotent per client+scope). scope='rank'
+    covers tracked_keywords; scope='brand' covers brand_tracked_keywords."""
+    supabase = get_supabase()
+    if market_job_pending(supabase, client_id, scope):
         return
     supabase.table("async_jobs").insert(
-        {"job_type": "keyword_market", "entity_id": client_id, "payload": {"client_id": client_id}}
+        {
+            "job_type": "keyword_market",
+            "entity_id": client_id,
+            "payload": {"client_id": client_id, "scope": scope, "force": force},
+        }
     ).execute()
 
 
@@ -210,7 +266,10 @@ async def run_keyword_market_job(job: dict) -> None:
             {"status": "failed", "error": "missing client_id", "completed_at": "now()"}
         ).eq("id", job_id).execute()
         return
-    result = await refresh_client_market(client_id)
+    if (payload.get("scope") or "rank") == "brand":
+        result = await refresh_brand_market(client_id, force=bool(payload.get("force")))
+    else:
+        result = await refresh_client_market(client_id)
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.get("status") == "ok" else "failed",

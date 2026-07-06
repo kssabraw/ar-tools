@@ -214,9 +214,20 @@ def list_history(
     return _safe(_q)
 
 
+def health_score(visibility_pct: float | None, avg_confidence: float | None) -> int | None:
+    """LABS health-score formula: visibility share (0-100) x 0.7 + avg classifier
+    confidence (0-1) x 30, clamped to 0-100. The single server-side source —
+    the dashboard (via compute_trends) and the HTML report both read it."""
+    if visibility_pct is None:
+        return None
+    return max(0, min(100, round(visibility_pct * 0.7 + (avg_confidence or 0.0) * 30)))
+
+
 def compute_trends(rows: list[dict]) -> list[dict]:
     """Roll completed brand-mention rows up by scan batch → per-engine + overall
-    visibility. Pure (no DB) so it can be unit-tested. Newest batch last."""
+    visibility, avg classifier confidence + health score, and per-competitor
+    tallies (from the competitor_results re-classifications riding on the
+    brand's rows). Pure (no DB) so it can be unit-tested. Newest batch last."""
     batches: dict[str, dict] = {}
     for r in rows:
         if r.get("status") != "completed":
@@ -226,8 +237,10 @@ def compute_trends(rows: list[dict]) -> list[dict]:
             "scan_batch_id": r.get("scan_batch_id"),
             "created_at": r.get("created_at"),
             "engines": {},
+            "competitors": {},
             "total": 0,
             "found": 0,
+            "confs": [],
         })
         # Earliest created_at in the batch represents the scan's time.
         if r.get("created_at") and (b["created_at"] is None or r["created_at"] < b["created_at"]):
@@ -238,9 +251,24 @@ def compute_trends(rows: list[dict]) -> list[dict]:
         if r.get("mention_found"):
             eng["found"] += 1
             b["found"] += 1
+        if r.get("confidence_score") is not None:
+            b["confs"].append(float(r["confidence_score"]))
+        for comp in r.get("competitor_results") or []:
+            name = comp.get("name")
+            if not name:
+                continue
+            c = b["competitors"].setdefault(name, {"total": 0, "found": 0, "confs": []})
+            c["total"] += 1
+            if comp.get("found"):
+                c["found"] += 1
+            if comp.get("confidence") is not None:
+                c["confs"].append(float(comp["confidence"]))
 
     def _pct(found, total):
         return round(100.0 * found / total, 1) if total else 0.0
+
+    def _avg(vals):
+        return sum(vals) / len(vals) if vals else None
 
     out = []
     for b in batches.values():
@@ -248,16 +276,120 @@ def compute_trends(rows: list[dict]) -> list[dict]:
             e: {"total": v["total"], "found": v["found"], "visibility_pct": _pct(v["found"], v["total"])}
             for e, v in b["engines"].items()
         }
+        competitors = {
+            n: {
+                "total": v["total"],
+                "found": v["found"],
+                "visibility_pct": _pct(v["found"], v["total"]),
+                "health_score": health_score(_pct(v["found"], v["total"]), _avg(v["confs"])),
+            }
+            for n, v in b["competitors"].items()
+        }
+        avg_conf = _avg(b["confs"])
+        pct = _pct(b["found"], b["total"])
         out.append({
             "scan_batch_id": b["scan_batch_id"],
             "created_at": b["created_at"],
             "total": b["total"],
             "found": b["found"],
-            "visibility_pct": _pct(b["found"], b["total"]),
+            "visibility_pct": pct,
+            "avg_confidence": avg_conf,
+            "health_score": health_score(pct, avg_conf),
             "engines": engines,
+            "competitors": competitors,
         })
     out.sort(key=lambda x: (x["created_at"] or ""))
     return out
+
+
+async def get_keyword_market(client_id: str) -> dict:
+    """CPC / search volume / competition for the client's active brand keywords,
+    powering the Lead Valuation card. Cache-only read of the rank tracker's
+    cross-client keyword_market table — the paid DataForSEO fill runs as the
+    shared keyword_market async job (scope='brand'), auto-enqueued here when
+    keywords are missing/stale, so a dashboard GET never blocks on (or pays
+    for) a live provider call. `refreshing` is True while a fill job is
+    pending/running; the card polls until it clears."""
+    from datetime import datetime, timedelta, timezone
+
+    from config import settings
+    from services.dataforseo_rank import location_code_for
+    from services.keyword_market import (
+        enqueue_keyword_market, fetch_cached_market, market_job_pending, stale_keywords,
+    )
+
+    supabase = get_supabase()
+    client_res = _safe(lambda: (
+        supabase.table("clients").select("id, website_url, gbp, rank_tracking_location_code")
+        .eq("id", client_id).limit(1).execute()
+    ))
+    if not client_res.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    location_code = location_code_for(client_res.data[0])
+
+    kw_list = [k["keyword"] for k in list_keywords(client_id, include_inactive=False)]
+    if not kw_list:
+        return {"location_code": location_code, "degraded": None, "refreshing": False, "keywords": []}
+
+    cached = _safe(lambda: fetch_cached_market(supabase, kw_list, location_code))
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.keyword_market_refresh_days)
+    to_fetch = stale_keywords(kw_list, cached, stale_cutoff)
+
+    degraded: Optional[str] = None
+    refreshing = _safe(lambda: market_job_pending(supabase, client_id, "brand"))
+    if to_fetch and not refreshing:
+        if not (settings.dataforseo_login and settings.dataforseo_password):
+            degraded = "dataforseo_not_configured"
+        else:
+            _safe(lambda: enqueue_keyword_market(client_id, scope="brand"))
+            refreshing = True
+
+    return {
+        "location_code": location_code,
+        "degraded": degraded,
+        "refreshing": refreshing,
+        "keywords": [
+            {
+                "keyword": kw,
+                "search_volume": cached.get(kw.lower(), {}).get("search_volume"),
+                "cpc": cached.get(kw.lower(), {}).get("cpc"),
+                "competition": cached.get(kw.lower(), {}).get("competition"),
+            }
+            for kw in kw_list
+        ],
+    }
+
+
+def refresh_keyword_market(client_id: str) -> dict:
+    """User-triggered market refresh: force-enqueue the scope='brand' job so
+    even null-cached keywords (which the staleness pass treats as fresh for
+    keyword_market_refresh_days) are re-queried."""
+    from config import settings
+    from services.keyword_market import enqueue_keyword_market
+
+    if not (settings.dataforseo_login and settings.dataforseo_password):
+        return {"refreshing": False, "degraded": "dataforseo_not_configured"}
+    _safe(lambda: enqueue_keyword_market(client_id, scope="brand", force=True))
+    return {"refreshing": True, "degraded": None}
+
+
+def get_mention(client_id: str, mention_id: str) -> dict:
+    """One mention row incl. the heavy fields (raw_response, retry_count) the
+    history list deliberately omits — fetched lazily by the detail sheet."""
+    def _q():
+        rows = (
+            get_supabase().table("brand_mention_history")
+            .select(_HISTORY_COLS + ", raw_response, retry_count")
+            .eq("id", mention_id)
+            .eq("client_id", client_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="mention_not_found")
+        return rows[0]
+    return _safe(_q)
 
 
 def get_trends(client_id: str, limit: int = 2000) -> list[dict]:
