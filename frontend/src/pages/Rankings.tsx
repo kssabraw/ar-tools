@@ -47,6 +47,13 @@ export function Rankings() {
   const unreadAlerts = overview?.unread_alert_count ?? 0
   const [tab, setTab] = useState<Tab>('overview')
 
+  // The Overview tab is a GSC dashboard (avg-position/clicks/impressions charts,
+  // striking distance). Without GSC it collapses into a weaker copy of Keywords,
+  // so we hide it and land on Keywords once we know the client has no property.
+  const propsLoaded = properties !== undefined
+  const showOverview = !propsLoaded || gscConnected
+  const effectiveTab: Tab = tab === 'overview' && !showOverview ? 'keywords' : tab
+
   return (
     <div style={{ padding: 32, maxWidth: 980 }}>
       <button style={backLink} onClick={() => navigate(`/clients/${clientId}`)}>
@@ -68,33 +75,33 @@ export function Rankings() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, borderBottom: '1px solid #e2e8f0', marginBottom: 24 }}>
-        <TabButton active={tab === 'overview'} onClick={() => setTab('overview')} label="Overview" />
-        <TabButton active={tab === 'keywords'} onClick={() => setTab('keywords')} label="Keywords" />
-        {gscConnected && <TabButton active={tab === 'pages'} onClick={() => setTab('pages')} label="Pages" />}
-        <TabButton active={tab === 'rankability'} onClick={() => setTab('rankability')} label="Rankability" />
-        <TabButton active={tab === 'trends'} onClick={() => setTab('trends')} label="SERP Trends" />
-        {gscConnected && <TabButton active={tab === 'brand'} onClick={() => setTab('brand')} label="Brand search" />}
-        <TabButton active={tab === 'alerts'} onClick={() => setTab('alerts')} label="Alerts" badge={unreadAlerts} />
-        <TabButton active={tab === 'reports'} onClick={() => setTab('reports')} label="Reports" />
-        <TabButton active={tab === 'settings'} onClick={() => setTab('settings')} label="Settings" />
+        {showOverview && <TabButton active={effectiveTab === 'overview'} onClick={() => setTab('overview')} label="Overview" />}
+        <TabButton active={effectiveTab === 'keywords'} onClick={() => setTab('keywords')} label="Keywords" />
+        {gscConnected && <TabButton active={effectiveTab === 'pages'} onClick={() => setTab('pages')} label="Pages" />}
+        <TabButton active={effectiveTab === 'rankability'} onClick={() => setTab('rankability')} label="Rankability" />
+        <TabButton active={effectiveTab === 'trends'} onClick={() => setTab('trends')} label="SERP Trends" />
+        {gscConnected && <TabButton active={effectiveTab === 'brand'} onClick={() => setTab('brand')} label="Brand search" />}
+        <TabButton active={effectiveTab === 'alerts'} onClick={() => setTab('alerts')} label="Alerts" badge={unreadAlerts} />
+        <TabButton active={effectiveTab === 'reports'} onClick={() => setTab('reports')} label="Reports" />
+        <TabButton active={effectiveTab === 'settings'} onClick={() => setTab('settings')} label="Settings" />
       </div>
 
       {/* Body */}
-      {tab === 'settings' ? (
+      {effectiveTab === 'settings' ? (
         <RankSettings clientId={clientId} />
-      ) : tab === 'overview' ? (
+      ) : effectiveTab === 'overview' ? (
         <RankOverview clientId={clientId} />
-      ) : tab === 'pages' ? (
+      ) : effectiveTab === 'pages' ? (
         <RankPages clientId={clientId} />
-      ) : tab === 'rankability' ? (
+      ) : effectiveTab === 'rankability' ? (
         <Rankability clientId={clientId} />
-      ) : tab === 'trends' ? (
+      ) : effectiveTab === 'trends' ? (
         <SerpTrends clientId={clientId} />
-      ) : tab === 'brand' ? (
+      ) : effectiveTab === 'brand' ? (
         <BrandSearch clientId={clientId} />
-      ) : tab === 'alerts' ? (
+      ) : effectiveTab === 'alerts' ? (
         <RankAlerts clientId={clientId} />
-      ) : tab === 'reports' ? (
+      ) : effectiveTab === 'reports' ? (
         <RankReports clientId={clientId} />
       ) : (
         <RankKeywords clientId={clientId} gscConnected={gscConnected} />
