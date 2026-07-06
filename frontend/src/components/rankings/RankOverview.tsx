@@ -25,6 +25,16 @@ export function RankOverview({ clientId }: { clientId: string }) {
       .slice(0, 8)
   }, [keywords])
 
+  // DataForSEO-mode summary: without GSC the live rank (today_rank) is the only
+  // real number available, so surface how many keywords rank and their average.
+  const dfStats = useMemo(() => {
+    const ranks = (keywords ?? []).map(k => k.today_rank).filter((r): r is number => r != null)
+    return {
+      ranking: ranks.length,
+      avg_rank: ranks.length ? ranks.reduce((a, b) => a + b, 0) / ranks.length : null,
+    }
+  }, [keywords])
+
   if (!ov) return <p style={{ color: '#94a3b8', fontSize: 14 }}>Loading overview…</p>
 
   if (ov.keyword_count === 0) {
@@ -57,6 +67,12 @@ export function RankOverview({ clientId }: { clientId: string }) {
             value={ov.avg_position_30d != null ? ov.avg_position_30d.toFixed(1) : '—'} />
           <Kpi icon={<MousePointerClick size={16} />} label="Clicks 30d" value={ov.clicks_30d.toLocaleString()} />
           <Kpi icon={<Eye size={16} />} label="Impressions 30d" value={ov.impressions_30d.toLocaleString()} />
+        </>}
+        {!gsc && <>
+          <Kpi icon={<Target size={16} />} label="Ranking"
+            value={`${dfStats.ranking} / ${ov.keyword_count}`} />
+          <Kpi icon={<BarChart3 size={16} />} label="Avg live rank"
+            value={dfStats.avg_rank != null ? dfStats.avg_rank.toFixed(1) : '—'} />
         </>}
       </div>
 
@@ -98,7 +114,9 @@ export function RankOverview({ clientId }: { clientId: string }) {
               <span style={{ flex: 1, fontWeight: 600, color: '#0f172a', fontSize: 13, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{k.keyword}</span>
               <Sparkline values={k.sparkline} color={meta.color} width={84} height={22} />
               <span style={{ fontSize: 12, color: '#64748b', width: 60, textAlign: 'right' }}>
-                {k.avg_30 != null ? `30d ${k.avg_30.toFixed(1)}` : '—'}
+                {gsc
+                  ? (k.avg_30 != null ? `30d ${k.avg_30.toFixed(1)}` : '—')
+                  : (k.today_rank != null ? `#${k.today_rank}` : '—')}
               </span>
               <span style={{ color: meta.color, background: meta.bg, borderRadius: 999, padding: '2px 9px', fontSize: 11, fontWeight: 600, width: 78, textAlign: 'center' }}>
                 {meta.label}
