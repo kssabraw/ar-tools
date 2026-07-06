@@ -1,4 +1,5 @@
 import { TrendingUp, TrendingDown, Minus, CheckCircle2, XCircle } from 'lucide-react'
+import { relativeTime as suiteRelativeTime } from '../localseo/shared'
 import './animations.css'
 
 // Small shared pieces for the AI Visibility result cards + detail sheet.
@@ -64,34 +65,20 @@ export function SentimentIndicator({ value }: { value: number | null }) {
 
 // FOUND / NOT FOUND pill (LABS card + sheet header).
 export function FoundPill({ found, size = 'sm' }: { found: boolean; size?: 'sm' | 'md' }) {
-  const pad = size === 'md' ? '4px 12px' : '2px 9px'
   const fs = size === 'md' ? 12 : 11
-  return found ? (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: pad, borderRadius: 999, background: '#f0fdf4', color: '#15803d', fontSize: fs, fontWeight: 700 }}>
-      <CheckCircle2 size={fs + 1} /> {size === 'md' ? 'FOUND' : 'YES'}
-    </span>
-  ) : (
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: pad, borderRadius: 999, background: '#fef2f2', color: '#b91c1c', fontSize: fs, fontWeight: 700 }}>
-      <XCircle size={fs + 1} /> {size === 'md' ? 'NOT FOUND' : 'NO'}
+  const { bg, fg, Icon, text } = found
+    ? { bg: '#f0fdf4', fg: '#15803d', Icon: CheckCircle2, text: size === 'md' ? 'FOUND' : 'YES' }
+    : { bg: '#fef2f2', fg: '#b91c1c', Icon: XCircle, text: size === 'md' ? 'NOT FOUND' : 'NO' }
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: size === 'md' ? '4px 12px' : '2px 9px', borderRadius: 999, background: bg, color: fg, fontSize: fs, fontWeight: 700 }}>
+      <Icon size={fs + 1} /> {text}
     </span>
   )
 }
 
-// Compact relative time ("3h ago") — avoids a date-fns dependency.
+// Null-tolerant wrapper over the suite's shared relative-time formatter.
 export function relativeTime(iso: string | null): string {
-  if (!iso) return ''
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return ''
-  const s = Math.max(0, Math.floor((Date.now() - then) / 1000))
-  if (s < 60) return 'just now'
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  const d = Math.floor(h / 24)
-  if (d < 30) return `${d}d ago`
-  const mo = Math.floor(d / 30)
-  return mo < 12 ? `${mo}mo ago` : `${Math.floor(mo / 12)}y ago`
+  return iso ? suiteRelativeTime(iso) : ''
 }
 
 export function hostOf(url: string): string {

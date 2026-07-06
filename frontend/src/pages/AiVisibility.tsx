@@ -203,6 +203,12 @@ function Overview(props: {
   const viewing = view !== 'brand' && competitors.some(c => c.competitor_name === view) ? view : 'brand'
 
   // Export the full scan history (every keyword×engine row over time) as CSV.
+  // Engine values keep the labels earlier exports used ('Google AIO', not the
+  // UI's shorter 'AI Overview') so appended/pivoted spreadsheets stay joinable.
+  const CSV_ENGINE_LABELS: Record<string, string> = {
+    google_ai_overview: 'Google AIO',
+    google_ai_mode: 'Google AI Mode',
+  }
   const exportHistoryCsv = () => {
     const headers = [
       'Scan date', 'Keyword', 'Engine', 'Brand mentioned', 'Mention type', 'Sentiment',
@@ -216,7 +222,7 @@ function Overview(props: {
       return [
         h.created_at ? new Date(h.created_at).toLocaleString() : '',
         keywordById.get(h.keyword_id ?? '') ?? '',
-        engineMeta(h.engine).label,
+        CSV_ENGINE_LABELS[h.engine] ?? engineMeta(h.engine).label,
         h.mention_found == null ? '' : h.mention_found ? 'Yes' : 'No',
         h.mention_type ?? '',
         h.sentiment == null ? '' : h.sentiment.toFixed(2),

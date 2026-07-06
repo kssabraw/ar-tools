@@ -4,6 +4,8 @@
 // approximations of each provider's mark — recognizable via shape + brand color,
 // no external image assets (matches the suite's dependency-free convention).
 
+import { useId } from 'react'
+
 export type EngineKey =
   | 'chatgpt' | 'claude' | 'gemini' | 'perplexity' | 'google_ai_overview' | 'google_ai_mode'
 
@@ -66,8 +68,10 @@ function ClaudeMark({ size }: { size: number }) {
 }
 
 function GeminiMark({ size }: { size: number }) {
-  // Four-point spark with Gemini's blue→purple→pink gradient.
-  const id = 'aiv-gemini-grad'
+  // Four-point spark with Gemini's blue→purple→pink gradient. useId keeps the
+  // gradient id unique per instance (the mark renders many times per page —
+  // duplicate DOM ids are invalid HTML).
+  const id = `aiv-gemini-grad-${useId()}`
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <defs>

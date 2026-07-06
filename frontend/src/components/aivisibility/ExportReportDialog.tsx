@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { X, FileDown, Eye, Printer, ArrowLeft, AlertTriangle } from 'lucide-react'
 import { api } from '../../lib/api'
+import { downloadFile } from '../localseo/shared'
 import './animations.css'
 
 // LABS' Export Report dialog: pick a date range (presets + custom), preview the
@@ -82,13 +83,7 @@ export function ExportReportDialog({ clientId, clientName, onClose }: {
         return // error surfaces via genMut.isError in the settings view
       }
     }
-    const blob = new Blob([doc], { type: 'text/html' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `ai-visibility-report-${clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${today}.html`
-    a.click()
-    URL.revokeObjectURL(url)
+    downloadFile(doc, `ai-visibility-report-${clientName.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${today}.html`, 'text/html')
   }
 
   const print = () => iframeRef.current?.contentWindow?.print()
