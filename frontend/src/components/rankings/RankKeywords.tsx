@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Camera, ChevronDown, ChevronRight, Download, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, Upload, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
-import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse } from '../../lib/types'
+import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse, TrendPoint } from '../../lib/types'
 import { toCsv, downloadCsv, parseKeywordsFromCsv } from '../../lib/csv'
 import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
 import { STATUS_META, statusRank } from './status'
@@ -73,12 +73,14 @@ export function RankKeywords({ clientId, gscConnected }: {
 
   const exportCsv = () => {
     const headers = [
-      'Keyword', 'Status', 'Source', 'Today (live rank)', 'CPC', 'Volume', 'Est. monthly value',
+      'Keyword', 'Status', 'Source', 'Today (live rank)', 'Prev rank', 'Prev rank date',
+      'CPC', 'Volume', 'Est. monthly value',
       'Avg 7d', 'Avg 30d', 'Avg 60d', 'Avg 90d', 'Clicks 30d', 'Impr 30d', 'CTR 30d',
       'Canonical URL', 'Pages', 'Index status',
     ]
     const data = rows.map(k => [
       k.keyword, STATUS_META[k.status].label, k.primary_source, k.today_rank,
+      k.prev_rank, k.prev_rank_date,
       k.cpc, k.search_volume, k.est_monthly_value,
       k.avg_7, k.avg_30, k.avg_60, k.avg_90,
       k.clicks_30d, k.impressions_30d, k.ctr_30d,
@@ -247,9 +249,14 @@ function KeywordRow({ k, clientId, showGsc }: {
 
   const colSpan = 8 + (showGsc ? 7 : 0)
   // DataForSEO keywords plot tracked_rank; GSC keywords plot gsc_position.
-  const trendValues = (trend?.points ?? []).map(p => ({
-    date: p.date, value: isDf ? (p.tracked_rank ?? null) : p.gsc_position,
-  }))
+  // For DataForSEO the ranks are sparse weekly checks, so drop the null days and
+  // connect the actual checks into a visible line (GSC keeps its daily gaps).
+  const trendValues = isDf
+    ? (trend?.points ?? [])
+        .filter(p => p.tracked_rank != null)
+        .map(p => ({ date: p.date, value: p.tracked_rank as number }))
+    : (trend?.points ?? []).map(p => ({ date: p.date, value: p.gsc_position }))
+  const pointInTime = computePointInTime(trend?.points ?? [], isDf)
 
   return (
     <>
@@ -282,7 +289,14 @@ function KeywordRow({ k, clientId, showGsc }: {
         </td>
         <td style={td}><Sparkline values={k.sparkline} color={meta.color} /></td>
         <td style={td}><span style={{ ...badge, color: meta.color, background: meta.bg }}>{meta.label}</span></td>
-        <td style={td}>{k.today_rank != null ? <span style={todayBox}>{k.today_rank}</span> : <Dash />}</td>
+        <td style={td}>
+          {k.today_rank != null ? (
+            <div style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+              <RankPill rank={k.today_rank} />
+              {k.prev_rank != null && <WeekDelta prev={k.prev_rank} now={k.today_rank} date={k.prev_rank_date} />}
+            </div>
+          ) : <Dash />}
+        </td>
         <td style={td}>{k.cpc != null ? `$${k.cpc.toFixed(2)}` : <Dash />}</td>
         <td style={td}>{k.search_volume != null ? k.search_volume.toLocaleString() : <Dash />}</td>
         <td style={td}>{k.est_monthly_value != null
@@ -316,6 +330,7 @@ function KeywordRow({ k, clientId, showGsc }: {
           <td colSpan={colSpan} style={{ padding: 16, background: '#fafbfc', borderBottom: '1px solid #f1f5f9' }}>
             {k.status === 'deindex_risk' && <DeindexBanner k={k}
               checking={checkIndexMut.isPending} onCheck={() => checkIndexMut.mutate()} />}
+            {pointInTime && <PointInTime pit={pointInTime} isDf={isDf} />}
             <div style={{ fontSize: 12, color: '#64748b', marginBottom: 8 }}>
               {isDf
                 ? 'DataForSEO live SERP rank — weekly checks (lower is better; inverted axis)'
@@ -415,6 +430,111 @@ function DeindexBanner({ k, checking, onCheck }: {
   )
 }
 
+// --- Point-in-time ranks (7/30/90 days ago + campaign start) ----------------
+interface PointInTimeData {
+  start: number | null
+  d90: number | null
+  d30: number | null
+  d7: number | null
+  now: number | null
+}
+
+function isoDaysAgo(days: number): string {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+// Last known rank on-or-before `targetIso`. Ranks are sparse (weekly for
+// DataForSEO), so "N days ago" means the most recent check as of that date.
+function rankAsOf(series: { date: string; value: number }[], targetIso: string): number | null {
+  let out: number | null = null
+  for (const p of series) {
+    if (p.date <= targetIso) out = p.value
+    else break
+  }
+  return out
+}
+
+// Reduce a keyword's trendline (date-ascending) to point-in-time ranks. Campaign
+// start = the earliest recorded rank, so 30/90-day-ago read "—" until there's
+// enough history behind them.
+function computePointInTime(points: TrendPoint[], isDf: boolean): PointInTimeData | null {
+  const series = points
+    .map(p => ({ date: p.date, value: isDf ? p.tracked_rank : p.gsc_position }))
+    .filter((p): p is { date: string; value: number } => p.value != null)
+  if (!series.length) return null
+  return {
+    start: series[0].value,
+    d90: rankAsOf(series, isoDaysAgo(90)),
+    d30: rankAsOf(series, isoDaysAgo(30)),
+    d7: rankAsOf(series, isoDaysAgo(7)),
+    now: series[series.length - 1].value,
+  }
+}
+
+function PointInTime({ pit, isDf }: { pit: PointInTimeData; isDf: boolean }) {
+  const fmt = (v: number | null) => (v == null ? '—' : isDf ? `#${v}` : `#${v.toFixed(1)}`)
+  const cells: { label: string; value: number | null; isNow?: boolean }[] = [
+    { label: 'Campaign start', value: pit.start },
+    { label: '90 days ago', value: pit.d90 },
+    { label: '30 days ago', value: pit.d30 },
+    { label: '7 days ago', value: pit.d7 },
+    { label: 'Now', value: pit.now, isNow: true },
+  ]
+  return (
+    <div style={pitWrap}>
+      {cells.map(c => {
+        // Delta vs now: positive = we were worse then (lower position now = improved).
+        const delta = !c.isNow && c.value != null && pit.now != null ? c.value - pit.now : null
+        return (
+          <div key={c.label} style={{ ...pitTile, ...(c.isNow ? pitTileNow : null) }}>
+            <div style={pitLabel}>{c.label}</div>
+            <div style={{ ...pitValue, color: c.value == null ? '#cbd5e1' : c.isNow ? '#4338ca' : '#0f172a' }}>{fmt(c.value)}</div>
+            {delta != null && delta !== 0 && (
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 11, fontWeight: 600, color: delta > 0 ? '#15803d' : '#c2410c' }}>
+                {delta > 0 ? <TrendingUp size={11} /> : <TrendingDown size={11} />}
+                {Math.abs(delta).toFixed(isDf ? 0 : 1)}
+              </div>
+            )}
+            {delta === 0 && <div style={{ color: '#94a3b8' }}><Minus size={11} /></div>}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// Live rank as a color-scaled pill so it reads at a glance: green = page-1 top,
+// blue = page 1, amber = page 2, red = beyond.
+function RankPill({ rank }: { rank: number }) {
+  const [bg, color] = rank <= 3 ? ['#dcfce7', '#15803d']
+    : rank <= 10 ? ['#e0f2fe', '#0369a1']
+    : rank <= 20 ? ['#fef3c7', '#b45309']
+    : ['#fee2e2', '#b91c1c']
+  return (
+    <span style={{ display: 'inline-block', minWidth: 30, textAlign: 'center', borderRadius: 6, padding: '3px 9px', fontWeight: 800, fontSize: 14, background: bg, color }}>
+      {rank}
+    </span>
+  )
+}
+
+// Week-over-week movement vs the previous DataForSEO check. Lower rank = better,
+// so a decrease is an improvement (green up).
+function WeekDelta({ prev, now, date }: { prev: number; now: number; date: string | null }) {
+  const delta = prev - now
+  const flat = delta === 0
+  const improved = delta > 0
+  const color = flat ? '#94a3b8' : improved ? '#15803d' : '#c2410c'
+  const Icon = flat ? Minus : improved ? TrendingUp : TrendingDown
+  const title = `Previous check: #${prev}${date ? ` on ${new Date(date).toLocaleDateString()}` : ''}`
+  return (
+    <span title={title} style={{ display: 'inline-flex', alignItems: 'center', gap: 2, fontSize: 11, fontWeight: 700, color }}>
+      <Icon size={11} /> {flat ? '0' : Math.abs(delta)}
+    </span>
+  )
+}
+
 function Pos({ value }: { value: number | null }) {
   return value == null ? <Dash /> : <span style={{ color: '#334155' }}>{value.toFixed(1)}</span>
 }
@@ -438,7 +558,11 @@ const badge: React.CSSProperties = { borderRadius: 999, padding: '2px 9px', font
 const srcBadge: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '#0369a1', background: '#e0f2fe', borderRadius: 4, padding: '1px 5px' }
 const pagesChip: React.CSSProperties = { flexShrink: 0, fontSize: 10, fontWeight: 600, color: '#7c3aed', background: '#f3e8ff', borderRadius: 4, padding: '1px 5px', whiteSpace: 'nowrap' }
 const canonChip: React.CSSProperties = { fontSize: 10, fontWeight: 600, color: '#15803d', background: '#dcfce7', borderRadius: 4, padding: '1px 6px' }
-const todayBox: React.CSSProperties = { display: 'inline-block', minWidth: 22, border: '1px solid #e2e8f0', borderRadius: 5, padding: '1px 6px', fontWeight: 700, color: '#0f172a' }
+const pitWrap: React.CSSProperties = { display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }
+const pitTile: React.CSSProperties = { flex: '1 1 92px', minWidth: 92, border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px', background: '#fff', textAlign: 'center' }
+const pitTileNow: React.CSSProperties = { borderColor: '#c7d2fe', background: '#eef2ff' }
+const pitLabel: React.CSSProperties = { fontSize: 10, color: '#94a3b8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.03em', marginBottom: 4 }
+const pitValue: React.CSSProperties = { fontSize: 18, fontWeight: 800, marginBottom: 2 }
 const emptyCard: React.CSSProperties = { ...card, color: '#64748b', fontSize: 13, lineHeight: 1.6 }
 const dfBanner: React.CSSProperties = { background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#0369a1', marginBottom: 14, lineHeight: 1.5 }
 const rankabilityBanner: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#3730a3', marginBottom: 14, lineHeight: 1.5, flexWrap: 'wrap' }

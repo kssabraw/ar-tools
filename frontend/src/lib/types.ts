@@ -161,6 +161,8 @@ export interface KeywordSummary {
   impressions_30d: number
   ctr_30d: number
   today_rank: number | null
+  prev_rank: number | null
+  prev_rank_date: string | null
   cpc: number | null
   search_volume: number | null
   competition: string | null
