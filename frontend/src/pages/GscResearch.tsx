@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, FileSearch, Download, RefreshCw, AlertTriangle } from 'lucide-react'
@@ -162,6 +162,7 @@ export function GscResearch() {
 
 // ── Quick / Hidden wins table ───────────────────────────────────────────────
 function OpportunityTable({ rows, caption, csvName }: { rows: OpportunityRow[]; caption: string; csvName: string }) {
+  const { page, setPage, pageRows, total, totalPages, from, to } = usePagination(rows)
   const exportCsv = () => {
     const headers = ['Keyword', 'Page', 'Position', 'Impressions', 'Clicks', 'Search Volume', 'CPC', 'Competition']
     const data = rows.map(r => [r.keyword, r.page, r.position, r.impressions, r.clicks, r.search_volume, r.cpc, r.competition])
@@ -173,30 +174,33 @@ function OpportunityTable({ rows, caption, csvName }: { rows: OpportunityRow[]; 
       {rows.length === 0 ? (
         <EmptyState title="Nothing here" body="No opportunities matched this band in the latest analysis." />
       ) : (
-        <div style={tableWrap}>
-          <table style={table}>
-            <thead>
-              <tr>
-                <Th>Keyword</Th><Th>Page</Th><Th right>Position</Th><Th right>Impr.</Th>
-                <Th right>Clicks</Th><Th right>Volume</Th><Th right>CPC</Th><Th>Competition</Th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r, i) => (
-                <tr key={`${r.keyword}-${r.page}-${i}`} style={i % 2 ? rowAlt : undefined}>
-                  <Td><strong>{r.keyword}</strong></Td>
-                  <Td><PageLink url={r.page} /></Td>
-                  <Td right>{r.position.toFixed(1)}</Td>
-                  <Td right>{r.impressions.toLocaleString()}</Td>
-                  <Td right>{r.clicks.toLocaleString()}</Td>
-                  <Td right>{r.search_volume?.toLocaleString() ?? '—'}</Td>
-                  <Td right>{r.cpc != null ? `$${r.cpc.toFixed(2)}` : '—'}</Td>
-                  <Td>{r.competition ? <CompChip value={r.competition} /> : '—'}</Td>
+        <>
+          <div style={tableWrap}>
+            <table style={table}>
+              <thead>
+                <tr>
+                  <Th>Keyword</Th><Th>Page</Th><Th right>Position</Th><Th right>Impr.</Th>
+                  <Th right>Clicks</Th><Th right>Volume</Th><Th right>CPC</Th><Th>Competition</Th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {pageRows.map((r, i) => (
+                  <tr key={`${r.keyword}-${r.page}-${from + i}`} style={i % 2 ? rowAlt : undefined}>
+                    <Td><strong>{r.keyword}</strong></Td>
+                    <Td><PageLink url={r.page} /></Td>
+                    <Td right>{r.position.toFixed(1)}</Td>
+                    <Td right>{r.impressions.toLocaleString()}</Td>
+                    <Td right>{r.clicks.toLocaleString()}</Td>
+                    <Td right>{r.search_volume?.toLocaleString() ?? '—'}</Td>
+                    <Td right>{r.cpc != null ? `$${r.cpc.toFixed(2)}` : '—'}</Td>
+                    <Td>{r.competition ? <CompChip value={r.competition} /> : '—'}</Td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={page} setPage={setPage} total={total} totalPages={totalPages} from={from} to={to} unit="keywords" />
+        </>
       )}
     </div>
   )
@@ -204,6 +208,7 @@ function OpportunityTable({ rows, caption, csvName }: { rows: OpportunityRow[]; 
 
 // ── Cannibalization table ───────────────────────────────────────────────────
 function CannibalizationTable({ rows }: { rows: CannibalizationRow[] }) {
+  const { page, setPage, pageRows, total, totalPages, from, to } = usePagination(rows)
   const exportCsv = () => {
     const headers = ['Query', 'Page', 'Position', 'Impressions', 'Clicks', 'Page Count', 'Total Impressions']
     const data: (string | number | null)[][] = []
@@ -225,8 +230,8 @@ function CannibalizationTable({ rows }: { rows: CannibalizationRow[] }) {
         <EmptyState title="No cannibalization found" body="No queries showed multiple well-ranking URLs with clustered impressions." />
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {rows.map((r, i) => (
-            <div key={`${r.query}-${i}`} style={card}>
+          {pageRows.map((r, i) => (
+            <div key={`${r.query}-${from + i}`} style={card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
                 <strong style={{ fontSize: 15, color: '#0f172a' }}>{r.query}</strong>
                 <span style={{ fontSize: 12, color: '#94a3b8' }}>
@@ -250,8 +255,53 @@ function CannibalizationTable({ rows }: { rows: CannibalizationRow[] }) {
               </table>
             </div>
           ))}
+          <Pager page={page} setPage={setPage} total={total} totalPages={totalPages} from={from} to={to} unit="queries" />
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Pagination ──────────────────────────────────────────────────────────────
+const PAGE_SIZE = 100
+
+function usePagination<T>(rows: T[]) {
+  const [page, setPage] = useState(1)
+  const total = rows.length
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
+  // Reset to page 1 whenever the underlying set changes (re-run, tab data swap).
+  useEffect(() => { setPage(1) }, [rows])
+  const current = Math.min(page, totalPages)
+  const start = (current - 1) * PAGE_SIZE
+  const pageRows = rows.slice(start, start + PAGE_SIZE)
+  return {
+    page: current,
+    setPage,
+    pageRows,
+    total,
+    totalPages,
+    from: start,
+    to: start + pageRows.length,
+  }
+}
+
+function Pager({
+  page, setPage, total, totalPages, from, to, unit,
+}: {
+  page: number; setPage: (p: number) => void; total: number; totalPages: number
+  from: number; to: number; unit: string
+}) {
+  if (totalPages <= 1) return null
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 14 }}>
+      <span style={{ fontSize: 12, color: '#94a3b8' }}>
+        Showing {(from + 1).toLocaleString()}–{to.toLocaleString()} of {total.toLocaleString()} {unit}
+      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button style={pagerBtn(page <= 1)} disabled={page <= 1} onClick={() => setPage(page - 1)}>Prev</button>
+        <span style={{ fontSize: 12, color: '#475569', fontWeight: 600 }}>Page {page} of {totalPages.toLocaleString()}</span>
+        <button style={pagerBtn(page >= totalPages)} disabled={page >= totalPages} onClick={() => setPage(page + 1)}>Next</button>
+      </div>
     </div>
   )
 }
@@ -335,6 +385,7 @@ const backLink: React.CSSProperties = { display: 'inline-flex', alignItems: 'cen
 const pill: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#6366f1', background: '#eef2ff', borderRadius: 999, padding: '3px 10px' }
 const runBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, padding: '9px 16px', fontSize: 13, fontWeight: 600, cursor: 'pointer' }
 const exportBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 8, padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }
+const pagerBtn = (disabled: boolean): React.CSSProperties => ({ background: '#fff', color: disabled ? '#cbd5e1' : '#475569', border: '1px solid #e2e8f0', borderRadius: 8, padding: '5px 12px', fontSize: 12, fontWeight: 600, cursor: disabled ? 'default' : 'pointer' })
 const tableWrap: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }
 const table: React.CSSProperties = { width: '100%', borderCollapse: 'collapse' }
 const rowAlt: React.CSSProperties = { background: '#fafbfc' }
