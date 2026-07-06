@@ -316,6 +316,7 @@ async def gsc_scheduler() -> None:
     from services.asana_service import shift_months
     from services.asana_workload import run_workload_alert
     from services.brand_schedule import enqueue_due_brand_scans
+    from services.client_report_schedule import enqueue_due_report_schedules
     from services.freeze import enqueue_due_freeze_checks
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
     from services.citation_check import enqueue_due_citation_checks
@@ -412,5 +413,8 @@ async def gsc_scheduler() -> None:
             # AI Visibility scheduled scans are self-clocked via each schedule's
             # next_run_at, so they're evaluated every tick (cheap due-query).
             enqueue_due_brand_scans()
+            # Client Reporting scheduled reports (Phase 5) — same self-clocked
+            # next_run_at pattern; delivery runs after each scheduled render.
+            enqueue_due_report_schedules()
         except Exception as exc:
             logger.error("gsc_scheduler.unhandled", extra={"error": str(exc)})

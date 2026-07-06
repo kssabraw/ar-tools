@@ -905,6 +905,28 @@ def _signed_url(path: str) -> Optional[str]:
         return None
 
 
+def _build_ai_visibility_report(client_id: str, period_start: date, period_end: date) -> tuple[str, str]:
+    """(html, title) for the ai_visibility report type — the LABS-style
+    white-label report folded in as a Client Reporting type (Phase 5, locked
+    decision 2026-07-06). brand_report_html builds the body; this pipeline owns
+    PDF render, storage and delivery. The standalone POST …/brand/report-html
+    stays as the instant in-browser preview/download path."""
+    from services import brand_report_html
+
+    # generate_html_report is async for its router; this runs inside the job's
+    # worker thread (asyncio.to_thread), where no event loop is running.
+    result = asyncio.run(
+        brand_report_html.generate_html_report(
+            client_id, period_start.isoformat(), period_end.isoformat()
+        )
+    )
+    rows = (
+        get_supabase().table("clients").select("name").eq("id", client_id).limit(1).execute()
+    ).data
+    name = (rows[0].get("name") if rows else None) or "Client"
+    return result["html"], f"{name} — AI Visibility Report ({period_end.isoformat()})"
+
+
 def generate_client_report(
     client_id: str,
     report_type: str = "monthly",
@@ -918,23 +940,30 @@ def generate_client_report(
     period_end = period_end or date.today()
     period_start = period_start or (period_end - timedelta(days=_DEFAULT_PERIOD_DAYS))
 
-    data = gather_report_data(client_id, period_start, period_end)
+    if report_type == "ai_visibility":
+        html, title = _build_ai_visibility_report(client_id, period_start, period_end)
+        section_status: dict = {"ai_visibility": "ok"}
+    else:
+        data = gather_report_data(client_id, period_start, period_end)
 
-    # Phase 4: positive, owner-friendly executive summary (best-effort; first section).
-    try:
-        signals = _gather_exec_inputs(supabase, client_id)
-        summary = generate_exec_summary(data["client"].get("name"), data["period"], data, signals)
-        if summary:
-            data["exec"] = summary
-            data["section_status"]["exec"] = "ok"
-        else:
-            data["section_status"]["exec"] = "empty"
-    except Exception as exc:
-        data["section_status"]["exec"] = "failed"
-        logger.warning("report_exec_failed", extra={"client_id": client_id, "error": str(exc)})
+        # Phase 4: positive, owner-friendly executive summary (best-effort; first section).
+        try:
+            signals = _gather_exec_inputs(supabase, client_id)
+            summary = generate_exec_summary(data["client"].get("name"), data["period"], data, signals)
+            if summary:
+                data["exec"] = summary
+                data["section_status"]["exec"] = "ok"
+            else:
+                data["section_status"]["exec"] = "empty"
+        except Exception as exc:
+            data["section_status"]["exec"] = "failed"
+            logger.warning("report_exec_failed", extra={"client_id": client_id, "error": str(exc)})
 
-    title = f"{data['client'].get('name') or 'Client'} — SEO Report ({period_end.isoformat()})"
-    pdf = render_pdf(build_report_html(data))
+        title = f"{data['client'].get('name') or 'Client'} — SEO Report ({period_end.isoformat()})"
+        html = build_report_html(data)
+        section_status = data["section_status"]
+
+    pdf = render_pdf(html)
 
     if report_id is None:
         report_id = (
@@ -948,16 +977,20 @@ def generate_client_report(
     path, url = _store_pdf(client_id, report_id, pdf)
     supabase.table("client_reports").update({
         "status": "complete", "storage_path": path, "pdf_url": url,
-        "sections": data["section_status"], "title": title, "completed_at": "now()",
+        "sections": section_status, "title": title, "completed_at": "now()",
     }).eq("id", report_id).execute()
-    return {"report_id": report_id, "pdf_url": url, "sections": data["section_status"]}
+    return {"report_id": report_id, "pdf_url": url, "sections": section_status}
 
 
 def enqueue_client_report(
     client_id: str, report_type: str = "monthly",
     period_start: Optional[date] = None, period_end: Optional[date] = None,
+    deliver: bool = False,
 ) -> str:
-    """Create a pending client_reports row + its async job. Returns the report id."""
+    """Create a pending client_reports row + its async job. Returns the report id.
+    deliver=True runs Phase 5 delivery (email + Drive copy per the client's
+    report settings) after the render — scheduled runs always deliver; on-demand
+    generation opts in."""
     supabase = get_supabase()
     row = (
         supabase.table("client_reports")
@@ -972,7 +1005,8 @@ def enqueue_client_report(
     supabase.table("async_jobs").insert({
         "job_type": "client_report", "entity_id": client_id,
         "payload": {"client_id": client_id, "report_id": row["id"], "report_type": report_type,
-                    "period_start": row.get("period_start"), "period_end": row.get("period_end")},
+                    "period_start": row.get("period_start"), "period_end": row.get("period_end"),
+                    "deliver": deliver},
     }).execute()
     return row["id"]
 
@@ -1009,6 +1043,12 @@ async def run_client_report_job(job: dict) -> None:
             {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
         ).eq("id", job_id).execute()
         return
+    if payload.get("deliver"):
+        # Phase 5: email + Drive copy per the client's report settings.
+        # Best-effort — deliver_report never raises; outcomes land on the row.
+        from services.client_report_schedule import deliver_report
+
+        result["delivery"] = await deliver_report(report_id)
     supabase.table("async_jobs").update(
         {"status": "complete", "result": result, "completed_at": "now()"}
     ).eq("id", job_id).execute()

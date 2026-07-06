@@ -112,6 +112,31 @@ async def create_google_doc(
     return {"doc_id": result.get("doc_id"), "doc_url": result.get("doc_url")}
 
 
+async def upload_pdf(folder_id: str, title: str, pdf: bytes) -> dict:
+    """Save a PDF file into `folder_id`; returns {file_id, file_url}.
+
+    Sends the bytes base64-encoded as `type: "pdf"`. Requires a webhook
+    deployment with the PDF branch (see writer/apps-script/publish_webhook.gs).
+    An OLD deployment ignores `type` and makes a Doc from the base64 text — we
+    treat a missing `file_id` as a hard error (`pdf_not_supported`) so callers
+    fail loudly instead of recording a phantom Drive copy."""
+    import base64
+
+    if not folder_id:
+        raise GoogleDocError("missing_google_drive_folder_id")
+    body = {
+        "type": "pdf",
+        "folder_id": folder_id,
+        "title": title,
+        "content_base64": base64.b64encode(pdf).decode(),
+    }
+    result = await _call_apps_script(body)
+    file_id = result.get("file_id")
+    if not file_id:
+        raise GoogleDocError("pdf_not_supported: redeploy the Apps Script webhook (no file_id returned)")
+    return {"file_id": file_id, "file_url": result.get("file_url")}
+
+
 async def create_google_sheet(
     folder_id: str,
     title: str,

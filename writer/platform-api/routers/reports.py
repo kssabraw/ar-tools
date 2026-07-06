@@ -15,8 +15,13 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
-from models.reports import ClientReport, GenerateReportRequest
-from services import client_report
+from models.reports import (
+    ClientReport,
+    GenerateReportRequest,
+    ReportSettings,
+    ReportSettingsUpdateRequest,
+)
+from services import client_report, client_report_schedule
 
 router = APIRouter(tags=["reports"])
 logger = logging.getLogger(__name__)
@@ -36,10 +41,12 @@ async def generate_report(
     client_id: UUID, body: GenerateReportRequest, auth: dict = Depends(require_auth)
 ) -> ClientReport:
     """Enqueue a report build; returns the pending row (poll the detail endpoint)."""
-    if body.report_type not in ("monthly", "weekly"):
+    if body.report_type not in ("monthly", "weekly", "ai_visibility"):
         raise HTTPException(status_code=422, detail="invalid_report_type")
     report_id = client_report.enqueue_client_report(
-        str(client_id), body.report_type, _parse_date(body.period_start), _parse_date(body.period_end)
+        str(client_id), body.report_type,
+        _parse_date(body.period_start), _parse_date(body.period_end),
+        deliver=body.deliver,
     )
     row = (
         get_supabase().table("client_reports").select("*").eq("id", report_id).limit(1).execute()
@@ -74,3 +81,22 @@ async def get_report(
         if fresh:
             row["pdf_url"] = fresh
     return ClientReport(**row)
+
+
+# ── Phase 5 — report settings (recipients + schedule + delivery toggles) ─────
+@router.get("/clients/{client_id}/report-settings", response_model=ReportSettings)
+async def get_report_settings(client_id: UUID, auth: dict = Depends(require_auth)) -> ReportSettings:
+    return ReportSettings(**client_report_schedule.get_settings(str(client_id)))
+
+
+@router.put("/clients/{client_id}/report-settings", response_model=ReportSettings)
+async def put_report_settings(
+    client_id: UUID, body: ReportSettingsUpdateRequest, auth: dict = Depends(require_auth)
+) -> ReportSettings:
+    if body.cadence not in ("disabled", "weekly", "monthly"):
+        raise HTTPException(status_code=422, detail="invalid_cadence")
+    saved = client_report_schedule.upsert_settings(
+        str(client_id), body.recipients, body.cadence, body.day_of_week,
+        body.day_of_month, body.hour_utc, body.email_enabled, body.drive_enabled,
+    )
+    return ReportSettings(**saved)

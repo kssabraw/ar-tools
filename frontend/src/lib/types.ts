@@ -1436,7 +1436,7 @@ export interface AsanaWorkloadReport {
 export interface ClientReport {
   id: string
   client_id: string
-  report_type: 'monthly' | 'weekly'
+  report_type: 'monthly' | 'weekly' | 'ai_visibility'
   period_start: string | null
   period_end: string | null
   status: 'pending' | 'running' | 'complete' | 'failed'
@@ -1444,10 +1444,25 @@ export interface ClientReport {
   pdf_url: string | null
   drive_doc_id: string | null
   sections: Record<string, string> | null
+  delivery: Record<string, string> | null // Phase 5: {email, drive} → ok/failed/skipped
   title: string | null
   error: string | null
   created_at: string
   completed_at: string | null
+}
+
+// Client Reporting Phase 5 — per-client delivery recipients + schedule.
+export interface ReportSettings {
+  client_id: string
+  recipients: string[]
+  cadence: 'disabled' | 'weekly' | 'monthly'
+  day_of_week: number | null
+  day_of_month: number | null
+  hour_utc: number
+  email_enabled: boolean
+  drive_enabled: boolean
+  last_run_at: string | null
+  next_run_at: string | null
 }
 
 // SerMaStr — strategist reviews (docs/modules/seo-strategist-agent-plan-v1_0.md).
