@@ -16,6 +16,7 @@ from middleware.auth import require_auth
 from models.brand import (
     BrandCompetitorCreateRequest,
     BrandCompetitorResponse,
+    BrandHtmlReportRequest,
     BrandKeywordCreateRequest,
     BrandKeywordResponse,
     BrandKeywordUpdateRequest,
@@ -148,6 +149,23 @@ async def get_brand_scan_results(
     auth: dict = Depends(require_auth),
 ):
     return brand_service.list_history(str(client_id), limit=1000, scan_batch_id=str(scan_batch_id))
+
+
+@router.post("/clients/{client_id}/brand/report-html")
+async def generate_brand_html_report(
+    client_id: UUID,
+    body: BrandHtmlReportRequest,
+    auth: dict = Depends(require_auth),
+):
+    """LABS-style white-label HTML visibility report over a date range —
+    returned inline for the frontend's preview/download/print dialog. DB +
+    market-cache reads only (fast, no paid calls); the Google-Doc report
+    (POST …/brand/report) remains the Drive publishing path."""
+    from services import brand_report_html
+
+    return await brand_report_html.generate_html_report(
+        str(client_id), body.start_date, body.end_date
+    )
 
 
 @router.get("/clients/{client_id}/brand/keyword-market")

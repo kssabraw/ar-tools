@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, Eye, Zap, AlertTriangle, Plus, Trash2, Check, CalendarClock, Sparkles, FileText, Download,
+  ArrowLeft, Eye, Zap, AlertTriangle, Plus, Trash2, Check, CalendarClock, Sparkles, FileText, FileDown, Download,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
@@ -23,6 +23,7 @@ import { VisibilityTrendsChart } from '../components/aivisibility/VisibilityTren
 import { CompetitorTrendsChart } from '../components/aivisibility/CompetitorTrendsChart'
 import { CompetitorComparisonCard } from '../components/aivisibility/CompetitorComparisonCard'
 import { LeadValuationCard } from '../components/aivisibility/LeadValuationCard'
+import { ExportReportDialog } from '../components/aivisibility/ExportReportDialog'
 import '../components/aivisibility/animations.css'
 
 // ── page-local types (shared data types live in components/aivisibility) ─────
@@ -168,6 +169,7 @@ function Overview(props: {
   const activeKeywords = keywords.filter(k => k.is_active)
   const [diagnose, setDiagnose] = useState<{ m: Mention; keyword: string } | null>(null)
   const [scanOpen, setScanOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
   const keywordById = useMemo(() => new Map(keywords.map(k => [k.id, k.keyword])), [keywords])
 
   // LABS health score = visibility share (0.7) + avg classifier confidence (30×),
@@ -276,8 +278,13 @@ function Overview(props: {
         {(history.length > 0 || latestBatch !== null) && (
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 0 }}>
             {latestBatch !== null && (
-              <button style={miniBtn} disabled={reportRunning} onClick={() => reportMut.mutate()}>
-                <FileText size={13} /> {reportRunning ? 'Generating…' : 'Generate report'}
+              <button style={miniBtn} onClick={() => setExportOpen(true)}>
+                <FileDown size={13} /> Export report
+              </button>
+            )}
+            {latestBatch !== null && (
+              <button style={miniBtn} disabled={reportRunning} onClick={() => reportMut.mutate()} title="Publish a visibility report to the client's Drive folder">
+                <FileText size={13} /> {reportRunning ? 'Generating…' : 'Google Doc'}
               </button>
             )}
             {history.length > 0 && (
@@ -390,6 +397,9 @@ function Overview(props: {
           onRun={onRun}
           onClose={() => setScanOpen(false)}
         />
+      )}
+      {exportOpen && (
+        <ExportReportDialog clientId={clientId} clientName={brandName} onClose={() => setExportOpen(false)} />
       )}
     </div>
   )
