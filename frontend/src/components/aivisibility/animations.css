@@ -1,0 +1,36 @@
+/* AI Visibility module animations & effects.
+ * Ported from the LABS visibility dashboard's keyframes, prefixed `aiv-` so they
+ * can't collide with anything else in the suite. Imported directly by the
+ * components that use them (Vite bundles CSS imported from a module). */
+
+/* Card entrance — staggered fade-up */
+@keyframes aiv-card-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.aiv-card-enter { animation: aiv-card-enter 0.35s ease-out both; }
+.aiv-stagger-1 { animation-delay: 0ms; }
+.aiv-stagger-2 { animation-delay: 60ms; }
+.aiv-stagger-3 { animation-delay: 120ms; }
+.aiv-stagger-4 { animation-delay: 180ms; }
+.aiv-stagger-5 { animation-delay: 240ms; }
+.aiv-stagger-6 { animation-delay: 300ms; }
+
+/* Health-score gauge arc fill — sweeps the stroke on mount.
+ * The component sets --aiv-gauge-circumference and --aiv-gauge-offset inline. */
+@keyframes aiv-gauge-fill {
+  from { stroke-dashoffset: var(--aiv-gauge-circumference); }
+  to   { stroke-dashoffset: var(--aiv-gauge-offset); }
+}
+.aiv-gauge-fill { animation: aiv-gauge-fill 1s ease-out forwards; }
+
+/* Run-scan button pulse when the client has no scans yet.
+ * Uses the suite indigo (#6366f1) rather than LABS' purple. */
+@keyframes aiv-scan-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); }
+  50%      { box-shadow: 0 0 0 6px rgba(99, 102, 241, 0); }
+}
+.aiv-scan-pulse { animation: aiv-scan-pulse 2s ease-in-out infinite; }
+
+/* Confidence-bar segment — animates its width on value change */
+.aiv-confidence-seg { transition: width 0.6s ease-out; }
