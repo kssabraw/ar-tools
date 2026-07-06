@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # page-level RD-imbalance capture (paid DataForSEO page summaries).
     citation_check_enabled: bool = True
     page_backlink_intel_enabled: bool = True
+    # Auto-generate a new client's brand voice + ICP at creation (async, best-
+    # effort) so the assets exist without a manual scan. Skips clients with no
+    # website and no GBP (nothing to analyze). Never overrides user-authored
+    # structured voice/ICP.
+    auto_generate_brand_voice_icp: bool = True
     allowed_origins: List[str] = ["*"]
     log_level: str = "INFO"
     google_apps_script_url: str = ""

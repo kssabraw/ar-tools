@@ -233,6 +233,49 @@ async def scan(client_id: str, force: bool, user_id: str) -> dict:
     return {"brand_voice": blob, "pages_sampled": result.get("pages_sampled")}
 
 
+async def run_brand_voice_scan_job(job: dict) -> None:
+    """Async worker entry: auto-generate a client's brand voice (enqueued at
+    client creation). Best-effort — a provider error or the user-authored
+    supersede guard (409) is not a hard failure. Persists via `scan`; this
+    only manages the async_jobs row."""
+    payload = job.get("payload") or {}
+    client_id = payload.get("client_id")
+    user_id = payload.get("user_id")
+    job_id = job["id"]
+    supabase = get_supabase()
+    try:
+        result = await scan(
+            client_id=client_id, force=bool(payload.get("force")), user_id=user_id
+        )
+        supabase.table("async_jobs").update(
+            {
+                "status": "complete",
+                "result": {"pages_sampled": result.get("pages_sampled")},
+                "completed_at": "now()",
+            }
+        ).eq("id", job_id).execute()
+        logger.info("brand_voice.auto_scan_complete", extra={"client_id": client_id})
+    except HTTPException as exc:
+        # 409 = a user already authored a structured voice → nothing to do (not
+        # an error). Anything else is a best-effort miss recorded on the job.
+        status = "complete" if exc.status_code == 409 else "failed"
+        supabase.table("async_jobs").update(
+            {"status": status, "error": str(exc.detail)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.info(
+            "brand_voice.auto_scan_skipped",
+            extra={"client_id": client_id, "status": status, "detail": str(exc.detail)},
+        )
+    except Exception as exc:
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.warning(
+            "brand_voice.auto_scan_failed",
+            extra={"client_id": client_id, "error": str(exc)},
+        )
+
+
 def update(
     client_id: str,
     *,
