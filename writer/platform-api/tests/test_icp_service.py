@@ -81,6 +81,46 @@ def test_scan_payload_includes_categories_and_falls_back_without_gbp():
     assert captured["payload"]["gbp_categories"] == []
 
 
+# ── run_icp_scan_job (auto-generate at client creation) ──────────────────────
+
+def test_run_icp_scan_job_marks_complete_on_success():
+    supabase = _supabase()
+    job = {"id": "job-1", "payload": {"client_id": "client-1", "user_id": "u1"}}
+    with patch.object(icp_service, "scan",
+                      new=AsyncMock(return_value={"detected_icp": {}, "differentiators": [],
+                                                  "pages_crawled": 4, "analysis_status": "complete"})), \
+         patch.object(icp_service, "get_supabase", return_value=supabase):
+        asyncio.run(icp_service.run_icp_scan_job(job))
+    update = supabase.table.return_value.update.call_args[0][0]
+    assert update["status"] == "complete"
+    assert update["result"]["analysis_status"] == "complete"
+
+
+def test_run_icp_scan_job_treats_409_as_complete_noop():
+    supabase = _supabase()
+    job = {"id": "job-1", "payload": {"client_id": "client-1", "user_id": "u1"}}
+    with patch.object(icp_service, "scan",
+                      new=AsyncMock(side_effect=HTTPException(
+                          status_code=409, detail="icp_user_authored"))), \
+         patch.object(icp_service, "get_supabase", return_value=supabase):
+        asyncio.run(icp_service.run_icp_scan_job(job))
+    update = supabase.table.return_value.update.call_args[0][0]
+    assert update["status"] == "complete"
+    assert update["error"] == "icp_user_authored"
+
+
+def test_run_icp_scan_job_marks_failed_on_provider_error():
+    supabase = _supabase()
+    job = {"id": "job-1", "payload": {"client_id": "client-1", "user_id": "u1"}}
+    with patch.object(icp_service, "scan",
+                      new=AsyncMock(side_effect=HTTPException(
+                          status_code=502, detail="local_seo_provider_error"))), \
+         patch.object(icp_service, "get_supabase", return_value=supabase):
+        asyncio.run(icp_service.run_icp_scan_job(job))
+    update = supabase.table.return_value.update.call_args[0][0]
+    assert update["status"] == "failed"
+
+
 def test_scan_refuses_to_overwrite_user_structured_icp():
     row = _client_row(detected_icp={"source": "user", "segments": [{"label": "X"}]})
     with patch.object(icp_service, "_get_client", return_value=row), \
