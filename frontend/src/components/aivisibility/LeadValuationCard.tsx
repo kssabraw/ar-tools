@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { DollarSign, RefreshCw, TrendingDown, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { Keyword, Mention } from './types'
@@ -10,14 +10,21 @@ import './animations.css'
 //   opportunity = search_volume × CPC × visibility_gap
 // where visibility_gap = share of that keyword's scanned engines where the
 // brand was NOT found (current matrix state). CPC/volume come from the rank
-// tracker's shared keyword_market cache via /brand/keyword-market. An
-// estimate for prioritisation — the LABS disclaimer applies verbatim.
+// tracker's shared keyword_market cache via /brand/keyword-market (cache-only;
+// the paid fill runs server-side as the keyword_market job — the card polls
+// while `refreshing`). An estimate for prioritisation — the LABS disclaimer
+// applies verbatim.
 
-interface MarketRow { keyword: string; search_volume: number | null; cpc: number | null; competition: number | null }
-interface MarketResponse { location_code: number; degraded: string | null; keywords: MarketRow[] }
+interface MarketRow {
+  keyword: string
+  search_volume: number | null
+  cpc: number | null
+  competition: 'LOW' | 'MEDIUM' | 'HIGH' | null // DataForSEO label (text, not numeric)
+}
+interface MarketResponse { location_code: number; degraded: string | null; refreshing: boolean; keywords: MarketRow[] }
 
 const money = (v: number) =>
-  v.toLocaleString(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })
+  v.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 0, maximumFractionDigits: 0 })
 
 export function LeadValuationCard({ clientId, activeKeywords, latestByCell }: {
   clientId: string
@@ -31,7 +38,17 @@ export function LeadValuationCard({ clientId, activeKeywords, latestByCell }: {
     queryFn: () => api.get<MarketResponse>(`/clients/${clientId}/brand/keyword-market`),
     staleTime: 6 * 3600e3, // market data refreshes monthly server-side
     retry: false,
+    // While a server-side fill job is running, poll until it lands.
+    refetchInterval: (q) => (q.state.data?.refreshing ? 4000 : false),
   })
+  const refreshMut = useMutation({
+    mutationFn: () => api.post<{ refreshing: boolean }>(`/clients/${clientId}/brand/keyword-market/refresh`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['brand-keyword-market', clientId] })
+      void refetch()
+    },
+  })
+  const refreshing = Boolean(data?.refreshing) || refreshMut.isPending
 
   // Per-keyword visibility gap from the current matrix state.
   const rows = useMemo(() => {
@@ -69,11 +86,12 @@ export function LeadValuationCard({ clientId, activeKeywords, latestByCell }: {
         <span style={{ fontSize: 13.5, fontWeight: 700, color: '#0f172a', flex: 1 }}>Lead valuation engine</span>
         <button
           style={ghostBtn}
-          onClick={() => { qc.invalidateQueries({ queryKey: ['brand-keyword-market', clientId] }); void refetch() }}
-          title="Refresh market data"
+          disabled={refreshing}
+          onClick={() => refreshMut.mutate()}
+          title="Refresh market data (re-queries every keyword)"
           aria-label="Refresh market data"
         >
-          <RefreshCw size={13} className={isFetching ? 'aiv-spin' : undefined} />
+          <RefreshCw size={13} className={refreshing || isFetching ? 'aiv-spin' : undefined} />
         </button>
       </div>
       <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>Estimated monthly visibility opportunity cost</div>
@@ -86,10 +104,13 @@ export function LeadValuationCard({ clientId, activeKeywords, latestByCell }: {
         </div>
       ) : withData === 0 ? (
         <div style={{ fontSize: 13, color: '#64748b', padding: '8px 0' }}>
-          No CPC/volume data for these keywords yet
-          {data?.degraded === 'dataforseo_not_configured' && ' — DataForSEO isn\'t configured'}
-          {data?.degraded === 'market_fetch_failed' && ' — the market lookup failed, try Refresh'}
-          .
+          {refreshing
+            ? 'Fetching market data…'
+            : <>
+                No CPC/volume data for these keywords yet
+                {data?.degraded === 'dataforseo_not_configured' ? ' — DataForSEO isn\'t configured' : ' — try Refresh to re-query'}
+                .
+              </>}
         </div>
       ) : (
         <>
@@ -103,9 +124,9 @@ export function LeadValuationCard({ clientId, activeKeywords, latestByCell }: {
           ) : (
             <div style={{ fontSize: 32, fontWeight: 800, color: '#15803d' }}>$0<span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 400 }}> /mo — no visibility gap on valued keywords</span></div>
           )}
-          {data?.degraded && (
+          {data?.degraded === 'dataforseo_not_configured' && (
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11.5, color: '#b45309', marginTop: 6 }}>
-              <AlertTriangle size={12} /> Some keywords are missing market data ({data.degraded === 'dataforseo_not_configured' ? 'DataForSEO not configured' : 'lookup failed'}) — the estimate is partial.
+              <AlertTriangle size={12} /> Some keywords are missing market data (DataForSEO not configured) — the estimate is partial.
             </div>
           )}
 

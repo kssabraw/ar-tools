@@ -171,8 +171,16 @@ async def generate_brand_html_report(
 @router.get("/clients/{client_id}/brand/keyword-market")
 async def get_brand_keyword_market(client_id: UUID, auth: dict = Depends(require_auth)):
     """CPC/volume/competition for active brand keywords (Lead Valuation card).
-    Cache-first via the shared keyword_market table; best-effort live fill."""
+    Cache-only via the shared keyword_market table; missing/stale keywords
+    auto-enqueue the keyword_market async job (response carries refreshing)."""
     return await brand_service.get_keyword_market(str(client_id))
+
+
+@router.post("/clients/{client_id}/brand/keyword-market/refresh")
+async def refresh_brand_keyword_market(client_id: UUID, auth: dict = Depends(require_auth)):
+    """Force a market-data refresh for active brand keywords (re-queries even
+    keywords cached with no data). Enqueues the shared keyword_market job."""
+    return brand_service.refresh_keyword_market(str(client_id))
 
 
 @router.get("/clients/{client_id}/brand/mentions/{mention_id}")
