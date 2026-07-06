@@ -28,8 +28,15 @@ from config import settings
 from db.supabase_client import get_supabase
 from services.brand_scan import ENGINE_ORDER
 from services.brand_report import ENGINE_LABELS
+from services.brand_service import _safe
 
 logger = logging.getLogger("brand_report_html")
+
+# Hard ceiling on mention rows aggregated into one report. Fetched in pages;
+# a range that exceeds it renders with an explicit truncation note instead of
+# silently reporting wrong totals.
+_MAX_REPORT_ROWS = 20000
+_PAGE_SIZE = 1000
 
 # ── suite palette (LABS layout, AR Tools colors) ─────────────────────────────
 _BRAND = "#4f46e5"          # indigo-600 (in place of LABS' purple #533577)
@@ -244,6 +251,11 @@ def render_html(*, client: dict, agency_name: str, date_range_label: str,
   </div>
 </div>''')
 
+    if data.get("truncated"):
+        parts.append(f'<div style="font-size:12px;color:{_MUTED};margin-bottom:18px">'
+                     f'Note: this date range exceeded {_MAX_REPORT_ROWS:,} scan results — '
+                     f'figures cover the most recent {_MAX_REPORT_ROWS:,} only. Pick a shorter range for exact totals.</div>')
+
     # 5 — performance by AI engine
     if data["engines"]:
         parts.append(_h2("Performance by AI Engine"))
@@ -328,6 +340,31 @@ def render_html(*, client: dict, agency_name: str, date_range_label: str,
 
 
 # ── orchestration ────────────────────────────────────────────────────────────
+def _fetch_mention_rows(supabase, client_id: str, start: date, end: date) -> tuple[list[dict], bool]:
+    """All completed brand mention rows in the range, paged (PostgREST caps a
+    single response), up to _MAX_REPORT_ROWS. Returns (rows, truncated)."""
+    rows: list[dict] = []
+    while True:
+        batch = (
+            supabase.table("brand_mention_history")
+            .select("keyword_id, engine, status, mention_found, confidence_score, competitor_results, created_at")
+            .eq("client_id", client_id)
+            .eq("is_competitor_scan", False)
+            .eq("status", "completed")
+            .gte("created_at", start.isoformat())
+            .lt("created_at", (end + timedelta(days=1)).isoformat())
+            .order("created_at", desc=True)
+            .range(len(rows), len(rows) + _PAGE_SIZE - 1)
+            .execute()
+        ).data or []
+        rows.extend(batch)
+        if len(batch) < _PAGE_SIZE:
+            return rows, False
+        if len(rows) >= _MAX_REPORT_ROWS:
+            logger.warning("brand_report_html_truncated", extra={"client_id": client_id, "rows": len(rows)})
+            return rows, True
+
+
 async def generate_html_report(client_id: str, start_date: str | None, end_date: str | None) -> dict:
     """Assemble the report for a date range (defaults: last 30 days). DB reads
     + the keyword_market cache only — no LLM, no paid calls; synchronous-fast."""
@@ -335,40 +372,34 @@ async def generate_html_report(client_id: str, start_date: str | None, end_date:
     from services.keyword_market import fetch_cached_market
 
     supabase = get_supabase()
-    client_res = (
+    client_res = _safe(lambda: (
         supabase.table("clients")
         .select("id, name, website_url, gbp, rank_tracking_location_code")
         .eq("id", client_id).limit(1).execute()
-    )
+    ))
     if not client_res.data:
         raise HTTPException(status_code=404, detail="client_not_found")
     client = client_res.data[0]
 
-    end = date.fromisoformat(end_date) if end_date else date.today()
-    start = date.fromisoformat(start_date) if start_date else end - timedelta(days=30)
+    try:
+        end = date.fromisoformat(end_date) if end_date else date.today()
+        start = date.fromisoformat(start_date) if start_date else end - timedelta(days=30)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid_date")
     if start > end:
         raise HTTPException(status_code=422, detail="invalid_date_range")
 
-    keywords = (
+    keywords = _safe(lambda: (
         supabase.table("brand_tracked_keywords")
         .select("id, keyword, category, is_active")
         .eq("client_id", client_id).order("created_at").execute()
-    ).data or []
+    ).data) or []
     keyword_labels = {k["id"]: k["keyword"] for k in keywords}
 
-    rows = (
-        supabase.table("brand_mention_history")
-        .select("keyword_id, engine, status, mention_found, confidence_score, competitor_results, created_at")
-        .eq("client_id", client_id)
-        .eq("is_competitor_scan", False)
-        .gte("created_at", start.isoformat())
-        .lt("created_at", (end + timedelta(days=1)).isoformat())
-        .order("created_at", desc=True)
-        .limit(5000)
-        .execute()
-    ).data or []
+    rows, truncated = _safe(lambda: _fetch_mention_rows(supabase, client_id, start, end))
 
     data = aggregate_range(rows, keyword_labels)
+    data["truncated"] = truncated
 
     # Lead valuation from the shared market cache (best-effort, never live).
     valuation = None
@@ -391,4 +422,4 @@ async def generate_html_report(client_id: str, start_date: str | None, end_date:
         valuation=valuation,
         generated_on=datetime.now(timezone.utc).strftime("%b %d, %Y"),
     )
-    return {"html": html, "data": {**data, "valuation": valuation, "start_date": start.isoformat(), "end_date": end.isoformat()}}
+    return {"html": html}

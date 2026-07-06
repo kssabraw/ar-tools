@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X, Users, Zap } from 'lucide-react'
+import { AlertTriangle, X, Users, Zap } from 'lucide-react'
 import { ENGINE_ORDER, ENGINES, EngineIcon, type EngineKey } from './engines'
 import type { ScanStatus } from './types'
 import './animations.css'
@@ -23,15 +23,22 @@ export function ScanDialog(props: {
   activeKeywordCount: number
   competitorCount: number
   running: boolean
+  starting: boolean
+  startError: string | null
   jobStatus: ScanStatus | undefined
+  // Lives on the page (not dialog-local) so the choice survives reopening the dialog.
+  includeCompetitors: boolean
+  onIncludeCompetitorsChange: (v: boolean) => void
   onRun: (engines: string[], includeCompetitors: boolean) => void
   onClose: () => void
 }) {
-  const { activeKeywordCount, competitorCount, running, jobStatus, onRun, onClose } = props
+  const {
+    activeKeywordCount, competitorCount, running, starting, startError,
+    jobStatus, includeCompetitors, onIncludeCompetitorsChange, onRun, onClose,
+  } = props
   // Internal-tool default: all six engines on (LABS defaults to ChatGPT-only
   // because each engine costs a credit; here the full sweep is the norm).
   const [selected, setSelected] = useState<Set<EngineKey>>(new Set(ENGINE_ORDER))
-  const [includeCompetitors, setIncludeCompetitors] = useState(false)
 
   const toggle = (key: EngineKey) => {
     setSelected(prev => {
@@ -88,7 +95,7 @@ export function ScanDialog(props: {
             type="checkbox"
             checked={includeCompetitors}
             disabled={running}
-            onChange={e => setIncludeCompetitors(e.target.checked)}
+            onChange={e => onIncludeCompetitorsChange(e.target.checked)}
           />
           <Users size={14} /> Include competitors
           <span style={{ fontSize: 11, color: '#94a3b8' }}>
@@ -132,15 +139,21 @@ export function ScanDialog(props: {
           </div>
         )}
 
+        {startError && (
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12.5, color: '#b91c1c', marginBottom: 12 }}>
+            <AlertTriangle size={13} style={{ flexShrink: 0 }} /> {startError}
+          </div>
+        )}
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button style={ghostBtn} onClick={onClose}>{running ? 'Close' : 'Cancel'}</button>
           {!running && (
             <button
-              style={{ ...primaryBtn, opacity: selected.size === 0 || activeKeywordCount === 0 ? 0.5 : 1 }}
-              disabled={selected.size === 0 || activeKeywordCount === 0}
+              style={{ ...primaryBtn, opacity: selected.size === 0 || activeKeywordCount === 0 || starting ? 0.5 : 1 }}
+              disabled={selected.size === 0 || activeKeywordCount === 0 || starting}
               onClick={() => onRun([...selected], includeCompetitors)}
             >
-              <Zap size={14} /> Run scan
+              <Zap size={14} /> {starting ? 'Starting…' : 'Run scan'}
             </button>
           )}
         </div>

@@ -134,7 +134,7 @@ export function AiVisibility() {
         <Overview
           clientId={clientId!}
           brandName={client?.name ?? 'This brand'}
-          activeCount={activeKeywords.length}
+          activeKeywords={activeKeywords}
           keywords={keywords}
           competitors={competitors}
           history={history}
@@ -142,6 +142,7 @@ export function AiVisibility() {
           latestBatch={latestBatch}
           trends={trends}
           running={running}
+          runPending={runMut.isPending}
           jobStatus={jobStatus}
           onRun={(engines, includeCompetitors) => runMut.mutate({ engines, include_competitors: includeCompetitors })}
           runError={runMut.isError ? (runMut.error as Error).message : null}
@@ -158,18 +159,20 @@ export function AiVisibility() {
 
 // ── Overview ─────────────────────────────────────────────────────────────────
 function Overview(props: {
-  clientId: string; brandName: string; activeCount: number; keywords: Keyword[]; competitors: Competitor[]; history: Mention[]
+  clientId: string; brandName: string; activeKeywords: Keyword[]; keywords: Keyword[]; competitors: Competitor[]; history: Mention[]
   latestByCell: Map<string, Mention>
-  latestBatch: TrendBatch | null; trends: TrendBatch[]; running: boolean
+  latestBatch: TrendBatch | null; trends: TrendBatch[]; running: boolean; runPending: boolean
   jobStatus: ScanStatus | undefined
   onRun: (engines: string[], includeCompetitors: boolean) => void
   runError: string | null; onManageKeywords: () => void; onManageCompetitors: () => void
 }) {
-  const { clientId, brandName, activeCount, keywords, competitors, history, latestByCell, latestBatch, trends, running, jobStatus, onRun, runError, onManageKeywords, onManageCompetitors } = props
-  const activeKeywords = keywords.filter(k => k.is_active)
+  const { clientId, brandName, activeKeywords, keywords, competitors, history, latestByCell, latestBatch, trends, running, runPending, jobStatus, onRun, runError, onManageKeywords, onManageCompetitors } = props
+  const activeCount = activeKeywords.length
   const [diagnose, setDiagnose] = useState<{ m: Mention; keyword: string } | null>(null)
   const [scanOpen, setScanOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+  // Page-level so the choice survives closing/reopening the scan dialog.
+  const [includeCompetitors, setIncludeCompetitors] = useState(false)
   const keywordById = useMemo(() => new Map(keywords.map(k => [k.id, k.keyword])), [keywords])
 
   // LABS health score = visibility share (0.7) + avg classifier confidence (30×),
@@ -393,7 +396,11 @@ function Overview(props: {
           activeKeywordCount={activeCount}
           competitorCount={competitors.length}
           running={running}
+          starting={runPending}
+          startError={runError}
           jobStatus={jobStatus}
+          includeCompetitors={includeCompetitors}
+          onIncludeCompetitorsChange={setIncludeCompetitors}
           onRun={onRun}
           onClose={() => setScanOpen(false)}
         />
@@ -685,8 +692,8 @@ function Banner({ kind, children }: { kind: 'error' | 'warn'; children: React.Re
     <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} /> <span>{children}</span>
   </div>
 }
-function Th({ children, right, center }: { children: React.ReactNode; right?: boolean; center?: boolean }) {
-  return <th style={{ textAlign: center ? 'center' : right ? 'right' : 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid #e2e8f0' }}>{children}</th>
+function Th({ children, right }: { children: React.ReactNode; right?: boolean }) {
+  return <th style={{ textAlign: right ? 'right' : 'left', padding: '8px 12px', fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', borderBottom: '1px solid #e2e8f0' }}>{children}</th>
 }
 function Td({ children, right }: { children: React.ReactNode; right?: boolean }) {
   return <td style={{ textAlign: right ? 'right' : 'left', padding: '8px 12px', fontSize: 13, color: '#334155', borderBottom: '1px solid #f1f5f9' }}>{children}</td>

@@ -53,14 +53,36 @@ export function ExportReportDialog({ clientId, clientName, onClose }: {
   })
   const html = genMut.data?.html ?? null
 
+  // Any range change invalidates a previously generated report — without this,
+  // download() would reuse the cached HTML for the old range.
+  const changePreset = (p: Preset) => {
+    setPreset(p)
+    genMut.reset()
+  }
+  const changeCustom = (setter: (v: string) => void) => (v: string) => {
+    setter(v)
+    genMut.reset()
+  }
+
   const preview = async () => {
-    await genMut.mutateAsync()
-    setView('preview')
+    try {
+      await genMut.mutateAsync()
+      setView('preview')
+    } catch {
+      // stay on settings — genMut.isError renders the message there
+    }
   }
 
   const download = async () => {
-    const result = html ? { html } : await genMut.mutateAsync()
-    const blob = new Blob([result.html], { type: 'text/html' })
+    let doc = html
+    if (!doc) {
+      try {
+        doc = (await genMut.mutateAsync()).html
+      } catch {
+        return // error surfaces via genMut.isError in the settings view
+      }
+    }
+    const blob = new Blob([doc], { type: 'text/html' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -93,7 +115,7 @@ export function ExportReportDialog({ clientId, clientName, onClose }: {
               {PRESETS.map(p => (
                 <button
                   key={p.key}
-                  onClick={() => setPreset(p.key)}
+                  onClick={() => changePreset(p.key)}
                   style={{
                     padding: '6px 12px', fontSize: 12, fontWeight: 600, borderRadius: 8, cursor: 'pointer',
                     background: preset === p.key ? '#6366f1' : '#fff',
@@ -107,9 +129,9 @@ export function ExportReportDialog({ clientId, clientName, onClose }: {
             </div>
             {preset === 'custom' && (
               <div style={{ display: 'flex', gap: 10, marginBottom: 12, alignItems: 'center' }}>
-                <input type="date" style={dateInput} value={customStart} max={customEnd} onChange={e => setCustomStart(e.target.value)} />
+                <input type="date" style={dateInput} value={customStart} max={customEnd} onChange={e => changeCustom(setCustomStart)(e.target.value)} />
                 <span style={{ color: '#94a3b8', fontSize: 12 }}>to</span>
-                <input type="date" style={dateInput} value={customEnd} min={customStart} max={today} onChange={e => setCustomEnd(e.target.value)} />
+                <input type="date" style={dateInput} value={customEnd} min={customStart} max={today} onChange={e => changeCustom(setCustomEnd)(e.target.value)} />
               </div>
             )}
 
