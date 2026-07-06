@@ -425,3 +425,109 @@ def test_aggregate_weak_areas_skips_blank_city_and_handles_empty():
         {},
     ]
     assert reopt_planner._aggregate_weak_areas(results) == []
+
+
+# ---------------------------------------------------------------------------
+# enqueue_reopt_plan — in-flight dedup + restart/burst debounce
+# ---------------------------------------------------------------------------
+class _FakeQuery:
+    """Records the filter chain for one async_jobs query and returns a canned
+    result decided by the recording _FakeSupabase."""
+
+    def __init__(self, supa, op):
+        self._supa = supa
+        self._op = op  # "select" or "insert"
+        self.filters: dict = {}
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, col, val):
+        self.filters[col] = val
+        return self
+
+    def in_(self, col, vals):
+        self.filters[col] = list(vals)
+        return self
+
+    def gte(self, col, val):
+        self.filters[f"{col}__gte"] = val
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
+    def execute(self):
+        if self._op == "insert":
+            self._supa.inserts.append(self._payload)
+            return _Result([{"id": "new"}])
+        # A select: decide which guard query this is by its filters.
+        statuses = self.filters.get("status")
+        if isinstance(statuses, list):  # in_(...) → in-flight check
+            return _Result([{"id": "inflight"}] if self._supa.in_flight else [])
+        if self.filters.get("status") == "complete":  # recency debounce
+            return _Result([{"id": "recent"}] if self._supa.has_recent else [])
+        return _Result([])
+
+    def insert(self, payload):
+        self._op = "insert"
+        self._payload = payload
+        return self
+
+
+class _Result:
+    def __init__(self, data):
+        self.data = data
+
+
+class _FakeSupabase:
+    def __init__(self, in_flight=False, has_recent=False):
+        self.in_flight = in_flight
+        self.has_recent = has_recent
+        self.inserts: list = []
+
+    def table(self, _name):
+        return _FakeQuery(self, "select")
+
+
+def _run_enqueue(monkeypatch, trigger, *, in_flight=False, has_recent=False, window=6):
+    fake = _FakeSupabase(in_flight=in_flight, has_recent=has_recent)
+    monkeypatch.setattr(reopt_planner, "get_supabase", lambda: fake)
+    # enqueue_reopt_plan resolves settings via a local `from config import settings`.
+    import config
+
+    monkeypatch.setattr(config.settings, "reopt_plan_min_interval_hours", window)
+    reopt_planner.enqueue_reopt_plan(CLIENT, trigger=trigger)
+    return fake
+
+
+def test_enqueue_manual_always_inserts_even_with_recent_plan(monkeypatch):
+    fake = _run_enqueue(monkeypatch, "manual", has_recent=True)
+    assert len(fake.inserts) == 1
+    assert fake.inserts[0]["payload"]["trigger"] == "manual"
+
+
+def test_enqueue_skips_when_job_in_flight(monkeypatch):
+    fake = _run_enqueue(monkeypatch, "scheduled", in_flight=True)
+    assert fake.inserts == []
+
+
+def test_enqueue_scheduled_debounced_when_plan_built_today(monkeypatch):
+    fake = _run_enqueue(monkeypatch, "scheduled", has_recent=True)
+    assert fake.inserts == []
+
+
+def test_enqueue_scheduled_inserts_when_no_recent_plan(monkeypatch):
+    fake = _run_enqueue(monkeypatch, "scheduled", has_recent=False)
+    assert len(fake.inserts) == 1
+
+
+def test_enqueue_event_trigger_debounced_within_window(monkeypatch):
+    fake = _run_enqueue(monkeypatch, "drop", has_recent=True, window=6)
+    assert fake.inserts == []
+
+
+def test_enqueue_event_trigger_window_zero_disables_debounce(monkeypatch):
+    # window=0 → no recency query; the event rebuild is allowed.
+    fake = _run_enqueue(monkeypatch, "maps_drop", has_recent=True, window=0)
+    assert len(fake.inserts) == 1

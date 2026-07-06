@@ -181,6 +181,14 @@ class Settings(BaseSettings):
     # alert. On-demand always works regardless.
     reopt_plan_auto_enabled: bool = True
     reopt_plan_weekday: int = 0    # Monday=0 … Sunday=6 (weekly digest day, UTC)
+    # Debounce for automated (non-manual) action-plan rebuilds. The scheduler's
+    # weekly day-gate is in-memory, so every platform-api restart on the weekly
+    # day re-fires the "scheduled" pass; event triggers (drop/maps_drop/offpage)
+    # can also fire several times a day. A "scheduled" rebuild is collapsed to at
+    # most once per UTC day; event-driven rebuilds are collapsed within this many
+    # hours of the last completed plan. A user-initiated "manual" refresh is never
+    # debounced. Set to 0 to disable the event-trigger window (day-gate stays).
+    reopt_plan_min_interval_hours: int = 6
 
     # Notifications service — shared delivery pipe (in-app card/feed + email +
     # Slack). In-app always works (DB row); email/Slack are best-effort and only
