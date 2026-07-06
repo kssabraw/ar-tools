@@ -402,6 +402,10 @@ class Settings(BaseSettings):
     # tasks run on demand, not per-row, so flagship cost is fine).
     brand_diagnose_model: str = "gpt-5.4"
     brand_suggest_model: str = "gpt-5.4"
+    # Keyword suggestions transform the client's already-tracked organic +
+    # geo-grid keywords into ICP-grounded conversational AI queries (3-5 each).
+    # Cap the seed set so the single suggestion call stays bounded/parseable.
+    brand_suggest_max_seed_keywords: int = 25
     # Auto-generate the invisibility diagnosis during the scan for every
     # completed not-found cell (vs. lazily on first click). Best-effort: a
     # failed/unconfigured diagnose never fails the cell, and the on-demand

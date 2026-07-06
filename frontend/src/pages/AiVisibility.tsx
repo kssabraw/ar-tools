@@ -655,13 +655,13 @@ function Keywords({ clientId, keywords }: { clientId: string; keywords: Keyword[
       <AddRow placeholder="Add a keyword (e.g. emergency plumber sydney)" value={text} setValue={setText} onAdd={() => text.trim() && addMut.mutate(text.trim())} pending={addMut.isPending} />
       <div style={{ marginBottom: 16, marginTop: -6 }}>
         <button style={miniBtn} disabled={suggestMut.isPending} onClick={() => suggestMut.mutate()}>
-          <Sparkles size={13} /> {suggestMut.isPending ? 'Thinking…' : 'Suggest keywords'}
+          <Sparkles size={13} /> {suggestMut.isPending ? 'Thinking…' : 'Suggest AI queries'}
         </button>
       </div>
       {suggestMut.isError && <Banner kind="error">{(suggestMut.error as Error).message}</Banner>}
       {suggested && suggested.length > 0 && (
         <div style={{ ...card, marginBottom: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 8 }}>Suggested for this client — click to add</div>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 8 }}>Conversational AI queries from this client’s tracked keywords — click to add</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {suggested.map(kw => {
               const dupe = existing.has(kw.toLowerCase())

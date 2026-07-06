@@ -35,6 +35,34 @@ def test_prompts_include_context():
     assert "Acme" in s and "Plumber" in s and "123 St, Sydney" in s
 
 
+# ── conversational-query suggestions ──────────────────────────────────────────
+def test_parse_string_list_respects_cap():
+    assert bi._parse_string_list('["a","b","c"]', cap=2) == ["a", "b"]
+    assert bi._parse_string_list('["x", "", "  ", "y"]', cap=10) == ["x", "y"]
+    assert bi._parse_string_list("not json", cap=5) == []
+
+
+def test_conversational_prompt_includes_seeds_and_icp():
+    p = bi._conversational_prompt(
+        "Acme Plumbing", "Acme Plumbing (Plumber) — Sydney",
+        "Homeowners with an urgent leak who value fast, insured tradies.",
+        ["emergency plumber sydney", "blocked drain inner west"],
+    )
+    assert "emergency plumber sydney" in p and "blocked drain inner west" in p
+    assert "Homeowners with an urgent leak" in p
+    assert "Acme Plumbing (Plumber) — Sydney" in p
+    assert "3-5 conversational queries per seed keyword" in p
+
+
+def test_conversational_prompt_notes_missing_icp():
+    p = bi._conversational_prompt("Acme", "Acme (Roofer)", "", ["roof repair sydney"])
+    assert "No explicit ICP is on file" in p
+
+
+def test_suggest_conversational_queries_empty_when_no_seeds():
+    assert asyncio.run(bi.suggest_conversational_queries("Acme", "ctx", "icp", [])) == []
+
+
 # ── real client signals → prompt block ────────────────────────────────────────
 def test_format_signals_block_empty_when_no_signals():
     assert bi.format_signals_block({}) == ""

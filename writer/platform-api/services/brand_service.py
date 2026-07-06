@@ -379,24 +379,99 @@ def get_report_status(client_id: str, job_id: str) -> dict:
     return _safe(_q)
 
 
+def _gather_tracked_keywords(supabase, client_id: str) -> list[str]:
+    """Distinct active keywords the client already tracks across both rank
+    trackers: organic (tracked_keywords, via its gsc_properties) + geo-grid
+    (maps_keywords). Case-insensitive de-dupe, original casing preserved,
+    capped at brand_suggest_max_seed_keywords. Best-effort per source."""
+    from config import settings
+
+    seeds: list[str] = []
+    seen: set[str] = set()
+
+    def _add(keyword: Optional[str]) -> None:
+        kw = (keyword or "").strip()
+        if kw and kw.lower() not in seen:
+            seen.add(kw.lower())
+            seeds.append(kw)
+
+    # Organic — tracked_keywords is keyed to gsc_properties, not the client.
+    try:
+        props = (
+            supabase.table("gsc_properties").select("id")
+            .eq("client_id", client_id).execute().data
+        ) or []
+        prop_ids = [p["id"] for p in props if p.get("id")]
+        if prop_ids:
+            org = (
+                supabase.table("tracked_keywords").select("keyword")
+                .in_("property_id", prop_ids).eq("active", True).execute().data
+            ) or []
+            for r in org:
+                _add(r.get("keyword"))
+    except Exception:  # pragma: no cover - best-effort
+        pass
+
+    # Geo-grid — maps_keywords is keyed directly to the client.
+    try:
+        maps = (
+            supabase.table("maps_keywords").select("keyword")
+            .eq("client_id", client_id).eq("active", True).execute().data
+        ) or []
+        for r in maps:
+            _add(r.get("keyword"))
+    except Exception:  # pragma: no cover - best-effort
+        pass
+
+    return seeds[: settings.brand_suggest_max_seed_keywords]
+
+
+def _business_context(client: dict) -> str:
+    """A short business descriptor for grounding the conversational queries when
+    (or alongside) the ICP: name + GBP primary category + location."""
+    gbp = client.get("gbp") or {}
+    parts = [client.get("name") or ""]
+    if gbp.get("gbp_category"):
+        parts.append(f"({gbp['gbp_category']})")
+    loc = gbp.get("address") or gbp.get("formatted_address")
+    if loc:
+        parts.append(f"— {loc}")
+    return " ".join(p for p in parts if p).strip()
+
+
 async def suggest_keywords_for_client(client_id: str) -> dict:
-    """Suggest keywords to track, using the client's name + GBP business context."""
-    from services import brand_insights
+    """Suggest AI queries to track by expanding the client's already-tracked
+    organic + geo-grid ranking keywords into ICP-grounded conversational queries
+    (3-5 each). When the client tracks no keywords yet, fall back to the legacy
+    GBP-seeded keyword suggester so the button is never empty-handed."""
+    from services import brand_insights, icp_service
 
     supabase = get_supabase()
     rows = (
-        supabase.table("clients").select("name, website_url, gbp")
+        supabase.table("clients")
+        .select("name, website_url, gbp, detected_icp, differentiators, icp_text")
         .eq("id", client_id).limit(1).execute().data
     )
     if not rows:
         raise HTTPException(status_code=404, detail="client_not_found")
     client = rows[0]
-    gbp = client.get("gbp") or {}
     brand = client.get("name") or ""
-    business_types = [t for t in [gbp.get("gbp_category")] if t]
-    address = gbp.get("address") or gbp.get("formatted_address")
+    seeds = _gather_tracked_keywords(supabase, client_id)
+
     try:
-        keywords = await brand_insights.suggest_keywords(brand, business_types, address)
+        if seeds:
+            keywords = await brand_insights.suggest_conversational_queries(
+                brand=brand,
+                business_context=_business_context(client),
+                icp_text=icp_service.resolve_icp_text(client),
+                seed_keywords=seeds,
+            )
+        else:
+            # No tracked keywords to expand — fall back to GBP-seeded suggestions.
+            gbp = client.get("gbp") or {}
+            business_types = [t for t in [gbp.get("gbp_category")] if t]
+            address = gbp.get("address") or gbp.get("formatted_address")
+            keywords = await brand_insights.suggest_keywords(brand, business_types, address)
     except brand_insights.InsightUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return {"keywords": keywords}
