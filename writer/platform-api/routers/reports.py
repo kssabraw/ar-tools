@@ -43,10 +43,12 @@ async def generate_report(
     """Enqueue a report build; returns the pending row (poll the detail endpoint)."""
     if body.report_type not in ("monthly", "weekly", "ai_visibility"):
         raise HTTPException(status_code=422, detail="invalid_report_type")
+    if body.period is not None and body.period not in client_report.PERIOD_CHOICES:
+        raise HTTPException(status_code=422, detail="invalid_period")
     report_id = client_report.enqueue_client_report(
         str(client_id), body.report_type,
         _parse_date(body.period_start), _parse_date(body.period_end),
-        deliver=body.deliver,
+        deliver=body.deliver, period=body.period,
     )
     row = (
         get_supabase().table("client_reports").select("*").eq("id", report_id).limit(1).execute()
@@ -95,8 +97,11 @@ async def put_report_settings(
 ) -> ReportSettings:
     if body.cadence not in ("disabled", "weekly", "monthly"):
         raise HTTPException(status_code=422, detail="invalid_cadence")
+    if body.period not in ("auto", *client_report.PERIOD_CHOICES):
+        raise HTTPException(status_code=422, detail="invalid_period")
     saved = client_report_schedule.upsert_settings(
         str(client_id), body.recipients, body.cadence, body.day_of_week,
         body.day_of_month, body.hour_utc, body.email_enabled, body.drive_enabled,
+        period=body.period,
     )
     return ReportSettings(**saved)

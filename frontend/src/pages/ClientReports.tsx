@@ -3,7 +3,16 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, CalendarClock, Download, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
-import type { Client, ClientReport, ReportSettings } from '../lib/types'
+import type { Client, ClientReport, ReportPeriod, ReportSettings } from '../lib/types'
+
+const PERIOD_LABELS: [ReportPeriod, string][] = [
+  ['30d', 'Last 30 days'],
+  ['60d', 'Last 60 days'],
+  ['90d', 'Last 90 days'],
+  ['120d', 'Last 120 days'],
+  ['1y', 'Last year'],
+  ['all', 'Since campaign start'],
+]
 
 // Client Reporting (Phase 6 UI + Phase 5 delivery/scheduling) — generate
 // on-demand PDF reports (monthly SEO or AI Visibility), list history, download,
@@ -17,6 +26,7 @@ export function ClientReports() {
   const queryClient = useQueryClient()
   const [downloading, setDownloading] = useState<string | null>(null)
   const [reportType, setReportType] = useState<'monthly' | 'ai_visibility'>('monthly')
+  const [period, setPeriod] = useState<ReportPeriod>('30d')
   const [deliver, setDeliver] = useState(false)
 
   const { data: client } = useQuery<Client>({
@@ -35,7 +45,7 @@ export function ClientReports() {
   })
 
   const generate = useMutation({
-    mutationFn: () => api.post<ClientReport>(`/clients/${clientId}/reports`, { report_type: reportType, deliver }),
+    mutationFn: () => api.post<ClientReport>(`/clients/${clientId}/reports`, { report_type: reportType, period, deliver }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['client-reports', clientId] }),
   })
 
@@ -69,6 +79,9 @@ export function ClientReports() {
             <select style={select} value={reportType} onChange={(e) => setReportType(e.target.value as 'monthly' | 'ai_visibility')}>
               <option value="monthly">Monthly SEO report</option>
               <option value="ai_visibility">AI Visibility report</option>
+            </select>
+            <select style={select} value={period} onChange={(e) => setPeriod(e.target.value as ReportPeriod)}>
+              {PERIOD_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
             </select>
             <button style={primaryBtn} onClick={() => generate.mutate()} disabled={generate.isPending}>
               <RefreshCw size={14} style={generate.isPending ? { animation: 'spin 1s linear infinite' } : undefined} />
@@ -208,6 +221,15 @@ function SettingsCard({ clientId }: { clientId: string }) {
             </select>
           </div>
         )}
+        {s.cadence !== 'disabled' && (
+          <div>
+            <div style={fieldLabel}>Report covers</div>
+            <select style={select} value={s.period} onChange={(e) => set({ period: e.target.value as ReportSettings['period'] })}>
+              <option value="auto">Auto ({s.cadence === 'weekly' ? '7' : '30'} days)</option>
+              {PERIOD_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+        )}
         <label style={toggleLabel}>
           <input type="checkbox" checked={s.email_enabled} onChange={(e) => set({ email_enabled: e.target.checked })} /> Email
         </label>
@@ -219,7 +241,7 @@ function SettingsCard({ clientId }: { clientId: string }) {
           disabled={save.isPending}
           onClick={() => save.mutate({
             recipients, cadence: s.cadence, day_of_week: s.day_of_week, day_of_month: s.day_of_month,
-            hour_utc: s.hour_utc, email_enabled: s.email_enabled, drive_enabled: s.drive_enabled,
+            hour_utc: s.hour_utc, period: s.period, email_enabled: s.email_enabled, drive_enabled: s.drive_enabled,
           })}
         >
           {save.isPending ? 'Saving…' : 'Save'}

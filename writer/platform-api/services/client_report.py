@@ -33,7 +33,7 @@ import asyncio
 import html as _html
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from config import settings
@@ -905,6 +905,36 @@ def _signed_url(path: str) -> Optional[str]:
         return None
 
 
+# Coverage tokens the API/UI can pass instead of explicit dates. 'all' = since
+# the start of the campaign (the client's created_at).
+PERIOD_CHOICES = ("30d", "60d", "90d", "120d", "1y", "all")
+_PERIOD_DAYS = {"30d": 30, "60d": 60, "90d": 90, "120d": 120, "1y": 365}
+
+
+def period_start_for(period: Optional[str], campaign_start: Optional[date], today: date) -> Optional[date]:
+    """Start date for a coverage token; None means the builder default (30d).
+    'all' anchors on the campaign start, falling back to the default window
+    when the client's created_at is unknown. Pure."""
+    if period == "all":
+        return campaign_start or (today - timedelta(days=_DEFAULT_PERIOD_DAYS))
+    days = _PERIOD_DAYS.get(period or "")
+    return (today - timedelta(days=days)) if days else None
+
+
+def campaign_start(supabase, client_id: str) -> Optional[date]:
+    """The client's created_at date — the suite's 'start of campaign' anchor."""
+    rows = (
+        supabase.table("clients").select("created_at").eq("id", client_id).limit(1).execute()
+    ).data
+    raw = rows[0].get("created_at") if rows else None
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date()
+    except ValueError:
+        return None
+
+
 def _build_ai_visibility_report(client_id: str, period_start: date, period_end: date) -> tuple[str, str]:
     """(html, title) for the ai_visibility report type — the LABS-style
     white-label report folded in as a Client Reporting type (Phase 5, locked
@@ -986,12 +1016,19 @@ def enqueue_client_report(
     client_id: str, report_type: str = "monthly",
     period_start: Optional[date] = None, period_end: Optional[date] = None,
     deliver: bool = False,
+    period: Optional[str] = None,
 ) -> str:
     """Create a pending client_reports row + its async job. Returns the report id.
     deliver=True runs Phase 5 delivery (email + Drive copy per the client's
     report settings) after the render — scheduled runs always deliver; on-demand
-    generation opts in."""
+    generation opts in. `period` is a PERIOD_CHOICES coverage token resolved to
+    period_start here (explicit dates win over it)."""
     supabase = get_supabase()
+    if period and period_start is None:
+        today = period_end or date.today()
+        anchor = campaign_start(supabase, client_id) if period == "all" else None
+        period_start = period_start_for(period, anchor, today)
+        period_end = period_end or today
     row = (
         supabase.table("client_reports")
         .insert({

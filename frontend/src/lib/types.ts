@@ -1452,6 +1452,8 @@ export interface ClientReport {
 }
 
 // Client Reporting Phase 5 — per-client delivery recipients + schedule.
+export type ReportPeriod = '30d' | '60d' | '90d' | '120d' | '1y' | 'all'
+
 export interface ReportSettings {
   client_id: string
   recipients: string[]
@@ -1459,6 +1461,7 @@ export interface ReportSettings {
   day_of_week: number | null
   day_of_month: number | null
   hour_utc: number
+  period: 'auto' | ReportPeriod
   email_enabled: boolean
   drive_enabled: boolean
   last_run_at: string | null

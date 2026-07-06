@@ -38,7 +38,7 @@ _WEEKLY_PERIOD_DAYS = 7
 
 _SETTINGS_COLS = (
     "client_id, recipients, cadence, day_of_week, day_of_month, hour_utc, "
-    "email_enabled, drive_enabled, last_run_at, next_run_at"
+    "period, email_enabled, drive_enabled, last_run_at, next_run_at"
 )
 
 
@@ -91,6 +91,7 @@ def _default_settings(client_id: str) -> dict:
         "day_of_week": None,
         "day_of_month": None,
         "hour_utc": 8,
+        "period": "auto",
         "email_enabled": True,
         "drive_enabled": True,
         "last_run_at": None,
@@ -118,6 +119,7 @@ def upsert_settings(
     hour_utc: int,
     email_enabled: bool,
     drive_enabled: bool,
+    period: str = "auto",
 ) -> dict:
     """Save settings and (re)compute the schedule clock. Raises HTTPException on
     an invalid cadence (via compute_next_run_at)."""
@@ -130,6 +132,7 @@ def upsert_settings(
         "day_of_week": day_of_week,
         "day_of_month": day_of_month,
         "hour_utc": hour_utc,
+        "period": period,
         "email_enabled": email_enabled,
         "drive_enabled": drive_enabled,
         "next_run_at": next_run.isoformat() if next_run else None,
@@ -184,12 +187,19 @@ def enqueue_due_report_schedules() -> int:
         if _has_pending_report(supabase, client_id):
             continue
         report_type = "weekly" if sched["cadence"] == "weekly" else "monthly"
-        period_start = (now.date() - timedelta(days=_WEEKLY_PERIOD_DAYS)) if report_type == "weekly" else None
+        period = sched.get("period") or "auto"
+        if period == "auto":
+            # Preserve the cadence-matched default: weekly → 7 days, monthly → 30.
+            period_start = (now.date() - timedelta(days=_WEEKLY_PERIOD_DAYS)) if report_type == "weekly" else None
+            period_token = None
+        else:
+            period_start = None
+            period_token = period
         try:
             enqueue_client_report(
                 client_id, report_type,
                 period_start=period_start, period_end=now.date(),
-                deliver=True,
+                deliver=True, period=period_token,
             )
             enqueued += 1
         except Exception as exc:  # pragma: no cover - defensive

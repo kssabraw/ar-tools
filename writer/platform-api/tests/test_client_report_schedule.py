@@ -3,6 +3,9 @@
 The cadence clock is brand_schedule.compute_next_run_at (tested with that
 module); scheduler/delivery I/O paths are exercised on the deployed worker."""
 
+from datetime import date
+
+from services.client_report import PERIOD_CHOICES, period_start_for
 from services.client_report_schedule import format_report_email, parse_recipients
 
 
@@ -31,3 +34,26 @@ def test_format_report_email_no_client_no_link():
     subject, body = format_report_email(None, "Report", None)
     assert subject == "SEO report ready"
     assert "http" not in body
+
+
+def test_period_start_for_day_tokens():
+    today = date(2026, 7, 6)
+    assert period_start_for("30d", None, today) == date(2026, 6, 6)
+    assert period_start_for("60d", None, today) == date(2026, 5, 7)
+    assert period_start_for("90d", None, today) == date(2026, 4, 7)
+    assert period_start_for("120d", None, today) == date(2026, 3, 8)
+    assert period_start_for("1y", None, today) == date(2025, 7, 6)
+    # No/unknown token → None (builder default window).
+    assert period_start_for(None, None, today) is None
+    assert period_start_for("bogus", None, today) is None
+
+
+def test_period_start_for_campaign_start():
+    today = date(2026, 7, 6)
+    # 'all' anchors on the campaign start...
+    assert period_start_for("all", date(2025, 2, 14), today) == date(2025, 2, 14)
+    # ...and falls back to the default window when created_at is unknown.
+    assert period_start_for("all", None, today) == date(2026, 6, 6)
+    # every advertised choice resolves without raising
+    for token in PERIOD_CHOICES:
+        period_start_for(token, date(2025, 1, 1), today)

@@ -28,7 +28,8 @@ class ClientReport(BaseModel):
 
 class GenerateReportRequest(BaseModel):
     report_type: str = "monthly"          # monthly | weekly | ai_visibility
-    period_start: Optional[str] = None    # ISO date; defaults to last 30 days
+    period: Optional[str] = None          # 30d | 60d | 90d | 120d | 1y | all (since campaign start)
+    period_start: Optional[str] = None    # explicit ISO dates win over `period`
     period_end: Optional[str] = None
     deliver: bool = False                 # Phase 5: email + Drive copy after render
 
@@ -40,6 +41,7 @@ class ReportSettings(BaseModel):
     day_of_week: Optional[int] = None     # 0=Monday..6 (weekly)
     day_of_month: Optional[int] = None    # 1..28 (monthly)
     hour_utc: int = 8
+    period: str = "auto"                  # auto | 30d | 60d | 90d | 120d | 1y | all
     email_enabled: bool = True
     drive_enabled: bool = True
     last_run_at: Optional[str] = None
@@ -52,5 +54,6 @@ class ReportSettingsUpdateRequest(BaseModel):
     day_of_week: Optional[int] = None
     day_of_month: Optional[int] = None
     hour_utc: int = 8
+    period: str = "auto"                  # auto = 7d (weekly) / 30d (monthly)
     email_enabled: bool = True
     drive_enabled: bool = True
