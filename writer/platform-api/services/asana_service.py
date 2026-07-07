@@ -133,13 +133,17 @@ def build_task_payload(
     not_started_option_gid: str = "",
     effort_field_gid: str = "",
     est_hours: Optional[float] = None,
+    due_on: Optional[str] = None,
 ) -> dict:
     """Build the ``POST /tasks`` ``data`` body for one template row.
 
     Sets name + (optional) assignee + (optional) category; Status = Not Started
     when both the field and option GIDs are configured; stamps the estimated
-    hours into the effort number field when configured; **no** due date (the
-    team fills dates in). Places the task directly in ``section_gid``.
+    hours into the effort number field when configured. A ``due_on`` date
+    (``YYYY-MM-DD``) is set only when explicitly provided — the bulk monthly
+    push leaves it unset so the team fills dates in, but an on-demand task
+    (e.g. via SerMastr) may carry one. Places the task directly in
+    ``section_gid``.
     """
     data: dict[str, Any] = {
         "name": name or "",
@@ -148,6 +152,8 @@ def build_task_payload(
     }
     if assignee_gid:
         data["assignee"] = assignee_gid
+    if due_on:
+        data["due_on"] = due_on
 
     custom_fields: dict[str, Any] = {}
     if status_field_gid and not_started_option_gid:

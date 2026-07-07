@@ -109,6 +109,17 @@ def test_build_task_payload_full():
     assert "due_on" not in payload  # no due date carried forward
 
 
+def test_build_task_payload_due_on_when_provided():
+    payload = asana.build_task_payload(
+        "Fix GBP categories", "proj1", "sec_new",
+        assignee_gid="ivy", due_on="2026-12-31",
+    )
+    assert payload["due_on"] == "2026-12-31"
+    # No due_on key at all when none is passed (the bulk push relies on this).
+    bare = asana.build_task_payload("x", "proj1", "sec_new")
+    assert "due_on" not in bare
+
+
 def test_build_task_payload_unassigned_no_custom_fields():
     payload = asana.build_task_payload("Ad-hoc", "proj1", "sec_new")
     assert payload["name"] == "Ad-hoc"

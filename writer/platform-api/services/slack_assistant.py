@@ -156,8 +156,10 @@ _SYSTEM = (
     "- Asana board: add_asana_task (extract the task name and assignee from the "
     "message, and put the relevant context in notes — including findings from "
     "earlier in this conversation, e.g. a review insight or data point the task "
-    "acts on, so the assignee knows WHY), remove_asana_task / complete_asana_task "
-    "(pass the task name the teammate used).\n"
+    "acts on, so the assignee knows WHY; if the teammate gives a deadline — 'by "
+    "Friday', 'end of month', 'by Q4' — resolve it to a YYYY-MM-DD due_date, "
+    "otherwise leave it off and the team fills the date in), remove_asana_task / "
+    "complete_asana_task (pass the task name the teammate used).\n"
     "- Client profile (the Setup page): update_client_profile (website URL, GSC "
     "property, business location, monthly retainer, client type, SAB flag) and "
     "add_target_cities / remove_target_cities for the Local SEO target-city list.\n"
@@ -1451,6 +1453,13 @@ async def _stage_add_task(client_id: str, args: dict) -> tuple[str, dict | str]:
     if problem:
         return "reply", problem
 
+    due = (args.get("due_date") or "").strip()
+    if due:
+        try:
+            date.fromisoformat(due)
+        except ValueError:
+            return "reply", "The due date must be YYYY-MM-DD (e.g. 2026-12-31)."
+
     assignee_note = "unassigned"
     assignee_gid = None
     wanted = (args.get("assignee") or "").strip()
@@ -1468,8 +1477,9 @@ async def _stage_add_task(client_id: str, args: dict) -> tuple[str, dict | str]:
                 f"unassigned — I couldn't match “{wanted}” to a tracked team member "
                 "(check the Workload page)"
             )
-    staged = {**args, "task_name": name, "assignee_gid": assignee_gid}
-    staged["_confirm"] = f"create the Asana task *“{name}”* ({assignee_note})"
+    staged = {**args, "task_name": name, "assignee_gid": assignee_gid, "due_date": due or None}
+    detail = assignee_note + (f", due {due}" if due else "")
+    staged["_confirm"] = f"create the Asana task *“{name}”* ({detail})"
     return "confirm", staged
 
 
@@ -1482,6 +1492,7 @@ async def _act_add_task(client_id: str, args: Optional[dict] = None) -> str:
         return problem
     section_gid = await asana_push._ensure_month_section(project_gid, date.today())
     fields = await asana_service.resolve_project_fields(project_gid)
+    due_on = (args.get("due_date") or "").strip() or None
     payload = asana_service.build_task_payload(
         (args.get("task_name") or "Task")[:250],
         project_gid,
@@ -1489,6 +1500,7 @@ async def _act_add_task(client_id: str, args: Optional[dict] = None) -> str:
         assignee_gid=args.get("assignee_gid"),
         status_field_gid=fields.get("status_field_gid") or "",
         not_started_option_gid=fields.get("not_started_option_gid") or "",
+        due_on=due_on,
     )
     if not section_gid:  # section create failed → land in the project top-level
         payload.pop("memberships", None)
@@ -1501,7 +1513,8 @@ async def _act_add_task(client_id: str, args: Optional[dict] = None) -> str:
     if not gid:
         return "Asana didn't return the new task — check the board."
     who = "" if args.get("assignee_gid") else " (unassigned)"
-    return f"✅ Created *“{payload['name']}”*{who} — {asana_push.task_url(gid)}"
+    when = f" · due {due_on}" if due_on else ""
+    return f"✅ Created *“{payload['name']}”*{who}{when} — {asana_push.task_url(gid)}"
 
 
 async def _stage_pick_task(client_id: str, args: dict, verb: str) -> tuple[str, dict | str]:
@@ -2118,6 +2131,7 @@ _ACTIONS: dict[str, dict] = {
                 "task_name": {"type": "string", "description": "The task's name, verbatim from the teammate."},
                 "assignee": {"type": "string", "description": "Person to assign it to (first or full name), if the teammate named one."},
                 "notes": {"type": "string", "description": "Detail for the task description — from the message OR from earlier in the conversation (e.g. the research finding, review insight, or data point the task is based on, so the assignee has the context)."},
+                "due_date": {"type": "string", "description": "Due date as YYYY-MM-DD, if the teammate gave one (e.g. \"by Friday\", \"end of month\", \"by Q4\" → the resolved calendar date). Omit if they didn't specify one — the team fills dates in themselves."},
             },
             "required": ["task_name"],
         },
