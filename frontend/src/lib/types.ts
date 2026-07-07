@@ -1372,6 +1372,36 @@ export interface CampaignGoal {
   note: string | null
 }
 
+// Competitive intelligence — assembled competitor profiles.
+export interface CompetitorProfile {
+  id: string
+  name: string
+  domain: string | null
+  place_id: string | null
+  sources: string[]
+  notes: string | null
+  local_pack: { found_pins: number | null; top3_pins: number | null; avg_rank: number | null } | null
+  gbp: { rating: number | null; review_count: number | null; primary_category: string | null; captured_at: string | null } | null
+  backlinks: { domain_rating: number | null; referring_domains: number | null } | null
+  organic: { top10_keyword_count: number; keywords: string[]; best_position: number | null } | null
+  review_velocity_30d: number | null
+  new_pages_30d: number
+  recent_pages: { url: string; first_seen: string }[]
+  last_synced_at: string | null
+}
+
+export interface CompetitorProfilesResponse {
+  competitors: CompetitorProfile[]
+  client: {
+    domain: string | null
+    domain_rating: number | null
+    referring_domains: number | null
+    gbp_rating: number | null
+    gbp_review_count: number | null
+    review_velocity_30d: number | null
+  }
+}
+
 // Asana task integration.
 export interface AsanaProjectMapping {
   client_id: string

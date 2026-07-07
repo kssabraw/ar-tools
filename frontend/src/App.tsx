@@ -19,6 +19,7 @@ import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
 import { CampaignGoals } from './pages/CampaignGoals'
+import { Competitors } from './pages/Competitors'
 import { Sops } from './pages/Sops'
 import { Guides } from './pages/Guides'
 import { AsanaTasks } from './pages/AsanaTasks'
@@ -82,6 +83,7 @@ export default function App() {
                       <Route path="/clients/:id/task-plan" element={<TaskPlan />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
                       <Route path="/clients/:id/goals" element={<CampaignGoals />} />
+                      <Route path="/clients/:id/competitors" element={<Competitors />} />
                       <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />
                       <Route path="/clients/:id/reports" element={<ClientReports />} />

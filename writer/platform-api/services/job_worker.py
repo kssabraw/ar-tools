@@ -27,6 +27,7 @@ from services.service_page_plan import run_service_plan_job
 from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
 from services.citation_check import run_citation_check_job
+from services.competitor_intel import run_competitor_intel_job
 from services.freeze import FREEZE_GATED_JOB_TYPES, is_frozen, job_client_id, run_freeze_check_job
 from services.page_backlink_intel import run_page_backlink_job
 from services.notifications import run_notification_dispatch_job
@@ -308,6 +309,8 @@ async def _process_job(job: dict) -> None:
         await run_freeze_check_job(job)
     elif job_type == "citation_check":
         await run_citation_check_job(job)
+    elif job_type == "competitor_intel":
+        await run_competitor_intel_job(job)
     elif job_type == "page_backlink_intel":
         await run_page_backlink_job(job)
     elif job_type == "website_scrape":
