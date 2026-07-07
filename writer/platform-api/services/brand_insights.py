@@ -403,7 +403,8 @@ def _suggest_prompt(brand: str, business_types: list[str], address: Optional[str
         "find this business through AI assistants like ChatGPT, Gemini, or Perplexity.\n\n"
         f"Business name: {brand}\n{type_ctx}\n{loc_ctx}\n\n"
         "Requirements:\n"
-        '- Focus on local/service-intent keywords (e.g., "plumber near me", "emergency AC repair")\n'
+        '- Focus on local/service-intent keywords (e.g., "emergency plumber Sydney", "24 hour AC repair")\n'
+        '- Never use the phrase "near me"; use the actual suburb/city for local intent\n'
         f'- Include the business name in at least one keyword (e.g., "{brand} reviews")\n'
         "- Make keywords specific to the business type, not generic\n"
         "- Keywords should be what someone would ask an AI assistant\n"
@@ -431,6 +432,20 @@ def _parse_keyword_list(text: str) -> list[str]:
     return _parse_string_list(text, cap=5)
 
 
+# LABS keyword/query suggestions must never contain the phrase "near me" (owner
+# preference, 2026-07): AI assistants already resolve "near me" to the asker's
+# location, so it's noise as a tracked query — the actual suburb/city is what we
+# want. Belt-and-suspenders: the suggestion prompts ask the model to avoid it,
+# and this filter guarantees it regardless of what the model returns. Matches
+# "near me", "near-me", "nearme" (any spacing/casing) as a whole phrase.
+_NEAR_ME_RE = re.compile(r"\bnear[\s\-]*me\b", re.I)
+
+
+def _drop_near_me(items: list[str]) -> list[str]:
+    """Drop any suggestion containing the phrase "near me" (see _NEAR_ME_RE)."""
+    return [s for s in items if not _NEAR_ME_RE.search(s)]
+
+
 async def suggest_keywords(brand: str, business_types: list[str], address: Optional[str]) -> list[str]:
     client = _client()
     try:
@@ -443,7 +458,7 @@ async def suggest_keywords(brand: str, business_types: list[str], address: Optio
         )
     except Exception as exc:  # pragma: no cover
         raise InsightUnavailable(str(exc))
-    return _parse_keyword_list(resp.choices[0].message.content or "")
+    return _drop_near_me(_parse_keyword_list(resp.choices[0].message.content or ""))
 
 
 # ── conversational-query suggestions from tracked keywords ────────────────────
@@ -483,8 +498,11 @@ def _conversational_prompt(
         "NOT keyword fragments.\n"
         "- Ground each query in the ideal customer's real situation, intent, and "
         "priorities from the ICP above.\n"
-        "- Preserve the seed keyword's location and qualifier (an emergency/near-me/"
-        "suburb term stays that specific).\n"
+        "- Preserve the seed keyword's location and qualifier (an emergency/suburb "
+        "term stays that specific).\n"
+        '- Never use the phrase "near me". If a seed keyword says "near me", resolve '
+        "it to the business's actual city/suburb (from the business context above) "
+        "instead — a real person talking to an AI names the place.\n"
         "- Keep them commercial/high-intent (finding or choosing a provider), not "
         "generic informational trivia.\n"
         "- Return ONLY a flat JSON array of all the query strings, nothing else."
@@ -510,7 +528,7 @@ async def suggest_conversational_queries(
     except Exception as exc:  # pragma: no cover
         raise InsightUnavailable(str(exc))
     cap = len(seed_keywords) * _QUERIES_PER_KEYWORD_MAX
-    parsed = _parse_string_list(resp.choices[0].message.content or "", cap=cap)
+    parsed = _drop_near_me(_parse_string_list(resp.choices[0].message.content or "", cap=cap))
     seen: set[str] = set()
     out: list[str] = []
     for q in parsed:
