@@ -198,10 +198,17 @@ def _section_geogrid(data: dict) -> str:
     cards = []
     for k in g["keywords"]:
         avg = _fmt_pos(k.get("average_rank"))
+        img = k.get("map_image")
+        # The saved map image (real Google tile + numbered rank pins) when we have
+        # it; otherwise the lightweight SVG grid so older scans still render.
+        visual = (
+            f"<img class='grid-img' src='{img}' alt='Local rank map'/>" if img
+            else svg_geogrid(k.get("rank_grid"))
+        )
         cards.append(
             "<div class='grid-card'>"
             f"<div class='grid-kw'>{_esc(k.get('keyword'))}</div>"
-            f"<div>{svg_geogrid(k.get('rank_grid'))}</div>"
+            f"<div>{visual}</div>"
             f"<div class='grid-meta'>avg rank {_esc(avg)} · "
             f"top-3 in {_esc(k.get('top3_pins', 0))}/{_esc(k.get('total_pins', 0))} pins</div>"
             "</div>"
@@ -551,6 +558,7 @@ th { font-size:9px; text-transform:uppercase; letter-spacing:.04em; color:#94a3b
 td.num, th.num { text-align:right; }
 .grid-cards { display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; }
 .grid-card { border:1px solid #e2e8f0; border-radius:8px; padding:10px; text-align:center; }
+.grid-img { width:220px; max-width:100%; height:auto; border-radius:6px; }
 .grid-kw { font-weight:600; margin-bottom:6px; }
 .grid-meta { color:#64748b; font-size:10px; margin-top:6px; }
 .legend { color:#64748b; font-size:9px; }
@@ -637,7 +645,7 @@ def _gather_geogrid(supabase, client_id: str) -> Optional[dict]:
         return None
     results = (
         supabase.table("maps_scan_results")
-        .select("keyword, average_rank, top3_pins, total_pins, rank_grid, report_weak_locations")
+        .select("keyword, average_rank, top3_pins, total_pins, rank_grid, map_image_url, report_weak_locations")
         .eq("scan_id", scan[0]["id"])
         .limit(6)
         .execute()
@@ -658,11 +666,32 @@ def _gather_geogrid(supabase, client_id: str) -> Optional[dict]:
                 "top3_pins": r.get("top3_pins"),
                 "total_pins": r.get("total_pins"),
                 "rank_grid": r.get("rank_grid"),
+                # Prefer the saved map PNG (Google tile + numbered pins) inlined as
+                # a data URI so the PDF is self-contained; fall back to the SVG grid.
+                "map_image": _png_data_uri(r.get("map_image_url")),
             }
             for r in results
         ],
         "weak_areas": weak[:8],
     }
+
+
+def _png_data_uri(url: Optional[str]) -> Optional[str]:
+    """Fetch a stored map PNG and return it as a `data:image/png;base64,...` URI so
+    it embeds self-contained in the PDF (no network/expiry at render). Best-effort
+    — None on any failure (caller falls back to the SVG grid)."""
+    if not url:
+        return None
+    try:
+        import base64  # noqa: PLC0415
+        import httpx  # noqa: PLC0415
+
+        resp = httpx.get(url, timeout=15)
+        resp.raise_for_status()
+        return "data:image/png;base64," + base64.b64encode(resp.content).decode("ascii")
+    except Exception as exc:  # noqa: BLE001 — a missing image just falls back to SVG
+        logger.warning("client_report_map_image_fetch_failed", extra={"url": url, "error": str(exc)})
+        return None
 
 
 def _gather_gbp(client: dict) -> Optional[dict]:

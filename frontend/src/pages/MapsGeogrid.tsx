@@ -230,6 +230,11 @@ function ResultView({ r, scan, clientId }: { r: MapsScanResultRow; scan: MapsSca
             Open interactive map ↗
           </a>
         )}
+        {r.map_image_url && (
+          <a href={r.map_image_url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#6366f1', textDecoration: 'none' }}>
+            Saved map image ↗
+          </a>
+        )}
         <details>
           <summary style={{ fontSize: 12, color: '#64748b', cursor: 'pointer' }}>Show full grid</summary>
           <div style={{ marginTop: 10 }}><Grid grid={r.rank_grid} /></div>

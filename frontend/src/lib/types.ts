@@ -626,6 +626,7 @@ export interface MapsScanResultRow {
   top10_pins: number
   rank_grid: Array<Array<number | null>> | null
   heatmap_image_url: string | null
+  map_image_url: string | null
   dynamic_url: string | null
   competitors: MapsCompetitor[] | null
   competitors_above: MapsCompetitorsAbove | null

@@ -24,7 +24,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import maps_analytics, maps_geocode, maps_octants
+from services import maps_analytics, maps_geocode, maps_image, maps_octants
 from services.google_docs import GoogleDocError, create_google_doc
 
 logger = logging.getLogger(__name__)
@@ -394,15 +394,32 @@ def enqueue_maps_report(scan_id: str) -> bool:
     return True
 
 
-async def _maybe_publish_doc(client: dict, scan_row: dict, reports: list[tuple[str, str]]) -> Optional[str]:
+async def _maybe_publish_doc(
+    client: dict, scan_row: dict, reports: list[tuple[str, str, Optional[str]]],
+) -> Optional[str]:
     """Publish one combined Google Doc (all keyword reports) if the client has a
-    Drive folder + the webhook is configured. Returns the doc_url or None."""
+    Drive folder + the webhook is configured. Returns the doc_url or None.
+
+    Each keyword's section gets a "Local Rank Map" image embedded via markdown —
+    the Apps Script webhook fetches the URL and inserts a real Doc image (needs
+    the image-aware markdown renderer in writer/apps-script/publish_webhook.gs; an
+    older deployment renders the line as text until it's redeployed)."""
     folder_id = client.get("google_drive_folder_id")
     if not folder_id or not settings.google_apps_script_url or not reports:
         return None
     date = str(scan_row.get("completed_at") or "")[:10]
     title = f"Local Rank Analysis — {client.get('name')} — {date}".strip(" —")
-    body = "\n\n---\n\n".join(md for _, md in reports if md)
+    sections: list[str] = []
+    for keyword, md, img_url in reports:
+        if not md:
+            continue
+        section = md
+        if img_url:
+            section += f"\n\n## Local Rank Map\n\n![Local rank grid — {keyword}]({img_url})"
+        sections.append(section)
+    if not sections:
+        return None
+    body = "\n\n---\n\n".join(sections)
     try:
         result = await create_google_doc(folder_id, title, body)
         return result.get("doc_url")
@@ -434,6 +451,33 @@ async def run_maps_report_job(job: dict) -> None:
             .eq("scan_id", scan_id).execute()
         ).data or []
 
+        # Render + store the saved map image per keyword FIRST, independent of the
+        # LLM: the PNG (Google tile + numbered rank pins) is the archival artifact
+        # and must survive a failed narrative. Best-effort, bounded, isolated —
+        # keyed by result id so both the success and failed updates below can stamp
+        # map_image_url and the Doc can embed it.
+        img_sem = asyncio.Semaphore(_REPORT_CONCURRENCY)
+
+        async def _gen_image(result_row: dict) -> tuple[str, Optional[str]]:
+            async with img_sem:
+                try:
+                    url = await maps_image.generate_and_store(
+                        supabase, scan_row["client_id"], scan_id, result_row["id"],
+                        result_row.get("rank_grid"),
+                        scan_row.get("center_lat"), scan_row.get("center_lng"),
+                    )
+                    return result_row["id"], url
+                except Exception as exc:  # noqa: BLE001 — a bad image never sinks the report
+                    logger.warning(
+                        "maps_report_image_failed",
+                        extra={"scan_id": scan_id, "keyword": result_row.get("keyword"), "error": str(exc)},
+                    )
+                    return result_row["id"], None
+
+        image_urls: dict[str, Optional[str]] = dict(
+            await asyncio.gather(*(_gen_image(r) for r in results))
+        )
+
         # Generate per-keyword reports concurrently (each is a ~1-min LLM call) so
         # a multi-keyword scan doesn't hold the single async-job worker for many
         # minutes serially. Bounded so a large keyword set can't fan out an
@@ -448,20 +492,23 @@ async def run_maps_report_job(job: dict) -> None:
                 except Exception as exc:  # noqa: BLE001 — isolate per-keyword failure
                     return result_row, None, exc
 
-        generated: list[tuple[str, str]] = []  # (keyword, markdown)
+        generated: list[tuple[str, str, Optional[str]]] = []  # (keyword, markdown, image_url)
         for result_row, fields, exc in await asyncio.gather(*(_gen_one(r) for r in results)):
+            img_url = image_urls.get(result_row["id"])
             if exc is not None or fields is None:
                 logger.warning(
                     "maps_report_keyword_failed",
                     extra={"scan_id": scan_id, "keyword": result_row.get("keyword"), "error": str(exc)},
                 )
+                # Still persist the saved map image even when the narrative failed.
                 supabase.table("maps_scan_results").update(
-                    {"report_status": "failed", "report_error": str(exc)[:500]}
+                    {"report_status": "failed", "report_error": str(exc)[:500], "map_image_url": img_url}
                 ).eq("id", result_row["id"]).execute()
                 continue
+            fields = {**fields, "map_image_url": img_url}
             supabase.table("maps_scan_results").update(fields).eq("id", result_row["id"]).execute()
             if fields.get("report_md"):
-                generated.append((result_row.get("keyword"), fields["report_md"]))
+                generated.append((result_row.get("keyword"), fields["report_md"], img_url))
 
         doc_url = await _maybe_publish_doc(client, scan_row, generated)
         if doc_url:
