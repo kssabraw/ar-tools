@@ -9,7 +9,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 
 from db.supabase_client import get_supabase
-from middleware.auth import require_auth
+from middleware.auth import is_staff_or_above, require_auth
 from models.runs import (
     BULK_RUNS_MAX,
     ClientContextSnapshot,
@@ -494,8 +494,8 @@ async def cancel_run(
     if run["status"] in _TERMINAL_STATUSES:
         return {"id": str(run_id), "status": run["status"]}
 
-    # Only creator or admin may cancel
-    if auth["role"] != "admin" and str(run.get("created_by")) != auth["user_id"]:
+    # Only the creator or a senior operator (staff/admin) may cancel
+    if not is_staff_or_above(auth["role"]) and str(run.get("created_by")) != auth["user_id"]:
         raise HTTPException(status_code=403, detail="forbidden")
 
     supabase.table("runs").update(
@@ -528,7 +528,7 @@ async def resume_run(
     if run["status"] not in {"failed", "cancelled"}:
         raise HTTPException(status_code=409, detail="run_not_resumable")
 
-    if auth["role"] != "admin" and str(run.get("created_by")) != auth["user_id"]:
+    if not is_staff_or_above(auth["role"]) and str(run.get("created_by")) != auth["user_id"]:
         raise HTTPException(status_code=403, detail="forbidden")
 
     in_flight = (

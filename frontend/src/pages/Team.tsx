@@ -5,9 +5,32 @@ import { useAuth } from '../context/AuthContext'
 import type { TeamUser } from '../lib/types'
 import { UserPlus, Trash2, KeyRound, Mail, Check, X, Shield } from 'lucide-react'
 
-function roleLabel(role: TeamUser['role']): string {
-  return role === 'admin' ? 'Admin' : 'VA'
+const ROLE_LABELS: Record<TeamUser['role'], string> = {
+  admin: 'Admin',
+  staff: 'Staff',
+  team_member: 'VA',
+  client: 'Client',
 }
+
+function roleLabel(role: TeamUser['role']): string {
+  return ROLE_LABELS[role] ?? role
+}
+
+function roleBadge(role: TeamUser['role']): React.CSSProperties {
+  switch (role) {
+    case 'admin':
+      return adminBadge
+    case 'staff':
+      return staffBadge
+    case 'client':
+      return clientBadge
+    default:
+      return vaBadge
+  }
+}
+
+// Ordered highest-privilege first, matching the backend role model.
+const ROLE_OPTIONS: TeamUser['role'][] = ['admin', 'staff', 'team_member', 'client']
 
 // Where invite / reset-email links land the user. Must be in Supabase's
 // redirect allowlist. Uses the current app origin so it's correct per deploy.
@@ -41,13 +64,13 @@ export function Team() {
   })
 
   const inviteMutation = useMutation({
-    mutationFn: (email: string) =>
-      api.post('/users/invite', { email, role: 'team_member', redirect_to: PW_REDIRECT }),
-    onSuccess: (_d, email) => {
+    mutationFn: (vars: { email: string; role: TeamUser['role'] }) =>
+      api.post('/users/invite', { email: vars.email, role: vars.role, redirect_to: PW_REDIRECT }),
+    onSuccess: (_d, vars) => {
       setInviteEmail('')
       setError(null)
       qc.invalidateQueries({ queryKey: ['users'] })
-      showFlash('invite', `Invite sent to ${email}`)
+      showFlash('invite', `Invite sent to ${vars.email}`)
     },
     onError: (e: Error) => setError(e.message),
   })
@@ -111,13 +134,13 @@ export function Team() {
       <div style={{ marginBottom: 8 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Team</h1>
         <p style={{ color: '#64748b', fontSize: 13, margin: '6px 0 0' }}>
-          Invite VAs, change roles, remove access, and help them reset their passwords.
+          Invite team members, change roles, remove access, and help them reset their passwords.
         </p>
       </div>
 
       {/* Add a VA */}
       <div style={cardStyle}>
-        <div style={{ fontWeight: 600, fontSize: 14, color: '#0f172a', marginBottom: 12 }}>Add a VA</div>
+        <div style={{ fontWeight: 600, fontSize: 14, color: '#0f172a', marginBottom: 12 }}>Add a user</div>
 
         {/* Mode toggle: email invite vs. direct create with password */}
         <div style={{ display: 'flex', gap: 4, background: '#f1f5f9', borderRadius: 8, padding: 3, marginBottom: 14, width: 'fit-content' }}>
@@ -142,23 +165,32 @@ export function Team() {
             <form
               onSubmit={(e) => {
                 e.preventDefault()
-                if (canInvite) inviteMutation.mutate(inviteEmail.trim())
+                if (canInvite) inviteMutation.mutate({ email: inviteEmail.trim(), role: newRole })
               }}
-              style={{ display: 'flex', gap: 8, alignItems: 'center' }}
+              style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}
             >
               <input
                 type="email"
                 value={inviteEmail}
                 onChange={(e) => setInviteEmail(e.target.value)}
-                placeholder="va@example.com"
+                placeholder="person@example.com"
                 style={inputStyle}
               />
+              <select
+                value={newRole}
+                onChange={(e) => setNewRole(e.target.value as TeamUser['role'])}
+                style={{ ...inputStyle, flex: 'none', minWidth: 110, cursor: 'pointer' }}
+              >
+                {ROLE_OPTIONS.map((r) => (
+                  <option key={r} value={r}>{roleLabel(r)}</option>
+                ))}
+              </select>
               <button type="submit" disabled={!canInvite || inviteMutation.isPending} style={primaryBtn}>
                 <UserPlus size={15} /> {inviteMutation.isPending ? 'Sending…' : 'Send invite'}
               </button>
             </form>
             <p style={{ color: '#94a3b8', fontSize: 12, margin: '10px 0 0' }}>
-              The VA receives an email invite to set their own password and sign in.
+              The user receives an email invite to set their own password and sign in.
             </p>
           </>
         ) : (
@@ -190,8 +222,9 @@ export function Team() {
                 onChange={(e) => setNewRole(e.target.value as TeamUser['role'])}
                 style={{ ...inputStyle, flex: 'none', minWidth: 110, cursor: 'pointer' }}
               >
-                <option value="team_member">VA</option>
-                <option value="admin">Admin</option>
+                {ROLE_OPTIONS.map((r) => (
+                  <option key={r} value={r}>{roleLabel(r)}</option>
+                ))}
               </select>
               <button type="submit" disabled={!canCreate || createMutation.isPending} style={primaryBtn}>
                 <UserPlus size={15} /> {createMutation.isPending ? 'Creating…' : 'Create user'}
@@ -240,7 +273,7 @@ export function Team() {
                     <span style={{ fontWeight: 600, fontSize: 14, color: '#0f172a' }}>
                       {u.full_name || u.email}
                     </span>
-                    <span style={u.role === 'admin' ? adminBadge : vaBadge}>{roleLabel(u.role)}</span>
+                    <span style={roleBadge(u.role)}>{roleLabel(u.role)}</span>
                     {isSelf && <span style={{ fontSize: 12, color: '#94a3b8' }}>(you)</span>}
                   </div>
                   {u.full_name && (
@@ -304,24 +337,22 @@ export function Team() {
                       </div>
                     ) : roleId === u.id ? (
                       <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                        <span style={{ fontSize: 12, color: '#475569' }}>
-                          {u.role === 'admin'
-                            ? `Change ${u.email} to VA?`
-                            : `Make ${u.email} an admin?`}
-                        </span>
-                        <button
-                          onClick={() =>
-                            roleMutation.mutate({
-                              id: u.id,
-                              role: u.role === 'admin' ? 'team_member' : 'admin',
-                            })
-                          }
+                        <span style={{ fontSize: 12, color: '#475569' }}>Role:</span>
+                        <select
+                          defaultValue={u.role}
+                          autoFocus
                           disabled={roleMutation.isPending}
-                          style={{ ...iconBtn, color: '#16a34a', borderColor: '#86efac' }}
-                          title="Confirm role change"
+                          onChange={(e) => {
+                            const role = e.target.value as TeamUser['role']
+                            if (role !== u.role) roleMutation.mutate({ id: u.id, role })
+                            else setRoleId(null)
+                          }}
+                          style={{ ...inputStyle, flex: 'none', minWidth: 130, cursor: 'pointer' }}
                         >
-                          <Check size={14} />
-                        </button>
+                          {ROLE_OPTIONS.map((r) => (
+                            <option key={r} value={r}>{roleLabel(r)}</option>
+                          ))}
+                        </select>
                         <button onClick={() => setRoleId(null)} style={iconBtn} title="Cancel">
                           <X size={14} />
                         </button>
@@ -346,9 +377,9 @@ export function Team() {
                         <button
                           onClick={() => { setError(null); setRoleId(u.id) }}
                           style={textBtn}
-                          title={u.role === 'admin' ? 'Change to VA' : 'Make admin'}
+                          title="Change role"
                         >
-                          <Shield size={13} /> {u.role === 'admin' ? 'Make VA' : 'Make admin'}
+                          <Shield size={13} /> Change role
                         </button>
                         <button
                           onClick={() => { setError(null); setRemoveId(u.id) }}
@@ -379,3 +410,5 @@ const iconBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', pa
 const textBtn: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 500 }
 const vaBadge: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#4338ca', background: '#eef2ff', padding: '2px 8px', borderRadius: 999 }
 const adminBadge: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#0369a1', background: '#e0f2fe', padding: '2px 8px', borderRadius: 999 }
+const staffBadge: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#9333ea', background: '#f3e8ff', padding: '2px 8px', borderRadius: 999 }
+const clientBadge: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#0f766e', background: '#ccfbf1', padding: '2px 8px', borderRadius: 999 }

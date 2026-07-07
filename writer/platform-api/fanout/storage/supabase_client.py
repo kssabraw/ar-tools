@@ -24,12 +24,11 @@ from fanout.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-def _host_is_admin(user_id: str) -> bool:
-    """Role bridge: an AR Tools suite admin (public.profiles.role == 'admin') is
-    treated as a Topic Fanout 'owner'. Reads the host suite's profiles table via
-    its public-schema service client (the fanout client is scoped to the fanout
+def _host_role(user_id: str) -> str | None:
+    """Read the caller's AR Tools suite role (public.profiles.role) via the
+    public-schema service client (the fanout client is scoped to the fanout
     schema, so it can't see public.profiles). Best-effort — any failure returns
-    False so the fanout role stands and login is never blocked."""
+    None so the fanout role stands and login is never blocked."""
     try:
         from db.supabase_client import get_supabase
 
@@ -41,13 +40,27 @@ def _host_is_admin(user_id: str) -> bool:
             .limit(1)
             .execute()
         )
-        return bool(resp.data) and resp.data[0].get("role") == "admin"
+        return resp.data[0].get("role") if resp.data else None
     except Exception as exc:  # noqa: BLE001 - bridge is advisory, never fatal
         logger.warning(
             "host_role_bridge_failed",
             extra={"event": "host_role_bridge_failed", "reason": repr(exc)},
         )
-        return False
+        return None
+
+
+def _host_is_elevated(user_id: str) -> bool:
+    """Role bridge: an AR Tools suite senior operator (public.profiles.role in
+    {'admin', 'staff'}) is treated as a Topic Fanout 'owner'."""
+    return _host_role(user_id) in ("admin", "staff")
+
+
+def host_is_read_only(user_id: str) -> bool:
+    """True when the suite role is a read-only tier ('client'). Used by the
+    fanout auth layer to reject write requests — the suite's read-only
+    enforcement lives in the suite's require_auth, which never runs for /fanout
+    routes."""
+    return _host_role(user_id) == "client"
 
 
 @lru_cache
@@ -85,9 +98,9 @@ def ensure_user_profile(user_id: str, email: str | None) -> dict:
     )
     if existing.data:
         profile = existing.data[0]
-        # Keep a suite admin promoted to owner even if they were provisioned as a
-        # va on an earlier Fanout-only login.
-        if profile.get("role") != "owner" and _host_is_admin(user_id):
+        # Keep a suite senior operator (admin/staff) promoted to owner even if
+        # they were provisioned as a va on an earlier Fanout-only login.
+        if profile.get("role") != "owner" and _host_is_elevated(user_id):
             updated = (
                 service.table("user_profiles")
                 .update({"role": "owner"})
@@ -100,8 +113,9 @@ def ensure_user_profile(user_id: str, email: str | None) -> dict:
         return profile
 
     display_name = (email or "").split("@")[0] or None
-    # New Fanout user: a suite admin lands as owner, everyone else as va.
-    role = "owner" if _host_is_admin(user_id) else "va"
+    # New Fanout user: a suite senior operator (admin/staff) lands as owner,
+    # everyone else as va.
+    role = "owner" if _host_is_elevated(user_id) else "va"
     inserted = (
         service.table("user_profiles")
         .insert({"user_id": user_id, "display_name": display_name, "role": role})

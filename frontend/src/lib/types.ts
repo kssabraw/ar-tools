@@ -11,11 +11,15 @@ export type RunStatus =
   | 'failed'
   | 'cancelled'
 
+// Suite user types, ordered by privilege (see middleware/auth.py ROLE_RANK):
+//   admin > staff > team_member (VA) > client (read-only)
+export type UserRole = 'admin' | 'staff' | 'team_member' | 'client'
+
 export interface TeamUser {
   id: string
   email: string
   full_name: string | null
-  role: 'admin' | 'team_member'
+  role: UserRole
   created_at: string
 }
 
@@ -502,7 +506,7 @@ export interface RunDetail {
 
 export interface Profile {
   id: string
-  role: 'admin' | 'team_member'
+  role: UserRole
   full_name: string | null
 }
 

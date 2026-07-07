@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from config import settings
 from db.supabase_client import get_supabase
-from middleware.auth import require_admin, require_auth
+from middleware.auth import require_auth, require_staff
 from models.clients import (
     ClientCreateRequest,
     ClientDetail,
@@ -208,7 +208,7 @@ async def get_client(
 @router.post("/clients", response_model=ClientDetail, status_code=201)
 async def create_client(
     body: ClientCreateRequest,
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_staff),
 ) -> ClientDetail:
     supabase = get_supabase()
 
@@ -307,7 +307,7 @@ async def create_client(
 async def update_client(
     client_id: UUID,
     body: ClientUpdateRequest,
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_staff),
 ) -> ClientDetail:
     supabase = get_supabase()
 
@@ -426,7 +426,7 @@ async def update_client(
 @router.post("/clients/{client_id}/archive", response_model=dict)
 async def archive_client(
     client_id: UUID,
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_staff),
 ) -> dict:
     supabase = get_supabase()
     result = (
@@ -444,7 +444,7 @@ async def archive_client(
 @router.post("/clients/{client_id}/reanalyze", response_model=dict, status_code=202)
 async def reanalyze_client(
     client_id: UUID,
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_staff),
 ) -> dict:
     supabase = get_supabase()
     result = (
@@ -480,7 +480,7 @@ async def reanalyze_client(
 async def reanalyze_page_structures(
     client_id: UUID,
     page_type: Optional[str] = Query(None),
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_staff),
 ) -> dict:
     """Re-scrape + re-analyze the client's stored reference page structure(s).
 

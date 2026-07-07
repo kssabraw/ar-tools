@@ -16,7 +16,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from middleware.auth import require_admin, require_auth
+from middleware.auth import require_auth, require_staff
 from models.sops import Sop, SopCreateRequest, SopUpdateRequest
 from services import sop_store
 
@@ -32,7 +32,7 @@ async def list_agency_sops(auth: dict = Depends(require_auth)) -> list[Sop]:
 
 
 @router.post("/sops", response_model=Sop, status_code=201)
-async def create_agency_sop(body: SopCreateRequest, auth: dict = Depends(require_admin)) -> Sop:
+async def create_agency_sop(body: SopCreateRequest, auth: dict = Depends(require_staff)) -> Sop:
     row = sop_store.create_sop(
         client_id=None, title=body.title, content=body.content,
         category=body.category, source=body.source,
@@ -52,7 +52,7 @@ async def list_client_sops(
 
 @router.post("/clients/{client_id}/sops", response_model=Sop, status_code=201)
 async def create_client_sop(
-    client_id: UUID, body: SopCreateRequest, auth: dict = Depends(require_admin),
+    client_id: UUID, body: SopCreateRequest, auth: dict = Depends(require_staff),
 ) -> Sop:
     row = sop_store.create_sop(
         client_id=str(client_id), title=body.title, content=body.content,
@@ -63,7 +63,7 @@ async def create_client_sop(
 
 # --- shared update / delete (by id) ---------------------------------------------
 @router.patch("/sops/{sop_id}", response_model=Sop)
-async def update_sop(sop_id: UUID, body: SopUpdateRequest, auth: dict = Depends(require_admin)) -> Sop:
+async def update_sop(sop_id: UUID, body: SopUpdateRequest, auth: dict = Depends(require_staff)) -> Sop:
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=422, detail="no_fields")
@@ -71,6 +71,6 @@ async def update_sop(sop_id: UUID, body: SopUpdateRequest, auth: dict = Depends(
 
 
 @router.delete("/sops/{sop_id}", status_code=204, response_class=Response)
-async def delete_sop(sop_id: UUID, auth: dict = Depends(require_admin)) -> Response:
+async def delete_sop(sop_id: UUID, auth: dict = Depends(require_staff)) -> Response:
     sop_store.delete_sop(str(sop_id))
     return Response(status_code=204)
