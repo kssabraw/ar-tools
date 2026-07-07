@@ -271,6 +271,13 @@ export function ClientWorkspace() {
           cta="Open"
         />
         <ActionCard
+          icon={<TrendingUp size={22} />}
+          label="Forecast"
+          description="Where the campaign is heading at the current trend — projected positions, est. traffic & value in 90 days, the quick-win upside in clicks & dollars, and goal trajectories."
+          to={id ? `/clients/${id}/forecast` : undefined}
+          cta="Open"
+        />
+        <ActionCard
           icon={<Swords size={22} />}
           label="Competitive Intel"
           description="Who you're up against, unified across every tracker — local-pack pins, GBP reviews, authority, organic overlap & the new pages they publish. Auto-discovered weekly."
