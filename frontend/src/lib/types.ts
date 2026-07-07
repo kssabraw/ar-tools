@@ -136,7 +136,17 @@ export interface SyncRun {
 
 export interface IngestResponse {
   property_id: string
-  status: 'ok' | 'failed'
+  // A dateless "Sync now" enqueues a background job ("queued" + job_id); an
+  // explicit-window re-pull still returns "ok"/"failed" synchronously.
+  status: 'queued' | 'ok' | 'failed'
+  job_id: string | null
+  rows: number
+  error: string | null
+}
+
+export interface IngestJobStatus {
+  job_id: string
+  status: 'pending' | 'running' | 'complete' | 'failed'
   rows: number
   error: string | null
 }

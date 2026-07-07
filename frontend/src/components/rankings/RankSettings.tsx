@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Clock, Copy, Globe, History, MapPin, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import type {
-  FetchMode, FetchSchedule, GscProperty, IngestResponse, RankLocation, SyncRun, VerifyAccessResponse,
+  FetchMode, FetchSchedule, GscProperty, IngestJobStatus, IngestResponse, RankLocation, SyncRun, VerifyAccessResponse,
 } from '../../lib/types'
 import { LocationAutocomplete } from '../localseo/LocationAutocomplete'
 import { Spinner } from '../localseo/Spinner'
@@ -358,10 +358,31 @@ function SyncStatus({ propertyId }: { propertyId: string }) {
     queryKey: ['gsc-sync-runs', propertyId],
     queryFn: () => api.get<SyncRun[]>(`/gsc-properties/${propertyId}/sync-runs`),
   })
+  // "Sync now" enqueues a background ingest (it survives leaving this page) and
+  // we poll the job to completion, refreshing the sync-run history when it lands.
+  const [ingestJobId, setIngestJobId] = useState<string | null>(null)
   const ingestMut = useMutation({
     mutationFn: () => api.post<IngestResponse>(`/gsc-properties/${propertyId}/ingest`, {}),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] }),
+    onSuccess: (data) => { if (data?.job_id) setIngestJobId(data.job_id) },
   })
+  const { data: ingestJob } = useQuery<IngestJobStatus>({
+    queryKey: ['gsc-ingest-job', ingestJobId],
+    queryFn: () => api.get<IngestJobStatus>(`/gsc-properties/${propertyId}/ingest/${ingestJobId}`),
+    enabled: !!ingestJobId,
+    refetchInterval: (query) => {
+      const s = (query.state.data as IngestJobStatus | undefined)?.status
+      return s === 'complete' || s === 'failed' ? false : 4000
+    },
+  })
+  const ingestStatus = ingestJob?.status
+  useEffect(() => {
+    if (ingestStatus === 'complete' || ingestStatus === 'failed') {
+      queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingestStatus])
+  const ingestRunning = ingestMut.isPending
+    || (!!ingestJobId && ingestStatus !== 'complete' && ingestStatus !== 'failed')
   const backfillMut = useMutation({
     mutationFn: () => api.post(`/gsc-properties/${propertyId}/backfill`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['gsc-sync-runs', propertyId] }),
@@ -371,7 +392,11 @@ function SyncStatus({ propertyId }: { propertyId: string }) {
     <div style={syncStrip}>
       <div style={{ fontSize: 12, color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
         <Clock size={12} color="#94a3b8" />
-        {latest ? (
+        {ingestRunning ? (
+          <span style={{ color: '#4338ca' }}>Syncing in the background — you can leave this page.</span>
+        ) : ingestStatus === 'failed' ? (
+          <span style={{ color: '#b45309' }}>Sync failed{ingestJob?.error ? ` · ${ingestJob.error}` : ''}</span>
+        ) : latest ? (
           latest.status === 'ok' ? (
             <span>Last sync {relativeTime(latest.run_at)} · {latest.rows.toLocaleString()} rows</span>
           ) : (
@@ -385,8 +410,9 @@ function SyncStatus({ propertyId }: { propertyId: string }) {
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
         <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
-          onClick={() => ingestMut.mutate()} disabled={ingestMut.isPending}>
-          <RefreshCw size={13} /> {ingestMut.isPending ? 'Syncing…' : 'Sync now'}
+          onClick={() => ingestMut.mutate()} disabled={ingestRunning}
+          title="Pull the latest Search Console data now (runs in the background)">
+          <RefreshCw size={13} /> {ingestRunning ? 'Syncing…' : 'Sync now'}
         </button>
         <button style={{ ...outlineBtn, padding: '5px 10px', fontSize: 12 }}
           title="Pull ~16 months of history in the background"

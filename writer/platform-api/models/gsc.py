@@ -60,6 +60,16 @@ class SyncRun(BaseModel):
 
 class IngestResponse(BaseModel):
     property_id: UUID
-    status: Literal["ok", "failed"]
-    rows: int
+    status: str  # "queued" (enqueued) | "ok" | "failed"
+    job_id: Optional[UUID] = None
+    rows: int = 0
+    error: Optional[str] = None
+
+
+class IngestJobStatus(BaseModel):
+    """Poll payload for an enqueued GSC ingest so the UI can track it to
+    completion (mirrors the async_jobs row)."""
+    job_id: UUID
+    status: str  # pending | running | complete | failed
+    rows: int = 0
     error: Optional[str] = None
