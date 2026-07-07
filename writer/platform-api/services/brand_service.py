@@ -545,27 +545,22 @@ def get_report_status(client_id: str, job_id: str) -> dict:
 
 def _organic_tracked_keywords(supabase, client_id: str) -> list[str]:
     """Distinct active organic rank-tracker keywords for a client, original
-    casing preserved, case-insensitively de-duped. tracked_keywords is keyed to
-    gsc_properties (not the client), so resolve the client's properties first.
-    Best-effort: no properties / read error → empty list."""
+    casing preserved, case-insensitively de-duped. tracked_keywords is anchored
+    directly to the client (property_id is often null for GSC/DataForSEO-fallback
+    keywords), so read by client_id — matching the rank tracker's own canonical
+    read in rank_materialize. Best-effort: no keywords / read error → empty list."""
     out: list[str] = []
     seen: set[str] = set()
     try:
-        props = (
-            supabase.table("gsc_properties").select("id")
-            .eq("client_id", client_id).execute().data
+        rows = (
+            supabase.table("tracked_keywords").select("keyword")
+            .eq("client_id", client_id).eq("active", True).execute().data
         ) or []
-        prop_ids = [p["id"] for p in props if p.get("id")]
-        if prop_ids:
-            rows = (
-                supabase.table("tracked_keywords").select("keyword")
-                .in_("property_id", prop_ids).eq("active", True).execute().data
-            ) or []
-            for r in rows:
-                kw = (r.get("keyword") or "").strip()
-                if kw and kw.lower() not in seen:
-                    seen.add(kw.lower())
-                    out.append(kw)
+        for r in rows:
+            kw = (r.get("keyword") or "").strip()
+            if kw and kw.lower() not in seen:
+                seen.add(kw.lower())
+                out.append(kw)
     except Exception:  # pragma: no cover - best-effort
         pass
     return out
