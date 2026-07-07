@@ -424,6 +424,25 @@ def test_stage_add_task_matches_assignee_and_flags_unknown(monkeypatch):
     assert outcome == "confirm"
     assert staged["assignee_gid"] == "g1"
     assert "Ivy Gervacio" in staged["_confirm"]
+    assert staged["due_date"] is None
+    assert "due" not in staged["_confirm"]
+
+    # A valid due date is echoed in the confirm and carried on the staged args.
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_add_task(
+            "c1", {"task_name": "Audit citations", "assignee": "Ivy", "due_date": "2026-12-31"}
+        )
+    )
+    assert outcome == "confirm"
+    assert staged["due_date"] == "2026-12-31"
+    assert "due 2026-12-31" in staged["_confirm"]
+
+    # A malformed due date is rejected before anything is staged.
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_add_task("c1", {"task_name": "Audit citations", "due_date": "Friday"})
+    )
+    assert outcome == "reply"
+    assert "YYYY-MM-DD" in reply
 
     outcome, staged = asyncio.run(
         slack_assistant._stage_add_task("c1", {"task_name": "Audit citations", "assignee": "Bob"})
