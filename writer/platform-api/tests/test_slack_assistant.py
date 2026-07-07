@@ -197,6 +197,46 @@ def test_action_tools_match_registry():
     assert slack_assistant._ACTIONS["rebuild_action_plan"]["paid"] is False
     assert all(slack_assistant._ACTIONS[k]["paid"] for k in
                ("run_maps_scan", "run_gsc_research", "run_ai_visibility_scan"))
+    # the Asana push isn't API spend but still confirm-gated (creates real
+    # tasks) — with its own confirm wording.
+    push = slack_assistant._ACTIONS["push_task_plan"]
+    assert push["paid"] is True
+    assert "Asana" in push["note"]
+
+
+def test_push_task_plan_action_guards_and_enqueues(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from services import asana_monthly, asana_push, asana_service
+
+    monkeypatch.setattr(asana_service, "is_configured", lambda: True)
+    monkeypatch.setattr(asana_monthly, "get_project_gid", lambda cid: "777")
+
+    # no plan row → guidance, nothing enqueued
+    supabase = MagicMock()
+    chain = supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute
+    chain.return_value.data = []
+    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+    enqueued = []
+    monkeypatch.setattr(asana_push, "enqueue_asana_push", lambda cid, pid: enqueued.append((cid, pid)))
+    out = slack_assistant._act_push_task_plan("c1")
+    assert "No monthly task plan" in out and not enqueued
+
+    # empty plan → guidance, nothing enqueued
+    chain.return_value.data = [{"id": "p1", "month": "2026-07-01", "plan": {"tasks": []}}]
+    out = slack_assistant._act_push_task_plan("c1")
+    assert "no task lines" in out and not enqueued
+
+    # real plan → enqueued
+    chain.return_value.data = [{"id": "p1", "month": "2026-07-01", "plan": {"tasks": [{"task_type": "das_v2"}]}}]
+    out = slack_assistant._act_push_task_plan("c1")
+    assert enqueued == [("c1", "p1")]
+    assert "Pushing the latest task plan" in out
+
+    # unmapped project → guidance
+    monkeypatch.setattr(asana_monthly, "get_project_gid", lambda cid: None)
+    out = slack_assistant._act_push_task_plan("c1")
+    assert "no Asana project mapped" in out
 
 
 def test_format_context_is_json_with_client():
