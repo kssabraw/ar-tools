@@ -111,9 +111,11 @@ _SYSTEM = (
     "AI Visibility scan, or a strategist review; generate a client report "
     "(generate_client_report — optionally delivered to the client per their report "
     "settings); push the latest monthly task plan to Asana.\n"
-    "- Asana board: add_asana_task (extract the task name, assignee and any detail "
-    "from the message), remove_asana_task / complete_asana_task (pass the task name "
-    "the teammate used).\n"
+    "- Asana board: add_asana_task (extract the task name and assignee from the "
+    "message, and put the relevant context in notes — including findings from "
+    "earlier in this conversation, e.g. a review insight or data point the task "
+    "acts on, so the assignee knows WHY), remove_asana_task / complete_asana_task "
+    "(pass the task name the teammate used).\n"
     "- Client profile (the Setup page): update_client_profile (website URL, GSC "
     "property, business location, monthly retainer, client type, SAB flag) and "
     "add_target_cities / remove_target_cities for the Local SEO target-city list.\n"
@@ -1541,7 +1543,7 @@ _ACTIONS: dict[str, dict] = {
             "properties": {
                 "task_name": {"type": "string", "description": "The task's name, verbatim from the teammate."},
                 "assignee": {"type": "string", "description": "Person to assign it to (first or full name), if the teammate named one."},
-                "notes": {"type": "string", "description": "Any extra detail the teammate gave, for the task description."},
+                "notes": {"type": "string", "description": "Detail for the task description — from the message OR from earlier in the conversation (e.g. the research finding, review insight, or data point the task is based on, so the assignee has the context)."},
             },
             "required": ["task_name"],
         },
