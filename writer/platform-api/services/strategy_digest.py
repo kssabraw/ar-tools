@@ -306,6 +306,11 @@ def _prov_client(supabase, client_id: str, today: date, now: datetime) -> Option
         "target_cities": (c.get("target_cities") or [])[:12],
         "gbp": {
             "business_name": gbp.get("business_name"),
+            "address": gbp.get("address"),
+            "latitude": gbp.get("latitude"),
+            "longitude": gbp.get("longitude"),
+            "phone": gbp.get("phone"),
+            "google_maps_uri": gbp.get("google_maps_uri"),
             "category": gbp.get("gbp_category"),
             "categories": (gbp.get("gbp_categories") or [])[:6],
             "rating": gbp.get("gbp_rating"),

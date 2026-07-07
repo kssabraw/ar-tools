@@ -125,6 +125,139 @@ def test_build_context_assembles_isolates_and_omits(monkeypatch):
     assert ctx == {"alpha": {"ok": True}}  # empty omitted, failing one isolated
 
 
+def test_ctx_setup_exposes_full_gbp_profile():
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    supabase = MagicMock()
+    supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+        {
+            "website_url": "https://firstclassroofing.com",
+            "gbp_place_id": "ChIJabc123",
+            "gbp": {
+                "business_name": "First Class Roofing",
+                "address": "123 Main St, Wooster, OH 44691",
+                "latitude": 40.805,
+                "longitude": -81.935,
+                "phone": "(330) 555-0100",
+                "gbp_category": "Roofing contractor",
+                "gbp_categories": ["Roofing contractor", "Gutter service"],
+                "gbp_rating": 4.9,
+                "gbp_review_count": 120,
+                "reviews": [{"text": "bulky — must not pass through"}],
+            },
+            "brand_voice": {"tone": "warm"},
+            "detected_icp": None,
+            "differentiators": None,
+            "icp_text": None,
+            "target_cities": ["Wooster", "Orrville"],
+            "retainer_monthly": 2500,
+            "is_sab": False,
+            "client_type": "local",
+        }
+    ]
+
+    out = slack_assistant._ctx_setup(supabase, "c1", date(2026, 7, 7))
+    gbp = out["gbp"]
+    assert gbp["address"] == "123 Main St, Wooster, OH 44691"
+    assert gbp["latitude"] == 40.805 and gbp["longitude"] == -81.935
+    assert gbp["phone"] == "(330) 555-0100"
+    assert gbp["place_id"] == "ChIJabc123"
+    assert gbp["rating"] == 4.9 and gbp["review_count"] == 120
+    assert "reviews" not in gbp  # bulky raw assets stay out
+    assert out["target_cities"] == ["Wooster", "Orrville"]
+    assert out["client_type"] == "local"
+    assert out["has_brand_voice"] is True
+
+
+def test_ctx_task_plan_maps_plan_lines():
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    supabase = MagicMock()
+    supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
+        {
+            "month": "2026-07-01",
+            "margin_used": 0.34,
+            "deployable": 850,
+            "spent": 700,
+            "remaining": 150,
+            "flags": ["capacity_capped"],
+            "plan": {
+                "diagnosis": {"deficient": ["referring_domains"]},
+                "tasks": [
+                    {"task_type": "citations", "label": "40 Citations", "quantity": 1,
+                     "unit_cost": 40.0, "line_cost": 40.0, "assignee": "Minda"},
+                ],
+            },
+        }
+    ]
+    out = slack_assistant._ctx_task_plan(supabase, "c1", date(2026, 7, 7))
+    assert out["deployable"] == 850
+    assert out["flags"] == ["capacity_capped"]
+    assert out["tasks"] == [
+        {"task": "40 Citations", "quantity": 1, "line_cost": 40.0, "assignee": "Minda"}
+    ]
+    assert out["diagnosis"] == {"deficient": ["referring_domains"]}
+
+
+def test_ctx_strategist_shapes_and_truncates():
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    supabase = MagicMock()
+    supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
+        {
+            "assessment": "x" * 2000,
+            "proposals": [{"title": f"P{i}", "status": "proposed", "requires": "approval",
+                           "rationale": "long text that must not pass through"} for i in range(12)],
+            "questions": [f"Q{i}" for i in range(9)],
+            "trigger": "scheduled",
+            "created_at": "2026-07-06T00:00:00Z",
+        }
+    ]
+    out = slack_assistant._ctx_strategist(supabase, "c1", date(2026, 7, 7))
+    assert len(out["assessment"]) == 1200
+    assert len(out["proposals"]) == 8
+    assert out["proposals"][0] == {"title": "P0", "status": "proposed", "requires": "approval"}
+    assert out["questions"] == [f"Q{i}" for i in range(5)]
+
+
+def test_stage_live_serp_requires_keyword():
+    import asyncio
+
+    outcome, reply = asyncio.run(slack_assistant._stage_live_serp("c1", {}))
+    assert outcome == "reply"
+    assert "keyword" in reply.lower()
+
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_live_serp("c1", {"keyword": "roof repair akron"})
+    )
+    assert outcome == "confirm"
+    assert "roof repair akron" in staged["_confirm"]
+
+
+def test_run_live_gsc_reports_unconfigured(monkeypatch):
+    import asyncio
+
+    from services import gsc_service
+
+    monkeypatch.setattr(gsc_service, "is_configured", lambda: False)
+    out = asyncio.run(slack_assistant._run_live_gsc("c1", {"dimension": "query"}))
+    assert "not configured" in out
+
+
+def test_context_providers_cover_all_modules():
+    keys = [k for k, _ in slack_assistant._CONTEXT_PROVIDERS]
+    for expected in (
+        "campaign_goals", "competitors", "forecast", "trends", "organic_rank",
+        "maps_geogrid", "ai_visibility", "content", "keyword_research",
+        "task_plan", "citations", "syndication", "reports", "sops", "asana",
+        "health", "strategist_review", "setup",
+    ):
+        assert expected in keys
+
+
 def test_format_history_labels_roles_and_skips_empty():
     out = slack_assistant.format_history([
         {"role": "user", "content": "how is Acme?"},
@@ -716,13 +849,25 @@ def test_create_with_continuation_resumes_pause_turn():
     done = NS(stop_reason="end_turn", content=[NS(type="text", text="answer")])
 
     api = FakeApi([paused, done])
-    resp = asyncio.run(slack_assistant._create_with_continuation(api, "sys", "q", []))
+    messages = [{"role": "user", "content": "q"}]
+    resp = asyncio.run(slack_assistant._create_with_continuation(api, "sys", messages, []))
     assert resp is done
     assert len(api.calls) == 2
-    # the resumed request re-sends user + the paused assistant content
+    # the resumed request re-sends user + the paused assistant content — and the
+    # interim assistant turn lands in the SHARED list (outer tool loops rely on it)
     second = api.calls[1]["messages"]
     assert second[0] == {"role": "user", "content": "q"}
     assert second[1]["role"] == "assistant" and second[1]["content"] is paused.content
+    assert messages[1]["content"] is paused.content
+    # no tool_choice kwarg unless one was passed
+    assert "tool_choice" not in api.calls[0]
+
+    # tool_choice is forwarded on every call when given
+    api = FakeApi([NS(stop_reason="end_turn", content=[])])
+    asyncio.run(slack_assistant._create_with_continuation(
+        api, "sys", [{"role": "user", "content": "q"}], [], tool_choice={"type": "none"}
+    ))
+    assert api.calls[0]["tool_choice"] == {"type": "none"}
 
     # bounded: a turn that never finishes stops after 1 + N continuations
     always_paused = [
@@ -730,7 +875,9 @@ def test_create_with_continuation_resumes_pause_turn():
         for _ in range(slack_assistant._PAUSE_TURN_CONTINUATIONS + 5)
     ]
     api = FakeApi(always_paused)
-    resp = asyncio.run(slack_assistant._create_with_continuation(api, "sys", "q", []))
+    resp = asyncio.run(slack_assistant._create_with_continuation(
+        api, "sys", [{"role": "user", "content": "q"}], []
+    ))
     assert len(api.calls) == 1 + slack_assistant._PAUSE_TURN_CONTINUATIONS
     assert resp.stop_reason == "pause_turn"  # caller gets the last response as-is
 
@@ -751,3 +898,61 @@ def test_admin_actions_registered_confirm_gated_and_staged():
         assert callable(meta.get("stage")), name
         tool = next(t for t in slack_assistant._ACTION_TOOLS if t["name"] == name)
         assert tool["input_schema"]["properties"], name
+
+
+# ---------------------------------------------------------------------------
+# SOP grounding — the strategy-question gate + domain selection (pure).
+# ---------------------------------------------------------------------------
+def test_wants_sop_grounding_matches_strategy_shapes():
+    for q in (
+        "How is our strategy working?",
+        "Should we change the approach for Acme?",
+        "What's the forecast for next quarter?",
+        "What should we improve?",
+        "Why did rankings drop last week?",
+        "How do we grow GBP reviews?",
+        "Can we shift budget into link building?",
+        "how should we prioritize the action plan",
+    ):
+        assert slack_assistant.wants_sop_grounding(q), q
+
+
+def test_wants_sop_grounding_skips_pure_data_reads():
+    for q in (
+        "What's our rank for roof repair?",
+        "Show me the tracked keywords",
+        "Who are the top competitors?",
+        "add an asana task for Ivy",
+    ):
+        assert not slack_assistant.wants_sop_grounding(q), q
+    assert not slack_assistant.wants_sop_grounding("")
+    assert not slack_assistant.wants_sop_grounding(None)
+
+
+def test_sop_domains_from_question_keywords():
+    assert "maps" in slack_assistant.sop_domains("how do we win the local pack?", {})
+    assert "ai_visibility" in slack_assistant.sop_domains("why is ChatGPT not mentioning us", {})
+    assert "offpage" in slack_assistant.sop_domains("do we need more backlinks?", {})
+    assert "budget" in slack_assistant.sop_domains("where should the retainer go", {})
+    assert "content" in slack_assistant.sop_domains("plan more blog content", {})
+    assert "organic_drop" in slack_assistant.sop_domains("rankings fell — is this cannibalization?", {})
+
+
+def test_sop_domains_from_context_signals():
+    ctx = {
+        "organic_rank": {"open_drop_alerts": [{"keyword": "roof repair"}]},
+        "maps_geogrid": {"scans": []},
+        "ai_visibility": {"visibility": 40},
+    }
+    domains = slack_assistant.sop_domains("how is the campaign going", ctx)
+    assert {"organic_drop", "maps", "ai_visibility"} <= domains
+    # No alerts / modules → no context-driven domains.
+    assert slack_assistant.sop_domains("how is the campaign going", {"organic_rank": {}}) == set()
+
+
+def test_read_sop_tool_lists_docs():
+    tool = slack_assistant._read_sop_tool()
+    assert tool["name"] == "read_sop"
+    assert "doc" in tool["input_schema"]["properties"]
+    # The live SOP corpus is vendored into the service — the catalog should name it.
+    assert "How_To_Rank_In_Google_Maps_SOP.md" in tool["description"]

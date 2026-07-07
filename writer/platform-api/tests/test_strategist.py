@@ -285,7 +285,7 @@ def test_job_handler_fails_cleanly_while_disabled():
 
     job = {"id": "job-1", "payload": {"client_id": "c-1", "review_id": "r-1"}}
     with patch.object(strategist, "get_supabase", return_value=supabase):
-        asyncio.get_event_loop().run_until_complete(strategist.run_strategy_review_job(job))
+        asyncio.run(strategist.run_strategy_review_job(job))
 
     assert any(u.get("error") == "strategist_disabled" and u.get("status") == "failed" for u in updates)
     # Both the job row and the pre-created review row are closed out.
