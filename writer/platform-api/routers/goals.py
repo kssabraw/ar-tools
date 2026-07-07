@@ -72,10 +72,14 @@ async def update_goal(
     body: CampaignGoalUpdateRequest,
     auth: dict = Depends(require_auth),
 ) -> CampaignGoalResponse:
-    changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    # exclude_unset (not is-not-None) so an explicit null CLEARS a field —
+    # inline editing needs "remove the due date" to be expressible.
+    changes = body.model_dump(exclude_unset=True)
     if not changes:
         raise HTTPException(status_code=422, detail="nothing_to_update")
-    if "due_date" in changes:
+    if changes.get("label") is not None and not str(changes["label"]).strip():
+        raise HTTPException(status_code=422, detail="label_required")
+    if changes.get("due_date") is not None:
         changes["due_date"] = changes["due_date"].isoformat()
     changes["updated_at"] = "now()"
     try:
