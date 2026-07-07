@@ -669,9 +669,44 @@ def _prov_backlinks(supabase, client_id: str, today: date, now: datetime) -> Opt
     }
 
 
+def _prov_campaign_goals(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """The client's success targets with deterministic on-track reads —
+    the yardstick the strategist judges every other section against."""
+    from services import campaign_goals
+
+    assessed = campaign_goals.assess_goals(client_id, today=today)
+    if not assessed:
+        return None
+    return {
+        "goals": [
+            {
+                "label": g.get("label"),
+                "goal_type": g.get("goal_type"),
+                "keyword": g.get("keyword"),
+                "target_value": g.get("target_value"),
+                "target_position": g.get("target_position"),
+                "baseline_value": g.get("baseline_value"),
+                "current_value": g.get("current_value"),
+                "status": g.get("status"),  # computed deterministically — trust it
+                "progress_pct": g.get("progress_pct"),
+                "elapsed_pct": g.get("elapsed_pct"),
+                "due_date": g.get("due_date"),
+                "note": g.get("note"),
+            }
+            for g in assessed
+        ],
+        "counts": {
+            s: sum(1 for g in assessed if g.get("status") == s)
+            for s in ("achieved", "on_track", "behind", "overdue", "no_data", "manual")
+            if any(g.get("status") == s for g in assessed)
+        },
+    }
+
+
 # Registry — append a provider to feed the strategist a new module.
 _PROVIDERS: list[tuple[str, object]] = [
     ("client", _prov_client),
+    ("campaign_goals", _prov_campaign_goals),
     ("organic_rank", _prov_organic),
     ("open_alerts", _prov_open_alerts),
     ("action_plan", _prov_action_plan),

@@ -48,6 +48,9 @@ _SYSTEM = (
     "You are SerMastr, an in-house SEO strategist for an agency, answering a "
     "teammate in Slack. You are given a JSON object describing ONE client across "
     "the agency's SEO modules, keyed by module:\n"
+    "- campaign_goals: the client's success targets (rank, traffic, AI-visibility, "
+    "local-pack goals) with a deterministic status each — achieved/on_track/behind/"
+    "overdue.\n"
     "- organic_rank: tracked keywords with current rank + trend, open ranking-drop "
     "alerts, the latest reoptimization Action Plan, and Search Console opportunities.\n"
     "- maps_geogrid: local-pack / Google Maps geo-grid scan results (average rank, "
@@ -74,10 +77,13 @@ _SYSTEM = (
     "matching tool instead of answering. If they're only asking about results or "
     "anything else, answer normally — do NOT call a tool for a question.\n\n"
     "STRATEGIST BEHAVIOURS:\n"
-    "- 'How is the campaign going?' → a short cross-module health read: lead with the "
-    "overall verdict, then the 2-3 biggest wins and the 2-3 biggest concerns, each "
-    "with its number (rank moves, pack presence, AI visibility, open alerts). Note "
-    "any module with no data as not-yet-set-up rather than silently skipping it.\n"
+    "- 'How is the campaign going?' → a short cross-module health read: when "
+    "campaign_goals exist, LEAD with progress against them (their status field — "
+    "achieved/on_track/behind/overdue — is computed deterministically; report it, "
+    "never re-derive it), then the 2-3 biggest wins and the 2-3 biggest concerns, "
+    "each with its number (rank moves, pack presence, AI visibility, open alerts). "
+    "Note any module with no data as not-yet-set-up rather than silently skipping "
+    "it. No goals set → say so and suggest adding them on the Campaign Goals page.\n"
     "- 'What should we improve/tweak?' → concrete, prioritized recommendations "
     "grounded ONLY in the data (e.g. striking-distance keywords to reoptimize, weak "
     "geo-grid areas needing location pages, invisible AI keywords, open drop alerts "
@@ -511,8 +517,33 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+def _ctx_campaign_goals(supabase, client_id: str, today: date) -> Optional[dict]:
+    """The client's success targets with deterministic status — lets 'how is
+    the campaign going' lead with progress vs what was promised."""
+    from services import campaign_goals
+
+    assessed = campaign_goals.assess_goals(client_id, today=today)
+    if not assessed:
+        return None
+    return {
+        "goals": [
+            {
+                "label": g.get("label"),
+                "status": g.get("status"),
+                "current_value": g.get("current_value"),
+                "target_value": g.get("target_value"),
+                "progress_pct": g.get("progress_pct"),
+                "due_date": g.get("due_date"),
+                "note": g.get("note"),
+            }
+            for g in assessed
+        ],
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
+    ("campaign_goals", _ctx_campaign_goals),
     ("organic_rank", _ctx_organic_rank),
     ("maps_geogrid", _ctx_maps),
     ("ai_visibility", _ctx_ai_visibility),

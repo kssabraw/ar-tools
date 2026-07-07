@@ -1348,6 +1348,30 @@ export interface BrandSearchResponse {
   totals: BrandSearchTotals
 }
 
+// Campaign goals — per-client success targets; status computed server-side
+// on every read (achieved | on_track | behind | overdue | no_data | manual).
+export interface CampaignGoal {
+  id: string
+  client_id: string
+  goal_type: string
+  label: string
+  keyword: string | null
+  target_value: number | null
+  target_position: number | null
+  due_date: string | null
+  baseline_value: number | null
+  baseline_date: string | null
+  achieved_at: string | null
+  active: boolean
+  notes: string | null
+  created_at: string | null
+  current_value: number | null
+  status: string | null
+  progress_pct: number | null
+  elapsed_pct: number | null
+  note: string | null
+}
+
 // Asana task integration.
 export interface AsanaProjectMapping {
   client_id: string
