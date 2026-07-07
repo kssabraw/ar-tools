@@ -42,6 +42,16 @@ _SLACK_POST_URL = "https://slack.com/api/chat.postMessage"
 _SLACK_REPLIES_URL = "https://slack.com/api/conversations.replies"
 _TIMEOUT = 20.0
 _LLM_TIMEOUT = 60.0  # bound the Claude call so a hung request can't pin the task
+# The SDK default (2 retries, ~2s total backoff) can't outlast a burst of
+# long-running background LLM jobs (maps reports, strategist runs) holding the
+# account's concurrent-connection budget — an interactive turn should back off
+# and wait rather than surface an error.
+_LLM_MAX_RETRIES = 5
+_BUSY_REPLY = (
+    "I'm briefly at capacity — several background AI jobs are running right now. "
+    "Give it a minute and ask me again."
+)
+_CAPACITY_STATUS_CODES = (429, 529)  # rate-limited / API overloaded
 _THREAD_HISTORY_LIMIT = 12  # prior thread messages folded into context for continuity
 _MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
 _SIG_MAX_SKEW_SECONDS = 60 * 5  # reject events older than 5 min (replay guard)
@@ -1717,7 +1727,11 @@ async def interpret(
                 "section):\n" + sops
             )
     user = "\n\n".join(blocks)
-    api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
+    api = anthropic.AsyncAnthropic(
+        api_key=settings.anthropic_api_key,
+        timeout=_LLM_TIMEOUT,
+        max_retries=_LLM_MAX_RETRIES,
+    )
     messages: list[dict] = [{"role": "user", "content": user}]
     tools = _ACTION_TOOLS + [_read_sop_tool(), _LIVE_GSC_TOOL]
     # Bounded tool loop: read_sop / fetch_live_gsc calls are answered
@@ -1726,14 +1740,25 @@ async def interpret(
     max_rounds = max(settings.slack_assistant_sop_rounds, _LIVE_GSC_ROUNDS)
     for round_no in range(max_rounds + 1):
         final_round = round_no == max_rounds
-        resp = await api.messages.create(
-            model=settings.slack_assistant_model,
-            max_tokens=settings.slack_assistant_max_tokens,
-            system=_SYSTEM + (_WEB_STYLE if style == "web" else ""),
-            tools=tools,
-            **({"tool_choice": {"type": "none"}} if final_round else {}),
-            messages=messages,
-        )
+        try:
+            resp = await api.messages.create(
+                model=settings.slack_assistant_model,
+                max_tokens=settings.slack_assistant_max_tokens,
+                system=_SYSTEM + (_WEB_STYLE if style == "web" else ""),
+                tools=tools,
+                **({"tool_choice": {"type": "none"}} if final_round else {}),
+                messages=messages,
+            )
+        except anthropic.APIStatusError as exc:
+            # Capacity exhaustion (retries included) is transient, not a fault —
+            # degrade to a friendly "try again shortly" instead of erroring the turn.
+            if exc.status_code in _CAPACITY_STATUS_CODES:
+                logger.warning(
+                    "assistant_llm_capacity",
+                    extra={"status_code": exc.status_code, "client_id": client.get("id")},
+                )
+                return ("text", _BUSY_REPLY)
+            raise
         for b in resp.content:
             if getattr(b, "type", None) == "tool_use" and b.name in _ACTIONS:
                 return ("action", {"name": b.name, "args": dict(b.input or {})})
