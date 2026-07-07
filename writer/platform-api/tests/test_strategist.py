@@ -318,6 +318,46 @@ def test_opportunity_sweep_targets_quiet_clients_not_recently_run(monkeypatch):
     assert strategist.clients_due_opportunity_sweep({"a"}, 28) == {"c"}
 
 
+def test_clients_scheduled_within_durable_weekly_guard(monkeypatch):
+    from unittest.mock import MagicMock
+
+    # days <= 0 → disabled, no DB touched
+    assert strategist.clients_scheduled_within(0) == set()
+
+    supabase = MagicMock()
+    chain = supabase.table.return_value
+    chain.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = [
+        {"client_id": "a"}, {"client_id": "b"}, {"client_id": None},
+    ]
+    monkeypatch.setattr(strategist, "get_supabase", lambda: supabase)
+
+    assert strategist.clients_scheduled_within(6) == {"a", "b"}
+    # scoped to the scheduled trigger so escalation/on-demand runs don't count
+    chain.select.return_value.eq.assert_called_once_with("trigger", "scheduled")
+
+
+def test_weekly_pass_skips_active_clients_run_this_week(monkeypatch):
+    from unittest.mock import MagicMock
+    from config import settings
+
+    monkeypatch.setattr(settings, "strategist_enabled", True)
+    monkeypatch.setattr(strategist, "clients_with_active_signals", lambda: {"a", "b"})
+    # b already had a scheduled run this week → only a is still due
+    monkeypatch.setattr(strategist, "clients_scheduled_within", lambda days: {"b"})
+    monkeypatch.setattr(
+        strategist, "clients_due_opportunity_sweep", lambda active, interval: set()
+    )
+    enqueued: list[tuple] = []
+    monkeypatch.setattr(
+        strategist,
+        "enqueue_strategy_review",
+        lambda cid, trigger="on_demand": (enqueued.append((cid, trigger)), "rid")[1],
+    )
+
+    assert strategist.enqueue_due_strategy_reviews() == 1
+    assert enqueued == [("a", "scheduled")]
+
+
 def test_opportunity_sweep_disabled_and_no_quiet(monkeypatch):
     from unittest.mock import MagicMock
 

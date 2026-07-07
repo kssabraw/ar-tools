@@ -687,6 +687,26 @@ def clients_due_opportunity_sweep(active: set[str], interval_days: int) -> set[s
     return quiet - recently_run
 
 
+def clients_scheduled_within(days: int) -> set[str]:
+    """Client ids with a `scheduled`-trigger strategist run inside the last
+    `days` days. The durable "already ran this week" guard: the weekly weekday
+    gate lives in process memory, so without this a redeploy on the strategist
+    weekday re-fires the whole active-signal pass. `days <= 0` disables."""
+    if days <= 0:
+        return set()
+    supabase = get_supabase()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return {
+        r["client_id"]
+        for r in (
+            supabase.table("strategy_reviews").select("client_id")
+            .eq("trigger", "scheduled")
+            .gte("created_at", cutoff).execute()
+        ).data or []
+        if r.get("client_id")
+    }
+
+
 def enqueue_due_strategy_reviews() -> int:
     """Weekly scheduler pass: one scheduled strategist run per active-signal
     client, plus quiet clients due the opportunity sweep (see
@@ -695,7 +715,15 @@ def enqueue_due_strategy_reviews() -> int:
     if not settings.strategist_enabled:
         return 0
     active = clients_with_active_signals()
-    due = set(active)
+    # Durable weekly guard: drop active clients that already had a scheduled run
+    # this week so a redeploy on the strategist weekday can't re-fire the pass.
+    # (Quiet clients are already interval-gated inside the opportunity sweep.)
+    try:
+        recent = clients_scheduled_within(settings.strategist_weekly_interval_days)
+    except Exception as exc:  # a failed read must never silence the weekly pass
+        logger.warning("strategist.recent_scheduled_read_failed", extra={"error": str(exc)})
+        recent = set()
+    due = set(active) - recent
     try:
         due |= clients_due_opportunity_sweep(
             active, settings.strategist_opportunity_interval_days

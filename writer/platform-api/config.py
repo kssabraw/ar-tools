@@ -571,6 +571,14 @@ class Settings(BaseSettings):
     # strategist reads a fresh Action Plan (0=Mon..6=Sun). Active-signal
     # clients only (spec §9 default).
     strategist_weekly_weekday: int = 1
+    # Durable "already ran this week" guard for the scheduled pass. The weekly
+    # weekday gate lives in process memory (`last_strategist_date`), so a
+    # redeploy/restart on the strategist weekday would otherwise re-fire the
+    # whole active-signal pass. A client with a `scheduled` run inside this many
+    # days is skipped, so scheduled runs stay at most weekly regardless of how
+    # often the process restarts. 6 (not 7) leaves a day of margin so next
+    # week's legitimate run at the same weekday isn't suppressed. 0 disables.
+    strategist_weekly_interval_days: int = 6
     # Proactive opportunity sweep: a QUIET client (no active signals) still gets
     # a scheduled run when its last strategist run is older than this — so
     # opportunity mining (review themes, competitor gaps, coverage holes)
