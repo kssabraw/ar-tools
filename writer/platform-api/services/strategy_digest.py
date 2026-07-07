@@ -823,35 +823,163 @@ def review_snippets(gbp, limit: int = 10, clip: int = 240) -> list[dict]:
     return out
 
 
+def competitor_review_sets(
+    rows: list[dict], max_competitors: int = 4, per_competitor: int = 5, clip: int = 200
+) -> list[dict]:
+    """Per-competitor review snippets from raw competitor_gbp_profiles rows. Pure.
+
+    Rows arrive newest-capture-first; the first occurrence per place_id is the
+    latest capture. Competitors are ordered by local-pack presence (top3 then
+    found pins — the ones that matter most first), competitors with no review
+    text are skipped."""
+    seen: set = set()
+    latest: list[dict] = []
+    for r in rows or []:
+        pid = r.get("place_id")
+        if not pid or pid in seen:
+            continue
+        seen.add(pid)
+        latest.append(r)
+    latest.sort(key=lambda r: (-(r.get("top3_pins") or 0), -(r.get("found_pins") or 0)))
+    out: list[dict] = []
+    for r in latest:
+        snippets = review_snippets(r.get("profile") or {}, limit=per_competitor, clip=clip)
+        if not snippets:
+            continue
+        out.append({"competitor": r.get("name"), "reviews": snippets})
+        if len(out) >= max_competitors:
+            break
+    return out
+
+
 def _prov_reviews(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
-    """The client's stored GBP reviews, verbatim — the customer's own words.
+    """Customer voice, verbatim — the client's GBP reviews AND the top local-pack
+    competitors' reviews (from the competitor_gbp captures).
 
     Lets the strategist notice recurring themes ("every review mentions the
-    free parking") and propose content that leverages them (GBP posts, page
-    copy angles) instead of a human having to spot the pattern."""
+    free parking") and positioning gaps (what competitors' customers praise
+    that the client doesn't market) instead of a human having to spot them."""
     rows = (
         supabase.table("clients").select("gbp").eq("id", client_id).limit(1).execute()
     ).data
     snippets = review_snippets((rows[0].get("gbp") if rows else None) or {})
-    if not snippets:
+
+    comp_rows = (
+        supabase.table("competitor_gbp_profiles")
+        .select("place_id, name, found_pins, top3_pins, profile, captured_at")
+        .eq("client_id", client_id)
+        .order("captured_at", desc=True)
+        .limit(60)
+        .execute()
+    ).data or []
+    competitor_sets = competitor_review_sets(comp_rows)
+
+    if not snippets and not competitor_sets:
         return None
-    return {
+    out: dict = {
         "note": (
-            "What customers say in their own words — recent Google reviews from the "
-            "client's GBP. A theme recurring across several reviews (a praised amenity, "
-            "speed, a differentiator) is marketing raw material the campaign may be "
-            "under-using. TRAP: this set is filtered to high ratings at capture, so use "
-            "it to find what customers PRAISE — never to assess overall sentiment or "
+            "What customers say in their own words — recent Google reviews for the "
+            "client and (when captured) its top local-pack competitors. A theme "
+            "recurring across the CLIENT's reviews (a praised amenity, speed, a "
+            "differentiator) is marketing raw material the campaign may be under-using. "
+            "A theme recurring in a COMPETITOR's reviews is either a positioning gap "
+            "(they have it, the client can't match it) or an unmatched weapon (the "
+            "client has it too but doesn't market it — check the client's own reviews "
+            "and ICP). TRAP: all sets are filtered to high ratings at capture, so use "
+            "them to find what customers PRAISE — never to assess overall sentiment or "
             "detect complaints (absence of complaints here means nothing)."
         ),
-        "reviews": snippets,
     }
+    if snippets:
+        out["client_reviews"] = snippets
+    if competitor_sets:
+        out["competitor_reviews"] = competitor_sets
+    return out
+
+
+def _prov_gbp_audit(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """Deterministic GBP audit vs captured competitor profiles — profile-
+    completeness gaps, category gaps (categories most competitors carry that the
+    client doesn't), and the review deficit vs the competitor median. Pure gap
+    data the strategist can aim proposals at."""
+    from services import competitor_gbp, gbp_audit
+
+    rows = supabase.table("clients").select("gbp").eq("id", client_id).limit(1).execute().data
+    gbp = (rows[0].get("gbp") if rows else None) or {}
+    if not gbp:
+        return None
+    audit = gbp_audit.audit(gbp, competitor_gbp.latest_profiles(client_id))
+    return {
+        "note": (
+            "Deterministic audit of the client's GBP vs its captured local-pack "
+            "competitors. category_gaps = categories on at least half the competitors "
+            "but missing from the client (usually worth adding). review_gap = deficit "
+            "vs the competitor median (the Recipe Engine funds reviews first when "
+            "gating). gaps = failed profile-completeness checks. Remember the module "
+            "card: the GBP description is an AI-visibility factor, not a local-pack "
+            "ranking factor."
+        ),
+        "score": audit.get("score"),
+        "gaps": audit.get("gaps"),
+        "category_gaps": audit.get("category_gaps"),
+        "review_gap": audit.get("review_gap"),
+        "competitor_count": audit.get("competitor_count"),
+    }
+
+
+def _prov_content(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """What the campaign has actually produced — the coverage map to hold
+    against ICP/differentiators, review themes, and competitor content when
+    hunting gaps."""
+    out: dict = {}
+    by_type: dict[str, int] = {}
+    for t in ("blog_post", "service_page", "location_page"):
+        n = (
+            supabase.table("runs")
+            .select("id", count="exact", head=True)
+            .eq("client_id", client_id).eq("status", "complete").eq("content_type", t)
+            .execute()
+        ).count or 0
+        if n:
+            by_type[t] = n
+    if by_type:
+        out["completed_runs_by_type"] = by_type
+        out["recent_runs"] = [
+            {"keyword": r.get("keyword"), "content_type": r.get("content_type")}
+            for r in (
+                supabase.table("runs").select("keyword, content_type")
+                .eq("client_id", client_id).eq("status", "complete")
+                .order("created_at", desc=True).limit(8).execute()
+            ).data or []
+        ]
+
+    pages = (
+        supabase.table("local_seo_pages").select("keyword, page_title, published_doc_id")
+        .eq("client_id", client_id).is_("deleted_at", "null")
+        .order("created_at", desc=True).limit(200).execute()
+    ).data or []
+    if pages:
+        out["local_seo_pages_saved"] = len(pages)
+        out["local_seo_pages_published"] = sum(1 for p in pages if p.get("published_doc_id"))
+        out["recent_local_seo_keywords"] = [p.get("keyword") for p in pages[:8] if p.get("keyword")]
+
+    if not out:
+        return None
+    out["note"] = (
+        "The campaign's content inventory (counts + most recent targets). Hold it "
+        "against the ICP/differentiators, review themes, and competitors' recent_pages: "
+        "a service the ICP names with no page, a praised theme with no content, or a "
+        "competitor content push with no answer is a coverage gap worth a proposal."
+    )
+    return out
 
 
 # Registry — append a provider to feed the strategist a new module.
 _PROVIDERS: list[tuple[str, object]] = [
     ("client", _prov_client),
     ("reviews", _prov_reviews),
+    ("gbp_audit", _prov_gbp_audit),
+    ("content", _prov_content),
     ("campaign_goals", _prov_campaign_goals),
     ("competitors", _prov_competitors),
     ("forecast", _prov_forecast),

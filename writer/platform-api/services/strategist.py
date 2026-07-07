@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from config import settings
@@ -152,13 +152,23 @@ declining + heavy off-topic content = vector confusion, not three separate probl
 when the evidence points elsewhere, with the evidence.
 4. Escalation briefs — when a 6-week episode escalates, prepare the case file: what was \
 tried, what moved, what you recommend the seniors decide.
-5. Customer-voice leverage — the digest's reviews section carries recent Google reviews \
-verbatim. A theme recurring across several of them (a praised amenity, response speed, a \
-differentiator like free parking) is marketing raw material the campaign may be under-using: \
-propose the concrete content that leverages it — GBP posts, page-copy angles, AEO/AI-answer \
-content — naming the theme and how many reviews mention it. Heed the section's TRAP note \
-(the set is high-rating-filtered); cite the owning SOP as usual, and if no SOP owns the \
-action surface it as a question.
+5. Proactive opportunity mining — problems announce themselves (alerts, drops, behind \
+goals); OPPORTUNITIES don't, and finding them is your job. Sweep EVERYTHING in the digest \
+for under-used raw material and unexploited gaps, cross-referencing sections:
+  - Customer voice (reviews): a theme recurring in the CLIENT's reviews (a praised amenity, \
+speed, a differentiator like free parking) is marketing material — propose the content that \
+leverages it (GBP posts, page-copy angles, AEO/AI-answer content), naming the theme and \
+count. A theme in a COMPETITOR's reviews is a positioning gap or an unmatched weapon.
+  - Competitive intelligence (competitors + gbp_audit): a competitor's recent_pages push \
+with no answer from us, category_gaps most competitors carry, the review deficit, an \
+organic-overlap keyword they hold that we don't cover — each maps to a concrete proposal.
+  - Coverage (content vs client): hold the content inventory against the ICP/ \
+differentiators and target_cities — a service the ICP names with no page, a served city \
+with no location page, a differentiator no content mentions, is a gap worth a proposal.
+  - Timing (trends + forecast): rising seasonal demand is when content/GBP pushes land \
+hardest; quick-win keywords say where effort converts fastest.
+Heed each section's TRAP note; propose only what the evidence in front of you supports; \
+cite the owning SOP as usual, and if no SOP owns the action surface it as a question.
 Do NOT restate the Action Plan back — it's in your input. Add judgment, not inventory. An \
 empty review is a valid review: if the deterministic layer already has it right, say so \
 briefly and emit no proposals.
@@ -641,13 +651,56 @@ def clients_with_active_signals() -> set[str]:
     return ids
 
 
+def clients_due_opportunity_sweep(active: set[str], interval_days: int) -> set[str]:
+    """QUIET clients due a proactive opportunity run.
+
+    The active-signal gate keys the weekly pass to open PROBLEMS — but the
+    strategist also mines opportunities (review themes, competitor gaps,
+    coverage holes), and those exist precisely on clients with nothing on
+    fire. Quiet clients therefore still get a scheduled run when their last
+    strategist run (any trigger) is older than `interval_days` — proactive
+    mining reaches every client at least ~monthly, at a bounded cost of one
+    extra run per quiet client per interval. `interval_days <= 0` disables."""
+    if interval_days <= 0:
+        return set()
+    supabase = get_supabase()
+    quiet = {
+        r["id"]
+        for r in (
+            supabase.table("clients").select("id").eq("archived", False).execute()
+        ).data or []
+    } - active
+    if not quiet:
+        return set()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=interval_days)).isoformat()
+    recently_run = {
+        r["client_id"]
+        for r in (
+            supabase.table("strategy_reviews").select("client_id")
+            .gte("created_at", cutoff).execute()
+        ).data or []
+        if r.get("client_id")
+    }
+    return quiet - recently_run
+
+
 def enqueue_due_strategy_reviews() -> int:
     """Weekly scheduler pass: one scheduled strategist run per active-signal
-    client. No-ops entirely while strategist_enabled is false."""
+    client, plus quiet clients due the opportunity sweep (see
+    `clients_due_opportunity_sweep`). No-ops entirely while strategist_enabled
+    is false."""
     if not settings.strategist_enabled:
         return 0
+    active = clients_with_active_signals()
+    due = set(active)
+    try:
+        due |= clients_due_opportunity_sweep(
+            active, settings.strategist_opportunity_interval_days
+        )
+    except Exception as exc:  # the sweep must never break the weekly pass
+        logger.warning("strategist.opportunity_sweep_failed", extra={"error": str(exc)})
     enqueued = 0
-    for client_id in sorted(clients_with_active_signals()):
+    for client_id in sorted(due):
         if enqueue_strategy_review(client_id, trigger="scheduled"):
             enqueued += 1
     if enqueued:

@@ -527,6 +527,12 @@ class Settings(BaseSettings):
     # strategist reads a fresh Action Plan (0=Mon..6=Sun). Active-signal
     # clients only (spec §9 default).
     strategist_weekly_weekday: int = 1
+    # Proactive opportunity sweep: a QUIET client (no active signals) still gets
+    # a scheduled run when its last strategist run is older than this — so
+    # opportunity mining (review themes, competitor gaps, coverage holes)
+    # reaches every client ~monthly, not just clients with open problems.
+    # Bounded: ≤1 extra run per quiet client per interval; 0 disables.
+    strategist_opportunity_interval_days: int = 28
     # Input budget per run before drill-downs (spec §2: ≤ ~25k tokens). The
     # digest assembler converts at ~4 chars/token and splits this between the
     # signal digest and the SOP block.
