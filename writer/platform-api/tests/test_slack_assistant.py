@@ -202,6 +202,122 @@ def test_action_tools_match_registry():
     push = slack_assistant._ACTIONS["push_task_plan"]
     assert push["paid"] is True
     assert "Asana" in push["note"]
+    # the task-management actions are parameterized + staged, and their tool
+    # schemas carry the params so Claude can fill them.
+    for name in ("add_asana_task", "remove_asana_task", "complete_asana_task"):
+        meta = slack_assistant._ACTIONS[name]
+        assert meta["paid"] is True and callable(meta["stage"])
+        tool = next(t for t in slack_assistant._ACTION_TOOLS if t["name"] == name)
+        assert "task_name" in tool["input_schema"]["properties"]
+        assert tool["input_schema"]["required"] == ["task_name"]
+
+
+# ---------------------------------------------------------------------------
+# conversational task management
+# ---------------------------------------------------------------------------
+def test_match_open_tasks_exact_beats_substring_and_skips_completed():
+    tasks = [
+        {"gid": "1", "name": "Citations", "completed": False},
+        {"gid": "2", "name": "Citations — batch 2", "completed": False},
+        {"gid": "3", "name": "Citations — batch 3", "completed": True},
+    ]
+    # exact name → only that task, even though others contain the query
+    assert [t["gid"] for t in slack_assistant.match_open_tasks(tasks, "citations")] == ["1"]
+    # substring → open matches only (the completed batch 3 never surfaces)
+    assert [t["gid"] for t in slack_assistant.match_open_tasks(tasks, "batch")] == ["2"]
+    assert slack_assistant.match_open_tasks(tasks, "") == []
+    assert slack_assistant.match_open_tasks(tasks, "nothing") == []
+
+
+def test_stage_pick_task_resolves_disambiguates_and_guards(monkeypatch):
+    import asyncio
+
+    from services import asana_service
+
+    monkeypatch.setattr(slack_assistant, "_asana_ready", lambda cid: ("777", None))
+    tasks = [
+        {"gid": "t1", "name": "Fix GBP categories", "completed": False,
+         "assignee": {"name": "Ivy Gervacio"}},
+        {"gid": "t2", "name": "Fix citations", "completed": False, "assignee": None},
+    ]
+
+    async def fake_list(project_gid):
+        return tasks
+
+    monkeypatch.setattr(asana_service, "list_project_tasks", fake_list)
+
+    # one match → staged with the exact gid + a confirm naming task & assignee
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_pick_task("c1", {"task_name": "gbp"}, "permanently delete")
+    )
+    assert outcome == "confirm"
+    assert staged["task_gid"] == "t1"
+    assert "Fix GBP categories" in staged["_confirm"] and "Ivy Gervacio" in staged["_confirm"]
+
+    # several matches → immediate disambiguation reply, nothing staged
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_pick_task("c1", {"task_name": "fix"}, "permanently delete")
+    )
+    assert outcome == "reply" and "matches 2 open tasks" in reply
+
+    # no match → the open tasks are listed back
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_pick_task("c1", {"task_name": "zzz"}, "permanently delete")
+    )
+    assert outcome == "reply" and "Fix GBP categories" in reply
+
+    # unready Asana → the guard's guidance passes straight through
+    monkeypatch.setattr(slack_assistant, "_asana_ready", lambda cid: (None, "not set up"))
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_pick_task("c1", {"task_name": "gbp"}, "permanently delete")
+    )
+    assert outcome == "reply" and reply == "not set up"
+
+
+def test_stage_add_task_matches_assignee_and_flags_unknown(monkeypatch):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(slack_assistant, "_asana_ready", lambda cid: ("777", None))
+    supabase = MagicMock()
+    supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+        {"gid": "g1", "name": "Ivy Gervacio"},
+    ]
+    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_add_task("c1", {"task_name": "Audit citations", "assignee": "Ivy"})
+    )
+    assert outcome == "confirm"
+    assert staged["assignee_gid"] == "g1"
+    assert "Ivy Gervacio" in staged["_confirm"]
+
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_add_task("c1", {"task_name": "Audit citations", "assignee": "Bob"})
+    )
+    assert outcome == "confirm"
+    assert staged["assignee_gid"] is None
+    assert "couldn't match" in staged["_confirm"]
+
+    outcome, reply = asyncio.run(slack_assistant._stage_add_task("c1", {}))
+    assert outcome == "reply"
+
+
+def test_run_action_awaits_async_runners(monkeypatch):
+    import asyncio
+
+    async def async_runner(client_id, args=None):
+        return f"async:{client_id}"
+
+    def sync_runner(client_id, args=None):
+        return f"sync:{client_id}"
+
+    monkeypatch.setitem(slack_assistant._ACTIONS, "add_asana_task",
+                        {**slack_assistant._ACTIONS["add_asana_task"], "run": async_runner})
+    monkeypatch.setitem(slack_assistant._ACTIONS, "rebuild_action_plan",
+                        {**slack_assistant._ACTIONS["rebuild_action_plan"], "run": sync_runner})
+    assert asyncio.run(slack_assistant._run_action("add_asana_task", "c1", {})) == "async:c1"
+    assert asyncio.run(slack_assistant._run_action("rebuild_action_plan", "c1", None)) == "sync:c1"
 
 
 def test_push_task_plan_action_guards_and_enqueues(monkeypatch):

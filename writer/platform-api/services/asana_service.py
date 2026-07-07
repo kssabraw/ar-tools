@@ -515,6 +515,33 @@ async def add_task_to_section(section_gid: str, task_gid: str) -> Any:
     return await _post(f"/sections/{section_gid}/addTask", {"task": task_gid})
 
 
+async def _delete(path: str) -> None:
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        resp = await client.delete(f"{_BASE_URL}{path}", headers=_headers())
+        resp.raise_for_status()
+
+
+async def list_project_tasks(project_gid: str) -> list[dict]:
+    """Tasks in a project [{gid, name, completed, assignee, permalink_url}].
+
+    One page of 100 — enough for the conversational lookup this powers (a
+    month's board section is a handful of tasks; we don't paginate)."""
+    return await _get(
+        f"/projects/{project_gid}/tasks",
+        {"opt_fields": "name,completed,assignee.name,permalink_url", "limit": 100},
+    ) or []
+
+
+async def delete_task(task_gid: str) -> None:
+    """Permanently delete a task."""
+    await _delete(f"/tasks/{task_gid}")
+
+
+async def complete_task(task_gid: str) -> dict:
+    """Mark a task complete."""
+    return await _put(f"/tasks/{task_gid}", {"completed": True})
+
+
 async def get_project(project_gid: str) -> dict:
     """One project's basics — used to validate a pasted project GID at save
     time (a wrong number, e.g. a workspace id from the new Asana URL format,
