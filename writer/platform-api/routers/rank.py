@@ -61,6 +61,8 @@ from services import (
     dataforseo_rank,
     gsc_service,
     keyword_market,
+    rank_analysis,
+    rank_analysis_report,
     rank_location,
     rank_materialize,
     rank_report,
@@ -674,6 +676,106 @@ async def get_report(report_id: UUID, auth: dict = Depends(require_auth)) -> Gen
 @router.delete("/rank-reports/{report_id}", status_code=204, response_class=Response)
 async def delete_report(report_id: UUID, auth: dict = Depends(require_auth)) -> Response:
     get_supabase().table("rank_reports").delete().eq("id", str(report_id)).execute()
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# Organic Rank Analysis — the per-keyword deep-dive report (the organic
+# analogue of the Maps Local Rank Analysis report). Reuses the latest stored
+# SERP snapshot; generated on-demand here, plus auto on a rank-drop alert and
+# weekly per keyword (services/rank_analysis_report.py). The analysis blob is
+# loosely-typed JSONB, so these endpoints return plain dicts.
+# ---------------------------------------------------------------------------
+def _keyword_or_404(supabase, keyword_id: str) -> dict:
+    found = (
+        supabase.table("tracked_keywords")
+        .select("id, keyword, client_id").eq("id", keyword_id).limit(1).execute()
+    )
+    if not found.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    return found.data[0]
+
+
+@router.post("/tracked-keywords/{keyword_id}/analysis")
+async def generate_keyword_analysis(
+    keyword_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    """Enqueue an Organic Rank Analysis report for one keyword. Returns
+    ``needs_snapshot`` (without enqueueing) when no SERP snapshot exists yet —
+    the report analyzes the latest stored snapshot, so the caller captures one
+    first. Deduped: a pending report short-circuits to it."""
+    supabase = get_supabase()
+    k = _keyword_or_404(supabase, str(keyword_id))
+
+    snap = (
+        supabase.table("serp_snapshots").select("id")
+        .eq("keyword_id", str(keyword_id))
+        .in_("status", ["complete", "partial"]).limit(1).execute()
+    )
+    if not snap.data:
+        return {"status": "needs_snapshot",
+                "detail": "Capture a Competitive SERP Snapshot for this keyword first."}
+
+    report_id = rank_analysis_report.enqueue_rank_keyword_report(
+        k["client_id"], str(keyword_id), k["keyword"], trigger="on_demand"
+    )
+    if report_id is None:
+        existing = (
+            supabase.table("rank_keyword_reports").select("id")
+            .eq("keyword_id", str(keyword_id)).eq("status", "pending").limit(1).execute()
+        ).data
+        return {"status": "pending", "report_id": (existing[0]["id"] if existing else None),
+                "already_running": True}
+    return {"status": "pending", "report_id": report_id}
+
+
+@router.get("/tracked-keywords/{keyword_id}/analysis")
+async def get_latest_keyword_analysis(
+    keyword_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    """The newest Organic Rank Analysis report for a keyword (any status), or
+    ``{status: 'none'}`` if none has been generated."""
+    res = (
+        get_supabase().table("rank_keyword_reports").select("*")
+        .eq("keyword_id", str(keyword_id))
+        .order("created_at", desc=True).limit(1).execute()
+    )
+    if not res.data:
+        return {"status": "none"}
+    return res.data[0]
+
+
+@router.get("/tracked-keywords/{keyword_id}/analysis/history")
+async def list_keyword_analyses(
+    keyword_id: UUID, auth: dict = Depends(require_auth)
+) -> list[dict]:
+    """Report history for a keyword (newest first) — lightweight rows for a
+    history list, without the full analytics blob."""
+    res = (
+        get_supabase().table("rank_keyword_reports")
+        .select("id, status, trigger, priority, report_headline, generated_at, created_at, doc_url")
+        .eq("keyword_id", str(keyword_id))
+        .order("created_at", desc=True).limit(60).execute()
+    )
+    return res.data or []
+
+
+@router.get("/rank-keyword-reports/{report_id}")
+async def get_keyword_analysis(
+    report_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    res = (
+        get_supabase().table("rank_keyword_reports").select("*")
+        .eq("id", str(report_id)).limit(1).execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    return res.data[0]
+
+
+@router.delete("/rank-keyword-reports/{report_id}", status_code=204, response_class=Response)
+async def delete_keyword_analysis(report_id: UUID, auth: dict = Depends(require_auth)) -> Response:
+    get_supabase().table("rank_keyword_reports").delete().eq("id", str(report_id)).execute()
     return Response(status_code=204)
 
 

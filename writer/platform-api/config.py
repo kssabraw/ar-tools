@@ -171,6 +171,19 @@ class Settings(BaseSettings):
     # budget truncates the forced tool-use JSON and yields an empty summary.
     maps_report_max_tokens: int = 8192
 
+    # Organic Rank Analysis report — the per-keyword deep-dive (the organic
+    # analogue of the Local Rank Analysis report). Sonnet writes an observational
+    # narrative from the deterministic trajectory + competitive-landscape +
+    # gap-to-close rollups (services/rank_analysis.py); it reuses the latest
+    # stored SERP snapshot (no fresh capture). Generated on-demand per keyword,
+    # automatically when a rank-drop alert opens, and weekly per keyword.
+    rank_analysis_model: str = "claude-sonnet-4-6"
+    rank_analysis_max_tokens: int = 8192
+    # Weekly auto-generation: gated on this flag; runs the day after the weekly
+    # SERP-snapshot capture so the latest landscape is available to analyze.
+    rank_analysis_auto_enabled: bool = True
+    rank_analysis_weekly_weekday: int = 3  # Thursday (after the weekly snapshot)
+
     # Action Plan (reoptimization planner) — SOP-grounded enrichment. One Claude
     # call per plan rewrites every action's recommendation into the agency's own
     # methodology + voice, grounded in the SOP store (agency-wide + per-client) and
