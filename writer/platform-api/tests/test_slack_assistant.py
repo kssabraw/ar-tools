@@ -366,3 +366,61 @@ def test_format_context_is_json_with_client():
     assert parsed["client"]["name"] == "Acme"
     assert parsed["client"]["website"] == "https://acme.com"
     assert parsed["keyword_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# SOP grounding — the strategy-question gate + domain selection (pure).
+# ---------------------------------------------------------------------------
+def test_wants_sop_grounding_matches_strategy_shapes():
+    for q in (
+        "How is our strategy working?",
+        "Should we change the approach for Acme?",
+        "What's the forecast for next quarter?",
+        "What should we improve?",
+        "Why did rankings drop last week?",
+        "How do we grow GBP reviews?",
+        "Can we shift budget into link building?",
+        "how should we prioritize the action plan",
+    ):
+        assert slack_assistant.wants_sop_grounding(q), q
+
+
+def test_wants_sop_grounding_skips_pure_data_reads():
+    for q in (
+        "What's our rank for roof repair?",
+        "Show me the tracked keywords",
+        "Who are the top competitors?",
+        "add an asana task for Ivy",
+    ):
+        assert not slack_assistant.wants_sop_grounding(q), q
+    assert not slack_assistant.wants_sop_grounding("")
+    assert not slack_assistant.wants_sop_grounding(None)
+
+
+def test_sop_domains_from_question_keywords():
+    assert "maps" in slack_assistant.sop_domains("how do we win the local pack?", {})
+    assert "ai_visibility" in slack_assistant.sop_domains("why is ChatGPT not mentioning us", {})
+    assert "offpage" in slack_assistant.sop_domains("do we need more backlinks?", {})
+    assert "budget" in slack_assistant.sop_domains("where should the retainer go", {})
+    assert "content" in slack_assistant.sop_domains("plan more blog content", {})
+    assert "organic_drop" in slack_assistant.sop_domains("rankings fell — is this cannibalization?", {})
+
+
+def test_sop_domains_from_context_signals():
+    ctx = {
+        "organic_rank": {"open_drop_alerts": [{"keyword": "roof repair"}]},
+        "maps_geogrid": {"scans": []},
+        "ai_visibility": {"visibility": 40},
+    }
+    domains = slack_assistant.sop_domains("how is the campaign going", ctx)
+    assert {"organic_drop", "maps", "ai_visibility"} <= domains
+    # No alerts / modules → no context-driven domains.
+    assert slack_assistant.sop_domains("how is the campaign going", {"organic_rank": {}}) == set()
+
+
+def test_read_sop_tool_lists_docs():
+    tool = slack_assistant._read_sop_tool()
+    assert tool["name"] == "read_sop"
+    assert "doc" in tool["input_schema"]["properties"]
+    # The live SOP corpus is vendored into the service — the catalog should name it.
+    assert "How_To_Rank_In_Google_Maps_SOP.md" in tool["description"]
