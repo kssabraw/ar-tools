@@ -55,6 +55,12 @@ _SYSTEM = (
     "GBP rating/reviews, DR/referring domains (tool reads — true RD ≈ ×10), organic "
     "top-10 keyword overlap, review velocity, and new pages they published in the last "
     "30 days. A null module inside a competitor = no capture yet.\n"
+    "- forecast: deterministic projections — portfolio clicks/value now vs 90 days at "
+    "the current trend, the GSC clicks trajectory, the quick-win scenario (what moving "
+    "striking-distance keywords to top 3 is worth), and per-goal trajectory reads. "
+    "CITE these numbers verbatim; never compute your own projections. Always carry the "
+    "caveat that projections are linear trend extrapolations, and prefer 'gsc'-sourced "
+    "click numbers (actuals) over 'ctr_model' ones (estimates) when both exist.\n"
     "- organic_rank: tracked keywords with current rank + trend, open ranking-drop "
     "alerts, the latest reoptimization Action Plan, and Search Console opportunities.\n"
     "- maps_geogrid: local-pack / Google Maps geo-grid scan results (average rank, "
@@ -571,10 +577,31 @@ def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+def _ctx_forecast(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Deterministic projections so 'where is this heading / what's it worth'
+    questions get computed numbers, never invented ones."""
+    from services import forecasting
+
+    fc = forecasting.build_forecast(client_id, today=today)
+    if not fc.get("keyword_count"):
+        return None
+    return {
+        "note": fc.get("note"),
+        "portfolio": fc.get("portfolio"),
+        "gsc_clicks_trajectory": fc.get("gsc_clicks_trajectory"),
+        "quick_wins_summary": {
+            k: v for k, v in (fc.get("quick_wins") or {}).items() if k != "keywords"
+        },
+        "quick_wins_top": (fc.get("quick_wins") or {}).get("keywords", [])[:6],
+        "goal_projections": fc.get("goal_projections"),
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
     ("competitors", _ctx_competitors),
+    ("forecast", _ctx_forecast),
     ("organic_rank", _ctx_organic_rank),
     ("maps_geogrid", _ctx_maps),
     ("ai_visibility", _ctx_ai_visibility),

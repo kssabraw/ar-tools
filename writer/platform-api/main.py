@@ -23,6 +23,7 @@ from routers.clients import router as clients_router
 from routers.competitors import router as competitors_router
 from routers.dashboard import router as dashboard_router
 from routers.files import router as files_router
+from routers.forecast import router as forecast_router
 from routers.freeze import router as freeze_router
 from routers.goals import router as goals_router
 from routers.gsc import router as gsc_router
@@ -171,6 +172,7 @@ app.include_router(clients_router)
 app.include_router(competitors_router)
 app.include_router(dashboard_router)
 app.include_router(files_router)
+app.include_router(forecast_router)
 app.include_router(freeze_router)
 app.include_router(goals_router)
 app.include_router(gsc_router)

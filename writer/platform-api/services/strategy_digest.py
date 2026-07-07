@@ -738,11 +738,42 @@ def _prov_competitors(supabase, client_id: str, today: date, now: datetime) -> O
     }
 
 
+def _prov_forecast(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """Deterministic trajectory/value projections — the strategist cites these
+    numbers, never derives its own."""
+    from services import forecasting
+
+    fc = forecasting.build_forecast(client_id, today=today)
+    if not fc.get("keyword_count"):
+        return None
+    keywords = fc.get("keywords") or []
+    return {
+        "note": fc.get("note"),
+        "portfolio": fc.get("portfolio"),
+        "gsc_clicks_trajectory": fc.get("gsc_clicks_trajectory"),
+        "quick_wins": {
+            **{k: v for k, v in (fc.get("quick_wins") or {}).items() if k != "keywords"},
+            "top_keywords": (fc.get("quick_wins") or {}).get("keywords", [])[:8],
+        },
+        "goal_projections": fc.get("goal_projections"),
+        # The biggest movers only — full per-keyword table lives in the API/UI.
+        "top_keyword_forecasts": [
+            {k: f.get(k) for k in (
+                "keyword", "current_position", "trend_per_week",
+                "projected_position_90d", "confidence",
+                "clicks_per_month_now", "clicks_per_month_90d", "clicks_source",
+            )}
+            for f in keywords[:10]
+        ],
+    }
+
+
 # Registry — append a provider to feed the strategist a new module.
 _PROVIDERS: list[tuple[str, object]] = [
     ("client", _prov_client),
     ("campaign_goals", _prov_campaign_goals),
     ("competitors", _prov_competitors),
+    ("forecast", _prov_forecast),
     ("organic_rank", _prov_organic),
     ("open_alerts", _prov_open_alerts),
     ("action_plan", _prov_action_plan),

@@ -1402,6 +1402,65 @@ export interface CompetitorProfilesResponse {
   }
 }
 
+// Deterministic forecasting — computed on read, nothing stored.
+export interface KeywordForecast {
+  keyword: string
+  current_position: number | null
+  trend_per_week: number | null
+  projected_position_30d: number | null
+  projected_position_90d: number | null
+  confidence: 'high' | 'medium' | 'low'
+  clicks_per_month_now: number | null
+  clicks_per_month_90d: number | null
+  clicks_source: 'gsc' | 'ctr_model' | 'none'
+  search_volume: number | null
+  cpc: number | null
+  value_per_month_now: number | null
+  value_per_month_90d: number | null
+}
+
+export interface ForecastResponse {
+  generated_for: string
+  keyword_count: number
+  keywords: KeywordForecast[]
+  portfolio: {
+    clicks_per_month_now: number
+    clicks_per_month_90d: number
+    value_per_month_now: number
+    value_per_month_90d: number
+  }
+  quick_wins: {
+    target_position: number
+    keywords: {
+      keyword: string
+      current_position: number
+      target_position: number
+      extra_clicks_per_month: number
+      extra_value_per_month: number | null
+    }[]
+    keyword_count: number
+    total_extra_clicks_per_month: number
+    total_extra_value_per_month: number
+    skipped_no_volume: number
+  }
+  gsc_clicks_trajectory: {
+    clicks_last_30d: number
+    clicks_previous_30d: number
+    delta_30d: number
+    projected_30d_ahead: number
+    projected_90d_ahead: number
+  } | null
+  goal_projections: {
+    goal_label: string
+    horizon_days: number
+    projected_value: number | null
+    target_value: number | null
+    on_trajectory: boolean
+    confidence: string
+  }[]
+  note: string
+}
+
 // Asana task integration.
 export interface AsanaProjectMapping {
   client_id: string
