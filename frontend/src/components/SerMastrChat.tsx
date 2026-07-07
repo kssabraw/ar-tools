@@ -86,7 +86,11 @@ export function SerMastrChat({ exampleClient }: { exampleClient?: string }) {
       const detail = e instanceof Error ? e.message : 'unknown_error'
       const friendly = detail === 'assistant_not_configured'
         ? 'The assistant isn’t configured on the server yet (missing Anthropic key).'
-        : 'Sorry — I hit an error answering that. Try again in a moment.'
+        : detail === 'Not Found'
+          // The frontend shipped ahead of the backend (e.g. a deploy preview
+          // pointed at the production API before the endpoint was deployed).
+          ? 'The assistant backend isn’t live yet — the platform API this app points at doesn’t have /assistant/chat deployed.'
+          : `Sorry — I hit an error answering that (${detail}). Try again in a moment.`
       setState(s => ({ ...s, messages: [...s.messages, { role: 'assistant', content: friendly }], pendingToken: null }))
     } finally {
       setSending(false)
