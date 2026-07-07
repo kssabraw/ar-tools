@@ -3,8 +3,10 @@
 Two-way Slack, **channel mode**: SerMastr lives in a dedicated channel, so Slack
 POSTs a `message` event to `/slack/events` for *every* message there (no @mention
 needed). We answer each plain human message — resolve which client it's about,
-assemble a cross-module context (rank tracker, Maps geo-grid, AI visibility,
-content, keyword research, setup), fold in the thread's prior turns for
+assemble a cross-module context covering every workspace module (rank trackers,
+Maps geo-grid, AI visibility, content, keyword research, task plan, citations,
+syndication, reports, SOPs, Asana, health guards, strategist reviews, setup),
+fold in the thread's prior turns for
 continuity, ask Claude, and post the answer back **in-thread**. The bot's own
 posts (rank-drop alerts etc.) and other bots are ignored, so it never loops.
 
@@ -26,7 +28,7 @@ import hmac
 import json
 import logging
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import httpx
@@ -75,16 +77,41 @@ _SYSTEM = (
     "- content: what content has been produced (blog posts, service/location pages, "
     "Local SEO pages).\n"
     "- keyword_research: Topic Fanout research sessions.\n"
+    "- task_plan: the latest Recipe Engine monthly task plan — deployable budget, "
+    "spend, flags, diagnosis, and the assigned task lines.\n"
+    "- citations: citation-liveness tracking — status counts + currently-dead URLs.\n"
+    "- syndication: content-syndication config + discovered/published item counts.\n"
+    "- reports: recently generated client reports + the delivery schedule.\n"
+    "- sops: which SOPs are loaded for this client (titles; agency-wide + "
+    "client-specific).\n"
+    "- asana: whether an Asana project is mapped + the monthly task templates.\n"
+    "- health: campaign guards — an active FREEZE (all content/link output paused; "
+    "mention it prominently if present), open response episodes (each drop's "
+    "response clock), and offpage alerts (referring-domain loss/spike, citation "
+    "loss).\n"
+    "- strategist_review: the latest completed strategist review — assessment, "
+    "proposals with approval status, open questions.\n"
     "- setup: the client's full business profile — the GBP listing (address, "
     "coordinates, phone, categories, rating, review count, hours, service-area "
     "places, Maps link), target cities, campaign settings (client type, SAB, "
-    "retainer), and ICP summary.\n"
+    "retainer), brand-voice summary, and ICP summary.\n"
     "A module is OMITTED when there's no data for it — if a module key is absent, "
     "that work simply hasn't been set up or run for this client; say so rather than "
-    "guessing. Answer using ONLY this data. Be concise and direct — a few sentences "
+    "guessing. Answer using ONLY this data (plus live tool results). Be concise and "
+    "direct — a few sentences "
     "or a short list, Slack-friendly (you may use *bold* and bullets). Lead with the "
     "answer. As a strategist, you may connect signals across modules when relevant "
     "(e.g. a ranking drop + a content gap). Never invent numbers or modules.\n\n"
+    "LIVE DATA: the stored context above is refreshed on a schedule (GSC daily, "
+    "DataForSEO weekly). Two tools get you fresher reads:\n"
+    "- fetch_live_gsc (free, use directly): pulls LIVE Search Console rows for the "
+    "client's verified property. Use it when the teammate asks for current/live/"
+    "latest search performance, top queries or pages, clicks/impressions — or when "
+    "the stored context can't answer a performance question. Then answer from the "
+    "result, saying the numbers are a live Search Console pull.\n"
+    "- check_live_serp (paid, confirm-gated): a live Google SERP check for one "
+    "keyword. Call it when the teammate explicitly wants a right-now SERP/position "
+    "check; the teammate will be asked to confirm before it runs.\n\n"
     "You can also TAKE ACTIONS via the provided tools: run work (rebuild the Action "
     "Plan, run a Maps geo-grid scan, run GSC Research, run an AI Visibility scan, run "
     "a strategist review, push the latest monthly task plan to Asana) and manage the "
@@ -93,7 +120,8 @@ _SYSTEM = (
     "name the teammate used). If the teammate is clearly asking you to run/start/"
     "trigger/rebuild/create/assign/delete/finish one of these for the client, call the "
     "matching tool instead of answering. If they're only asking about results or "
-    "anything else, answer normally — do NOT call a tool for a question.\n\n"
+    "anything else, answer normally — do NOT call an action tool for a question "
+    "(fetch_live_gsc is the one tool that IS for questions).\n\n"
     "STRATEGIST BEHAVIOURS:\n"
     "- 'How is the campaign going?' → a short cross-module health read: when "
     "campaign_goals exist, LEAD with progress against them (their status field — "
@@ -363,10 +391,29 @@ def _ctx_organic_rank(supabase, client_id: str, today: date) -> Optional[dict]:
     ).data
     if gsc:
         g = gsc[0]
+        cann = g.get("cannibalization") or []
+        quick = g.get("quick_wins") or []
+        hidden = g.get("hidden_wins") or []
         out["gsc_opportunities"] = {
-            "cannibalization": len(g.get("cannibalization") or []),
-            "quick_wins": len(g.get("quick_wins") or []),
-            "hidden_wins": len(g.get("hidden_wins") or []),
+            "counts": {
+                "cannibalization": len(cann),
+                "quick_wins": len(quick),
+                "hidden_wins": len(hidden),
+            },
+            "cannibalization": [
+                {"query": c.get("query"), "competing_pages": len(c.get("pages") or [])}
+                for c in cann[:5]
+            ],
+            "quick_wins": [
+                {"keyword": w.get("keyword"), "position": w.get("position"),
+                 "impressions": w.get("impressions"), "page": w.get("page")}
+                for w in quick[:8]
+            ],
+            "hidden_wins": [
+                {"keyword": w.get("keyword"), "position": w.get("position"),
+                 "impressions": w.get("impressions"), "page": w.get("page")}
+                for w in hidden[:8]
+            ],
         }
     return out or None
 
@@ -409,6 +456,17 @@ def _ctx_maps(supabase, client_id: str, today: date) -> Optional[dict]:
                     weak.append(city)
         if weak:
             out["weak_coverage_areas"] = weak[:10]
+    alerts = (
+        supabase.table("maps_alerts")
+        .select("keyword, alert_type, message, triggered_on")
+        .eq("client_id", client_id)
+        .is_("resolved_at", "null")
+        .order("created_at", desc=True)
+        .limit(10)
+        .execute()
+    ).data or []
+    if alerts:
+        out["open_alerts"] = alerts
     return out
 
 
@@ -501,6 +559,29 @@ def _ctx_content(supabase, client_id: str, today: date) -> Optional[dict]:
         ).count or 0
         out["local_seo_pages_saved"] = saved
         out["local_seo_pages_published"] = published
+
+    recent_runs = (
+        supabase.table("runs")
+        .select("keyword, content_type, created_at")
+        .eq("client_id", client_id)
+        .eq("status", "complete")
+        .order("created_at", desc=True)
+        .limit(8)
+        .execute()
+    ).data or []
+    if recent_runs:
+        out["recent_completed_runs"] = recent_runs
+    recent_pages = (
+        supabase.table("local_seo_pages")
+        .select("keyword, created_at")
+        .eq("client_id", client_id)
+        .is_("deleted_at", "null")
+        .order("created_at", desc=True)
+        .limit(8)
+        .execute()
+    ).data or []
+    if recent_pages:
+        out["recent_local_seo_pages"] = recent_pages
     return out or None
 
 
@@ -565,6 +646,14 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
         icp = icp_service.resolve_icp_text(c) or ""
         if icp:
             out["icp_summary"] = icp[:1500]
+    except Exception:
+        pass
+    try:
+        from services.brand_voice_service import render_brand_voice_text
+
+        bv = render_brand_voice_text(c.get("brand_voice")) or ""
+        if bv:
+            out["brand_voice_summary"] = bv[:800]
     except Exception:
         pass
     if gbp:
@@ -687,6 +776,237 @@ def _ctx_trends(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+def _ctx_task_plan(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Latest Recipe Engine monthly task plan — budget, flags, assigned lines."""
+    rows = (
+        supabase.table("monthly_task_plans")
+        .select("month, margin_used, deployable, spent, remaining, flags, plan, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        return None
+    p = rows[0]
+    plan = p.get("plan") or {}
+    return {
+        "month": p.get("month"),
+        "margin_used": p.get("margin_used"),
+        "deployable": p.get("deployable"),
+        "spent": p.get("spent"),
+        "remaining": p.get("remaining"),
+        "flags": p.get("flags") or [],
+        "diagnosis": plan.get("diagnosis"),
+        "tasks": [
+            {
+                "task": t.get("label"),
+                "quantity": t.get("quantity"),
+                "line_cost": t.get("line_cost"),
+                "assignee": t.get("assignee"),
+            }
+            for t in (plan.get("tasks") or [])[:15]
+        ],
+    }
+
+
+def _ctx_citations(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Citation liveness — status counts plus the currently-dead URLs."""
+    rows = (
+        supabase.table("client_citations")
+        .select("url, status, last_checked_at")
+        .eq("client_id", client_id)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    by_status: dict[str, int] = {}
+    for r in rows:
+        s = r.get("status") or "unknown"
+        by_status[s] = by_status.get(s, 0) + 1
+    out: dict = {"total": len(rows), "by_status": by_status}
+    dead = [r["url"] for r in rows if r.get("status") == "dead"]
+    if dead:
+        out["dead_urls"] = dead[:8]
+    return out
+
+
+def _ctx_syndication(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Content syndication — config plus discovered/published item counts."""
+    cfg = (
+        supabase.table("syndication_config")
+        .select("enabled, share_mode, last_scan_date")
+        .eq("client_id", client_id)
+        .limit(1)
+        .execute()
+    ).data
+    by_status: dict[str, int] = {}
+    for s in ("discovered", "rewriting", "published", "failed", "skipped"):
+        n = (
+            supabase.table("syndication_items")
+            .select("id", count="exact", head=True)
+            .eq("client_id", client_id)
+            .eq("status", s)
+            .execute()
+        ).count or 0
+        if n:
+            by_status[s] = n
+    if not (cfg or by_status):
+        return None
+    out: dict = {"items_by_status": by_status}
+    if cfg:
+        c = cfg[0]
+        out["enabled"] = c.get("enabled")
+        out["share_mode"] = c.get("share_mode")
+        out["last_scan_date"] = c.get("last_scan_date")
+    return out
+
+
+def _ctx_reports(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Client reports — recent generated reports + the delivery schedule."""
+    reports = (
+        supabase.table("client_reports")
+        .select("report_type, status, title, period_start, period_end, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(5)
+        .execute()
+    ).data or []
+    cfg = (
+        supabase.table("client_report_settings")
+        .select("*")
+        .eq("client_id", client_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not (reports or cfg):
+        return None
+    out: dict = {}
+    if reports:
+        out["recent_reports"] = reports
+    if cfg:
+        c = cfg[0]
+        out["schedule"] = {
+            "cadence": c.get("cadence"),
+            "recipient_count": len(c.get("recipients") or []),
+            "email_enabled": c.get("email_enabled"),
+            "drive_enabled": c.get("drive_enabled"),
+            "coverage": c.get("coverage"),
+            "next_run_at": c.get("next_run_at"),
+        }
+    return out
+
+
+def _ctx_sops(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Loaded SOPs — titles only (the Action Plan/strategist consume the bodies)."""
+    from services import sop_store
+
+    rows = sop_store.list_sops(client_id)
+    if not rows:
+        return None
+    return {
+        "count": len(rows),
+        "sops": [
+            {
+                "title": r.get("title"),
+                "category": r.get("category"),
+                "scope": "client" if r.get("client_id") else "agency",
+            }
+            for r in rows[:20]
+        ],
+    }
+
+
+def _ctx_asana(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Asana setup — whether a project is mapped + the monthly task templates."""
+    proj = (
+        supabase.table("asana_client_projects")
+        .select("project_gid")
+        .eq("client_id", client_id)
+        .limit(1)
+        .execute()
+    ).data
+    templates = (
+        supabase.table("asana_client_task_templates")
+        .select("name, assignee_name, category_name")
+        .eq("client_id", client_id)
+        .eq("active", True)
+        .order("sort_order")
+        .limit(20)
+        .execute()
+    ).data or []
+    if not (proj or templates):
+        return None
+    out: dict = {"project_mapped": bool(proj)}
+    if templates:
+        out["monthly_task_templates"] = templates
+    return out
+
+
+def _ctx_health(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Campaign health guards — freeze state, open response episodes, offpage alerts."""
+    out: dict = {}
+    try:
+        from services import freeze
+
+        fr = freeze.active_freeze(client_id)
+        if fr:
+            out["freeze"] = {
+                "reason": fr.get("reason"),
+                "since": fr.get("created_at"),
+                "note": fr.get("note"),
+            }
+    except Exception:
+        pass
+    episodes = (
+        supabase.table("response_episodes")
+        .select("channel, keyword, classification, status, opened_at, last_checked_at")
+        .eq("client_id", client_id)
+        .in_("status", ["open", "escalated"])
+        .order("opened_at", desc=True)
+        .limit(10)
+        .execute()
+    ).data or []
+    if episodes:
+        out["response_episodes"] = episodes
+    offpage = (
+        supabase.table("offpage_alerts")
+        .select("alert_type, message, from_rd, to_rd, delta_pct, triggered_on")
+        .eq("client_id", client_id)
+        .is_("resolved_at", "null")
+        .execute()
+    ).data or []
+    if offpage:
+        out["offpage_alerts"] = offpage
+    return out or None
+
+
+def _ctx_strategist(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Latest completed strategist review — assessment, proposals, open questions."""
+    rows = (
+        supabase.table("strategy_reviews")
+        .select("assessment, proposals, questions, trigger, created_at")
+        .eq("client_id", client_id)
+        .eq("status", "complete")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        return None
+    r = rows[0]
+    return {
+        "reviewed_at": r.get("created_at"),
+        "trigger": r.get("trigger"),
+        "assessment": (r.get("assessment") or "")[:1200] or None,
+        "proposals": [
+            {"title": p.get("title"), "status": p.get("status"), "requires": p.get("requires")}
+            for p in (r.get("proposals") or [])[:8]
+        ],
+        "questions": (r.get("questions") or [])[:5],
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
@@ -698,6 +1018,14 @@ _CONTEXT_PROVIDERS = [
     ("ai_visibility", _ctx_ai_visibility),
     ("content", _ctx_content),
     ("keyword_research", _ctx_keyword_research),
+    ("task_plan", _ctx_task_plan),
+    ("citations", _ctx_citations),
+    ("syndication", _ctx_syndication),
+    ("reports", _ctx_reports),
+    ("sops", _ctx_sops),
+    ("asana", _ctx_asana),
+    ("health", _ctx_health),
+    ("strategist_review", _ctx_strategist),
     ("setup", _ctx_setup),
 ]
 
@@ -955,6 +1283,52 @@ async def _act_complete_task(client_id: str, args: Optional[dict] = None) -> str
     return f"✅ Marked *“{args.get('task_name')}”* complete."
 
 
+async def _stage_live_serp(client_id: str, args: dict) -> tuple[str, dict | str]:
+    """Validate the keyword and name it in the confirm phrase."""
+    keyword = (args.get("keyword") or "").strip()
+    if not keyword:
+        return (
+            "reply",
+            "Which keyword should I check? e.g. “check the live SERP for "
+            "roof repair akron for Acme”.",
+        )
+    args["_confirm"] = f"run one live Google SERP check for *{keyword}*"
+    return "confirm", args
+
+
+async def _act_live_serp(client_id: str, args: Optional[dict] = None) -> str:
+    """One live DataForSEO SERP pull: where the client's domain ranks right now."""
+    from services import dataforseo_rank
+
+    keyword = ((args or {}).get("keyword") or "").strip()
+    supabase = get_supabase()
+    rows = (
+        supabase.table("clients")
+        .select("website_url, gbp, rank_tracking_location_code")
+        .eq("id", client_id)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        return "Client not found."
+    c = rows[0]
+    domain = dataforseo_rank.extract_domain(c.get("website_url") or "")
+    if not domain:
+        return "This client has no website URL on file — I can't identify their domain in the SERP."
+    location_code = dataforseo_rank.location_code_for(c)
+    try:
+        urls = await dataforseo_rank.fetch_serp_rank_urls(keyword, domain, location_code)
+    except Exception as exc:
+        return f"Live SERP check failed: {exc}"
+    if not urls:
+        return (
+            f"Live SERP for *{keyword}* (just checked): no page of {domain} in the "
+            f"top {settings.dataforseo_serp_depth} organic results."
+        )
+    lines = "\n".join(f"  #{u['position']} — {u['url']}" for u in urls[:5])
+    return f"Live SERP for *{keyword}* (just checked) — {domain} ranks:\n{lines}"
+
+
 # (tool name) → {label, paid, run} + optional:
 #   note   — the parenthetical in the reply-*yes* confirm (default: API-budget
 #            wording). `paid` really means "confirm-gated": paid API spend OR
@@ -1024,6 +1398,21 @@ _ACTIONS: dict[str, dict] = {
             "required": ["task_name"],
         },
     },
+    # A right-now Google SERP read for one keyword — the on-demand freshness
+    # escape hatch when the weekly tracked rank isn't recent enough.
+    "check_live_serp": {
+        "label": "run a live Google SERP check",
+        "paid": True,
+        "note": "one live DataForSEO SERP pull",
+        "run": _act_live_serp,
+        "stage": _stage_live_serp,
+        "params": {
+            "properties": {
+                "keyword": {"type": "string", "description": "The exact search keyword to check the live Google results for."},
+            },
+            "required": ["keyword"],
+        },
+    },
 }
 _ACTION_TOOLS = [
     {"name": name, "description": meta["label"].capitalize() + " for the client.",
@@ -1039,6 +1428,110 @@ _pending: dict[tuple, dict] = {}
 
 
 # ---------------------------------------------------------------------------
+# Live-data tools — answer-time reads, distinct from actions. fetch_live_gsc is
+# free (Search Console API), so Claude may call it mid-answer with no confirm;
+# paid live reads (DataForSEO) stay confirm-gated actions (`check_live_serp`).
+# ---------------------------------------------------------------------------
+_LIVE_GSC_ROUNDS = 2  # tool-use rounds before the answer is forced from what's fetched
+_LIVE_GSC_TOP = 15  # rows surfaced per pull
+_LIVE_GSC_RESULT_CHARS = 4000
+
+_LIVE_GSC_TOOL = {
+    "name": "fetch_live_gsc",
+    "description": (
+        "Pull LIVE Google Search Console data for this client's verified property "
+        "(free — no confirmation needed). Use for current/latest search performance: "
+        "top queries or pages by clicks/impressions, a specific keyword's or page's "
+        "numbers, or daily totals. Fresher than the stored context (which is a daily "
+        "ingest). Returns window totals plus the top rows."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "dimension": {
+                "type": "string",
+                "enum": ["query", "page", "date"],
+                "description": "Group rows by search query, by page URL, or by day.",
+            },
+            "days": {
+                "type": "integer",
+                "description": "Lookback window in days (default 28, max 180).",
+            },
+            "search": {
+                "type": "string",
+                "description": "Optional case-insensitive substring filter on the dimension value (a keyword or URL fragment).",
+            },
+        },
+        "required": ["dimension"],
+    },
+}
+
+
+async def _run_live_gsc(client_id: str, args: dict) -> str:
+    """Execute one live Search Console pull; returns a JSON summary string.
+
+    Errors return an explanatory string (never raise) so Claude can tell the
+    teammate why live data isn't available."""
+    import asyncio
+
+    from services import gsc_service, rank_materialize
+
+    if not gsc_service.is_configured():
+        return "Live GSC unavailable: the agency service-account key is not configured."
+    prop = rank_materialize._verified_property(get_supabase(), client_id)
+    if not prop:
+        return (
+            "Live GSC unavailable: no verified Search Console property for this "
+            "client — connect one on the Rankings page."
+        )
+    dim = args.get("dimension") or "query"
+    if dim not in ("query", "page", "date"):
+        dim = "query"
+    days = max(1, min(int(args.get("days") or 28), 180))
+    end = date.today() - timedelta(days=2)  # GSC data lags ~2 days
+    start = end - timedelta(days=days)
+    try:
+        rows = await asyncio.to_thread(
+            gsc_service.fetch_search_analytics,
+            prop["site_url"], [dim], start.isoformat(), end.isoformat(),
+        )
+    except Exception as exc:
+        return f"Live GSC pull failed: {exc}"
+    needle = (args.get("search") or "").strip().lower()
+    if needle:
+        rows = [r for r in rows if needle in str((r.get("keys") or [""])[0]).lower()]
+    clicks = sum(int(r.get("clicks") or 0) for r in rows)
+    impressions = sum(int(r.get("impressions") or 0) for r in rows)
+    pos_num = sum(float(r.get("position") or 0) * int(r.get("impressions") or 0) for r in rows)
+    top = sorted(rows, key=lambda r: (r.get("clicks") or 0, r.get("impressions") or 0), reverse=True)
+    if dim == "date":
+        top = sorted(rows, key=lambda r: (r.get("keys") or [""])[0])
+    payload = {
+        "property": prop["site_url"],
+        "window": {"start": start.isoformat(), "end": end.isoformat(), "note": "GSC data lags ~2 days"},
+        "dimension": dim,
+        "filter": needle or None,
+        "totals": {
+            "rows": len(rows),
+            "clicks": clicks,
+            "impressions": impressions,
+            "avg_position": round(pos_num / impressions, 1) if impressions else None,
+        },
+        "top_rows": [
+            {
+                dim: (r.get("keys") or [""])[0],
+                "clicks": r.get("clicks"),
+                "impressions": r.get("impressions"),
+                "ctr": round(float(r.get("ctr") or 0), 4),
+                "position": round(float(r.get("position") or 0), 1),
+            }
+            for r in top[:_LIVE_GSC_TOP]
+        ],
+    }
+    return json.dumps(payload, default=str)[:_LIVE_GSC_RESULT_CHARS]
+
+
+# ---------------------------------------------------------------------------
 # Claude + Slack I/O.
 # ---------------------------------------------------------------------------
 async def interpret(
@@ -1049,9 +1542,11 @@ async def interpret(
 
     Returns ("action", {"name": tool_name, "args": tool_input}) when the
     teammate is asking to trigger one of the available actions, else
-    ("text", answer). Claude sees the cross-module context + thread history and
-    the action tools; a tool call ⇒ action, otherwise a normal grounded answer.
-    `style="web"` swaps the Slack-mrkdwn voice for dashboard-chat Markdown.
+    ("text", answer). Claude sees the cross-module context + thread history, the
+    action tools, and the free `fetch_live_gsc` tool — a live-GSC call is
+    executed inline (bounded rounds) and folded back into the answer; an action
+    call ⇒ ("action", …). `style="web"` swaps the Slack-mrkdwn voice for
+    dashboard-chat Markdown.
     """
     import anthropic
 
@@ -1062,18 +1557,34 @@ async def interpret(
     blocks.append(f"Client data (JSON):\n{format_context(client, context)}")
     user = "\n\n".join(blocks)
     api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
-    resp = await api.messages.create(
-        model=settings.slack_assistant_model,
-        max_tokens=settings.slack_assistant_max_tokens,
-        system=_SYSTEM + (_WEB_STYLE if style == "web" else ""),
-        tools=_ACTION_TOOLS,
-        messages=[{"role": "user", "content": user}],
-    )
-    for b in resp.content:
-        if getattr(b, "type", None) == "tool_use" and b.name in _ACTIONS:
-            return ("action", {"name": b.name, "args": dict(b.input or {})})
-    parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
-    return ("text", "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing.")
+    messages: list[dict] = [{"role": "user", "content": user}]
+    for round_no in range(_LIVE_GSC_ROUNDS + 1):
+        # Last round withholds the live tool so the model must answer.
+        tools = _ACTION_TOOLS + ([_LIVE_GSC_TOOL] if round_no < _LIVE_GSC_ROUNDS else [])
+        resp = await api.messages.create(
+            model=settings.slack_assistant_model,
+            max_tokens=settings.slack_assistant_max_tokens,
+            system=_SYSTEM + (_WEB_STYLE if style == "web" else ""),
+            tools=tools,
+            messages=messages,
+        )
+        for b in resp.content:
+            if getattr(b, "type", None) == "tool_use" and b.name in _ACTIONS:
+                return ("action", {"name": b.name, "args": dict(b.input or {})})
+        live_calls = [
+            b for b in resp.content
+            if getattr(b, "type", None) == "tool_use" and b.name == _LIVE_GSC_TOOL["name"]
+        ]
+        if not live_calls:
+            parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
+            return ("text", "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing.")
+        messages.append({"role": "assistant", "content": resp.content})
+        results = []
+        for b in live_calls:
+            out = await _run_live_gsc(client["id"], dict(b.input or {}))
+            results.append({"type": "tool_result", "tool_use_id": b.id, "content": out})
+        messages.append({"role": "user", "content": results})
+    return ("text", "I couldn't generate an answer just now — try rephrasing.")
 
 
 async def _run_action(name: str, client_id: str, args: Optional[dict]) -> str:

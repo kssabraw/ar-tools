@@ -170,6 +170,94 @@ def test_ctx_setup_exposes_full_gbp_profile():
     assert out["has_brand_voice"] is True
 
 
+def test_ctx_task_plan_maps_plan_lines():
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    supabase = MagicMock()
+    supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
+        {
+            "month": "2026-07-01",
+            "margin_used": 0.34,
+            "deployable": 850,
+            "spent": 700,
+            "remaining": 150,
+            "flags": ["capacity_capped"],
+            "plan": {
+                "diagnosis": {"deficient": ["referring_domains"]},
+                "tasks": [
+                    {"task_type": "citations", "label": "40 Citations", "quantity": 1,
+                     "unit_cost": 40.0, "line_cost": 40.0, "assignee": "Minda"},
+                ],
+            },
+        }
+    ]
+    out = slack_assistant._ctx_task_plan(supabase, "c1", date(2026, 7, 7))
+    assert out["deployable"] == 850
+    assert out["flags"] == ["capacity_capped"]
+    assert out["tasks"] == [
+        {"task": "40 Citations", "quantity": 1, "line_cost": 40.0, "assignee": "Minda"}
+    ]
+    assert out["diagnosis"] == {"deficient": ["referring_domains"]}
+
+
+def test_ctx_strategist_shapes_and_truncates():
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    supabase = MagicMock()
+    supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value.data = [
+        {
+            "assessment": "x" * 2000,
+            "proposals": [{"title": f"P{i}", "status": "proposed", "requires": "approval",
+                           "rationale": "long text that must not pass through"} for i in range(12)],
+            "questions": [f"Q{i}" for i in range(9)],
+            "trigger": "scheduled",
+            "created_at": "2026-07-06T00:00:00Z",
+        }
+    ]
+    out = slack_assistant._ctx_strategist(supabase, "c1", date(2026, 7, 7))
+    assert len(out["assessment"]) == 1200
+    assert len(out["proposals"]) == 8
+    assert out["proposals"][0] == {"title": "P0", "status": "proposed", "requires": "approval"}
+    assert out["questions"] == [f"Q{i}" for i in range(5)]
+
+
+def test_stage_live_serp_requires_keyword():
+    import asyncio
+
+    outcome, reply = asyncio.run(slack_assistant._stage_live_serp("c1", {}))
+    assert outcome == "reply"
+    assert "keyword" in reply.lower()
+
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_live_serp("c1", {"keyword": "roof repair akron"})
+    )
+    assert outcome == "confirm"
+    assert "roof repair akron" in staged["_confirm"]
+
+
+def test_run_live_gsc_reports_unconfigured(monkeypatch):
+    import asyncio
+
+    from services import gsc_service
+
+    monkeypatch.setattr(gsc_service, "is_configured", lambda: False)
+    out = asyncio.run(slack_assistant._run_live_gsc("c1", {"dimension": "query"}))
+    assert "not configured" in out
+
+
+def test_context_providers_cover_all_modules():
+    keys = [k for k, _ in slack_assistant._CONTEXT_PROVIDERS]
+    for expected in (
+        "campaign_goals", "competitors", "forecast", "trends", "organic_rank",
+        "maps_geogrid", "ai_visibility", "content", "keyword_research",
+        "task_plan", "citations", "syndication", "reports", "sops", "asana",
+        "health", "strategist_review", "setup",
+    ):
+        assert expected in keys
+
+
 def test_format_history_labels_roles_and_skips_empty():
     out = slack_assistant.format_history([
         {"role": "user", "content": "how is Acme?"},
