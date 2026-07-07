@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  AlertTriangle, ArrowLeft, CheckCircle2, Clock, HelpCircle, Plus, Target, Trash2, TrendingUp,
+  AlertTriangle, ArrowLeft, CheckCircle2, Clock, HelpCircle, Pencil, Plus, Target, Trash2, TrendingUp,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { CampaignGoal, Client } from '../lib/types'
@@ -87,6 +87,40 @@ export function CampaignGoals() {
   const deleteGoal = useMutation({
     mutationFn: (goalId: string) => api.delete(`/clients/${id}/goals/${goalId}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['campaign-goals', id] }),
+  })
+
+  // ── Inline editing (target / due date / label / notes — baseline is kept) ──
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [eLabel, setELabel] = useState('')
+  const [eTarget, setETarget] = useState('')
+  const [ePosition, setEPosition] = useState('')
+  const [eDue, setEDue] = useState('')
+  const [eNotes, setENotes] = useState('')
+
+  const startEdit = (g: CampaignGoal) => {
+    setEditingId(g.id)
+    setELabel(g.label)
+    setETarget(g.target_value != null ? String(g.target_value) : '')
+    setEPosition(g.target_position != null ? String(g.target_position) : '')
+    setEDue(g.due_date ?? '')
+    setENotes(g.notes ?? '')
+  }
+
+  const updateGoal = useMutation({
+    mutationFn: (g: CampaignGoal) => {
+      const body: Record<string, unknown> = {
+        label: eLabel.trim() || g.label,
+        due_date: eDue || null,
+        notes: eNotes.trim() || null,
+      }
+      if (g.goal_type !== 'custom') body.target_value = Number(eTarget)
+      if (g.goal_type === 'keywords_in_top') body.target_position = Number(ePosition)
+      return api.put<CampaignGoal>(`/clients/${id}/goals/${g.id}`, body)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['campaign-goals', id] })
+      setEditingId(null)
+    },
   })
 
   const canSubmit =
@@ -185,6 +219,55 @@ export function CampaignGoals() {
           {goals.map((g) => {
             const meta = STATUS_META[g.status ?? 'no_data'] ?? STATUS_META.no_data
             const pct = g.progress_pct
+            if (editingId === g.id) {
+              const canSave =
+                (g.goal_type === 'custom' || (eTarget !== '' && !Number.isNaN(Number(eTarget)))) &&
+                (g.goal_type !== 'keywords_in_top' || (ePosition !== '' && !Number.isNaN(Number(ePosition))))
+              return (
+                <section key={g.id} style={{ ...card, borderColor: '#c7d2fe' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <label style={fieldLabel}>Label</label>
+                      <input style={input} value={eLabel} onChange={(e) => setELabel(e.target.value)} />
+                    </div>
+                    {g.goal_type !== 'custom' && (
+                      <div>
+                        <label style={fieldLabel}>Target {GOAL_TYPE_META[g.goal_type]?.unit && `(${GOAL_TYPE_META[g.goal_type].unit})`}</label>
+                        <input style={input} type="number" value={eTarget} onChange={(e) => setETarget(e.target.value)} />
+                      </div>
+                    )}
+                    {g.goal_type === 'keywords_in_top' && (
+                      <div>
+                        <label style={fieldLabel}>Top N (the position bar)</label>
+                        <input style={input} type="number" value={ePosition} onChange={(e) => setEPosition(e.target.value)} />
+                      </div>
+                    )}
+                    <div>
+                      <label style={fieldLabel}>Due date (blank = no deadline)</label>
+                      <input style={input} type="date" value={eDue} onChange={(e) => setEDue(e.target.value)} />
+                    </div>
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <label style={fieldLabel}>Notes</label>
+                      <input style={input} value={eNotes} onChange={(e) => setENotes(e.target.value)} />
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                    <button style={primaryBtn} disabled={!canSave || updateGoal.isPending} onClick={() => updateGoal.mutate(g)}>
+                      {updateGoal.isPending ? 'Saving…' : 'Save changes'}
+                    </button>
+                    <button style={ghostBtn} onClick={() => setEditingId(null)}>Cancel</button>
+                    <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
+                      The original baseline ({g.baseline_value != null ? fmt(g.baseline_value) : '—'}) is kept — progress keeps measuring from where the campaign started.
+                    </span>
+                  </div>
+                  {updateGoal.isError && (
+                    <p style={{ color: '#dc2626', fontSize: 12, margin: '8px 0 0' }}>
+                      Couldn’t save: {(updateGoal.error as Error).message}
+                    </p>
+                  )}
+                </section>
+              )
+            }
             return (
               <section key={g.id} style={card}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
@@ -201,13 +284,18 @@ export function CampaignGoals() {
                     </div>
                     {g.notes && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 4 }}>{g.notes}</div>}
                   </div>
-                  <button
-                    style={iconBtn}
-                    title="Delete goal"
-                    onClick={() => { if (window.confirm(`Delete goal “${g.label}”?`)) deleteGoal.mutate(g.id) }}
-                  >
-                    <Trash2 size={15} />
-                  </button>
+                  <div style={{ display: 'flex', gap: 2 }}>
+                    <button style={iconBtn} title="Edit goal" onClick={() => startEdit(g)}>
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      style={iconBtn}
+                      title="Delete goal"
+                      onClick={() => { if (window.confirm(`Delete goal “${g.label}”?`)) deleteGoal.mutate(g.id) }}
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
                 </div>
                 {pct != null && (
                   <div style={{ marginTop: 10 }}>
