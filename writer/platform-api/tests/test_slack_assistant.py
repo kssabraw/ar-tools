@@ -125,6 +125,51 @@ def test_build_context_assembles_isolates_and_omits(monkeypatch):
     assert ctx == {"alpha": {"ok": True}}  # empty omitted, failing one isolated
 
 
+def test_ctx_setup_exposes_full_gbp_profile():
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    supabase = MagicMock()
+    supabase.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+        {
+            "website_url": "https://firstclassroofing.com",
+            "gbp_place_id": "ChIJabc123",
+            "gbp": {
+                "business_name": "First Class Roofing",
+                "address": "123 Main St, Wooster, OH 44691",
+                "latitude": 40.805,
+                "longitude": -81.935,
+                "phone": "(330) 555-0100",
+                "gbp_category": "Roofing contractor",
+                "gbp_categories": ["Roofing contractor", "Gutter service"],
+                "gbp_rating": 4.9,
+                "gbp_review_count": 120,
+                "reviews": [{"text": "bulky — must not pass through"}],
+            },
+            "brand_voice": {"tone": "warm"},
+            "detected_icp": None,
+            "differentiators": None,
+            "icp_text": None,
+            "target_cities": ["Wooster", "Orrville"],
+            "retainer_monthly": 2500,
+            "is_sab": False,
+            "client_type": "local",
+        }
+    ]
+
+    out = slack_assistant._ctx_setup(supabase, "c1", date(2026, 7, 7))
+    gbp = out["gbp"]
+    assert gbp["address"] == "123 Main St, Wooster, OH 44691"
+    assert gbp["latitude"] == 40.805 and gbp["longitude"] == -81.935
+    assert gbp["phone"] == "(330) 555-0100"
+    assert gbp["place_id"] == "ChIJabc123"
+    assert gbp["rating"] == 4.9 and gbp["review_count"] == 120
+    assert "reviews" not in gbp  # bulky raw assets stay out
+    assert out["target_cities"] == ["Wooster", "Orrville"]
+    assert out["client_type"] == "local"
+    assert out["has_brand_voice"] is True
+
+
 def test_format_history_labels_roles_and_skips_empty():
     out = slack_assistant.format_history([
         {"role": "user", "content": "how is Acme?"},

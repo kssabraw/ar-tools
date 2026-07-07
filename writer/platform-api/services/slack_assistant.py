@@ -75,7 +75,10 @@ _SYSTEM = (
     "- content: what content has been produced (blog posts, service/location pages, "
     "Local SEO pages).\n"
     "- keyword_research: Topic Fanout research sessions.\n"
-    "- setup: the client's configured context (GBP, brand voice, ICP, target cities).\n"
+    "- setup: the client's full business profile — the GBP listing (address, "
+    "coordinates, phone, categories, rating, review count, hours, service-area "
+    "places, Maps link), target cities, campaign settings (client type, SAB, "
+    "retainer), and ICP summary.\n"
     "A module is OMITTED when there's no data for it — if a module key is absent, "
     "that work simply hasn't been set up or run for this client; say so rather than "
     "guessing. Answer using ONLY this data. Be concise and direct — a few sentences "
@@ -524,10 +527,21 @@ def _ctx_keyword_research(supabase, client_id: str, today: date) -> Optional[dic
 
 
 def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
-    """Client setup context the strategist should be aware of."""
+    """The client's full configured business profile.
+
+    Everything captured on the client row goes in — the whole GBP profile
+    (address, coordinates, phone, categories, rating, hours, service area…),
+    target cities, campaign settings, ICP — except bulky raw assets (the GBP
+    reviews array, the full brand guide), which stay presence flags so one
+    client's context can't swamp the prompt.
+    """
     rows = (
         supabase.table("clients")
-        .select("website_url, gbp, brand_voice, detected_icp, differentiators, target_cities")
+        .select(
+            "website_url, gbp, gbp_place_id, brand_voice, detected_icp, "
+            "differentiators, icp_text, target_cities, retainer_monthly, "
+            "is_sab, client_type"
+        )
         .eq("id", client_id)
         .limit(1)
         .execute()
@@ -536,14 +550,45 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
         return None
     c = rows[0]
     gbp = c.get("gbp") or {}
-    return {
+    out: dict = {
         "website": c.get("website_url"),
-        "has_gbp": bool(gbp.get("business_name") or gbp.get("place_id")),
-        "gbp_name": gbp.get("business_name"),
+        "client_type": c.get("client_type"),
+        "is_sab": bool(c.get("is_sab")),
+        "retainer_monthly": c.get("retainer_monthly"),
+        "target_cities": (c.get("target_cities") or [])[:12],
         "has_brand_voice": bool(c.get("brand_voice")),
         "has_icp": bool(c.get("detected_icp") or c.get("differentiators")),
-        "target_city_count": len(c.get("target_cities") or []),
     }
+    try:
+        from services import icp_service
+
+        icp = icp_service.resolve_icp_text(c) or ""
+        if icp:
+            out["icp_summary"] = icp[:1500]
+    except Exception:
+        pass
+    if gbp:
+        out["gbp"] = {
+            "business_name": gbp.get("business_name"),
+            "place_id": c.get("gbp_place_id") or gbp.get("place_id"),
+            "address": gbp.get("address"),
+            "address_hidden": gbp.get("address_hidden"),
+            "latitude": gbp.get("latitude"),
+            "longitude": gbp.get("longitude"),
+            "phone": gbp.get("phone"),
+            "website": gbp.get("website"),
+            "category": gbp.get("gbp_category"),
+            "categories": (gbp.get("gbp_categories") or [])[:8],
+            "rating": gbp.get("gbp_rating"),
+            "review_count": gbp.get("gbp_review_count"),
+            "hours": gbp.get("hours"),
+            "google_maps_uri": gbp.get("google_maps_uri"),
+            "service_area_places": (gbp.get("service_area_places") or [])[:10],
+            "description": (gbp.get("description") or "")[:500] or None,
+        }
+    else:
+        out["has_gbp"] = False
+    return out
 
 
 def _ctx_campaign_goals(supabase, client_id: str, today: date) -> Optional[dict]:
