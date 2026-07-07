@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import { Markdown } from './Markdown'
 import { Send, Sparkles, X } from 'lucide-react'
 
@@ -7,6 +8,11 @@ import { Send, Sparkles, X } from 'lucide-react'
 // spoken over POST /assistant/chat. The conversation (and its sticky client +
 // any staged confirm token) lives in sessionStorage so navigating around the
 // suite doesn't lose the thread; a new browser session starts fresh.
+//
+// The thread is scoped to the signed-in user (storage key carries their id), so
+// on a shared browser one user never sees another's chat: switching accounts
+// loads that account's own (empty) thread, and logout clears it. History is not
+// persisted server-side — it stays local to this browser session.
 
 type ChatMsg = { role: 'user' | 'assistant'; content: string }
 
@@ -24,12 +30,21 @@ type ChatState = {
   pendingToken: string | null
 }
 
-const STORAGE_KEY = 'sermastr-chat-v1'
+const STORAGE_PREFIX = 'sermastr-chat-v1'
+// Pre-isolation key: a single shared bucket not tied to any user. Purged on
+// mount so a previous user's chat can't linger on a shared browser.
+const LEGACY_STORAGE_KEY = 'sermastr-chat-v1'
 const EMPTY: ChatState = { messages: [], clientId: null, clientName: null, pendingToken: null }
 
-function loadState(): ChatState {
+function storageKey(userId: string | null): string | null {
+  return userId ? `${STORAGE_PREFIX}:${userId}` : null
+}
+
+function loadState(userId: string | null): ChatState {
+  const key = storageKey(userId)
+  if (!key) return EMPTY
   try {
-    const raw = sessionStorage.getItem(STORAGE_KEY)
+    const raw = sessionStorage.getItem(key)
     if (!raw) return EMPTY
     const parsed = JSON.parse(raw) as Partial<ChatState>
     return { ...EMPTY, ...parsed, messages: Array.isArray(parsed.messages) ? parsed.messages : [] }
@@ -45,16 +60,36 @@ function slackToMd(text: string): string {
 }
 
 export function SerMastrChat({ exampleClient }: { exampleClient?: string }) {
-  const [state, setState] = useState<ChatState>(loadState)
+  const { user } = useAuth()
+  const userId = user?.id ?? null
+  const [state, setState] = useState<ChatState>(() => loadState(userId))
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const prevUserId = useRef(userId)
+
+  // Purge the pre-isolation shared bucket once, so an older suite version's
+  // chat can't be read on a shared browser.
+  useEffect(() => {
+    try { sessionStorage.removeItem(LEGACY_STORAGE_KEY) } catch { /* ignore */ }
+  }, [])
+
+  // When the signed-in user changes (switch accounts / login / logout), load
+  // that user's own thread — never carry one user's chat into another's view.
+  useEffect(() => {
+    if (prevUserId.current !== userId) {
+      prevUserId.current = userId
+      setState(loadState(userId))
+    }
+  }, [userId])
 
   useEffect(() => {
+    const key = storageKey(userId)
+    if (!key) return // logged out — nothing to persist to
     try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+      sessionStorage.setItem(key, JSON.stringify(state))
     } catch { /* storage full/blocked — chat still works, just not persisted */ }
-  }, [state])
+  }, [state, userId])
 
   useEffect(() => {
     const el = scrollRef.current
