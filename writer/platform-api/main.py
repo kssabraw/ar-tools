@@ -32,6 +32,7 @@ from routers.gsc import router as gsc_router
 from routers.gsc_research import router as gsc_research_router
 from routers.guides import router as guides_router
 from routers.icp import router as icp_router
+from routers.internal_linking import router as internal_linking_router
 from routers.local_seo import router as local_seo_router
 from routers.maps import router as maps_router
 from routers.notifications import router as notifications_router
@@ -183,6 +184,7 @@ app.include_router(gsc_router)
 app.include_router(gsc_research_router)
 app.include_router(guides_router)
 app.include_router(icp_router)
+app.include_router(internal_linking_router)
 app.include_router(local_seo_router)
 app.include_router(maps_router)
 app.include_router(notifications_router)

@@ -68,6 +68,14 @@ class Settings(BaseSettings):
     # as-is. Set max_images to 0 to disable sideloading entirely.
     wordpress_media_max_images: int = 20
     wordpress_media_max_bytes: int = 15_000_000  # 15 MB per image
+    # Internal-linking analyzer + injector. WordPress (app-password) sources are
+    # injectable after per-edit human approval; non-WP sites are crawled
+    # (sitemap + ScrapeOwl) for recommend-only suggestions.
+    internal_link_max_per_page: int = 3          # max new links added to one page
+    internal_link_max_inbound_per_target: int = 5  # cap links funnelled to one target
+    internal_link_min_anchor_words: int = 2      # anchors must be ≥ this many words
+    internal_link_wp_max_pages: int = 200        # WP inventory fetch cap
+    internal_link_crawl_max_pages: int = 40      # non-WP crawl cap
     # GitHub direct publishing — commit finished content to the client's repo as
     # Astro content Markdown (matches the Topic Fan-out convention). Dormant until
     # a token is set; each client supplies the target repo/branch/content_path.
