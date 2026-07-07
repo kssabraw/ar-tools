@@ -1497,6 +1497,9 @@ export interface StrategyProposal {
   status: 'proposed' | 'approved' | 'dismissed' | 'expired'
   requires: 'none' | 'approval' | 'senior'
   decided_by?: string | null
+  // Strategist Phase 5: the Asana task created when the proposal was approved
+  // (absent when Asana is unconfigured / the client has no project mapping).
+  asana_task?: { gid: string; url: string } | null
 }
 
 export interface StrategyReview {
