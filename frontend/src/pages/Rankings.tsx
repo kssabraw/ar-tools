@@ -104,7 +104,7 @@ export function Rankings() {
       ) : effectiveTab === 'reports' ? (
         <RankReports clientId={clientId} />
       ) : (
-        <RankKeywords clientId={clientId} gscConnected={gscConnected} />
+        <RankKeywords clientId={clientId} gscConnected={gscConnected} onViewRankability={() => setTab('rankability')} />
       )}
     </div>
   )
