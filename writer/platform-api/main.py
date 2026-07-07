@@ -23,6 +23,7 @@ from routers.clients import router as clients_router
 from routers.dashboard import router as dashboard_router
 from routers.files import router as files_router
 from routers.freeze import router as freeze_router
+from routers.goals import router as goals_router
 from routers.gsc import router as gsc_router
 from routers.gsc_research import router as gsc_research_router
 from routers.guides import router as guides_router
@@ -169,6 +170,7 @@ app.include_router(clients_router)
 app.include_router(dashboard_router)
 app.include_router(files_router)
 app.include_router(freeze_router)
+app.include_router(goals_router)
 app.include_router(gsc_router)
 app.include_router(gsc_research_router)
 app.include_router(guides_router)

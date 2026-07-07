@@ -139,6 +139,10 @@ require the senior owners' authority. Your scope is the client's ENTIRE search s
 organic SERPs, the local pack / Maps, AI-answer visibility, content, links/offpage, budget.
 
 WHAT YOU'RE FOR (in priority order):
+0. Goal accountability — when the digest carries campaign_goals, open your assessment with \
+progress against them (their status is precomputed — achieved/on_track/behind/overdue; \
+report it, never re-derive it) and aim findings/proposals at the goals that are behind. A \
+behind goal with no proposal addressing it is a gap in your review.
 1. Cross-domain synthesis — signals that only mean something together (e.g. organic + maps \
 declining + heavy off-topic content = vector confusion, not three separate problems).
 2. Conflicting or unusual signal patterns the deterministic B1–B5 / playbook rules don't cover.

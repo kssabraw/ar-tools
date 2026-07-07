@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2,
+  ClipboardList, BookOpen, Share2, Target,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -261,6 +261,13 @@ export function ClientWorkspace() {
           label="AI Visibility"
           description="Track whether this brand shows up in AI assistant answers — ChatGPT, Claude, Gemini, Perplexity & Google AI Overviews — across your keywords, over time."
           to={id ? `/clients/${id}/ai-visibility` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Target size={22} />}
+          label="Campaign Goals"
+          description="What success means for this client — rank, traffic, AI-visibility & local-pack targets with live on-track / behind status. SerMaStr judges every review and answer against these."
+          to={id ? `/clients/${id}/goals` : undefined}
           cta="Open"
         />
         <ActionCard
