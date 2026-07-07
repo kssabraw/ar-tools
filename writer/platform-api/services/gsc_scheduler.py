@@ -321,6 +321,7 @@ async def gsc_scheduler() -> None:
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
     from services.citation_check import enqueue_due_citation_checks
     from services.competitor_intel import enqueue_due_competitor_intel
+    from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.response_episodes import run_episode_sync
@@ -366,6 +367,7 @@ async def gsc_scheduler() -> None:
                 # monthly page-level RD-imbalance captures.
                 enqueue_due_citation_checks()
                 enqueue_due_competitor_intel()
+                run_trend_sweep()
                 enqueue_due_page_backlinks()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still

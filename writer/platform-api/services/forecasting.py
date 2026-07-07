@@ -376,8 +376,19 @@ def build_forecast(client_id: str, today: Optional[date] = None) -> dict:
     except Exception as exc:
         logger.warning("forecasting.goal_projection_failed", extra={"client_id": client_id, "error": str(exc)})
 
+    # Seasonal demand outlook (trend watcher; cache-only) — rendered alongside
+    # the projections so "clicks flat but demand falling" reads correctly.
+    demand = None
+    try:
+        from services import trend_watch
+
+        demand = trend_watch.build_demand_outlook(client_id, today=today)
+    except Exception as exc:
+        logger.warning("forecasting.demand_outlook_failed", extra={"client_id": client_id, "error": str(exc)})
+
     forecasts.sort(key=lambda f: -((f.get("value_per_month_90d") or 0) - (f.get("value_per_month_now") or 0)))
     return {
+        "demand_outlook": demand,
         "generated_for": today.isoformat(),
         "keyword_count": len(forecasts),
         "keywords": forecasts,

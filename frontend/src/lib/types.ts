@@ -1458,6 +1458,14 @@ export interface ForecastResponse {
     on_trajectory: boolean
     confidence: string
   }[]
+  demand_outlook: {
+    direction: 'rising' | 'falling' | 'stable'
+    change_pct_next_quarter: number
+    months_ahead: string[]
+    keywords_with_history: number
+    keywords_without_history?: number
+    notable_swings: { keyword: string; change_pct: number; volume: number; peak_months: string[] }[]
+  } | null
   note: string
 }
 

@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     competitor_intel_enabled: bool = True
     competitor_intel_interval_days: int = 7
     competitor_watch_max_pages: int = 2000
+    # Trend watching (strategist phase 4): cross-client algo-update detection
+    # (daily DB-reads-only sweep) + seasonal demand from cached volume history.
+    # An event needs >= algo_min_clients AND >= algo_min_share of clients with
+    # tracked keywords opening drops inside the same algo_window_days window.
+    trend_watch_enabled: bool = True
+    algo_min_clients: int = 3
+    algo_min_share: float = 0.4
+    algo_window_days: int = 3
     # Auto-generate a new client's brand voice + ICP at creation (async, best-
     # effort) so the assets exist without a manual scan. Skips clients with no
     # website and no GBP (nothing to analyze). Never overrides user-authored

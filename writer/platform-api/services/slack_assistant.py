@@ -61,6 +61,11 @@ _SYSTEM = (
     "CITE these numbers verbatim; never compute your own projections. Always carry the "
     "caveat that projections are linear trend extrapolations, and prefer 'gsc'-sourced "
     "click numbers (actuals) over 'ctr_model' ones (estimates) when both exist.\n"
+    "- trends: cross-client algorithm-update detections (several of the agency's "
+    "clients opened rank drops in the same window = a Google update, not this client's "
+    "emergency — factor this into any drop explanation) + the client's seasonal demand "
+    "outlook from 12-month volume history (falling seasonal demand explains falling "
+    "impressions without a ranking problem).\n"
     "- organic_rank: tracked keywords with current rank + trend, open ranking-drop "
     "alerts, the latest reoptimization Action Plan, and Search Console opportunities.\n"
     "- maps_geogrid: local-pack / Google Maps geo-grid scan results (average rank, "
@@ -597,11 +602,38 @@ def _ctx_forecast(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+def _ctx_trends(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Cross-client algo-update events + this client's seasonal demand read."""
+    from services import trend_watch
+
+    events = trend_watch.recent_algo_events()
+    outlook = None
+    try:
+        outlook = trend_watch.build_demand_outlook(client_id, today=today)
+    except Exception:
+        pass
+    if not events and not outlook:
+        return None
+    return {
+        "algo_events": [
+            {
+                "window_start": e.get("window_start"),
+                "window_end": e.get("window_end"),
+                "clients_affected": e.get("clients_affected"),
+                "clients_total": e.get("clients_total"),
+            }
+            for e in events[:3]
+        ],
+        "demand_outlook": outlook,
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
     ("competitors", _ctx_competitors),
     ("forecast", _ctx_forecast),
+    ("trends", _ctx_trends),
     ("organic_rank", _ctx_organic_rank),
     ("maps_geogrid", _ctx_maps),
     ("ai_visibility", _ctx_ai_visibility),
