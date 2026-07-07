@@ -242,6 +242,13 @@ class Settings(BaseSettings):
     slack_assistant_model: str = "claude-sonnet-4-6"
     slack_assistant_max_tokens: int = 900
     slack_assistant_max_keywords: int = 60   # cap keywords folded into the LLM context
+    # Anthropic's server-side web_search tool on the assistant's Claude call —
+    # lets SerMastr look up public info (reviews on TrustPilot/Google, competitor
+    # sites, industry news) it recommended but couldn't previously read. Billed
+    # per search by Anthropic; max_uses bounds spend per question. The tool type
+    # requires a 4.6+ model (slack_assistant_model default qualifies).
+    slack_assistant_web_search_enabled: bool = True
+    slack_assistant_web_search_max_uses: int = 3
     # SOP grounding for the assistant (Slack + dashboard chat): strategy-shaped
     # questions inject a budgeted SOP selection into the prompt, and the model
     # can pull more via a read_sop tool (bounded rounds per message).
@@ -525,6 +532,12 @@ class Settings(BaseSettings):
     # strategist reads a fresh Action Plan (0=Mon..6=Sun). Active-signal
     # clients only (spec §9 default).
     strategist_weekly_weekday: int = 1
+    # Proactive opportunity sweep: a QUIET client (no active signals) still gets
+    # a scheduled run when its last strategist run is older than this — so
+    # opportunity mining (review themes, competitor gaps, coverage holes)
+    # reaches every client ~monthly, not just clients with open problems.
+    # Bounded: ≤1 extra run per quiet client per interval; 0 disables.
+    strategist_opportunity_interval_days: int = 28
     # Input budget per run before drill-downs (spec §2: ≤ ~25k tokens). The
     # digest assembler converts at ~4 chars/token and splits this between the
     # signal digest and the SOP block.

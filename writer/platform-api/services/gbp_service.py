@@ -69,7 +69,10 @@ _DATAFORSEO_REVIEWS_ENDPOINT = (
 _TIMEOUT = 45
 # Only surface strong reviews with actual text, capped to a handful.
 _REVIEW_MIN_RATING = 4
-_REVIEW_LIMIT = 5
+# Keep as many parsed reviews as the DataForSEO call already fetches (depth=10)
+# — the strategist mines them for recurring customer-voice themes, and a larger
+# sample costs nothing extra (the cap only truncated parsing).
+_REVIEW_LIMIT = 10
 
 # Hosts used by Google Maps "share" / short links that 302-redirect to the
 # full place URL. We expand these server-side before querying Outscraper,

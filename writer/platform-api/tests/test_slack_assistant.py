@@ -502,6 +502,405 @@ def test_format_context_is_json_with_client():
 
 
 # ---------------------------------------------------------------------------
+# admin actions — pure helpers
+# ---------------------------------------------------------------------------
+def test_match_named_exact_beats_substring():
+    rows = [
+        {"id": "1", "keyword": "roof repair"},
+        {"id": "2", "keyword": "roof repair near me"},
+    ]
+    assert [r["id"] for r in slack_assistant.match_named(rows, "roof repair", key="keyword")] == ["1"]
+    assert [r["id"] for r in slack_assistant.match_named(rows, "near", key="keyword")] == ["2"]
+    assert slack_assistant.match_named(rows, "", key="keyword") == []
+    assert slack_assistant.match_named(rows, "zzz", key="keyword") == []
+
+
+def test_merge_cities_dedupes_case_insensitively():
+    merged, added, already = slack_assistant.merge_cities(
+        ["Austin", "Round Rock"], ["round rock", "Pflugerville", "  ", "pflugerville"]
+    )
+    assert merged == ["Austin", "Round Rock", "Pflugerville"]
+    assert added == ["Pflugerville"]
+    assert already == ["round rock"]
+
+
+def test_merge_cities_from_empty():
+    merged, added, already = slack_assistant.merge_cities(None, ["Austin"])
+    assert merged == ["Austin"] and added == ["Austin"] and already == []
+
+
+def test_drop_cities_matches_stored_casing_and_reports_missing():
+    remaining, removed, missing = slack_assistant.drop_cities(
+        ["Austin", "Round Rock", "Pflugerville"], ["round rock", "Nowhere"]
+    )
+    assert remaining == ["Austin", "Pflugerville"]
+    assert removed == ["Round Rock"]  # stored casing
+    assert missing == ["Nowhere"]
+
+
+def test_coerce_profile_value_typing():
+    assert slack_assistant.coerce_profile_value("retainer_monthly", "$4,500") == (4500.0, None)
+    assert slack_assistant.coerce_profile_value("retainer_monthly", "lots")[1] is not None
+    assert slack_assistant.coerce_profile_value("client_type", "Enterprise") == ("enterprise", None)
+    assert slack_assistant.coerce_profile_value("client_type", "franchise")[1] is not None
+    assert slack_assistant.coerce_profile_value("is_sab", "yes") == (True, None)
+    assert slack_assistant.coerce_profile_value("is_sab", "no") == (False, None)
+    assert slack_assistant.coerce_profile_value("is_sab", "maybe")[1] is not None
+    assert slack_assistant.coerce_profile_value("website_url", "acme.com") == ("https://acme.com", None)
+    assert slack_assistant.coerce_profile_value("website_url", "https://acme.com") == ("https://acme.com", None)
+    assert slack_assistant.coerce_profile_value("gsc_property", " sc-domain:acme.com ") == ("sc-domain:acme.com", None)
+    # non-editable / empty → error
+    assert slack_assistant.coerce_profile_value("name", "Acme")[1] is not None
+    assert slack_assistant.coerce_profile_value("wordpress_app_password", "x")[1] is not None
+    assert slack_assistant.coerce_profile_value("website_url", "")[1] is not None
+
+
+def test_clean_list_trims_and_dedupes():
+    assert slack_assistant._clean_list(["  Austin ", "austin", "", None, "Waco"]) == ["Austin", "Waco"]
+    assert slack_assistant._clean_list(None) == []
+
+
+# ---------------------------------------------------------------------------
+# admin actions — staging (mocked DB)
+# ---------------------------------------------------------------------------
+def test_stage_update_profile_confirms_change_and_skips_noop(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(
+        slack_assistant, "_client_row", lambda cid, cols: {"retainer_monthly": 3000.0}
+    )
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_update_profile("c1", {"field": "retainer_monthly", "value": "$4,500"})
+    )
+    assert outcome == "confirm"
+    assert staged["coerced_value"] == 4500.0
+    assert "$4,500" in staged["_confirm"] and "$3,000" in staged["_confirm"]
+
+    # same value → immediate reply, nothing staged
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_update_profile("c1", {"field": "retainer_monthly", "value": "3000"})
+    )
+    assert outcome == "reply" and "already" in reply
+
+    # bad field → the coercion error passes straight through
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_update_profile("c1", {"field": "name", "value": "X"})
+    )
+    assert outcome == "reply" and "can't edit" in reply
+
+
+def test_stage_add_and_remove_cities(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(
+        slack_assistant, "_client_row", lambda cid, cols: {"target_cities": ["Austin", "Waco"]}
+    )
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_add_cities("c1", {"cities": ["waco", "Temple"]})
+    )
+    assert outcome == "confirm"
+    assert staged["added"] == ["Temple"] and staged["merged"] == ["Austin", "Waco", "Temple"]
+    assert "Temple" in staged["_confirm"] and "already on the list" in staged["_confirm"]
+
+    outcome, reply = asyncio.run(slack_assistant._stage_add_cities("c1", {"cities": ["austin"]}))
+    assert outcome == "reply" and "nothing to add" in reply
+
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_remove_cities("c1", {"cities": ["WACO"]})
+    )
+    assert outcome == "confirm" and staged["removed"] == ["Waco"] and staged["remaining"] == ["Austin"]
+
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_remove_cities("c1", {"cities": ["Nowhere"]})
+    )
+    assert outcome == "reply" and "Austin" in reply  # lists current cities back
+
+    outcome, reply = asyncio.run(slack_assistant._stage_add_cities("c1", {}))
+    assert outcome == "reply"
+
+
+def test_stage_add_goal_validates_like_the_api():
+    import asyncio
+
+    stage = slack_assistant._stage_add_goal
+    # unknown type
+    outcome, reply = asyncio.run(stage("c1", {"goal_type": "wat", "label": "x"}))
+    assert outcome == "reply" and "Goal type" in reply
+    # non-custom needs target_value
+    outcome, reply = asyncio.run(stage("c1", {"goal_type": "organic_clicks", "label": "x"}))
+    assert outcome == "reply" and "target value" in reply
+    # keyword_position needs keyword
+    outcome, reply = asyncio.run(
+        stage("c1", {"goal_type": "keyword_position", "label": "x", "target_value": 3})
+    )
+    assert outcome == "reply" and "keyword" in reply.lower()
+    # keywords_in_top needs target_position
+    outcome, reply = asyncio.run(
+        stage("c1", {"goal_type": "keywords_in_top", "label": "x", "target_value": 5})
+    )
+    assert outcome == "reply" and "position" in reply.lower()
+    # bad due date
+    outcome, reply = asyncio.run(
+        stage("c1", {"goal_type": "organic_clicks", "label": "x", "target_value": 800, "due_date": "Q4"})
+    )
+    assert outcome == "reply" and "YYYY-MM-DD" in reply
+    # valid → confirm names the goal
+    outcome, staged = asyncio.run(
+        stage("c1", {
+            "goal_type": "keyword_position", "label": "'roof repair' to top 3",
+            "target_value": 3, "keyword": "roof repair", "due_date": "2026-12-31",
+        })
+    )
+    assert outcome == "confirm"
+    assert "'roof repair' to top 3" in staged["_confirm"] and "due 2026-12-31" in staged["_confirm"]
+    # numbers arriving as strings are coerced, not crashed on
+    outcome, staged = asyncio.run(
+        stage("c1", {"goal_type": "organic_clicks", "label": "800 clicks/mo", "target_value": "800"})
+    )
+    assert outcome == "confirm" and staged["target_value"] == 800.0
+    outcome, reply = asyncio.run(
+        stage("c1", {"goal_type": "organic_clicks", "label": "x", "target_value": "lots"})
+    )
+    assert outcome == "reply" and "isn't a number" in reply
+
+
+def test_stage_remove_tracked_keyword_resolves_and_disambiguates(monkeypatch):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    supabase = MagicMock()
+    supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+        {"id": "k1", "keyword": "roof repair"},
+        {"id": "k2", "keyword": "roof repair near me"},
+    ]
+    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_remove_tracked_keyword("c1", {"keyword": "roof repair"})
+    )
+    assert outcome == "confirm" and staged["keyword_id"] == "k1"
+    assert "rank history" in staged["_confirm"]
+
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_remove_tracked_keyword("c1", {"keyword": "roof"})
+    )
+    assert outcome == "reply" and "matches 2" in reply
+
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_remove_tracked_keyword("c1", {"keyword": "plumber"})
+    )
+    assert outcome == "reply" and "roof repair" in reply
+
+
+def test_stage_generate_report_wording_and_validation():
+    import asyncio
+
+    outcome, staged = asyncio.run(slack_assistant._stage_generate_report("c1", {}))
+    assert outcome == "confirm"
+    assert staged["report_type"] == "monthly" and staged["deliver"] is False
+    assert "not delivered" in staged["_confirm"]
+
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_generate_report("c1", {"report_type": "ai_visibility", "deliver": True})
+    )
+    assert outcome == "confirm" and "DELIVER" in staged["_confirm"]
+
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_generate_report("c1", {"report_type": "quarterly"})
+    )
+    assert outcome == "reply" and "Report type" in reply
+
+
+def test_act_generate_report_enqueues(monkeypatch):
+    from services import client_report
+
+    calls = []
+    monkeypatch.setattr(
+        client_report, "enqueue_client_report",
+        lambda cid, rtype, deliver=False: calls.append((cid, rtype, deliver)) or "r1",
+    )
+    out = slack_assistant._act_generate_report("c1", {"report_type": "weekly", "deliver": True})
+    assert calls == [("c1", "weekly", True)]
+    assert "delivered" in out
+
+
+def test_act_add_tracked_keywords_upserts_and_enqueues(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from services import keyword_market, rank_materialize
+
+    supabase = MagicMock()
+    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+    mats, markets = [], []
+    monkeypatch.setattr(rank_materialize, "enqueue_materialize", lambda cid: mats.append(cid))
+    monkeypatch.setattr(
+        keyword_market, "enqueue_keyword_market", lambda cid, **kw: markets.append(cid)
+    )
+    out = slack_assistant._act_add_tracked_keywords("c1", {"new": ["roof repair", "roof leak"]})
+    rows = supabase.table.return_value.upsert.call_args[0][0]
+    assert [r["keyword"] for r in rows] == ["roof repair", "roof leak"]
+    assert all(r["client_id"] == "c1" for r in rows)
+    assert mats == ["c1"] and markets == ["c1"]
+    assert "roof repair" in out
+
+    # staged args lost → guidance, nothing written
+    supabase.reset_mock()
+    out = slack_assistant._act_add_tracked_keywords("c1", {})
+    assert "lost track" in out and not supabase.table.called
+
+
+def test_act_update_profile_website_triggers_rescrape(monkeypatch):
+    from unittest.mock import MagicMock
+
+    supabase = MagicMock()
+    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+    out = slack_assistant._act_update_profile(
+        "c1", {"field": "website_url", "coerced_value": "https://new.acme.com"}
+    )
+    updates = supabase.table.return_value.update.call_args[0][0]
+    assert updates["website_url"] == "https://new.acme.com"
+    assert updates["website_analysis_status"] == "pending"
+    job = supabase.table.return_value.insert.call_args[0][0]
+    assert job["job_type"] == "website_scrape"
+    assert job["payload"]["website_url"] == "https://new.acme.com"
+    assert "re-running the site analysis" in out
+
+    # a non-website field writes only the field (no scrape job)
+    supabase.reset_mock()
+    out = slack_assistant._act_update_profile("c1", {"field": "is_sab", "coerced_value": True})
+    updates = supabase.table.return_value.update.call_args[0][0]
+    assert updates["is_sab"] is True
+    assert not supabase.table.return_value.insert.called
+    assert "SAB" in out
+
+
+# ---------------------------------------------------------------------------
+# web search (server-side tool) — tool list, response parsing, pause_turn
+# ---------------------------------------------------------------------------
+def test_build_llm_tools_gates_web_search_on_setting(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "slack_assistant_web_search_enabled", True)
+    monkeypatch.setattr(settings, "slack_assistant_web_search_max_uses", 3)
+    tools = slack_assistant.build_llm_tools()
+    ws = [t for t in tools if t.get("name") == "web_search"]
+    assert len(ws) == 1
+    assert ws[0]["type"] == "web_search_20260209"
+    assert ws[0]["max_uses"] == 3
+    # every action tool still present
+    assert {t["name"] for t in slack_assistant._ACTION_TOOLS} <= {t["name"] for t in tools}
+
+    monkeypatch.setattr(settings, "slack_assistant_web_search_enabled", False)
+    tools = slack_assistant.build_llm_tools()
+    assert all(t.get("name") != "web_search" for t in tools)
+    assert len(tools) == len(slack_assistant._ACTION_TOOLS)
+
+
+def test_extract_interpretation_ignores_server_tool_blocks():
+    from types import SimpleNamespace as NS
+
+    # a searched answer: server tool use + result + interleaved text → text
+    content = [
+        NS(type="text", text="Let me check their reviews."),
+        NS(type="server_tool_use", name="web_search", input={"query": "FCR reviews"}),
+        NS(type="web_search_tool_result", content=[]),
+        NS(type="text", text="TrustPilot shows 4.2/5 across 87 reviews."),
+    ]
+    kind, payload = slack_assistant.extract_interpretation(content)
+    assert kind == "text"
+    assert "TrustPilot shows 4.2/5" in payload and "Let me check" in payload
+
+    # an action tool call wins over text
+    content = [
+        NS(type="text", text="Sure."),
+        NS(type="tool_use", name="rebuild_action_plan", input={}),
+    ]
+    kind, payload = slack_assistant.extract_interpretation(content)
+    assert kind == "action" and payload["name"] == "rebuild_action_plan"
+
+    # a tool_use whose name isn't a registered action is NOT an action
+    content = [NS(type="tool_use", name="unknown_tool", input={}), NS(type="text", text="hi")]
+    kind, payload = slack_assistant.extract_interpretation(content)
+    assert kind == "text" and payload == "hi"
+
+    # nothing usable → fallback message
+    kind, payload = slack_assistant.extract_interpretation([])
+    assert kind == "text" and "try rephrasing" in payload
+
+
+def test_create_with_continuation_resumes_pause_turn():
+    import asyncio
+    from types import SimpleNamespace as NS
+
+    class FakeApi:
+        def __init__(self, responses):
+            self._responses = list(responses)
+            self.calls = []
+
+        @property
+        def messages(self):
+            return self
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return self._responses.pop(0)
+
+    paused = NS(stop_reason="pause_turn", content=[NS(type="server_tool_use", name="web_search")])
+    done = NS(stop_reason="end_turn", content=[NS(type="text", text="answer")])
+
+    api = FakeApi([paused, done])
+    messages = [{"role": "user", "content": "q"}]
+    resp = asyncio.run(slack_assistant._create_with_continuation(api, "sys", messages, []))
+    assert resp is done
+    assert len(api.calls) == 2
+    # the resumed request re-sends user + the paused assistant content — and the
+    # interim assistant turn lands in the SHARED list (outer tool loops rely on it)
+    second = api.calls[1]["messages"]
+    assert second[0] == {"role": "user", "content": "q"}
+    assert second[1]["role"] == "assistant" and second[1]["content"] is paused.content
+    assert messages[1]["content"] is paused.content
+    # no tool_choice kwarg unless one was passed
+    assert "tool_choice" not in api.calls[0]
+
+    # tool_choice is forwarded on every call when given
+    api = FakeApi([NS(stop_reason="end_turn", content=[])])
+    asyncio.run(slack_assistant._create_with_continuation(
+        api, "sys", [{"role": "user", "content": "q"}], [], tool_choice={"type": "none"}
+    ))
+    assert api.calls[0]["tool_choice"] == {"type": "none"}
+
+    # bounded: a turn that never finishes stops after 1 + N continuations
+    always_paused = [
+        NS(stop_reason="pause_turn", content=[])
+        for _ in range(slack_assistant._PAUSE_TURN_CONTINUATIONS + 5)
+    ]
+    api = FakeApi(always_paused)
+    resp = asyncio.run(slack_assistant._create_with_continuation(
+        api, "sys", [{"role": "user", "content": "q"}], []
+    ))
+    assert len(api.calls) == 1 + slack_assistant._PAUSE_TURN_CONTINUATIONS
+    assert resp.stop_reason == "pause_turn"  # caller gets the last response as-is
+
+
+def test_admin_actions_registered_confirm_gated_and_staged():
+    admin_actions = (
+        "update_client_profile", "add_target_cities", "remove_target_cities",
+        "add_tracked_keywords", "remove_tracked_keyword",
+        "add_ai_keywords", "remove_ai_keyword", "add_ai_competitor", "remove_ai_competitor",
+        "add_campaign_goal", "remove_campaign_goal", "generate_client_report",
+    )
+    for name in admin_actions:
+        meta = slack_assistant._ACTIONS[name]
+        # every admin write is confirm-gated with its own wording, and staged so
+        # the confirm names the exact change before anything is written.
+        assert meta["paid"] is True, name
+        assert meta.get("note"), name
+        assert callable(meta.get("stage")), name
+        tool = next(t for t in slack_assistant._ACTION_TOOLS if t["name"] == name)
+        assert tool["input_schema"]["properties"], name
+
+
+# ---------------------------------------------------------------------------
 # is_local_client
 # ---------------------------------------------------------------------------
 def test_is_local_client_no_signals_is_not_local():

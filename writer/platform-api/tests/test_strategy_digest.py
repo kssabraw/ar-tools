@@ -203,3 +203,62 @@ def test_budget_domain_from_client_retainer():
     # client with an unflagged plan still activates the budget domain.
     digest = {"client": {"retainer_monthly": 2000}, "task_plan": {"flags": []}}
     assert "budget" in sd.active_signal_domains(digest)
+
+
+# ---------------------------------------------------------------------------
+# review_snippets — customer-voice raw material for the strategist
+# ---------------------------------------------------------------------------
+def test_review_snippets_clips_caps_and_skips_empty():
+    gbp = {"reviews": [
+        {"reviewer": "A", "rating": 5, "date": "2026-06-01", "text": "Free parking was great! " * 30},
+        {"reviewer": "B", "rating": 4, "date": "", "text": "  "},          # empty → skipped
+        {"reviewer": "C", "rating": 5, "text": "They have free parking."},  # no date → None
+        "junk",                                                             # non-dict → skipped
+    ]}
+    out = sd.review_snippets(gbp, limit=10, clip=50)
+    assert len(out) == 2
+    assert len(out[0]["text"]) == 50 and out[0]["rating"] == 5
+    assert out[1] == {"rating": 5, "date": None, "text": "They have free parking."}
+    # reviewer names are deliberately NOT carried into the prompt
+    assert all("reviewer" not in r for r in out)
+
+
+def test_review_snippets_limit_and_empty_shapes():
+    gbp = {"reviews": [{"text": f"review {i}"} for i in range(20)]}
+    assert len(sd.review_snippets(gbp, limit=10)) == 10
+    assert sd.review_snippets(None) == []
+    assert sd.review_snippets({}) == []
+    assert sd.review_snippets({"reviews": "oops"}) == []
+
+
+# ---------------------------------------------------------------------------
+# competitor_review_sets — competitor customer-voice from raw capture rows
+# ---------------------------------------------------------------------------
+def test_competitor_review_sets_dedups_sorts_and_caps():
+    rows = [
+        # newest capture first per place — the stale p1 capture below must lose
+        {"place_id": "p1", "name": "Acme Roofing", "top3_pins": 2, "found_pins": 5,
+         "profile": {"reviews": [{"text": "fresh capture"}]}},
+        {"place_id": "p2", "name": "Best Roofs", "top3_pins": 9, "found_pins": 12,
+         "profile": {"reviews": [{"text": f"r{i}"} for i in range(9)]}},
+        {"place_id": "p1", "name": "Acme Roofing", "top3_pins": 2, "found_pins": 5,
+         "profile": {"reviews": [{"text": "STALE capture"}]}},
+        {"place_id": "p3", "name": "No Reviews Inc", "top3_pins": 99, "found_pins": 99,
+         "profile": {"reviews": []}},  # no text → skipped even though top pack presence
+    ]
+    out = sd.competitor_review_sets(rows, max_competitors=4, per_competitor=5)
+    # p3 skipped (no reviews); p2 first (more pack presence than p1)
+    assert [c["competitor"] for c in out] == ["Best Roofs", "Acme Roofing"]
+    assert len(out[0]["reviews"]) == 5  # per-competitor cap
+    assert out[1]["reviews"][0]["text"] == "fresh capture"  # latest capture won
+
+
+def test_competitor_review_sets_max_competitors_and_empty():
+    rows = [
+        {"place_id": f"p{i}", "name": f"C{i}", "top3_pins": i,
+         "profile": {"reviews": [{"text": "hi"}]}}
+        for i in range(6)
+    ]
+    assert len(sd.competitor_review_sets(rows, max_competitors=3)) == 3
+    assert sd.competitor_review_sets([]) == []
+    assert sd.competitor_review_sets(None) == []

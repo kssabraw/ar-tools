@@ -285,8 +285,50 @@ def test_job_handler_fails_cleanly_while_disabled():
 
     job = {"id": "job-1", "payload": {"client_id": "c-1", "review_id": "r-1"}}
     with patch.object(strategist, "get_supabase", return_value=supabase):
-        asyncio.get_event_loop().run_until_complete(strategist.run_strategy_review_job(job))
+        asyncio.run(strategist.run_strategy_review_job(job))
 
     assert any(u.get("error") == "strategist_disabled" and u.get("status") == "failed" for u in updates)
     # Both the job row and the pre-created review row are closed out.
     assert len([u for u in updates if u.get("status") == "failed"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# opportunity sweep — proactive runs for QUIET clients (no active signals)
+# ---------------------------------------------------------------------------
+def test_opportunity_sweep_targets_quiet_clients_not_recently_run(monkeypatch):
+    from unittest.mock import MagicMock
+
+    def fake_table(name):
+        m = MagicMock()
+        if name == "clients":
+            m.select.return_value.eq.return_value.execute.return_value.data = [
+                {"id": "a"}, {"id": "b"}, {"id": "c"},
+            ]
+        else:  # strategy_reviews within the interval
+            m.select.return_value.gte.return_value.execute.return_value.data = [
+                {"client_id": "b"},
+            ]
+        return m
+
+    supabase = MagicMock()
+    supabase.table.side_effect = fake_table
+    monkeypatch.setattr(strategist, "get_supabase", lambda: supabase)
+
+    # a is active (excluded), b ran recently (excluded) → only c is due
+    assert strategist.clients_due_opportunity_sweep({"a"}, 28) == {"c"}
+
+
+def test_opportunity_sweep_disabled_and_no_quiet(monkeypatch):
+    from unittest.mock import MagicMock
+
+    # interval <= 0 → off, no DB touched
+    assert strategist.clients_due_opportunity_sweep({"a"}, 0) == set()
+
+    # every client active → nothing to sweep (reviews table never queried)
+    supabase = MagicMock()
+    clients_m = MagicMock()
+    clients_m.select.return_value.eq.return_value.execute.return_value.data = [{"id": "a"}]
+    supabase.table.return_value = clients_m
+    monkeypatch.setattr(strategist, "get_supabase", lambda: supabase)
+    assert strategist.clients_due_opportunity_sweep({"a"}, 28) == set()
+    supabase.table.assert_called_once_with("clients")
