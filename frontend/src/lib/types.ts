@@ -136,7 +136,17 @@ export interface SyncRun {
 
 export interface IngestResponse {
   property_id: string
-  status: 'ok' | 'failed'
+  // A dateless "Sync now" enqueues a background job ("queued" + job_id); an
+  // explicit-window re-pull still returns "ok"/"failed" synchronously.
+  status: 'queued' | 'ok' | 'failed'
+  job_id: string | null
+  rows: number
+  error: string | null
+}
+
+export interface IngestJobStatus {
+  job_id: string
+  status: 'pending' | 'running' | 'complete' | 'failed'
   rows: number
   error: string | null
 }
@@ -320,6 +330,23 @@ export interface RankAlert {
 export interface RankAlertsResponse {
   alerts: RankAlert[]
   unread_count: number
+}
+
+// DataForSEO "Refresh live ranks" now runs as a background job so it survives
+// navigation. POST enqueues; poll the status endpoint until it settles.
+export interface DataForSeoRefreshEnqueue {
+  client_id: string
+  status: string
+  job_id: string | null
+}
+
+export interface DataForSeoRefreshStatus {
+  job_id: string
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  fetched: number
+  skipped: number
+  failed: number
+  error: string | null
 }
 
 // ── ICP + differentiators (converged client-level assets, Option A) ──────────

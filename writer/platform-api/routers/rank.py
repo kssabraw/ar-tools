@@ -23,6 +23,7 @@ from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from models.rank import (
     DataForSeoRefreshResponse,
+    DataForSeoRefreshStatus,
     FetchSchedule,
     KeywordSummary,
     KeywordTrendline,
@@ -505,11 +506,42 @@ async def set_tracking_location(
 
 @router.post("/clients/{client_id}/rank/refresh-dataforseo", response_model=DataForSeoRefreshResponse)
 async def trigger_dataforseo(client_id: UUID, auth: dict = Depends(require_auth)) -> DataForSeoRefreshResponse:
-    """Fetch DataForSEO ranks now for keywords GSC can't cover (admin)."""
-    result = await dataforseo_rank.refresh_client_ranks(str(client_id))
-    if result.get("status") == "ok" and result.get("fetched"):
-        rank_materialize.materialize_client(str(client_id))
-    return DataForSeoRefreshResponse(client_id=client_id, **result)
+    """Enqueue a DataForSEO rank pull for keywords GSC can't cover.
+
+    Runs as an async job in the worker (the pull is one SERP call per uncovered
+    keyword and can take a minute or two), so it completes even if the user
+    leaves the rankings page. Poll ``GET .../rank/refresh-dataforseo/{job_id}``
+    for progress; the job also re-materializes status when fresh ranks land.
+    """
+    job_id = dataforseo_rank.enqueue_dataforseo_rank(str(client_id))
+    return DataForSeoRefreshResponse(client_id=client_id, status="enqueued", job_id=job_id)
+
+
+@router.get(
+    "/clients/{client_id}/rank/refresh-dataforseo/{job_id}",
+    response_model=DataForSeoRefreshStatus,
+)
+async def dataforseo_refresh_status(
+    client_id: UUID, job_id: UUID, auth: dict = Depends(require_auth)
+) -> DataForSeoRefreshStatus:
+    """Status of an enqueued DataForSEO refresh so the UI can poll to completion."""
+    rows = (
+        get_supabase().table("async_jobs")
+        .select("id, status, result, error")
+        .eq("id", str(job_id)).limit(1).execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    row = rows[0]
+    result = row.get("result") or {}
+    return DataForSeoRefreshStatus(
+        job_id=job_id,
+        status=row["status"],
+        fetched=result.get("fetched", 0),
+        skipped=result.get("skipped", 0),
+        failed=result.get("failed", 0),
+        error=row.get("error") or result.get("error"),
+    )
 
 
 # ---- Per-client rank-data refresh schedule -----------------------------------

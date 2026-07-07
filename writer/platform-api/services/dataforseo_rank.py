@@ -316,8 +316,13 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
     return {"status": "ok", "fetched": fetched, "skipped": skipped, "failed": failed}
 
 
-def enqueue_dataforseo_rank(client_id: str) -> None:
-    """Enqueue a weekly DataForSEO rank job (deduped against pending ones)."""
+def enqueue_dataforseo_rank(client_id: str) -> str:
+    """Enqueue a DataForSEO rank job (deduped against pending/running ones).
+
+    Returns the job id — the existing one when a pull is already queued/running
+    (so a manual refresh rides the in-flight job rather than double-fetching),
+    otherwise the newly-inserted one.
+    """
     supabase = get_supabase()
     existing = (
         supabase.table("async_jobs")
@@ -329,10 +334,11 @@ def enqueue_dataforseo_rank(client_id: str) -> None:
         .execute()
     )
     if existing.data:
-        return
-    supabase.table("async_jobs").insert(
+        return existing.data[0]["id"]
+    inserted = supabase.table("async_jobs").insert(
         {"job_type": "dataforseo_rank", "entity_id": client_id, "payload": {"client_id": client_id}}
     ).execute()
+    return inserted.data[0]["id"]
 
 
 async def run_dataforseo_rank_job(job: dict) -> None:

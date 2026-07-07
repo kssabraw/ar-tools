@@ -218,6 +218,33 @@ def ingest_property_pages(property_id: str) -> IngestResult:
     return IngestResult(status="ok", rows=len(records))
 
 
+def enqueue_ingest(property_id: str) -> str:
+    """Enqueue a default-window GSC ingest job (deduped against pending/running).
+
+    Returns the job id — the existing one when an ingest is already queued or
+    running for this property (so a manual "Sync now" rides the in-flight pull,
+    incl. the daily scheduled one, rather than double-fetching), otherwise the
+    newly-inserted one. The job runs in the worker, so it completes even if the
+    user navigates away from the settings page.
+    """
+    supabase = get_supabase()
+    existing = (
+        supabase.table("async_jobs")
+        .select("id")
+        .eq("job_type", "gsc_ingest")
+        .eq("entity_id", property_id)
+        .in_("status", ["pending", "running"])
+        .limit(1)
+        .execute()
+    )
+    if existing.data:
+        return existing.data[0]["id"]
+    inserted = supabase.table("async_jobs").insert(
+        {"job_type": "gsc_ingest", "entity_id": property_id, "payload": {"property_id": property_id}}
+    ).execute()
+    return inserted.data[0]["id"]
+
+
 async def run_gsc_ingest_job(job: dict) -> None:
     """async_jobs handler for job_type='gsc_ingest'."""
     payload = job.get("payload") or {}

@@ -24,6 +24,7 @@ from models.gsc import (
     BackfillResponse,
     GscProperty,
     GscPropertyCreateRequest,
+    IngestJobStatus,
     IngestResponse,
     ServiceAccountInfo,
     SyncRun,
@@ -164,14 +165,35 @@ async def trigger_ingest(
     end_date: str | None = None,
     auth: dict = Depends(require_auth),
 ) -> IngestResponse:
-    """Run a GSC ingest now (admin). Omit dates for the default trailing window;
-    pass start_date/end_date (YYYY-MM-DD) for a wider initial backfill."""
-    result = gsc_ingest.ingest_property(str(property_id), start_date, end_date)
-    return IngestResponse(
-        property_id=property_id,
-        status=result.status,
-        rows=result.rows,
-        error=result.error,
+    """Sync GSC now (admin). Enqueues a background ingest for the default trailing
+    window so it finishes in the worker even if the user leaves the settings page
+    (poll ``GET .../ingest/{job_id}``). An explicit start_date/end_date still runs
+    synchronously — that path is only used for a bounded, deliberate re-pull."""
+    if start_date or end_date:
+        result = gsc_ingest.ingest_property(str(property_id), start_date, end_date)
+        return IngestResponse(
+            property_id=property_id, status=result.status, rows=result.rows, error=result.error,
+        )
+    job_id = gsc_ingest.enqueue_ingest(str(property_id))
+    return IngestResponse(property_id=property_id, status="queued", job_id=job_id)
+
+
+@router.get("/gsc-properties/{property_id}/ingest/{job_id}", response_model=IngestJobStatus)
+async def ingest_status(
+    property_id: UUID, job_id: UUID, auth: dict = Depends(require_auth)
+) -> IngestJobStatus:
+    """Status of an enqueued GSC ingest so the UI can poll to completion."""
+    rows = (
+        get_supabase().table("async_jobs")
+        .select("id, status, result, error")
+        .eq("id", str(job_id)).limit(1).execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    row = rows[0]
+    result = row.get("result") or {}
+    return IngestJobStatus(
+        job_id=job_id, status=row["status"], rows=result.get("rows", 0), error=row.get("error"),
     )
 
 
