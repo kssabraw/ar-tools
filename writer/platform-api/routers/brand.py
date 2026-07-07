@@ -121,6 +121,14 @@ async def start_brand_scan(
     return BrandScanStartResponse(job_id=result["job_id"], scan_batch_id=result["scan_batch_id"])
 
 
+@router.get("/clients/{client_id}/brand/scan-active")
+async def get_active_brand_scan(client_id: UUID, auth: dict = Depends(require_auth)):
+    """The most recent in-flight (pending/running) scan job for this client, so
+    the frontend can re-attach its progress bar after reload / navigating away
+    and back. Returns {"job_id": null} when nothing is running."""
+    return brand_service.get_active_scan(str(client_id))
+
+
 @router.get("/clients/{client_id}/brand/scan/{job_id}", response_model=BrandScanStatusResponse)
 async def get_brand_scan_status(
     client_id: UUID,
