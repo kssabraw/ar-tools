@@ -366,3 +366,28 @@ def test_format_context_is_json_with_client():
     assert parsed["client"]["name"] == "Acme"
     assert parsed["client"]["website"] == "https://acme.com"
     assert parsed["keyword_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# is_local_client
+# ---------------------------------------------------------------------------
+def test_is_local_client_no_signals_is_not_local():
+    assert slack_assistant.is_local_client({}) is False
+    # client_type is deliberately ignored — it defaults to 'local' for everyone.
+    assert slack_assistant.is_local_client({"client_type": "local"}) is False
+
+
+def test_is_local_client_client_row_signals():
+    assert slack_assistant.is_local_client({"gbp": {"place_id": "abc"}}) is True
+    assert slack_assistant.is_local_client({"gbp": {"business_name": "Acme Plumbing"}}) is True
+    assert slack_assistant.is_local_client({"is_sab": True}) is True
+    assert slack_assistant.is_local_client({"business_location": "123 Main St, Austin"}) is True
+    assert slack_assistant.is_local_client({"target_cities": ["Penrith"]}) is True
+    # Empty/null shapes stay non-local.
+    assert slack_assistant.is_local_client({"gbp": {}, "target_cities": [], "is_sab": False}) is False
+
+
+def test_is_local_client_actual_local_work_counts():
+    assert slack_assistant.is_local_client({}, local_seo_pages=2) is True
+    assert slack_assistant.is_local_client({}, maps_scans=1) is True
+    assert slack_assistant.is_local_client({}, local_seo_pages=0, maps_scans=0) is False
