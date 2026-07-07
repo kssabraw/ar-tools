@@ -70,6 +70,13 @@ async def delete_brand_keyword(
     return {"ok": True}
 
 
+@router.post("/clients/{client_id}/brand/keywords/import-organic")
+async def import_organic_brand_keywords(client_id: UUID, auth: dict = Depends(require_auth)):
+    """Copy the client's active organic rank-tracker keywords into AI Visibility,
+    verbatim, skipping any already tracked. Returns {imported, skipped, keywords}."""
+    return brand_service.import_organic_keywords(str(client_id))
+
+
 # ── competitors ──────────────────────────────────────────────────────────────
 @router.get("/clients/{client_id}/brand/competitors", response_model=list[BrandCompetitorResponse])
 async def list_brand_competitors(client_id: UUID, auth: dict = Depends(require_auth)):

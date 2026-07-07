@@ -471,6 +471,7 @@ function Keywords({ clientId, keywords }: { clientId: string; keywords: Keyword[
   const qc = useQueryClient()
   const [text, setText] = useState('')
   const [suggested, setSuggested] = useState<string[] | null>(null)
+  const [importMsg, setImportMsg] = useState<string | null>(null)
   const invalidate = () => qc.invalidateQueries({ queryKey: ['brand-keywords', clientId] })
   const addMut = useMutation({ mutationFn: (keyword: string) => api.post(`/clients/${clientId}/brand/keywords`, { keyword }), onSuccess: () => { setText(''); invalidate() } })
   const toggleMut = useMutation({ mutationFn: (k: Keyword) => api.patch(`/clients/${clientId}/brand/keywords/${k.id}`, { is_active: !k.is_active }), onSuccess: invalidate })
@@ -478,6 +479,17 @@ function Keywords({ clientId, keywords }: { clientId: string; keywords: Keyword[
   const suggestMut = useMutation({
     mutationFn: () => api.post<{ keywords: string[] }>(`/clients/${clientId}/brand/suggest-keywords`, {}),
     onSuccess: (r) => setSuggested(r.keywords),
+  })
+  const importMut = useMutation({
+    mutationFn: () => api.post<{ imported: number; skipped: number; keywords: string[] }>(`/clients/${clientId}/brand/keywords/import-organic`, {}),
+    onSuccess: (r) => {
+      setImportMsg(
+        r.imported === 0
+          ? (r.skipped > 0 ? 'All organic rank-tracker keywords are already tracked here.' : 'No organic rank-tracker keywords found for this client.')
+          : `Imported ${r.imported} keyword${r.imported === 1 ? '' : 's'} from the organic rank tracker${r.skipped ? ` (${r.skipped} already tracked)` : ''}.`,
+      )
+      invalidate()
+    },
   })
   const existing = new Set(keywords.map(k => k.keyword.toLowerCase()))
   const addSuggestion = async (kw: string) => {
@@ -488,12 +500,17 @@ function Keywords({ clientId, keywords }: { clientId: string; keywords: Keyword[
   return (
     <div>
       <AddRow placeholder="Add a keyword (e.g. emergency plumber sydney)" value={text} setValue={setText} onAdd={() => text.trim() && addMut.mutate(text.trim())} pending={addMut.isPending} />
-      <div style={{ marginBottom: 16, marginTop: -6 }}>
+      <div style={{ marginBottom: 16, marginTop: -6, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
         <button style={miniBtn} disabled={suggestMut.isPending} onClick={() => suggestMut.mutate()}>
           <Sparkles size={13} /> {suggestMut.isPending ? 'Thinking…' : 'Suggest AI queries'}
         </button>
+        <button style={miniBtn} disabled={importMut.isPending} onClick={() => { setImportMsg(null); importMut.mutate() }}>
+          <Download size={13} /> {importMut.isPending ? 'Importing…' : 'Import from rank tracker'}
+        </button>
       </div>
       {suggestMut.isError && <Banner kind="error">{(suggestMut.error as Error).message}</Banner>}
+      {importMut.isError && <Banner kind="error">{(importMut.error as Error).message}</Banner>}
+      {importMsg && <Banner kind="info">{importMsg}</Banner>}
       {suggested && suggested.length > 0 && (
         <div style={{ ...card, marginBottom: 16 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginBottom: 8 }}>Conversational AI queries from this client’s tracked keywords — click to add</div>
@@ -680,12 +697,13 @@ function EmptyState({ title, body }: { title: string; body: string }) {
     <div style={{ fontSize: 13, color: '#94a3b8', maxWidth: 460, margin: '0 auto' }}>{body}</div>
   </div>
 }
-function Banner({ kind, children }: { kind: 'error' | 'warn'; children: React.ReactNode }) {
-  const color = kind === 'error' ? '#b91c1c' : '#b45309'
-  const bg = kind === 'error' ? '#fef2f2' : '#fffbeb'
-  const border = kind === 'error' ? '#fecaca' : '#fde68a'
+function Banner({ kind, children }: { kind: 'error' | 'warn' | 'info'; children: React.ReactNode }) {
+  const color = kind === 'error' ? '#b91c1c' : kind === 'info' ? '#1d4ed8' : '#b45309'
+  const bg = kind === 'error' ? '#fef2f2' : kind === 'info' ? '#eff6ff' : '#fffbeb'
+  const border = kind === 'error' ? '#fecaca' : kind === 'info' ? '#bfdbfe' : '#fde68a'
+  const Icon = kind === 'info' ? Check : AlertTriangle
   return <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start', background: bg, border: `1px solid ${border}`, color, borderRadius: 10, padding: '12px 14px', fontSize: 13, marginBottom: 16 }}>
-    <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} /> <span>{children}</span>
+    <Icon size={16} style={{ flexShrink: 0, marginTop: 1 }} /> <span>{children}</span>
   </div>
 }
 function Th({ children, right }: { children: React.ReactNode; right?: boolean }) {

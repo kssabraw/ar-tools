@@ -423,7 +423,10 @@ class Settings(BaseSettings):
     # tunable (like the Fanout client) so it can be flipped to
     # "web_search_preview" without a code change if the account needs it.
     brand_chatgpt_web_search_tool: str = "web_search"
-    brand_engine_gemini_model: str = "gemini-2.0-flash"
+    # gemini-2.0-flash was shut down by Google on 2026-06-01; gemini-3.5-flash
+    # is the current GA Flash model (alias gemini-flash-latest). Override via
+    # BRAND_ENGINE_GEMINI_MODEL when Google rotates the GA Flash tier again.
+    brand_engine_gemini_model: str = "gemini-3.5-flash"
     brand_engine_perplexity_model: str = "sonar"
     # Auxiliary OpenAI features: invisibility diagnosis + keyword suggestions.
     # Use the latest OpenAI flagship (these are quality reasoning/generation

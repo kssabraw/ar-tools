@@ -107,3 +107,63 @@ def test_aggregate_response_analysis_rolls_up_batch():
     rival = next(b for b in out["consensus"]["businesses"] if b["name"] == "Rival")
     assert rival["count"] == 2
     assert set(rival["attributes"]) == {"24/7", "family-owned"}
+
+
+# ── import_organic_keywords (copy organic rank-tracker keywords into LABS) ─────
+class _FakeQuery:
+    def __init__(self, data, sink):
+        self._data = data
+        self._sink = sink
+        self._insert = None
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def in_(self, *a, **k): return self
+
+    def insert(self, rows):
+        self._insert = rows
+        return self
+
+    def execute(self):
+        if self._insert is not None:
+            self._sink.extend(self._insert)
+            return type("R", (), {"data": self._insert})()
+        return type("R", (), {"data": self._data})()
+
+
+class _FakeSupabase:
+    def __init__(self, tables):
+        self._tables = tables
+        self.inserts: dict[str, list] = {}
+
+    def table(self, name):
+        return _FakeQuery(self._tables.get(name, []), self.inserts.setdefault(name, []))
+
+
+def test_import_organic_keywords_adds_new_skips_existing(monkeypatch):
+    fake = _FakeSupabase({
+        "gsc_properties": [{"id": "p1"}],
+        "tracked_keywords": [
+            {"keyword": "Emergency Plumber Sydney"},
+            {"keyword": "blocked drain"},
+            {"keyword": "Blocked Drain"},   # case-dup within the source
+            {"keyword": "burst pipe"},      # already tracked in LABS
+        ],
+        "brand_tracked_keywords": [{"keyword": "Burst Pipe"}],  # existing (case-insensitive)
+    })
+    monkeypatch.setattr(bsvc, "get_supabase", lambda: fake)
+
+    out = bsvc.import_organic_keywords("c1")
+    assert out["imported"] == 2 and out["skipped"] == 1
+    assert out["keywords"] == ["Emergency Plumber Sydney", "blocked drain"]
+    inserted = fake.inserts["brand_tracked_keywords"]
+    assert [r["keyword"] for r in inserted] == ["Emergency Plumber Sydney", "blocked drain"]
+    assert all(r["category"] == "organic" and r["client_id"] == "c1" for r in inserted)
+
+
+def test_import_organic_keywords_empty_tracker_is_noop(monkeypatch):
+    fake = _FakeSupabase({"gsc_properties": [], "brand_tracked_keywords": []})
+    monkeypatch.setattr(bsvc, "get_supabase", lambda: fake)
+    out = bsvc.import_organic_keywords("c1")
+    assert out == {"imported": 0, "skipped": 0, "keywords": []}
+    assert "brand_tracked_keywords" not in fake.inserts  # no insert attempted
