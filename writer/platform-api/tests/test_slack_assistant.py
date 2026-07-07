@@ -557,3 +557,52 @@ def test_read_sop_tool_lists_docs():
     assert "doc" in tool["input_schema"]["properties"]
     # The live SOP corpus is vendored into the service — the catalog should name it.
     assert "How_To_Rank_In_Google_Maps_SOP.md" in tool["description"]
+
+
+# ---------------------------------------------------------------------------
+# interpret — capacity-error degrade (429/529 → friendly reply, not an error)
+# ---------------------------------------------------------------------------
+def _capacity_interpret(status_code: int):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    anthropic = __import__("anthropic")
+    import httpx
+
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    resp = httpx.Response(status_code, request=req, json={"type": "error"})
+    err = anthropic.APIStatusError("capacity", response=resp, body=None)
+    err.status_code = status_code
+
+    api = MagicMock()
+    api.messages.create = AsyncMock(side_effect=err)
+    with patch.object(anthropic, "AsyncAnthropic", return_value=api):
+        return asyncio.run(
+            slack_assistant.interpret("how are we doing?", {"id": "c1", "name": "Acme"}, {})
+        )
+
+
+def test_interpret_rate_limited_returns_busy_reply():
+    import pytest
+
+    pytest.importorskip("anthropic")
+    kind, payload = _capacity_interpret(429)
+    assert kind == "text"
+    assert payload == slack_assistant._BUSY_REPLY
+
+
+def test_interpret_overloaded_returns_busy_reply():
+    import pytest
+
+    pytest.importorskip("anthropic")
+    kind, payload = _capacity_interpret(529)
+    assert kind == "text"
+    assert payload == slack_assistant._BUSY_REPLY
+
+
+def test_interpret_other_api_error_still_raises():
+    import pytest
+
+    anthropic = pytest.importorskip("anthropic")
+    with pytest.raises(anthropic.APIStatusError):
+        _capacity_interpret(500)
