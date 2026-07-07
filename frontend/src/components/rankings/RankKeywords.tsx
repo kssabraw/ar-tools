@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Camera, ChevronDown, ChevronRight, Download, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, Upload, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { ArrowRight, Camera, CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, Upload, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
-import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse, TrendPoint } from '../../lib/types'
+import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse, RankabilityResponse, TrendPoint } from '../../lib/types'
 import { toCsv, downloadCsv, parseKeywordsFromCsv } from '../../lib/csv'
 import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
 import { STATUS_META, statusRank } from './status'
@@ -10,11 +10,16 @@ import { Sparkline } from './Sparkline'
 import { PositionChart } from './PositionChart'
 import { SerpSnapshots } from './SerpSnapshots'
 
+// How long the rankability progress banner polls before handing the remaining
+// captures off to the background (a snapshot job can stall on slow backlink
+// lookups; the stale-job reaper requeues it, but we don't block the UI on it).
+const CAPTURE_TIMEOUT_MS = 6 * 60 * 1000
+
 // `gscConnected` controls whether the GSC-only columns (clicks, impressions,
 // CTR, 7/30/60/90 average position) are shown at all. Without GSC the table
 // falls back to the DataForSEO live rank ("Today") + trend.
-export function RankKeywords({ clientId, gscConnected }: {
-  clientId: string; gscConnected: boolean
+export function RankKeywords({ clientId, gscConnected, onViewRankability }: {
+  clientId: string; gscConnected: boolean; onViewRankability?: () => void
 }) {
   const queryClient = useQueryClient()
   const { data: keywords, isLoading } = useQuery<KeywordSummary[]>({
@@ -42,11 +47,61 @@ export function RankKeywords({ clientId, gscConnected }: {
   // First-entry opt-in: offer to run rankability (capture a snapshot) for the
   // keywords just added. After this, rankability only re-runs on a detected drop
   // (≤1/mo) or on demand.
+  //
+  // Capturing snapshots is a background job (one per keyword, ~20-30s each,
+  // serialized through the single worker), and the scores surface on the
+  // separate Rankability tab — so firing the request silently looked like a
+  // no-op. Instead we hold a progress banner and poll the rankability endpoint,
+  // counting how many of the just-added keywords now have a snapshot, until
+  // they're all captured (or we time out and hand off to the background).
+  const [capturing, setCapturing] = useState<string[] | null>(null)
+  const [captureStartedAt, setCaptureStartedAt] = useState(0)
+  const [captureTimedOut, setCaptureTimedOut] = useState(false)
+
   const rankabilityMut = useMutation({
     mutationFn: (ids: string[]) =>
       Promise.all(ids.map(id => api.post(`/tracked-keywords/${id}/serp-snapshot`, {}))),
-    onSuccess: () => setJustAdded([]),
   })
+
+  const startRankability = (ids: string[]) => {
+    setJustAdded([])
+    setCaptureTimedOut(false)
+    setCaptureStartedAt(Date.now())
+    setCapturing(ids)
+    rankabilityMut.mutate(ids)
+  }
+  const dismissCapture = () => { setCapturing(null); rankabilityMut.reset() }
+
+  const captureIds = capturing ?? []
+  // Shares the ['rankability', clientId] cache with the Rankability tab, so its
+  // data is already warm the moment the user jumps over.
+  const { data: rankData } = useQuery<RankabilityResponse>({
+    queryKey: ['rankability', clientId],
+    queryFn: () => api.get<RankabilityResponse>(`/clients/${clientId}/rank/rankability`),
+    enabled: captureIds.length > 0 && !rankabilityMut.isError,
+    refetchInterval: (query) => {
+      if (!captureIds.length) return false
+      const items = (query.state.data as RankabilityResponse | undefined)?.items ?? []
+      const done = items.filter(i => captureIds.includes(i.keyword_id) && i.has_snapshot).length
+      if (done >= captureIds.length) return false
+      if (captureStartedAt && Date.now() - captureStartedAt > CAPTURE_TIMEOUT_MS) return false
+      return 4000
+    },
+  })
+
+  // Guarantees a render at the timeout boundary (polling stops on its own, so
+  // without this the "still processing in the background" copy might never show).
+  useEffect(() => {
+    if (!capturing) return
+    const t = setTimeout(() => setCaptureTimedOut(true), CAPTURE_TIMEOUT_MS)
+    return () => clearTimeout(t)
+  }, [capturing])
+
+  const captureTotal = captureIds.length
+  const captureDone = (rankData?.items ?? [])
+    .filter(i => captureIds.includes(i.keyword_id) && i.has_snapshot).length
+  const captureComplete = captureTotal > 0 && captureDone >= captureTotal
+  const captureStalled = captureTimedOut && !captureComplete
 
   const onCsvSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -137,18 +192,67 @@ export function RankKeywords({ clientId, gscConnected }: {
         )}
       </div>
 
-      {justAdded.length > 0 && (
+      {justAdded.length > 0 && !capturing && (
         <div style={rankabilityBanner}>
           <span style={{ flex: 1 }}>
             Added <strong>{justAdded.length}</strong> keyword{justAdded.length === 1 ? '' : 's'}. Run a{' '}
             <strong>rankability score</strong> now? (~{justAdded.length} SERP snapshot{justAdded.length === 1 ? '' : 's'}.
             After this it only re-runs on a detected drop or on demand.)
           </span>
-          <button style={primaryBtn} disabled={rankabilityMut.isPending}
-            onClick={() => rankabilityMut.mutate(justAdded.map(k => k.id))}>
-            {rankabilityMut.isPending ? 'Starting…' : 'Run rankability'}
+          <button style={primaryBtn} onClick={() => startRankability(justAdded.map(k => k.id))}>
+            Run rankability
           </button>
           <button style={outlineBtn} onClick={() => setJustAdded([])}>Not now</button>
+        </div>
+      )}
+
+      {capturing && (
+        <div style={rankabilityBanner}>
+          {rankabilityMut.isError ? (
+            <>
+              <span style={{ flex: 1, color: '#b91c1c' }}>
+                Couldn’t start the rankability capture: {(rankabilityMut.error as Error).message}
+              </span>
+              <button style={primaryBtn} onClick={() => startRankability(captureIds)}>Retry</button>
+              <button style={outlineBtn} onClick={dismissCapture}>Dismiss</button>
+            </>
+          ) : captureComplete ? (
+            <>
+              <CheckCircle2 size={16} color="#15803d" style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>
+                <strong>Rankability ready</strong> — captured {captureDone} of {captureTotal} snapshot
+                {captureTotal === 1 ? '' : 's'}. See the scores on the Rankability tab.
+              </span>
+              {onViewRankability && (
+                <button style={primaryBtn} onClick={onViewRankability}>
+                  View Rankability <ArrowRight size={14} />
+                </button>
+              )}
+              <button style={outlineBtn} onClick={dismissCapture}>Dismiss</button>
+            </>
+          ) : (
+            <>
+              <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+              <Loader2 size={16} color="#4338ca" style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }} />
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 220 }}>
+                <span>
+                  <strong>Capturing SERP snapshots… {captureDone} of {captureTotal} done.</strong>{' '}
+                  {captureStalled
+                    ? 'The rest are still processing in the background — check the Rankability tab shortly.'
+                    : 'Scores appear on the Rankability tab as each lands. This takes a minute or two — you can leave this page.'}
+                </span>
+                <div style={captureTrack}>
+                  <div style={{ ...captureFill, width: `${captureTotal ? (captureDone / captureTotal) * 100 : 0}%` }} />
+                </div>
+              </div>
+              {onViewRankability && (
+                <button style={outlineBtn} onClick={onViewRankability}>
+                  View Rankability <ArrowRight size={14} />
+                </button>
+              )}
+              {captureStalled && <button style={outlineBtn} onClick={dismissCapture}>Dismiss</button>}
+            </>
+          )}
         </div>
       )}
 
@@ -566,3 +670,5 @@ const pitValue: React.CSSProperties = { fontSize: 18, fontWeight: 800, marginBot
 const emptyCard: React.CSSProperties = { ...card, color: '#64748b', fontSize: 13, lineHeight: 1.6 }
 const dfBanner: React.CSSProperties = { background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#0369a1', marginBottom: 14, lineHeight: 1.5 }
 const rankabilityBanner: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#3730a3', marginBottom: 14, lineHeight: 1.5, flexWrap: 'wrap' }
+const captureTrack: React.CSSProperties = { height: 6, borderRadius: 999, background: '#c7d2fe', overflow: 'hidden' }
+const captureFill: React.CSSProperties = { height: '100%', borderRadius: 999, background: '#6366f1', transition: 'width 0.4s ease' }
