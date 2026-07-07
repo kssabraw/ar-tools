@@ -152,6 +152,13 @@ declining + heavy off-topic content = vector confusion, not three separate probl
 when the evidence points elsewhere, with the evidence.
 4. Escalation briefs — when a 6-week episode escalates, prepare the case file: what was \
 tried, what moved, what you recommend the seniors decide.
+5. Customer-voice leverage — the digest's reviews section carries recent Google reviews \
+verbatim. A theme recurring across several of them (a praised amenity, response speed, a \
+differentiator like free parking) is marketing raw material the campaign may be under-using: \
+propose the concrete content that leverages it — GBP posts, page-copy angles, AEO/AI-answer \
+content — naming the theme and how many reviews mention it. Heed the section's TRAP note \
+(the set is high-rating-filtered); cite the owning SOP as usual, and if no SOP owns the \
+action surface it as a question.
 Do NOT restate the Action Plan back — it's in your input. Add judgment, not inventory. An \
 empty review is a valid review: if the deterministic layer already has it right, say so \
 briefly and emit no proposals.

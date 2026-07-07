@@ -203,3 +203,29 @@ def test_budget_domain_from_client_retainer():
     # client with an unflagged plan still activates the budget domain.
     digest = {"client": {"retainer_monthly": 2000}, "task_plan": {"flags": []}}
     assert "budget" in sd.active_signal_domains(digest)
+
+
+# ---------------------------------------------------------------------------
+# review_snippets — customer-voice raw material for the strategist
+# ---------------------------------------------------------------------------
+def test_review_snippets_clips_caps_and_skips_empty():
+    gbp = {"reviews": [
+        {"reviewer": "A", "rating": 5, "date": "2026-06-01", "text": "Free parking was great! " * 30},
+        {"reviewer": "B", "rating": 4, "date": "", "text": "  "},          # empty → skipped
+        {"reviewer": "C", "rating": 5, "text": "They have free parking."},  # no date → None
+        "junk",                                                             # non-dict → skipped
+    ]}
+    out = sd.review_snippets(gbp, limit=10, clip=50)
+    assert len(out) == 2
+    assert len(out[0]["text"]) == 50 and out[0]["rating"] == 5
+    assert out[1] == {"rating": 5, "date": None, "text": "They have free parking."}
+    # reviewer names are deliberately NOT carried into the prompt
+    assert all("reviewer" not in r for r in out)
+
+
+def test_review_snippets_limit_and_empty_shapes():
+    gbp = {"reviews": [{"text": f"review {i}"} for i in range(20)]}
+    assert len(sd.review_snippets(gbp, limit=10)) == 10
+    assert sd.review_snippets(None) == []
+    assert sd.review_snippets({}) == []
+    assert sd.review_snippets({"reviews": "oops"}) == []

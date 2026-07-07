@@ -804,9 +804,54 @@ def _prov_trends(supabase, client_id: str, today: date, now: datetime) -> Option
     }
 
 
+def review_snippets(gbp, limit: int = 10, clip: int = 240) -> list[dict]:
+    """Recent GBP review texts, clipped for the prompt. Pure, shape-tolerant.
+
+    The stored set (`clients.gbp.reviews`) is what GBP enrichment kept —
+    high-rating reviews only — so this is positive-theme raw material, not a
+    sentiment sample."""
+    out: list[dict] = []
+    for r in (gbp or {}).get("reviews") or []:
+        if not isinstance(r, dict):
+            continue
+        text = (r.get("text") or "").strip()
+        if not text:
+            continue
+        out.append({"rating": r.get("rating"), "date": r.get("date") or None, "text": text[:clip]})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _prov_reviews(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """The client's stored GBP reviews, verbatim — the customer's own words.
+
+    Lets the strategist notice recurring themes ("every review mentions the
+    free parking") and propose content that leverages them (GBP posts, page
+    copy angles) instead of a human having to spot the pattern."""
+    rows = (
+        supabase.table("clients").select("gbp").eq("id", client_id).limit(1).execute()
+    ).data
+    snippets = review_snippets((rows[0].get("gbp") if rows else None) or {})
+    if not snippets:
+        return None
+    return {
+        "note": (
+            "What customers say in their own words — recent Google reviews from the "
+            "client's GBP. A theme recurring across several reviews (a praised amenity, "
+            "speed, a differentiator) is marketing raw material the campaign may be "
+            "under-using. TRAP: this set is filtered to high ratings at capture, so use "
+            "it to find what customers PRAISE — never to assess overall sentiment or "
+            "detect complaints (absence of complaints here means nothing)."
+        ),
+        "reviews": snippets,
+    }
+
+
 # Registry — append a provider to feed the strategist a new module.
 _PROVIDERS: list[tuple[str, object]] = [
     ("client", _prov_client),
+    ("reviews", _prov_reviews),
     ("campaign_goals", _prov_campaign_goals),
     ("competitors", _prov_competitors),
     ("forecast", _prov_forecast),
