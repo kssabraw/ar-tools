@@ -5,9 +5,11 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen,
+  ClipboardList, BookOpen, Share2, Target, Swords,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
+import { FreezeBanner } from '../components/FreezeBanner'
+import { StrategistReview } from '../components/StrategistReview'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
@@ -43,6 +45,15 @@ export function ClientWorkspace() {
   })
   const savedLocationPageCount = locationPageRuns?.total ?? 0
 
+  // Count of syndication items already published (public Doc + Sheet) for this
+  // client, surfaced on the Content Syndication card.
+  const { data: syndicationData } = useQuery<{ counts: { published: number } }>({
+    queryKey: ['syndication-counts', id],
+    queryFn: () => api.get<{ counts: { published: number } }>(`/clients/${id}/syndication/items?limit=1`),
+    enabled: Boolean(id),
+  })
+  const syndicationPublishedCount = syndicationData?.counts?.published ?? 0
+
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
       <Link to="/" style={backLinkStyle}>
@@ -69,6 +80,12 @@ export function ClientWorkspace() {
         </div>
       </div>
 
+      {id && <FreezeBanner clientId={id} />}
+      {/* SerMaStr — strategist review as its own section, directly under the
+          Freeze Protocol banner and above Client setup. Renders nothing when
+          the strategist is off and no review exists (so quiet clients stay
+          clean). */}
+      {id && <StrategistReview clientId={id} />}
       {id && <ClientNotifications clientId={id} />}
 
       {/* ── Client setup ─────────────────────────────────────────────── */}
@@ -173,6 +190,13 @@ export function ClientWorkspace() {
           }
         />
         <ActionCard
+          icon={<CalendarClock size={22} />}
+          label="Create Mass Posts"
+          description="Plan and mass-generate this client's blog posts & Local SEO pages on a monthly schedule — opens the Topic Fan-out keyword-research, planning & scheduling tool."
+          href={id ? `/fanout/?client_id=${id}&client_name=${encodeURIComponent(client?.name ?? '')}` : '/fanout/'}
+          cta="Open"
+        />
+        <ActionCard
           icon={<FileSearch size={22} />}
           label="Plan a Content Silo"
           description="Research the parent, sibling & neighbourhood pages a topic needs — and see which already exist on this client’s site."
@@ -184,6 +208,24 @@ export function ClientWorkspace() {
           label="Publish to Google Docs"
           description="Select already-generated articles & Local SEO pages and publish them to this client's Drive folder in one batch."
           to={id ? `/clients/${id}/content` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Share2 size={22} />}
+          label="Content Syndication"
+          description={
+            syndicationPublishedCount > 0
+              ? `Auto-rewrites this client's new blog posts, pages & products into public Google Docs + Sheets that link back. ${syndicationPublishedCount} published.`
+              : "Auto-rewrites this client's new blog posts, pages & products into unique, search-discoverable Google Docs + Sheets that link back to the site."
+          }
+          to={id ? `/clients/${id}/syndication` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<BookOpen size={22} />}
+          label="Citations"
+          description="Liveness tracking for ordered citations — paste the URLs from vendor deliverables; a weekly sweep flags listings that stop resolving."
+          to={id ? `/clients/${id}/citations` : undefined}
           cta="Open"
         />
       </Section>
@@ -222,10 +264,38 @@ export function ClientWorkspace() {
           cta="Open"
         />
         <ActionCard
+          icon={<Target size={22} />}
+          label="Campaign Goals"
+          description="What success means for this client — rank, traffic, AI-visibility & local-pack targets with live on-track / behind status. SerMaStr judges every review and answer against these."
+          to={id ? `/clients/${id}/goals` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<TrendingUp size={22} />}
+          label="Forecast"
+          description="Where the campaign is heading at the current trend — projected positions, est. traffic & value in 90 days, the quick-win upside in clicks & dollars, and goal trajectories."
+          to={id ? `/clients/${id}/forecast` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Swords size={22} />}
+          label="Competitive Intel"
+          description="Who you're up against, unified across every tracker — local-pack pins, GBP reviews, authority, organic overlap & the new pages they publish. Auto-discovered weekly."
+          to={id ? `/clients/${id}/competitors` : undefined}
+          cta="Open"
+        />
+        <ActionCard
           icon={<ListChecks size={22} />}
           label="Action Plan"
           description="A prioritized reoptimization to-do list built from this client's rank signals — drops to fix, winnable quick wins & Search Console opportunities, each linked to the tool that does it."
           to={id ? `/clients/${id}/action-plan` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<ClipboardList size={22} />}
+          label="Monthly Task Plan"
+          description="The Recipe Engine: budget + diagnosis → a costed, assigned month of work — baseline stack, Diagnose-and-Fund, capacity-capped content, every line with an owner."
+          to={id ? `/clients/${id}/task-plan` : undefined}
           cta="Open"
         />
         <ActionCard
@@ -331,12 +401,6 @@ const moreTools: { label: string; description: string; icon: React.ReactNode; hr
     label: 'Ranking-Drop Agent',
     description: 'Detects ranking drops and recommends fixes from your SOPs.',
     icon: <Activity size={20} />,
-  },
-  {
-    label: 'Content Scheduler',
-    description: 'Plan and auto-publish monthly blog and local SEO content. Opens the Topic Fanout keyword-research, planning & scheduling tool.',
-    icon: <CalendarClock size={20} />,
-    href: '/fanout/',
   },
 ]
 

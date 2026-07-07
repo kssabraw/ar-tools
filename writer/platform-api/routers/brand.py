@@ -16,6 +16,7 @@ from middleware.auth import require_auth
 from models.brand import (
     BrandCompetitorCreateRequest,
     BrandCompetitorResponse,
+    BrandHtmlReportRequest,
     BrandKeywordCreateRequest,
     BrandKeywordResponse,
     BrandKeywordUpdateRequest,
@@ -67,6 +68,13 @@ async def delete_brand_keyword(
 ):
     brand_service.delete_keyword(str(client_id), str(keyword_id))
     return {"ok": True}
+
+
+@router.post("/clients/{client_id}/brand/keywords/import-organic")
+async def import_organic_brand_keywords(client_id: UUID, auth: dict = Depends(require_auth)):
+    """Copy the client's active organic rank-tracker keywords into AI Visibility,
+    verbatim, skipping any already tracked. Returns {imported, skipped, keywords}."""
+    return brand_service.import_organic_keywords(str(client_id))
 
 
 # ── competitors ──────────────────────────────────────────────────────────────
@@ -148,6 +156,49 @@ async def get_brand_scan_results(
     auth: dict = Depends(require_auth),
 ):
     return brand_service.list_history(str(client_id), limit=1000, scan_batch_id=str(scan_batch_id))
+
+
+@router.post("/clients/{client_id}/brand/report-html")
+async def generate_brand_html_report(
+    client_id: UUID,
+    body: BrandHtmlReportRequest,
+    auth: dict = Depends(require_auth),
+):
+    """LABS-style white-label HTML visibility report over a date range —
+    returned inline for the frontend's preview/download/print dialog. DB +
+    market-cache reads only (fast, no paid calls); the Google-Doc report
+    (POST …/brand/report) remains the Drive publishing path."""
+    from services import brand_report_html
+
+    return await brand_report_html.generate_html_report(
+        str(client_id), body.start_date, body.end_date
+    )
+
+
+@router.get("/clients/{client_id}/brand/keyword-market")
+async def get_brand_keyword_market(client_id: UUID, auth: dict = Depends(require_auth)):
+    """CPC/volume/competition for active brand keywords (Lead Valuation card).
+    Cache-only via the shared keyword_market table; missing/stale keywords
+    auto-enqueue the keyword_market async job (response carries refreshing)."""
+    return await brand_service.get_keyword_market(str(client_id))
+
+
+@router.post("/clients/{client_id}/brand/keyword-market/refresh")
+async def refresh_brand_keyword_market(client_id: UUID, auth: dict = Depends(require_auth)):
+    """Force a market-data refresh for active brand keywords (re-queries even
+    keywords cached with no data). Enqueues the shared keyword_market job."""
+    return brand_service.refresh_keyword_market(str(client_id))
+
+
+@router.get("/clients/{client_id}/brand/mentions/{mention_id}")
+async def get_brand_mention(
+    client_id: UUID,
+    mention_id: UUID,
+    auth: dict = Depends(require_auth),
+):
+    """Single mention incl. raw_response/retry_count (omitted from the history
+    list for payload size) — fetched lazily by the frontend detail sheet."""
+    return brand_service.get_mention(str(client_id), str(mention_id))
 
 
 @router.get("/clients/{client_id}/brand/trends")

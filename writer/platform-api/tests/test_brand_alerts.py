@@ -5,10 +5,12 @@ from __future__ import annotations
 from services import brand_alerts as ba
 
 
-def _row(kid, engine, found, *, status="completed", competitor=False, flags=None):
+def _row(kid, engine, found, *, status="completed", competitor=False, flags=None,
+         sentiment=None, confidence=None):
     return {
         "keyword_id": kid, "engine": engine, "mention_found": found, "status": status,
         "is_competitor_scan": competitor,
+        "sentiment": sentiment, "confidence_score": confidence,
         "response_analysis": {"accuracy_flags": flags} if flags else None,
     }
 
@@ -86,3 +88,43 @@ def test_summarize_misinformation_is_critical_with_keyword_labels():
     assert digest["severity"] == "critical"
     assert "misinformation" in digest["title"].lower()
     assert "burst pipe" in digest["summary"] and "ChatGPT" in digest["summary"]
+
+
+# ── reputation alarm (LABS parity, transition-based) ──────────────────────────
+def test_index_batch_collects_high_confidence_negatives_only():
+    rows = [
+        _row("k1", "chatgpt", True, sentiment=-0.6, confidence=0.9),   # negative
+        _row("k2", "claude", True, sentiment=-0.6, confidence=0.4),    # low confidence
+        _row("k3", "gemini", True, sentiment=0.4, confidence=0.9),     # positive
+        _row("k4", "perplexity", True),                                # no sentiment
+    ]
+    idx = ba.index_batch(rows)
+    assert [(m["keyword_id"], m["engine"]) for m in idx["negatives"]] == [("k1", "chatgpt")]
+
+
+def test_reputation_alert_is_transition_based():
+    neg = dict(sentiment=-0.5, confidence=0.8)
+    prev = ba.index_batch([_row("k1", "chatgpt", True, **neg)])
+    curr = ba.index_batch([_row("k1", "chatgpt", True, **neg)])
+    # Still negative on the same cell → alerted when it first turned, not again.
+    ch = ba.detect_changes(prev, curr)
+    assert ch["new_negatives"] == []
+    assert ba.summarize_changes(ch, 15) is None
+
+
+def test_summarize_new_negative_sentiment_warns_with_details():
+    prev = ba.index_batch([_row("k1", "chatgpt", True, sentiment=0.5, confidence=0.9)])
+    curr = ba.index_batch([_row("k1", "chatgpt", True, sentiment=-0.55, confidence=0.9)])
+    digest = ba.summarize_changes(ba.detect_changes(prev, curr), 15, {"k1": "emergency plumber"})
+    assert digest["severity"] == "warning"
+    assert "sentiment" in digest["title"].lower()
+    assert digest["triggers"] == ["reputation"]
+    assert "emergency plumber" in digest["summary"] and "-0.55" in digest["summary"]
+
+
+def test_summarize_names_lost_keywords_on_drop():
+    prev = ba.index_batch([_row("k1", "chatgpt", True), _row("k2", "chatgpt", True)])
+    curr = ba.index_batch([_row("k1", "chatgpt", True), _row("k2", "chatgpt", False)])
+    digest = ba.summarize_changes(ba.detect_changes(prev, curr), 15, {"k2": "roof restoration"})
+    assert "Went invisible" in digest["summary"]
+    assert "roof restoration" in digest["summary"]

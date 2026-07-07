@@ -79,3 +79,14 @@ def save_article(
         .execute()
     )
     return res.data[0]
+
+
+def set_suite_run_id(article_output_id: str, suite_run_id: str) -> None:
+    """Record the mirrored suite blog run on the Fan-out article (traceability)."""
+    (
+        get_service_client()
+        .table("article_outputs")
+        .update({"suite_run_id": suite_run_id})
+        .eq("id", article_output_id)
+        .execute()
+    )

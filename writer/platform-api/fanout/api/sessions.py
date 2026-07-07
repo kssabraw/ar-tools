@@ -427,6 +427,7 @@ def get_session(
         publish_available={
             "github": bool(_s.github_publish_token),
             "drive": _drive_publish_available(session),
+            "wordpress": _wordpress_publish_available(session),
         },
     )
 
@@ -440,8 +441,8 @@ async def search_locations(
 ) -> list[LocationSuggestion]:
     """Location typeahead for the Local SEO new-session form (Service + location
     autocomplete, mirroring the Local SEO writer). DataForSEO location suggestions
-    served by a thin /fanout wrapper so the fanout-frontend — mounted under /fanout
-    — doesn't reach a suite path outside its prefix.
+    served by a thin /fanout wrapper so the Fan-out frontend — the suite's
+    /fanout route subtree — doesn't reach a suite path outside its prefix.
 
     Scoped by `country` (ISO-2, from the form's selected market) when given, else
     by the client's country (`client_id`). The country path needs no client, so the
@@ -1917,6 +1918,30 @@ def _drive_publish_available(session: dict) -> bool:
     return apps_script_ok or oauth_ok
 
 
+def _wordpress_publish_available(session: dict) -> bool:
+    """Whether "Publish to Website" can run — the session is linked to an AR Tools
+    client that has WordPress configured (site URL + application password), reusing
+    the same publish path as the rest of the suite."""
+    client_id = session.get("client_id")
+    if not client_id:
+        return False
+    from db.supabase_client import get_supabase
+
+    try:
+        res = (
+            get_supabase().table("clients")
+            .select("wordpress_site_url, wordpress_app_password")
+            .eq("id", client_id).single().execute()
+        )
+    except Exception:  # noqa: BLE001 — availability probe; absence is just "no"
+        return False
+    d = res.data or {}
+    return bool(
+        (d.get("wordpress_site_url") or "").strip()
+        and (d.get("wordpress_app_password") or "").strip()
+    )
+
+
 async def _publish_to_client_drive(client_id: str, title: str, html: str) -> dict | None:
     """Publish article HTML into the linked client's Drive folder via the suite's
     Apps Script webhook (the shared `google_docs` service the rest of the suite
@@ -1973,6 +1998,62 @@ async def publish_cluster_drive(
     except drive_pub.DrivePublishError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {"published": True, **res}
+
+
+@router.post("/sessions/{session_id}/clusters/{cluster_id}/publish/wordpress")
+async def publish_cluster_wordpress(
+    session_id: str,
+    cluster_id: str,
+    wp_status: str = "draft",
+    user: AuthedUser = Depends(require_owner),
+) -> dict:
+    """Publish one article straight to the linked client's WordPress site, reusing
+    the suite's `publish_to_wordpress` (the same path as blog/service/Local SEO
+    pages). Requires the session to be linked to a client with WordPress
+    configured. `wp_status` is `draft` (default) or `publish`."""
+    from fanout.writer import store as article_store
+    from db.supabase_client import get_supabase
+    from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
+
+    session = _require_session(user, session_id)
+    if store.cluster_session_id(cluster_id) != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cluster not found")
+    client_id = session.get("client_id")
+    if not client_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Link this session to a client with WordPress configured first.",
+        )
+    row = article_store.get_latest_article(cluster_id)
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No article to publish")
+    aj = row["article_json"]
+    html = aj.get("article_html") or ""
+    if not html:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Article has no HTML body")
+    title = aj.get("title") or "Article"
+
+    client_res = (
+        get_supabase().table("clients")
+        .select("name, wordpress_site_url, wordpress_username, wordpress_app_password")
+        .eq("id", client_id).single().execute()
+    )
+    if not client_res.data:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client_not_found")
+    try:
+        res = await publish_to_wordpress(
+            client=client_res.data, title=title, html=html, status=wp_status,
+            content_type="blog_post",
+        )
+    except WordPressPublishError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {
+        "published": True,
+        "post_id": res.get("post_id"),
+        "url": res.get("link"),
+        "edit_url": res.get("edit_link"),
+        "status": res.get("status"),
+    }
 
 
 def _github_target(session: dict) -> tuple[str, str, str, str]:

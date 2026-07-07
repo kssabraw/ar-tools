@@ -1,19 +1,33 @@
 import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, RefreshCw } from 'lucide-react'
+import { ArrowLeft, CalendarClock, Download, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
-import type { Client, ClientReport } from '../lib/types'
+import type { Client, ClientReport, ReportPeriod, ReportSettings } from '../lib/types'
 
-// Client Reporting (Phase 6) — generate on-demand PDF reports, list history,
-// download. The PDF is assembled server-side (organic rankings, Maps geo-grids,
-// GBP) and stored in the private `reports` bucket; the detail endpoint re-signs
-// the download URL on read so it never goes stale.
+const PERIOD_LABELS: [ReportPeriod, string][] = [
+  ['30d', 'Last 30 days'],
+  ['60d', 'Last 60 days'],
+  ['90d', 'Last 90 days'],
+  ['120d', 'Last 120 days'],
+  ['1y', 'Last year'],
+  ['all', 'Since campaign start'],
+]
+
+// Client Reporting (Phase 6 UI + Phase 5 delivery/scheduling) — generate
+// on-demand PDF reports (monthly SEO or AI Visibility), list history, download,
+// and configure recipients + a monthly/weekly schedule. PDFs are assembled
+// server-side and stored in the private `reports` bucket; the detail endpoint
+// re-signs the download URL on read so it never goes stale. Scheduled runs
+// deliver automatically (email + Drive copy); on-demand runs opt in.
 export function ClientReports() {
   const { id: clientId } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [downloading, setDownloading] = useState<string | null>(null)
+  const [reportType, setReportType] = useState<'monthly' | 'ai_visibility'>('monthly')
+  const [period, setPeriod] = useState<ReportPeriod>('30d')
+  const [deliver, setDeliver] = useState(false)
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', clientId],
@@ -31,7 +45,7 @@ export function ClientReports() {
   })
 
   const generate = useMutation({
-    mutationFn: () => api.post<ClientReport>(`/clients/${clientId}/reports`, { report_type: 'monthly' }),
+    mutationFn: () => api.post<ClientReport>(`/clients/${clientId}/reports`, { report_type: reportType, period, deliver }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['client-reports', clientId] }),
   })
 
@@ -60,11 +74,28 @@ export function ClientReports() {
             geo-grids, and Google Business Profile. (Analytics, Asana & a campaign-health summary come in later phases.)
           </p>
         </div>
-        <button style={primaryBtn} onClick={() => generate.mutate()} disabled={generate.isPending}>
-          <RefreshCw size={14} style={generate.isPending ? { animation: 'spin 1s linear infinite' } : undefined} />
-          {generate.isPending ? 'Starting…' : 'Generate report'}
-        </button>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <select style={select} value={reportType} onChange={(e) => setReportType(e.target.value as 'monthly' | 'ai_visibility')}>
+              <option value="monthly">Monthly SEO report</option>
+              <option value="ai_visibility">AI Visibility report</option>
+            </select>
+            <select style={select} value={period} onChange={(e) => setPeriod(e.target.value as ReportPeriod)}>
+              {PERIOD_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+            <button style={primaryBtn} onClick={() => generate.mutate()} disabled={generate.isPending}>
+              <RefreshCw size={14} style={generate.isPending ? { animation: 'spin 1s linear infinite' } : undefined} />
+              {generate.isPending ? 'Starting…' : 'Generate report'}
+            </button>
+          </div>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475569', cursor: 'pointer' }}>
+            <input type="checkbox" checked={deliver} onChange={(e) => setDeliver(e.target.checked)} />
+            Email &amp; save to Drive when done
+          </label>
+        </div>
       </div>
+
+      <SettingsCard clientId={clientId!} />
 
       {isLoading ? (
         <div style={emptyBox}>Loading…</div>
@@ -75,9 +106,11 @@ export function ClientReports() {
           <thead>
             <tr>
               <th style={th}>Generated</th>
+              <th style={th}>Type</th>
               <th style={th}>Period</th>
               <th style={th}>Includes</th>
               <th style={th}>Status</th>
+              <th style={th}>Delivered</th>
               <th style={{ ...th, textAlign: 'right' }}>PDF</th>
             </tr>
           </thead>
@@ -85,9 +118,11 @@ export function ClientReports() {
             {reports.map((r) => (
               <tr key={r.id}>
                 <td style={td}>{new Date(r.created_at).toLocaleString()}</td>
+                <td style={td}>{TYPE_NAMES[r.report_type] ?? r.report_type}</td>
                 <td style={td}>{r.period_start && r.period_end ? `${r.period_start} – ${r.period_end}` : '—'}</td>
                 <td style={td}>{sectionsLabel(r)}</td>
                 <td style={td}><StatusBadge status={r.status} error={r.error} /></td>
+                <td style={td}><DeliveryBadges delivery={r.delivery} /></td>
                 <td style={{ ...td, textAlign: 'right' }}>
                   {r.status === 'complete' ? (
                     <button style={linkBtn} onClick={() => download(r.id)} disabled={downloading === r.id}>
@@ -107,6 +142,133 @@ export function ClientReports() {
   )
 }
 
+// ── Phase 5 — delivery & schedule settings ───────────────────────────────────
+const DOW = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+
+function SettingsCard({ clientId }: { clientId: string }) {
+  const queryClient = useQueryClient()
+  const { data: saved } = useQuery<ReportSettings>({
+    queryKey: ['report-settings', clientId],
+    queryFn: () => api.get<ReportSettings>(`/clients/${clientId}/report-settings`),
+    enabled: Boolean(clientId),
+  })
+  const [form, setForm] = useState<ReportSettings | null>(null)
+  const [recipientsText, setRecipientsText] = useState<string | null>(null)
+  const s = form ?? saved
+  const save = useMutation({
+    // recipients goes up as the raw comma-separated string; the backend parses it.
+    mutationFn: (body: Omit<Partial<ReportSettings>, 'recipients'> & { recipients: string }) =>
+      api.put<ReportSettings>(`/clients/${clientId}/report-settings`, body),
+    onSuccess: (r) => {
+      setForm(r)
+      setRecipientsText(null)
+      void queryClient.invalidateQueries({ queryKey: ['report-settings', clientId] })
+    },
+  })
+  if (!s) return null
+  const set = (patch: Partial<ReportSettings>) => setForm({ ...s, ...patch })
+  const recipients = recipientsText ?? s.recipients.join(', ')
+
+  return (
+    <div style={settingsCard}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <CalendarClock size={15} color="#6366f1" />
+        <strong style={{ fontSize: 13.5, color: '#0f172a' }}>Delivery &amp; schedule</strong>
+        {s.next_run_at && s.cadence !== 'disabled' && (
+          <span style={{ fontSize: 12, color: '#94a3b8' }}>next run {new Date(s.next_run_at).toLocaleString()}</span>
+        )}
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+        <div style={{ flex: '1 1 260px' }}>
+          <div style={fieldLabel}>Recipients (account manager — comma-separated)</div>
+          <input
+            style={{ ...select, width: '100%' }}
+            placeholder="am@agency.com"
+            value={recipients}
+            onChange={(e) => setRecipientsText(e.target.value)}
+          />
+        </div>
+        <div>
+          <div style={fieldLabel}>Schedule</div>
+          <select style={select} value={s.cadence} onChange={(e) => set({ cadence: e.target.value as ReportSettings['cadence'] })}>
+            <option value="disabled">Off</option>
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        {s.cadence === 'weekly' && (
+          <div>
+            <div style={fieldLabel}>Day</div>
+            <select style={select} value={s.day_of_week ?? 0} onChange={(e) => set({ day_of_week: Number(e.target.value) })}>
+              {DOW.map((d, i) => <option key={d} value={i}>{d}</option>)}
+            </select>
+          </div>
+        )}
+        {s.cadence === 'monthly' && (
+          <div>
+            <div style={fieldLabel}>Day of month</div>
+            <select style={select} value={s.day_of_month ?? 1} onChange={(e) => set({ day_of_month: Number(e.target.value) })}>
+              {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+        )}
+        {s.cadence !== 'disabled' && (
+          <div>
+            <div style={fieldLabel}>Hour (UTC)</div>
+            <select style={select} value={s.hour_utc} onChange={(e) => set({ hour_utc: Number(e.target.value) })}>
+              {Array.from({ length: 24 }, (_, i) => i).map((h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+            </select>
+          </div>
+        )}
+        {s.cadence !== 'disabled' && (
+          <div>
+            <div style={fieldLabel}>Report covers</div>
+            <select style={select} value={s.period} onChange={(e) => set({ period: e.target.value as ReportSettings['period'] })}>
+              <option value="auto">Auto ({s.cadence === 'weekly' ? '7' : '30'} days)</option>
+              {PERIOD_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+        )}
+        <label style={toggleLabel}>
+          <input type="checkbox" checked={s.email_enabled} onChange={(e) => set({ email_enabled: e.target.checked })} /> Email
+        </label>
+        <label style={toggleLabel}>
+          <input type="checkbox" checked={s.drive_enabled} onChange={(e) => set({ drive_enabled: e.target.checked })} /> Drive copy
+        </label>
+        <button
+          style={{ ...primaryBtn, padding: '8px 14px' }}
+          disabled={save.isPending}
+          onClick={() => save.mutate({
+            recipients, cadence: s.cadence, day_of_week: s.day_of_week, day_of_month: s.day_of_month,
+            hour_utc: s.hour_utc, period: s.period, email_enabled: s.email_enabled, drive_enabled: s.drive_enabled,
+          })}
+        >
+          {save.isPending ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+      {save.isError && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 8 }}>{(save.error as Error).message}</div>}
+      <div style={{ fontSize: 11.5, color: '#94a3b8', marginTop: 8 }}>
+        Scheduled reports email the recipients (PDF attached) and save a copy to the client's Drive folder.
+        Email needs SMTP configured on the server; the Drive copy needs the updated Apps Script deployment.
+      </div>
+    </div>
+  )
+}
+
+function DeliveryBadges({ delivery }: { delivery: Record<string, string> | null }) {
+  if (!delivery) return <span style={{ color: '#cbd5e1' }}>—</span>
+  const mark = (v?: string) => (v === 'ok' ? '✓' : v === 'failed' ? '✗' : '—')
+  const color = (v?: string) => (v === 'ok' ? '#15803d' : v === 'failed' ? '#b91c1c' : '#94a3b8')
+  return (
+    <span style={{ fontSize: 12 }}>
+      <span style={{ color: color(delivery.email) }} title={delivery.email_error}>email {mark(delivery.email)}</span>
+      {' · '}
+      <span style={{ color: color(delivery.drive) }} title={delivery.drive_error}>drive {mark(delivery.drive)}</span>
+    </span>
+  )
+}
+
 function sectionsLabel(r: ClientReport): string {
   const s = r.sections
   if (!s) return '—'
@@ -115,7 +277,11 @@ function sectionsLabel(r: ClientReport): string {
 }
 
 const SECTION_NAMES: Record<string, string> = {
-  organic: 'Organic', geogrid: 'Maps', gbp: 'GBP',
+  organic: 'Organic', geogrid: 'Maps', gbp: 'GBP', ai_visibility: 'AI Visibility',
+}
+
+const TYPE_NAMES: Record<string, string> = {
+  monthly: 'Monthly SEO', weekly: 'Weekly SEO', ai_visibility: 'AI Visibility',
 }
 
 function StatusBadge({ status, error }: { status: ClientReport['status']; error: string | null }) {
@@ -144,6 +310,20 @@ const primaryBtn: React.CSSProperties = {
 const linkBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, fontWeight: 600, color: '#6366f1',
   background: '#eef2ff', border: 'none', borderRadius: 6, padding: '5px 10px', cursor: 'pointer',
+}
+const select: React.CSSProperties = {
+  border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px', fontSize: 13,
+  color: '#0f172a', background: '#fff', outline: 'none',
+}
+const settingsCard: React.CSSProperties = {
+  border: '1px solid #e2e8f0', borderRadius: 10, padding: 16, background: '#fff', marginTop: 18,
+}
+const fieldLabel: React.CSSProperties = {
+  fontSize: 11, fontWeight: 600, color: '#64748b', marginBottom: 5,
+}
+const toggleLabel: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#475569',
+  cursor: 'pointer', paddingBottom: 8,
 }
 const emptyBox: React.CSSProperties = {
   border: '1px solid #e2e8f0', borderRadius: 10, padding: 24, background: '#f8fafc',

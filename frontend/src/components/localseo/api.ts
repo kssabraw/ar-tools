@@ -8,6 +8,7 @@ import type {
   PrecheckResult,
   RankabilityResult,
   RelatedPagesResult,
+  ScoreHistoryRow,
   ScoreResult,
   SiloPlanJob,
   SiloPlanResult,
@@ -164,6 +165,18 @@ export const localSeoApi = {
 
   getPage: (pageId: string) =>
     api.get<LocalSeoPageDetail>(`/local-seo/pages/${pageId}`),
+
+  // Per-run score history for a client (newest first) — each row carries the full
+  // 8-engine verdict. Optionally scoped to a single page.
+  scoreHistory: (clientId: string, opts: { pageId?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (opts.pageId) params.set('page_id', opts.pageId)
+    if (opts.limit) params.set('limit', String(opts.limit))
+    const qs = params.toString()
+    return api.get<ScoreHistoryRow[]>(
+      `/clients/${clientId}/local-seo/score-history${qs ? `?${qs}` : ''}`,
+    )
+  },
 
   // Soft-delete: move a page to Drafts (recoverable).
   deletePage: (pageId: string) =>

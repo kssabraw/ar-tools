@@ -29,6 +29,7 @@ from models.runs import (
     SIETermsByCategory,
     bucket_sie_required_terms,
 )
+from services.freeze import assert_not_frozen
 from services.orchestrator import NON_TERMINAL_STATUSES, orchestrate_run
 from services.run_dispatch import create_run_and_snapshot
 from services.file_parser import detect_format
@@ -80,7 +81,7 @@ async def list_runs(
     supabase = get_supabase()
     query = supabase.table("runs").select(
         "id, keyword, client_id, content_type, status, sie_cache_hit, total_cost_usd, "
-        "created_at, started_at, completed_at, published_doc_url, clients(name)",
+        "created_at, started_at, completed_at, published_doc_url, published_url, clients(name)",
         count="exact",
     )
 
@@ -136,6 +137,7 @@ async def list_runs(
                 started_at=r.get("started_at"),
                 completed_at=r.get("completed_at"),
                 published_doc_url=r.get("published_doc_url"),
+                published_url=r.get("published_url"),
             )
         )
 
@@ -263,6 +265,9 @@ async def create_run(
 ) -> RunCreateResponse:
     supabase = get_supabase()
 
+    # Freeze Protocol: content creation stops under an active freeze.
+    assert_not_frozen(str(body.client_id))
+
     # Concurrency check
     in_flight = (
         supabase.table("runs")
@@ -329,6 +334,9 @@ async def create_runs_bulk(
     large, paced batches use the Topic Fanout content scheduler instead.
     """
     supabase = get_supabase()
+
+    # Freeze Protocol: content creation stops under an active freeze.
+    assert_not_frozen(str(body.client_id))
 
     client_result = (
         supabase.table("clients").select("*").eq("id", str(body.client_id)).single().execute()

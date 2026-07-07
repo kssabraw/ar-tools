@@ -128,6 +128,49 @@ def enqueue_due_dataforseo() -> int:
     return due
 
 
+def enqueue_due_syndication_scans() -> int:
+    """Daily: enqueue a syndication_scan job for each client whose Content
+    Syndication is enabled and due (last_scan_date older than its interval_days).
+
+    `last_scan_date` is advanced by the scan job on success (not here), so a scan
+    that fails re-runs next cycle rather than being skipped. enqueue_scan dedupes
+    against an in-flight scan, so re-evaluating a still-pending client is a no-op.
+    A websiteless client is skipped (the scan would find nothing)."""
+    from datetime import datetime, timezone
+
+    from services.syndication_service import enqueue_scan
+
+    supabase = get_supabase()
+    configs = (
+        supabase.table("syndication_config").select("*").eq("enabled", True).execute()
+    ).data or []
+    if not configs:
+        return 0
+
+    client_ids = [c["client_id"] for c in configs]
+    client_rows = (
+        supabase.table("clients").select("id, website_url").in_("id", client_ids).execute()
+    ).data or []
+    websites = {c["id"]: (c.get("website_url") or "").strip() for c in client_rows}
+
+    today = datetime.now(timezone.utc).date()
+    due = 0
+    for cfg in configs:
+        client_id = cfg["client_id"]
+        if not websites.get(client_id):
+            continue
+        interval = max(1, int(cfg.get("interval_days") or 1))
+        last = cfg.get("last_scan_date")
+        last_date = date.fromisoformat(last) if isinstance(last, str) else last
+        if last_date is not None and (today - last_date).days < interval:
+            continue
+        if enqueue_scan(client_id):
+            due += 1
+    if due:
+        logger.info("gsc_scheduler.syndication_enqueued", extra={"clients": due})
+    return due
+
+
 def enqueue_due_serp_snapshots() -> int:
     """Weekly: enqueue a competitive SERP snapshot capture per client with
     active keywords (piggybacks the DataForSEO rank weekday). The job captures a
@@ -273,17 +316,29 @@ async def gsc_scheduler() -> None:
     from services.asana_service import shift_months
     from services.asana_workload import run_workload_alert
     from services.brand_schedule import enqueue_due_brand_scans
+    from services.client_report_schedule import enqueue_due_report_schedules
+    from services.freeze import enqueue_due_freeze_checks
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
+    from services.citation_check import enqueue_due_citation_checks
+    from services.competitor_intel import enqueue_due_competitor_intel
+    from services.trend_watch import run_trend_sweep
+    from services.offpage_agent import run_offpage_sweep
+    from services.page_backlink_intel import enqueue_due_page_backlinks
+    from services.response_episodes import run_episode_sync
+
+    from services.strategist import enqueue_due_strategy_reviews
 
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
     weekday = settings.dataforseo_rank_weekday
     maps_weekday = settings.maps_scan_weekday
     reopt_weekday = settings.reopt_plan_weekday
+    strategist_weekday = settings.strategist_weekly_weekday
     last_run_date: Optional[date] = None
     last_df_date: Optional[date] = None
     last_maps_date: Optional[date] = None
     last_reopt_date: Optional[date] = None
+    last_strategist_date: Optional[date] = None
     last_asana_month: Optional[tuple] = None
     last_asana_workload_date: Optional[date] = None
     logger.info("gsc_scheduler.started", extra={"poll_interval_s": interval, "hour_utc": hour})
@@ -300,6 +355,20 @@ async def gsc_scheduler() -> None:
                 # monthly/interval/off); the enqueue helper decides who is due
                 # today, so it runs daily rather than on one global weekday.
                 enqueue_due_dataforseo()
+                # Daily Content Syndication scan (per-client interval-gated).
+                enqueue_due_syndication_scans()
+                # Daily Freeze Protocol check (homepage deindex detection).
+                enqueue_due_freeze_checks()
+                # Daily response-episode sync (the SOPs' 2-week/6-week verify loop).
+                run_episode_sync()
+                # Daily offpage sweep (RD loss / unnatural spike — SOP §A.5).
+                run_offpage_sweep()
+                # Weekly citation liveness (per-client interval-gated) +
+                # monthly page-level RD-imbalance captures.
+                enqueue_due_citation_checks()
+                enqueue_due_competitor_intel()
+                run_trend_sweep()
+                enqueue_due_page_backlinks()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,
@@ -320,6 +389,12 @@ async def gsc_scheduler() -> None:
             if now.weekday() == reopt_weekday and should_run(now, last_reopt_date, hour):
                 enqueue_due_reopt_plans()
                 last_reopt_date = now.date()
+            # Weekly SerMaStr strategist reviews (active-signal clients only,
+            # the day after the reopt build so the plan is fresh). The enqueue
+            # helper no-ops entirely while strategist_enabled is false.
+            if now.weekday() == strategist_weekday and should_run(now, last_strategist_date, hour):
+                enqueue_due_strategy_reviews()
+                last_strategist_date = now.date()
             # Monthly Asana section automation: once per month on the configured
             # day-of-month, enqueue an asana_monthly job per mapped client (the
             # job itself no-ops if the month's section already exists).
@@ -342,5 +417,8 @@ async def gsc_scheduler() -> None:
             # AI Visibility scheduled scans are self-clocked via each schedule's
             # next_run_at, so they're evaluated every tick (cheap due-query).
             enqueue_due_brand_scans()
+            # Client Reporting scheduled reports (Phase 5) — same self-clocked
+            # next_run_at pattern; delivery runs after each scheduled render.
+            enqueue_due_report_schedules()
         except Exception as exc:
             logger.error("gsc_scheduler.unhandled", extra={"error": str(exc)})

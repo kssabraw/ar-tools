@@ -1,6 +1,205 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-06-29 · **Maps geo-grid strategy & Action Plan** (latest) — **MERGED to `main`** (PR #182, squash `35394ae`)
+## ⏩ Update — 2026-07-05 · **SerMaStr Phases 0–4 BUILT — dormant behind `strategist_enabled=false`** (latest)
+
+The strategist agent from `docs/modules/seo-strategist-agent-plan-v1_0.md` is
+**built end-to-end (Phases 0–4; Phase 5 Asana push deliberately out of scope)**
+in one overnight autonomous run. Migration `20260704180000_strategy_reviews`
+is **applied to the live Supabase project**. Nothing is active in production:
+every trigger path (on-demand API, weekly scheduler pass, both escalation
+hooks, the Slack action) checks `strategist_enabled`, which ships **FALSE**.
+
+**What exists now (detail in the CLAUDE.md paragraph):**
+- **Phase 0** — `services/strategy_digest.py` (signal envelope w/ deterministic
+  `status`, keyword passports, staleness flags, isolated providers) +
+  `services/sop_library.py` (active-domain SOP selection over `docs/sops/` +
+  the DB `sop_store` layer + module cards; corpus **vendored** at
+  `writer/platform-api/agent_docs/` because the Docker build context can't see
+  repo-root `docs/` — a unit test keeps the copies byte-identical).
+- **Phases 1+3** — `services/strategist.py` (bounded tool-use run →
+  `strategy_reviews` row; `sanitize_review` enforces §3 in code) +
+  `services/strategist_tools.py` (serp_deep_dive / geogrid_history LLM
+  subagents; episode_timeline / read_sop / client_capacity deterministic;
+  audit_page paid+capped) + `routers/strategist.py` + the Action Plan
+  **Strategist Review card** (Approve/Dismiss; senior proposals need admin).
+- **Phases 2+4** — weekly active-signal-only pass on the shared scheduler
+  (Tuesday, day after the reopt build); SerMaStr Slack action
+  ("strategy review for <client>", reply-*yes*); escalation briefs riding
+  `episode_escalated` + the new sitewide-decline transition detector.
+
+**Verification done:** 994 pytest green under the pinned `fastapi==0.115.0`
+import-check; real `npm run build` clean; an 8-angle code review ran before
+push — 6 confirmed findings fixed (senior-approval now enforced at the API,
+per-trigger job dedup so escalation briefs can't be swallowed, DB sop_store
+folded into the run, dead budget-domain read, orphaned-review cleanup,
+completed_at timing). Also fixed 3 pre-existing drifted `test_run_dispatch`
+assertions (fanout `generate_service_page_core` returns a run id now).
+
+### 🚦 To activate (the smoke gate — spec §7)
+1. Set `STRATEGIST_ENABLED=true` on the **PLATFORM** Railway service (env var
+   → redeploy). Nothing else is needed — schema is live, Slack/notifications
+   already provisioned.
+2. Smoke-test: open a client's **Action Plan** page → "Strategist Review" card
+   → **Run review** (or in Slack: "strategy review for <client>" → reply
+   *yes*). Expect a review in 1–3 minutes: assessment, findings w/ SOP
+   citations, proposals (senior-only badged), questions.
+3. Judge 2–3 real clients' reviews (Kyle/Ryan). If they'd have been your
+   calls, leave it on — the weekly pass (active-signal clients only) and the
+   escalation briefs are then live automatically. If not, set the flag back
+   to false; everything goes dormant again.
+
+**Deferred / notes:** Phase 5 (approved proposal → Asana task) rides the
+Asana-push build. `docs/sops/` + module-card edits must be re-copied into
+`writer/platform-api/agent_docs/` (pytest fails loudly if you forget).
+Weekly-scope/model/digest-destination/approval-surface all use the spec §9
+defaults (Sonnet everywhere; shared Slack channel; active-signal only;
+Action-Plan-first).
+
+---
+
+## ⏩ Update — 2026-07-04 · **SerMaStr — Search Marketing Strategist Agent, spec approved** — **MERGED to `main`** (PRs #218 `c7254fd` + #219 `2166a03`; spec only, nothing built yet)
+
+The reasoning layer atop the deterministic agent loop now has an **approved
+plan of record**: **`docs/modules/seo-strategist-agent-plan-v1_0.md`**. The
+agent's name is **SerMaStr** — **SE**arch **MA**rketing **STR**ategist (owner
+ruling, #219). The existing Slack assistant is this agent's conversational
+surface — one identity: the Q&A/actions bot today, plus the strategist mode
+the plan adds. Scope is the whole search surface (organic, local pack/maps,
+AI-answer visibility, content, links/offpage, budget) — deliberately *not*
+"a strategist for LLM visibility."
+
+**Locked decisions (decision records in the spec):**
+- **Per-domain standing LLM monitors rejected** — monitoring stays
+  deterministic (already built); strategy is the cross-domain part (one
+  shared budget, interlocking SOPs). Architecture: **one strategist run per
+  client**, event-driven (weekly for active-signal clients + escalation
+  events + on-demand), with **bounded drill-down tools** (≤4/run; only
+  `serp_deep_dive` + `geogrid_history` are true LLM subagents).
+- **Proposes, never executes.** Advice objects with SOP citations, staged for
+  Approve/Dismiss; six hard-coded human passthroughs from `_ORCHESTRATOR.md`
+  §3 (freeze, GBP suspension, sub-50% margin, separate-entity calls,
+  overclock, the 6-week review itself). Unowned decisions → questions.
+- **Escalation briefs:** the 6-week rule's critical notification gains a
+  prepared case file (what was tried / what moved / recommendation) instead
+  of a bare alert.
+- **Module legibility (spec §2b):** module cards + a standard signal envelope
+  (`direction` + deterministically-computed `status` — the LLM never does
+  trend arithmetic) + the **keyword passport** (digest grouped by keyword
+  across channels) + explicit staleness + self-documenting tools. First three
+  **module cards written** at **`docs/agents/module-cards/`** (rank-tracker,
+  geogrid-tracker, labs-ai-visibility — each with a worked misreading, e.g.
+  "average_rank without found_pins", "null GSC position ≠ rank loss", "one
+  AI answer-flip ≠ trend"). Cards can be wired into SerMaStr's Slack context
+  providers immediately, before the strategist ships.
+- **Cost:** ≈ $1–2/client/mo typical (Sonnet-class), $0 for quiet clients.
+- **Smoke gate:** Phase 1 is on-demand only (`strategist_enabled` default
+  false); weekly scheduling only after Kyle/Ryan judge 2–3 real reviews.
+
+**Next build (on "go"):** Phase 0–1 — `build_strategy_digest` (signal
+envelope + keyword passport + staleness + SOP/module-card retrieval),
+`strategy_reviews` migration, the on-demand run, and the Action Plan
+"Strategist Review" card. The **Asana task push** (plan lines → assigned
+Asana tasks) remains queued as its own build and later becomes SerMaStr
+Phase 5. Open §9 defaults to confirm at build time: Sonnet everywhere;
+digests to the shared Slack channel; weekly = active-signal clients only;
+approvals Action-Plan-first.
+
+---
+
+## ⏩ Update — 2026-07-04 · **SOP library + 24/7 SEO agent phase 1** — **MERGED to `main`** (PRs #215 `3e3c828` + #216 `73e6e15`, both deployed & live)
+
+The session that turned the agency's SOP corpus into a running machine. Two
+merged PRs: **#215** (the SOP library + the whole agent loop) and **#216** (the
+Recipe Engine frontend + a production hotfix). Everything below is **live** —
+all six migrations were applied to the live Supabase project during the build,
+and the PLATFORM deploy of `main` is healthy.
+
+**The agent loop (all built, all running on the shared scheduler):**
+
+```
+detect      trackers + daily freeze check + offpage/citation/imbalance sweeps
+classify    B1–B5 + §A sitewide scope (drop_classifier.py)
+decide      SOP response playbooks rendered in the Action Plan
+cost/assign Recipe Engine → monthly task plan (margin-aware, roles-matrix)
+verify      response episodes: 2-week rechecks / 6-week escalate → Kyle/Ryan
+kill switch Freeze Protocol (freeze pauses all content + link output)
+```
+
+**What shipped, by module** (full detail in each CLAUDE.md paragraph):
+
+1. **`docs/sops/`** — the 11-doc SOP library imported with a consistency pass:
+   drift fixes across every doc, the On-Page thresholds resolved from the live
+   nlp-api scoring code (bands ≥90/≥80/≥70/≥60; deficiency bar = engine < 80;
+   operational pass line 90), four owner rulings (plan-time Step 8 gate;
+   threshold-gated overclock self-serve; RD 250 = guideline not cap; LABS
+   engine list aligned to the built module), and the capacity workbook's dead
+   formulas wired. **Read `docs/sops/README.md` first** — `_ORCHESTRATOR.md`
+   is the router.
+2. **Freeze Protocol** — `client_freezes`, router/worker/fanout gates
+   (409 `client_frozen`), daily `freeze_check` (GSC URL-Inspection → auto
+   deindexing-freeze; DataForSEO `site:` probe warn-only), `FreezeBanner` on
+   the workspace (admin freeze/lift). Manual actions have no Google API — a
+   human confirms via the banner.
+3. **Recipe Engine** — SOP §1–§5 as code, conformance-tested against the §4
+   worked example ($2,000 → $0 remaining, exact). Auto-diagnosis from suite
+   data. **Frontend:** workspace "Monthly Task Plan" card → generate (66%/50%
+   margin), summary strip, flags, assigned task table, CSV, history.
+4. **Drop classifier** — open rank alerts arrive classified (B1 cannibalization
+   / B2 SERP-shift / B3 CTR / B4 indexing / B5 position; §A sitewide banner);
+   the Action Plan renders each classification's SOP protocol + right-tool CTA.
+5. **Response episodes** — every drop response has the SOP clock: baseline at
+   open (organic weighted position / maps geo-grid `average_rank`), 14-day
+   rechecks, recovered when the tracker resolves the alert, **escalated once
+   at 6 weeks** with no improvement (critical notification; improving episodes
+   never escalate). Clock notes append to Action Plan rows.
+6. **Offpage agent** — RD loss / unnatural spike from `backlink_profiles`
+   (both relative + absolute bars), **citation liveness** (paste-in list at
+   `clients/:id/citations`; fail-open — only hard 404/410/DNS ×2 consecutive
+   = dead; bot-blocks count alive), **per-page RD imbalance** (monthly page
+   summaries, inner page > homepage RD × 1.5 → info-severity rebalance).
+   Every new alert triggers a silent Action Plan rebuild (`trigger="offpage"`).
+
+### ⚠️ Incident (resolved) — PLATFORM crash-loop after the #215 deploy
+
+The `DELETE /citations/{id}` route used `status_code=204`, which the pinned
+`fastapi==0.115.0` rejects **at import time** → the whole API crash-looped
+~07:34–07:45 UTC ("client cards aren't loading"). Fixed in #216 (200 + JSON
+body), verified by importing all 30 suite modules under the pinned FastAPI.
+**Process rule going forward:** backend changes are import-checked under the
+pinned requirements before push (the sandbox's newer FastAPI had masked it),
+and frontend changes run the real `npm run build` (which also caught a React
+19 `JSX` namespace break earlier).
+
+### 🔧 Operator to-dos (the loop idles until these are done)
+
+1. **Set each client's budget** — client form → "Budget & Campaign Type"
+   (monthly budget with live 34%-deployable readout; local/enterprise funding
+   order; SAB toggle → $130 baseline).
+2. **Paste citation lists** — client workspace → Citations card → paste the
+   URLs from vendor deliverables (weekly liveness sweep starts from there).
+3. **Smoke-test one client** — generate a Monthly Task Plan and gut-check it;
+   open + lift a manual freeze and confirm the Slack ping + the 409 gates.
+
+No migrations to apply — unlike prior handoffs, **all schema is already live**
+(`client_freezes`, `recipe_engine`, `response_episodes`, `offpage_alerts`,
+`citations_page_backlinks`).
+
+### Deferred / next builds (each a clean follow-up PR)
+
+- **Asana task push** — one Asana task per plan line, assigned per the roles
+  matrix (the Asana integration already exists). Highest-leverage next step:
+  closes the loop from "plan generated" to "task in Minda's queue".
+- Algo-update detection (cross-client drop correlation).
+- On-page coverage audit (blog/service/location scoring parity with local).
+- LABS "mention AND link" win rollup + AIO Fork A/B classification.
+- Recipe Engine refinements: gap-sized funding quantities; cross-client
+  capacity from the workbook; per-person escalation routing.
+- SOP paper debt: anchor-ratio ledger (the freeze health check references it),
+  T1 Booster spec, LB recipe decision matrix.
+
+---
+
+## ⏩ Update — 2026-06-29 · **Maps geo-grid strategy & Action Plan** — **MERGED to `main`** (PR #182, squash `35394ae`)
 
 Brought the **Maps geo-grid tracker** to parity with the organic rank tracker's
 reoptimization guidance, then layered on strategic competitive intelligence —

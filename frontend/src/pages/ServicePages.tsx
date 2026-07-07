@@ -3,9 +3,14 @@ import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, FileText, ArrowRight, Loader, Sparkles, Check, RefreshCw } from 'lucide-react'
 import { api } from '../lib/api'
+import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
+import { BulkPublishBar } from '../components/publish/BulkPublishBar'
+import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
 import type { Client, RunListResponse, RunStatus } from '../lib/types'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
+const runPublished = (r: { published_doc_url?: string | null; published_url?: string | null }) =>
+  Boolean(r.published_doc_url || r.published_url)
 
 type PlanStatus = 'pending' | 'running' | 'complete' | 'failed'
 interface PlanItem { keyword: string; group: string; status: 'found' | 'missing' | 'reoptimize'; url: string | null; rank: number | null }
@@ -49,7 +54,7 @@ export function ServicePages() {
 
   const { data: runs } = useQuery<RunListResponse>({
     queryKey: ['service-page-runs', id],
-    queryFn: () => api.get<RunListResponse>(`/runs?client_id=${id}&content_type=service_page&page_size=100`),
+    queryFn: () => api.get<RunListResponse>(`/runs?client_id=${id}&content_type=service_page&page_size=200`),
     enabled: Boolean(id),
     refetchInterval: (query) => {
       const list = query.state.data?.data ?? []
@@ -153,6 +158,15 @@ export function ServicePages() {
   }
 
   const list = runs?.data ?? []
+  const pub = usePagedPublish(list, runPublished)
+
+  // Bulk-publish the completed pages to Google Docs / the client's website / both.
+  const bulk = useBulkPublish()
+  const publishItems: PublishItem[] = list
+    .filter((r) => r.status === 'complete')
+    .map((r) => ({ key: `run:${r.id}`, type: 'run', id: r.id, label: r.title || r.keyword }))
+  const wpConfigured = Boolean(client?.wordpress_site_url && client?.wordpress_app_password_set)
+  const ghConfigured = Boolean(client?.github_repo)
 
   return (
     <div style={{ padding: 32, maxWidth: 900 }}>
@@ -343,27 +357,57 @@ export function ServicePages() {
       {list.length === 0 ? (
         <div style={{ color: '#94a3b8', fontSize: 14, padding: '12px 0' }}>No service pages yet.</div>
       ) : (
+        <>
+        <BulkPublishBar items={publishItems} bulk={bulk} wordpressConfigured={wpConfigured} githubConfigured={ghConfigured} placement="top" />
+        <div style={{ margin: '4px 0 12px' }}>
+          <PublishTabs counts={pub.counts} active={pub.filter} onPick={pub.pick} />
+        </div>
+        {pub.total === 0 ? (
+          <div style={{ color: '#94a3b8', fontSize: 14, padding: '12px 0' }}>Nothing in this view.</div>
+        ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {list.map((r) => {
+          {pub.pageItems.map((r) => {
             const running = !TERMINAL.includes(r.status)
+            const key = `run:${r.id}`
+            const result = bulk.results[key]
             return (
-              <Link key={r.id} to={`/runs/${r.id}`} style={rowStyle}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, color: '#0f172a', fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {r.title || r.keyword}
+              <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {r.status === 'complete' ? (
+                  <input
+                    type="checkbox"
+                    checked={bulk.selected.has(key)}
+                    onChange={(e) => bulk.toggle(key, e.target.checked)}
+                    disabled={bulk.publishing}
+                    style={{ width: 16, height: 16, accentColor: '#6366f1', cursor: 'pointer', flexShrink: 0 }}
+                    title="Select for bulk publish"
+                  />
+                ) : (
+                  <span style={{ width: 16, flexShrink: 0 }} />
+                )}
+                <Link to={`/runs/${r.id}`} style={{ ...rowStyle, flex: 1, minWidth: 0 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, color: '#0f172a', fontSize: 14, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {r.title || r.keyword}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#94a3b8' }}>{new Date(r.created_at).toLocaleString()}</div>
                   </div>
-                  <div style={{ fontSize: 12, color: '#94a3b8' }}>{new Date(r.created_at).toLocaleString()}</div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: statusColor(r.status) }}>
-                    {running && <Loader size={13} />} {r.status.replace(/_/g, ' ')}
-                  </span>
-                  <ArrowRight size={15} color="#cbd5e1" />
-                </div>
-              </Link>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    {result?.status === 'failed' && <span style={{ fontSize: 12, color: '#dc2626' }} title={result.error}>Failed</span>}
+                    {result?.status === 'publishing' && <Loader size={13} />}
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: statusColor(r.status) }}>
+                      {running && <Loader size={13} />} {r.status.replace(/_/g, ' ')}
+                    </span>
+                    <ArrowRight size={15} color="#cbd5e1" />
+                  </div>
+                </Link>
+                <PublishBadges docUrl={r.published_doc_url} siteUrl={r.published_url} />
+              </div>
             )
           })}
         </div>
+        )}
+        <Pager page={pub.page} pageCount={pub.pageCount} total={pub.total} pageSize={pub.pageSize} onPage={pub.setPage} />
+        </>
       )}
     </div>
   )

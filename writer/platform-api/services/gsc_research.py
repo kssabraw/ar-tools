@@ -11,8 +11,11 @@ opportunity sets:
      competing pages instead of favoring one.
   2. Quick wins — query×page sitting at position 6–10. A small push lands it
      on page 1.
-  3. Hidden wins — query×page at position 11–30 with ≥5 impressions. Real
-     demand stuck on page 2–3.
+  3. Hidden wins — query×page at position 11–30. Real demand stuck on page 2–3.
+
+All three bands share a minimum-impressions floor (`_MIN_IMPRESSIONS`) over the
+LOOKBACK_DAYS window so the long tail of near-zero-impression queries doesn't
+drown out real opportunities on large properties.
 
 Quick/hidden wins are enriched with DataForSEO market data (CPC / search volume
 / competition) by reusing the keyword_market service + its cross-client cache.
@@ -20,9 +23,9 @@ Quick/hidden wins are enriched with DataForSEO market data (CPC / search volume
 The analysis helpers are pure (no I/O) so they're unit-tested directly. The
 job runner pulls data, computes, enriches, and writes the run row.
 
-Thresholds are fixed (they encode the workflow's heuristics); see the constants
-below. Note the source workflow leaves a small gap at position (10, 11] between
-the quick- and hidden-win bands — replicated here intentionally for fidelity.
+Position bands encode the source workflow's heuristics; see the constants below.
+Note the small gap at position (10, 11] between the quick- and hidden-win bands
+— replicated from the source workflow intentionally for fidelity.
 """
 
 from __future__ import annotations
@@ -50,10 +53,16 @@ _IMPRESSIONS_CLOSE_RATIO = 0.5  # (max-min)/max ≤ this → impressions "cluste
 _QUICK_MIN_EXCL = 5.0
 _QUICK_MAX_INCL = 10.0
 
-# Hidden-win band: position in (11, 30] with ≥5 impressions.
+# Hidden-win band: position in (11, 30].
 _HIDDEN_MIN_EXCL = 11.0
 _HIDDEN_MAX_INCL = 30.0
-_HIDDEN_MIN_IMPRESSIONS = 5
+
+# Shared impressions floor across all three bands: a query must have pulled at
+# least this many impressions over the LOOKBACK_DAYS window to surface as an
+# opportunity — per query×page for quick/hidden wins, and the query's total
+# across its competing pages for cannibalization. Filters out the long tail of
+# 1–2 impression flukes that otherwise dominate large properties.
+_MIN_IMPRESSIONS = 500
 
 # Cap on keywords sent to DataForSEO per run (cost guard); the top opportunities
 # by impressions are enriched first.
@@ -132,13 +141,19 @@ def find_cannibalization(aggregated: list[dict]) -> list[dict]:
         if not impressions_close:
             continue
 
+        # Impressions floor: the query (summed across its competing pages) must
+        # clear _MIN_IMPRESSIONS over the window.
+        total_impressions = sum(p["impressions"] for p in pages)
+        if total_impressions < _MIN_IMPRESSIONS:
+            continue
+
         ordered_pages = sorted(pages, key=lambda p: p["impressions"], reverse=True)
         out.append(
             {
                 "query": query,
                 "page_count": len(pages),
                 "total_clicks": sum(p["clicks"] for p in pages),
-                "total_impressions": sum(p["impressions"] for p in pages),
+                "total_impressions": total_impressions,
                 "pages": [
                     {
                         "page": p["page"],
@@ -168,24 +183,26 @@ def _opportunity_row(agg: dict) -> dict:
 
 
 def find_quick_wins(aggregated: list[dict]) -> list[dict]:
-    """query×page rows at position (5, 10], ordered by impressions desc."""
+    """query×page rows at position (5, 10] with ≥_MIN_IMPRESSIONS, by impressions desc."""
     out = [
         _opportunity_row(a)
         for a in aggregated
-        if a["position"] is not None and _QUICK_MIN_EXCL < a["position"] <= _QUICK_MAX_INCL
+        if a["position"] is not None
+        and _QUICK_MIN_EXCL < a["position"] <= _QUICK_MAX_INCL
+        and a["impressions"] >= _MIN_IMPRESSIONS
     ]
     out.sort(key=lambda r: r["impressions"], reverse=True)
     return out
 
 
 def find_hidden_wins(aggregated: list[dict]) -> list[dict]:
-    """query×page rows at position (11, 30] with ≥5 impressions, by impressions desc."""
+    """query×page rows at position (11, 30] with ≥_MIN_IMPRESSIONS, by impressions desc."""
     out = [
         _opportunity_row(a)
         for a in aggregated
         if a["position"] is not None
         and _HIDDEN_MIN_EXCL < a["position"] <= _HIDDEN_MAX_INCL
-        and a["impressions"] >= _HIDDEN_MIN_IMPRESSIONS
+        and a["impressions"] >= _MIN_IMPRESSIONS
     ]
     out.sort(key=lambda r: r["impressions"], reverse=True)
     return out
@@ -262,6 +279,7 @@ async def _fetch_market_for(supabase, keywords: list[str], location_code: int) -
                     "search_volume": fetched.get(kw.lower(), {}).get("search_volume"),
                     "cpc": fetched.get(kw.lower(), {}).get("cpc"),
                     "competition": fetched.get(kw.lower(), {}).get("competition"),
+                    "monthly_searches": fetched.get(kw.lower(), {}).get("monthly_searches"),
                     "refreshed_at": now_iso,
                 }
                 for kw in missing

@@ -2,14 +2,18 @@
 
 After a brand scan completes, compare it to the client's previous scan and emit a
 notification (in-app + Slack/email, via the shared notifications service) when
-something regressed. Three triggers (per the module's deferred notifications
-piece):
+something regressed. Four triggers (per the module's notifications piece —
+ports LABS' process-scan-alerts taxonomy, minus its credit-blackout):
 
   1. Visibility drop   — overall visibility fell by >= the configured points.
   2. Engine went dark  — the brand was visible on an engine last scan and is now
                          invisible on it.
   3. Misinformation    — an accuracy flag (AI stating wrong phone / "permanently
                          closed" vs GBP) appeared that wasn't there last scan.
+  4. Reputation        — a high-confidence negative-sentiment mention appeared on
+                         a keyword×engine cell that wasn't negative last scan
+                         (LABS' reputation alarm, made transition-based so a
+                         persistently negative cell alerts once, not every scan).
 
 Comparison is restricted to keyword×engine cells present in BOTH scans, so a
 partial / differently-scoped scan can't raise false regressions. The diff +
@@ -34,15 +38,24 @@ ENGINE_LABELS = {
 
 
 # ── pure: index one batch ─────────────────────────────────────────────────────
-def index_batch(rows: list[dict]) -> dict:
+def index_batch(
+    rows: list[dict],
+    *,
+    sentiment_threshold: float = -0.3,
+    confidence_min: float = 0.7,
+) -> dict:
     """Summarize a batch's completed brand rows for comparison. Pure.
 
     Returns {cells: {(keyword_id, engine): found_bool}, engines: {engine: (found,
-    total)}, overall: (found, total), misinfo: [{keyword_id, engine, field}]}."""
+    total)}, overall: (found, total), misinfo: [{keyword_id, engine, field}],
+    negatives: [{keyword_id, engine, sentiment, confidence}]} — negatives are
+    high-confidence negative-sentiment mentions (LABS' reputation-alarm bar:
+    sentiment < threshold at confidence >= minimum)."""
     cells: dict[tuple, bool] = {}
     engines: dict[str, list] = {}
     overall = [0, 0]
     misinfo: list[dict] = []
+    negatives: list[dict] = []
     for r in rows:
         if r.get("status") != "completed" or r.get("is_competitor_scan"):
             continue
@@ -61,11 +74,21 @@ def index_batch(rows: list[dict]) -> dict:
         for f in (r.get("response_analysis") or {}).get("accuracy_flags") or []:
             misinfo.append({"keyword_id": kid, "engine": engine, "field": f.get("field"),
                             "stated": f.get("stated"), "actual": f.get("actual")})
+        sentiment = r.get("sentiment")
+        confidence = r.get("confidence_score")
+        if (
+            sentiment is not None and confidence is not None
+            and float(sentiment) < sentiment_threshold
+            and float(confidence) >= confidence_min
+        ):
+            negatives.append({"keyword_id": kid, "engine": engine,
+                              "sentiment": float(sentiment), "confidence": float(confidence)})
     return {
         "cells": cells,
         "engines": {e: tuple(v) for e, v in engines.items()},
         "overall": tuple(overall),
         "misinfo": misinfo,
+        "negatives": negatives,
     }
 
 
@@ -107,6 +130,14 @@ def detect_changes(prev: dict, curr: dict) -> dict:
         if (m["keyword_id"], m["engine"], m["field"]) not in prev_keys
     ]
 
+    # Reputation: negative cells that weren't negative last scan (transition-
+    # based — a persistently negative cell alerted when it first turned).
+    prev_negative_keys = {(m["keyword_id"], m["engine"]) for m in prev.get("negatives", [])}
+    new_negatives = [
+        m for m in curr.get("negatives", [])
+        if (m["keyword_id"], m["engine"]) not in prev_negative_keys
+    ]
+
     return {
         "overall_prev_pct": overall_prev,
         "overall_curr_pct": overall_curr,
@@ -114,6 +145,7 @@ def detect_changes(prev: dict, curr: dict) -> dict:
         "engines_dark": engines_dark,
         "lost_cells": lost_cells,
         "new_misinfo": new_misinfo,
+        "new_negatives": new_negatives,
     }
 
 
@@ -129,6 +161,8 @@ def summarize_changes(
     drop = changes["drop_pct"]
     engines_dark = changes["engines_dark"]
     new_misinfo = changes["new_misinfo"]
+    new_negatives = changes.get("new_negatives", [])
+    lost_cells = changes.get("lost_cells", [])
 
     triggers: list[str] = []
     drop_hit = drop >= drop_threshold and changes["overall_prev_pct"] > 0
@@ -138,14 +172,19 @@ def summarize_changes(
         triggers.append("engine_dark")
     if new_misinfo:
         triggers.append("misinformation")
+    if new_negatives:
+        triggers.append("reputation")
     if not triggers:
         return None
 
-    # Severity: misinformation is the most serious, then a drop / dark engine.
+    # Severity: misinformation is the most serious (critical pings the channel);
+    # a new negative-sentiment mention / drop / dark engine warn.
     severity = "critical" if new_misinfo else "warning"
 
     if new_misinfo:
         title = "Possible AI misinformation detected"
+    elif new_negatives:
+        title = "Negative AI sentiment detected"
     elif engines_dark:
         n = len(engines_dark)
         title = f"Brand went invisible on {n} AI engine{'s' if n != 1 else ''}"
@@ -159,12 +198,28 @@ def summarize_changes(
         )
     if engines_dark:
         parts.append("No longer visible on: " + ", ".join(ENGINE_LABELS.get(e, e) for e in engines_dark) + ".")
+    if (drop_hit or engines_dark) and lost_cells:
+        bits = []
+        for kid, engine in lost_cells[:5]:
+            kw = keyword_labels.get(kid, "a keyword")
+            bits.append(f"“{kw}” ({ENGINE_LABELS.get(engine, engine)})")
+        extra = len(lost_cells) - 5
+        parts.append("Went invisible: " + ", ".join(bits) + (f" +{extra} more" if extra > 0 else "") + ".")
     if new_misinfo:
         bits = []
         for m in new_misinfo[:5]:
             kw = keyword_labels.get(m["keyword_id"], "a keyword")
             bits.append(f"{m.get('field')} on “{kw}” ({ENGINE_LABELS.get(m['engine'], m['engine'])})")
         parts.append("Incorrect info stated: " + "; ".join(bits) + ".")
+    if new_negatives:
+        bits = []
+        for m in new_negatives[:5]:
+            kw = keyword_labels.get(m["keyword_id"], "a keyword")
+            bits.append(
+                f"“{kw}” on {ENGINE_LABELS.get(m['engine'], m['engine'])} "
+                f"(sentiment {m['sentiment']:+.2f})"
+            )
+        parts.append("New negative mentions: " + "; ".join(bits) + ".")
 
     return {"title": title, "summary": " ".join(parts), "severity": severity, "triggers": triggers}
 
@@ -212,8 +267,12 @@ def emit_scan_alerts(client_id: str, scan_batch_id: str) -> Optional[str]:
         if not prev_id:
             return None  # first scan — nothing to compare against
 
-        curr_idx = index_batch(_batch_rows(supabase, client_id, scan_batch_id))
-        prev_idx = index_batch(_batch_rows(supabase, client_id, prev_id))
+        thresholds = {
+            "sentiment_threshold": settings.brand_alert_sentiment_threshold,
+            "confidence_min": settings.brand_alert_confidence_min,
+        }
+        curr_idx = index_batch(_batch_rows(supabase, client_id, scan_batch_id), **thresholds)
+        prev_idx = index_batch(_batch_rows(supabase, client_id, prev_id), **thresholds)
         changes = detect_changes(prev_idx, curr_idx)
 
         kw_rows = (

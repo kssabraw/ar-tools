@@ -108,7 +108,7 @@ async def _upload_media(
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:  # noqa: BLE001 — best-effort; log and skip this image
-        logger.warning("wordpress_media_upload_failed", extra={"filename": filename, "error": str(exc)})
+        logger.warning("wordpress_media_upload_failed", extra={"upload_filename": filename, "error": str(exc)})
         return None
     if not isinstance(data, dict) or not data.get("id"):
         return None

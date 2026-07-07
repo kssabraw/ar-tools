@@ -51,6 +51,7 @@ from models.local_seo import (
     PageTemplateDefaultRequest,
 )
 from services import local_seo_precheck, local_seo_service, local_seo_silo
+from services.freeze import assert_not_frozen
 from sse import sse_response
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ async def generate_local_seo_page_async(
 ) -> LocalSeoGenerateJob:
     """Kick off page generation as a background job (runs minutes; poll for the
     result). Lets the UI navigate away — even to other clients — while it runs."""
+    assert_not_frozen(str(client_id))  # Freeze Protocol: content creation paused
     job_id = await local_seo_service.enqueue_generate(
         client_id=str(client_id),
         keyword=body.keyword,
@@ -100,6 +102,7 @@ async def generate_local_seo_pages_bulk(
 ) -> LocalSeoBulkGenerateJob:
     """Enqueue background generation for several keywords (bulk-create). The UI
     polls the returned job ids and can leave while they run."""
+    assert_not_frozen(str(client_id))  # Freeze Protocol: content creation paused
     job_ids = await local_seo_service.enqueue_generate_bulk(
         client_id=str(client_id),
         keywords=body.keywords,
@@ -120,6 +123,7 @@ async def reoptimize_local_seo_pages_bulk(
 ) -> LocalSeoReoptimizeBulkJob:
     """Enqueue background reoptimization for several page URLs. The UI polls the
     returned jobs (paired with their URLs) and can leave while they run."""
+    assert_not_frozen(str(client_id))  # Freeze Protocol: content creation paused
     jobs = await local_seo_service.enqueue_reoptimize_bulk(
         client_id=str(client_id),
         targets=[t.model_dump() for t in body.targets],
@@ -354,6 +358,21 @@ async def list_local_seo_drafts(
     return [LocalSeoPageListItem(**row) for row in local_seo_service.list_pages(str(client_id), deleted=True)]
 
 
+@router.get("/clients/{client_id}/local-seo/score-history")
+async def list_local_seo_score_history(
+    client_id: UUID,
+    page_id: UUID | None = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    auth: dict = Depends(require_auth),
+) -> list[dict]:
+    """Per-run score history for a client — each row carries the full 8-engine
+    `engine_scores` verdict, composite, deficiencies and token usage. Optionally
+    scoped to one page via `page_id`."""
+    return local_seo_service.list_score_history(
+        str(client_id), page_id=str(page_id) if page_id else None, limit=limit,
+    )
+
+
 @router.get("/local-seo/pages/{page_id}", response_model=LocalSeoPageDetail)
 async def get_local_seo_page(
     page_id: UUID,
@@ -402,7 +421,7 @@ async def purge_local_seo_drafts(
 
 
 class PublishPageRequest(BaseModel):
-    destination: Literal["google_docs", "wordpress"] = "google_docs"
+    destination: Literal["google_docs", "wordpress", "github"] = "google_docs"
     status: Literal["draft", "publish"] = "draft"
 
 

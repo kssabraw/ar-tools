@@ -86,6 +86,10 @@ export interface Client extends ClientListItem {
   page_structures: Record<string, PageStructureEntry> | null
   // Manual extra cities to plan location pages for (silo planner target-city source).
   target_cities: string[] | null
+  // Recipe Engine budget inputs (66% margin target → 34% deployable).
+  retainer_monthly: number | null
+  is_sab: boolean
+  client_type: 'local' | 'enterprise'
   updated_at: string
 }
 
@@ -157,6 +161,8 @@ export interface KeywordSummary {
   impressions_30d: number
   ctr_30d: number
   today_rank: number | null
+  prev_rank: number | null
+  prev_rank_date: string | null
   cpc: number | null
   search_volume: number | null
   competition: string | null
@@ -411,6 +417,7 @@ export interface Run {
   started_at: string | null
   completed_at: string | null
   published_doc_url?: string | null
+  published_url?: string | null
 }
 
 // Service Page Writer output (module_outputs.service_writer.output_payload)
@@ -1341,11 +1348,134 @@ export interface BrandSearchResponse {
   totals: BrandSearchTotals
 }
 
+// Campaign goals — per-client success targets; status computed server-side
+// on every read (achieved | on_track | behind | overdue | no_data | manual).
+export interface CampaignGoal {
+  id: string
+  client_id: string
+  goal_type: string
+  label: string
+  keyword: string | null
+  target_value: number | null
+  target_position: number | null
+  due_date: string | null
+  baseline_value: number | null
+  baseline_date: string | null
+  achieved_at: string | null
+  active: boolean
+  notes: string | null
+  created_at: string | null
+  current_value: number | null
+  status: string | null
+  progress_pct: number | null
+  elapsed_pct: number | null
+  note: string | null
+}
+
+// Competitive intelligence — assembled competitor profiles.
+export interface CompetitorProfile {
+  id: string
+  name: string
+  domain: string | null
+  place_id: string | null
+  sources: string[]
+  notes: string | null
+  local_pack: { found_pins: number | null; top3_pins: number | null; avg_rank: number | null } | null
+  gbp: { rating: number | null; review_count: number | null; primary_category: string | null; captured_at: string | null } | null
+  backlinks: { domain_rating: number | null; referring_domains: number | null } | null
+  organic: { top10_keyword_count: number; keywords: string[]; best_position: number | null } | null
+  review_velocity_30d: number | null
+  new_pages_30d: number
+  recent_pages: { url: string; first_seen: string }[]
+  last_synced_at: string | null
+}
+
+export interface CompetitorProfilesResponse {
+  competitors: CompetitorProfile[]
+  client: {
+    domain: string | null
+    domain_rating: number | null
+    referring_domains: number | null
+    gbp_rating: number | null
+    gbp_review_count: number | null
+    review_velocity_30d: number | null
+  }
+}
+
+// Deterministic forecasting — computed on read, nothing stored.
+export interface KeywordForecast {
+  keyword: string
+  current_position: number | null
+  trend_per_week: number | null
+  projected_position_30d: number | null
+  projected_position_90d: number | null
+  confidence: 'high' | 'medium' | 'low'
+  clicks_per_month_now: number | null
+  clicks_per_month_90d: number | null
+  clicks_source: 'gsc' | 'ctr_model' | 'none'
+  search_volume: number | null
+  cpc: number | null
+  value_per_month_now: number | null
+  value_per_month_90d: number | null
+}
+
+export interface ForecastResponse {
+  generated_for: string
+  keyword_count: number
+  keywords: KeywordForecast[]
+  portfolio: {
+    clicks_per_month_now: number
+    clicks_per_month_90d: number
+    value_per_month_now: number
+    value_per_month_90d: number
+  }
+  quick_wins: {
+    target_position: number
+    keywords: {
+      keyword: string
+      current_position: number
+      target_position: number
+      extra_clicks_per_month: number
+      extra_value_per_month: number | null
+    }[]
+    keyword_count: number
+    total_extra_clicks_per_month: number
+    total_extra_value_per_month: number
+    skipped_no_volume: number
+  }
+  gsc_clicks_trajectory: {
+    clicks_last_30d: number
+    clicks_previous_30d: number
+    delta_30d: number
+    projected_30d_ahead: number
+    projected_90d_ahead: number
+  } | null
+  goal_projections: {
+    goal_label: string
+    horizon_days: number
+    projected_value: number | null
+    target_value: number | null
+    on_trajectory: boolean
+    confidence: string
+  }[]
+  demand_outlook: {
+    direction: 'rising' | 'falling' | 'stable'
+    change_pct_next_quarter: number
+    months_ahead: string[]
+    keywords_with_history: number
+    keywords_without_history?: number
+    notable_swings: { keyword: string; change_pct: number; volume: number; peak_months: string[] }[]
+  } | null
+  note: string
+}
+
 // Asana task integration.
 export interface AsanaProjectMapping {
   client_id: string
   project_gid: string
   auto_assignee_gids: string[]
+  // Resolved from Asana at save time (GID validation); null on plain reads.
+  project_name?: string | null
 }
 
 export interface AsanaTaskTemplateItem {
@@ -1429,7 +1559,7 @@ export interface AsanaWorkloadReport {
 export interface ClientReport {
   id: string
   client_id: string
-  report_type: 'monthly' | 'weekly'
+  report_type: 'monthly' | 'weekly' | 'ai_visibility'
   period_start: string | null
   period_end: string | null
   status: 'pending' | 'running' | 'complete' | 'failed'
@@ -1437,8 +1567,84 @@ export interface ClientReport {
   pdf_url: string | null
   drive_doc_id: string | null
   sections: Record<string, string> | null
+  delivery: Record<string, string> | null // Phase 5: {email, drive} → ok/failed/skipped
   title: string | null
   error: string | null
   created_at: string
   completed_at: string | null
+}
+
+// Client Reporting Phase 5 — per-client delivery recipients + schedule.
+export type ReportPeriod = '30d' | '60d' | '90d' | '120d' | '1y' | 'all'
+
+export interface ReportSettings {
+  client_id: string
+  recipients: string[]
+  cadence: 'disabled' | 'weekly' | 'monthly'
+  day_of_week: number | null
+  day_of_month: number | null
+  hour_utc: number
+  period: 'auto' | ReportPeriod
+  email_enabled: boolean
+  drive_enabled: boolean
+  last_run_at: string | null
+  next_run_at: string | null
+}
+
+// SerMaStr — strategist reviews (docs/modules/seo-strategist-agent-plan-v1_0.md).
+export interface StrategyFinding {
+  signal_refs: string[]
+  synthesis: string
+  sop_citation: string
+}
+
+export interface StrategyCostedItem {
+  task_type: string
+  quantity: number
+}
+
+export interface StrategyProposal {
+  title: string
+  action: string
+  rationale: string
+  sop_citation: string
+  // Cost is grounded in the agency price list, computed server-side (the LLM
+  // never writes a dollar). null = not priced (an un-researched tool op or a
+  // 'none'-basis proposal); the card shows "tool cost" for operational, else
+  // just the effort tag.
+  est_cost_usd: number | null
+  cost_basis?: 'recipe' | 'operational' | 'none'
+  costed_items?: StrategyCostedItem[]
+  effort: 'low' | 'medium' | 'high' | null
+  assignee_hint: string | null
+  status: 'proposed' | 'approved' | 'dismissed' | 'expired'
+  requires: 'none' | 'approval' | 'senior'
+  decided_by?: string | null
+  // Strategist Phase 5: the Asana task created when the proposal was approved
+  // (absent when Asana is unconfigured / the client has no project mapping).
+  asana_task?: { gid: string; url: string } | null
+}
+
+export interface StrategyReview {
+  id: string
+  client_id: string
+  trigger: 'scheduled' | 'escalation' | 'on_demand'
+  status: 'running' | 'complete' | 'failed'
+  model: string | null
+  assessment: string | null
+  findings: StrategyFinding[]
+  proposals: StrategyProposal[]
+  questions: string[]
+  token_usage: Record<string, unknown> | null
+  error: string | null
+  created_at: string
+  completed_at: string | null
+  published_doc_id?: string | null
+  published_doc_url?: string | null
+  published_at?: string | null
+}
+
+export interface StrategyReviewList {
+  reviews: StrategyReview[]
+  enabled: boolean
 }

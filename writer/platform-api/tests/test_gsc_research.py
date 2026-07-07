@@ -45,17 +45,27 @@ def test_aggregate_skips_blank_query_or_page():
 # ---------------------------------------------------------------------------
 def test_cannibalization_flags_clustered_impressions_all_ranking_high():
     aggregated = [
-        {"query": "lawyer", "page": "/x", "clicks": 5, "impressions": 100, "position": 4.0},
-        {"query": "lawyer", "page": "/y", "clicks": 3, "impressions": 80, "position": 9.0},  # within 50%
+        {"query": "lawyer", "page": "/x", "clicks": 5, "impressions": 1000, "position": 4.0},
+        {"query": "lawyer", "page": "/y", "clicks": 3, "impressions": 800, "position": 9.0},  # within 50%
     ]
     out = gsc_research.find_cannibalization(aggregated)
     assert len(out) == 1
     row = out[0]
     assert row["query"] == "lawyer"
     assert row["page_count"] == 2
-    assert row["total_impressions"] == 180
+    assert row["total_impressions"] == 1800
     # pages ordered by impressions desc
     assert [p["page"] for p in row["pages"]] == ["/x", "/y"]
+
+
+def test_cannibalization_excludes_below_impressions_floor():
+    # Clustered + all ranking high, but the query total (180) is under the
+    # 500-impression floor → excluded.
+    aggregated = [
+        {"query": "lawyer", "page": "/x", "clicks": 5, "impressions": 100, "position": 4.0},
+        {"query": "lawyer", "page": "/y", "clicks": 3, "impressions": 80, "position": 9.0},
+    ]
+    assert gsc_research.find_cannibalization(aggregated) == []
 
 
 def test_cannibalization_excludes_single_page():
@@ -82,24 +92,25 @@ def test_cannibalization_excludes_when_impressions_far_apart():
 # ---------------------------------------------------------------------------
 # find_quick_wins / find_hidden_wins
 # ---------------------------------------------------------------------------
-def test_quick_wins_band_and_sort():
+def test_quick_wins_band_sort_and_impressions_floor():
     aggregated = [
-        {"query": "a", "page": "/a", "clicks": 1, "impressions": 50, "position": 6.0},   # in band
-        {"query": "b", "page": "/b", "clicks": 1, "impressions": 200, "position": 10.0}, # in band, more impr
-        {"query": "c", "page": "/c", "clicks": 1, "impressions": 10, "position": 5.0},   # boundary excl
-        {"query": "d", "page": "/d", "clicks": 1, "impressions": 10, "position": 11.0},  # out of band
+        {"query": "a", "page": "/a", "clicks": 1, "impressions": 600, "position": 6.0},   # in band
+        {"query": "b", "page": "/b", "clicks": 1, "impressions": 2000, "position": 10.0},  # in band, more impr
+        {"query": "c", "page": "/c", "clicks": 1, "impressions": 800, "position": 5.0},    # boundary excl (pos)
+        {"query": "d", "page": "/d", "clicks": 1, "impressions": 800, "position": 11.0},   # out of band (pos)
+        {"query": "e", "page": "/e", "clicks": 1, "impressions": 100, "position": 7.0},    # below floor
     ]
     out = gsc_research.find_quick_wins(aggregated)
     assert [r["keyword"] for r in out] == ["b", "a"]
     assert all(k in out[0] for k in ("search_volume", "cpc", "competition"))
 
 
-def test_hidden_wins_band_and_min_impressions():
+def test_hidden_wins_band_and_impressions_floor():
     aggregated = [
-        {"query": "a", "page": "/a", "clicks": 1, "impressions": 5, "position": 12.0},   # in band
-        {"query": "b", "page": "/b", "clicks": 1, "impressions": 4, "position": 20.0},   # too few impr
-        {"query": "c", "page": "/c", "clicks": 1, "impressions": 100, "position": 30.0}, # boundary incl
-        {"query": "d", "page": "/d", "clicks": 1, "impressions": 100, "position": 31.0}, # out of band
+        {"query": "a", "page": "/a", "clicks": 1, "impressions": 600, "position": 12.0},  # in band
+        {"query": "b", "page": "/b", "clicks": 1, "impressions": 400, "position": 20.0},  # below floor
+        {"query": "c", "page": "/c", "clicks": 1, "impressions": 800, "position": 30.0},  # boundary incl
+        {"query": "d", "page": "/d", "clicks": 1, "impressions": 800, "position": 31.0},  # out of band
     ]
     out = gsc_research.find_hidden_wins(aggregated)
     assert sorted(r["keyword"] for r in out) == ["a", "c"]

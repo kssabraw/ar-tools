@@ -29,6 +29,10 @@ export interface LocalSeoPageListItem {
   created_at: string
   // Set when soft-deleted (moved to Drafts); null = active (Saved Pages).
   deleted_at?: string | null
+  // Publish state (for the Saved Pages "published" badge).
+  published_doc_url?: string | null
+  published_url?: string | null
+  published_at?: string | null
 }
 
 export interface LocalSeoPageDetail extends LocalSeoPageListItem {
@@ -70,6 +74,28 @@ export interface ScoreResult {
   deficiencies: Deficiency[]
   token_usage: { cost_usd?: number; input_tokens?: number; output_tokens?: number } & Record<string, unknown>
   serp_analysis?: AnalysisResult | null
+}
+
+// One run in the per-run score history (local_seo_page_scores). Each row carries
+// the full 8-engine verdict for a run — standalone score, generate, or the
+// reoptimize before/after — so the per-engine breakdown is kept, not just the
+// composite.
+export type ScoreRunMode = 'score' | 'generate' | 'reoptimize' | 'reoptimize_before'
+
+export interface ScoreHistoryRow {
+  id: string
+  client_id: string
+  page_id: string | null
+  keyword: string
+  location: string | null
+  page_url: string | null
+  mode: ScoreRunMode
+  composite_score: number | null
+  composite_status: string | null
+  engine_scores: Record<string, EngineScore> | null
+  deficiencies: Deficiency[] | null
+  token_usage?: (Record<string, unknown>) | null
+  created_at: string
 }
 
 export interface FindPageResult {

@@ -43,6 +43,26 @@ async def get_action_plan(client_id: UUID, auth: dict = Depends(require_auth)) -
     return ReoptPlan(**row) if row else None
 
 
+@router.get("/clients/{client_id}/response-episodes")
+async def get_response_episodes(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The client's response episodes (the SOPs' verify loop): open + escalated
+    first, then recent history. Read-only — episodes are opened/checked by the
+    daily sync, recovered by the trackers, escalated by the 6-week rule."""
+    rows = (
+        get_supabase()
+        .table("response_episodes")
+        .select("*")
+        .eq("client_id", str(client_id))
+        .order("opened_at", desc=True)
+        .limit(50)
+        .execute()
+    ).data or []
+    return {
+        "active": [r for r in rows if r["status"] in ("open", "escalated")],
+        "history": rows,
+    }
+
+
 @router.post("/clients/{client_id}/action-plan/refresh", response_model=ReoptPlan)
 async def refresh_action_plan(client_id: UUID, auth: dict = Depends(require_auth)) -> ReoptPlan:
     """Rebuild the plan now (manual trigger — no notification) and return it."""

@@ -54,6 +54,15 @@ ENGINES = set(ENGINE_ORDER)
 # auth, payment/quota, forbidden, and rate-limit.
 _TERMINAL_STATUSES = {401, 402, 403, 429}
 
+# Some providers (notably Google Gemini) return an auth/permission failure as a
+# 400 rather than a 40x — e.g. an invalid key is `400 API_KEY_INVALID` and a
+# disabled/unauthorized API is `PERMISSION_DENIED`. Retrying those is pointless,
+# so a 400 whose body carries one of these signals is treated as terminal too.
+_TERMINAL_REASON_RE = re.compile(
+    r"API_KEY_INVALID|PERMISSION_DENIED|api key not valid|SERVICE_DISABLED|has not been used",
+    re.I,
+)
+
 _SCAN_PROMPT = (
     'You are answering as a local search assistant.\n\n'
     'User query: "{keyword}"\n\n'
@@ -78,6 +87,28 @@ class ScanFailed(Exception):
     def __init__(self, reason: str):
         self.reason = reason
         super().__init__(reason)
+
+
+def _provider_reason(message: str) -> str:
+    """Extract a short, human-readable reason from a provider's error body.
+
+    Providers return JSON like `{"error": {"message": ..., "status": ...}}`
+    (Google/OpenAI) — surface that so a failed cell says *why* it failed
+    (e.g. "Generative Language API has not been used in project … or it is
+    disabled") instead of an opaque catch-all. Provider error bodies never echo
+    the API key, so this is safe to persist/log. Capped so it fits the UI."""
+    if not message:
+        return ""
+    try:
+        data = json.loads(message)
+    except (ValueError, TypeError):
+        return message.strip()[:200]
+    err = data.get("error") if isinstance(data, dict) else None
+    if isinstance(err, dict):
+        return (err.get("message") or err.get("status") or "").strip()[:200]
+    if isinstance(err, str):
+        return err.strip()[:200]
+    return message.strip()[:200]
 
 
 # ── citation extraction (per provider) ────────────────────────────────────────
@@ -692,10 +723,23 @@ async def scan_keyword_engine(
             # Config errors (no API key / unknown engine) — terminal, don't retry.
             raise
         except ProviderError as exc:
-            if exc.status in _TERMINAL_STATUSES:
-                raise ScanFailed(
-                    "Rate limit exceeded" if exc.status == 429 else "AI service authentication/quota issue"
+            reason = _provider_reason(exc.message)
+            terminal = exc.status in _TERMINAL_STATUSES or (
+                exc.status == 400 and bool(_TERMINAL_REASON_RE.search(reason))
+            )
+            if terminal:
+                logger.warning(
+                    "brand_scan.provider_terminal",
+                    extra={"engine": engine, "status": exc.status, "reason": reason},
                 )
+                if exc.status == 429:
+                    raise ScanFailed("Rate limit exceeded")
+                detail = f": {reason}" if reason else ""
+                raise ScanFailed(f"{engine} auth/quota error (HTTP {exc.status}){detail}")
+            logger.info(
+                "brand_scan.provider_retry",
+                extra={"engine": engine, "status": exc.status, "reason": reason},
+            )
             retry_count += 1
             continue
         except Exception:

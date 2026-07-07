@@ -8,10 +8,11 @@ content, keyword research, setup), fold in the thread's prior turns for
 continuity, ask Claude, and post the answer back **in-thread**. The bot's own
 posts (rank-drop alerts etc.) and other bots are ignored, so it never loops.
 
-Read-only Q&A — the assistant only reads and explains; it never triggers work
-(that's a later, carefully-authed step). Anyone in the workspace can ask
-(per the product decision); inbound requests are verified by Slack's request
-signature so the public endpoint can't be spoofed.
+Q&A plus a small action registry (_ACTIONS): the assistant can trigger existing
+jobs — scans, research, a strategist review, an Asana task-plan push — with paid
+or side-effecting actions staged behind an explicit reply-*yes* confirm. Anyone
+in the workspace can ask (per the product decision); inbound requests are
+verified by Slack's request signature so the public endpoint can't be spoofed.
 
 Split: pure helpers (signature verify, mention stripping, client resolution,
 history formatting) are import-light and unit-tested; the context build + thread
@@ -47,6 +48,24 @@ _SYSTEM = (
     "You are SerMastr, an in-house SEO strategist for an agency, answering a "
     "teammate in Slack. You are given a JSON object describing ONE client across "
     "the agency's SEO modules, keyed by module:\n"
+    "- campaign_goals: the client's success targets (rank, traffic, AI-visibility, "
+    "local-pack goals) with a deterministic status each — achieved/on_track/behind/"
+    "overdue.\n"
+    "- competitors: named competitors profiled across every module — local-pack pins, "
+    "GBP rating/reviews, DR/referring domains (tool reads — true RD ≈ ×10), organic "
+    "top-10 keyword overlap, review velocity, and new pages they published in the last "
+    "30 days. A null module inside a competitor = no capture yet.\n"
+    "- forecast: deterministic projections — portfolio clicks/value now vs 90 days at "
+    "the current trend, the GSC clicks trajectory, the quick-win scenario (what moving "
+    "striking-distance keywords to top 3 is worth), and per-goal trajectory reads. "
+    "CITE these numbers verbatim; never compute your own projections. Always carry the "
+    "caveat that projections are linear trend extrapolations, and prefer 'gsc'-sourced "
+    "click numbers (actuals) over 'ctr_model' ones (estimates) when both exist.\n"
+    "- trends: cross-client algorithm-update detections (several of the agency's "
+    "clients opened rank drops in the same window = a Google update, not this client's "
+    "emergency — factor this into any drop explanation) + the client's seasonal demand "
+    "outlook from 12-month volume history (falling seasonal demand explains falling "
+    "impressions without a ranking problem).\n"
     "- organic_rank: tracked keywords with current rank + trend, open ranking-drop "
     "alerts, the latest reoptimization Action Plan, and Search Console opportunities.\n"
     "- maps_geogrid: local-pack / Google Maps geo-grid scan results (average rank, "
@@ -63,11 +82,38 @@ _SYSTEM = (
     "or a short list, Slack-friendly (you may use *bold* and bullets). Lead with the "
     "answer. As a strategist, you may connect signals across modules when relevant "
     "(e.g. a ranking drop + a content gap). Never invent numbers or modules.\n\n"
-    "You can also TAKE ACTIONS via the provided tools (rebuild the Action Plan, "
-    "run a Maps geo-grid scan, run GSC Research, run an AI Visibility scan). If the "
-    "teammate is clearly asking you to run/start/trigger/rebuild one of these for the "
-    "client, call the matching tool instead of answering. If they're only asking about "
-    "results or anything else, answer normally — do NOT call a tool for a question."
+    "You can also TAKE ACTIONS via the provided tools: run work (rebuild the Action "
+    "Plan, run a Maps geo-grid scan, run GSC Research, run an AI Visibility scan, run "
+    "a strategist review, push the latest monthly task plan to Asana) and manage the "
+    "client's Asana board (add_asana_task — extract the task name, assignee and any "
+    "detail from the message; remove_asana_task / complete_asana_task — pass the task "
+    "name the teammate used). If the teammate is clearly asking you to run/start/"
+    "trigger/rebuild/create/assign/delete/finish one of these for the client, call the "
+    "matching tool instead of answering. If they're only asking about results or "
+    "anything else, answer normally — do NOT call a tool for a question.\n\n"
+    "STRATEGIST BEHAVIOURS:\n"
+    "- 'How is the campaign going?' → a short cross-module health read: when "
+    "campaign_goals exist, LEAD with progress against them (their status field — "
+    "achieved/on_track/behind/overdue — is computed deterministically; report it, "
+    "never re-derive it), then the 2-3 biggest wins and the 2-3 biggest concerns, "
+    "each with its number (rank moves, pack presence, AI visibility, open alerts). "
+    "Note any module with no data as not-yet-set-up rather than silently skipping "
+    "it. No goals set → say so and suggest adding them on the Campaign Goals page.\n"
+    "- 'What should we improve/tweak?' → concrete, prioritized recommendations "
+    "grounded ONLY in the data (e.g. striking-distance keywords to reoptimize, weak "
+    "geo-grid areas needing location pages, invisible AI keywords, open drop alerts "
+    "to diagnose, unstaffed plan lines). Name the tool/page that does each. Offer to "
+    "run a full strategist review for a deeper pass — don't trigger it unasked.\n\n"
+    "HOW TO READ THE INSTRUMENTS (module-card rules — never misread these):\n"
+    "- Rank tracker: position is lower=better. A null GSC position means NO DATA that "
+    "day (no impressions / not connected), never 'dropped out'; read positions with "
+    "their impressions; don't splice GSC and DataForSEO reads into one trend.\n"
+    "- Maps geo-grid: average_rank is computed over FOUND pins only — always read it "
+    "with found/total pin coverage (3/25 pins at average 2.0 = barely present, not "
+    "'ranking #2'); top-3 pins / total pins is the honest pack-presence number.\n"
+    "- AI visibility: single results are noisy by design — one engine flipping on one "
+    "keyword is NOT a trend; read batch rollups and cross-batch trends; engines are "
+    "not interchangeable (AIO/AI-Mode lean on GBP + top organic, ChatGPT leans Bing)."
 )
 
 
@@ -486,8 +532,108 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+def _ctx_campaign_goals(supabase, client_id: str, today: date) -> Optional[dict]:
+    """The client's success targets with deterministic status — lets 'how is
+    the campaign going' lead with progress vs what was promised."""
+    from services import campaign_goals
+
+    assessed = campaign_goals.assess_goals(client_id, today=today)
+    if not assessed:
+        return None
+    return {
+        "goals": [
+            {
+                "label": g.get("label"),
+                "status": g.get("status"),
+                "current_value": g.get("current_value"),
+                "target_value": g.get("target_value"),
+                "progress_pct": g.get("progress_pct"),
+                "due_date": g.get("due_date"),
+                "note": g.get("note"),
+            }
+            for g in assessed
+        ],
+    }
+
+
+def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Assembled competitor profiles so competitive questions get real data."""
+    from services import competitor_intel
+
+    assembled = competitor_intel.build_profiles(client_id, today=today)
+    profiles = assembled.get("competitors") or []
+    if not profiles:
+        return None
+    return {
+        "client_comparison": assembled.get("client"),
+        "competitors": [
+            {
+                "name": p.get("name"),
+                "domain": p.get("domain"),
+                "local_pack": p.get("local_pack"),
+                "gbp": p.get("gbp"),
+                "backlinks": p.get("backlinks"),
+                "organic": p.get("organic"),
+                "review_velocity_30d": p.get("review_velocity_30d"),
+                "new_pages_30d": p.get("new_pages_30d"),
+            }
+            for p in profiles[:6]
+        ],
+    }
+
+
+def _ctx_forecast(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Deterministic projections so 'where is this heading / what's it worth'
+    questions get computed numbers, never invented ones."""
+    from services import forecasting
+
+    fc = forecasting.build_forecast(client_id, today=today)
+    if not fc.get("keyword_count"):
+        return None
+    return {
+        "note": fc.get("note"),
+        "portfolio": fc.get("portfolio"),
+        "gsc_clicks_trajectory": fc.get("gsc_clicks_trajectory"),
+        "quick_wins_summary": {
+            k: v for k, v in (fc.get("quick_wins") or {}).items() if k != "keywords"
+        },
+        "quick_wins_top": (fc.get("quick_wins") or {}).get("keywords", [])[:6],
+        "goal_projections": fc.get("goal_projections"),
+    }
+
+
+def _ctx_trends(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Cross-client algo-update events + this client's seasonal demand read."""
+    from services import trend_watch
+
+    events = trend_watch.recent_algo_events()
+    outlook = None
+    try:
+        outlook = trend_watch.build_demand_outlook(client_id, today=today)
+    except Exception:
+        pass
+    if not events and not outlook:
+        return None
+    return {
+        "algo_events": [
+            {
+                "window_start": e.get("window_start"),
+                "window_end": e.get("window_end"),
+                "clients_affected": e.get("clients_affected"),
+                "clients_total": e.get("clients_total"),
+            }
+            for e in events[:3]
+        ],
+        "demand_outlook": outlook,
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
+    ("campaign_goals", _ctx_campaign_goals),
+    ("competitors", _ctx_competitors),
+    ("forecast", _ctx_forecast),
+    ("trends", _ctx_trends),
     ("organic_rank", _ctx_organic_rank),
     ("maps_geogrid", _ctx_maps),
     ("ai_visibility", _ctx_ai_visibility),
@@ -499,17 +645,34 @@ _CONTEXT_PROVIDERS = [
 
 # ---------------------------------------------------------------------------
 # Actions — SerMastr can trigger work (not just report). Anyone in the channel
-# may trigger (product decision); paid actions are gated behind an explicit
-# confirmation. Each runner enqueues an EXISTING job and returns a reply string.
+# may trigger (product decision); paid/side-effecting actions are gated behind
+# an explicit confirmation. Runners take (client_id, args) and return a reply
+# string; they may be sync or async.
 # ---------------------------------------------------------------------------
-def _act_rebuild_plan(client_id: str) -> str:
+def match_open_tasks(tasks: list[dict], query: str) -> list[dict]:
+    """Open tasks whose name matches the query. Pure.
+
+    Case-insensitive; an exact name match wins outright (so "citations" can't
+    be ambiguous with "citations — batch 2" when the user names one exactly),
+    else substring matches. Completed tasks are never candidates."""
+    q = (query or "").strip().casefold()
+    if not q:
+        return []
+    open_tasks = [t for t in tasks if not t.get("completed")]
+    exact = [t for t in open_tasks if (t.get("name") or "").strip().casefold() == q]
+    if exact:
+        return exact
+    return [t for t in open_tasks if q in (t.get("name") or "").casefold()]
+
+
+def _act_rebuild_plan(client_id: str, args: Optional[dict] = None) -> str:
     from services import reopt_planner
 
     res = reopt_planner.build_plan(client_id, trigger="manual")
     return f"✅ Rebuilt the Action Plan — {res.get('summary')}."
 
 
-def _act_maps_scan(client_id: str) -> str:
+def _act_maps_scan(client_id: str, args: Optional[dict] = None) -> str:
     from services import local_dominator
 
     started = local_dominator.enqueue_maps_scan(client_id, trigger="manual")
@@ -520,7 +683,7 @@ def _act_maps_scan(client_id: str) -> str:
     )
 
 
-def _act_gsc_research(client_id: str) -> str:
+def _act_gsc_research(client_id: str, args: Optional[dict] = None) -> str:
     from services import gsc_research
 
     job_id = gsc_research.enqueue_gsc_research(client_id, trigger="manual")
@@ -531,7 +694,25 @@ def _act_gsc_research(client_id: str) -> str:
     )
 
 
-def _act_ai_scan(client_id: str) -> str:
+def _act_strategy_review(client_id: str, args: Optional[dict] = None) -> str:
+    from services import strategist
+
+    if not settings.strategist_enabled:
+        return (
+            "The strategist is currently disabled (`strategist_enabled` is off) — "
+            "it activates once the smoke gate is passed."
+        )
+    review_id = strategist.enqueue_strategy_review(client_id, trigger="on_demand", notify=True)
+    return (
+        "🧠 Strategist review started — the digest will post to the alerts channel "
+        "when it's done; the full review (with Approve/Dismiss) lands on the client's "
+        "Action Plan page."
+        if review_id
+        else "A strategist review is already running for this client."
+    )
+
+
+def _act_ai_scan(client_id: str, args: Optional[dict] = None) -> str:
     from fastapi import HTTPException
 
     from services import brand_service
@@ -545,16 +726,249 @@ def _act_ai_scan(client_id: str) -> str:
         raise
 
 
-# (tool name) → {label, paid, run}. Append here to add an action.
+def _act_push_task_plan(client_id: str, args: Optional[dict] = None) -> str:
+    from services import asana_monthly, asana_push, asana_service
+
+    if not asana_service.is_configured():
+        return "Asana isn't connected yet (ASANA_TOKEN + workspace) — set that up on the platform first."
+    if not asana_monthly.get_project_gid(client_id):
+        return "This client has no Asana project mapped yet — set it on their Asana Tasks page first."
+    rows = (
+        get_supabase()
+        .table("monthly_task_plans")
+        .select("id, month, plan")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        return "No monthly task plan exists for this client yet — generate one on the Task Plan page first."
+    plan_row = rows[0]
+    if not ((plan_row.get("plan") or {}).get("tasks")):
+        return "The latest task plan has no task lines to push (empty or frozen plan)."
+    asana_push.enqueue_asana_push(client_id, str(plan_row["id"]))
+    return (
+        f"✅ Pushing the latest task plan ({plan_row.get('month') or 'current month'}) to Asana — "
+        "tasks land on the board in a moment. Already-pushed lines are skipped."
+    )
+
+
+def _asana_ready(client_id: str) -> tuple[Optional[str], Optional[str]]:
+    """(project_gid, None) when the client's Asana board is usable, else
+    (None, guidance string)."""
+    from services import asana_monthly, asana_service
+
+    if not asana_service.is_configured():
+        return None, "Asana isn't connected yet (ASANA_TOKEN + workspace) — set that up on the platform first."
+    project_gid = asana_monthly.get_project_gid(client_id)
+    if not project_gid:
+        return None, "This client has no Asana project mapped yet — set it on their Asana Tasks page first."
+    return project_gid, None
+
+
+async def _stage_add_task(client_id: str, args: dict) -> tuple[str, dict | str]:
+    """Resolve the assignee and build the exact confirm text for add_asana_task."""
+    from services.asana_push import match_member_gid
+
+    name = (args.get("task_name") or "").strip()
+    if not name:
+        return "reply", "What should the task be called?"
+    _, problem = _asana_ready(client_id)
+    if problem:
+        return "reply", problem
+
+    assignee_note = "unassigned"
+    assignee_gid = None
+    wanted = (args.get("assignee") or "").strip()
+    if wanted:
+        members = (
+            get_supabase().table("asana_team_members").select("gid, name")
+            .eq("active", True).execute()
+        ).data or []
+        assignee_gid = match_member_gid(wanted, members)
+        if assignee_gid:
+            full = next((m.get("name") for m in members if m["gid"] == assignee_gid), wanted)
+            assignee_note = f"assigned to *{full}*"
+        else:
+            assignee_note = (
+                f"unassigned — I couldn't match “{wanted}” to a tracked team member "
+                "(check the Workload page)"
+            )
+    staged = {**args, "task_name": name, "assignee_gid": assignee_gid}
+    staged["_confirm"] = f"create the Asana task *“{name}”* ({assignee_note})"
+    return "confirm", staged
+
+
+async def _act_add_task(client_id: str, args: Optional[dict] = None) -> str:
+    from services import asana_push, asana_service
+
+    args = args or {}
+    project_gid, problem = _asana_ready(client_id)
+    if problem:
+        return problem
+    section_gid = await asana_push._ensure_month_section(project_gid, date.today())
+    fields = await asana_service.resolve_project_fields(project_gid)
+    payload = asana_service.build_task_payload(
+        (args.get("task_name") or "Task")[:250],
+        project_gid,
+        section_gid or "",
+        assignee_gid=args.get("assignee_gid"),
+        status_field_gid=fields.get("status_field_gid") or "",
+        not_started_option_gid=fields.get("not_started_option_gid") or "",
+    )
+    if not section_gid:  # section create failed → land in the project top-level
+        payload.pop("memberships", None)
+    notes = ["AR Tools · created via SerMastr"]
+    if args.get("notes"):
+        notes.append(str(args["notes"]))
+    payload["notes"] = "\n".join(notes)
+    result = await asana_service.create_task(payload)
+    gid = (result or {}).get("gid")
+    if not gid:
+        return "Asana didn't return the new task — check the board."
+    who = "" if args.get("assignee_gid") else " (unassigned)"
+    return f"✅ Created *“{payload['name']}”*{who} — {asana_push.task_url(gid)}"
+
+
+async def _stage_pick_task(client_id: str, args: dict, verb: str) -> tuple[str, dict | str]:
+    """Shared resolver for remove/complete: find exactly one open task by name.
+
+    Resolution happens BEFORE the confirm so the reply-*yes* names the exact
+    task (never 'yes' to a fuzzy match)."""
+    from services import asana_service
+
+    query = (args.get("task_name") or "").strip()
+    if not query:
+        return "reply", f"Which task should I {verb}? Give me (part of) its name."
+    project_gid, problem = _asana_ready(client_id)
+    if problem:
+        return "reply", problem
+    tasks = await asana_service.list_project_tasks(project_gid)
+    matches = match_open_tasks(tasks, query)
+    if not matches:
+        open_names = [t.get("name") for t in tasks if not t.get("completed") and t.get("name")]
+        listing = "; ".join(open_names[:8]) or "none"
+        return "reply", (
+            f"I couldn't find an open task matching “{query}” on this board. "
+            f"Open tasks: {listing}."
+        )
+    if len(matches) > 1:
+        listing = "\n".join(f"• {t.get('name')}" for t in matches[:8])
+        return "reply", (
+            f"“{query}” matches {len(matches)} open tasks — which one?\n{listing}"
+        )
+    task = matches[0]
+    who = (task.get("assignee") or {}).get("name")
+    staged = {**args, "task_gid": task.get("gid"), "task_name": task.get("name")}
+    staged["_confirm"] = (
+        f"{verb} the Asana task *“{task.get('name')}”*"
+        + (f" (assigned to {who})" if who else " (unassigned)")
+    )
+    return "confirm", staged
+
+
+async def _stage_remove_task(client_id: str, args: dict) -> tuple[str, dict | str]:
+    return await _stage_pick_task(client_id, args, "permanently delete")
+
+
+async def _stage_complete_task(client_id: str, args: dict) -> tuple[str, dict | str]:
+    return await _stage_pick_task(client_id, args, "mark complete")
+
+
+async def _act_remove_task(client_id: str, args: Optional[dict] = None) -> str:
+    from services import asana_service
+
+    args = args or {}
+    if not args.get("task_gid"):
+        return "I lost track of which task to delete — ask again naming the task."
+    await asana_service.delete_task(args["task_gid"])
+    return f"🗑️ Deleted *“{args.get('task_name')}”* from the board."
+
+
+async def _act_complete_task(client_id: str, args: Optional[dict] = None) -> str:
+    from services import asana_service
+
+    args = args or {}
+    if not args.get("task_gid"):
+        return "I lost track of which task to complete — ask again naming the task."
+    await asana_service.complete_task(args["task_gid"])
+    return f"✅ Marked *“{args.get('task_name')}”* complete."
+
+
+# (tool name) → {label, paid, run} + optional:
+#   note   — the parenthetical in the reply-*yes* confirm (default: API-budget
+#            wording). `paid` really means "confirm-gated": paid API spend OR
+#            side effects on an external system (Asana writes).
+#   params — JSON-schema properties/required for the tool (Claude fills them
+#            from the conversation; args flow stage → confirm → run).
+#   stage  — async (client_id, args) -> ("confirm", staged_args) to proceed
+#            (staged_args["_confirm"] overrides the confirm verb-phrase) or
+#            ("reply", text) to answer immediately (guards / disambiguation).
 _ACTIONS: dict[str, dict] = {
     "rebuild_action_plan": {"label": "rebuild the Action Plan", "paid": False, "run": _act_rebuild_plan},
     "run_maps_scan": {"label": "run a Maps geo-grid scan", "paid": True, "run": _act_maps_scan},
     "run_gsc_research": {"label": "run a GSC Research analysis", "paid": True, "run": _act_gsc_research},
     "run_ai_visibility_scan": {"label": "run an AI Visibility scan", "paid": True, "run": _act_ai_scan},
+    # SerMaStr strategist mode: "strategy review for <client>". Paid gating =
+    # the reply-*yes* confirm (an LLM run + up to one paid nlp audit call).
+    "run_strategy_review": {"label": "run a strategist review", "paid": True, "run": _act_strategy_review},
+    # Not paid-API spend, but it creates real tasks on the client's board — same
+    # reply-*yes* confirm gate (the `note` swaps the budget wording).
+    "push_task_plan": {
+        "label": "push the latest monthly task plan to Asana",
+        "paid": True,
+        "note": "creates real tasks on the client's Asana board",
+        "run": _act_push_task_plan,
+    },
+    # Conversational task management — parameterized (Claude extracts the task
+    # name / assignee from the message), staged so the confirm names the exact
+    # resolved task before anything is written or deleted.
+    "add_asana_task": {
+        "label": "create an Asana task",
+        "paid": True,
+        "note": "creates a real task on the client's Asana board",
+        "run": _act_add_task,
+        "stage": _stage_add_task,
+        "params": {
+            "properties": {
+                "task_name": {"type": "string", "description": "The task's name, verbatim from the teammate."},
+                "assignee": {"type": "string", "description": "Person to assign it to (first or full name), if the teammate named one."},
+                "notes": {"type": "string", "description": "Any extra detail the teammate gave, for the task description."},
+            },
+            "required": ["task_name"],
+        },
+    },
+    "remove_asana_task": {
+        "label": "delete an Asana task",
+        "paid": True,
+        "note": "permanently deletes a task from the client's Asana board",
+        "run": _act_remove_task,
+        "stage": _stage_remove_task,
+        "params": {
+            "properties": {
+                "task_name": {"type": "string", "description": "Name (or distinctive part of the name) of the task to delete."},
+            },
+            "required": ["task_name"],
+        },
+    },
+    "complete_asana_task": {
+        "label": "mark an Asana task complete",
+        "paid": True,
+        "note": "marks a task complete on the client's Asana board",
+        "run": _act_complete_task,
+        "stage": _stage_complete_task,
+        "params": {
+            "properties": {
+                "task_name": {"type": "string", "description": "Name (or distinctive part of the name) of the task to mark complete."},
+            },
+            "required": ["task_name"],
+        },
+    },
 }
 _ACTION_TOOLS = [
     {"name": name, "description": meta["label"].capitalize() + " for the client.",
-     "input_schema": {"type": "object", "properties": {}}}
+     "input_schema": {"type": "object", **(meta.get("params") or {"properties": {}})}}
     for name, meta in _ACTIONS.items()
 ]
 
@@ -570,13 +984,13 @@ _pending: dict[tuple, dict] = {}
 # ---------------------------------------------------------------------------
 async def interpret(
     question: str, client: dict, context: dict, history: Optional[list[dict]] = None
-) -> tuple[str, str]:
+) -> tuple[str, object]:
     """Decide whether the message is a question or an action request.
 
-    Returns ("action", tool_name) when the teammate is asking to trigger one of
-    the available actions, else ("text", answer). Claude sees the cross-module
-    context + thread history and the action tools; a tool call ⇒ action, otherwise
-    a normal grounded answer.
+    Returns ("action", {"name": tool_name, "args": tool_input}) when the
+    teammate is asking to trigger one of the available actions, else
+    ("text", answer). Claude sees the cross-module context + thread history and
+    the action tools; a tool call ⇒ action, otherwise a normal grounded answer.
     """
     import anthropic
 
@@ -596,9 +1010,19 @@ async def interpret(
     )
     for b in resp.content:
         if getattr(b, "type", None) == "tool_use" and b.name in _ACTIONS:
-            return ("action", b.name)
+            return ("action", {"name": b.name, "args": dict(b.input or {})})
     parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
     return ("text", "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing.")
+
+
+async def _run_action(name: str, client_id: str, args: Optional[dict]) -> str:
+    """Invoke an action runner, awaiting it when async."""
+    import inspect
+
+    out = _ACTIONS[name]["run"](client_id, args or {})
+    if inspect.isawaitable(out):
+        out = await out
+    return out
 
 
 async def post_message(channel: str, text: str, thread_ts: Optional[str] = None) -> None:
@@ -664,7 +1088,7 @@ async def handle_message(event: dict) -> None:
         pending = _pending.get(pend_key)
         if pending and is_affirmative(question):
             _pending.pop(pend_key, None)
-            reply = _ACTIONS[pending["action"]]["run"](pending["client_id"])
+            reply = await _run_action(pending["action"], pending["client_id"], pending.get("args"))
             await post_message(channel, reply, thread_ts)
             return
         if pending:  # a different message supersedes the pending confirmation
@@ -695,18 +1119,33 @@ async def handle_message(event: dict) -> None:
         context = build_context(client["id"])
         kind, payload = await interpret(question, client, context, history)
         if kind == "action":
-            meta = _ACTIONS[payload]
+            name, args = payload["name"], payload["args"]
+            meta = _ACTIONS[name]
+            confirm_phrase = None
+            if meta.get("stage"):
+                # Resolve the target BEFORE the confirm (exact task, matched
+                # assignee) — guards / ambiguity answer immediately instead.
+                outcome, staged = await meta["stage"](client["id"], args)
+                if outcome == "reply":
+                    await post_message(channel, staged, thread_ts)
+                    return
+                args = staged
+                confirm_phrase = args.pop("_confirm", None)
             if meta["paid"]:
-                # 2) Stage paid actions behind an explicit confirm (guards spend).
-                _pending[pend_key] = {"action": payload, "client_id": client["id"]}
+                # 2) Stage confirm-gated actions behind an explicit reply-*yes*
+                # (guards spend + external side effects).
+                _pending[pend_key] = {"action": name, "client_id": client["id"], "args": args}
+                # A staged confirm phrase already names the exact target (and
+                # carries its own severity wording), so the generic note only
+                # accompanies the generic label.
+                phrase = confirm_phrase or f"{meta['label']} ({meta.get('note', 'uses API budget')})"
                 await post_message(
                     channel,
-                    f"This will {meta['label']} for *{client['name']}* (uses API budget). "
-                    "Reply *yes* to proceed.",
+                    f"This will {phrase} for *{client['name']}*. Reply *yes* to proceed.",
                     thread_ts,
                 )
             else:
-                await post_message(channel, meta["run"](client["id"]), thread_ts)
+                await post_message(channel, await _run_action(name, client["id"], args), thread_ts)
             return
         await post_message(channel, payload, thread_ts)
     except Exception as exc:

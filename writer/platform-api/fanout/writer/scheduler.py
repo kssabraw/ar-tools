@@ -138,6 +138,14 @@ def _process_run(row: dict) -> None:
         if not keyword or not session:
             _finish_run(run_id, "failed", error="cluster has no primary keyword or session missing")
             return
+        # Freeze Protocol (suite): scheduled content creation stops for a frozen
+        # client. Fanout may import suite services (never the reverse).
+        if session.get("client_id"):
+            from services.freeze import is_frozen
+
+            if is_frozen(session["client_id"]):
+                _finish_run(run_id, "failed", error="client_frozen")
+                return
         # The schedule decides which generator runs (blog post, Local SEO page,
         # or service page).
         schedule = schedule_store.get_schedule(schedule_id) if schedule_id else None

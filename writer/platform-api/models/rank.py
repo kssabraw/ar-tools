@@ -44,6 +44,10 @@ class KeywordSummary(BaseModel):
     ctr_30d: float = 0.0
     # DataForSEO live integer rank.
     today_rank: Optional[int] = None
+    # The previous DataForSEO check's rank (the prior weekly pull) + its date, so
+    # the row can show week-over-week movement without fetching the trendline.
+    prev_rank: Optional[int] = None
+    prev_rank_date: Optional[str] = None
     # Keyword market data (DataForSEO Google Ads) + derived ROI estimate.
     cpc: Optional[float] = None
     search_volume: Optional[int] = None

@@ -23,6 +23,7 @@ from fastapi import HTTPException
 from config import settings
 from db.supabase_client import get_supabase
 from services import analysis_cache, locations_service
+from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
 
@@ -54,7 +55,11 @@ def _business_fields(client: dict) -> dict:
         "gbp_category": gbp.get("gbp_category") or "",
         "address": gbp.get("address") or client.get("business_location") or "",
         "phone": gbp.get("phone"),
-        "website": gbp.get("website") or client.get("website_url"),
+        # Repair/clean the stored URL defensively — historic rows may carry a
+        # GBP tracking link whose query was percent-encoded into the path
+        # (`…/page/%3Futm_source%3D…`), which 404s and breaks every downstream
+        # scrape/probe (brand voice, page generation, …).
+        "website": normalize_website_url(gbp.get("website") or client.get("website_url")),
     }
 
 
@@ -138,6 +143,20 @@ async def _post_nlp(
                     "local_seo.nlp_http_error",
                     extra={"path": path, "status_code": response.status_code, "body": response.text[:500]},
                 )
+                # A 4xx from nlp is client-actionable — e.g. a 422 "Your website
+                # returned a 404 error. Check that the URL is correct and the
+                # site is live." Surface that message (and status) so the user
+                # knows what to fix, instead of the opaque provider error. 5xx
+                # stays a generic provider error (nothing the user can do).
+                if 400 <= response.status_code < 500:
+                    detail = "local_seo_provider_error"
+                    try:
+                        body = response.json()
+                        if isinstance(body, dict) and body.get("detail"):
+                            detail = str(body["detail"])
+                    except ValueError:
+                        pass
+                    raise HTTPException(status_code=response.status_code, detail=detail)
                 raise HTTPException(status_code=502, detail="local_seo_provider_error")
             try:
                 return response.json()
@@ -180,7 +199,7 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
                     if step == "error":
                         logger.warning(
                             "local_seo.stream_worker_error",
-                            extra={"path": path, "message": event.get("message")},
+                            extra={"path": path, "error": event.get("message")},
                         )
                         raise HTTPException(status_code=502, detail="local_seo_generation_failed")
                     if step == "done":
@@ -208,6 +227,9 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         "content_gaps": result.get("content_gaps") or [],
         "composite_score": result.get("composite_score"),
         "composite_status": result.get("composite_status"),
+        # Full per-engine verdict (nlp surfaces this on generate/reoptimize). None
+        # on older nlp builds that don't emit it — the column is nullable.
+        "engine_scores": result.get("engine_scores"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -219,7 +241,64 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         "local_seo.page_persisted",
         extra={"client_id": client_id, "page_id": page["id"], "mode": mode, "run_analysis": run_analysis},
     )
+    # Log the run's verdict to the score history (best-effort — never fail the run).
+    _record_score_run(
+        client_id, keyword, location, mode, result,
+        page_id=page["id"], page_url=None, user_id=user_id,
+    )
     return page
+
+
+# ── score-run history ─────────────────────────────────────────────────────────
+# Every scoring run (standalone score, generate, reoptimize before/after) logs its
+# full verdict to `local_seo_page_scores` so the per-engine breakdown is kept, not
+# just the composite. Writes are best-effort: a history-log failure must never
+# break the actual generation/scoring the user asked for.
+
+def _score_run_row(
+    client_id: str, keyword: str, location: Optional[str], mode: str, result: dict,
+    *, page_id: Optional[str], page_url: Optional[str], user_id: Optional[str],
+) -> dict:
+    """Build a `local_seo_page_scores` row from a score/generate/reoptimize result.
+    Pure (no I/O) so it's unit-testable. `deficiencies` falls back to `content_gaps`
+    for result shapes (generate) that carry the engine failures under that key."""
+    return {
+        "client_id": client_id,
+        "page_id": page_id,
+        "keyword": keyword,
+        "location": location,
+        "page_url": page_url,
+        "mode": mode,
+        "composite_score": result.get("composite_score"),
+        "composite_status": result.get("composite_status"),
+        "engine_scores": result.get("engine_scores"),
+        "deficiencies": result.get("deficiencies") or result.get("content_gaps") or [],
+        "token_usage": result.get("token_usage"),
+        "created_by": user_id,
+    }
+
+
+def _record_score_run(
+    client_id: str, keyword: str, location: Optional[str], mode: str, result: dict,
+    *, page_id: Optional[str] = None, page_url: Optional[str] = None, user_id: Optional[str] = None,
+) -> None:
+    """Insert one score-history row. Best-effort: logs and swallows any failure so
+    the surrounding generate/score/reoptimize operation is never lost to a history
+    write. Skips silently when there's no verdict to record (no engine_scores and
+    no composite)."""
+    if result.get("engine_scores") is None and result.get("composite_score") is None:
+        return
+    try:
+        row = _score_run_row(
+            client_id, keyword, location, mode, result,
+            page_id=page_id, page_url=page_url, user_id=user_id,
+        )
+        get_supabase().table("local_seo_page_scores").insert(row).execute()
+    except Exception:  # noqa: BLE001 — history logging must never break the run
+        logger.warning(
+            "local_seo.score_run_record_failed",
+            extra={"client_id": client_id, "mode": mode, "page_id": page_id},
+        )
 
 
 # ── public operations ───────────────────────────────────────────────────────
@@ -733,7 +812,7 @@ async def score_page(
         serp_analysis = await _get_or_compute_analysis(
             keyword, location, location_code, force_refresh, user_id, required=False
         )
-    return await _post_nlp("/score-page", {
+    result = await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,
         "location_code": location_code,
@@ -743,7 +822,14 @@ async def score_page(
         "gbp_category": fields["gbp_category"],
         "address": fields["address"],
         "serp_analysis": serp_analysis,
-    })
+    }, user_id=user_id)
+    # A standalone score has no page row — log it against page_url (may be None
+    # when scoring raw HTML) so the verdict is still kept in the run history.
+    _record_score_run(
+        client_id, keyword, location, "score", result,
+        page_id=None, page_url=page_url, user_id=user_id,
+    )
+    return result
 
 
 async def related_pages(client_id: str, keyword: str, location: str) -> dict:
@@ -808,6 +894,8 @@ async def reoptimize_page(
             })
             result["composite_score"] = score.get("composite_score")
             result["composite_status"] = score.get("composite_status")
+            result["engine_scores"] = score.get("engine_scores")
+            result["deficiencies"] = score.get("deficiencies")
         except Exception:
             # Non-fatal — the expensive rewrite already succeeded, so persist the
             # reoptimized page without a fresh score rather than losing the work.
@@ -868,6 +956,13 @@ async def reoptimize_url(
         "address": fields["address"],
         "serp_analysis": serp,
     }, user_id=user_id)
+
+    # Record the "before" verdict of the live page (whether or not we go on to
+    # reoptimize) so the history captures what the page scored at as found.
+    _record_score_run(
+        client_id, keyword, location, "reoptimize_before", score_result,
+        page_id=None, page_url=page_url, user_id=user_id,
+    )
 
     composite = score_result.get("composite_score")
     # Gate: a page already at/above the threshold is left untouched.
@@ -963,7 +1058,8 @@ async def social_posts(
 # Columns returned for the page-list views (Saved Pages + Drafts).
 _LIST_COLUMNS = (
     "id, client_id, keyword, location, page_title, composite_score, "
-    "composite_status, mode, created_at, deleted_at"
+    "composite_status, mode, created_at, deleted_at, "
+    "published_doc_url, published_url, published_at"
 )
 
 
@@ -990,6 +1086,24 @@ def get_page(page_id: str) -> dict:
     if not res.data:
         raise HTTPException(status_code=404, detail="local_seo_page_not_found")
     return res.data
+
+
+def list_score_history(
+    client_id: str, page_id: Optional[str] = None, limit: int = 100,
+) -> list[dict]:
+    """Return a client's score-run history (newest first), including the full
+    per-engine `engine_scores` verdict for each run. Optionally scoped to one
+    page. `limit` is clamped to a sane ceiling."""
+    limit = max(1, min(limit, 500))
+    supabase = get_supabase()
+    query = (
+        supabase.table("local_seo_page_scores")
+        .select("*")
+        .eq("client_id", client_id)
+    )
+    if page_id:
+        query = query.eq("page_id", page_id)
+    return query.order("created_at", desc=True).limit(limit).execute().data or []
 
 
 def delete_page(page_id: str) -> None:
@@ -1066,6 +1180,33 @@ def set_featured_image(page_id: str, url: Optional[str]) -> dict:
     return {"featured_image_url": url or None}
 
 
+async def _publish_page_to_github(page: dict, client: dict, user_id: str) -> dict:
+    """Commit a Local SEO page to the client's GitHub repo as a content Markdown
+    file. The page body is HTML (valid inside a Markdown file), wrapped with
+    frontmatter by the shared github service."""
+    from services.github_publish import GitHubPublishError, publish_to_github
+
+    title = page.get("page_title") or f"{page.get('keyword', '')} — {client.get('name', '')}"
+    html = page.get("content_html") or ""
+    slug = f"{page.get('keyword', '')}-{page.get('location', '')}".strip("-")
+    try:
+        result = await publish_to_github(client=client, title=title, body=html, slug=slug)
+    except GitHubPublishError as exc:
+        client_errors = {"github_not_configured", "github_repo_not_set", "content_is_empty"}
+        code = 422 if str(exc) in client_errors else 502
+        raise HTTPException(status_code=code, detail=str(exc)) from exc
+    logger.info(
+        "local_seo.page_published_github",
+        extra={"page_id": page["id"], "path": result.get("path"), "user_id": user_id},
+    )
+    return {
+        "success": True,
+        "destination": "github",
+        "url": result.get("html_url"),
+        "path": result.get("path"),
+    }
+
+
 async def _publish_page_to_wordpress(
     page: dict, client: dict, user_id: str, status: str
 ) -> dict:
@@ -1124,11 +1265,23 @@ async def publish_page(
     HTML is converted to Markdown (the webhook's expected `content` format); for
     WordPress the HTML is posted as-is. The publish target is persisted on the row."""
     # Fail fast on unconfigured Google Docs before any DB work.
-    if destination != "wordpress" and not settings.google_apps_script_url:
+    if destination == "google_docs" and not settings.google_apps_script_url:
         raise HTTPException(status_code=503, detail="publish_not_configured")
 
     supabase = get_supabase()
     page = get_page(page_id)  # 404s if missing
+
+    if destination == "github":
+        client_res = (
+            supabase.table("clients")
+            .select("name, github_repo, github_branch, github_content_path")
+            .eq("id", page["client_id"])
+            .single()
+            .execute()
+        )
+        if not client_res.data:
+            raise HTTPException(status_code=404, detail="client_not_found")
+        return await _publish_page_to_github(page, client_res.data, user_id)
 
     if destination == "wordpress":
         client_res = (

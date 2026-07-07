@@ -539,7 +539,7 @@ function Setup({ clientId }: { clientId: string }) {
     setSeededFrom(config)
     setForm(config)
   }
-  const set = (patch: Partial<MapsConfig>) => setForm(f => ({ ...f, ...patch }))
+  const set = (patch: Partial<MapsConfig>) => { setForm(f => ({ ...f, ...patch })); saveMut.reset() }
 
   const saveMut = useMutation({
     mutationFn: () => api.put<MapsConfig>(`/clients/${clientId}/maps/config`, {
@@ -613,6 +613,11 @@ function Setup({ clientId }: { clientId: string }) {
           {saveMut.isPending ? 'Saving…' : 'Save setup'}
         </button>
         {saveMut.error && <div style={{ ...errorBox, marginTop: 10 }}>{(saveMut.error as Error).message}</div>}
+        {saveMut.isSuccess && (
+          <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#16a34a', fontWeight: 600 }}>
+            <Check size={14} /> Setup saved.
+          </div>
+        )}
         {(form.center_lat == null || form.center_lng == null || !form.google_place_id) && (
           <p style={{ fontSize: 12, color: '#b45309', margin: '10px 0 0', display: 'flex', alignItems: 'center', gap: 6 }}>
             <MapPin size={13} /> A Place ID and center lat/lng are required before a scan can run.

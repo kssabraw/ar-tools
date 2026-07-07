@@ -18,6 +18,9 @@ import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
+import { CampaignGoals } from './pages/CampaignGoals'
+import { Competitors } from './pages/Competitors'
+import { Forecast } from './pages/Forecast'
 import { Sops } from './pages/Sops'
 import { Guides } from './pages/Guides'
 import { AsanaTasks } from './pages/AsanaTasks'
@@ -25,6 +28,9 @@ import { TeamWorkload } from './pages/TeamWorkload'
 import { TaskLibrary } from './pages/TaskLibrary'
 import { ClientReports } from './pages/ClientReports'
 import { GscResearch } from './pages/GscResearch'
+import { Syndication } from './pages/Syndication'
+import { Citations } from './pages/Citations'
+import { TaskPlan } from './pages/TaskPlan'
 import { AiVisibility } from './pages/AiVisibility'
 import { MapsGeogrid } from './pages/MapsGeogrid'
 import { MapsReport } from './pages/MapsReport'
@@ -33,6 +39,7 @@ import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
 import { Team } from './pages/Team'
 import { SetPassword } from './pages/SetPassword'
+import FanoutApp from './fanout/FanoutApp'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -55,6 +62,10 @@ export default function App() {
                   <Layout>
                     <Routes>
                       <Route path="/" element={<Home />} />
+                      {/* Topic Fan-out, merged in (Option C) — a native route
+                          subtree that renders inside the suite Layout, so it
+                          shares the suite sidebar. */}
+                      <Route path="/fanout/*" element={<FanoutApp />} />
                       <Route path="/runs" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
@@ -68,7 +79,13 @@ export default function App() {
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
+                      <Route path="/clients/:id/syndication" element={<Syndication />} />
+                      <Route path="/clients/:id/citations" element={<Citations />} />
+                      <Route path="/clients/:id/task-plan" element={<TaskPlan />} />
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
+                      <Route path="/clients/:id/goals" element={<CampaignGoals />} />
+                      <Route path="/clients/:id/competitors" element={<Competitors />} />
+                      <Route path="/clients/:id/forecast" element={<Forecast />} />
                       <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />
                       <Route path="/clients/:id/reports" element={<ClientReports />} />

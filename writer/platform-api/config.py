@@ -28,6 +28,34 @@ class Settings(BaseSettings):
     # few minutes; maps_scan's 30-min poll lives on a separate table, not here).
     # Set to 0 to disable the reaper.
     job_stale_timeout_minutes: int = 30
+    # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
+    # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.
+    freeze_check_enabled: bool = True
+    # Response-episode tracking: the SOPs' verify loop (2-week rechecks, 6-week
+    # escalation) over open rank/maps drop responses.
+    episode_tracking_enabled: bool = True
+    # Offpage agent extensions: weekly citation-liveness sweep + monthly
+    # page-level RD-imbalance capture (paid DataForSEO page summaries).
+    citation_check_enabled: bool = True
+    page_backlink_intel_enabled: bool = True
+    # Competitive intelligence (strategist phase 2): weekly registry
+    # auto-discovery + competitor content watch (sitemap reads only).
+    competitor_intel_enabled: bool = True
+    competitor_intel_interval_days: int = 7
+    competitor_watch_max_pages: int = 2000
+    # Trend watching (strategist phase 4): cross-client algo-update detection
+    # (daily DB-reads-only sweep) + seasonal demand from cached volume history.
+    # An event needs >= algo_min_clients AND >= algo_min_share of clients with
+    # tracked keywords opening drops inside the same algo_window_days window.
+    trend_watch_enabled: bool = True
+    algo_min_clients: int = 3
+    algo_min_share: float = 0.4
+    algo_window_days: int = 3
+    # Auto-generate a new client's brand voice + ICP at creation (async, best-
+    # effort) so the assets exist without a manual scan. Skips clients with no
+    # website and no GBP (nothing to analyze). Never overrides user-authored
+    # structured voice/ICP.
+    auto_generate_brand_voice_icp: bool = True
     allowed_origins: List[str] = ["*"]
     log_level: str = "INFO"
     google_apps_script_url: str = ""
@@ -40,6 +68,12 @@ class Settings(BaseSettings):
     # as-is. Set max_images to 0 to disable sideloading entirely.
     wordpress_media_max_images: int = 20
     wordpress_media_max_bytes: int = 15_000_000  # 15 MB per image
+    # GitHub direct publishing — commit finished content to the client's repo as
+    # Astro content Markdown (matches the Topic Fan-out convention). Dormant until
+    # a token is set; each client supplies the target repo/branch/content_path.
+    github_publish_token: str = ""
+    github_default_branch: str = "main"
+    github_default_content_path: str = "src/content/blog"
     outscraper_api_key: str = ""
     # Google Search Console — Organic Rank Tracker (Module #4).
     # The service-account key JSON (the entire downloaded key file, as a single
@@ -160,6 +194,21 @@ class Settings(BaseSettings):
     # alert. On-demand always works regardless.
     reopt_plan_auto_enabled: bool = True
     reopt_plan_weekday: int = 0    # Monday=0 … Sunday=6 (weekly digest day, UTC)
+    # Debounce for automated (non-manual) action-plan rebuilds. The scheduler's
+    # weekly day-gate is in-memory, so every platform-api restart on the weekly
+    # day re-fires the "scheduled" pass; event triggers (drop/maps_drop/offpage)
+    # can also fire several times a day. A "scheduled" rebuild is collapsed to at
+    # most once per UTC day; event-driven rebuilds are collapsed within this many
+    # hours of the last completed plan. A user-initiated "manual" refresh is never
+    # debounced. Set to 0 to disable the event-trigger window (day-gate stays).
+    reopt_plan_min_interval_hours: int = 6
+    # Strict weekly cadence (owner decision): only the weekly "scheduled" pass and
+    # user-initiated "manual" refreshes rebuild the Action Plan. Event triggers
+    # (drop/maps_drop/offpage) are suppressed by default — the drop still notifies
+    # via the alert/notifications path; the plan just folds it in on the next
+    # weekly run or a manual refresh. Flip to True to restore the on-drop
+    # auto-refresh (still debounced by reopt_plan_min_interval_hours).
+    reopt_plan_event_refresh_enabled: bool = False
 
     # Notifications service — shared delivery pipe (in-app card/feed + email +
     # Slack). In-app always works (DB row); email/Slack are best-effort and only
@@ -176,6 +225,14 @@ class Settings(BaseSettings):
     # Slack app bot token (xoxb-…) + default channel id/name.
     slack_bot_token: str = ""
     slack_default_channel: str = ""
+    # Broadcast mention on Slack notifications. slack_mention_token picks the
+    # broadcast — "here" (<!here>, pings active members only), "channel"
+    # (<!channel>, pings every member incl. away/offline), or "" (off). It is
+    # applied only to notifications whose severity is in slack_mention_severities
+    # (comma-separated), so info-level items never ping. Default: @here on
+    # critical + warning (owner decision).
+    slack_mention_token: str = "here"
+    slack_mention_severities: str = "critical,warning"
     # Slack conversational assistant (SerMastr): respond to @mentions in channels
     # with a Claude answer grounded in the client's rank/GSC data. The signing
     # secret (Basic Information → App Credentials) verifies inbound Slack events;
@@ -343,6 +400,26 @@ class Settings(BaseSettings):
     local_seo_overpass_mirror_url: str = "https://overpass.kumi.systems/api/interpreter"
     local_seo_overpass_place_types: str = "city,town"
 
+    # ── Content Syndication module ───────────────────────────────────────────
+    # Daily scan watches a client's site for new content (blog/pages/products),
+    # rewrites each new piece into a unique version, and publishes it as a public
+    # Google Doc + Google Sheet with a backlink to the source. Discovery reuses
+    # the sitemap crawler (local_seo_sitemap_* caps) + the DataForSEO `site:`
+    # fallback. The rewrite is a heavier, new-angle reworking (Sonnet). Per-item
+    # publish jobs are staggered (reuses the bulk-spacing idea) so a large first
+    # scan runs at background priority and each item stays under the stale-job
+    # reaper window.
+    syndication_rewrite_model: str = "claude-sonnet-4-6"
+    syndication_rewrite_max_tokens: int = 8192
+    syndication_default_interval_days: int = 1
+    # Manual select-and-publish: the scan only lists discovered pages; the user
+    # ticks pages and publishes them. Selected items are enqueued as lightly
+    # staggered per-item jobs (this spacing) — kept ≈ the worker poll interval so
+    # the selection processes about as fast as the single worker can drain it,
+    # while staying >0 so a now-dated interactive job still interleaves ahead of
+    # the rest of a large batch.
+    syndication_item_job_spacing_seconds: int = 10
+
     # ── AI Visibility (Brand Strength) module ────────────────────────────────
     # Mention classifier (post-processes each engine's answer into mention/type/
     # sentiment via OpenAI function-calling). Runs once per keyword×engine plus
@@ -359,7 +436,10 @@ class Settings(BaseSettings):
     # tunable (like the Fanout client) so it can be flipped to
     # "web_search_preview" without a code change if the account needs it.
     brand_chatgpt_web_search_tool: str = "web_search"
-    brand_engine_gemini_model: str = "gemini-2.0-flash"
+    # gemini-2.0-flash was shut down by Google on 2026-06-01; gemini-3.5-flash
+    # is the current GA Flash model (alias gemini-flash-latest). Override via
+    # BRAND_ENGINE_GEMINI_MODEL when Google rotates the GA Flash tier again.
+    brand_engine_gemini_model: str = "gemini-3.5-flash"
     brand_engine_perplexity_model: str = "sonar"
     # Auxiliary OpenAI features: invisibility diagnosis + keyword suggestions.
     # Diagnosis runs per not-found cell during a scan (auto-diagnose, below), so
@@ -368,6 +448,10 @@ class Settings(BaseSettings):
     # so they stay on the flagship where generation quality matters more.
     brand_diagnose_model: str = "gpt-5.4-mini"
     brand_suggest_model: str = "gpt-5.4"
+    # Keyword suggestions transform the client's already-tracked organic +
+    # geo-grid keywords into ICP-grounded conversational AI queries (3-5 each).
+    # Cap the seed set so the single suggestion call stays bounded/parseable.
+    brand_suggest_max_seed_keywords: int = 25
     # Auto-generate the invisibility diagnosis during the scan for every
     # completed not-found cell (vs. lazily on first click). Best-effort: a
     # failed/unconfigured diagnose never fails the cell, and the on-demand
@@ -393,6 +477,11 @@ class Settings(BaseSettings):
     # fully invisible on, or newly-detected misinformation. Set False to mute.
     brand_alerts_enabled: bool = True
     brand_alert_visibility_drop_pct: int = 15
+    # Reputation alarm (LABS parity): a completed cell with sentiment below the
+    # threshold at at-least this classifier confidence counts as a negative
+    # mention; alerts fire only for cells that weren't negative last scan.
+    brand_alert_sentiment_threshold: float = -0.3
+    brand_alert_confidence_min: float = 0.7
 
     # Service Page scoring: after a service_page run generates, it auto-scores
     # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below
@@ -404,6 +493,37 @@ class Settings(BaseSettings):
     # The rank check bills DataForSEO per page, so it's bounded per plan run.
     service_page_rank_top_n: int = 5
     service_page_plan_max_rank_checks: int = 25
+
+    # ------------------------------------------------------------------
+    # SerMaStr — Search Marketing Strategist Agent
+    # (docs/modules/seo-strategist-agent-plan-v1_0.md)
+    # ------------------------------------------------------------------
+    # Master switch. DEFAULT FALSE until the smoke gate (spec §7): with it off,
+    # nothing runs — the on-demand API returns 409, the weekly scheduler pass
+    # and the escalation-event triggers all no-op, and the Slack action refuses.
+    # Flip STRATEGIST_ENABLED=true on PLATFORM to activate.
+    strategist_enabled: bool = False
+    # Sonnet-class everywhere (spec §9 default; revisit Opus for escalation
+    # briefs after the smoke gate).
+    strategist_model: str = "claude-sonnet-4-6"
+    strategist_max_tokens: int = 4096
+    # Drill-down bounds (spec §2): ≤ N tool calls per run; the paid one
+    # (audit_page → an nlp-api scoring run) is capped separately and tighter.
+    strategist_max_drilldowns: int = 4
+    strategist_max_paid_drilldowns: int = 1
+    # Each drill-down result is truncated to ~this many characters (~2k tokens).
+    strategist_tool_result_chars: int = 8_000
+    # The two LLM drill-down subagents (serp_deep_dive / geogrid_history).
+    strategist_subagent_model: str = "claude-sonnet-4-6"
+    strategist_subagent_max_tokens: int = 1200
+    # Weekly scheduled runs: the day after the Monday reopt-plan build so the
+    # strategist reads a fresh Action Plan (0=Mon..6=Sun). Active-signal
+    # clients only (spec §9 default).
+    strategist_weekly_weekday: int = 1
+    # Input budget per run before drill-downs (spec §2: ≤ ~25k tokens). The
+    # digest assembler converts at ~4 chars/token and splits this between the
+    # signal digest and the SOP block.
+    strategist_digest_budget_tokens: int = 25_000
 
     # ------------------------------------------------------------------
     # Asana task integration (docs/modules/asana-task-integration-plan-v1_0.md)

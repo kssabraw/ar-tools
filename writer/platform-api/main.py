@@ -18,9 +18,14 @@ from routers.asana import router as asana_router
 from routers.brand import router as brand_router
 from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
+from routers.citations import router as citations_router
 from routers.clients import router as clients_router
+from routers.competitors import router as competitors_router
 from routers.dashboard import router as dashboard_router
 from routers.files import router as files_router
+from routers.forecast import router as forecast_router
+from routers.freeze import router as freeze_router
+from routers.goals import router as goals_router
 from routers.gsc import router as gsc_router
 from routers.gsc_research import router as gsc_research_router
 from routers.guides import router as guides_router
@@ -30,12 +35,15 @@ from routers.maps import router as maps_router
 from routers.notifications import router as notifications_router
 from routers.publish import router as publish_router
 from routers.rank import router as rank_router
+from routers.recipe import router as recipe_router
 from routers.reopt import router as reopt_router
 from routers.reports import router as reports_router
 from routers.slack_events import router as slack_events_router
+from routers.strategist import router as strategist_router
 from routers.runs import router as runs_router
 from routers.silos import router as silos_router
 from routers.sops import router as sops_router
+from routers.syndication import router as syndication_router
 from routers.users import router as users_router
 from services.gsc_scheduler import gsc_scheduler
 from services.job_worker import job_worker
@@ -135,13 +143,38 @@ app.add_middleware(
 )
 
 
+# Last-resort handler for unhandled exceptions. Starlette serves this response
+# from ServerErrorMiddleware — OUTSIDE CORSMiddleware — so without the manual
+# CORS header below the browser drops the 500 and reports "Failed to fetch",
+# hiding the real error from the frontend.
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception(
+        "unhandled_exception",
+        extra={
+            "request_id": getattr(request.state, "request_id", None),
+            "path": request.url.path,
+        },
+    )
+    response = JSONResponse(status_code=500, content={"detail": "internal_error"})
+    origin = request.headers.get("origin")
+    if origin and ("*" in settings.allowed_origins or origin in settings.allowed_origins):
+        response.headers["Access-Control-Allow-Origin"] = origin
+    return response
+
+
 app.include_router(asana_router)
 app.include_router(brand_router)
 app.include_router(brand_voice_router)
 app.include_router(briefs_router)
+app.include_router(citations_router)
 app.include_router(clients_router)
+app.include_router(competitors_router)
 app.include_router(dashboard_router)
 app.include_router(files_router)
+app.include_router(forecast_router)
+app.include_router(freeze_router)
+app.include_router(goals_router)
 app.include_router(gsc_router)
 app.include_router(gsc_research_router)
 app.include_router(guides_router)
@@ -150,12 +183,15 @@ app.include_router(local_seo_router)
 app.include_router(maps_router)
 app.include_router(notifications_router)
 app.include_router(rank_router)
+app.include_router(recipe_router)
 app.include_router(reopt_router)
 app.include_router(reports_router)
 app.include_router(slack_events_router)
+app.include_router(strategist_router)
 app.include_router(runs_router)
 app.include_router(silos_router)
 app.include_router(sops_router)
+app.include_router(syndication_router)
 app.include_router(users_router)
 app.include_router(publish_router)
 

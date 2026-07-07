@@ -89,6 +89,38 @@ def delete_keyword(client_id: str, keyword_id: str) -> None:
     _safe(_q)
 
 
+def import_organic_keywords(client_id: str) -> dict:
+    """One-click import of the client's active *organic* rank-tracker keywords
+    into AI Visibility's tracked keywords, verbatim. Case-insensitively skips any
+    already tracked (active or paused). Returns {imported, skipped, keywords}
+    (`keywords` = the newly-added strings). Best-effort read of the rank tracker:
+    an empty/absent organic tracker imports nothing rather than erroring."""
+    def _q():
+        supabase = get_supabase()
+        organic = _organic_tracked_keywords(supabase, client_id)
+        if not organic:
+            return {"imported": 0, "skipped": 0, "keywords": []}
+        existing = (
+            supabase.table("brand_tracked_keywords").select("keyword")
+            .eq("client_id", client_id).execute().data
+        ) or []
+        have = {(r.get("keyword") or "").strip().lower() for r in existing}
+        to_add: list[str] = []
+        added: set[str] = set()
+        for kw in organic:
+            key = kw.lower()
+            if key in have or key in added:
+                continue
+            added.add(key)
+            to_add.append(kw)
+        if to_add:
+            supabase.table("brand_tracked_keywords").insert(
+                [{"client_id": client_id, "keyword": kw, "category": "organic"} for kw in to_add]
+            ).execute()
+        return {"imported": len(to_add), "skipped": len(organic) - len(to_add), "keywords": to_add}
+    return _safe(_q)
+
+
 # ── competitors ──────────────────────────────────────────────────────────────
 def list_competitors(client_id: str) -> list[dict]:
     def _q():
@@ -214,9 +246,20 @@ def list_history(
     return _safe(_q)
 
 
+def health_score(visibility_pct: float | None, avg_confidence: float | None) -> int | None:
+    """LABS health-score formula: visibility share (0-100) x 0.7 + avg classifier
+    confidence (0-1) x 30, clamped to 0-100. The single server-side source —
+    the dashboard (via compute_trends) and the HTML report both read it."""
+    if visibility_pct is None:
+        return None
+    return max(0, min(100, round(visibility_pct * 0.7 + (avg_confidence or 0.0) * 30)))
+
+
 def compute_trends(rows: list[dict]) -> list[dict]:
     """Roll completed brand-mention rows up by scan batch → per-engine + overall
-    visibility. Pure (no DB) so it can be unit-tested. Newest batch last."""
+    visibility, avg classifier confidence + health score, and per-competitor
+    tallies (from the competitor_results re-classifications riding on the
+    brand's rows). Pure (no DB) so it can be unit-tested. Newest batch last."""
     batches: dict[str, dict] = {}
     for r in rows:
         if r.get("status") != "completed":
@@ -226,8 +269,10 @@ def compute_trends(rows: list[dict]) -> list[dict]:
             "scan_batch_id": r.get("scan_batch_id"),
             "created_at": r.get("created_at"),
             "engines": {},
+            "competitors": {},
             "total": 0,
             "found": 0,
+            "confs": [],
         })
         # Earliest created_at in the batch represents the scan's time.
         if r.get("created_at") and (b["created_at"] is None or r["created_at"] < b["created_at"]):
@@ -238,9 +283,24 @@ def compute_trends(rows: list[dict]) -> list[dict]:
         if r.get("mention_found"):
             eng["found"] += 1
             b["found"] += 1
+        if r.get("confidence_score") is not None:
+            b["confs"].append(float(r["confidence_score"]))
+        for comp in r.get("competitor_results") or []:
+            name = comp.get("name")
+            if not name:
+                continue
+            c = b["competitors"].setdefault(name, {"total": 0, "found": 0, "confs": []})
+            c["total"] += 1
+            if comp.get("found"):
+                c["found"] += 1
+            if comp.get("confidence") is not None:
+                c["confs"].append(float(comp["confidence"]))
 
     def _pct(found, total):
         return round(100.0 * found / total, 1) if total else 0.0
+
+    def _avg(vals):
+        return sum(vals) / len(vals) if vals else None
 
     out = []
     for b in batches.values():
@@ -248,16 +308,120 @@ def compute_trends(rows: list[dict]) -> list[dict]:
             e: {"total": v["total"], "found": v["found"], "visibility_pct": _pct(v["found"], v["total"])}
             for e, v in b["engines"].items()
         }
+        competitors = {
+            n: {
+                "total": v["total"],
+                "found": v["found"],
+                "visibility_pct": _pct(v["found"], v["total"]),
+                "health_score": health_score(_pct(v["found"], v["total"]), _avg(v["confs"])),
+            }
+            for n, v in b["competitors"].items()
+        }
+        avg_conf = _avg(b["confs"])
+        pct = _pct(b["found"], b["total"])
         out.append({
             "scan_batch_id": b["scan_batch_id"],
             "created_at": b["created_at"],
             "total": b["total"],
             "found": b["found"],
-            "visibility_pct": _pct(b["found"], b["total"]),
+            "visibility_pct": pct,
+            "avg_confidence": avg_conf,
+            "health_score": health_score(pct, avg_conf),
             "engines": engines,
+            "competitors": competitors,
         })
     out.sort(key=lambda x: (x["created_at"] or ""))
     return out
+
+
+async def get_keyword_market(client_id: str) -> dict:
+    """CPC / search volume / competition for the client's active brand keywords,
+    powering the Lead Valuation card. Cache-only read of the rank tracker's
+    cross-client keyword_market table — the paid DataForSEO fill runs as the
+    shared keyword_market async job (scope='brand'), auto-enqueued here when
+    keywords are missing/stale, so a dashboard GET never blocks on (or pays
+    for) a live provider call. `refreshing` is True while a fill job is
+    pending/running; the card polls until it clears."""
+    from datetime import datetime, timedelta, timezone
+
+    from config import settings
+    from services.dataforseo_rank import location_code_for
+    from services.keyword_market import (
+        enqueue_keyword_market, fetch_cached_market, market_job_pending, stale_keywords,
+    )
+
+    supabase = get_supabase()
+    client_res = _safe(lambda: (
+        supabase.table("clients").select("id, website_url, gbp, rank_tracking_location_code")
+        .eq("id", client_id).limit(1).execute()
+    ))
+    if not client_res.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    location_code = location_code_for(client_res.data[0])
+
+    kw_list = [k["keyword"] for k in list_keywords(client_id, include_inactive=False)]
+    if not kw_list:
+        return {"location_code": location_code, "degraded": None, "refreshing": False, "keywords": []}
+
+    cached = _safe(lambda: fetch_cached_market(supabase, kw_list, location_code))
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(days=settings.keyword_market_refresh_days)
+    to_fetch = stale_keywords(kw_list, cached, stale_cutoff)
+
+    degraded: Optional[str] = None
+    refreshing = _safe(lambda: market_job_pending(supabase, client_id, "brand"))
+    if to_fetch and not refreshing:
+        if not (settings.dataforseo_login and settings.dataforseo_password):
+            degraded = "dataforseo_not_configured"
+        else:
+            _safe(lambda: enqueue_keyword_market(client_id, scope="brand"))
+            refreshing = True
+
+    return {
+        "location_code": location_code,
+        "degraded": degraded,
+        "refreshing": refreshing,
+        "keywords": [
+            {
+                "keyword": kw,
+                "search_volume": cached.get(kw.lower(), {}).get("search_volume"),
+                "cpc": cached.get(kw.lower(), {}).get("cpc"),
+                "competition": cached.get(kw.lower(), {}).get("competition"),
+            }
+            for kw in kw_list
+        ],
+    }
+
+
+def refresh_keyword_market(client_id: str) -> dict:
+    """User-triggered market refresh: force-enqueue the scope='brand' job so
+    even null-cached keywords (which the staleness pass treats as fresh for
+    keyword_market_refresh_days) are re-queried."""
+    from config import settings
+    from services.keyword_market import enqueue_keyword_market
+
+    if not (settings.dataforseo_login and settings.dataforseo_password):
+        return {"refreshing": False, "degraded": "dataforseo_not_configured"}
+    _safe(lambda: enqueue_keyword_market(client_id, scope="brand", force=True))
+    return {"refreshing": True, "degraded": None}
+
+
+def get_mention(client_id: str, mention_id: str) -> dict:
+    """One mention row incl. the heavy fields (raw_response, retry_count) the
+    history list deliberately omits — fetched lazily by the detail sheet."""
+    def _q():
+        rows = (
+            get_supabase().table("brand_mention_history")
+            .select(_HISTORY_COLS + ", raw_response, retry_count")
+            .eq("id", mention_id)
+            .eq("client_id", client_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="mention_not_found")
+        return rows[0]
+    return _safe(_q)
 
 
 def get_trends(client_id: str, limit: int = 2000) -> list[dict]:
@@ -379,24 +543,109 @@ def get_report_status(client_id: str, job_id: str) -> dict:
     return _safe(_q)
 
 
+def _organic_tracked_keywords(supabase, client_id: str) -> list[str]:
+    """Distinct active organic rank-tracker keywords for a client, original
+    casing preserved, case-insensitively de-duped. tracked_keywords is anchored
+    directly to the client (property_id is often null for GSC/DataForSEO-fallback
+    keywords), so read by client_id — matching the rank tracker's own canonical
+    read in rank_materialize. Best-effort: no keywords / read error → empty list."""
+    out: list[str] = []
+    seen: set[str] = set()
+    try:
+        rows = (
+            supabase.table("tracked_keywords").select("keyword")
+            .eq("client_id", client_id).eq("active", True).execute().data
+        ) or []
+        for r in rows:
+            kw = (r.get("keyword") or "").strip()
+            if kw and kw.lower() not in seen:
+                seen.add(kw.lower())
+                out.append(kw)
+    except Exception:  # pragma: no cover - best-effort
+        pass
+    return out
+
+
+def _gather_tracked_keywords(supabase, client_id: str) -> list[str]:
+    """Distinct active keywords the client already tracks across both rank
+    trackers: organic (tracked_keywords, via its gsc_properties) + geo-grid
+    (maps_keywords). Case-insensitive de-dupe, original casing preserved,
+    capped at brand_suggest_max_seed_keywords. Best-effort per source."""
+    from config import settings
+
+    seeds: list[str] = []
+    seen: set[str] = set()
+
+    def _add(keyword: Optional[str]) -> None:
+        kw = (keyword or "").strip()
+        if kw and kw.lower() not in seen:
+            seen.add(kw.lower())
+            seeds.append(kw)
+
+    # Organic — tracked_keywords is keyed to gsc_properties, not the client.
+    for kw in _organic_tracked_keywords(supabase, client_id):
+        _add(kw)
+
+    # Geo-grid — maps_keywords is keyed directly to the client.
+    try:
+        maps = (
+            supabase.table("maps_keywords").select("keyword")
+            .eq("client_id", client_id).eq("active", True).execute().data
+        ) or []
+        for r in maps:
+            _add(r.get("keyword"))
+    except Exception:  # pragma: no cover - best-effort
+        pass
+
+    return seeds[: settings.brand_suggest_max_seed_keywords]
+
+
+def _business_context(client: dict) -> str:
+    """A short business descriptor for grounding the conversational queries when
+    (or alongside) the ICP: name + GBP primary category + location."""
+    gbp = client.get("gbp") or {}
+    parts = [client.get("name") or ""]
+    if gbp.get("gbp_category"):
+        parts.append(f"({gbp['gbp_category']})")
+    loc = gbp.get("address") or gbp.get("formatted_address")
+    if loc:
+        parts.append(f"— {loc}")
+    return " ".join(p for p in parts if p).strip()
+
+
 async def suggest_keywords_for_client(client_id: str) -> dict:
-    """Suggest keywords to track, using the client's name + GBP business context."""
-    from services import brand_insights
+    """Suggest AI queries to track by expanding the client's already-tracked
+    organic + geo-grid ranking keywords into ICP-grounded conversational queries
+    (3-5 each). When the client tracks no keywords yet, fall back to the legacy
+    GBP-seeded keyword suggester so the button is never empty-handed."""
+    from services import brand_insights, icp_service
 
     supabase = get_supabase()
     rows = (
-        supabase.table("clients").select("name, website_url, gbp")
+        supabase.table("clients")
+        .select("name, website_url, gbp, detected_icp, differentiators, icp_text")
         .eq("id", client_id).limit(1).execute().data
     )
     if not rows:
         raise HTTPException(status_code=404, detail="client_not_found")
     client = rows[0]
-    gbp = client.get("gbp") or {}
     brand = client.get("name") or ""
-    business_types = [t for t in [gbp.get("gbp_category")] if t]
-    address = gbp.get("address") or gbp.get("formatted_address")
+    seeds = _gather_tracked_keywords(supabase, client_id)
+
     try:
-        keywords = await brand_insights.suggest_keywords(brand, business_types, address)
+        if seeds:
+            keywords = await brand_insights.suggest_conversational_queries(
+                brand=brand,
+                business_context=_business_context(client),
+                icp_text=icp_service.resolve_icp_text(client),
+                seed_keywords=seeds,
+            )
+        else:
+            # No tracked keywords to expand — fall back to GBP-seeded suggestions.
+            gbp = client.get("gbp") or {}
+            business_types = [t for t in [gbp.get("gbp_category")] if t]
+            address = gbp.get("address") or gbp.get("formatted_address")
+            keywords = await brand_insights.suggest_keywords(brand, business_types, address)
     except brand_insights.InsightUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return {"keywords": keywords}

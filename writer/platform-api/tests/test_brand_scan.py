@@ -249,6 +249,48 @@ def test_scan_keyword_engine_terminal_error_raises(monkeypatch):
         asyncio.run(bs.scan_keyword_engine("kw", "Acme", "perplexity", []))
 
 
+def test_scan_keyword_engine_terminal_surfaces_provider_reason(monkeypatch):
+    # A 403 from Google carries the real reason in the body; it must reach the
+    # user-facing ScanFailed.reason instead of a generic catch-all.
+    body = json.dumps({
+        "error": {
+            "code": 403,
+            "status": "PERMISSION_DENIED",
+            "message": "Generative Language API has not been used in project 123 or it is disabled.",
+        }
+    })
+
+    async def fake_dispatch(engine, keyword, brand):
+        raise ProviderError(403, body)
+
+    monkeypatch.setattr(bs, "_dispatch", fake_dispatch)
+    with pytest.raises(ScanFailed) as exc:
+        asyncio.run(bs.scan_keyword_engine("kw", "Acme", "gemini", []))
+    assert "gemini" in exc.value.reason
+    assert "HTTP 403" in exc.value.reason
+    assert "has not been used" in exc.value.reason
+
+
+def test_scan_keyword_engine_invalid_key_400_is_terminal(monkeypatch):
+    # An invalid Gemini key is a 400 (API_KEY_INVALID) — terminal, not a
+    # retry-until-exhausted "no valid response" masking the real cause.
+    calls = {"n": 0}
+    body = json.dumps({
+        "error": {"code": 400, "status": "INVALID_ARGUMENT",
+                  "message": "API key not valid. Please pass a valid API key."}
+    })
+
+    async def bad_key(engine, keyword, brand):
+        calls["n"] += 1
+        raise ProviderError(400, body)
+
+    monkeypatch.setattr(bs, "_dispatch", bad_key)
+    with pytest.raises(ScanFailed) as exc:
+        asyncio.run(bs.scan_keyword_engine("kw", "Acme", "gemini", []))
+    assert calls["n"] == 1  # terminal → no retries
+    assert "API key not valid" in exc.value.reason
+
+
 def test_scan_keyword_engine_retries_then_succeeds(monkeypatch):
     calls = {"n": 0}
 

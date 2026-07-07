@@ -48,7 +48,9 @@ TOTAL_MAX = 25
 # quick win must not leapfrog an urgent drop, and same-kind rows must not all tie.)
 _TIER = 10_000
 _WITHIN_MAX = 9_999          # within-tier term is clamped to [0, _WITHIN_MAX]
+_SORT_SITEWIDE = 8 * _TIER   # §A sitewide-decline banner sits above everything
 _SORT_DROP = 6 * _TIER
+_SORT_OFFPAGE = 5 * _TIER    # aggregate link loss / RD spike: between drops and cannibalization
 _SORT_DEINDEX_BONUS = _TIER  # deindex sits in its own band above ordinary drops
 _SORT_CANNIBAL = 4 * _TIER
 _SORT_MAPS = 3 * _TIER       # local-pack declines: below cannibalization, above quick wins
@@ -121,27 +123,38 @@ def build_actions(
     actions: list[dict] = []
     dropped_keywords: set[str] = set()
 
-    # 1) Open rank-drop alerts — urgent.
+    # 1) Open rank-drop alerts — urgent. When the drop classifier has attached a
+    # B1–B5 classification (docs/sops/Rank_Drop_Mitigation_SOP_Organic.md), the
+    # action carries that classification's SOP response protocol; unclassified
+    # drops keep the generic guidance.
     for d in drops:
         kw = d.get("keyword") or ""
         dropped_keywords.add(kw.lower())
         deindex = d.get("alert_type") == "deindexed"
+        response = d.get("response") or {}
+        classification = d.get("classification")
+        diagnosis = d.get("message") or "Ranking dropped."
+        if classification and response.get("label"):
+            diagnosis = f"[{classification} — {response['label']}] {diagnosis}"
         actions.append(
             {
                 "kind": "rank_drop",
                 "source": "organic",
                 "keyword": kw,
-                "diagnosis": d.get("message") or "Ranking dropped.",
-                "recommendation": (
+                "classification": classification,
+                "diagnosis": diagnosis,
+                "recommendation": response.get("recommendation")
+                or (
                     "Confirm indexing — run URL Inspection and check robots/noindex/canonical, then resubmit."
                     if deindex
                     else "Diagnose & reoptimize — capture a SERP snapshot to see what changed (AI Overview, "
                     "a stronger competitor, an intent shift), then reoptimize the ranking page."
                 ),
-                "cta_label": "Open rank tracker",
-                "cta_path": f"clients/{client_id}/rankings",
+                "cta_label": response.get("cta_label") or "Open rank tracker",
+                "cta_path": response.get("cta_path") or f"clients/{client_id}/rankings",
                 "severity": "critical" if deindex else "warning",
                 "sort": _SORT_DROP + (_SORT_DEINDEX_BONUS if deindex else 0),
+                "alert_created_at": d.get("created_at"),
             }
         )
 
@@ -219,6 +232,106 @@ def build_actions(
 
     actions.sort(key=lambda a: a["sort"], reverse=True)
     return actions if cap is None else actions[:cap]
+
+
+def build_offpage_actions(client_id: str, offpage_alerts: list[dict]) -> list[dict]:
+    """Map open offpage-agent alerts (RD loss / unnatural spike) to actions per
+    the Organic Rank Drop SOP §A.5. Pure (unit-tested)."""
+    actions: list[dict] = []
+    for a in offpage_alerts:
+        alert_type = a.get("alert_type")
+        if alert_type == "rd_loss":
+            actions.append(
+                {
+                    "kind": "rd_loss",
+                    "source": "organic",
+                    "keyword": "Backlink profile",
+                    "diagnosis": a.get("message") or "Referring domains fell between captures.",
+                    "recommendation": "Aggregate link loss (SOP §A.5) — build a replacement plan via the "
+                    "Recipe Engine: generate this month's task plan and fund the referring-domains "
+                    "variable (the lost RD marks it deficient automatically).",
+                    "cta_label": "Action Plan",
+                    "cta_path": f"clients/{client_id}/action-plan",
+                    "severity": "warning",
+                    "sort": _SORT_OFFPAGE + _within(9_000 + abs(a.get("delta_pct") or 0)),
+                }
+            )
+        elif alert_type == "rd_spike":
+            actions.append(
+                {
+                    "kind": "rd_spike",
+                    "source": "organic",
+                    "keyword": "Backlink profile",
+                    "diagnosis": a.get("message") or "Referring domains spiked between captures.",
+                    "recommendation": "Unnatural RD spike (SOP §A.5) — check for negative SEO or an "
+                    "unintended blast. We never disavow: response levers are anchor dilution, velocity "
+                    "throttling, stopping builds, and letting the page settle. MC4 judgment call — "
+                    "escalate to the senior SEOs if unclear.",
+                    "cta_label": "Action Plan",
+                    "cta_path": f"clients/{client_id}/action-plan",
+                    "severity": "warning",
+                    "sort": _SORT_OFFPAGE + _within(5_000 + abs(a.get("delta_pct") or 0)),
+                }
+            )
+        elif alert_type == "citation_loss":
+            dead = (a.get("details") or {}).get("dead_count") or 0
+            actions.append(
+                {
+                    "kind": "citation_loss",
+                    "source": "organic",
+                    "keyword": "Citations",
+                    "diagnosis": a.get("message") or "Citations no longer resolve.",
+                    "recommendation": "Dead citations (SOP §A.8 'citations still live') — fix or reorder "
+                    "the dead listings. Citations are in the monthly baseline stack ($40/40, Minda); "
+                    "replacements are already funded — this is a re-order, not new budget.",
+                    "cta_label": "Citations",
+                    "cta_path": f"clients/{client_id}/citations",
+                    "severity": "warning",
+                    "sort": _SORT_OFFPAGE + _within(4_000 + dead * 10),
+                }
+            )
+        elif alert_type == "rd_imbalance":
+            actions.append(
+                {
+                    "kind": "rd_imbalance",
+                    "source": "organic",
+                    "keyword": "Backlink profile",
+                    "diagnosis": a.get("message") or "An inner page carries more RD than the home page.",
+                    "recommendation": "Entity-balance hygiene (Link Building SOP health check) — build "
+                    "more RD to the home page, or ease off the inner page, until the home page leads "
+                    "again. Non-escalating: the SEO NEO assignee self-corrects with rebalanced link "
+                    "building.",
+                    "cta_label": "Action Plan",
+                    "cta_path": f"clients/{client_id}/action-plan",
+                    "severity": "info",
+                    "sort": _SORT_OFFPAGE + _within(2_000),
+                }
+            )
+    return actions
+
+
+def build_sitewide_action(client_id: str, scope_info: dict) -> dict:
+    """The §A sitewide-decline banner action (Organic Rank Drop SOP): many
+    keywords down together means a systemic cause — the per-keyword responses
+    below it still apply, but §A's ordered ladder is worked first. Pure."""
+    from services.drop_classifier import SITEWIDE_PLAYBOOK, cta_path
+
+    open_drops = scope_info.get("open_drops") or 0
+    tracked = scope_info.get("tracked_count") or 0
+    return {
+        "kind": "sitewide_decline",
+        "source": "organic",
+        "keyword": "Sitewide",
+        "classification": "A",
+        "diagnosis": f"[§A — {SITEWIDE_PLAYBOOK['label']}] {open_drops} of {tracked} tracked "
+        "keywords have open drops — this pattern points at a systemic cause, not "
+        "per-keyword problems.",
+        "recommendation": SITEWIDE_PLAYBOOK["recommendation"],
+        "cta_label": SITEWIDE_PLAYBOOK["cta_label"],
+        "cta_path": cta_path(SITEWIDE_PLAYBOOK["cta_kind"], client_id),
+        "severity": "critical",
+        "sort": _SORT_SITEWIDE,
+    }
 
 
 def build_maps_actions(
@@ -792,11 +905,22 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
 
     drops = (
         supabase.table("rank_alerts")
-        .select("keyword_id, keyword, alert_type, message")
+        .select("keyword_id, keyword, alert_type, message, created_at")
         .eq("client_id", client_id)
         .is_("resolved_at", "null")
         .execute()
     ).data or []
+
+    # Classify each open drop per the Organic Rank Drop SOP (B1–B5 + scope) so
+    # the actions carry the SOP's response protocols. Best-effort — an
+    # unclassified drop keeps the generic guidance.
+    scope_info: dict = {}
+    try:
+        from services import drop_classifier
+
+        scope_info = drop_classifier.classify_client_drops(client_id, drops)
+    except Exception as exc:
+        logger.warning("reopt_plan_classify_failed", extra={"client_id": client_id, "error": str(exc)})
 
     try:
         rankability_items = rankability.get_client_rankability(client_id).get("items", [])
@@ -825,6 +949,15 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
 
     # Build organic uncapped so Maps actions compete fairly for the combined cap.
     organic = build_actions(client_id, drops, rankability_items, gsc, cap=None)
+    if scope_info.get("sitewide"):
+        organic.insert(0, build_sitewide_action(client_id, scope_info))
+    # Offpage-agent alerts (aggregate RD loss / unnatural spike — SOP §A.5).
+    try:
+        from services.offpage_agent import open_offpage_alerts
+
+        organic += build_offpage_actions(client_id, open_offpage_alerts(client_id))
+    except Exception as exc:
+        logger.warning("reopt_plan_offpage_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
     maps_actions += build_relevance_action(client_id, relevance_gap)
     maps_actions += build_gbp_action(client_id, gbp_audit_result)
@@ -835,17 +968,57 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     actions = organic + maps_actions + brand_actions
     actions.sort(key=lambda a: a["sort"], reverse=True)
     actions = actions[:TOTAL_MAX]
+
+    # Verify-loop notes: append each open response episode's clock (2-week
+    # recheck / 6-week escalation state) to its keyword's action rows —
+    # organic and maps alike. Best-effort.
+    try:
+        from services.response_episodes import open_episode_notes
+
+        notes = open_episode_notes(client_id)
+        if notes:
+            for a in actions:
+                note = notes.get((a.get("keyword") or "").lower())
+                if note:
+                    a["episode_note"] = note
+                    a["diagnosis"] = f"{a['diagnosis']} {note}"
+    except Exception as exc:
+        logger.warning("reopt_plan_episode_notes_failed", extra={"client_id": client_id, "error": str(exc)})
+
+    # Algo-update context: a drop that opened while several clients dropped
+    # together is a Google update, not this client's emergency — annotate so
+    # nobody reoptimizes into a rolling update (Organic SOP §A). Best-effort.
+    try:
+        from services.trend_watch import algo_note_for, recent_algo_events
+
+        events = recent_algo_events()
+        if events:
+            for a in actions:
+                if a.get("kind") != "rank_drop":
+                    continue
+                note = algo_note_for(a.get("alert_created_at"), events)
+                if note:
+                    a["algo_note"] = note
+                    a["diagnosis"] = f"{a['diagnosis']} {note}"
+    except Exception as exc:
+        logger.warning("reopt_plan_algo_notes_failed", extra={"client_id": client_id, "error": str(exc)})
     digest = summarize_plan(actions)
 
     latest = (
         supabase.table("reopt_plans")
-        .select("id, action_count")
+        .select("id, action_count, items")
         .eq("client_id", client_id)
         .order("created_at", desc=True)
         .limit(1)
         .execute()
     ).data
     latest_count = latest[0]["action_count"] if latest else None
+    # Sitewide-decline TRANSITION detection for the strategist escalation brief:
+    # fire only when this build turns sitewide on and the previous plan wasn't —
+    # a client sitting in a sitewide state doesn't re-brief on every rebuild.
+    prev_had_sitewide = bool(latest) and any(
+        a.get("kind") == "sitewide_decline" for a in (latest[0].get("items") or [])
+    )
 
     if _should_store(len(actions), latest_count):
         plan = (
@@ -878,6 +1051,29 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
             severity=digest["severity"],
             payload={"link": _plan_path(client_id), "plan_id": plan["id"]},
         )
+
+    # SerMaStr escalation brief (Phase 4): a §A sitewide decline just opened —
+    # a systemic cause needs a strategic read, not per-keyword fixes. The
+    # enqueue no-ops while strategist_enabled is false; best-effort.
+    if scope_info.get("sitewide") and not prev_had_sitewide:
+        try:
+            from services.strategist import enqueue_strategy_review
+
+            enqueue_strategy_review(
+                client_id,
+                trigger="escalation",
+                escalation_context={
+                    "kind": "sitewide_decline",
+                    "open_drops": scope_info.get("open_drops"),
+                    "tracked_count": scope_info.get("tracked_count"),
+                    "plan_id": plan["id"],
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "reopt_plan_sitewide_brief_failed",
+                extra={"client_id": client_id, "error": str(exc)},
+            )
 
     logger.info(
         "reopt_plan_built",
@@ -1060,9 +1256,41 @@ async def enrich_plan(client_id: str, plan_id: "str | None" = None) -> bool:
 
 
 def enqueue_reopt_plan(client_id: str, trigger: str = "manual") -> None:
-    """Enqueue a reopt_plan job (deduped against any in-flight one for the client)."""
+    """Enqueue a reopt_plan job, deduped so a client's action plan isn't rebuilt
+    many times a day.
+
+    Cadence (owner decision — strictly weekly + manual):
+
+    0. Event-trigger gate: ``drop``/``maps_drop``/``offpage`` rebuilds are
+       suppressed unless ``reopt_plan_event_refresh_enabled`` is set. The drop
+       still surfaces via the alert/notifications path; the plan just folds it in
+       on the next weekly run or a manual refresh. ``manual`` and ``scheduled``
+       are never gated here.
+
+    Then two guards, both skipped for a user-initiated ``manual`` refresh (that
+    always runs):
+
+    1. In-flight dedup (all triggers): never stack a second job while one is
+       already pending/running for the client.
+    2. Recency debounce (automated triggers): the scheduler's weekly day-gate is
+       held in an in-memory variable, so every platform-api restart on the weekly
+       day re-fires the ``scheduled`` pass — producing several identical rebuilds
+       in one day. So a ``scheduled`` rebuild is collapsed to at most one per UTC
+       day (which, given the weekday gate, is effectively once per week). When
+       event refreshes are re-enabled, an event-driven rebuild is likewise skipped
+       when a plan already completed within ``reopt_plan_min_interval_hours``.
+    """
+    from config import settings
+
+    if trigger not in ("manual", "scheduled") and not settings.reopt_plan_event_refresh_enabled:
+        logger.info(
+            "reopt_plan_event_refresh_disabled",
+            extra={"client_id": client_id, "trigger": trigger},
+        )
+        return
+
     supabase = get_supabase()
-    existing = (
+    in_flight = (
         supabase.table("async_jobs")
         .select("id")
         .eq("job_type", "reopt_plan")
@@ -1071,8 +1299,33 @@ def enqueue_reopt_plan(client_id: str, trigger: str = "manual") -> None:
         .limit(1)
         .execute()
     )
-    if existing.data:
+    if in_flight.data:
         return
+
+    if trigger != "manual":
+        now = datetime.now(timezone.utc)
+        if trigger == "scheduled":
+            cutoff = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            cutoff = now - timedelta(hours=max(0, settings.reopt_plan_min_interval_hours))
+        if cutoff < now:
+            recent = (
+                supabase.table("async_jobs")
+                .select("id")
+                .eq("job_type", "reopt_plan")
+                .eq("entity_id", client_id)
+                .eq("status", "complete")
+                .gte("created_at", cutoff.isoformat())
+                .limit(1)
+                .execute()
+            )
+            if recent.data:
+                logger.info(
+                    "reopt_plan_debounced",
+                    extra={"client_id": client_id, "trigger": trigger},
+                )
+                return
+
     supabase.table("async_jobs").insert(
         {"job_type": "reopt_plan", "entity_id": client_id, "payload": {"client_id": client_id, "trigger": trigger}}
     ).execute()

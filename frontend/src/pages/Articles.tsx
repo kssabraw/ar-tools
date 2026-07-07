@@ -10,6 +10,10 @@ import { FeedbackButton } from '../components/FeedbackButton'
 import { FeaturedImagePicker } from '../components/FeaturedImagePicker'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
+import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
+
+const runPublished = (r: { published_doc_url?: string | null; published_url?: string | null }) =>
+  Boolean(r.published_doc_url || r.published_url)
 
 function downloadFile(content: string, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
@@ -91,7 +95,7 @@ function ArticleCard({ run, selected, onToggleSelect }: {
             checked={selected ?? false}
             onChange={e => onToggleSelect(e.target.checked)}
             style={{ marginTop: 3, width: 16, height: 16, cursor: 'pointer', flexShrink: 0, accentColor: '#6366f1' }}
-            title="Select for bulk publish to Google Docs"
+            title="Select for bulk publish"
           />
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -106,6 +110,11 @@ function ArticleCard({ run, selected, onToggleSelect }: {
             {run.client_name} · {new Date(run.completed_at ?? run.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
             {run.total_cost_usd != null && ` · $${Number(run.total_cost_usd).toFixed(4)}`}
           </div>
+          {(publishedUrl || run.published_url || wpUrl) && (
+            <div style={{ marginTop: 6 }}>
+              <PublishBadges docUrl={publishedUrl} siteUrl={run.published_url ?? wpUrl} />
+            </div>
+          )}
         </div>
 
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
@@ -262,6 +271,8 @@ export function Articles() {
     search === '' || r.keyword.toLowerCase().includes(search.toLowerCase()) || r.client_name.toLowerCase().includes(search.toLowerCase())
   )
 
+  const pub = usePagedPublish(runs, runPublished)
+
   const bulk = useBulkPublish()
   const items: PublishItem[] = runs.map(r => ({
     key: `run:${r.id}`,
@@ -295,8 +306,16 @@ export function Articles() {
           {search ? 'No articles match your search.' : 'No completed articles yet. Start a run to generate content.'}
         </div>
       ) : (
+        <>
+        <BulkPublishBar items={items} bulk={bulk} placement="top" />
+        <div style={{ margin: '4px 0 14px' }}>
+          <PublishTabs counts={pub.counts} active={pub.filter} onPick={pub.pick} />
+        </div>
+        {pub.total === 0 ? (
+          <div style={{ ...cardStyle, textAlign: 'center', color: '#64748b', padding: 32 }}>Nothing in this view.</div>
+        ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {runs.map(run => (
+          {pub.pageItems.map(run => (
             <ArticleCard
               key={run.id}
               run={run}
@@ -305,9 +324,10 @@ export function Articles() {
             />
           ))}
         </div>
+        )}
+        <Pager page={pub.page} pageCount={pub.pageCount} total={pub.total} pageSize={pub.pageSize} onPage={pub.setPage} />
+        </>
       )}
-
-      <BulkPublishBar items={items} bulk={bulk} />
     </div>
   )
 }

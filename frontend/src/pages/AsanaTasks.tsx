@@ -192,9 +192,25 @@ export function AsanaTasks() {
             disabled={!mappingDirty || !projectGid.trim() || saveMapping.isPending}
             onClick={() => saveMapping.mutate()}
           >
-            <Save size={14} /> {saveMapping.isPending ? 'Saving…' : 'Save'}
+            <Save size={14} /> {saveMapping.isPending ? 'Saving…' : !mappingDirty && saveMapping.isSuccess ? 'Saved' : 'Save'}
           </button>
         </div>
+        {saveMapping.isSuccess && !mappingDirty && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#15803d', marginTop: 8 }}>
+            <CheckCircle2 size={14} />
+            {saveMapping.data?.project_name
+              ? `Saved — mapped to “${saveMapping.data.project_name}”. Monthly sections, task-plan pushes and strategist tasks now go to this project.`
+              : 'Project mapping saved — monthly sections, task-plan pushes and strategist tasks now go to this project.'}
+          </div>
+        )}
+        {saveMapping.isError && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#b91c1c', marginTop: 8 }}>
+            <AlertTriangle size={14} />
+            {(saveMapping.error as Error).message === 'asana_project_not_found_or_no_access'
+              ? 'Asana doesn’t recognize that project GID (or the token can’t see the project). In the new Asana URL format — app.asana.com/1/<workspace>/project/<project-gid>/… — copy the number right after “/project/”, not the first number.'
+              : `Couldn’t save: ${(saveMapping.error as Error).message}`}
+          </div>
+        )}
 
         <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #f1f5f9' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>Auto-assign team</div>
@@ -227,7 +243,6 @@ export function AsanaTasks() {
             </div>
           )}
         </div>
-        {saveMapping.isError && <p style={errText}>{(saveMapping.error as Error).message}</p>}
       </section>
 
       {/* ── Task template ───────────────────────────────────────────── */}

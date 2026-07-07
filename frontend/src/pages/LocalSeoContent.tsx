@@ -16,8 +16,10 @@ import { useSiloPlan } from '../components/localseo/useSiloPlan'
 import { useBulkCreate } from '../components/localseo/useBulkCreate'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
+import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
 import { PageScoreView } from '../components/localseo/PageScoreView'
 import { ReoptimizeView } from '../components/localseo/ReoptimizeView'
+import { ScoreHistoryView } from '../components/localseo/ScoreHistoryView'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
 import {
@@ -57,12 +59,13 @@ export function LocalSeoContent() {
     enabled: Boolean(clientId),
   })
 
-  const [tab, setTab] = useState<'new' | 'plan' | 'reopt' | 'saved' | 'drafts'>(
-    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / reopt / drafts).
+  const [tab, setTab] = useState<'new' | 'plan' | 'reopt' | 'saved' | 'drafts' | 'history'>(
+    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / reopt / drafts / history).
     searchParams.get('tab') === 'saved' ? 'saved'
       : searchParams.get('tab') === 'plan' ? 'plan'
       : searchParams.get('tab') === 'reopt' ? 'reopt'
       : searchParams.get('tab') === 'drafts' ? 'drafts'
+      : searchParams.get('tab') === 'history' ? 'history'
       : 'new',
   )
   const [view, setView] = useState<View>({ kind: 'form' })
@@ -430,7 +433,7 @@ export function LocalSeoContent() {
 
       {/* Tabs */}
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-        {(['new', 'plan', 'reopt', 'saved', 'drafts'] as const).map(t => (
+        {(['new', 'plan', 'reopt', 'saved', 'drafts', 'history'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -439,7 +442,7 @@ export function LocalSeoContent() {
               background: tab === t ? '#fff' : 'transparent', color: tab === t ? '#0f172a' : '#64748b',
               boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
             }}
-          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}`}</button>
+          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : t === 'drafts' ? `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}` : 'Score History'}</button>
         ))}
       </div>
 
@@ -449,6 +452,8 @@ export function LocalSeoContent() {
           loading={loadingSaved}
           onOpen={openSaved}
           onDelete={async (pid) => { await localSeoApi.deletePage(pid); refreshSaved() }}
+          wordpressConfigured={Boolean(client?.wordpress_site_url && client?.wordpress_app_password_set)}
+          githubConfigured={Boolean(client?.github_repo)}
         />
       ) : tab === 'drafts' ? (
         <DraftsList
@@ -459,6 +464,8 @@ export function LocalSeoContent() {
           onPurge={async (pid) => { await localSeoApi.purgePage(pid); refreshSaved() }}
           onPurgeAll={async () => { await localSeoApi.purgeDrafts(clientId); refreshSaved() }}
         />
+      ) : tab === 'history' ? (
+        <ScoreHistoryView clientId={clientId} />
       ) : tab === 'reopt' ? (
         <ReoptimizeView
           clientId={clientId}
@@ -704,15 +711,18 @@ export function LocalSeoContent() {
   )
 }
 
-function SavedPagesList({ pages, loading, onOpen, onDelete }: {
+function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured, githubConfigured }: {
   pages: LocalSeoPageListItem[]
   loading: boolean
   onOpen: (id: string) => void
   onDelete: (id: string) => Promise<void>
+  wordpressConfigured?: boolean
+  githubConfigured?: boolean
 }) {
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const bulk = useBulkPublish()
+  const pub = usePagedPublish(pages, p => Boolean(p.published_doc_url || p.published_url))
 
   const items: PublishItem[] = pages.map(p => ({
     key: `lsp:${p.id}`,
@@ -735,8 +745,15 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
   }
   return (
     <>
+    <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={wordpressConfigured} githubConfigured={githubConfigured} placement="top" />
+    <div style={{ margin: '4px 0 12px' }}>
+      <PublishTabs counts={pub.counts} active={pub.filter} onPick={pub.pick} />
+    </div>
+    {pub.total === 0 ? (
+      <p style={{ fontSize: 14, color: '#94a3b8', textAlign: 'center', padding: 24 }}>Nothing in this view.</p>
+    ) : (
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
-      {pages.map((p, i) => {
+      {pub.pageItems.map((p, i) => {
         const key = `lsp:${p.id}`
         const result = bulk.results[key]
         return (
@@ -747,7 +764,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
             onChange={e => bulk.toggle(key, e.target.checked)}
             disabled={bulk.publishing}
             style={{ width: 16, height: 16, cursor: 'pointer', flexShrink: 0, accentColor: '#6366f1' }}
-            title="Select for bulk publish to Google Docs"
+            title="Select for bulk publish"
           />
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -763,11 +780,16 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
               {p.keyword} · {p.location.split(',')[0]} <span style={{ marginLeft: 6, opacity: 0.7 }}>{relativeTime(p.created_at)}</span>
             </p>
           </div>
-          {result?.status === 'done' && (result.docUrl
-            ? <a href={result.docUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', textDecoration: 'none', flexShrink: 0 }}>Open Doc ↗</a>
-            : <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', flexShrink: 0 }}>Published</span>)}
+          {result?.status === 'done' && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              {result.docUrl && <a href={result.docUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, fontWeight: 600, color: '#16a34a', textDecoration: 'none' }}>Open Doc ↗</a>}
+              {result.siteUrl && <a href={result.siteUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, fontWeight: 600, color: '#2563eb', textDecoration: 'none' }}>Open page ↗</a>}
+              {!result.docUrl && !result.siteUrl && <span style={{ fontSize: 12, fontWeight: 600, color: '#16a34a' }}>Published</span>}
+            </span>
+          )}
           {result?.status === 'failed' && <span style={{ fontSize: 12, color: '#dc2626', flexShrink: 0 }} title={result.error}>Failed</span>}
           {result?.status === 'publishing' && <Spinner size={14} />}
+          {!result && <span style={{ flexShrink: 0 }}><PublishBadges docUrl={p.published_doc_url} siteUrl={p.published_url} /></span>}
           <button style={outlineBtn} onClick={() => onOpen(p.id)}>View <ArrowRight size={13} /></button>
           {confirmId === p.id ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#64748b' }}>
@@ -789,7 +811,8 @@ function SavedPagesList({ pages, loading, onOpen, onDelete }: {
         )
       })}
     </div>
-    <BulkPublishBar items={items} bulk={bulk} />
+    )}
+    <Pager page={pub.page} pageCount={pub.pageCount} total={pub.total} pageSize={pub.pageSize} onPage={pub.setPage} />
     </>
   )
 }

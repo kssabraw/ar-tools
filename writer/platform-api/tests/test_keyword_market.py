@@ -36,12 +36,17 @@ def test_estimate_value_none_when_missing_inputs():
 
 
 def test_parse_market_items():
+    history = [{"year": 2025, "month": 6, "search_volume": 2600}]
     items = [
-        {"keyword": "HVAC Repair", "search_volume": 2400, "cpc": 12.5, "competition": "HIGH"},
+        {"keyword": "HVAC Repair", "search_volume": 2400, "cpc": 12.5, "competition": "HIGH",
+         "monthly_searches": history},
         {"keyword": "no volume"},  # partial
         {"search_volume": 10},     # no keyword → skipped
     ]
     parsed = keyword_market.parse_market_items(items)
-    assert parsed["hvac repair"] == {"search_volume": 2400, "cpc": 12.5, "competition": "HIGH"}
+    assert parsed["hvac repair"] == {
+        "search_volume": 2400, "cpc": 12.5, "competition": "HIGH",
+        "monthly_searches": history,
+    }
     assert parsed["no volume"]["search_volume"] is None
     assert "search_volume" not in parsed  # the keyword-less item didn't create a bogus key

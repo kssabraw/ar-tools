@@ -2,9 +2,30 @@
  * AR Tools — Google Docs publish webhook (Apps Script).
  *
  * This is the script behind GOOGLE_APPS_SCRIPT_URL. The platform-api posts
- *   { folder_id, title, content, format }
+ *   { folder_id, title, content, format, share }            (a Google Doc)
+ *   { type: "sheet", folder_id, title, rows, share }         (a Google Sheet)
+ *   { type: "pdf", folder_id, title, content_base64 }        (a PDF file)
  * and expects back
- *   { success: true, doc_id, doc_url }   (or { success: false, error }).
+ *   { success: true, doc_id, doc_url }                       (doc)
+ *   { success: true, sheet_id, sheet_url }                   (sheet)
+ *   { success: true, file_id, file_url }                     (pdf)
+ *   (or { success: false, error }).
+ *
+ * `type` (added 2026-06): "doc" (default) builds a Google Doc; "sheet" builds a
+ * Google Sheet from `rows` (an array of rows, each an array of cell strings);
+ * "pdf" (added 2026-07, Client Reporting Phase 5) saves a base64-encoded PDF
+ * into the folder as a plain Drive file — used for the client-report Drive
+ * copy. Requires a REDEPLOY of the Web App to serve this version.
+ *
+ * `share` (added 2026-06): how to share the new file —
+ *   - "private" (default) → no sharing change (legacy behaviour).
+ *   - "link"              → anyone with the link can VIEW.
+ *   - "public"            → anyone on the internet can FIND + VIEW (search-
+ *                           discoverable). Used by Content Syndication.
+ * Sharing uses DriveApp.setSharing(...). The CONTENT SYNDICATION module needs
+ * the Sheets capability + ANYONE sharing, so after grafting these in you must
+ * REDEPLOY the Web App (Deploy → Manage deployments → edit → New version) and,
+ * on first run, authorize the added Spreadsheet/Drive scopes.
  *
  * `format` (added 2026-06):
  *   - "html"     → build the Doc with NATIVE Google Docs formatting (real
@@ -33,16 +54,39 @@ function doPost(e) {
     var req = JSON.parse(e.postData.contents);
     var folderId = req.folder_id;
     var title = req.title || 'Untitled';
-    var content = req.content || '';
-    var format = (req.format || 'markdown').toLowerCase();
+    var type = (req.type || 'doc').toLowerCase();
+    var share = (req.share || 'private').toLowerCase();
 
     if (!folderId) {
       return _json({ success: false, error: 'missing_folder_id' });
     }
 
+    if (type === 'pdf') {
+      var pdfFileId = createPdfFromBase64(folderId, title, req.content_base64 || '');
+      _applySharing(pdfFileId, share);
+      return _json({
+        success: true,
+        file_id: pdfFileId,
+        file_url: 'https://drive.google.com/file/d/' + pdfFileId + '/view',
+      });
+    }
+
+    if (type === 'sheet') {
+      var sheetId = createSheetFromRows(folderId, title, req.rows || []);
+      _applySharing(sheetId, share);
+      return _json({
+        success: true,
+        sheet_id: sheetId,
+        sheet_url: 'https://docs.google.com/spreadsheets/d/' + sheetId + '/edit',
+      });
+    }
+
+    var content = req.content || '';
+    var format = (req.format || 'markdown').toLowerCase();
     var docId = (format === 'html')
       ? createDocFromHtml(folderId, title, content)
       : createDocFromMarkdown(folderId, title, content);
+    _applySharing(docId, share);
 
     return _json({
       success: true,
@@ -52,6 +96,62 @@ function doPost(e) {
   } catch (err) {
     return _json({ success: false, error: String(err) });
   }
+}
+
+/**
+ * Apply a sharing mode to a newly-created file by id.
+ *   "link"   → anyone with the link can view.
+ *   "public" → anyone (incl. search) can find + view.
+ *   anything else → leave private (default Drive behaviour).
+ */
+function _applySharing(fileId, share) {
+  if (share !== 'link' && share !== 'public') { return; }
+  var file = DriveApp.getFileById(fileId);
+  var access = (share === 'public') ? DriveApp.Access.ANYONE : DriveApp.Access.ANYONE_WITH_LINK;
+  file.setSharing(access, DriveApp.Permission.VIEW);
+}
+
+/**
+ * Google Sheet from a 2-D array of strings. Writes the rows top-to-bottom into
+ * the first sheet, then moves the new Spreadsheet out of My Drive root into the
+ * client's folder (same move pattern as createDocFromMarkdown). Returns the id.
+ */
+function createPdfFromBase64(folderId, title, contentBase64) {
+  if (!contentBase64) {
+    throw new Error('missing_content_base64');
+  }
+  var bytes = Utilities.base64Decode(contentBase64);
+  var name = /\.pdf$/i.test(title) ? title : title + '.pdf';
+  var blob = Utilities.newBlob(bytes, 'application/pdf', name);
+  var folder = DriveApp.getFolderById(folderId);
+  return folder.createFile(blob).getId();
+}
+
+function createSheetFromRows(folderId, title, rows) {
+  var ss = SpreadsheetApp.create(title);
+  var sheet = ss.getSheets()[0];
+  if (rows && rows.length) {
+    // Normalize to a rectangular range (Sheets requires equal-length rows).
+    var width = 1;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i] || [];
+      if (r.length > width) { width = r.length; }
+    }
+    var grid = [];
+    for (var j = 0; j < rows.length; j++) {
+      var row = rows[j] || [];
+      var padded = [];
+      for (var k = 0; k < width; k++) { padded.push(row[k] != null ? String(row[k]) : ''); }
+      grid.push(padded);
+    }
+    sheet.getRange(1, 1, grid.length, width).setValues(grid);
+  }
+  SpreadsheetApp.flush();
+
+  var file = DriveApp.getFileById(ss.getId());
+  DriveApp.getFolderById(folderId).addFile(file);
+  DriveApp.getRootFolder().removeFile(file);
+  return ss.getId();
 }
 
 /**

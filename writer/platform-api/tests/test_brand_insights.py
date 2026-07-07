@@ -35,6 +35,67 @@ def test_prompts_include_context():
     assert "Acme" in s and "Plumber" in s and "123 St, Sydney" in s
 
 
+# ── "near me" is never suggested ──────────────────────────────────────────────
+def test_drop_near_me_filters_variants():
+    items = [
+        "plumber near me",       # canonical
+        "plumber near-me",       # hyphen
+        "plumber nearme",        # no space
+        "PLUMBER NEAR ME now",   # casing + trailing words
+        "emergency plumber Sydney",  # keep
+        "nearest plumber",       # keep — "nearest" is not "near me"
+        "plumbers near Mexico",  # keep — different word after "near"
+    ]
+    assert bi._drop_near_me(items) == [
+        "emergency plumber Sydney", "nearest plumber", "plumbers near Mexico",
+    ]
+
+
+def test_suggest_prompt_forbids_near_me():
+    s = bi._suggest_prompt("Acme", ["Plumber"], "123 St, Sydney")
+    assert 'Never use the phrase "near me"' in s
+    assert "plumber near me" not in s.lower()  # the old example is gone
+
+
+def test_conversational_prompt_forbids_near_me():
+    p = bi._conversational_prompt("Acme", "Acme (Plumber) — Sydney", "", ["plumber near me"])
+    assert 'Never use the phrase "near me"' in p
+
+
+# ── conversational-query suggestions ──────────────────────────────────────────
+def test_parse_string_list_respects_cap():
+    assert bi._parse_string_list('["a","b","c"]', cap=2) == ["a", "b"]
+    assert bi._parse_string_list('["x", "", "  ", "y"]', cap=10) == ["x", "y"]
+    assert bi._parse_string_list("not json", cap=5) == []
+
+
+def test_conversational_prompt_includes_seeds_and_icp():
+    p = bi._conversational_prompt(
+        "Acme Plumbing", "Acme Plumbing (Plumber) — Sydney",
+        "Homeowners with an urgent leak who value fast, insured tradies.",
+        ["emergency plumber sydney", "blocked drain inner west"],
+    )
+    assert "emergency plumber sydney" in p and "blocked drain inner west" in p
+    assert "Homeowners with an urgent leak" in p
+    assert "Acme Plumbing (Plumber) — Sydney" in p
+    assert "3-5 conversational queries per seed keyword" in p
+
+
+def test_conversational_prompt_notes_missing_icp():
+    p = bi._conversational_prompt("Acme", "Acme (Roofer)", "", ["roof repair sydney"])
+    assert "No explicit ICP is on file" in p
+
+
+def test_conversational_prompt_constrains_length_and_single_thought():
+    p = bi._conversational_prompt("Acme", "Acme (Plumber) — Sydney", "", ["plumber sydney"])
+    assert "8-14 words" in p
+    assert "One thought per query" in p
+
+
+def test_suggest_conversational_queries_empty_when_no_seeds():
+    assert asyncio.run(bi.suggest_conversational_queries("Acme", "ctx", "icp", [])) == []
+
+
 # ── real client signals → prompt block ────────────────────────────────────────
 def test_format_signals_block_empty_when_no_signals():
     assert bi.format_signals_block({}) == ""

@@ -8,6 +8,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.clients import (
@@ -44,6 +45,33 @@ def _enqueue_website_scrape(client_id: str, website_url: str) -> None:
             "payload": {"website_url": website_url, "client_id": client_id},
         }
     ).execute()
+
+
+def _enqueue_auto_brand_voice_icp(client: dict, user_id: str) -> None:
+    """Auto-generate a new client's brand voice + ICP as background jobs (best-
+    effort). Skipped when disabled, or when there's nothing to analyze (no
+    website and no GBP). The scans never override user-authored structured
+    assets — a freeform brand guide / ICP typed at creation is preserved and
+    merely enriched. See `brand_voice_service.run_brand_voice_scan_job` /
+    `icp_service.run_icp_scan_job`."""
+    if not settings.auto_generate_brand_voice_icp:
+        return
+    if not (client.get("website_url") or client.get("gbp")):
+        logger.info(
+            "client_auto_assets_skipped_no_source", extra={"client_id": client["id"]}
+        )
+        return
+    supabase = get_supabase()
+    rows = [
+        {
+            "job_type": job_type,
+            "entity_id": client["id"],
+            "payload": {"client_id": client["id"], "user_id": user_id},
+        }
+        for job_type in ("brand_voice_scan", "icp_scan")
+    ]
+    supabase.table("async_jobs").insert(rows).execute()
+    logger.info("client_auto_assets_enqueued", extra={"client_id": client["id"]})
 
 
 def _enqueue_page_structure_scrape(client_id: str, page_type: str, url: str) -> None:
@@ -239,6 +267,13 @@ async def create_client(
         row["target_cities"] = body.target_cities
     if body.drive_folders is not None:
         row["drive_folders"] = body.drive_folders
+    # Recipe Engine budget inputs (§1–§2).
+    if body.retainer_monthly is not None:
+        row["retainer_monthly"] = body.retainer_monthly
+    if body.is_sab is not None:
+        row["is_sab"] = body.is_sab
+    if body.client_type is not None:
+        row["client_type"] = body.client_type
     # Reference page structures: seed the pending entries so the row reflects the
     # configured URLs immediately; the scrape jobs are enqueued after insert.
     page_structures, ps_to_enqueue = _sync_page_structures({}, body.page_structure_urls)
@@ -258,6 +293,8 @@ async def create_client(
     _enqueue_website_scrape(client["id"], body.website_url)
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(client["id"], page_type, url)
+    # Auto-generate the brand voice + ICP so they exist without a manual scan.
+    _enqueue_auto_brand_voice_icp(client, auth["user_id"])
     # Auto-derive the rank-tracking location from the GBP (best-effort, async).
     if body.gbp is not None:
         rank_location.enqueue_location_derive(client["id"])
@@ -347,6 +384,13 @@ async def update_client(
         updates["gsc_property"] = body.gsc_property
     if body.business_location is not None:
         updates["business_location"] = body.business_location
+    # Recipe Engine budget inputs (§1–§2).
+    if body.retainer_monthly is not None:
+        updates["retainer_monthly"] = body.retainer_monthly
+    if body.is_sab is not None:
+        updates["is_sab"] = body.is_sab
+    if body.client_type is not None:
+        updates["client_type"] = body.client_type
     if body.gbp_place_id is not None:
         updates["gbp_place_id"] = body.gbp_place_id
     if body.gbp is not None:

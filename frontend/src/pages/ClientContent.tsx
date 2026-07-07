@@ -67,11 +67,11 @@ export function ClientContent() {
 
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 4px' }}>
-          Publish to Google Docs
+          Publish content
         </h1>
         <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
-          Select existing content for {client?.name ?? 'this client'} and publish it to their Drive
-          folder. Each item becomes its own Google Doc.
+          Select existing content for {client?.name ?? 'this client'} and publish it to a Google Doc
+          in their Drive folder, straight to their website, or both.
         </p>
       </div>
 
@@ -111,7 +111,7 @@ export function ClientContent() {
         </div>
       )}
 
-      <BulkPublishBar items={items} bulk={bulk} />
+      <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={Boolean(client?.wordpress_site_url && client?.wordpress_app_password_set)} githubConfigured={Boolean(client?.github_repo)} />
     </div>
   )
 }
@@ -157,8 +157,11 @@ function ContentSection({ title, subtitle, rows, bulk }: {
               </span>
               <span style={{ fontSize: 12, color: '#94a3b8', marginLeft: 'auto', flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {result?.status === 'done' ? (
-                  result.docUrl ? (
-                    <a href={result.docUrl} target="_blank" rel="noreferrer" style={{ color: '#16a34a', fontWeight: 600, textDecoration: 'none' }}>Open Doc ↗</a>
+                  result.docUrl || result.siteUrl ? (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      {result.docUrl && <a href={result.docUrl} target="_blank" rel="noreferrer" style={{ color: '#16a34a', fontWeight: 600, textDecoration: 'none' }}>Open Doc ↗</a>}
+                      {result.siteUrl && <a href={result.siteUrl} target="_blank" rel="noreferrer" style={{ color: '#2563eb', fontWeight: 600, textDecoration: 'none' }}>Open page ↗</a>}
+                    </span>
                   ) : <span style={{ color: '#16a34a', fontWeight: 600 }}>Published</span>
                 ) : result?.status === 'failed' ? (
                   <span style={{ color: '#dc2626' }} title={result.error}>Failed</span>

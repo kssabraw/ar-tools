@@ -77,6 +77,27 @@ def format_email(title: str, summary: Optional[str], client_name: Optional[str],
     return subject, "\n".join(lines)
 
 
+# Slack broadcast tokens. The raw <!here>/<!channel> forms fire the ping under
+# mrkdwn (no link_names needed); a plain "@here" string would render inert.
+_MENTION_TOKENS = {"here": "<!here>", "channel": "<!channel>", "everyone": "<!everyone>"}
+
+
+def slack_mention(severity: str) -> str:
+    """The Slack broadcast prefix (``<!here>``/``<!channel>``) to lead a message
+    with for this severity, or ``""``. Gated by ``slack_mention_token`` (set it to
+    ``""`` to disable all broadcasts) and the ``slack_mention_severities``
+    allowlist, so info-level notifications never ping the channel. Pure."""
+    token = _MENTION_TOKENS.get((settings.slack_mention_token or "").strip().lower())
+    if not token:
+        return ""
+    allowed = {
+        s.strip().lower()
+        for s in (settings.slack_mention_severities or "").split(",")
+        if s.strip()
+    }
+    return token if severity in allowed else ""
+
+
 def format_slack(title: str, summary: Optional[str], client_name: Optional[str],
                  link: Optional[str], severity: str) -> str:
     """Slack message text (mrkdwn). Pure."""
@@ -84,6 +105,9 @@ def format_slack(title: str, summary: Optional[str], client_name: Optional[str],
     head = f"{icon} *{title}*"
     if client_name:
         head += f"  ·  _{client_name}_"
+    mention = slack_mention(severity)
+    if mention:
+        head = f"{mention} {head}"
     parts = [head]
     if summary:
         parts.append(summary)
