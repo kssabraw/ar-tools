@@ -418,39 +418,72 @@ def test_stage_add_task_matches_assignee_and_flags_unknown(monkeypatch):
     ]
     monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
 
-    outcome, staged = asyncio.run(
-        slack_assistant._stage_add_task("c1", {"task_name": "Audit citations", "assignee": "Ivy"})
-    )
-    assert outcome == "confirm"
-    assert staged["assignee_gid"] == "g1"
-    assert "Ivy Gervacio" in staged["_confirm"]
-    assert staged["due_date"] is None
-    assert "due" not in staged["_confirm"]
-
-    # A valid due date is echoed in the confirm and carried on the staged args.
+    # An explicit due date wins and is echoed in the confirm.
     outcome, staged = asyncio.run(
         slack_assistant._stage_add_task(
             "c1", {"task_name": "Audit citations", "assignee": "Ivy", "due_date": "2026-12-31"}
         )
     )
     assert outcome == "confirm"
+    assert staged["assignee_gid"] == "g1"
+    assert "Ivy Gervacio" in staged["_confirm"]
     assert staged["due_date"] == "2026-12-31"
     assert "due 2026-12-31" in staged["_confirm"]
 
-    # A malformed due date is rejected before anything is staged.
+    # No explicit date + a matching SOP task → the delivery turnaround defaults
+    # the due date, and the confirm cites the SOP.
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_add_task(
+            "c1", {"task_name": "Order a niche edit", "sop_task": "Niche edit"}
+        )
+    )
+    assert outcome == "confirm"
+    assert staged["due_date"] is not None
+    assert "SOP delivery: 2 weeks for Niche edit" in staged["_confirm"]
+
+    # No explicit date + no matching SOP task → ask the teammate to confirm.
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_add_task("c1", {"task_name": "Fix GBP categories"})
+    )
+    assert outcome == "reply"
+    assert "due date" in reply.lower()
+
+    # A recurring-cadence SOP task (no concrete turnaround) also asks.
+    outcome, reply = asyncio.run(
+        slack_assistant._stage_add_task(
+            "c1", {"task_name": "Do the reporting", "sop_task": "Monthly reporting (per client)"}
+        )
+    )
+    assert outcome == "reply"
+
+    # Explicit opt-out → create with no due date.
+    outcome, staged = asyncio.run(
+        slack_assistant._stage_add_task(
+            "c1", {"task_name": "Ad-hoc thing", "no_due_date": True}
+        )
+    )
+    assert outcome == "confirm"
+    assert staged["due_date"] is None
+    assert "no due date" in staged["_confirm"]
+
+    # A malformed explicit due date is rejected before anything is staged.
     outcome, reply = asyncio.run(
         slack_assistant._stage_add_task("c1", {"task_name": "Audit citations", "due_date": "Friday"})
     )
     assert outcome == "reply"
     assert "YYYY-MM-DD" in reply
 
+    # Unknown assignee is flagged (using no_due_date to isolate the assignee path).
     outcome, staged = asyncio.run(
-        slack_assistant._stage_add_task("c1", {"task_name": "Audit citations", "assignee": "Bob"})
+        slack_assistant._stage_add_task(
+            "c1", {"task_name": "Audit citations", "assignee": "Bob", "no_due_date": True}
+        )
     )
     assert outcome == "confirm"
     assert staged["assignee_gid"] is None
     assert "couldn't match" in staged["_confirm"]
 
+    # Missing task name is caught first.
     outcome, reply = asyncio.run(slack_assistant._stage_add_task("c1", {}))
     assert outcome == "reply"
 
