@@ -29,6 +29,14 @@ rank fine outside it; SABs (hidden address) have dampened proximity signals by
 design; rankings vary by keyword — one keyword's grid says nothing about
 another's.
 
+**GBP levers — what actually moves the local pack:** relevance (categories,
+business name), distance/proximity, and prominence (review count / velocity /
+quality, links). The GBP **business description is NOT a local-pack ranking
+factor** — never present it as a Maps relevance signal. A complete description
+(and overall GBP completeness) matters for **AI visibility** instead (AIO/AEO
+SOP: GBP completeness ≈ 40% of local AI visibility factors, working model) —
+attribute description advice there, not to pack rank.
+
 **Worked misreading:** "average_rank improved 5.8 → 3.9, great progress."
 Check coverage first: if `found_pins` also fell 22 → 9, the client *lost*
 presence — the average improved only because the remaining pins are the easy

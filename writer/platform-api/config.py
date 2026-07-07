@@ -242,6 +242,11 @@ class Settings(BaseSettings):
     slack_assistant_model: str = "claude-sonnet-4-6"
     slack_assistant_max_tokens: int = 900
     slack_assistant_max_keywords: int = 60   # cap keywords folded into the LLM context
+    # SOP grounding for the assistant (Slack + dashboard chat): strategy-shaped
+    # questions inject a budgeted SOP selection into the prompt, and the model
+    # can pull more via a read_sop tool (bounded rounds per message).
+    slack_assistant_sop_budget_chars: int = 16_000
+    slack_assistant_sop_rounds: int = 3
     # Frontend base URL for deep links in email/Slack (e.g. https://ar-internal.netlify.app).
     app_base_url: str = ""
     maps_report_competitor_min_rating: float = 4.7
