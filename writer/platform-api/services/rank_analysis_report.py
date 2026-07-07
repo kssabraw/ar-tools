@@ -278,6 +278,39 @@ def enqueue_rank_keyword_report(
     return report_id
 
 
+def enqueue_drop_reports(client_id: str, keyword_ids: list[str]) -> int:
+    """Enqueue a drop-triggered Organic Rank Analysis report for each just-dropped
+    keyword that has a SERP snapshot to analyze. Called from rank_materialize's
+    drop-detection path (alongside the drop-triggered snapshot + reopt plan). A
+    keyword with no snapshot is skipped — the report's competitive half needs one,
+    and a fresh drop-triggered capture will make the next run eligible. Deduped by
+    the pending-row guard in enqueue_rank_keyword_report. Returns the count."""
+    if not keyword_ids:
+        return 0
+    supabase = get_supabase()
+    with_snap = {
+        r["keyword_id"] for r in (
+            supabase.table("serp_snapshots").select("keyword_id")
+            .in_("keyword_id", keyword_ids)
+            .in_("status", ["complete", "partial"]).execute()
+        ).data or []
+    }
+    if not with_snap:
+        return 0
+    names = {
+        r["id"]: r["keyword"] for r in (
+            supabase.table("tracked_keywords").select("id, keyword")
+            .in_("id", list(with_snap)).execute()
+        ).data or []
+    }
+    count = 0
+    for kid in keyword_ids:
+        if kid in with_snap and kid in names:
+            if enqueue_rank_keyword_report(client_id, kid, names[kid], trigger="drop"):
+                count += 1
+    return count
+
+
 async def _maybe_publish_doc(
     client: dict, keyword: str, report_md: str, work_order: list[dict],
     top_blockers: Optional[list[str]],

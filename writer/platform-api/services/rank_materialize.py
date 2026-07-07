@@ -264,9 +264,17 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
         result = rank_alerts.reconcile_alerts(supabase, client_id, alert_inputs, today)
         opened_ids = result.get("opened_keyword_ids") or []
         if opened_ids:
-            from services import serp_snapshot
+            from services import rank_analysis_report, serp_snapshot
 
             serp_snapshot.enqueue_drop_triggered_snapshots(client_id, opened_ids, today)
+            # Generate a deep Organic Rank Analysis report for each dropped keyword
+            # that has a snapshot to analyze — the diagnosis is ready when the team
+            # looks (best-effort; a keyword without a snapshot is skipped).
+            try:
+                rank_analysis_report.enqueue_drop_reports(client_id, opened_ids)
+            except Exception as exc:
+                logger.warning("rank_analysis_drop_report_enqueue_failed",
+                               extra={"client_id": client_id, "error": str(exc)})
         opened_alerts = result.get("opened_alerts") or []
         if opened_alerts:
             from services import notifications
