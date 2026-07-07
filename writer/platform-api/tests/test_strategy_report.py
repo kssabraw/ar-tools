@@ -111,3 +111,35 @@ def test_review_date_falls_back_to_now_on_bad_value():
     assert sr._review_date({"created_at": "not-a-date"}, NOW) == NOW
     assert sr._review_date({}, NOW) == NOW
     assert sr._review_date({"created_at": None}, NOW) == NOW
+
+
+# ---------------------------------------------------------------------------
+# Goal-accountability block (internal) — render_goals_block / render_markdown
+# ---------------------------------------------------------------------------
+def test_render_goals_block_raw_status_and_pace():
+    goals = [
+        {"label": "Rank roof repair", "goal_type": "keyword_position", "status": "on_track",
+         "progress_pct": 60.0, "elapsed_pct": 40.0, "current_value": 6, "target_value": 3,
+         "due_date": "2026-12-31"},
+        {"label": "Maps", "goal_type": "maps_pack_presence", "status": "no_data",
+         "current_value": None, "target_value": 50},
+    ]
+    md = "\n".join(sr.render_goals_block(goals))
+    assert "## Goal status" in md
+    assert "ON TRACK" in md and "NO DATA" in md          # raw statuses (internal)
+    assert "60% (40% time)" in md                        # pace shown
+    assert "Maps" in md                                   # internal shows all goals
+
+
+def test_render_goals_block_empty():
+    assert sr.render_goals_block([]) == []
+
+
+def test_render_markdown_embeds_goal_block():
+    review = {"assessment": "Doing ok.", "proposals": [], "findings": [], "questions": []}
+    goals = [{"label": "Clicks", "goal_type": "organic_clicks", "status": "achieved",
+              "progress_pct": 100.0, "current_value": 900, "target_value": 800}]
+    md = sr.render_markdown("Acme", review, "4 Jul 2026", goals)
+    assert "## Goal status" in md and "ACHIEVED" in md
+    # No goals → no block.
+    assert "## Goal status" not in sr.render_markdown("Acme", review, "4 Jul 2026", [])

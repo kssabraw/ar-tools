@@ -48,8 +48,48 @@ def _esc(value) -> str:
     return str(value).replace("\n", " ").strip()
 
 
-def render_markdown(client_name: str, review: dict, date_str: str) -> str:
-    """Render a completed strategy review as the internal Google Doc body. Pure."""
+_GOAL_STATUS_RAW = {
+    "achieved": "ACHIEVED", "on_track": "ON TRACK", "behind": "BEHIND",
+    "overdue": "OVERDUE", "no_data": "NO DATA", "manual": "MANUAL",
+}
+
+
+def _fmt_num(v) -> str:
+    return "—" if v is None else f"{v:g}"
+
+
+def render_goals_block(goals: list) -> list[str]:
+    """The internal goal-accountability scorecard — raw status/current/target/pace
+    for every active goal (the agency's yardstick, spec §4.6). Pure; returns
+    Markdown lines (empty when there are no goals)."""
+    if not goals:
+        return []
+    lines = ["## Goal status", "",
+             "| Goal | Status | Current | Target | Progress | Due |",
+             "| --- | --- | --- | --- | --- | --- |"]
+    for g in goals:
+        label = _esc(g.get("label") or g.get("keyword") or g.get("goal_type") or "Goal")
+        status = _GOAL_STATUS_RAW.get(g.get("status"), (g.get("status") or "").upper())
+        pace = ""
+        if g.get("progress_pct") is not None:
+            pace = f"{g['progress_pct']:g}%"
+            if g.get("elapsed_pct") is not None:
+                pace += f" ({g['elapsed_pct']:g}% time)"
+        due = _esc(g.get("due_date") or "")
+        lines.append(
+            f"| {label} | {status} | {_fmt_num(g.get('current_value'))} | "
+            f"{_fmt_num(g.get('target_value'))} | {pace or '—'} | {due or '—'} |"
+        )
+    lines.append("")
+    return lines
+
+
+def render_markdown(client_name: str, review: dict, date_str: str, goals: "list | None" = None) -> str:
+    """Render a completed strategy review as the internal Google Doc body. Pure.
+
+    ``goals`` (from campaign_goals.assess_goals) renders a goal-accountability
+    scorecard right after the assessment — the yardstick the review is judged
+    against (spec §4.6, priority 0)."""
     trigger = review.get("trigger") or "on_demand"
     proposals = review.get("proposals") or []
     findings = review.get("findings") or []
@@ -67,6 +107,9 @@ def render_markdown(client_name: str, review: dict, date_str: str) -> str:
     assessment = (review.get("assessment") or "").strip()
     if assessment:
         lines += ["## Assessment", assessment, ""]
+
+    # Goal accountability (spec §4.6, priority 0) — the yardstick, up top.
+    lines += render_goals_block(goals or [])
 
     # Open questions first — these are the halt-and-ask calls needing a human.
     if questions:
@@ -187,7 +230,16 @@ async def publish_review(review_id: str) -> dict:
     now = datetime.now(timezone.utc)
     client_name = client.get("name") or "Client"
     date_str = _review_date(review, now).strftime("%-d %b %Y")
-    markdown = render_markdown(client_name, review, date_str)
+    # Goal accountability scorecard — best-effort (a goals failure never blocks
+    # publishing the review).
+    try:
+        from services import campaign_goals
+
+        goals = campaign_goals.assess_goals(review["client_id"], today=now.date())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("strategy_report.goals_failed", extra={"review_id": review_id, "error": str(exc)})
+        goals = []
+    markdown = render_markdown(client_name, review, date_str, goals)
     title = _doc_title(client_name, review.get("trigger") or "on_demand", date_str)
 
     doc = await create_google_doc(folder_id, title, markdown)

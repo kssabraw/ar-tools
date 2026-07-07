@@ -260,3 +260,45 @@ def test_footer_is_white_labeled():
     out = cr.build_report_html(_data(agency_name="Amazing Rankings"))
     assert "Prepared by Amazing Rankings" in out
     assert "AR Tools" not in out
+
+
+# ---------------------------------------------------------------------------
+# Goal scorecard (client-facing) — _section_goals / _fmt_goal_value
+# ---------------------------------------------------------------------------
+def _goals(*gs):
+    return {"goals": {"goals": list(gs)}}
+
+
+def test_section_goals_renders_and_softens_status():
+    data = _goals(
+        {"goal_type": "keyword_position", "label": "Rank roof repair", "status": "behind",
+         "progress_pct": 20.0, "current_value": 8, "target_value": 3, "due_date": "2026-12-31"},
+    )
+    html = cr._section_goals(data)
+    assert "Progress toward your goals" in html
+    assert "Rank roof repair" in html
+    # client-facing softening: "behind" is never shown; "In progress" is.
+    assert "In progress" in html and "BEHIND" not in html
+
+
+def test_section_goals_drops_no_data_and_shows_achieved():
+    data = _goals(
+        {"goal_type": "organic_clicks", "label": "Clicks", "status": "achieved",
+         "progress_pct": 100.0, "current_value": 900, "target_value": 800},
+        {"goal_type": "maps_pack_presence", "label": "Maps", "status": "no_data",
+         "current_value": None, "target_value": 50},
+    )
+    html = cr._section_goals(data)
+    assert "Achieved" in html and "900 clicks/mo" in html
+    assert "Maps" not in html          # no_data goal is dropped from the client report
+
+
+def test_section_goals_empty_when_nothing_measurable():
+    assert cr._section_goals(_goals()) == ""
+    assert cr._section_goals({}) == ""
+
+
+def test_fmt_goal_value_by_type():
+    assert cr._fmt_goal_value("keyword_position", 3) == "position 3"
+    assert cr._fmt_goal_value("ai_visibility", 40) == "40%"
+    assert cr._fmt_goal_value("keyword_position", None) == "—"
