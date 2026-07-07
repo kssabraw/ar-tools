@@ -26,6 +26,7 @@ from routers.files import router as files_router
 from routers.forecast import router as forecast_router
 from routers.freeze import router as freeze_router
 from routers.goals import router as goals_router
+from routers.gbp_metrics import router as gbp_metrics_router
 from routers.gsc import router as gsc_router
 from routers.gsc_research import router as gsc_research_router
 from routers.guides import router as guides_router
@@ -175,6 +176,7 @@ app.include_router(files_router)
 app.include_router(forecast_router)
 app.include_router(freeze_router)
 app.include_router(goals_router)
+app.include_router(gbp_metrics_router)
 app.include_router(gsc_router)
 app.include_router(gsc_research_router)
 app.include_router(guides_router)

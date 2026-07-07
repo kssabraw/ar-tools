@@ -246,12 +246,34 @@ def _section_gbp(data: dict) -> str:
         f"<p class='lead'>{_esc(rating)} ★ · {_esc(b.get('review_count', 0))} reviews</p>"
         if rating is not None else ""
     )
+    metrics = b.get("metrics") or {}
+    metric_rows = ""
+    for it in metrics.get("items") or []:
+        pct = it.get("pct")
+        if pct is None:
+            change = "new"
+        else:
+            arrow = "▲" if pct > 0 else ("▼" if pct < 0 else "▬")
+            change = f"{arrow} {abs(pct)}%"
+        metric_rows += (
+            f"<tr><td>{_esc(it.get('label'))}</td>"
+            f"<td>{_esc(it.get('current', 0))}</td>"
+            f"<td>{_esc(change)}</td></tr>"
+        )
+    metrics_html = (
+        "<p class='note'>How customers engaged with your Google listing in the last "
+        f"{_esc(metrics.get('window_days', 30))} days, vs the previous "
+        f"{_esc(metrics.get('window_days', 30))}.</p>"
+        "<table class='gbp-metrics'><thead><tr><th>Action</th><th>This period</th>"
+        f"<th>Change</th></tr></thead><tbody>{metric_rows}</tbody></table>"
+        if metric_rows else ""
+    )
     return (
         "<section><h2>Google Business Profile</h2>"
         "<p class='note'>Your Google listing — the profile customers see on Google "
         "Search and Maps, with their ratings and reviews.</p>"
         f"<p>{_esc(b.get('business_name'))}{(' · ' + _esc(b.get('address'))) if b.get('address') else ''}</p>"
-        + rating_html + reviews_html + "</section>"
+        + rating_html + reviews_html + metrics_html + "</section>"
     )
 
 
@@ -694,7 +716,7 @@ def _png_data_uri(url: Optional[str]) -> Optional[str]:
         return None
 
 
-def _gather_gbp(client: dict) -> Optional[dict]:
+def _gather_gbp(supabase, client_id: str, client: dict, period_end: date) -> Optional[dict]:
     gbp = client.get("gbp") or {}
     if not (gbp.get("business_name") or gbp.get("place_id")):
         return None
@@ -710,7 +732,73 @@ def _gather_gbp(client: dict) -> Optional[dict]:
         "rating": gbp.get("rating"),
         "review_count": gbp.get("review_count") or gbp.get("reviews_count"),
         "top_reviews": texts,
+        # Performance-metric growth (impressions/calls/clicks/directions) — the
+        # Phase-2 GBP time-series. Best-effort: absent until GBP metrics ingest
+        # is enabled and has data for this client's verified location(s).
+        "metrics": _gather_gbp_metric_growth(supabase, client_id, period_end),
     }
+
+
+# Human labels for the GBP performance metrics shown in the report. Impression
+# sub-types are collapsed into one "Profile views" total for owner-friendliness.
+_GBP_IMPRESSION_METRICS = {
+    "BUSINESS_IMPRESSIONS_DESKTOP_MAPS",
+    "BUSINESS_IMPRESSIONS_DESKTOP_SEARCH",
+    "BUSINESS_IMPRESSIONS_MOBILE_MAPS",
+    "BUSINESS_IMPRESSIONS_MOBILE_SEARCH",
+}
+_GBP_METRIC_LABELS = {
+    "profile_views": "Profile views",
+    "CALL_CLICKS": "Calls",
+    "WEBSITE_CLICKS": "Website clicks",
+    "BUSINESS_DIRECTION_REQUESTS": "Direction requests",
+    "BUSINESS_CONVERSATIONS": "Messages",
+}
+
+
+def _gather_gbp_metric_growth(supabase, client_id: str, period_end: date) -> Optional[dict]:
+    """30-day GBP performance growth vs the prior 30 days, per metric, summed
+    across the client's verified locations. Returns None when GBP metrics aren't
+    enabled or no data exists yet (keeps the report unchanged pre-Phase-2)."""
+    if not settings.gbp_metrics_enabled:
+        return None
+    try:
+        from services.gbp_metrics_ingest import compute_metric_growth
+
+        locs = (
+            supabase.table("gbp_locations").select("id")
+            .eq("client_id", client_id).eq("access_status", "ok").execute()
+        ).data or []
+        if not locs:
+            return None
+        loc_ids = [l["id"] for l in locs]
+        window = 30
+        start = period_end - timedelta(days=window * 2)
+        rows = (
+            supabase.table("gbp_metric_daily").select("date, metric, value")
+            .in_("location_row_id", loc_ids)
+            .gte("date", start.isoformat()).lte("date", period_end.isoformat())
+            .execute()
+        ).data or []
+        if not rows:
+            return None
+        # Collapse the four impression sub-types into one "profile_views" metric
+        # before computing growth, so the report shows one headline number.
+        folded: list[dict] = []
+        for r in rows:
+            m = r.get("metric")
+            folded.append({**r, "metric": "profile_views" if m in _GBP_IMPRESSION_METRICS else m})
+        growth = compute_metric_growth(folded, period_end, window)
+        # Render-ready ordered list of labeled metrics that have data.
+        items = [
+            {"label": _GBP_METRIC_LABELS[key], **growth[key]}
+            for key in _GBP_METRIC_LABELS
+            if key in growth
+        ]
+        return {"window_days": window, "items": items} if items else None
+    except Exception as exc:
+        logger.warning("gbp_metric_growth_failed", extra={"client_id": client_id, "error": str(exc)})
+        return None
 
 
 def _gather_work_delivered(supabase, client_id: str, period_start: date, period_end: date) -> Optional[dict]:
@@ -771,7 +859,7 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
         ("work_delivered", lambda: _gather_work_delivered(supabase, client_id, period_start, period_end)),
         ("geogrid", lambda: _gather_geogrid(supabase, client_id)),
         ("ai_visibility", lambda: _gather_ai_visibility(supabase, client_id)),
-        ("gbp", lambda: _gather_gbp(client)),
+        ("gbp", lambda: _gather_gbp(supabase, client_id, client, period_end)),
     ):
         try:
             section = fn()

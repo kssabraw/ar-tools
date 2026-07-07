@@ -72,6 +72,46 @@ def enqueue_due_ingests() -> int:
     return enqueued
 
 
+def enqueue_due_gbp_metrics() -> int:
+    """Daily: enqueue a gbp_metrics_ingest job for each verified GBP location.
+
+    Gated on ``gbp_metrics_enabled`` (dormant until Google approves Business
+    Profile API quota + the service account is a Manager on each profile). The
+    ingest re-pulls a trailing window, so a missed run self-heals; dedupes
+    against any in-flight job for the same location."""
+    if not settings.gbp_metrics_enabled:
+        return 0
+    supabase = get_supabase()
+    locs = (
+        supabase.table("gbp_locations").select("id").eq("access_status", "ok").execute()
+    )
+    enqueued = 0
+    for loc in locs.data or []:
+        location_row_id = loc["id"]
+        existing = (
+            supabase.table("async_jobs")
+            .select("id")
+            .eq("job_type", "gbp_metrics_ingest")
+            .eq("entity_id", location_row_id)
+            .in_("status", ["pending", "running"])
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            continue
+        supabase.table("async_jobs").insert(
+            {
+                "job_type": "gbp_metrics_ingest",
+                "entity_id": location_row_id,
+                "payload": {"location_row_id": location_row_id},
+            }
+        ).execute()
+        enqueued += 1
+    if enqueued:
+        logger.info("gsc_scheduler.gbp_metrics_enqueued", extra={"jobs": enqueued})
+    return enqueued
+
+
 def enqueue_due_dataforseo() -> int:
     """Daily: enqueue a DataForSEO rank job for each client whose per-client
     fetch schedule is due today.
@@ -348,6 +388,8 @@ async def gsc_scheduler() -> None:
             now = datetime.now(timezone.utc)
             if should_run(now, last_run_date, hour):
                 enqueue_due_ingests()
+                # Daily GBP performance-metrics ingest (no-op until enabled).
+                enqueue_due_gbp_metrics()
                 enqueue_due_market()
                 enqueue_due_reports()
                 enqueue_due_gsc_research()

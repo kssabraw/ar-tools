@@ -93,6 +93,24 @@ class Settings(BaseSettings):
     gsc_backfill_days: int = 480
     # Weekly query×page ingest window (canonical-URL resolution + Pages view).
     gsc_page_window_days: int = 30
+    # ------------------------------------------------------------------
+    # Google Business Profile (GBP) performance-metrics ingestion.
+    # DORMANT until (a) Google approves Business Profile API quota for the GCP
+    # project the service account lives in and (b) the service account is added
+    # as a Manager on each client's Business Profile. Reuses
+    # `google_service_account_key` (with the added business.manage scope).
+    # Left off by default so the scheduler pass + endpoints are no-ops until
+    # access lands. See docs/modules/client-reporting-prd-v1_0.md (Phase 2).
+    gbp_metrics_enabled: bool = False
+    # Each daily run re-pulls the trailing window (GBP performance data arrives
+    # ~3–5 days late — longer than GSC — so re-pull further back; idempotent
+    # upserts make the overlap harmless and a missed run self-heals).
+    gbp_metrics_repull_days: int = 7
+    # The scheduler enqueues one ingest job per verified location once a day,
+    # after this hour (UTC), same shared loop as the GSC ingest.
+    gbp_metrics_hour_utc: int = 8
+    # One-time historical pull window. The Performance API serves ~18 months.
+    gbp_metrics_backfill_days: int = 540
     # Striking-distance discovery: queries averaging in this position band (and
     # not already tracked) are page-2 opportunities.
     striking_distance_min: float = 8.0
