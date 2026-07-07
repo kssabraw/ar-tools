@@ -13,6 +13,7 @@ import { ClientWorkspace } from './pages/ClientWorkspace'
 import { ClientContent } from './pages/ClientContent'
 import { BrandVoice } from './pages/BrandVoice'
 import { Icp } from './pages/Icp'
+import { InternalLinks } from './pages/InternalLinks'
 import { LocalSeoContent } from './pages/LocalSeoContent'
 import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
@@ -78,6 +79,7 @@ export default function App() {
                       <Route path="/clients/:id/service-pages" element={<ServicePages />} />
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />
                       <Route path="/clients/:id/rankings" element={<Rankings />} />
+                      <Route path="/clients/:id/internal-links" element={<InternalLinks />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/syndication" element={<Syndication />} />
                       <Route path="/clients/:id/citations" element={<Citations />} />

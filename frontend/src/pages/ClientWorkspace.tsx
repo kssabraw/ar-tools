@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -226,6 +226,13 @@ export function ClientWorkspace() {
           label="Citations"
           description="Liveness tracking for ordered citations — paste the URLs from vendor deliverables; a weekly sweep flags listings that stop resolving."
           to={id ? `/clients/${id}/citations` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Link2 size={22} />}
+          label="Internal Links"
+          description="Finds topical internal-link opportunities across this client's pages. WordPress sites get links written to the live page after you approve each one; others are recommend-only."
+          to={id ? `/clients/${id}/internal-links` : undefined}
           cta="Open"
         />
       </Section>

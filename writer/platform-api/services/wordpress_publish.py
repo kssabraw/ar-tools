@@ -298,3 +298,120 @@ async def publish_to_wordpress(
         "edit_link": edit_link,
         "featured_media": result.get("featured_media") or None,
     }
+
+
+def edit_link_for(site_url: str, post_id) -> str:
+    """The wp-admin edit URL for a post id (so a human can review/publish)."""
+    site_root = _rest_base(site_url).rsplit("/wp-json", 1)[0]
+    return f"{site_root}/wp-admin/post.php?post={post_id}&action=edit"
+
+
+async def list_content(client: dict, *, per_page: int = 100, max_pages: int = 1000) -> list[dict]:
+    """List the client's WordPress posts + pages for the internal-link inventory.
+
+    Returns ``[{id, type ('posts'|'pages'), url, title, html, status}]`` — published
+    items only (we only link real, live pages). Paginates the WP REST API; bounded
+    by ``max_pages`` total items. Raises WordPressPublishError on missing config or
+    an auth/transport failure (best-effort callers catch it)."""
+    if not client_is_configured(client):
+        raise WordPressPublishError("wordpress_not_configured")
+    rest_base = _rest_base(client["wordpress_site_url"])
+    auth = _auth_header(client["wordpress_username"], client["wordpress_app_password"])
+    headers = {"Authorization": auth}
+    out: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=False) as http:
+            for resource in ("posts", "pages"):
+                page = 1
+                while len(out) < max_pages:
+                    resp = await http.get(
+                        f"{rest_base}/{resource}",
+                        params={
+                            "per_page": per_page, "page": page, "status": "publish",
+                            "_fields": "id,link,title,content,status",
+                        },
+                        headers=headers,
+                    )
+                    if resp.status_code == 400:
+                        break  # past the last page (WP returns 400 for page > total)
+                    resp.raise_for_status()
+                    items = resp.json()
+                    if not isinstance(items, list) or not items:
+                        break
+                    for it in items:
+                        out.append({
+                            "id": it.get("id"),
+                            "type": resource,
+                            "url": it.get("link"),
+                            "title": (it.get("title") or {}).get("rendered") or "",
+                            "html": (it.get("content") or {}).get("rendered") or "",
+                            "status": it.get("status"),
+                        })
+                    total_pages = int(resp.headers.get("X-WP-TotalPages") or 0)
+                    if page >= total_pages or len(items) < per_page:
+                        break
+                    page += 1
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        if code in (401, 403):
+            raise WordPressPublishError("wordpress_auth_failed") from exc
+        if code == 404:
+            raise WordPressPublishError("wordpress_rest_api_unreachable") from exc
+        raise WordPressPublishError(f"wordpress_http_error_{code}") from exc
+    except WordPressPublishError:
+        raise
+    except Exception as exc:
+        logger.error("wordpress_list_failed", extra={"error": str(exc)})
+        raise WordPressPublishError("wordpress_call_failed") from exc
+    return out
+
+
+async def update_post_content(
+    client: dict, post_id, html: str, *, resource: str = "posts"
+) -> dict:
+    """Write new body ``html`` to an existing WP post/page, **preserving its
+    status** (we don't send ``status``, so a published page stays published — this
+    is the gated injection that runs only AFTER a human approved the edit).
+
+    Returns ``{post_id, link, edit_link, modified}``. Raises WordPressPublishError
+    on missing config or an auth/transport failure."""
+    if not client_is_configured(client):
+        raise WordPressPublishError("wordpress_not_configured")
+    if not (html or "").strip():
+        raise WordPressPublishError("content_is_empty")
+    if resource not in ("posts", "pages"):
+        resource = "posts"
+    rest_base = _rest_base(client["wordpress_site_url"])
+    auth = _auth_header(client["wordpress_username"], client["wordpress_app_password"])
+    headers = {"Authorization": auth, "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=60, follow_redirects=False) as http:
+            resp = await http.post(  # WP accepts POST for updates to /{resource}/{id}
+                f"{rest_base}/{resource}/{post_id}",
+                json={"content": html},
+                headers=headers,
+            )
+            resp.raise_for_status()
+            result = resp.json()
+    except httpx.HTTPStatusError as exc:
+        code = exc.response.status_code
+        logger.error("wordpress_update_error",
+                     extra={"status": code, "post_id": post_id, "body": exc.response.text[:300]})
+        if code in (401, 403):
+            raise WordPressPublishError("wordpress_auth_failed") from exc
+        if code == 404:
+            raise WordPressPublishError("wordpress_post_not_found") from exc
+        raise WordPressPublishError(f"wordpress_http_error_{code}") from exc
+    except WordPressPublishError:
+        raise
+    except Exception as exc:
+        logger.error("wordpress_update_failed", extra={"post_id": post_id, "error": str(exc)})
+        raise WordPressPublishError("wordpress_call_failed") from exc
+    if not isinstance(result, dict) or not result.get("id"):
+        raise WordPressPublishError("wordpress_unexpected_response")
+    return {
+        "post_id": result.get("id"),
+        "link": result.get("link"),
+        "edit_link": edit_link_for(client["wordpress_site_url"], result.get("id")),
+        "modified": result.get("modified"),
+    }
