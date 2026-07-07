@@ -1,7 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
-  ArrowLeft, ArrowDownRight, ArrowUpRight, Minus, Sparkles, Target, TrendingUp,
+  ArrowLeft, ArrowDownRight, ArrowUpRight, CalendarClock, Minus, Sparkles, Target, TrendingUp,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client, ForecastResponse } from '../lib/types'
@@ -102,6 +102,37 @@ export function Forecast() {
                 <p style={{ fontSize: 11.5, color: '#94a3b8', margin: '8px 0 0' }}>
                   {qw.skipped_no_volume} striking-distance keyword{qw.skipped_no_volume !== 1 ? 's' : ''} skipped (no search-volume data cached yet).
                 </p>
+              )}
+            </section>
+          )}
+
+          {/* ── Seasonal demand ──────────────────────────────────────── */}
+          {data.demand_outlook && (
+            <section style={card}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <CalendarClock size={16} style={{ color: '#64748b' }} />
+                <h2 style={{ ...cardTitle, margin: 0 }}>Seasonal demand outlook</h2>
+              </div>
+              <p style={{ fontSize: 13.5, color: '#334155', margin: '8px 0 4px' }}>
+                Search demand for this portfolio is{' '}
+                <strong style={{ color: data.demand_outlook.direction === 'rising' ? '#15803d' : data.demand_outlook.direction === 'falling' ? '#b45309' : '#334155' }}>
+                  {data.demand_outlook.direction}
+                </strong>
+                {' '}heading into {data.demand_outlook.months_ahead.join('–')}
+                {data.demand_outlook.change_pct_next_quarter !== 0 && (
+                  <> ({data.demand_outlook.change_pct_next_quarter > 0 ? '+' : ''}{data.demand_outlook.change_pct_next_quarter}% vs this month, volume-weighted)</>
+                )}
+                . Based on 12-month volume history for {data.demand_outlook.keywords_with_history} keyword{data.demand_outlook.keywords_with_history !== 1 ? 's' : ''}.
+              </p>
+              {data.demand_outlook.notable_swings.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                  {data.demand_outlook.notable_swings.map((s) => (
+                    <span key={s.keyword} style={qwChip}>
+                      {s.keyword}: {s.change_pct > 0 ? '+' : ''}{s.change_pct}%
+                      {s.peak_months.length > 0 && <span style={{ color: '#64748b' }}> · peaks {s.peak_months.join('/')}</span>}
+                    </span>
+                  ))}
+                </div>
               )}
             </section>
           )}

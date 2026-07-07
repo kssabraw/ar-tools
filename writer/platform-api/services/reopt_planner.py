@@ -154,6 +154,7 @@ def build_actions(
                 "cta_path": response.get("cta_path") or f"clients/{client_id}/rankings",
                 "severity": "critical" if deindex else "warning",
                 "sort": _SORT_DROP + (_SORT_DEINDEX_BONUS if deindex else 0),
+                "alert_created_at": d.get("created_at"),
             }
         )
 
@@ -904,7 +905,7 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
 
     drops = (
         supabase.table("rank_alerts")
-        .select("keyword_id, keyword, alert_type, message")
+        .select("keyword_id, keyword, alert_type, message, created_at")
         .eq("client_id", client_id)
         .is_("resolved_at", "null")
         .execute()
@@ -983,6 +984,24 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
                     a["diagnosis"] = f"{a['diagnosis']} {note}"
     except Exception as exc:
         logger.warning("reopt_plan_episode_notes_failed", extra={"client_id": client_id, "error": str(exc)})
+
+    # Algo-update context: a drop that opened while several clients dropped
+    # together is a Google update, not this client's emergency — annotate so
+    # nobody reoptimizes into a rolling update (Organic SOP §A). Best-effort.
+    try:
+        from services.trend_watch import algo_note_for, recent_algo_events
+
+        events = recent_algo_events()
+        if events:
+            for a in actions:
+                if a.get("kind") != "rank_drop":
+                    continue
+                note = algo_note_for(a.get("alert_created_at"), events)
+                if note:
+                    a["algo_note"] = note
+                    a["diagnosis"] = f"{a['diagnosis']} {note}"
+    except Exception as exc:
+        logger.warning("reopt_plan_algo_notes_failed", extra={"client_id": client_id, "error": str(exc)})
     digest = summarize_plan(actions)
 
     latest = (

@@ -768,12 +768,49 @@ def _prov_forecast(supabase, client_id: str, today: date, now: datetime) -> Opti
     }
 
 
+def _prov_trends(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """Portfolio-level trend context: suspected Google algorithm updates
+    (cross-client co-drops) + the client's seasonal demand outlook."""
+    from services import trend_watch
+
+    events = trend_watch.recent_algo_events()
+    outlook = None
+    try:
+        outlook = trend_watch.build_demand_outlook(client_id, today=today)
+    except Exception as exc:
+        logger.warning("strategy_digest.demand_outlook_failed", extra={"client_id": client_id, "error": str(exc)})
+    if not events and not outlook:
+        return None
+    return {
+        "note": (
+            "algo_events are CROSS-CLIENT detections (several clients opened drops in "
+            "the same window = a Google update, not this client's emergency) — drops "
+            "inside a window carry an algo_note on the Action Plan; don't propose "
+            "reoptimizing into a rolling update. demand_outlook is seasonality from "
+            "12-month volume history: falling demand explains falling impressions "
+            "without a ranking problem."
+        ),
+        "algo_events": [
+            {
+                "window_start": e.get("window_start"),
+                "window_end": e.get("window_end"),
+                "clients_affected": e.get("clients_affected"),
+                "clients_total": e.get("clients_total"),
+                "drop_count": e.get("drop_count"),
+            }
+            for e in events[:3]
+        ],
+        "demand_outlook": outlook,
+    }
+
+
 # Registry — append a provider to feed the strategist a new module.
 _PROVIDERS: list[tuple[str, object]] = [
     ("client", _prov_client),
     ("campaign_goals", _prov_campaign_goals),
     ("competitors", _prov_competitors),
     ("forecast", _prov_forecast),
+    ("trends", _prov_trends),
     ("organic_rank", _prov_organic),
     ("open_alerts", _prov_open_alerts),
     ("action_plan", _prov_action_plan),

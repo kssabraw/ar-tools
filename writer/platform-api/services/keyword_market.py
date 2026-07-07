@@ -81,6 +81,9 @@ def parse_market_items(items: list[dict]) -> dict[str, dict]:
             "search_volume": item.get("search_volume"),
             "cpc": item.get("cpc"),
             "competition": item.get("competition"),  # LOW / MEDIUM / HIGH or None
+            # 12-month volume history [{year, month, search_volume}] — powers
+            # the trend watcher's seasonality read; comes free on this call.
+            "monthly_searches": item.get("monthly_searches"),
         }
     return out
 
@@ -170,6 +173,7 @@ async def refresh_keywords(supabase, kw_list: list[str], location_code: int, *, 
             "search_volume": market.get(kw.lower(), {}).get("search_volume"),
             "cpc": market.get(kw.lower(), {}).get("cpc"),
             "competition": market.get(kw.lower(), {}).get("competition"),
+            "monthly_searches": market.get(kw.lower(), {}).get("monthly_searches"),
             "refreshed_at": now_iso,
         }
         for kw in to_fetch

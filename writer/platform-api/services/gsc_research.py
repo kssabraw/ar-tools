@@ -279,6 +279,7 @@ async def _fetch_market_for(supabase, keywords: list[str], location_code: int) -
                     "search_volume": fetched.get(kw.lower(), {}).get("search_volume"),
                     "cpc": fetched.get(kw.lower(), {}).get("cpc"),
                     "competition": fetched.get(kw.lower(), {}).get("competition"),
+                    "monthly_searches": fetched.get(kw.lower(), {}).get("monthly_searches"),
                     "refreshed_at": now_iso,
                 }
                 for kw in missing
