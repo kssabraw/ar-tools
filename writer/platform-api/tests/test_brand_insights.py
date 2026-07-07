@@ -86,6 +86,12 @@ def test_conversational_prompt_notes_missing_icp():
     assert "No explicit ICP is on file" in p
 
 
+def test_conversational_prompt_constrains_length_and_single_thought():
+    p = bi._conversational_prompt("Acme", "Acme (Plumber) — Sydney", "", ["plumber sydney"])
+    assert "8-14 words" in p
+    assert "One thought per query" in p
+
+
 def test_suggest_conversational_queries_empty_when_no_seeds():
     assert asyncio.run(bi.suggest_conversational_queries("Acme", "ctx", "icp", [])) == []
 

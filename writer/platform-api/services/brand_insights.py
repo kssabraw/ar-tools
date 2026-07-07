@@ -494,10 +494,17 @@ def _conversational_prompt(
         f"- Produce {_QUERIES_PER_KEYWORD_MIN}-{_QUERIES_PER_KEYWORD_MAX} conversational "
         "queries per seed keyword.\n"
         "- Write full natural questions/requests, the way a real person talks to an AI "
-        '(e.g. "who\'s the best emergency plumber in Sydney for a burst pipe at night?"), '
+        '(e.g. "who\'s the best emergency plumber in Sydney for a burst pipe?"), '
         "NOT keyword fragments.\n"
-        "- Ground each query in the ideal customer's real situation, intent, and "
-        "priorities from the ICP above.\n"
+        "- Keep each query SHORT and natural: one sentence, roughly 8-14 words, the way "
+        "someone actually types into an AI. Do not exceed ~16 words.\n"
+        "- One thought per query: a single need or situation. Do NOT stack multiple "
+        "clauses/qualifiers into one question (no run-ons chaining time + price + "
+        "guarantee + availability). If a seed keyword implies several angles, split them "
+        "across separate queries rather than cramming them into one.\n"
+        "- Ground each query in the ideal customer's real situation and intent from the "
+        "ICP above, but reflect it through ONE concrete angle per query — do not narrate "
+        "the whole customer profile in a single question.\n"
         "- Preserve the seed keyword's location and qualifier (an emergency/suburb "
         "term stays that specific).\n"
         '- Never use the phrase "near me". If a seed keyword says "near me", resolve '
