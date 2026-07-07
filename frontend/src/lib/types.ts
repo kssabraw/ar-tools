@@ -322,6 +322,23 @@ export interface RankAlertsResponse {
   unread_count: number
 }
 
+// DataForSEO "Refresh live ranks" now runs as a background job so it survives
+// navigation. POST enqueues; poll the status endpoint until it settles.
+export interface DataForSeoRefreshEnqueue {
+  client_id: string
+  status: string
+  job_id: string | null
+}
+
+export interface DataForSeoRefreshStatus {
+  job_id: string
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  fetched: number
+  skipped: number
+  failed: number
+  error: string | null
+}
+
 // ── ICP + differentiators (converged client-level assets, Option A) ──────────
 
 export interface IcpSegment {

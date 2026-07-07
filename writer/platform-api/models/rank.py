@@ -210,6 +210,18 @@ class FetchSchedule(BaseModel):
 class DataForSeoRefreshResponse(BaseModel):
     client_id: UUID
     status: str
+    job_id: Optional[UUID] = None
+    fetched: int = 0
+    skipped: int = 0
+    failed: int = 0
+    error: Optional[str] = None
+
+
+class DataForSeoRefreshStatus(BaseModel):
+    """Poll payload for an enqueued DataForSEO refresh — mirrors the async_jobs
+    row so the UI can tell running from complete/failed and surface the counts."""
+    job_id: UUID
+    status: str  # pending | running | complete | failed
     fetched: int = 0
     skipped: int = 0
     failed: int = 0

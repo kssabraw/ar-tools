@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Camera, CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, Upload, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
-import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse, RankabilityResponse, TrendPoint } from '../../lib/types'
+import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse, RankabilityResponse, TrendPoint, DataForSeoRefreshEnqueue, DataForSeoRefreshStatus } from '../../lib/types'
 import { toCsv, downloadCsv, parseKeywordsFromCsv } from '../../lib/csv'
 import { card, errorBox, outlineBtn, primaryBtn } from '../localseo/shared'
 import { STATUS_META, statusRank } from './status'
@@ -110,10 +110,32 @@ export function RankKeywords({ clientId, gscConnected, onViewRankability }: {
     const keywords = parseKeywordsFromCsv(await file.text())
     if (keywords.length) addMut.mutate(keywords)
   }
+  // "Refresh live ranks" enqueues a background job (one DataForSEO SERP call per
+  // GSC-uncovered keyword, ~a minute or two) instead of blocking the request, so
+  // the measurement finishes in the worker even if the user leaves this page. We
+  // then poll the job to surface progress and refresh the table when it lands.
+  const [refreshJobId, setRefreshJobId] = useState<string | null>(null)
   const refreshMut = useMutation({
-    mutationFn: () => api.post(`/clients/${clientId}/rank/refresh-dataforseo`, {}),
-    onSuccess: invalidate,
+    mutationFn: () => api.post<DataForSeoRefreshEnqueue>(`/clients/${clientId}/rank/refresh-dataforseo`, {}),
+    onSuccess: (data) => { if (data?.job_id) setRefreshJobId(data.job_id) },
   })
+  const { data: refreshJob } = useQuery<DataForSeoRefreshStatus>({
+    queryKey: ['rank-refresh-job', refreshJobId],
+    queryFn: () => api.get<DataForSeoRefreshStatus>(`/clients/${clientId}/rank/refresh-dataforseo/${refreshJobId}`),
+    enabled: !!refreshJobId,
+    refetchInterval: (query) => {
+      const s = (query.state.data as DataForSeoRefreshStatus | undefined)?.status
+      return s === 'complete' || s === 'failed' ? false : 4000
+    },
+  })
+  // When the job settles, pull the fresh ranks/status into the table once.
+  const refreshStatus = refreshJob?.status
+  useEffect(() => {
+    if (refreshStatus === 'complete') invalidate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshStatus])
+  const refreshRunning = refreshMut.isPending
+    || (!!refreshJobId && refreshStatus !== 'complete' && refreshStatus !== 'failed')
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {}
@@ -178,9 +200,9 @@ export function RankKeywords({ clientId, gscConnected, onViewRankability }: {
             </button>
             <input ref={fileRef} type="file" accept=".csv,text/csv" style={{ display: 'none' }} onChange={onCsvSelected} />
             {(keywords?.length ?? 0) > 0 && (
-              <button style={outlineBtn} onClick={() => refreshMut.mutate()} disabled={refreshMut.isPending}
-                title="Fetch DataForSEO ranks now for keywords GSC doesn't cover">
-                <RefreshCw size={14} /> {refreshMut.isPending ? 'Fetching…' : 'Refresh live ranks'}
+              <button style={outlineBtn} onClick={() => refreshMut.mutate()} disabled={refreshRunning}
+                title="Fetch DataForSEO ranks now for keywords GSC doesn't cover (runs in the background)">
+                <RefreshCw size={14} /> {refreshRunning ? 'Refreshing…' : 'Refresh live ranks'}
               </button>
             )}
             {(keywords?.length ?? 0) > 0 && (
@@ -254,6 +276,41 @@ export function RankKeywords({ clientId, gscConnected, onViewRankability }: {
             </>
           )}
         </div>
+      )}
+
+      {refreshMut.isError && (
+        <div style={{ ...rankabilityBanner, background: '#fef2f2', borderColor: '#fecaca', color: '#b91c1c' }}>
+          <span style={{ flex: 1 }}>Couldn’t start the live-rank refresh: {(refreshMut.error as Error).message}</span>
+          <button style={outlineBtn} onClick={() => refreshMut.reset()}>Dismiss</button>
+        </div>
+      )}
+
+      {refreshJobId && !refreshMut.isError && (
+        refreshStatus === 'complete' ? (
+          <div style={rankabilityBanner}>
+            <CheckCircle2 size={16} color="#15803d" style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1 }}>
+              <strong>Live ranks refreshed</strong>{typeof refreshJob?.fetched === 'number'
+                ? ` — updated ${refreshJob.fetched} keyword${refreshJob.fetched === 1 ? '' : 's'}${refreshJob.failed ? `, ${refreshJob.failed} failed` : ''}.`
+                : '.'}
+            </span>
+            <button style={outlineBtn} onClick={() => setRefreshJobId(null)}>Dismiss</button>
+          </div>
+        ) : refreshStatus === 'failed' ? (
+          <div style={{ ...rankabilityBanner, background: '#fef2f2', borderColor: '#fecaca', color: '#b91c1c' }}>
+            <span style={{ flex: 1 }}>Live-rank refresh failed{refreshJob?.error ? `: ${refreshJob.error}` : '.'}</span>
+            <button style={outlineBtn} onClick={() => setRefreshJobId(null)}>Dismiss</button>
+          </div>
+        ) : (
+          <div style={rankabilityBanner}>
+            <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+            <Loader2 size={16} color="#4338ca" style={{ flexShrink: 0, animation: 'spin 1s linear infinite' }} />
+            <span style={{ flex: 1 }}>
+              <strong>Refreshing live ranks…</strong> This runs in the background — you can leave this page and the
+              ranks will update when it finishes.
+            </span>
+          </div>
+        )
       )}
 
       {!gscConnected && (keywords?.length ?? 0) > 0 && (
