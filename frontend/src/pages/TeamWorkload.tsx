@@ -174,6 +174,9 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
   const tracked = new Set(rows.map((r) => r.gid))
   const available = (users ?? []).filter((u) => !tracked.has(u.gid))
   const dirty = JSON.stringify(rows) !== JSON.stringify((members ?? []).map((m) => ({ ...m })))
+  // gid → email (from the live workspace-users read) — disambiguates same-name
+  // accounts (e.g. a work account vs a personal-gmail duplicate).
+  const emailByGid = new Map((users ?? []).map((u) => [u.gid, u.email]))
 
   const addMember = (gid: string) => {
     const u = users?.find((x) => x.gid === gid)
@@ -201,7 +204,12 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {rows.map((r, i) => (
             <div key={r.gid} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 36px', gap: 8, alignItems: 'center' }}>
-              <span style={{ fontSize: 13, color: '#0f172a' }}>{r.name ?? r.gid}</span>
+              <span style={{ fontSize: 13, color: '#0f172a' }}>
+                {r.name ?? r.gid}
+                {emailByGid.get(r.gid) && (
+                  <span style={{ fontSize: 11.5, color: '#94a3b8', marginLeft: 8 }}>{emailByGid.get(r.gid)}</span>
+                )}
+              </span>
               <input
                 style={input}
                 type="number"
@@ -229,7 +237,11 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
       <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
         <select style={{ ...input, maxWidth: 280 }} value={picker} disabled={!configured} onChange={(e) => addMember(e.target.value)}>
           <option value="">+ Add team member…</option>
-          {available.map((u) => <option key={u.gid} value={u.gid}>{u.name ?? u.gid}</option>)}
+          {available.map((u) => (
+            <option key={u.gid} value={u.gid}>
+              {u.name ?? u.gid}{u.email ? ` — ${u.email}` : ''}
+            </option>
+          ))}
         </select>
         <button style={primaryBtn} disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
           <Save size={14} /> {save.isPending ? 'Saving…' : dirty ? 'Save team' : 'Saved'}
