@@ -4,13 +4,18 @@
  * This is the script behind GOOGLE_APPS_SCRIPT_URL. The platform-api posts
  *   { folder_id, title, content, format, share }            (a Google Doc)
  *   { type: "sheet", folder_id, title, rows, share }         (a Google Sheet)
+ *   { type: "pdf", folder_id, title, content_base64 }        (a PDF file)
  * and expects back
  *   { success: true, doc_id, doc_url }                       (doc)
  *   { success: true, sheet_id, sheet_url }                   (sheet)
+ *   { success: true, file_id, file_url }                     (pdf)
  *   (or { success: false, error }).
  *
  * `type` (added 2026-06): "doc" (default) builds a Google Doc; "sheet" builds a
- * Google Sheet from `rows` (an array of rows, each an array of cell strings).
+ * Google Sheet from `rows` (an array of rows, each an array of cell strings);
+ * "pdf" (added 2026-07, Client Reporting Phase 5) saves a base64-encoded PDF
+ * into the folder as a plain Drive file — used for the client-report Drive
+ * copy. Requires a REDEPLOY of the Web App to serve this version.
  *
  * `share` (added 2026-06): how to share the new file —
  *   - "private" (default) → no sharing change (legacy behaviour).
@@ -63,6 +68,16 @@ function doPost(e) {
       return _json({ success: false, error: 'missing_folder_id' });
     }
 
+    if (type === 'pdf') {
+      var pdfFileId = createPdfFromBase64(folderId, title, req.content_base64 || '');
+      _applySharing(pdfFileId, share);
+      return _json({
+        success: true,
+        file_id: pdfFileId,
+        file_url: 'https://drive.google.com/file/d/' + pdfFileId + '/view',
+      });
+    }
+
     if (type === 'sheet') {
       var sheetId = createSheetFromRows(folderId, title, req.rows || []);
       _applySharing(sheetId, share);
@@ -101,6 +116,21 @@ function _applySharing(fileId, share) {
   var file = DriveApp.getFileById(fileId);
   var access = (share === 'public') ? DriveApp.Access.ANYONE : DriveApp.Access.ANYONE_WITH_LINK;
   file.setSharing(access, DriveApp.Permission.VIEW);
+}
+
+/**
+ * PDF from a base64 payload → a plain Drive file in the client's folder (Client
+ * Reporting Phase 5 Drive copy). Returns the new file id.
+ */
+function createPdfFromBase64(folderId, title, contentBase64) {
+  if (!contentBase64) {
+    throw new Error('missing_content_base64');
+  }
+  var bytes = Utilities.base64Decode(contentBase64);
+  var name = /\.pdf$/i.test(title) ? title : title + '.pdf';
+  var blob = Utilities.newBlob(bytes, 'application/pdf', name);
+  var folder = DriveApp.getFolderById(folderId);
+  return folder.createFile(blob).getId();
 }
 
 /**
