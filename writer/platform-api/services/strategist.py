@@ -179,7 +179,10 @@ use cost_basis="none".
 
 HOW TO READ THE INSTRUMENTS: module cards are included in your input — follow them exactly \
 (they exist because the common failure is misreading, not mis-reasoning: average_rank without \
-found_pins, a null GSC position read as a rank loss, one AI answer-flip read as a trend).
+found_pins, a null GSC position read as a rank loss, one AI answer-flip read as a trend). \
+The client section's local_campaign flag says whether this client runs a LOCAL campaign at \
+all — when false, local-only setup (target_cities, GBP) reads n/a; that is the correct state \
+for a non-local client, never a gap or a finding.
 
 DRILL-DOWNS: you may call the provided read-only tools when the digest genuinely isn't \
 enough — they are capped per run (the cap is in your input); the paid audit_page tighter \
