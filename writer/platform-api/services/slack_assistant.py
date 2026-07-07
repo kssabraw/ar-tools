@@ -94,7 +94,10 @@ _SYSTEM = (
     "- setup: the client's full business profile — the GBP listing (address, "
     "coordinates, phone, categories, rating, review count, hours, service-area "
     "places, Maps link), target cities, campaign settings (client type, SAB, "
-    "retainer), brand-voice summary, and ICP summary.\n"
+    "retainer), brand-voice summary, and ICP summary. setup.local_campaign says "
+    "whether this client runs a LOCAL campaign at all; when false, local-only setup "
+    "(target cities, GBP) reads n/a — that is the correct state for a non-local "
+    "client, never a gap or limitation to flag or fix.\n"
     "A module is OMITTED when there's no data for it — if a module key is absent, "
     "that work simply hasn't been set up or run for this client; say so rather than "
     "guessing. Answer using ONLY this data (plus live tool results). Be concise and "
@@ -279,6 +282,29 @@ def format_history(history: list[dict]) -> str:
         if text:
             lines.append(f"{who}: {text}")
     return "\n".join(lines)
+
+
+def is_local_client(client: dict, local_seo_pages: int = 0, maps_scans: int = 0) -> bool:
+    """Whether local-only setup (target cities, suburb targeting) applies to this
+    client at all. Pure.
+
+    Any positive signal counts: a GBP attached, the service-area-business flag,
+    a business address or manual target cities typed on the client, or actual
+    local work in the suite (Local SEO pages, Maps geo-grid scans). No signal →
+    not a local campaign, and empty target cities is the correct state, not a
+    gap. `clients.client_type` is deliberately not read — it defaults to
+    'local' for every client, so it can't distinguish anything.
+    """
+    gbp = client.get("gbp") or {}
+    return bool(
+        gbp.get("business_name")
+        or gbp.get("place_id")
+        or client.get("is_sab")
+        or client.get("business_location")
+        or client.get("target_cities")
+        or local_seo_pages
+        or maps_scans
+    )
 
 
 def is_affirmative(text: str) -> bool:
@@ -626,13 +652,18 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
     target cities, campaign settings, ICP — except bulky raw assets (the GBP
     reviews array, the full brand guide), which stay presence flags so one
     client's context can't swamp the prompt.
+
+    Local-only settings (target cities) are reported only when the client
+    actually runs a local campaign (`is_local_client`); otherwise they read
+    "n/a" so the model never flags an empty list as a setup gap for a
+    national/non-local client.
     """
     rows = (
         supabase.table("clients")
         .select(
             "website_url, gbp, gbp_place_id, brand_voice, detected_icp, "
             "differentiators, icp_text, target_cities, retainer_monthly, "
-            "is_sab, client_type"
+            "is_sab, client_type, business_location"
         )
         .eq("id", client_id)
         .limit(1)
@@ -642,12 +673,33 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
         return None
     c = rows[0]
     gbp = c.get("gbp") or {}
+    local = is_local_client(c)
+    if not local:
+        # Nothing local on the client row itself — check for actual local work
+        # before concluding suburb-level targeting doesn't apply.
+        pages = (
+            supabase.table("local_seo_pages")
+            .select("id", count="exact", head=True)
+            .eq("client_id", client_id)
+            .is_("deleted_at", "null")
+            .execute()
+        ).count or 0
+        scans = (
+            supabase.table("maps_scans")
+            .select("id", count="exact", head=True)
+            .eq("client_id", client_id)
+            .execute()
+        ).count or 0
+        local = is_local_client(c, pages, scans)
     out: dict = {
         "website": c.get("website_url"),
         "client_type": c.get("client_type"),
         "is_sab": bool(c.get("is_sab")),
         "retainer_monthly": c.get("retainer_monthly"),
-        "target_cities": (c.get("target_cities") or [])[:12],
+        "local_campaign": local,
+        "target_cities": (c.get("target_cities") or [])[:12]
+        if local
+        else "n/a — no local campaign; suburb-level targeting does not apply",
         "has_brand_voice": bool(c.get("brand_voice")),
         "has_icp": bool(c.get("detected_icp") or c.get("differentiators")),
     }
