@@ -19,8 +19,9 @@ from config import settings
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from db.supabase_client import get_supabase
-from middleware.auth import require_auth
+from middleware.auth import require_admin, require_auth
 from models.gbp_metrics import (
+    GbpAccessProbeResponse,
     GbpBackfillResponse,
     GbpIngestResponse,
     GbpLocation,
@@ -46,6 +47,27 @@ async def get_service_account_email(auth: dict = Depends(require_auth)) -> GbpSe
         return GbpServiceAccountInfo(email=gbp.get_service_account_email())
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
+
+
+@router.get("/gbp/access-probe", response_model=GbpAccessProbeResponse)
+async def access_probe(auth: dict = Depends(require_admin)) -> GbpAccessProbeResponse:
+    """Admin-only live check of Business Profile API access for the agency SA.
+
+    Runs a read-only ``accounts.list`` call and classifies the result — NOT
+    gated on ``gbp_metrics_enabled`` — so access can be verified before the
+    module is switched on (e.g. the moment a pending access request is
+    approved). See ``GbpAccessProbeResponse`` for the status meanings.
+    """
+    result = gbp.probe_api_access()
+    return GbpAccessProbeResponse(
+        status=result.status,
+        detail=result.detail,
+        account_count=result.account_count,
+        service_account_email=result.service_account_email,
+        project_id=result.project_id,
+        http_status=result.http_status,
+        google_message=result.google_message,
+    )
 
 
 @router.get("/gbp/resolve-locations", response_model=ResolveLocationsResponse)

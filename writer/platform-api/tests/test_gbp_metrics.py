@@ -7,6 +7,7 @@ No network / no DB: normalize_location_id, parse_time_series, classify_access_er
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import pytest
@@ -120,6 +121,66 @@ def test_classify_quota_is_error():
 
 def test_classify_unknown():
     assert gbp.classify_access_error(None).status == "error"
+
+
+# ----------------------------------------------------------------------------
+# classify_probe_error (access-probe classifier)
+# ----------------------------------------------------------------------------
+def test_probe_classify_api_disabled_from_message():
+    status, detail = gbp.classify_probe_error(
+        403,
+        message="My Business Account Management API has not been used in project 12345 before or it is disabled.",
+    )
+    assert status == "api_disabled" and detail == "api_not_enabled_on_gcp_project"
+
+
+def test_probe_classify_api_disabled_from_reason():
+    status, _ = gbp.classify_probe_error(403, message="", reason="SERVICE_DISABLED")
+    assert status == "api_disabled"
+
+
+def test_probe_classify_access_not_granted_plain_403():
+    status, detail = gbp.classify_probe_error(403, message="The caller does not have permission")
+    assert status == "access_not_granted"
+    assert detail == "project_not_allowlisted_or_service_account_no_access"
+
+
+def test_probe_classify_quota_exceeded():
+    assert gbp.classify_probe_error(429)[0] == "quota_exceeded"
+
+
+def test_probe_classify_auth_failure():
+    assert gbp.classify_probe_error(401)[0] == "error"
+
+
+def test_probe_classify_unknown_when_no_status():
+    status, detail = gbp.classify_probe_error(None)
+    assert status == "error" and detail == "unknown_error"
+
+
+# ----------------------------------------------------------------------------
+# _extract_google_error
+# ----------------------------------------------------------------------------
+def test_extract_google_error_parses_json_body():
+    class _Exc(Exception):
+        content = json.dumps(
+            {
+                "error": {
+                    "message": "API disabled",
+                    "status": "PERMISSION_DENIED",
+                    "details": [{"reason": "SERVICE_DISABLED"}],
+                }
+            }
+        ).encode()
+
+    message, reason = gbp._extract_google_error(_Exc())
+    assert message == "API disabled"
+    assert "PERMISSION_DENIED" in reason and "SERVICE_DISABLED" in reason
+
+
+def test_extract_google_error_falls_back_to_str():
+    message, reason = gbp._extract_google_error(Exception("boom"))
+    assert message == "boom" and reason == ""
 
 
 # ----------------------------------------------------------------------------

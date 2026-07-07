@@ -61,6 +61,27 @@ class GbpServiceAccountInfo(BaseModel):
     email: str
 
 
+class GbpAccessProbeResponse(BaseModel):
+    """Result of the agency-level Business Profile API access probe.
+
+    ``status``: ``ok`` (API reachable — ``account_count`` locations visible to
+    the service account), ``api_disabled`` (enable the API on the GCP project),
+    ``access_not_granted`` (project not allow-listed / quota request still
+    pending, or the SA lacks access), ``quota_exceeded``, ``not_configured``
+    (no service-account key), or ``error``.
+    """
+
+    status: Literal[
+        "ok", "api_disabled", "access_not_granted", "quota_exceeded", "not_configured", "error"
+    ]
+    detail: str
+    account_count: Optional[int] = None
+    service_account_email: Optional[str] = None
+    project_id: Optional[str] = None
+    http_status: Optional[int] = None
+    google_message: Optional[str] = None
+
+
 class GbpIngestResponse(BaseModel):
     location_row_id: UUID
     status: Literal["ok", "failed"]

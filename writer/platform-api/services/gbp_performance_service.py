@@ -27,6 +27,7 @@ See: docs/modules/client-reporting-prd-v1_0.md (Phase 2 — GBP Performance).
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import date
@@ -80,6 +81,28 @@ class ResolvedLocation:
 class ResolveResult:
     locations: list[ResolvedLocation] = field(default_factory=list)
     detail: Optional[str] = None
+
+
+# Richer states for the standalone access probe (distinct from the per-location
+# AccessStatus): it separates "API not enabled on the project" from "project not
+# allow-listed / quota not granted" so the admin knows which Google-side step is
+# still outstanding while a Business Profile API access request is pending.
+ProbeStatus = Literal[
+    "ok", "api_disabled", "access_not_granted", "quota_exceeded", "not_configured", "error"
+]
+
+
+@dataclass
+class ProbeResult:
+    """Outcome of the agency-level Business Profile API access probe."""
+
+    status: ProbeStatus
+    detail: str
+    account_count: Optional[int] = None
+    service_account_email: Optional[str] = None
+    project_id: Optional[str] = None
+    http_status: Optional[int] = None
+    google_message: Optional[str] = None
 
 
 # ----------------------------------------------------------------------------
@@ -179,6 +202,65 @@ def classify_access_error(status_code: Optional[int]) -> VerifyResult:
     )
 
 
+def classify_probe_error(
+    status_code: Optional[int], message: str = "", reason: str = ""
+) -> tuple[ProbeStatus, str]:
+    """Classify an ``accounts.list`` failure into a probe status + short detail.
+
+    Distinguishes the two Google-side blockers that both surface as a 403:
+    the API not being enabled on the GCP project ("has not been used … or it is
+    disabled" / ``SERVICE_DISABLED`` / ``accessNotConfigured``) versus the
+    project not yet being allow-listed / quota not granted (a plain
+    ``PERMISSION_DENIED`` while a Business Profile API access request is pending,
+    or the service account simply lacking access). Pure — unit-tested.
+    """
+    text = f"{message} {reason}".lower()
+    if status_code == 429:
+        return "quota_exceeded", "quota_exhausted_or_not_granted"
+    if status_code == 403:
+        disabled_markers = (
+            "has not been used",
+            "it is disabled",
+            "service_disabled",
+            "accessnotconfigured",
+            "not been enabled",
+        )
+        if any(marker in text for marker in disabled_markers):
+            return "api_disabled", "api_not_enabled_on_gcp_project"
+        return "access_not_granted", "project_not_allowlisted_or_service_account_no_access"
+    if status_code == 401:
+        return "error", "authentication_failed"
+    if status_code in (400, 404):
+        return "error", f"http_{status_code}"
+    return "error", f"http_{status_code}" if status_code else "unknown_error"
+
+
+def _extract_google_error(exc: Exception) -> tuple[str, str]:
+    """Best-effort (message, reason) from a Google ``HttpError``.
+
+    Reads the JSON error body when present (``error.message`` +
+    ``error.status``/``details[].reason``), falling back to ``str(exc)``. Never
+    raises — classification stays robust to unexpected shapes.
+    """
+    message = ""
+    reason = ""
+    content = getattr(exc, "content", None)
+    if content:
+        try:
+            body = json.loads(content.decode() if isinstance(content, bytes) else content)
+            err = body.get("error", {}) if isinstance(body, dict) else {}
+            message = err.get("message", "") or ""
+            reason = err.get("status", "") or ""
+            for detail in err.get("details", []) or []:
+                if isinstance(detail, dict) and detail.get("reason"):
+                    reason = f"{reason} {detail['reason']}".strip()
+        except Exception:  # pragma: no cover - defensive parse
+            pass
+    if not message:
+        message = str(exc)
+    return message[:600], reason
+
+
 # ----------------------------------------------------------------------------
 # Service-account identity + clients (lazy Google imports)
 # ----------------------------------------------------------------------------
@@ -217,6 +299,54 @@ def build_business_info_client():
 # ----------------------------------------------------------------------------
 # Live operations
 # ----------------------------------------------------------------------------
+def probe_api_access() -> ProbeResult:
+    """Live, read-only check of Business Profile API access for the agency SA.
+
+    Calls ``accounts.list`` on the Account Management API — the lightest call
+    that proves the GCP project is enabled + allow-listed for the Business
+    Profile APIs. Deliberately gated ONLY on the service-account key being
+    present (NOT on ``gbp_metrics_enabled``), so access can be verified — e.g.
+    the moment a pending access request is approved — before the module is
+    switched on. Never raises: every outcome maps to a ``ProbeResult``.
+
+    A ``status == "ok"`` with ``account_count == 0`` means the API is reachable
+    but the service account isn't yet a Manager on any Business Profile.
+    """
+    if not gsc_service.is_configured():
+        return ProbeResult(status="not_configured", detail="google_service_account_key_not_configured")
+    try:
+        key = gsc_service._load_key()
+    except RuntimeError as exc:
+        return ProbeResult(status="error", detail=str(exc))
+    sa_email = key.get("client_email")
+    project_id = key.get("project_id")
+
+    try:
+        client = build_account_client()
+        resp = client.accounts().list().execute()
+        accounts = resp.get("accounts", []) or []
+        return ProbeResult(
+            status="ok",
+            detail="business_profile_api_reachable",
+            account_count=len(accounts),
+            service_account_email=sa_email,
+            project_id=project_id,
+        )
+    except Exception as exc:
+        code = gsc_service._extract_status_code(exc)
+        message, reason = _extract_google_error(exc)
+        status, detail = classify_probe_error(code, message, reason)
+        logger.info("gbp_access_probe", extra={"status_code": code, "probe_status": status})
+        return ProbeResult(
+            status=status,
+            detail=detail,
+            service_account_email=sa_email,
+            project_id=project_id,
+            http_status=code,
+            google_message=message or None,
+        )
+
+
 def resolve_locations() -> ResolveResult:
     """List every location the service account can see, across all accounts.
 
