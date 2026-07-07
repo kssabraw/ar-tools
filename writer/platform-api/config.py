@@ -442,9 +442,11 @@ class Settings(BaseSettings):
     brand_engine_gemini_model: str = "gemini-3.5-flash"
     brand_engine_perplexity_model: str = "sonar"
     # Auxiliary OpenAI features: invisibility diagnosis + keyword suggestions.
-    # Use the latest OpenAI flagship (these are quality reasoning/generation
-    # tasks run on demand, not per-row, so flagship cost is fine).
-    brand_diagnose_model: str = "gpt-5.4"
+    # Diagnosis runs per not-found cell during a scan (auto-diagnose, below), so
+    # at scale it's a per-row cost driver — keep it on the cheaper `mini` tier.
+    # Keyword suggestions are genuinely on-demand (a manual click), low volume,
+    # so they stay on the flagship where generation quality matters more.
+    brand_diagnose_model: str = "gpt-5.4-mini"
     brand_suggest_model: str = "gpt-5.4"
     # Keyword suggestions transform the client's already-tracked organic +
     # geo-grid keywords into ICP-grounded conversational AI queries (3-5 each).

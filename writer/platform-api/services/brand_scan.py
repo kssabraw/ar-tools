@@ -441,6 +441,28 @@ _RICH_CLASSIFIER_TOOL = {
                         "permanently_closed": {"type": "boolean"},
                     },
                 },
+                "competitors": {
+                    "type": "array",
+                    "description": (
+                        "For EACH competitor name provided in the prompt, whether that "
+                        "competitor appears in the answer as an actual business result, "
+                        "and how. Include exactly one entry per provided name, echoing the "
+                        "name as given; omit the array entirely only if no competitor "
+                        "names were provided."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Competitor name, echoed from the provided list."},
+                            "mention_found": {"type": "boolean", "description": "True ONLY if the competitor appears as an actual business result."},
+                            "mention_type": {"type": "string", "enum": ["direct", "implied", "none"]},
+                            "sentiment": {"type": "number", "description": "-1 (negative) to 1 (positive); 0 if neutral/absent."},
+                            "confidence": {"type": "number", "description": "0 to 1"},
+                            "evidence_snippet": {"type": "string", "description": "Text proving the competitor was/wasn't found (max 300 chars)."},
+                        },
+                        "required": ["name", "mention_found"],
+                    },
+                },
             },
             "required": _CLASSIFIER_TOOL["function"]["parameters"]["required"],
         },
@@ -489,33 +511,90 @@ def _clamp(value, lo, hi, default):
         return default
 
 
+def _clean_competitor_results(raw, expected_names: list[str]) -> list[dict]:
+    """Shape the folded `competitors` array from the rich classifier into the
+    competitor_results records the rest of the pipeline expects, keyed back to
+    the names we asked about. Any expected name the model omitted (or returned
+    malformed) degrades to a not-found record so the matrix stays complete."""
+    by_name: dict[str, dict] = {}
+    for c in raw or []:
+        if not isinstance(c, dict):
+            continue
+        name = (c.get("name") or "").strip()
+        if not name:
+            continue
+        found = c.get("mention_found") is True
+        snip = c.get("evidence_snippet")
+        by_name[name.lower()] = {
+            "name": name,
+            "found": found,
+            "mention_type": (c.get("mention_type") or "direct") if found else "none",
+            "sentiment": _clamp(c.get("sentiment"), -1, 1, 0.0),
+            "confidence": _clamp(c.get("confidence"), 0, 1, 0.5),
+            "snippet": (str(snip)[:300] if snip else None),
+        }
+    results: list[dict] = []
+    for name in expected_names:
+        results.append(by_name.get(name.lower()) or {
+            "name": name, "found": False, "mention_type": "none",
+            "sentiment": 0, "confidence": 0, "snippet": None,
+        })
+    return results
+
+
+def _fallback_competitor_record(raw_response: str, name: str) -> dict:
+    """Regex-only competitor classification — used when the classifier call
+    failed/was unavailable, so it adds no API call (mirrors the brand fallback)."""
+    fb = _fallback_analysis(raw_response, name, [], raw_response)
+    return {
+        "name": name, "found": fb["mention_found"], "mention_type": fb["mention_type"],
+        "sentiment": fb["sentiment"], "confidence": fb["confidence_score"],
+        "snippet": (fb["snippet"][:300] if fb["snippet"] else None),
+    }
+
+
 async def analyze_mention(
     response_text: str, brand: str, citations: list[str], raw_response: str,
-    extract_rich: bool = False,
+    extract_rich: bool = False, competitor_names: Optional[list[str]] = None,
 ) -> dict:
     """Classify whether `brand` appears in `response_text`. Uses the latest OpenAI
     `mini` model with forced function-calling; falls back to regex on any failure.
 
-    When `extract_rich` is True (the brand pass — not the per-competitor
-    re-classification), the same single call also extracts the answer's
-    structure (position, prominence, the full business list + attributes, intent,
-    locations, stated brand facts) into result['rich']. No extra API call."""
+    When `extract_rich` is True (the brand pass), the same single call also
+    extracts the answer's structure (position, prominence, the full business list
+    + attributes, intent, locations, stated brand facts) into result['rich'] and,
+    when `competitor_names` is given, classifies each competitor against the same
+    answer into result['competitor_results'] — all in one call, no per-competitor
+    round-trips."""
     if not settings.openai_api_key:
         return _fallback_analysis(response_text, brand, citations, raw_response)
     import openai
 
     client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
     tool = _RICH_CLASSIFIER_TOOL if extract_rich else _CLASSIFIER_TOOL
+    # Competitor names are only honored on the rich pass — the basic classifier
+    # tool has no `competitors` field to report them in.
+    capped_competitors = (competitor_names or [])[: settings.brand_scan_max_competitors] if extract_rich else []
+    user_content = (
+        f'Brand to find: "{brand}"\n\nSearch response to analyze:\n"""\n'
+        f'{response_text[:4000]}\n"""\n\nDetermine if this brand appears as an '
+        "actual business result (not just mentioned in the query or methodology)."
+    )
+    if capped_competitors:
+        names_list = ", ".join(f'"{n}"' for n in capped_competitors)
+        user_content += (
+            "\n\nAlso, for EACH of these competitor businesses, determine whether IT "
+            f"appears in the answer as an actual business result: [{names_list}]. "
+            "Report one entry per competitor in the `competitors` array, echoing each "
+            "name exactly as given. The same rules apply: a query restatement is not a "
+            "mention, and only count an actual business listing."
+        )
     try:
         resp = await client.chat.completions.create(
             model=settings.brand_classifier_model,
             messages=[
                 {"role": "system", "content": _CLASSIFIER_SYSTEM},
-                {"role": "user", "content": (
-                    f'Brand to find: "{brand}"\n\nSearch response to analyze:\n"""\n'
-                    f'{response_text[:4000]}\n"""\n\nDetermine if this brand appears as an '
-                    "actual business result (not just mentioned in the query or methodology)."
-                )},
+                {"role": "user", "content": user_content},
             ],
             tools=[tool],
             tool_choice={"type": "function", "function": {"name": "report_brand_visibility"}},
@@ -537,6 +616,9 @@ async def analyze_mention(
         }
         if extract_rich:
             result["rich"] = _extract_rich_fields(tool_input, found)
+        if capped_competitors:
+            result["competitor_results"] = _clean_competitor_results(
+                tool_input.get("competitors"), capped_competitors)
         return result
     except Exception as exc:
         logger.warning("brand_scan.classifier_failed", extra={"error": str(exc)})
@@ -673,27 +755,25 @@ async def scan_keyword_engine(
         if not response_text:
             retry_count += 1
             continue
-        result = await analyze_mention(response_text, brand, citations, response_text, extract_rich=True)
+        result = await analyze_mention(
+            response_text, brand, citations, response_text,
+            extract_rich=True, competitor_names=competitor_names,
+        )
 
     if result is None:
         raise ScanFailed("Failed to get a valid AI response after retries")
 
-    competitor_results = []
-    for name in competitor_names[: settings.brand_scan_max_competitors]:
-        try:
-            comp = await analyze_mention(result["raw_response"], name, result["citations"], result["raw_response"])
-            competitor_results.append({
-                "name": name, "found": comp["mention_found"], "mention_type": comp["mention_type"],
-                "sentiment": comp["sentiment"], "confidence": comp["confidence_score"],
-                "snippet": (comp["snippet"][:300] if comp["snippet"] else None),
-            })
-        except Exception:
-            competitor_results.append({
-                "name": name, "found": False, "mention_type": "none",
-                "sentiment": 0, "confidence": 0, "snippet": None,
-            })
-
-    result["competitor_results"] = competitor_results
+    # Competitor mentions are folded into the single rich classifier call above
+    # (result['competitor_results']) — one pass over the answer instead of one
+    # call per competitor. If that call fell back to regex (no API key /
+    # classifier failure) it carries no competitor_results, so derive them with
+    # the same regex fallback to keep the matrix complete, still with zero extra
+    # API calls.
+    capped = competitor_names[: settings.brand_scan_max_competitors]
+    if result.get("competitor_results") is None:
+        result["competitor_results"] = [
+            _fallback_competitor_record(result["raw_response"], name) for name in capped
+        ]
     result["retry_count"] = retry_count
 
     # Structured response analysis (best-effort, never fatal to the scan).
