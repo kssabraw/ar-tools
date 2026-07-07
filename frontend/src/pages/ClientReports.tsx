@@ -262,9 +262,9 @@ function DeliveryBadges({ delivery }: { delivery: Record<string, string> | null 
   const color = (v?: string) => (v === 'ok' ? '#15803d' : v === 'failed' ? '#b91c1c' : '#94a3b8')
   return (
     <span style={{ fontSize: 12 }}>
-      <span style={{ color: color(delivery.email) }}>email {mark(delivery.email)}</span>
+      <span style={{ color: color(delivery.email) }} title={delivery.email_error}>email {mark(delivery.email)}</span>
       {' · '}
-      <span style={{ color: color(delivery.drive) }}>drive {mark(delivery.drive)}</span>
+      <span style={{ color: color(delivery.drive) }} title={delivery.drive_error}>drive {mark(delivery.drive)}</span>
     </span>
   )
 }

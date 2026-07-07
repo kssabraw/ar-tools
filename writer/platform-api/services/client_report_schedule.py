@@ -233,7 +233,7 @@ async def deliver_report(report_id: str) -> dict:
     channel; records {email, drive} outcomes on client_reports.delivery and
     returns them. Never raises (the report itself already succeeded)."""
     from services.client_report import _REPORTS_BUCKET, _signed_url
-    from services.google_docs import GoogleDocError, resolve_drive_folder, upload_pdf
+    from services.google_docs import resolve_drive_folder, upload_pdf
 
     supabase = get_supabase()
     channels: dict[str, str] = {"email": "skipped", "drive": "skipped"}
@@ -270,6 +270,9 @@ async def deliver_report(report_id: str) -> dict:
                 channels["email"] = "ok"
             except Exception as exc:
                 channels["email"] = "failed"
+                # Persist the reason — the JSON log formatter drops `extra`, so
+                # without this a delivery failure is opaque (ok/failed only).
+                channels["email_error"] = str(exc)[:200]
                 logger.warning("report_email_failed", extra={"report_id": report_id, "error": str(exc)})
 
         folder_id = resolve_drive_folder(client, "report")
@@ -282,11 +285,9 @@ async def deliver_report(report_id: str) -> dict:
                 supabase.table("client_reports").update(
                     {"drive_doc_id": drive.get("file_id")}
                 ).eq("id", report_id).execute()
-            except GoogleDocError as exc:
+            except Exception as exc:  # incl. GoogleDocError
                 channels["drive"] = "failed"
-                logger.warning("report_drive_failed", extra={"report_id": report_id, "error": str(exc)})
-            except Exception as exc:
-                channels["drive"] = "failed"
+                channels["drive_error"] = str(exc)[:200]
                 logger.warning("report_drive_failed", extra={"report_id": report_id, "error": str(exc)})
 
         supabase.table("client_reports").update({"delivery": channels}).eq("id", report_id).execute()
