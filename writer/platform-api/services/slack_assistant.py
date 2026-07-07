@@ -8,11 +8,15 @@ content, keyword research, setup), fold in the thread's prior turns for
 continuity, ask Claude, and post the answer back **in-thread**. The bot's own
 posts (rank-drop alerts etc.) and other bots are ignored, so it never loops.
 
-Q&A plus a small action registry (_ACTIONS): the assistant can trigger existing
-jobs — scans, research, a strategist review, an Asana task-plan push — with paid
-or side-effecting actions staged behind an explicit reply-*yes* confirm. Anyone
-in the workspace can ask (per the product decision); inbound requests are
-verified by Slack's request signature so the public endpoint can't be spoofed.
+Q&A plus an action registry (_ACTIONS): the assistant has admin-level write
+access — it can trigger work (scans, research, a strategist review, client
+reports, an Asana task-plan push), manage the client's Asana board, edit the
+client profile (Setup-page scalars + target cities), and manage campaign state
+(tracked keywords, AI-visibility keywords/competitors, campaign goals). Every
+paid or side-effecting action is staged behind an explicit reply-*yes* confirm
+that names the exact change. Anyone in the workspace can ask (per the product
+decision); inbound requests are verified by Slack's request signature so the
+public endpoint can't be spoofed.
 
 Split: pure helpers (signature verify, mention stripping, client resolution,
 history formatting) are import-light and unit-tested; the context build + thread
@@ -82,15 +86,31 @@ _SYSTEM = (
     "or a short list, Slack-friendly (you may use *bold* and bullets). Lead with the "
     "answer. As a strategist, you may connect signals across modules when relevant "
     "(e.g. a ranking drop + a content gap). Never invent numbers or modules.\n\n"
-    "You can also TAKE ACTIONS via the provided tools: run work (rebuild the Action "
-    "Plan, run a Maps geo-grid scan, run GSC Research, run an AI Visibility scan, run "
-    "a strategist review, push the latest monthly task plan to Asana) and manage the "
-    "client's Asana board (add_asana_task — extract the task name, assignee and any "
-    "detail from the message; remove_asana_task / complete_asana_task — pass the task "
-    "name the teammate used). If the teammate is clearly asking you to run/start/"
-    "trigger/rebuild/create/assign/delete/finish one of these for the client, call the "
-    "matching tool instead of answering. If they're only asking about results or "
-    "anything else, answer normally — do NOT call a tool for a question.\n\n"
+    "You can also TAKE ACTIONS via the provided tools — you have admin-level write "
+    "access to the client's campaign, so NEVER claim you can't make a change that a "
+    "tool covers. Your action groups:\n"
+    "- Run work: rebuild the Action Plan, run a Maps geo-grid scan, GSC Research, an "
+    "AI Visibility scan, or a strategist review; generate a client report "
+    "(generate_client_report — optionally delivered to the client per their report "
+    "settings); push the latest monthly task plan to Asana.\n"
+    "- Asana board: add_asana_task (extract the task name, assignee and any detail "
+    "from the message), remove_asana_task / complete_asana_task (pass the task name "
+    "the teammate used).\n"
+    "- Client profile (the Setup page): update_client_profile (website URL, GSC "
+    "property, business location, monthly retainer, client type, SAB flag) and "
+    "add_target_cities / remove_target_cities for the Local SEO target-city list.\n"
+    "- Campaign management: add_tracked_keywords / remove_tracked_keyword (organic "
+    "rank tracker), add_ai_keywords / remove_ai_keyword and add_ai_competitor / "
+    "remove_ai_competitor (AI Visibility), add_campaign_goal / remove_campaign_goal "
+    "(Campaign Goals).\n"
+    "If the teammate is clearly asking you to run/start/trigger/rebuild/create/"
+    "change/assign/delete/finish one of these for the client, call the matching tool "
+    "instead of answering — every change is confirmed with them before it's applied, "
+    "so prefer calling the tool over asking permission in prose. Only things with no "
+    "tool (creating or archiving clients, freezing/unfreezing, WordPress/Drive "
+    "credentials, brand-voice or ICP text, reference page structures, GBP connection) "
+    "are dashboard-only — say so and name the page. If they're only asking about "
+    "results or anything else, answer normally — do NOT call a tool for a question.\n\n"
     "STRATEGIST BEHAVIOURS:\n"
     "- 'How is the campaign going?' → a short cross-module health read: when "
     "campaign_goals exist, LEAD with progress against them (their status field — "
@@ -663,20 +683,111 @@ _CONTEXT_PROVIDERS = [
 # an explicit confirmation. Runners take (client_id, args) and return a reply
 # string; they may be sync or async.
 # ---------------------------------------------------------------------------
-def match_open_tasks(tasks: list[dict], query: str) -> list[dict]:
-    """Open tasks whose name matches the query. Pure.
+def match_named(items: list[dict], query: str, key: str = "name") -> list[dict]:
+    """Items whose `key` matches the query. Pure.
 
-    Case-insensitive; an exact name match wins outright (so "citations" can't
-    be ambiguous with "citations — batch 2" when the user names one exactly),
-    else substring matches. Completed tasks are never candidates."""
+    Case-insensitive; an exact match wins outright (so "citations" can't be
+    ambiguous with "citations — batch 2" when the user names one exactly),
+    else substring matches."""
     q = (query or "").strip().casefold()
     if not q:
         return []
-    open_tasks = [t for t in tasks if not t.get("completed")]
-    exact = [t for t in open_tasks if (t.get("name") or "").strip().casefold() == q]
+    exact = [i for i in items if (i.get(key) or "").strip().casefold() == q]
     if exact:
         return exact
-    return [t for t in open_tasks if q in (t.get("name") or "").casefold()]
+    return [i for i in items if q in (i.get(key) or "").casefold()]
+
+
+def match_open_tasks(tasks: list[dict], query: str) -> list[dict]:
+    """Open tasks whose name matches the query. Pure.
+
+    Completed tasks are never candidates; matching per `match_named`."""
+    return match_named([t for t in tasks if not t.get("completed")], query)
+
+
+def merge_cities(existing, additions) -> tuple[list[str], list[str], list[str]]:
+    """Append cities to a target-city list, case-insensitively deduped. Pure.
+
+    Returns (merged, added, already_present) — `already_present` in the
+    teammate's casing so the reply can name what was skipped."""
+    merged = [str(c).strip() for c in (existing or []) if str(c).strip()]
+    was_existing = {c.casefold() for c in merged}
+    have = set(was_existing)
+    added, already = [], []
+    for c in additions or []:
+        name = str(c).strip()
+        if not name:
+            continue
+        key = name.casefold()
+        if key in have:
+            if key in was_existing:  # intra-request dupes skip silently
+                already.append(name)
+            continue
+        have.add(key)
+        merged.append(name)
+        added.append(name)
+    return merged, added, already
+
+
+def drop_cities(existing, removals) -> tuple[list[str], list[str], list[str]]:
+    """Remove cities from a target-city list, case-insensitively. Pure.
+
+    Returns (remaining, removed, missing) — `removed` in the STORED casing
+    (what actually leaves the list), `missing` in the teammate's casing."""
+    current = [str(c).strip() for c in (existing or []) if str(c).strip()]
+    wanted = {str(c).strip().casefold() for c in (removals or []) if str(c).strip()}
+    remaining = [c for c in current if c.casefold() not in wanted]
+    removed = [c for c in current if c.casefold() in wanted]
+    hit = {c.casefold() for c in removed}
+    missing = [str(c).strip() for c in (removals or []) if str(c).strip() and str(c).strip().casefold() not in hit]
+    return remaining, removed, missing
+
+
+# Client-profile fields SerMastr may edit (the Setup page's simple scalars).
+# Deliberately excluded: name (used for chat client-resolution + dup-checked),
+# brand guide / ICP text (long-form authored assets), GBP + page structures
+# (complex objects with their own capture flows), WP/Drive credentials.
+_PROFILE_FIELDS = {
+    "website_url": "the website URL",
+    "gsc_property": "the Search Console property",
+    "business_location": "the business location",
+    "retainer_monthly": "the monthly retainer",
+    "client_type": "the client type",
+    "is_sab": "the service-area-business (SAB) flag",
+}
+
+
+def coerce_profile_value(field: str, value) -> tuple[object, Optional[str]]:
+    """Validate + coerce a profile edit's value. Pure. Returns (coerced, error).
+
+    Mirrors the clients API's typing: retainer → float, client_type →
+    local|enterprise, is_sab → bool, website_url → scheme-prefixed."""
+    if field not in _PROFILE_FIELDS:
+        editable = ", ".join(_PROFILE_FIELDS)
+        return None, f"I can't edit “{field}” — I can change: {editable}."
+    raw = ("" if value is None else str(value)).strip()
+    if not raw:
+        return None, f"What should {_PROFILE_FIELDS[field]} be set to?"
+    if field == "retainer_monthly":
+        try:
+            return float(raw.replace("$", "").replace(",", "")), None
+        except ValueError:
+            return None, f"“{raw}” isn't a number — give me the monthly retainer in dollars."
+    if field == "client_type":
+        v = raw.lower()
+        if v not in ("local", "enterprise"):
+            return None, "Client type must be *local* or *enterprise*."
+        return v, None
+    if field == "is_sab":
+        v = raw.lower()
+        if v in ("true", "yes", "y", "1", "on", "sab"):
+            return True, None
+        if v in ("false", "no", "n", "0", "off"):
+            return False, None
+        return None, "Should the SAB flag be *yes* or *no*?"
+    if field == "website_url":
+        return (raw if raw.startswith(("http://", "https://")) else f"https://{raw}"), None
+    return raw, None
 
 
 def _act_rebuild_plan(client_id: str, args: Optional[dict] = None) -> str:
@@ -910,6 +1021,470 @@ async def _act_complete_task(client_id: str, args: Optional[dict] = None) -> str
     return f"✅ Marked *“{args.get('task_name')}”* complete."
 
 
+# ---------------------------------------------------------------------------
+# Admin actions — client profile, target cities, tracked keywords, AI-visibility
+# keywords/competitors, campaign goals, client reports. All confirm-gated
+# (writes to campaign state / paid follow-on work), all staged so the confirm
+# names the exact change before anything is written.
+# ---------------------------------------------------------------------------
+def _clean_list(values) -> list[str]:
+    """Trim + case-insensitively dedupe a Claude-supplied string list."""
+    seen: dict[str, str] = {}
+    for v in values or []:
+        name = str(v).strip() if v is not None else ""
+        if name:
+            seen.setdefault(name.casefold(), name)
+    return list(seen.values())
+
+
+def _client_row(client_id: str, columns: str) -> dict:
+    rows = (
+        get_supabase().table("clients").select(columns).eq("id", client_id).limit(1).execute()
+    ).data
+    return rows[0] if rows else {}
+
+
+def _fmt_profile_value(field: str, value) -> str:
+    if field == "is_sab":
+        return "yes" if value else "no"
+    if field == "retainer_monthly" and value is not None:
+        return f"${value:,.0f}"
+    return str(value) if value not in (None, "") else "(not set)"
+
+
+async def _stage_update_profile(client_id: str, args: dict) -> tuple[str, dict | str]:
+    field = (args.get("field") or "").strip()
+    coerced, error = coerce_profile_value(field, args.get("value"))
+    if error:
+        return "reply", error
+    current = _client_row(client_id, field).get(field)
+    if current == coerced:
+        return "reply", f"{_PROFILE_FIELDS[field].capitalize()} is already *{_fmt_profile_value(field, coerced)}* — nothing to change."
+    staged = {**args, "field": field, "coerced_value": coerced}
+    staged["_confirm"] = (
+        f"set {_PROFILE_FIELDS[field]} to *{_fmt_profile_value(field, coerced)}* "
+        f"(currently *{_fmt_profile_value(field, current)}*)"
+    )
+    return "confirm", staged
+
+
+def _act_update_profile(client_id: str, args: Optional[dict] = None) -> str:
+    args = args or {}
+    field = args.get("field")
+    if field not in _PROFILE_FIELDS or "coerced_value" not in args:
+        return "I lost track of which field to change — ask again naming the field and value."
+    value = args["coerced_value"]
+    supabase = get_supabase()
+    updates: dict = {field: value, "updated_at": "now()"}
+    if field == "website_url":
+        # Mirror the clients API: a website change re-runs the site analysis.
+        updates.update(
+            {"website_analysis_status": "pending", "website_analysis": None, "website_analysis_error": None}
+        )
+    supabase.table("clients").update(updates).eq("id", client_id).execute()
+    if field == "website_url":
+        supabase.table("async_jobs").insert(
+            {
+                "job_type": "website_scrape",
+                "entity_id": client_id,
+                "payload": {"website_url": value, "client_id": client_id},
+            }
+        ).execute()
+        return f"✅ Website set to *{value}* — re-running the site analysis in the background."
+    return f"✅ Set {_PROFILE_FIELDS[field]} to *{_fmt_profile_value(field, value)}*."
+
+
+async def _stage_add_cities(client_id: str, args: dict) -> tuple[str, dict | str]:
+    cities = _clean_list(args.get("cities"))
+    if not cities:
+        return "reply", "Which cities should I add to the target list?"
+    existing = _client_row(client_id, "target_cities").get("target_cities") or []
+    merged, added, already = merge_cities(existing, cities)
+    if not added:
+        return "reply", f"Already on the target list: {', '.join(already)} — nothing to add."
+    staged = {**args, "merged": merged, "added": added, "already": already}
+    note = f" ({', '.join(already)} already on the list)" if already else ""
+    staged["_confirm"] = f"add *{', '.join(added)}* to the target-city list{note}"
+    return "confirm", staged
+
+
+def _act_add_cities(client_id: str, args: Optional[dict] = None) -> str:
+    args = args or {}
+    if not args.get("merged"):
+        return "I lost track of which cities to add — ask again naming them."
+    get_supabase().table("clients").update(
+        {"target_cities": args["merged"], "updated_at": "now()"}
+    ).eq("id", client_id).execute()
+    return (
+        f"✅ Added *{', '.join(args.get('added') or [])}* to the target cities "
+        f"({len(args['merged'])} total). The Local SEO silo planner picks them up on its next run."
+    )
+
+
+async def _stage_remove_cities(client_id: str, args: dict) -> tuple[str, dict | str]:
+    cities = _clean_list(args.get("cities"))
+    if not cities:
+        return "reply", "Which cities should I remove from the target list?"
+    existing = _client_row(client_id, "target_cities").get("target_cities") or []
+    remaining, removed, missing = drop_cities(existing, cities)
+    if not removed:
+        listing = ", ".join(existing[:12]) or "none"
+        return "reply", (
+            f"None of those are on the target list. Current target cities: {listing}."
+        )
+    staged = {**args, "remaining": remaining, "removed": removed}
+    note = f" ({', '.join(missing)} not on the list)" if missing else ""
+    staged["_confirm"] = f"remove *{', '.join(removed)}* from the target-city list{note}"
+    return "confirm", staged
+
+
+def _act_remove_cities(client_id: str, args: Optional[dict] = None) -> str:
+    args = args or {}
+    if not args.get("removed"):
+        return "I lost track of which cities to remove — ask again naming them."
+    get_supabase().table("clients").update(
+        {"target_cities": args.get("remaining") or [], "updated_at": "now()"}
+    ).eq("id", client_id).execute()
+    return f"🗑️ Removed *{', '.join(args['removed'])}* from the target cities ({len(args.get('remaining') or [])} remain)."
+
+
+async def _stage_add_tracked_keywords(client_id: str, args: dict) -> tuple[str, dict | str]:
+    keywords = _clean_list(args.get("keywords"))
+    if not keywords:
+        return "reply", "Which keywords should I start tracking?"
+    existing = {
+        (r.get("keyword") or "").casefold()
+        for r in (
+            get_supabase().table("tracked_keywords").select("keyword")
+            .eq("client_id", client_id).execute()
+        ).data or []
+    }
+    new = [k for k in keywords if k.casefold() not in existing]
+    dupes = [k for k in keywords if k.casefold() in existing]
+    if not new:
+        return "reply", f"Already tracked: {', '.join(dupes)} — nothing to add."
+    staged = {**args, "new": new}
+    note = f" ({', '.join(dupes)} already tracked)" if dupes else ""
+    staged["_confirm"] = f"start rank-tracking *{', '.join(new)}*{note}"
+    return "confirm", staged
+
+
+def _act_add_tracked_keywords(client_id: str, args: Optional[dict] = None) -> str:
+    from services import keyword_market, rank_materialize
+
+    args = args or {}
+    new = args.get("new") or []
+    if not new:
+        return "I lost track of which keywords to add — ask again naming them."
+    supabase = get_supabase()
+    supabase.table("tracked_keywords").upsert(
+        [{"client_id": client_id, "keyword": kw, "source": "gsc"} for kw in new],
+        on_conflict="client_id,keyword",
+        ignore_duplicates=True,
+    ).execute()
+    # Same follow-on as the Rankings page: backfill the rank axis + market data.
+    rank_materialize.enqueue_materialize(client_id)
+    keyword_market.enqueue_keyword_market(client_id)
+    return (
+        f"✅ Now tracking *{', '.join(new)}* — backfilling rank history and market "
+        "data in the background; they appear on the Rankings page shortly."
+    )
+
+
+async def _stage_remove_tracked_keyword(client_id: str, args: dict) -> tuple[str, dict | str]:
+    query = (args.get("keyword") or "").strip()
+    if not query:
+        return "reply", "Which keyword should I stop tracking?"
+    rows = (
+        get_supabase().table("tracked_keywords").select("id, keyword")
+        .eq("client_id", client_id).execute()
+    ).data or []
+    matches = match_named(rows, query, key="keyword")
+    if not matches:
+        listing = "; ".join(r["keyword"] for r in rows[:10]) or "none"
+        return "reply", f"“{query}” isn't tracked for this client. Tracked keywords: {listing}."
+    if len(matches) > 1:
+        listing = "\n".join(f"• {r['keyword']}" for r in matches[:8])
+        return "reply", f"“{query}” matches {len(matches)} tracked keywords — which one?\n{listing}"
+    staged = {**args, "keyword_id": matches[0]["id"], "keyword": matches[0]["keyword"]}
+    staged["_confirm"] = (
+        f"stop tracking *“{matches[0]['keyword']}”* and delete its rank history"
+    )
+    return "confirm", staged
+
+
+def _act_remove_tracked_keyword(client_id: str, args: Optional[dict] = None) -> str:
+    args = args or {}
+    if not args.get("keyword_id"):
+        return "I lost track of which keyword to remove — ask again naming it."
+    get_supabase().table("tracked_keywords").delete().eq("id", args["keyword_id"]).execute()
+    return f"🗑️ Stopped tracking *“{args.get('keyword')}”*."
+
+
+async def _stage_add_ai_keywords(client_id: str, args: dict) -> tuple[str, dict | str]:
+    from services import brand_service
+
+    keywords = _clean_list(args.get("keywords"))
+    if not keywords:
+        return "reply", "Which keywords should I add to AI Visibility tracking?"
+    existing = {
+        (r.get("keyword") or "").casefold() for r in brand_service.list_keywords(client_id)
+    }
+    new = [k for k in keywords if k.casefold() not in existing]
+    dupes = [k for k in keywords if k.casefold() in existing]
+    if not new:
+        return "reply", f"Already tracked in AI Visibility: {', '.join(dupes)} — nothing to add."
+    staged = {**args, "new": new}
+    note = f" ({', '.join(dupes)} already tracked)" if dupes else ""
+    staged["_confirm"] = f"add *{', '.join(new)}* to AI Visibility tracking{note}"
+    return "confirm", staged
+
+
+def _act_add_ai_keywords(client_id: str, args: Optional[dict] = None) -> str:
+    from fastapi import HTTPException
+
+    from services import brand_service
+
+    args = args or {}
+    new = args.get("new") or []
+    if not new:
+        return "I lost track of which keywords to add — ask again naming them."
+    added = []
+    for kw in new:
+        try:
+            brand_service.add_keyword(client_id, kw, None)
+            added.append(kw)
+        except HTTPException as exc:
+            if exc.detail != "keyword_exists":
+                raise
+    return (
+        f"✅ Added *{', '.join(added)}* to AI Visibility — they're included in the next scan."
+        if added
+        else "Those keywords were already tracked — nothing added."
+    )
+
+
+async def _stage_remove_ai_keyword(client_id: str, args: dict) -> tuple[str, dict | str]:
+    from services import brand_service
+
+    query = (args.get("keyword") or "").strip()
+    if not query:
+        return "reply", "Which AI-visibility keyword should I remove?"
+    rows = brand_service.list_keywords(client_id)
+    matches = match_named(rows, query, key="keyword")
+    if not matches:
+        listing = "; ".join(r["keyword"] for r in rows[:10]) or "none"
+        return "reply", f"“{query}” isn't an AI-visibility keyword here. Tracked: {listing}."
+    if len(matches) > 1:
+        listing = "\n".join(f"• {r['keyword']}" for r in matches[:8])
+        return "reply", f"“{query}” matches {len(matches)} keywords — which one?\n{listing}"
+    staged = {**args, "keyword_id": matches[0]["id"], "keyword": matches[0]["keyword"]}
+    staged["_confirm"] = f"remove *“{matches[0]['keyword']}”* from AI Visibility tracking"
+    return "confirm", staged
+
+
+def _act_remove_ai_keyword(client_id: str, args: Optional[dict] = None) -> str:
+    from services import brand_service
+
+    args = args or {}
+    if not args.get("keyword_id"):
+        return "I lost track of which keyword to remove — ask again naming it."
+    brand_service.delete_keyword(client_id, args["keyword_id"])
+    return f"🗑️ Removed *“{args.get('keyword')}”* from AI Visibility tracking."
+
+
+async def _stage_add_ai_competitor(client_id: str, args: dict) -> tuple[str, dict | str]:
+    from services import brand_service
+
+    name = (args.get("name") or "").strip()
+    if not name:
+        return "reply", "Which competitor should I add to AI Visibility tracking?"
+    existing = brand_service.list_competitors(client_id)
+    if any((c.get("competitor_name") or "").casefold() == name.casefold() for c in existing):
+        return "reply", f"*{name}* is already a tracked AI-visibility competitor."
+    staged = {**args, "name": name}
+    site = (args.get("website") or "").strip()
+    staged["_confirm"] = (
+        f"add *{name}*{f' ({site})' if site else ''} as an AI Visibility competitor"
+    )
+    return "confirm", staged
+
+
+def _act_add_ai_competitor(client_id: str, args: Optional[dict] = None) -> str:
+    from fastapi import HTTPException
+
+    from services import brand_service
+
+    args = args or {}
+    name = (args.get("name") or "").strip()
+    if not name:
+        return "I lost track of which competitor to add — ask again naming them."
+    try:
+        brand_service.add_competitor(client_id, name, (args.get("website") or "").strip() or None, None)
+    except HTTPException as exc:
+        if exc.detail == "competitor_exists":
+            return f"*{name}* is already a tracked AI-visibility competitor."
+        raise
+    return f"✅ Added *{name}* as an AI Visibility competitor — they're classified against the next scan."
+
+
+async def _stage_remove_ai_competitor(client_id: str, args: dict) -> tuple[str, dict | str]:
+    from services import brand_service
+
+    query = (args.get("name") or "").strip()
+    if not query:
+        return "reply", "Which AI-visibility competitor should I remove?"
+    rows = brand_service.list_competitors(client_id)
+    matches = match_named(rows, query, key="competitor_name")
+    if not matches:
+        listing = "; ".join(r["competitor_name"] for r in rows[:10]) or "none"
+        return "reply", f"“{query}” isn't a tracked competitor here. Tracked: {listing}."
+    if len(matches) > 1:
+        listing = "\n".join(f"• {r['competitor_name']}" for r in matches[:8])
+        return "reply", f"“{query}” matches {len(matches)} competitors — which one?\n{listing}"
+    staged = {**args, "competitor_id": matches[0]["id"], "name": matches[0]["competitor_name"]}
+    staged["_confirm"] = f"remove *{matches[0]['competitor_name']}* from AI Visibility competitors"
+    return "confirm", staged
+
+
+def _act_remove_ai_competitor(client_id: str, args: Optional[dict] = None) -> str:
+    from services import brand_service
+
+    args = args or {}
+    if not args.get("competitor_id"):
+        return "I lost track of which competitor to remove — ask again naming them."
+    brand_service.delete_competitor(client_id, args["competitor_id"])
+    return f"🗑️ Removed *{args.get('name')}* from AI Visibility competitors."
+
+
+async def _stage_add_goal(client_id: str, args: dict) -> tuple[str, dict | str]:
+    from services.campaign_goals import GOAL_TYPES
+
+    goal_type = (args.get("goal_type") or "").strip()
+    if goal_type not in GOAL_TYPES:
+        return "reply", f"Goal type must be one of: {', '.join(GOAL_TYPES)}."
+    label = (args.get("label") or "").strip()
+    if not label:
+        return "reply", "What should the goal be called? Give me a short label."
+    # Tolerate Claude passing numbers as strings.
+    for num_field, caster in (("target_value", float), ("target_position", int)):
+        if args.get(num_field) is not None:
+            try:
+                args[num_field] = caster(args[num_field])
+            except (TypeError, ValueError):
+                return "reply", f"“{args[num_field]}” isn't a number — what's the {num_field.replace('_', ' ')}?"
+    # Mirror the Campaign Goals API's validation rules.
+    if goal_type != "custom" and args.get("target_value") is None:
+        return "reply", "What's the target value for this goal (a number)?"
+    if goal_type == "keyword_position" and not (args.get("keyword") or "").strip():
+        return "reply", "Which keyword is this position goal for?"
+    if goal_type == "keywords_in_top" and not args.get("target_position"):
+        return "reply", "Top what? Give me the position band (e.g. top 3 → 3)."
+    due = (args.get("due_date") or "").strip()
+    if due:
+        try:
+            date.fromisoformat(due)
+        except ValueError:
+            return "reply", "The due date must be YYYY-MM-DD (e.g. 2026-12-31)."
+    staged = {**args, "label": label, "goal_type": goal_type}
+    bits = [goal_type.replace("_", " ")]
+    if args.get("keyword"):
+        bits.append(f"keyword “{args['keyword']}”")
+    if args.get("target_value") is not None:
+        bits.append(f"target {args['target_value']:g}")
+    if args.get("target_position"):
+        bits.append(f"top {args['target_position']}")
+    if due:
+        bits.append(f"due {due}")
+    staged["_confirm"] = f"create the campaign goal *“{label}”* ({', '.join(bits)})"
+    return "confirm", staged
+
+
+def _act_add_goal(client_id: str, args: Optional[dict] = None) -> str:
+    from services import campaign_goals
+
+    args = args or {}
+    if not (args.get("label") and args.get("goal_type")):
+        return "I lost track of the goal's details — ask again with the label and target."
+    fields = {
+        k: args.get(k)
+        for k in ("goal_type", "label", "keyword", "target_value", "target_position", "due_date", "notes")
+    }
+    if isinstance(fields.get("due_date"), str) and not fields["due_date"].strip():
+        fields["due_date"] = None
+    row = campaign_goals.create_goal(client_id, fields, created_by=None)
+    baseline = row.get("baseline_value")
+    note = f" Baseline captured: {baseline:g}." if isinstance(baseline, (int, float)) else ""
+    return (
+        f"🎯 Created the campaign goal *“{row.get('label')}”*.{note} "
+        "Progress is assessed on every read — see the Campaign Goals page."
+    )
+
+
+async def _stage_remove_goal(client_id: str, args: dict) -> tuple[str, dict | str]:
+    query = (args.get("label") or "").strip()
+    if not query:
+        return "reply", "Which goal should I remove? Give me (part of) its label."
+    rows = (
+        get_supabase().table("campaign_goals").select("id, label, goal_type")
+        .eq("client_id", client_id).execute()
+    ).data or []
+    matches = match_named(rows, query, key="label")
+    if not matches:
+        listing = "; ".join(r["label"] for r in rows[:10] if r.get("label")) or "none"
+        return "reply", f"I couldn't find a goal matching “{query}”. Goals: {listing}."
+    if len(matches) > 1:
+        listing = "\n".join(f"• {r['label']}" for r in matches[:8])
+        return "reply", f"“{query}” matches {len(matches)} goals — which one?\n{listing}"
+    staged = {**args, "goal_id": matches[0]["id"], "label": matches[0]["label"]}
+    staged["_confirm"] = f"permanently delete the campaign goal *“{matches[0]['label']}”*"
+    return "confirm", staged
+
+
+def _act_remove_goal(client_id: str, args: Optional[dict] = None) -> str:
+    args = args or {}
+    if not args.get("goal_id"):
+        return "I lost track of which goal to delete — ask again naming it."
+    get_supabase().table("campaign_goals").delete().eq("id", args["goal_id"]).eq(
+        "client_id", client_id
+    ).execute()
+    return f"🗑️ Deleted the campaign goal *“{args.get('label')}”*."
+
+
+_REPORT_TYPES = ("monthly", "weekly", "ai_visibility")
+
+
+async def _stage_generate_report(client_id: str, args: dict) -> tuple[str, dict | str]:
+    report_type = (args.get("report_type") or "monthly").strip()
+    if report_type not in _REPORT_TYPES:
+        return "reply", f"Report type must be one of: {', '.join(_REPORT_TYPES)}."
+    deliver = bool(args.get("deliver"))
+    staged = {**args, "report_type": report_type, "deliver": deliver}
+    staged["_confirm"] = (
+        f"generate a {report_type.replace('_', ' ')} client report"
+        + (
+            " and DELIVER it to the client per their report settings (email/Drive)"
+            if deliver
+            else " (internal — not delivered to the client)"
+        )
+    )
+    return "confirm", staged
+
+
+def _act_generate_report(client_id: str, args: Optional[dict] = None) -> str:
+    from services import client_report
+
+    args = args or {}
+    report_type = args.get("report_type") or "monthly"
+    deliver = bool(args.get("deliver"))
+    client_report.enqueue_client_report(client_id, report_type, deliver=deliver)
+    return (
+        f"📄 Generating the {report_type.replace('_', ' ')} report — it lands on the "
+        "Client Reports page in a minute or two"
+        + (" and is delivered per the client's report settings." if deliver else ".")
+    )
+
+
 # (tool name) → {label, paid, run} + optional:
 #   note   — the parenthetical in the reply-*yes* confirm (default: API-budget
 #            wording). `paid` really means "confirm-gated": paid API spend OR
@@ -977,6 +1552,210 @@ _ACTIONS: dict[str, dict] = {
                 "task_name": {"type": "string", "description": "Name (or distinctive part of the name) of the task to mark complete."},
             },
             "required": ["task_name"],
+        },
+    },
+    # ── Admin actions: client profile / setup ──────────────────────────────
+    "update_client_profile": {
+        "label": "edit the client's profile",
+        "paid": True,
+        "note": "changes the client's Setup-page configuration",
+        "run": _act_update_profile,
+        "stage": _stage_update_profile,
+        "params": {
+            "properties": {
+                "field": {
+                    "type": "string",
+                    "enum": list(_PROFILE_FIELDS),
+                    "description": "Which profile field to change.",
+                },
+                "value": {
+                    "type": "string",
+                    "description": "The new value, verbatim from the teammate (retainer as a dollar amount; client_type local|enterprise; is_sab yes|no).",
+                },
+            },
+            "required": ["field", "value"],
+        },
+    },
+    "add_target_cities": {
+        "label": "add target cities",
+        "paid": True,
+        "note": "adds cities to the client's Local SEO target-city list",
+        "run": _act_add_cities,
+        "stage": _stage_add_cities,
+        "params": {
+            "properties": {
+                "cities": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "City names to add to the target list, verbatim from the teammate.",
+                },
+            },
+            "required": ["cities"],
+        },
+    },
+    "remove_target_cities": {
+        "label": "remove target cities",
+        "paid": True,
+        "note": "removes cities from the client's Local SEO target-city list",
+        "run": _act_remove_cities,
+        "stage": _stage_remove_cities,
+        "params": {
+            "properties": {
+                "cities": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "City names to remove from the target list.",
+                },
+            },
+            "required": ["cities"],
+        },
+    },
+    # ── Admin actions: organic rank tracker keywords ───────────────────────
+    "add_tracked_keywords": {
+        "label": "add tracked keywords",
+        "paid": True,
+        "note": "starts rank-tracking new keywords (backfills rank + market data via DataForSEO)",
+        "run": _act_add_tracked_keywords,
+        "stage": _stage_add_tracked_keywords,
+        "params": {
+            "properties": {
+                "keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Keywords to start rank-tracking, verbatim from the teammate.",
+                },
+            },
+            "required": ["keywords"],
+        },
+    },
+    "remove_tracked_keyword": {
+        "label": "remove a tracked keyword",
+        "paid": True,
+        "note": "stops tracking a keyword and deletes its rank history",
+        "run": _act_remove_tracked_keyword,
+        "stage": _stage_remove_tracked_keyword,
+        "params": {
+            "properties": {
+                "keyword": {"type": "string", "description": "The keyword (or a distinctive part of it) to stop tracking."},
+            },
+            "required": ["keyword"],
+        },
+    },
+    # ── Admin actions: AI Visibility keywords + competitors ────────────────
+    "add_ai_keywords": {
+        "label": "add AI Visibility keywords",
+        "paid": True,
+        "note": "adds keywords to AI Visibility tracking (scanned on the next run)",
+        "run": _act_add_ai_keywords,
+        "stage": _stage_add_ai_keywords,
+        "params": {
+            "properties": {
+                "keywords": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Keywords to add to AI Visibility tracking.",
+                },
+            },
+            "required": ["keywords"],
+        },
+    },
+    "remove_ai_keyword": {
+        "label": "remove an AI Visibility keyword",
+        "paid": True,
+        "note": "removes a keyword from AI Visibility tracking",
+        "run": _act_remove_ai_keyword,
+        "stage": _stage_remove_ai_keyword,
+        "params": {
+            "properties": {
+                "keyword": {"type": "string", "description": "The AI-visibility keyword (or a distinctive part of it) to remove."},
+            },
+            "required": ["keyword"],
+        },
+    },
+    "add_ai_competitor": {
+        "label": "add an AI Visibility competitor",
+        "paid": True,
+        "note": "adds a competitor to AI Visibility tracking",
+        "run": _act_add_ai_competitor,
+        "stage": _stage_add_ai_competitor,
+        "params": {
+            "properties": {
+                "name": {"type": "string", "description": "The competitor's business name."},
+                "website": {"type": "string", "description": "The competitor's website, if the teammate gave one."},
+            },
+            "required": ["name"],
+        },
+    },
+    "remove_ai_competitor": {
+        "label": "remove an AI Visibility competitor",
+        "paid": True,
+        "note": "removes a competitor from AI Visibility tracking",
+        "run": _act_remove_ai_competitor,
+        "stage": _stage_remove_ai_competitor,
+        "params": {
+            "properties": {
+                "name": {"type": "string", "description": "The competitor's name (or a distinctive part of it) to remove."},
+            },
+            "required": ["name"],
+        },
+    },
+    # ── Admin actions: campaign goals ──────────────────────────────────────
+    "add_campaign_goal": {
+        "label": "add a campaign goal",
+        "paid": True,
+        "note": "creates a success target the strategist judges progress against",
+        "run": _act_add_goal,
+        "stage": _stage_add_goal,
+        "params": {
+            "properties": {
+                "goal_type": {
+                    "type": "string",
+                    "enum": ["keyword_position", "keywords_in_top", "organic_clicks", "organic_impressions", "ai_visibility", "maps_pack_presence", "custom"],
+                    "description": "The goal's metric. keyword_position = one keyword to position N (needs keyword); keywords_in_top = N keywords inside top X (needs target_position); organic_clicks/impressions = 30-day GSC sums; ai_visibility = visibility %; maps_pack_presence = top-3 pin share %; custom = manual.",
+                },
+                "label": {"type": "string", "description": "Short human label, e.g. \"'roof repair' to top 3\"."},
+                "target_value": {"type": "number", "description": "The numeric target (position for keyword_position — lower is better; count/percentage otherwise)."},
+                "keyword": {"type": "string", "description": "The keyword, for keyword_position goals."},
+                "target_position": {"type": "integer", "description": "The top-X band, for keywords_in_top goals (top 3 → 3)."},
+                "due_date": {"type": "string", "description": "Due date YYYY-MM-DD, if the teammate gave one (e.g. \"by Q4\" → 2026-12-31)."},
+                "notes": {"type": "string", "description": "Any extra context the teammate gave."},
+            },
+            "required": ["goal_type", "label"],
+        },
+    },
+    "remove_campaign_goal": {
+        "label": "remove a campaign goal",
+        "paid": True,
+        "note": "permanently deletes a campaign goal",
+        "run": _act_remove_goal,
+        "stage": _stage_remove_goal,
+        "params": {
+            "properties": {
+                "label": {"type": "string", "description": "The goal's label (or a distinctive part of it)."},
+            },
+            "required": ["label"],
+        },
+    },
+    # ── Admin actions: client reports ──────────────────────────────────────
+    "generate_client_report": {
+        "label": "generate a client report",
+        "paid": True,
+        "note": "renders a client PDF report (uses API budget)",
+        "run": _act_generate_report,
+        "stage": _stage_generate_report,
+        "params": {
+            "properties": {
+                "report_type": {
+                    "type": "string",
+                    "enum": ["monthly", "weekly", "ai_visibility"],
+                    "description": "Which report to generate (default monthly).",
+                },
+                "deliver": {
+                    "type": "boolean",
+                    "description": "True ONLY when the teammate explicitly asks to send/deliver it to the client — delivery emails the client's recipients + saves to their Drive.",
+                },
+            },
+            "required": [],
         },
     },
 }
