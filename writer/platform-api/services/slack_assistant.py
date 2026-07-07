@@ -44,6 +44,7 @@ import httpx
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import task_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -156,9 +157,12 @@ _SYSTEM = (
     "- Asana board: add_asana_task (extract the task name and assignee from the "
     "message, and put the relevant context in notes — including findings from "
     "earlier in this conversation, e.g. a review insight or data point the task "
-    "acts on, so the assignee knows WHY; if the teammate gives a deadline — 'by "
-    "Friday', 'end of month', 'by Q4' — resolve it to a YYYY-MM-DD due_date, "
-    "otherwise leave it off and the team fills the date in), remove_asana_task / "
+    "acts on, so the assignee knows WHY. Due date: if the teammate gives an "
+    "explicit deadline ('by Friday', 'end of month', 'by Q4') resolve it to a "
+    "YYYY-MM-DD due_date; if they don't, set sop_task to the matching SOP "
+    "task-catalog entry so its standard delivery turnaround defaults the date — "
+    "and if no catalog entry genuinely matches, leave sop_task off and the "
+    "teammate will be asked to confirm a date), remove_asana_task / "
     "complete_asana_task (pass the task name the teammate used).\n"
     "- Client profile (the Setup page): update_client_profile (website URL, GSC "
     "property, business location, monthly retainer, client type, SAB flag) and "
@@ -1453,12 +1457,30 @@ async def _stage_add_task(client_id: str, args: dict) -> tuple[str, dict | str]:
     if problem:
         return "reply", problem
 
+    # Due date resolution (owner rule): an explicit date wins; otherwise
+    # default to the task's SOP delivery turnaround; if the task isn't in the
+    # SOP catalog (or its turnaround is a recurring/undefined cadence), ask the
+    # teammate to confirm a date rather than creating a dateless task. An
+    # explicit "leave it blank" (no_due_date) opts out of both.
     due = (args.get("due_date") or "").strip()
+    due_note = ""
     if due:
         try:
             date.fromisoformat(due)
         except ValueError:
             return "reply", "The due date must be YYYY-MM-DD (e.g. 2026-12-31)."
+    elif not args.get("no_due_date"):
+        sop = task_catalog.due_date_for(args.get("sop_task") or "", date.today())
+        if sop:
+            due_date_obj, delivery_text, label = sop
+            due = due_date_obj.isoformat()
+            due_note = f" (SOP delivery: {delivery_text} for {label})"
+        else:
+            return "reply", (
+                f"I couldn't find a set delivery time for *“{name}”* in the SOP task "
+                "catalog. What due date should I set? (YYYY-MM-DD — or say to leave it "
+                "blank and the team will fill it in.)"
+            )
 
     assignee_note = "unassigned"
     assignee_gid = None
@@ -1478,7 +1500,10 @@ async def _stage_add_task(client_id: str, args: dict) -> tuple[str, dict | str]:
                 "(check the Workload page)"
             )
     staged = {**args, "task_name": name, "assignee_gid": assignee_gid, "due_date": due or None}
-    detail = assignee_note + (f", due {due}" if due else "")
+    if due:
+        detail = f"{assignee_note}, due {due}{due_note}"
+    else:
+        detail = f"{assignee_note}, no due date"
     staged["_confirm"] = f"create the Asana task *“{name}”* ({detail})"
     return "confirm", staged
 
@@ -2092,6 +2117,11 @@ async def _act_live_serp(client_id: str, args: Optional[dict] = None) -> str:
     return f"Live SERP for *{keyword}* (just checked) — {domain} ranks:\n{lines}"
 
 
+# SOP task-catalog labels the LLM matches a new task against so its standard
+# delivery turnaround can default the Asana due date (services/task_catalog.py).
+_SOP_TASK_ENUM = task_catalog.catalog_labels()
+
+
 # (tool name) → {label, paid, run} + optional:
 #   note   — the parenthetical in the reply-*yes* confirm (default: API-budget
 #            wording). `paid` really means "confirm-gated": paid API spend OR
@@ -2131,7 +2161,13 @@ _ACTIONS: dict[str, dict] = {
                 "task_name": {"type": "string", "description": "The task's name, verbatim from the teammate."},
                 "assignee": {"type": "string", "description": "Person to assign it to (first or full name), if the teammate named one."},
                 "notes": {"type": "string", "description": "Detail for the task description — from the message OR from earlier in the conversation (e.g. the research finding, review insight, or data point the task is based on, so the assignee has the context)."},
-                "due_date": {"type": "string", "description": "Due date as YYYY-MM-DD, if the teammate gave one (e.g. \"by Friday\", \"end of month\", \"by Q4\" → the resolved calendar date). Omit if they didn't specify one — the team fills dates in themselves."},
+                "due_date": {"type": "string", "description": "Due date as YYYY-MM-DD, ONLY if the teammate gave an explicit deadline (e.g. \"by Friday\", \"end of month\", \"by Q4\" → the resolved calendar date). An explicit date overrides the SOP default. Omit when they didn't state one."},
+                "sop_task": {
+                    "type": "string",
+                    "enum": _SOP_TASK_ENUM,
+                    "description": "When no explicit due_date is given, pick the SOP task-catalog entry that best matches this task so its standard delivery turnaround sets the due date (e.g. a niche-edit order → \"Niche edit\"; a citations batch → \"Citations (per 40-batch)\"; a GBP Blast → \"GBP Blast\"). Omit if none genuinely matches — don't force-fit; the teammate will be asked to confirm a date.",
+                },
+                "no_due_date": {"type": "boolean", "description": "True ONLY when the teammate explicitly says to leave the due date blank / let the team fill it in. Skips both the explicit date and the SOP default."},
             },
             "required": ["task_name"],
         },
