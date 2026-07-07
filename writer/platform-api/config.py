@@ -459,6 +459,11 @@ class Settings(BaseSettings):
     # fully invisible on, or newly-detected misinformation. Set False to mute.
     brand_alerts_enabled: bool = True
     brand_alert_visibility_drop_pct: int = 15
+    # Reputation alarm (LABS parity): a completed cell with sentiment below the
+    # threshold at at-least this classifier confidence counts as a negative
+    # mention; alerts fire only for cells that weren't negative last scan.
+    brand_alert_sentiment_threshold: float = -0.3
+    brand_alert_confidence_min: float = 0.7
 
     # Service Page scoring: after a service_page run generates, it auto-scores
     # (nlp-api national mode) and auto-reoptimizes ONCE if the composite is below
