@@ -192,9 +192,19 @@ export function AsanaTasks() {
             disabled={!mappingDirty || !projectGid.trim() || saveMapping.isPending}
             onClick={() => saveMapping.mutate()}
           >
-            <Save size={14} /> {saveMapping.isPending ? 'Saving…' : 'Save'}
+            <Save size={14} /> {saveMapping.isPending ? 'Saving…' : !mappingDirty && saveMapping.isSuccess ? 'Saved' : 'Save'}
           </button>
         </div>
+        {saveMapping.isSuccess && !mappingDirty && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#15803d', marginTop: 8 }}>
+            <CheckCircle2 size={14} /> Project mapping saved — monthly sections, task-plan pushes and strategist tasks now go to this project.
+          </div>
+        )}
+        {saveMapping.isError && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#b91c1c', marginTop: 8 }}>
+            <AlertTriangle size={14} /> Couldn’t save: {(saveMapping.error as Error).message}
+          </div>
+        )}
 
         <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid #f1f5f9' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>Auto-assign team</div>
