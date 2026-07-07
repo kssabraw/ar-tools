@@ -901,6 +901,31 @@ def test_admin_actions_registered_confirm_gated_and_staged():
 
 
 # ---------------------------------------------------------------------------
+# is_local_client
+# ---------------------------------------------------------------------------
+def test_is_local_client_no_signals_is_not_local():
+    assert slack_assistant.is_local_client({}) is False
+    # client_type is deliberately ignored — it defaults to 'local' for everyone.
+    assert slack_assistant.is_local_client({"client_type": "local"}) is False
+
+
+def test_is_local_client_client_row_signals():
+    assert slack_assistant.is_local_client({"gbp": {"place_id": "abc"}}) is True
+    assert slack_assistant.is_local_client({"gbp": {"business_name": "Acme Plumbing"}}) is True
+    assert slack_assistant.is_local_client({"is_sab": True}) is True
+    assert slack_assistant.is_local_client({"business_location": "123 Main St, Austin"}) is True
+    assert slack_assistant.is_local_client({"target_cities": ["Penrith"]}) is True
+    # Empty/null shapes stay non-local.
+    assert slack_assistant.is_local_client({"gbp": {}, "target_cities": [], "is_sab": False}) is False
+
+
+def test_is_local_client_actual_local_work_counts():
+    assert slack_assistant.is_local_client({}, local_seo_pages=2) is True
+    assert slack_assistant.is_local_client({}, maps_scans=1) is True
+    assert slack_assistant.is_local_client({}, local_seo_pages=0, maps_scans=0) is False
+
+
+# ---------------------------------------------------------------------------
 # SOP grounding — the strategy-question gate + domain selection (pure).
 # ---------------------------------------------------------------------------
 def test_wants_sop_grounding_matches_strategy_shapes():
@@ -956,3 +981,52 @@ def test_read_sop_tool_lists_docs():
     assert "doc" in tool["input_schema"]["properties"]
     # The live SOP corpus is vendored into the service — the catalog should name it.
     assert "How_To_Rank_In_Google_Maps_SOP.md" in tool["description"]
+
+
+# ---------------------------------------------------------------------------
+# interpret — capacity-error degrade (429/529 → friendly reply, not an error)
+# ---------------------------------------------------------------------------
+def _capacity_interpret(status_code: int):
+    import asyncio
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    anthropic = __import__("anthropic")
+    import httpx
+
+    req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    resp = httpx.Response(status_code, request=req, json={"type": "error"})
+    err = anthropic.APIStatusError("capacity", response=resp, body=None)
+    err.status_code = status_code
+
+    api = MagicMock()
+    api.messages.create = AsyncMock(side_effect=err)
+    with patch.object(anthropic, "AsyncAnthropic", return_value=api):
+        return asyncio.run(
+            slack_assistant.interpret("how are we doing?", {"id": "c1", "name": "Acme"}, {})
+        )
+
+
+def test_interpret_rate_limited_returns_busy_reply():
+    import pytest
+
+    pytest.importorskip("anthropic")
+    kind, payload = _capacity_interpret(429)
+    assert kind == "text"
+    assert payload == slack_assistant._BUSY_REPLY
+
+
+def test_interpret_overloaded_returns_busy_reply():
+    import pytest
+
+    pytest.importorskip("anthropic")
+    kind, payload = _capacity_interpret(529)
+    assert kind == "text"
+    assert payload == slack_assistant._BUSY_REPLY
+
+
+def test_interpret_other_api_error_still_raises():
+    import pytest
+
+    anthropic = pytest.importorskip("anthropic")
+    with pytest.raises(anthropic.APIStatusError):
+        _capacity_interpret(500)

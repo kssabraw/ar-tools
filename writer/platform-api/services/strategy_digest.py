@@ -282,12 +282,14 @@ def render_digest(digest: dict, budget_chars: int) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 def _prov_client(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
     from services import freeze, icp_service
+    from services.slack_assistant import is_local_client
 
     rows = (
         supabase.table("clients")
         .select(
             "name, website_url, gbp, brand_voice, detected_icp, differentiators, "
-            "icp_text, target_cities, retainer_monthly, is_sab, client_type"
+            "icp_text, target_cities, retainer_monthly, is_sab, client_type, "
+            "business_location"
         )
         .eq("id", client_id).limit(1).execute()
     ).data
@@ -297,13 +299,34 @@ def _prov_client(supabase, client_id: str, today: date, now: datetime) -> Option
     gbp = c.get("gbp") or {}
     review_count = gbp.get("gbp_review_count")
     icp = icp_service.resolve_icp_text(c) or ""
+    # Local-only settings (target cities) read "n/a" for a non-local client so
+    # the strategist never proposes fixing an empty list that is correct.
+    local = is_local_client(c)
+    if not local:
+        pages = (
+            supabase.table("local_seo_pages")
+            .select("id", count="exact", head=True)
+            .eq("client_id", client_id)
+            .is_("deleted_at", "null")
+            .execute()
+        ).count or 0
+        scans = (
+            supabase.table("maps_scans")
+            .select("id", count="exact", head=True)
+            .eq("client_id", client_id)
+            .execute()
+        ).count or 0
+        local = is_local_client(c, pages, scans)
     out = {
         "name": c.get("name"),
         "website": c.get("website_url"),
         "client_type": c.get("client_type") or "local",
         "is_sab": bool(c.get("is_sab")),
         "retainer_monthly": c.get("retainer_monthly"),
-        "target_cities": (c.get("target_cities") or [])[:12],
+        "local_campaign": local,
+        "target_cities": (c.get("target_cities") or [])[:12]
+        if local
+        else "n/a — no local campaign; suburb-level targeting does not apply",
         "gbp": {
             "business_name": gbp.get("business_name"),
             "address": gbp.get("address"),
