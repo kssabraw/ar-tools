@@ -60,3 +60,42 @@ async def get_task_plans(client_id: UUID, auth: dict = Depends(require_auth)) ->
         .execute()
     ).data or []
     return {"latest": rows[0] if rows else None, "history": rows}
+
+
+@router.post("/clients/{client_id}/task-plan/{plan_row_id}/push")
+async def push_task_plan(
+    client_id: UUID, plan_row_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    """Push a stored plan's task lines into the client's Asana project as an
+    async job (idempotent per line — a re-push creates only missing tasks).
+    409 when Asana isn't configured or the client has no project mapping."""
+    from services import asana_push, asana_service
+    from services.asana_monthly import get_project_gid
+
+    if not asana_service.is_configured():
+        raise HTTPException(status_code=409, detail="asana_not_configured")
+    if not get_project_gid(str(client_id)):
+        raise HTTPException(status_code=409, detail="no_project_mapping")
+    exists = (
+        get_supabase().table("monthly_task_plans").select("id")
+        .eq("id", str(plan_row_id)).eq("client_id", str(client_id)).limit(1).execute()
+    ).data
+    if not exists:
+        raise HTTPException(status_code=404, detail="plan_not_found")
+    job_id = asana_push.enqueue_asana_push(str(client_id), str(plan_row_id))
+    return {"job_id": job_id}
+
+
+@router.get("/clients/{client_id}/task-plan/push/{job_id}")
+async def get_push_status(
+    client_id: UUID, job_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    rows = (
+        get_supabase().table("async_jobs")
+        .select("status, result, error, entity_id, job_type")
+        .eq("id", str(job_id)).limit(1).execute()
+    ).data
+    if not rows or rows[0].get("entity_id") != str(client_id) or rows[0].get("job_type") != "asana_push":
+        raise HTTPException(status_code=404, detail="push_not_found")
+    row = rows[0]
+    return {"status": row["status"], "result": row.get("result"), "error": row.get("error")}

@@ -112,6 +112,24 @@ async def set_proposal_status(
         raise HTTPException(status_code=403, detail="senior_approval_required")
     proposals[idx]["status"] = body.status
     proposals[idx]["decided_by"] = auth.get("user_id")
+
+    # Strategist Phase 5: an approved proposal becomes a real Asana task in the
+    # client's project (best-effort — approval never fails over Asana; skipped
+    # when unconfigured/unmapped, or when a task already exists from a previous
+    # approve→dismiss→approve cycle).
+    if body.status == "approved" and not proposals[idx].get("asana_task"):
+        from services import asana_push
+
+        review_client = (
+            supabase.table("strategy_reviews").select("client_id")
+            .eq("id", str(review_id)).limit(1).execute()
+        ).data
+        client_id = review_client[0].get("client_id") if review_client else None
+        if client_id:
+            task = await asana_push.push_proposal(str(client_id), str(review_id), proposals[idx])
+            if task:
+                proposals[idx]["asana_task"] = task
+
     try:
         supabase.table("strategy_reviews").update({"proposals": proposals}).eq(
             "id", str(review_id)
@@ -119,4 +137,7 @@ async def set_proposal_status(
     except Exception as exc:
         logger.error("proposal_status_failed", extra={"review_id": str(review_id), "error": str(exc)})
         raise HTTPException(status_code=502, detail="proposal_status_failed") from exc
-    return {"review_id": str(review_id), "idx": idx, "status": body.status}
+    return {
+        "review_id": str(review_id), "idx": idx, "status": body.status,
+        "asana_task": proposals[idx].get("asana_task"),
+    }

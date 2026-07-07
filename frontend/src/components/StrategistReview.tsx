@@ -285,6 +285,12 @@ function ProposalRow({
             ) : null}
             {p.effort && <span style={metaPill}>{p.effort} effort</span>}
             {p.assignee_hint && <span style={metaPill}>{p.assignee_hint}</span>}
+            {p.asana_task?.url && (
+              <a href={p.asana_task.url} target="_blank" rel="noreferrer"
+                style={{ ...metaPill, color: '#4f46e5', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                <ExternalLink size={10} /> Asana task
+              </a>
+            )}
           </div>
           <div style={{ fontSize: 12.5, color: '#334155', marginTop: 3, lineHeight: 1.5 }}>{p.action}</div>
           <button style={disclose} onClick={() => setOpen((v) => !v)}>

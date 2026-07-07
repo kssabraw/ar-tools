@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, AlertTriangle, Calculator, Download, OctagonAlert, RefreshCw, Wallet,
+  ArrowLeft, AlertTriangle, Calculator, Download, ExternalLink, OctagonAlert, RefreshCw, Send, Wallet,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
@@ -43,7 +43,13 @@ interface PlanRow {
   remaining: number
   flags: string[]
   plan: PlanBody
+  asana_push: Record<string, { gid: string; url: string; name: string }> | null
   created_at: string
+}
+interface PushStatus {
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  result: { status: string; created?: number; skipped?: number; errors?: string[]; reason?: string } | null
+  error: string | null
 }
 interface PlansResponse {
   latest: PlanRow | null
@@ -97,6 +103,29 @@ export function TaskPlan() {
   const shown: PlanRow | null =
     (viewPlanId && history.find((p) => p.id === viewPlanId)) || data?.latest || null
   const body = shown?.plan
+
+  // Push the shown plan's lines into the client's Asana project (async job;
+  // idempotent per line — a re-push creates only tasks that don't exist yet).
+  const [pushJobId, setPushJobId] = useState<string | null>(null)
+  const pushMut = useMutation({
+    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/task-plan/${shown!.id}/push`, {}),
+    onSuccess: (r) => setPushJobId(r.job_id),
+  })
+  const { data: pushStatus } = useQuery<PushStatus>({
+    queryKey: ['task-plan-push', id, pushJobId],
+    queryFn: () => api.get<PushStatus>(`/clients/${id}/task-plan/push/${pushJobId}`),
+    enabled: Boolean(pushJobId),
+    refetchInterval: (q) => {
+      const s = q.state.data?.status
+      return s === 'complete' || s === 'failed' ? false : 2500
+    },
+  })
+  const pushing = pushMut.isPending || (Boolean(pushJobId) && pushStatus?.status !== 'complete' && pushStatus?.status !== 'failed')
+  useEffect(() => {
+    if (pushStatus?.status === 'complete') {
+      queryClient.invalidateQueries({ queryKey: ['task-plans', id] })
+    }
+  }, [pushStatus?.status, id, queryClient])
 
   const exportCsv = () => {
     if (!body || !shown) return
@@ -161,7 +190,32 @@ export function TaskPlan() {
             <Download size={14} /> CSV
           </button>
         )}
+        {body && body.tasks.length > 0 && (
+          <button
+            onClick={() => { setPushJobId(null); pushMut.mutate() }}
+            disabled={pushing}
+            title="Create the plan's tasks in the client's Asana project (already-pushed lines are skipped)"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 14px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', fontSize: 13, fontWeight: 600, cursor: 'pointer', opacity: pushing ? 0.6 : 1 }}>
+            <Send size={14} /> {pushing ? 'Pushing…' : 'Push to Asana'}
+          </button>
+        )}
       </div>
+
+      {/* Push outcome */}
+      {pushMut.isError && (
+        <div style={{ padding: '10px 14px', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, marginBottom: 14, fontSize: 13, color: '#b91c1c' }}>
+          {(pushMut.error as Error).message === 'no_project_mapping'
+            ? 'This client has no Asana project mapped — set it on the Asana Tasks page first.'
+            : (pushMut.error as Error).message}
+        </div>
+      )}
+      {pushJobId && pushStatus && (pushStatus.status === 'complete' || pushStatus.status === 'failed') && (
+        <div style={{ padding: '10px 14px', background: pushStatus.status === 'complete' ? '#f0fdf4' : '#fef2f2', border: `1px solid ${pushStatus.status === 'complete' ? '#bbf7d0' : '#fecaca'}`, borderRadius: 10, marginBottom: 14, fontSize: 13, color: pushStatus.status === 'complete' ? '#166534' : '#b91c1c' }}>
+          {pushStatus.status === 'complete' && pushStatus.result
+            ? <>Asana push: {pushStatus.result.created ?? 0} task{(pushStatus.result.created ?? 0) === 1 ? '' : 's'} created{(pushStatus.result.skipped ?? 0) > 0 && <>, {pushStatus.result.skipped} already pushed</>}{(pushStatus.result.errors?.length ?? 0) > 0 && <> · {pushStatus.result.errors!.length} failed (retry pushes just the missing ones)</>}{pushStatus.result.reason && <> — {pushStatus.result.reason}</>}</>
+            : <>Asana push failed{pushStatus.error ? `: ${pushStatus.error}` : ''}</>}
+        </div>
+      )}
 
       {isLoading ? (
         <div style={{ color: '#64748b', fontSize: 13 }}>Loading…</div>
@@ -234,10 +288,19 @@ export function TaskPlan() {
                 </tr>
               </thead>
               <tbody>
-                {body.tasks.map((t) => (
+                {body.tasks.map((t, i) => (
                   <tr key={t.priority_rank} style={{ borderBottom: '1px solid #f1f5f9' }}>
                     <td style={{ padding: '8px 6px', color: '#94a3b8' }}>{t.priority_rank}</td>
-                    <td style={{ padding: '8px 6px', fontWeight: 600, color: '#0f172a' }}>{t.label}</td>
+                    <td style={{ padding: '8px 6px', fontWeight: 600, color: '#0f172a' }}>
+                      {t.label}
+                      {shown.asana_push?.[`${i}:${t.task_type}`]?.url && (
+                        <a href={shown.asana_push[`${i}:${t.task_type}`].url} target="_blank" rel="noreferrer"
+                          title="Open in Asana"
+                          style={{ marginLeft: 6, color: '#6366f1', verticalAlign: 'middle', display: 'inline-flex' }}>
+                          <ExternalLink size={12} />
+                        </a>
+                      )}
+                    </td>
                     <td style={{ padding: '8px 6px' }}>{t.quantity}</td>
                     <td style={{ padding: '8px 6px' }}>{money(t.line_cost)}</td>
                     <td style={{ padding: '8px 6px', color: t.assignee ? '#334155' : '#b45309', fontWeight: t.assignee ? 400 : 600 }}>
