@@ -641,6 +641,100 @@ def test_act_update_profile_website_triggers_rescrape(monkeypatch):
     assert "SAB" in out
 
 
+# ---------------------------------------------------------------------------
+# web search (server-side tool) — tool list, response parsing, pause_turn
+# ---------------------------------------------------------------------------
+def test_build_llm_tools_gates_web_search_on_setting(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "slack_assistant_web_search_enabled", True)
+    monkeypatch.setattr(settings, "slack_assistant_web_search_max_uses", 3)
+    tools = slack_assistant.build_llm_tools()
+    ws = [t for t in tools if t.get("name") == "web_search"]
+    assert len(ws) == 1
+    assert ws[0]["type"] == "web_search_20260209"
+    assert ws[0]["max_uses"] == 3
+    # every action tool still present
+    assert {t["name"] for t in slack_assistant._ACTION_TOOLS} <= {t["name"] for t in tools}
+
+    monkeypatch.setattr(settings, "slack_assistant_web_search_enabled", False)
+    tools = slack_assistant.build_llm_tools()
+    assert all(t.get("name") != "web_search" for t in tools)
+    assert len(tools) == len(slack_assistant._ACTION_TOOLS)
+
+
+def test_extract_interpretation_ignores_server_tool_blocks():
+    from types import SimpleNamespace as NS
+
+    # a searched answer: server tool use + result + interleaved text → text
+    content = [
+        NS(type="text", text="Let me check their reviews."),
+        NS(type="server_tool_use", name="web_search", input={"query": "FCR reviews"}),
+        NS(type="web_search_tool_result", content=[]),
+        NS(type="text", text="TrustPilot shows 4.2/5 across 87 reviews."),
+    ]
+    kind, payload = slack_assistant.extract_interpretation(content)
+    assert kind == "text"
+    assert "TrustPilot shows 4.2/5" in payload and "Let me check" in payload
+
+    # an action tool call wins over text
+    content = [
+        NS(type="text", text="Sure."),
+        NS(type="tool_use", name="rebuild_action_plan", input={}),
+    ]
+    kind, payload = slack_assistant.extract_interpretation(content)
+    assert kind == "action" and payload["name"] == "rebuild_action_plan"
+
+    # a tool_use whose name isn't a registered action is NOT an action
+    content = [NS(type="tool_use", name="unknown_tool", input={}), NS(type="text", text="hi")]
+    kind, payload = slack_assistant.extract_interpretation(content)
+    assert kind == "text" and payload == "hi"
+
+    # nothing usable → fallback message
+    kind, payload = slack_assistant.extract_interpretation([])
+    assert kind == "text" and "try rephrasing" in payload
+
+
+def test_create_with_continuation_resumes_pause_turn():
+    import asyncio
+    from types import SimpleNamespace as NS
+
+    class FakeApi:
+        def __init__(self, responses):
+            self._responses = list(responses)
+            self.calls = []
+
+        @property
+        def messages(self):
+            return self
+
+        async def create(self, **kwargs):
+            self.calls.append(kwargs)
+            return self._responses.pop(0)
+
+    paused = NS(stop_reason="pause_turn", content=[NS(type="server_tool_use", name="web_search")])
+    done = NS(stop_reason="end_turn", content=[NS(type="text", text="answer")])
+
+    api = FakeApi([paused, done])
+    resp = asyncio.run(slack_assistant._create_with_continuation(api, "sys", "q", []))
+    assert resp is done
+    assert len(api.calls) == 2
+    # the resumed request re-sends user + the paused assistant content
+    second = api.calls[1]["messages"]
+    assert second[0] == {"role": "user", "content": "q"}
+    assert second[1]["role"] == "assistant" and second[1]["content"] is paused.content
+
+    # bounded: a turn that never finishes stops after 1 + N continuations
+    always_paused = [
+        NS(stop_reason="pause_turn", content=[])
+        for _ in range(slack_assistant._PAUSE_TURN_CONTINUATIONS + 5)
+    ]
+    api = FakeApi(always_paused)
+    resp = asyncio.run(slack_assistant._create_with_continuation(api, "sys", "q", []))
+    assert len(api.calls) == 1 + slack_assistant._PAUSE_TURN_CONTINUATIONS
+    assert resp.stop_reason == "pause_turn"  # caller gets the last response as-is
+
+
 def test_admin_actions_registered_confirm_gated_and_staged():
     admin_actions = (
         "update_client_profile", "add_target_cities", "remove_target_cities",

@@ -8,6 +8,11 @@ content, keyword research, setup), fold in the thread's prior turns for
 continuity, ask Claude, and post the answer back **in-thread**. The bot's own
 posts (rank-drop alerts etc.) and other bots are ignored, so it never loops.
 
+Answers are grounded in the suite's own data, plus Anthropic's server-side
+web_search tool (config-gated) for public info the suite doesn't hold —
+third-party reviews, competitor sites, industry news — with campaign metrics
+still sourced exclusively from the cross-module context.
+
 Q&A plus an action registry (_ACTIONS): the assistant has admin-level write
 access — it can trigger work (scans, research, a strategist review, client
 reports, an Asana task-plan push), manage the client's Asana board, edit the
@@ -43,7 +48,8 @@ logger = logging.getLogger(__name__)
 _SLACK_POST_URL = "https://slack.com/api/chat.postMessage"
 _SLACK_REPLIES_URL = "https://slack.com/api/conversations.replies"
 _TIMEOUT = 20.0
-_LLM_TIMEOUT = 60.0  # bound the Claude call so a hung request can't pin the task
+_LLM_TIMEOUT = 120.0  # bound the Claude call (server-side web search lengthens turns)
+_PAUSE_TURN_CONTINUATIONS = 3  # max re-sends when server-side search pauses the turn
 _THREAD_HISTORY_LIMIT = 12  # prior thread messages folded into context for continuity
 _MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
 _SIG_MAX_SKEW_SECONDS = 60 * 5  # reject events older than 5 min (replay guard)
@@ -82,10 +88,22 @@ _SYSTEM = (
     "- setup: the client's configured context (GBP, brand voice, ICP, target cities).\n"
     "A module is OMITTED when there's no data for it — if a module key is absent, "
     "that work simply hasn't been set up or run for this client; say so rather than "
-    "guessing. Answer using ONLY this data. Be concise and direct — a few sentences "
-    "or a short list, Slack-friendly (you may use *bold* and bullets). Lead with the "
-    "answer. As a strategist, you may connect signals across modules when relevant "
-    "(e.g. a ranking drop + a content gap). Never invent numbers or modules.\n\n"
+    "guessing. Be concise and direct — a few sentences or a short list, "
+    "Slack-friendly (you may use *bold* and bullets). Lead with the answer. As a "
+    "strategist, you may connect signals across modules when relevant (e.g. a "
+    "ranking drop + a content gap). Never invent numbers or modules.\n\n"
+    "GROUNDING & WEB SEARCH: the client's campaign metrics (ranks, visibility, "
+    "clicks, goal progress, alerts) come ONLY from the JSON context above — never "
+    "search the web for them, never estimate them, and if the context lacks a "
+    "number say so. You DO have a web_search tool for PUBLIC information beyond "
+    "the suite's data: the client's or a competitor's reviews on third-party sites "
+    "(TrustPilot, ServiceSeeking, Yelp, Google), a competitor's website or "
+    "offering, industry/algorithm news, or anything else on the open web a "
+    "teammate asks you to look at. Use it when the question genuinely needs "
+    "outside information (including follow-ups on something you recommended "
+    "checking); don't search when the context already answers. When you use "
+    "searched facts, say where they came from (name the site or include the URL) "
+    "and keep clear what is live suite data vs what you found online.\n\n"
     "You can also TAKE ACTIONS via the provided tools — you have admin-level write "
     "access to the client's campaign, so NEVER claim you can't make a change that a "
     "tool covers. Your action groups:\n"
@@ -1775,6 +1793,71 @@ _pending: dict[tuple, dict] = {}
 # ---------------------------------------------------------------------------
 # Claude + Slack I/O.
 # ---------------------------------------------------------------------------
+def build_llm_tools() -> list[dict]:
+    """The tool list for the assistant's Claude call.
+
+    Action tools always; plus Anthropic's server-side web_search tool when
+    enabled — it runs on Anthropic's infrastructure inside the same request
+    (no client-side loop), giving SerMastr internet access for public info
+    (third-party reviews, competitor sites, industry news). `max_uses` bounds
+    the per-question search spend. The `_20260209` tool type requires a 4.6+
+    model — the default `slack_assistant_model` qualifies.
+    """
+    tools: list[dict] = list(_ACTION_TOOLS)
+    if settings.slack_assistant_web_search_enabled:
+        tools.append(
+            {
+                "type": "web_search_20260209",
+                "name": "web_search",
+                "max_uses": settings.slack_assistant_web_search_max_uses,
+            }
+        )
+    return tools
+
+
+async def _create_with_continuation(api, system: str, user: str, tools: list[dict]):
+    """messages.create with bounded `pause_turn` continuation.
+
+    A server-side web-search loop can pause a long turn (`stop_reason ==
+    "pause_turn"`); re-sending the conversation with the assistant content
+    appended resumes it server-side. Bounded so a pathological turn can't
+    spin forever — on exhaustion the last response is used as-is."""
+    messages: list[dict] = [{"role": "user", "content": user}]
+    resp = await api.messages.create(
+        model=settings.slack_assistant_model,
+        max_tokens=settings.slack_assistant_max_tokens,
+        system=system,
+        tools=tools,
+        messages=messages,
+    )
+    for _ in range(_PAUSE_TURN_CONTINUATIONS):
+        if getattr(resp, "stop_reason", None) != "pause_turn":
+            break
+        messages = messages + [{"role": "assistant", "content": resp.content}]
+        resp = await api.messages.create(
+            model=settings.slack_assistant_model,
+            max_tokens=settings.slack_assistant_max_tokens,
+            system=system,
+            tools=tools,
+            messages=messages,
+        )
+    return resp
+
+
+def extract_interpretation(content: list) -> tuple[str, object]:
+    """Map a Claude response's content blocks to (kind, payload). Pure.
+
+    An ACTION tool call (type "tool_use", name in the registry) wins; server
+    tool blocks (`server_tool_use`/`web_search_tool_result` — type differs)
+    never match, so a searched answer still lands as text. Text blocks are
+    joined (a search turn may interleave several around the tool results)."""
+    for b in content:
+        if getattr(b, "type", None) == "tool_use" and b.name in _ACTIONS:
+            return ("action", {"name": b.name, "args": dict(b.input or {})})
+    parts = [b.text for b in content if getattr(b, "type", None) == "text"]
+    return ("text", "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing.")
+
+
 async def interpret(
     question: str, client: dict, context: dict, history: Optional[list[dict]] = None,
     style: str = "slack",
@@ -1783,8 +1866,10 @@ async def interpret(
 
     Returns ("action", {"name": tool_name, "args": tool_input}) when the
     teammate is asking to trigger one of the available actions, else
-    ("text", answer). Claude sees the cross-module context + thread history and
-    the action tools; a tool call ⇒ action, otherwise a normal grounded answer.
+    ("text", answer). Claude sees the cross-module context + thread history,
+    the action tools, and (when enabled) the server-side web_search tool; an
+    action tool call ⇒ action, otherwise a normal grounded answer (which may
+    incorporate live web-search results).
     `style="web"` swaps the Slack-mrkdwn voice for dashboard-chat Markdown.
     """
     import anthropic
@@ -1796,18 +1881,10 @@ async def interpret(
     blocks.append(f"Client data (JSON):\n{format_context(client, context)}")
     user = "\n\n".join(blocks)
     api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
-    resp = await api.messages.create(
-        model=settings.slack_assistant_model,
-        max_tokens=settings.slack_assistant_max_tokens,
-        system=_SYSTEM + (_WEB_STYLE if style == "web" else ""),
-        tools=_ACTION_TOOLS,
-        messages=[{"role": "user", "content": user}],
+    resp = await _create_with_continuation(
+        api, _SYSTEM + (_WEB_STYLE if style == "web" else ""), user, build_llm_tools()
     )
-    for b in resp.content:
-        if getattr(b, "type", None) == "tool_use" and b.name in _ACTIONS:
-            return ("action", {"name": b.name, "args": dict(b.input or {})})
-    parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
-    return ("text", "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing.")
+    return extract_interpretation(resp.content)
 
 
 async def _run_action(name: str, client_id: str, args: Optional[dict]) -> str:

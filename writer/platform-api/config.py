@@ -242,6 +242,13 @@ class Settings(BaseSettings):
     slack_assistant_model: str = "claude-sonnet-4-6"
     slack_assistant_max_tokens: int = 900
     slack_assistant_max_keywords: int = 60   # cap keywords folded into the LLM context
+    # Anthropic's server-side web_search tool on the assistant's Claude call —
+    # lets SerMastr look up public info (reviews on TrustPilot/Google, competitor
+    # sites, industry news) it recommended but couldn't previously read. Billed
+    # per search by Anthropic; max_uses bounds spend per question. The tool type
+    # requires a 4.6+ model (slack_assistant_model default qualifies).
+    slack_assistant_web_search_enabled: bool = True
+    slack_assistant_web_search_max_uses: int = 3
     # Frontend base URL for deep links in email/Slack (e.g. https://ar-internal.netlify.app).
     app_base_url: str = ""
     maps_report_competitor_min_rating: float = 4.7
