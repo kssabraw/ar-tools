@@ -114,3 +114,36 @@ def test_normalize_website_handles_empty_and_none():
     assert gbp_service.normalize_website_url(None) is None
     assert gbp_service.normalize_website_url("") == ""
     assert gbp_service.normalize_website_url("   ") == ""
+
+
+# ---------------------------------------------------------------------------
+# rating_and_review_count — the one sanctioned reader of the client's stored
+# GBP rating/reviews. Guards against the key-name drift that made downstream
+# readers (SerMaStr competitor context, client report) see "not captured yet"
+# for clients whose Business Profile tab clearly showed reviews.
+# ---------------------------------------------------------------------------
+
+
+def test_rating_and_review_count_reads_canonical_keys():
+    gbp = {"gbp_rating": 4.9, "gbp_review_count": 87}
+    assert gbp_service.rating_and_review_count(gbp) == (4.9, 87)
+
+
+def test_rating_and_review_count_falls_back_to_legacy_keys():
+    assert gbp_service.rating_and_review_count({"rating": 4.5, "review_count": 12}) == (4.5, 12)
+    assert gbp_service.rating_and_review_count({"reviews_count": 33}) == (None, 33)
+
+
+def test_rating_and_review_count_prefers_canonical_over_legacy():
+    gbp = {"gbp_rating": 4.9, "gbp_review_count": 87, "rating": 1.0, "review_count": 2}
+    assert gbp_service.rating_and_review_count(gbp) == (4.9, 87)
+
+
+def test_rating_and_review_count_coerces_strings_and_handles_junk():
+    assert gbp_service.rating_and_review_count({"gbp_rating": "4.8", "gbp_review_count": "41"}) == (4.8, 41)
+    assert gbp_service.rating_and_review_count({"gbp_rating": "n/a", "gbp_review_count": "lots"}) == (None, None)
+
+
+def test_rating_and_review_count_handles_missing_and_none():
+    assert gbp_service.rating_and_review_count({}) == (None, None)
+    assert gbp_service.rating_and_review_count(None) == (None, None)

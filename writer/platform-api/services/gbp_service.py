@@ -114,6 +114,27 @@ def _to_int(value: Any) -> Optional[int]:
         return None
 
 
+def rating_and_review_count(gbp: Optional[dict[str, Any]]) -> tuple[Optional[float], Optional[int]]:
+    """The client's stored GBP rating + review count, from the `clients.gbp` JSONB.
+
+    The canonical keys are `gbp_rating` / `gbp_review_count` (what `fetch_gbp`
+    writes below); bare `rating` / `review_count` / `reviews_count` are accepted
+    as fallbacks for any capture that predates the current shape. Readers must
+    use this instead of guessing key names — a wrong guess reads as "not
+    captured yet" everywhere downstream (strategist, Slack assistant, reports).
+    """
+    gbp = gbp or {}
+    rating = gbp.get("gbp_rating")
+    if rating is None:
+        rating = gbp.get("rating")
+    count = gbp.get("gbp_review_count")
+    if count is None:
+        count = gbp.get("review_count")
+    if count is None:
+        count = gbp.get("reviews_count")
+    return _to_float(rating), _to_int(count)
+
+
 def _address_hidden(place: dict[str, Any]) -> Optional[bool]:
     """Whether Google hides the storefront address (the defining SAB signal).
 
