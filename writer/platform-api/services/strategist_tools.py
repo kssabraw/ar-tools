@@ -85,6 +85,30 @@ async def _run_read_sop(client_id: str, args: dict) -> str:
     return _clip(sop_library.read_sop(args.get("doc") or "", args.get("section")))
 
 
+async def _run_competitor_profile(client_id: str, args: dict) -> str:
+    """Full assembled profile for ONE registered competitor (the digest carries
+    only the summary row). Deterministic read over stored captures."""
+    from services import competitor_intel
+
+    wanted = (args.get("competitor") or "").strip().casefold()
+    if not wanted:
+        return "competitor_profile needs a competitor (name or domain)."
+    assembled = competitor_intel.build_profiles(client_id)
+    profiles = assembled.get("competitors") or []
+    if not profiles:
+        return "No competitors are registered for this client yet."
+    match = next(
+        (p for p in profiles
+         if wanted in (p.get("name") or "").casefold()
+         or wanted == (p.get("domain") or "").casefold()),
+        None,
+    )
+    if not match:
+        names = ", ".join(p.get("name") or "?" for p in profiles[:10])
+        return f"No registered competitor matches '{args.get('competitor')}'. Registered: {names}."
+    return _clip(_dump({"client_comparison": assembled.get("client"), "competitor": match}))
+
+
 async def _run_client_capacity(client_id: str, args: dict) -> str:
     """Team capacity + current cross-client plan load. The roles matrix lives
     in _ORCHESTRATOR §6; the load read sums this month's stored task plans."""
@@ -335,6 +359,23 @@ TOOLS: dict[str, dict] = {
         },
         "paid": True,
         "run": _run_audit_page,
+    },
+    "competitor_profile": {
+        "description": (
+            "Full assembled profile for ONE registered competitor across every module — "
+            "local-pack pins, GBP rating/review count, DR/referring domains, organic top-10 "
+            "keyword overlap, review velocity, recent new pages — plus the client's own "
+            "comparison values. Deterministic read. Trap notes: competitor DR/RD are tool "
+            "reads (true RD ≈ ×10 per the SOP shared definition); a null module means no "
+            "capture yet, not competitor absence."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"competitor": {"type": "string", "description": "Competitor name (or domain) from the digest's competitors section."}},
+            "required": ["competitor"],
+        },
+        "paid": False,
+        "run": _run_competitor_profile,
     },
     "episode_timeline": {
         "description": (

@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target,
+  ClipboardList, BookOpen, Share2, Target, Swords,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -268,6 +268,13 @@ export function ClientWorkspace() {
           label="Campaign Goals"
           description="What success means for this client — rank, traffic, AI-visibility & local-pack targets with live on-track / behind status. SerMaStr judges every review and answer against these."
           to={id ? `/clients/${id}/goals` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Swords size={22} />}
+          label="Competitive Intel"
+          description="Who you're up against, unified across every tracker — local-pack pins, GBP reviews, authority, organic overlap & the new pages they publish. Auto-discovered weekly."
+          to={id ? `/clients/${id}/competitors` : undefined}
           cta="Open"
         />
         <ActionCard

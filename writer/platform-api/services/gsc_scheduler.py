@@ -320,6 +320,7 @@ async def gsc_scheduler() -> None:
     from services.freeze import enqueue_due_freeze_checks
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
     from services.citation_check import enqueue_due_citation_checks
+    from services.competitor_intel import enqueue_due_competitor_intel
     from services.offpage_agent import run_offpage_sweep
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.response_episodes import run_episode_sync
@@ -364,6 +365,7 @@ async def gsc_scheduler() -> None:
                 # Weekly citation liveness (per-client interval-gated) +
                 # monthly page-level RD-imbalance captures.
                 enqueue_due_citation_checks()
+                enqueue_due_competitor_intel()
                 enqueue_due_page_backlinks()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still

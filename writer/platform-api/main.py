@@ -20,6 +20,7 @@ from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
 from routers.citations import router as citations_router
 from routers.clients import router as clients_router
+from routers.competitors import router as competitors_router
 from routers.dashboard import router as dashboard_router
 from routers.files import router as files_router
 from routers.freeze import router as freeze_router
@@ -167,6 +168,7 @@ app.include_router(brand_voice_router)
 app.include_router(briefs_router)
 app.include_router(citations_router)
 app.include_router(clients_router)
+app.include_router(competitors_router)
 app.include_router(dashboard_router)
 app.include_router(files_router)
 app.include_router(freeze_router)

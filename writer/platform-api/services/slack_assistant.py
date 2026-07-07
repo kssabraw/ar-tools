@@ -51,6 +51,10 @@ _SYSTEM = (
     "- campaign_goals: the client's success targets (rank, traffic, AI-visibility, "
     "local-pack goals) with a deterministic status each — achieved/on_track/behind/"
     "overdue.\n"
+    "- competitors: named competitors profiled across every module — local-pack pins, "
+    "GBP rating/reviews, DR/referring domains (tool reads — true RD ≈ ×10), organic "
+    "top-10 keyword overlap, review velocity, and new pages they published in the last "
+    "30 days. A null module inside a competitor = no capture yet.\n"
     "- organic_rank: tracked keywords with current rank + trend, open ranking-drop "
     "alerts, the latest reoptimization Action Plan, and Search Console opportunities.\n"
     "- maps_geogrid: local-pack / Google Maps geo-grid scan results (average rank, "
@@ -541,9 +545,36 @@ def _ctx_campaign_goals(supabase, client_id: str, today: date) -> Optional[dict]
     }
 
 
+def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Assembled competitor profiles so competitive questions get real data."""
+    from services import competitor_intel
+
+    assembled = competitor_intel.build_profiles(client_id, today=today)
+    profiles = assembled.get("competitors") or []
+    if not profiles:
+        return None
+    return {
+        "client_comparison": assembled.get("client"),
+        "competitors": [
+            {
+                "name": p.get("name"),
+                "domain": p.get("domain"),
+                "local_pack": p.get("local_pack"),
+                "gbp": p.get("gbp"),
+                "backlinks": p.get("backlinks"),
+                "organic": p.get("organic"),
+                "review_velocity_30d": p.get("review_velocity_30d"),
+                "new_pages_30d": p.get("new_pages_30d"),
+            }
+            for p in profiles[:6]
+        ],
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
+    ("competitors", _ctx_competitors),
     ("organic_rank", _ctx_organic_rank),
     ("maps_geogrid", _ctx_maps),
     ("ai_visibility", _ctx_ai_visibility),

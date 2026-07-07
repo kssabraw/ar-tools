@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # page-level RD-imbalance capture (paid DataForSEO page summaries).
     citation_check_enabled: bool = True
     page_backlink_intel_enabled: bool = True
+    # Competitive intelligence (strategist phase 2): weekly registry
+    # auto-discovery + competitor content watch (sitemap reads only).
+    competitor_intel_enabled: bool = True
+    competitor_intel_interval_days: int = 7
+    competitor_watch_max_pages: int = 2000
     # Auto-generate a new client's brand voice + ICP at creation (async, best-
     # effort) so the assets exist without a manual scan. Skips clients with no
     # website and no GBP (nothing to analyze). Never overrides user-authored

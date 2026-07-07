@@ -703,10 +703,46 @@ def _prov_campaign_goals(supabase, client_id: str, today: date, now: datetime) -
     }
 
 
+def _prov_competitors(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """Assembled competitor profiles (registry × every module) — gaps the
+    strategist can aim proposals at, plus fresh competitor content."""
+    from services import competitor_intel
+
+    assembled = competitor_intel.build_profiles(client_id, today=today)
+    profiles = assembled.get("competitors") or []
+    if not profiles:
+        return None
+    return {
+        "client": assembled.get("client"),
+        "note": (
+            "profiles join maps/GBP/backlinks/organic/reviews per competitor; a null "
+            "module means no capture yet, not absence of the competitor. Competitor "
+            "RD/DR are tool reads (true RD ≈ ×10, SOP shared definition). "
+            "new_pages_30d counts non-baseline URLs first seen in the last 30 days."
+        ),
+        "competitors": [
+            {
+                "name": p.get("name"),
+                "domain": p.get("domain"),
+                "sources": p.get("sources"),
+                "local_pack": p.get("local_pack"),
+                "gbp": p.get("gbp"),
+                "backlinks": p.get("backlinks"),
+                "organic": p.get("organic"),
+                "review_velocity_30d": p.get("review_velocity_30d"),
+                "new_pages_30d": p.get("new_pages_30d"),
+                "recent_pages": (p.get("recent_pages") or [])[:5],
+            }
+            for p in profiles[:8]
+        ],
+    }
+
+
 # Registry — append a provider to feed the strategist a new module.
 _PROVIDERS: list[tuple[str, object]] = [
     ("client", _prov_client),
     ("campaign_goals", _prov_campaign_goals),
+    ("competitors", _prov_competitors),
     ("organic_rank", _prov_organic),
     ("open_alerts", _prov_open_alerts),
     ("action_plan", _prov_action_plan),
