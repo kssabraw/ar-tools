@@ -150,3 +150,23 @@ async def test_call_llm_gives_up_after_max_retries(monkeypatch):
     with pytest.raises(RuntimeError):
         await mr._call_llm({})
     assert calls["n"] == 3  # initial try + 2 retries
+
+
+def test_summarize_report_failures_digest():
+    d = mr.summarize_report_failures(
+        "First Class Roofing",
+        [("roofing near me", "Error code: 429 - rate_limit_error"), ("metal roof", "")],
+        total=5,
+    )
+    assert d["severity"] == "warning"
+    assert d["title"] == "Local Rank report generation failed (2/5)"
+    assert "First Class Roofing" in d["summary"]
+    assert "roofing near me" in d["summary"]
+    assert "429" in d["summary"]
+
+
+def test_summarize_report_failures_truncates_keyword_list():
+    failures = [(f"kw{i}", "boom") for i in range(12)]
+    d = mr.summarize_report_failures("Acme", failures, total=20)
+    assert "+4 more" in d["summary"]  # 12 failures, first 8 shown
+    assert d["title"] == "Local Rank report generation failed (12/20)"

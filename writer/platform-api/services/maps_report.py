@@ -151,6 +151,26 @@ def weak_area_names(weak_locations: Optional[dict], top_n: int = 8) -> list[str]
     return out
 
 
+def summarize_report_failures(
+    client_name: Optional[str], failures: list[tuple[str, str]], total: int,
+) -> dict:
+    """Build the {title, summary, severity} digest for a report-generation-failure
+    notification. `failures` is a list of (keyword, short_error). Pure; unit-tested."""
+    n = len(failures)
+    who = f" for {client_name}" if client_name else ""
+    title = f"Local Rank report generation failed ({n}/{total})"
+    keywords = ", ".join(f"“{kw}”" for kw, _ in failures[:8] if kw)
+    if n > 8:
+        keywords += f", +{n - 8} more"
+    first_error = next((err for _, err in failures if err), "") or "unknown error"
+    summary = (
+        f"{n} of {total} keyword report(s) failed to generate{who}."
+        + (f" Keywords: {keywords}." if keywords else "")
+        + f" First error: {first_error[:200]}"
+    )
+    return {"title": title, "summary": summary, "severity": "warning"}
+
+
 def build_snapshot(
     client: dict, result_row: dict, analytics: dict, weak_locations: Optional[dict] = None,
 ) -> dict:
@@ -664,6 +684,7 @@ async def run_maps_report_job(job: dict) -> None:
                     return result_row, None, exc
 
         generated: list[tuple[str, str, Optional[str]]] = []  # (keyword, markdown, image_url)
+        failures: list[tuple[str, str]] = []  # (keyword, short_error)
         for result_row, fields, exc in await asyncio.gather(*(_gen_one(r) for r in results)):
             img_url = image_urls.get(result_row["id"])
             if exc is not None or fields is None:
@@ -671,6 +692,7 @@ async def run_maps_report_job(job: dict) -> None:
                     "maps_report_keyword_failed",
                     extra={"scan_id": scan_id, "keyword": result_row.get("keyword"), "error": str(exc)},
                 )
+                failures.append((result_row.get("keyword"), str(exc)))
                 # Still persist the saved map image even when the narrative failed.
                 supabase.table("maps_scan_results").update(
                     {"report_status": "failed", "report_error": str(exc)[:500], "map_image_url": img_url}
@@ -680,6 +702,25 @@ async def run_maps_report_job(job: dict) -> None:
             supabase.table("maps_scan_results").update(fields).eq("id", result_row["id"]).execute()
             if fields.get("report_md"):
                 generated.append((result_row.get("keyword"), fields["report_md"], img_url))
+
+        # Surface failed report generation as a warning notification (best-effort)
+        # so a silently-failed batch is visible in-app + Slack instead of only in
+        # the row status. One digest per scan, never per keyword.
+        if failures:
+            try:
+                from services import notifications
+
+                digest = summarize_report_failures(client.get("name"), failures, len(results))
+                notifications.emit(
+                    client_id=scan_row.get("client_id"),
+                    kind="maps_report_failed",
+                    title=digest["title"],
+                    summary=digest["summary"],
+                    severity=digest["severity"],
+                    payload={"link": f"clients/{scan_row.get('client_id')}/maps", "scan_id": scan_id},
+                )
+            except Exception as exc:  # notifications are best-effort
+                logger.warning("maps_report_notify_failed", extra={"scan_id": scan_id, "error": str(exc)})
 
         doc_url = await _maybe_publish_doc(client, scan_row, generated)
         if doc_url:
