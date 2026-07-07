@@ -459,6 +459,87 @@ def _section_exec(data: dict) -> str:
     )
 
 
+# Client-facing status label + colour (positive framing — no "overdue"/"behind"
+# scare copy in a client deliverable; the internal strategy doc keeps the raw
+# status). Goals with no measurement yet are dropped from the client report.
+_GOAL_STATUS_CLIENT = {
+    "achieved": ("Achieved", "#166534"),
+    "on_track": ("On track", "#166534"),
+    "behind": ("In progress", "#b45309"),
+    "overdue": ("In progress", "#b45309"),
+    "manual": ("Tracking", "#475569"),
+}
+
+
+def _fmt_goal_value(goal_type, v) -> str:
+    """Human, client-friendly rendering of a goal metric value. Pure."""
+    if v is None:
+        return "—"
+    if goal_type == "keyword_position":
+        return f"position {v:g}"
+    if goal_type == "keywords_in_top":
+        return f"{v:g} keyword{'s' if v != 1 else ''}"
+    if goal_type == "organic_clicks":
+        return f"{_fmt_int(v)} clicks/mo"
+    if goal_type == "organic_impressions":
+        return f"{_fmt_int(v)} impressions/mo"
+    if goal_type in ("ai_visibility", "maps_pack_presence"):
+        return f"{v:g}%"
+    return f"{v:g}"
+
+
+def _goal_label(goal: dict) -> str:
+    """A display label for a goal — its user label, else a type-derived one."""
+    if goal.get("label"):
+        return str(goal["label"])
+    kw = goal.get("keyword")
+    base = {
+        "keyword_position": f"Rank for “{kw}”" if kw else "Keyword ranking",
+        "keywords_in_top": "Keywords in the top results",
+        "organic_clicks": "Monthly organic clicks",
+        "organic_impressions": "Monthly search impressions",
+        "ai_visibility": "AI-assistant visibility",
+        "maps_pack_presence": "Local-pack presence",
+        "custom": "Goal",
+    }
+    return base.get(goal.get("goal_type"), "Goal")
+
+
+def _section_goals(data: dict) -> str:
+    goals = (data.get("goals") or {}).get("goals") or []
+    rows = []
+    for g in goals:
+        label = _GOAL_STATUS_CLIENT.get(g.get("status"))
+        if not label:  # no_data / unknown → nothing to show a client
+            continue
+        status_text, colour = label
+        pct = g.get("progress_pct")
+        gt = g.get("goal_type")
+        current = _fmt_goal_value(gt, g.get("current_value"))
+        target = _fmt_goal_value(gt, g.get("target_value"))
+        bar = ""
+        if pct is not None:
+            w = max(0, min(100, round(pct)))
+            bar = (f"<div class='gbar'><div class='gbar-fill' style='width:{w}%;"
+                   f"background:{colour}'></div></div>")
+        where = current if gt == "custom" else f"{_esc(current)} &middot; target {_esc(target)}"
+        rows.append(
+            f"<tr><td><strong>{_esc(_goal_label(g))}</strong></td>"
+            f"<td><span class='gchip' style='color:{colour}'>{_esc(status_text)}</span></td>"
+            f"<td class='gprog'>{bar}</td>"
+            f"<td class='num'>{where}</td></tr>"
+        )
+    if not rows:
+        return ""
+    return (
+        "<section><h2>Progress toward your goals</h2>"
+        "<p class='note'>The targets we set for this campaign and how each is tracking.</p>"
+        "<table><thead><tr><th>Goal</th><th>Status</th><th>Progress</th>"
+        "<th class='num'>Where we are</th></tr></thead><tbody>"
+        + "".join(rows) + "</tbody></table></section>"
+    )
+
+
 def _fmt_pos(v) -> str:
     if v is None:
         return "—"
@@ -529,7 +610,7 @@ def build_report_html(data: dict) -> str:
     period = data.get("period", {})
     kpis = _kpi_strip(data)
     sections = "".join(
-        s for s in (_section_exec(data), _section_performance(data),
+        s for s in (_section_exec(data), _section_goals(data), _section_performance(data),
                     _section_work_delivered(data), _section_organic(data),
                     _section_geogrid(data), _section_ai_visibility(data), _section_gbp(data)) if s
     )
@@ -586,6 +667,10 @@ td.num, th.num { text-align:right; }
 .legend { color:#64748b; font-size:9px; }
 .legend .sw { display:inline-block; width:9px; height:9px; border-radius:2px; margin:0 3px 0 10px; vertical-align:middle; }
 .reviews { color:#334155; } .reviews li { margin-bottom:4px; }
+.gchip { font-weight:700; font-size:10px; }
+.gprog { width:34%; }
+.gbar { background:#eef2f6; border-radius:6px; height:8px; width:100%; overflow:hidden; }
+.gbar-fill { height:8px; border-radius:6px; }
 footer { margin-top:24px; padding-top:8px; border-top:1px solid #e2e8f0; color:#94a3b8; font-size:9px; text-align:center; }
 .exec .headline { font-size:13px; color:#0f172a; font-weight:600; }
 td.num.pos { font-weight:600; color:#166534; }
@@ -858,6 +943,7 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
         "section_status": {},
     }
     for key, fn in (
+        ("goals", lambda: _gather_goals(supabase, client_id, period_end)),
         ("organic", lambda: _gather_organic(supabase, client_id, period_end)),
         ("work_delivered", lambda: _gather_work_delivered(supabase, client_id, period_start, period_end)),
         ("geogrid", lambda: _gather_geogrid(supabase, client_id)),
@@ -875,6 +961,16 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
             data["section_status"][key] = "failed"
             logger.warning("report_section_failed", extra={"client_id": client_id, "section": key, "error": str(exc)})
     return data
+
+
+def _gather_goals(supabase, client_id: str, period_end: date) -> Optional[dict]:
+    """Campaign goals assessed as of the report's period end (reuses the canonical
+    campaign_goals reader). None when the client has no goals / none are shown."""
+    from services import campaign_goals
+
+    goals = campaign_goals.assess_goals(client_id, today=period_end)
+    shown = [g for g in goals if g.get("status") in _GOAL_STATUS_CLIENT]
+    return {"goals": shown} if shown else None
 
 
 def _gather_ai_visibility(supabase, client_id: str) -> Optional[dict]:
