@@ -16,7 +16,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from db.supabase_client import get_supabase
-from middleware.auth import require_auth
+from middleware.auth import require_admin, require_auth
 from models.maps import (
     MapsAlert,
     MapsAlertsResponse,
@@ -257,7 +257,7 @@ def _scan_detail(scan_id: str) -> MapsScanDetail:
     s = found[0]
     results = (
         supabase.table("maps_scan_results")
-        .select("keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins, rank_grid, heatmap_image_url, dynamic_url, competitors, competitors_above, report_status, report_md, report_weak_directions, report_top_competitors, report_octant_pins, report_weak_locations, report_analytics, report_doc_url, report_generated_at")
+        .select("keyword, average_rank, found_pins, total_pins, top3_pins, top10_pins, rank_grid, heatmap_image_url, map_image_url, dynamic_url, competitors, competitors_above, report_status, report_md, report_weak_directions, report_top_competitors, report_octant_pins, report_weak_locations, report_analytics, report_doc_url, report_generated_at")
         .eq("scan_id", scan_id).order("keyword").execute()
     ).data or []
     return MapsScanDetail(
@@ -298,6 +298,31 @@ async def trigger_maps_report(
         target = str(scan_id)
     enqueued = enqueue_maps_report(target)
     return {"scan_id": target, "enqueued": enqueued}
+
+
+@router.post("/clients/{client_id}/maps/backfill-images")
+async def backfill_maps_images(
+    client_id: UUID, overwrite: bool = False, auth: dict = Depends(require_auth),
+) -> dict:
+    """Render + store the saved map PNG for this client's existing scan results
+    that predate the feature (a one-off, idempotent background job). Pass
+    overwrite=true to re-render rows that already have an image."""
+    from services.maps_report import enqueue_maps_image_backfill
+
+    job_id = enqueue_maps_image_backfill(str(client_id), overwrite)
+    return {"client_id": str(client_id), "job_id": job_id}
+
+
+@router.post("/maps/backfill-images")
+async def backfill_maps_images_all(
+    overwrite: bool = False, auth: dict = Depends(require_admin),
+) -> dict:
+    """Fan out the saved-map-image backfill across every client with geo-grid
+    scans (one background job per client). Admin-only."""
+    from services.maps_report import enqueue_maps_image_backfill_all
+
+    job_ids = enqueue_maps_image_backfill_all(overwrite)
+    return {"jobs": len(job_ids), "job_ids": job_ids}
 
 
 @router.get("/clients/{client_id}/maps/latest", response_model=MapsScanDetail)

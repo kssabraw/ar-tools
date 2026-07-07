@@ -34,3 +34,6 @@ weasyprint==62.3  # HTML/CSS -> PDF for the Client Reporting module (needs the
                   # pango/cairo system libs added in the Dockerfile)
 pydyf==0.10.0     # pin: weasyprint 62.3 needs pydyf <0.11 — pydyf 0.11 dropped
                   # the API it calls ("'super' object has no attribute 'transform'")
+pillow==10.4.0    # Maps geo-grid: composite the numbered rank pins onto Google's
+                  # static-map tile to save a PNG of each scan (services/maps_image.py).
+                  # Self-contained wheels (bundled libjpeg/zlib) — no extra apt libs.

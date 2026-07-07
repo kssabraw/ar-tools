@@ -58,7 +58,8 @@ class MapsScanResultRow(BaseModel):
     top3_pins: int = 0
     top10_pins: int = 0
     rank_grid: Optional[list] = None  # 1-based rank per pin (null where not ranked)
-    heatmap_image_url: Optional[str] = None  # Local Dominator's rendered map heatmap
+    heatmap_image_url: Optional[str] = None  # Local Dominator's rendered map heatmap (unused)
+    map_image_url: Optional[str] = None      # saved PNG of our map (tile + numbered pins)
     dynamic_url: Optional[str] = None        # interactive heatmap page
     competitors: Optional[list] = None       # per-keyword competitor leaderboard (top ~25)
     competitors_above: Optional[dict] = None  # per-pin businesses ranking above the client

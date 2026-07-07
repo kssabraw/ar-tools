@@ -43,6 +43,13 @@
  * `Drive`, v2). Then redeploy the Web App (Deploy → Manage deployments → edit →
  * New version) so the live URL serves this version.
  *
+ * IMAGE EMBEDDING (added 2026-07): the markdown renderer now inserts `![alt](url)`
+ * image lines as real Doc images (used by the Maps report's "Local Rank Map").
+ * This calls UrlFetchApp — after grafting it in you must REDEPLOY the Web App
+ * (New version) and, on first run, authorize the added external-request scope.
+ * Until then the Maps report still publishes; the image line just renders as
+ * text (the map PNG is always saved regardless, and shows in the app + client PDF).
+ *
  * NOTE: If you'd rather not replace your existing markdown rendering, you only
  * need to graft in the `format === 'html'` branch of doPost() plus
  * createDocFromHtml() below — the markdown path here is a reference
@@ -109,6 +116,21 @@ function _applySharing(fileId, share) {
   var file = DriveApp.getFileById(fileId);
   var access = (share === 'public') ? DriveApp.Access.ANYONE : DriveApp.Access.ANYONE_WITH_LINK;
   file.setSharing(access, DriveApp.Permission.VIEW);
+}
+
+/**
+ * PDF from a base64 payload → a plain Drive file in the client's folder (Client
+ * Reporting Phase 5 Drive copy). Returns the new file id.
+ */
+function createPdfFromBase64(folderId, title, contentBase64) {
+  if (!contentBase64) {
+    throw new Error('missing_content_base64');
+  }
+  var bytes = Utilities.base64Decode(contentBase64);
+  var name = /\.pdf$/i.test(title) ? title : title + '.pdf';
+  var blob = Utilities.newBlob(bytes, 'application/pdf', name);
+  var folder = DriveApp.getFolderById(folderId);
+  return folder.createFile(blob).getId();
 }
 
 /**
@@ -237,6 +259,27 @@ function createDocFromMarkdown(folderId, title, markdown) {
       ];
       p.setHeading(heads[level - 1]);
       _appendInline(p, h[2].trim());
+      continue;
+    }
+
+    // Image on its own line: ![alt](url). Used by the REPORTING modules (e.g. the
+    // Maps "Local Rank Map"): fetch the URL and insert it as a real Doc image,
+    // scaled down to the page content width. Falls back to the alt/URL text if the
+    // fetch fails (image host down, private URL). Requires UrlFetchApp + image
+    // scopes — authorized on first run after redeploy.
+    var img = trimmed.match(/^!\[([^\]]*)\]\((https?:\/\/[^\s)]+)\)$/);
+    if (img) {
+      try {
+        var blob = UrlFetchApp.fetch(img[2], { muteHttpExceptions: true }).getBlob();
+        var imgEl = body.appendImage(blob);
+        var w0 = imgEl.getWidth(), h0 = imgEl.getHeight();
+        if (w0 > 468) {                       // ~6.5in content width on Letter
+          imgEl.setWidth(468);
+          imgEl.setHeight(Math.round(h0 * (468 / w0)));
+        }
+      } catch (imgErr) {
+        body.appendParagraph(img[1] || img[2]);
+      }
       continue;
     }
 

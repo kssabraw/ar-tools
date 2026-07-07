@@ -24,7 +24,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import maps_analytics, maps_geocode, maps_octants
+from services import maps_analytics, maps_geocode, maps_image, maps_octants
 from services.google_docs import GoogleDocError, create_google_doc
 
 logger = logging.getLogger(__name__)
@@ -373,6 +373,137 @@ async def generate_report_for_result(client: dict, scan_row: dict, result_row: d
 # ----------------------------------------------------------------------------
 # Job + enqueue
 # ----------------------------------------------------------------------------
+# Concurrency + safety cap for the one-off image backfill.
+_BACKFILL_CONCURRENCY = 4
+_BACKFILL_MAX_ROWS = 10000
+
+
+def enqueue_maps_image_backfill(client_id: str, overwrite: bool = False) -> str:
+    """Enqueue a one-off per-client backfill that renders + stores the saved map
+    PNG for existing scan results that predate the feature. Returns the job id.
+    (async_jobs.entity_id is NOT NULL, so the backfill is always client-scoped;
+    the route fans out across all clients when the caller doesn't name one.)"""
+    supabase = get_supabase()
+    row = (
+        supabase.table("async_jobs").insert({
+            "job_type": "maps_image_backfill",
+            "entity_id": client_id,
+            "payload": {"client_id": client_id, "overwrite": overwrite},
+        }).execute()
+    ).data
+    return (row[0]["id"] if row else None)
+
+
+def enqueue_maps_image_backfill_all(overwrite: bool = False) -> list[str]:
+    """Fan out a backfill job per client that has any geo-grid scan result.
+    Returns the enqueued job ids."""
+    supabase = get_supabase()
+    seen: set[str] = set()
+    page = 0
+    while True:
+        rows = (
+            supabase.table("maps_scan_results").select("client_id")
+            .order("client_id").range(page * 1000, page * 1000 + 999).execute()
+        ).data or []
+        for r in rows:
+            if r.get("client_id"):
+                seen.add(r["client_id"])
+        if len(rows) < 1000:
+            break
+        page += 1
+    return [jid for cid in sorted(seen) if (jid := enqueue_maps_image_backfill(cid, overwrite))]
+
+
+async def run_maps_image_backfill_job(job: dict) -> None:
+    """async_jobs handler for 'maps_image_backfill' — render + store the saved map
+    image for existing maps_scan_results rows that have a grid but no image.
+
+    Best-effort per row: a row that can't render (no Maps key, dead tile, upload
+    failure) is left untouched and simply retried on a later run. Idempotent —
+    with overwrite=False it only touches rows where map_image_url is null, so it
+    can be re-run safely."""
+    payload = job.get("payload") or {}
+    client_id = payload.get("client_id")
+    overwrite = bool(payload.get("overwrite"))
+    job_id = job["id"]
+    supabase = get_supabase()
+    try:
+        # Collect the fixed candidate set up front (paged) so failures can't cause
+        # an infinite re-fetch loop. Only rows with a usable grid are kept.
+        candidates: list[dict] = []
+        page = 0
+        while len(candidates) < _BACKFILL_MAX_ROWS:
+            q = supabase.table("maps_scan_results").select("id, scan_id, client_id, rank_grid")
+            if not overwrite:
+                q = q.is_("map_image_url", "null")
+            if client_id:
+                q = q.eq("client_id", client_id)
+            batch = (
+                q.order("id").range(page * 500, page * 500 + 499).execute()
+            ).data or []
+            if not batch:
+                break
+            candidates.extend(r for r in batch if _grid_ok(r.get("rank_grid")))
+            if len(batch) < 500:
+                break
+            page += 1
+
+        # Scan centers live on maps_scans; fetch them for the referenced scans.
+        scan_ids = list({r["scan_id"] for r in candidates if r.get("scan_id")})
+        centers: dict[str, tuple] = {}
+        for i in range(0, len(scan_ids), 200):
+            chunk = scan_ids[i:i + 200]
+            rows = (
+                supabase.table("maps_scans").select("id, center_lat, center_lng")
+                .in_("id", chunk).execute()
+            ).data or []
+            for s in rows:
+                centers[s["id"]] = (s.get("center_lat"), s.get("center_lng"))
+
+        sem = asyncio.Semaphore(_BACKFILL_CONCURRENCY)
+
+        async def _one(r: dict) -> str:
+            center = centers.get(r.get("scan_id")) or (None, None)
+            async with sem:
+                try:
+                    url = await maps_image.generate_and_store(
+                        supabase, r.get("client_id"), r.get("scan_id"), r["id"],
+                        r.get("rank_grid"), center[0], center[1],
+                    )
+                except Exception as exc:  # noqa: BLE001 — isolate per-row failure
+                    logger.warning("maps_image_backfill_row_failed", extra={"result_id": r["id"], "error": str(exc)})
+                    return "failed"
+            if not url:
+                return "skipped"
+            supabase.table("maps_scan_results").update({"map_image_url": url}).eq("id", r["id"]).execute()
+            return "done"
+
+        outcomes = await asyncio.gather(*(_one(r) for r in candidates))
+        done = outcomes.count("done")
+        logger.info(
+            "maps_image_backfill_complete",
+            extra={
+                "job_id": job_id, "client_id": client_id, "candidates": len(candidates),
+                "done": done, "skipped": outcomes.count("skipped"), "failed": outcomes.count("failed"),
+            },
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "completed_at": "now()",
+             "result": {"candidates": len(candidates), "done": done,
+                        "skipped": outcomes.count("skipped"), "failed": outcomes.count("failed")}}
+        ).eq("id", job_id).execute()
+    except Exception as exc:
+        logger.error("maps_image_backfill_job_failed", extra={"job_id": job_id, "error": str(exc)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+
+def _grid_ok(grid) -> bool:
+    """True when a rank_grid is a non-empty 2-D list (worth rendering)."""
+    return isinstance(grid, list) and any(isinstance(row, list) and row for row in grid)
+
+
 def enqueue_maps_report(scan_id: str) -> bool:
     """Enqueue report generation for a completed scan (deduped)."""
     supabase = get_supabase()
@@ -394,15 +525,32 @@ def enqueue_maps_report(scan_id: str) -> bool:
     return True
 
 
-async def _maybe_publish_doc(client: dict, scan_row: dict, reports: list[tuple[str, str]]) -> Optional[str]:
+async def _maybe_publish_doc(
+    client: dict, scan_row: dict, reports: list[tuple[str, str, Optional[str]]],
+) -> Optional[str]:
     """Publish one combined Google Doc (all keyword reports) if the client has a
-    Drive folder + the webhook is configured. Returns the doc_url or None."""
+    Drive folder + the webhook is configured. Returns the doc_url or None.
+
+    Each keyword's section gets a "Local Rank Map" image embedded via markdown —
+    the Apps Script webhook fetches the URL and inserts a real Doc image (needs
+    the image-aware markdown renderer in writer/apps-script/publish_webhook.gs; an
+    older deployment renders the line as text until it's redeployed)."""
     folder_id = client.get("google_drive_folder_id")
     if not folder_id or not settings.google_apps_script_url or not reports:
         return None
     date = str(scan_row.get("completed_at") or "")[:10]
     title = f"Local Rank Analysis — {client.get('name')} — {date}".strip(" —")
-    body = "\n\n---\n\n".join(md for _, md in reports if md)
+    sections: list[str] = []
+    for keyword, md, img_url in reports:
+        if not md:
+            continue
+        section = md
+        if img_url:
+            section += f"\n\n## Local Rank Map\n\n![Local rank grid — {keyword}]({img_url})"
+        sections.append(section)
+    if not sections:
+        return None
+    body = "\n\n---\n\n".join(sections)
     try:
         result = await create_google_doc(folder_id, title, body)
         return result.get("doc_url")
@@ -434,6 +582,33 @@ async def run_maps_report_job(job: dict) -> None:
             .eq("scan_id", scan_id).execute()
         ).data or []
 
+        # Render + store the saved map image per keyword FIRST, independent of the
+        # LLM: the PNG (Google tile + numbered rank pins) is the archival artifact
+        # and must survive a failed narrative. Best-effort, bounded, isolated —
+        # keyed by result id so both the success and failed updates below can stamp
+        # map_image_url and the Doc can embed it.
+        img_sem = asyncio.Semaphore(_REPORT_CONCURRENCY)
+
+        async def _gen_image(result_row: dict) -> tuple[str, Optional[str]]:
+            async with img_sem:
+                try:
+                    url = await maps_image.generate_and_store(
+                        supabase, scan_row["client_id"], scan_id, result_row["id"],
+                        result_row.get("rank_grid"),
+                        scan_row.get("center_lat"), scan_row.get("center_lng"),
+                    )
+                    return result_row["id"], url
+                except Exception as exc:  # noqa: BLE001 — a bad image never sinks the report
+                    logger.warning(
+                        "maps_report_image_failed",
+                        extra={"scan_id": scan_id, "keyword": result_row.get("keyword"), "error": str(exc)},
+                    )
+                    return result_row["id"], None
+
+        image_urls: dict[str, Optional[str]] = dict(
+            await asyncio.gather(*(_gen_image(r) for r in results))
+        )
+
         # Generate per-keyword reports concurrently (each is a ~1-min LLM call) so
         # a multi-keyword scan doesn't hold the single async-job worker for many
         # minutes serially. Bounded so a large keyword set can't fan out an
@@ -448,20 +623,23 @@ async def run_maps_report_job(job: dict) -> None:
                 except Exception as exc:  # noqa: BLE001 — isolate per-keyword failure
                     return result_row, None, exc
 
-        generated: list[tuple[str, str]] = []  # (keyword, markdown)
+        generated: list[tuple[str, str, Optional[str]]] = []  # (keyword, markdown, image_url)
         for result_row, fields, exc in await asyncio.gather(*(_gen_one(r) for r in results)):
+            img_url = image_urls.get(result_row["id"])
             if exc is not None or fields is None:
                 logger.warning(
                     "maps_report_keyword_failed",
                     extra={"scan_id": scan_id, "keyword": result_row.get("keyword"), "error": str(exc)},
                 )
+                # Still persist the saved map image even when the narrative failed.
                 supabase.table("maps_scan_results").update(
-                    {"report_status": "failed", "report_error": str(exc)[:500]}
+                    {"report_status": "failed", "report_error": str(exc)[:500], "map_image_url": img_url}
                 ).eq("id", result_row["id"]).execute()
                 continue
+            fields = {**fields, "map_image_url": img_url}
             supabase.table("maps_scan_results").update(fields).eq("id", result_row["id"]).execute()
             if fields.get("report_md"):
-                generated.append((result_row.get("keyword"), fields["report_md"]))
+                generated.append((result_row.get("keyword"), fields["report_md"], img_url))
 
         doc_url = await _maybe_publish_doc(client, scan_row, generated)
         if doc_url:
