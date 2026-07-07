@@ -142,7 +142,6 @@ class _FakeSupabase:
 
 def test_import_organic_keywords_adds_new_skips_existing(monkeypatch):
     fake = _FakeSupabase({
-        "gsc_properties": [{"id": "p1"}],
         "tracked_keywords": [
             {"keyword": "Emergency Plumber Sydney"},
             {"keyword": "blocked drain"},
@@ -162,7 +161,7 @@ def test_import_organic_keywords_adds_new_skips_existing(monkeypatch):
 
 
 def test_import_organic_keywords_empty_tracker_is_noop(monkeypatch):
-    fake = _FakeSupabase({"gsc_properties": [], "brand_tracked_keywords": []})
+    fake = _FakeSupabase({"tracked_keywords": [], "brand_tracked_keywords": []})
     monkeypatch.setattr(bsvc, "get_supabase", lambda: fake)
     out = bsvc.import_organic_keywords("c1")
     assert out == {"imported": 0, "skipped": 0, "keywords": []}
