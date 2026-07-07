@@ -89,6 +89,38 @@ def delete_keyword(client_id: str, keyword_id: str) -> None:
     _safe(_q)
 
 
+def import_organic_keywords(client_id: str) -> dict:
+    """One-click import of the client's active *organic* rank-tracker keywords
+    into AI Visibility's tracked keywords, verbatim. Case-insensitively skips any
+    already tracked (active or paused). Returns {imported, skipped, keywords}
+    (`keywords` = the newly-added strings). Best-effort read of the rank tracker:
+    an empty/absent organic tracker imports nothing rather than erroring."""
+    def _q():
+        supabase = get_supabase()
+        organic = _organic_tracked_keywords(supabase, client_id)
+        if not organic:
+            return {"imported": 0, "skipped": 0, "keywords": []}
+        existing = (
+            supabase.table("brand_tracked_keywords").select("keyword")
+            .eq("client_id", client_id).execute().data
+        ) or []
+        have = {(r.get("keyword") or "").strip().lower() for r in existing}
+        to_add: list[str] = []
+        added: set[str] = set()
+        for kw in organic:
+            key = kw.lower()
+            if key in have or key in added:
+                continue
+            added.add(key)
+            to_add.append(kw)
+        if to_add:
+            supabase.table("brand_tracked_keywords").insert(
+                [{"client_id": client_id, "keyword": kw, "category": "organic"} for kw in to_add]
+            ).execute()
+        return {"imported": len(to_add), "skipped": len(organic) - len(to_add), "keywords": to_add}
+    return _safe(_q)
+
+
 # ── competitors ──────────────────────────────────────────────────────────────
 def list_competitors(client_id: str) -> list[dict]:
     def _q():
@@ -511,6 +543,34 @@ def get_report_status(client_id: str, job_id: str) -> dict:
     return _safe(_q)
 
 
+def _organic_tracked_keywords(supabase, client_id: str) -> list[str]:
+    """Distinct active organic rank-tracker keywords for a client, original
+    casing preserved, case-insensitively de-duped. tracked_keywords is keyed to
+    gsc_properties (not the client), so resolve the client's properties first.
+    Best-effort: no properties / read error → empty list."""
+    out: list[str] = []
+    seen: set[str] = set()
+    try:
+        props = (
+            supabase.table("gsc_properties").select("id")
+            .eq("client_id", client_id).execute().data
+        ) or []
+        prop_ids = [p["id"] for p in props if p.get("id")]
+        if prop_ids:
+            rows = (
+                supabase.table("tracked_keywords").select("keyword")
+                .in_("property_id", prop_ids).eq("active", True).execute().data
+            ) or []
+            for r in rows:
+                kw = (r.get("keyword") or "").strip()
+                if kw and kw.lower() not in seen:
+                    seen.add(kw.lower())
+                    out.append(kw)
+    except Exception:  # pragma: no cover - best-effort
+        pass
+    return out
+
+
 def _gather_tracked_keywords(supabase, client_id: str) -> list[str]:
     """Distinct active keywords the client already tracks across both rank
     trackers: organic (tracked_keywords, via its gsc_properties) + geo-grid
@@ -528,21 +588,8 @@ def _gather_tracked_keywords(supabase, client_id: str) -> list[str]:
             seeds.append(kw)
 
     # Organic — tracked_keywords is keyed to gsc_properties, not the client.
-    try:
-        props = (
-            supabase.table("gsc_properties").select("id")
-            .eq("client_id", client_id).execute().data
-        ) or []
-        prop_ids = [p["id"] for p in props if p.get("id")]
-        if prop_ids:
-            org = (
-                supabase.table("tracked_keywords").select("keyword")
-                .in_("property_id", prop_ids).eq("active", True).execute().data
-            ) or []
-            for r in org:
-                _add(r.get("keyword"))
-    except Exception:  # pragma: no cover - best-effort
-        pass
+    for kw in _organic_tracked_keywords(supabase, client_id):
+        _add(kw)
 
     # Geo-grid — maps_keywords is keyed directly to the client.
     try:
