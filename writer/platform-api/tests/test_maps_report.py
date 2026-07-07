@@ -96,3 +96,57 @@ async def test_generate_report_for_result_assembles_fields(monkeypatch):
     assert fields["report_top_competitors"] == ["Ace Roofing — 4.9 — 300"]
     assert "ring_summaries" in fields["report_analytics"]
     assert fields["report_octant_pins"]["ok"] in (True, False)  # ran without throwing
+
+
+def test_is_transient_anthropic_error_classifies():
+    # Empty-summary truncation is retryable; a plain error is not.
+    assert mr._is_transient_anthropic_error(RuntimeError("maps_report_empty_summary (stop=max_tokens)"))
+    assert not mr._is_transient_anthropic_error(RuntimeError("maps_report_llm_no_tool_use (stop=end_turn)"))
+    assert not mr._is_transient_anthropic_error(ValueError("boom"))
+
+    import anthropic
+    # A 429 concurrent-connections / rate-limit error is retryable.
+    rle = anthropic.RateLimitError.__new__(anthropic.RateLimitError)
+    assert mr._is_transient_anthropic_error(rle)
+
+
+@pytest.mark.asyncio
+async def test_call_llm_retries_then_succeeds(monkeypatch):
+    calls = {"n": 0}
+
+    async def flaky(_snapshot):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("maps_report_empty_summary (stop=max_tokens)")
+        return {"summary": "# ok", "weak_directions": "", "top_competitors": []}
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(mr, "_call_llm_once", flaky)
+    monkeypatch.setattr(mr.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(mr.settings, "maps_report_max_retries", 4)
+
+    out = await mr._call_llm({})
+    assert out["summary"] == "# ok"
+    assert calls["n"] == 3  # failed twice, succeeded on the third
+
+
+@pytest.mark.asyncio
+async def test_call_llm_gives_up_after_max_retries(monkeypatch):
+    calls = {"n": 0}
+
+    async def always_fail(_snapshot):
+        calls["n"] += 1
+        raise RuntimeError("maps_report_empty_summary (stop=max_tokens)")
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(mr, "_call_llm_once", always_fail)
+    monkeypatch.setattr(mr.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(mr.settings, "maps_report_max_retries", 2)
+
+    with pytest.raises(RuntimeError):
+        await mr._call_llm({})
+    assert calls["n"] == 3  # initial try + 2 retries

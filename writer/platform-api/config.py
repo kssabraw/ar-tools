@@ -170,6 +170,12 @@ class Settings(BaseSettings):
     # The full templated report (10 sections + 4 tables) is large; too small a
     # budget truncates the forced tool-use JSON and yields an empty summary.
     maps_report_max_tokens: int = 8192
+    # Per-keyword report generation fans out concurrent Anthropic calls within one
+    # scan's job; a burst can trip the account's concurrent-connections limit
+    # (HTTP 429). Retry those (and transient 5xx / connection errors) with
+    # exponential backoff + jitter rather than permanently failing the row.
+    maps_report_max_retries: int = 4
+    maps_report_retry_base_seconds: float = 2.0
 
     # Action Plan (reoptimization planner) — SOP-grounded enrichment. One Claude
     # call per plan rewrites every action's recommendation into the agency's own

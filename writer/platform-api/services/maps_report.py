@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 from typing import Optional
 
 from config import settings
@@ -286,8 +287,47 @@ _EMIT_TOOL = {
 }
 
 
+def _is_transient_anthropic_error(exc: Exception) -> bool:
+    """True for retryable Anthropic failures: the concurrent-connections / rate
+    limit 429, transient 5xx (overloaded), and connection drops. A truncated /
+    empty tool-use response is also retryable (raised as RuntimeError below)."""
+    import anthropic  # lazy: keep the pure rollup/snapshot helpers import-free
+
+    if isinstance(exc, (anthropic.RateLimitError, anthropic.APIConnectionError)):
+        return True
+    if isinstance(exc, anthropic.APIStatusError):
+        return exc.status_code == 429 or exc.status_code >= 500
+    # A max_tokens-truncated tool call yields an empty summary — worth one more try.
+    return isinstance(exc, RuntimeError) and "maps_report_empty_summary" in str(exc)
+
+
 async def _call_llm(snapshot: dict) -> dict:
-    """Run Claude with forced tool-use; returns {summary, weak_directions, top_competitors}."""
+    """Run Claude with forced tool-use; returns {summary, weak_directions,
+    top_competitors}. Retries transient failures (429 concurrent-connections /
+    rate limit, 5xx, connection errors) with exponential backoff + jitter so a
+    burst of concurrent per-keyword calls doesn't permanently fail rows."""
+    max_retries = settings.maps_report_max_retries
+    base = settings.maps_report_retry_base_seconds
+    attempt = 0
+    while True:
+        try:
+            return await _call_llm_once(snapshot)
+        except Exception as exc:  # noqa: BLE001 — classify then re-raise if terminal
+            if attempt >= max_retries or not _is_transient_anthropic_error(exc):
+                raise
+            # Exponential backoff with jitter (0.5–1.5×) to de-synchronize the
+            # concurrent per-keyword retries so they don't re-collide on the limit.
+            delay = base * (2 ** attempt) * (0.5 + secrets.randbelow(1000) / 1000.0)
+            logger.warning(
+                "maps_report_llm_retry",
+                extra={"attempt": attempt + 1, "delay_s": round(delay, 1), "error": str(exc)[:200]},
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
+async def _call_llm_once(snapshot: dict) -> dict:
+    """One forced tool-use Claude call; raises on empty/truncated output."""
     import anthropic  # lazy: keep the pure rollup/snapshot helpers import-free
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
