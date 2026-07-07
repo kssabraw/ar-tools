@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
+import { SerMastrChat } from '../components/SerMastrChat'
 import type { ClientListItem, ClientRankingHealth, RankingHealthResponse, RankingTrend, UnreadCountsResponse } from '../lib/types'
 import { Plus, Globe, Bell } from 'lucide-react'
 
@@ -78,6 +79,8 @@ export function Home() {
       <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 28px' }}>
         Choose a client to get started.
       </p>
+
+      <SerMastrChat exampleClient={clients[0]?.name} />
 
       {isLoading ? (
         <div style={{ color: '#64748b', fontSize: 14 }}>Loading clients…</div>
