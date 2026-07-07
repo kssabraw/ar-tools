@@ -135,6 +135,17 @@ _SYSTEM = (
     "geo-grid areas needing location pages, invisible AI keywords, open drop alerts "
     "to diagnose, unstaffed plan lines). Name the tool/page that does each. Offer to "
     "run a full strategist review for a deeper pass — don't trigger it unasked.\n\n"
+    "SOP GROUNDING (mandatory): the agency runs on a written SOP library. For ANY "
+    "question about strategy, changing strategy, forecasting, priorities, budgets, "
+    "drops, links, GBP/Maps, AI visibility or on-page work, your advice MUST come "
+    "from the SOPs, not general SEO knowledge: use the SOP LIBRARY block when one is "
+    "included in your input, and call the read_sop tool for anything it doesn't "
+    "cover. Cite the owning doc (and section) inline, e.g. "
+    "(How_To_Rank_In_Google_Maps SOP §Relevance). Where the SOPs are silent on a "
+    "decision, say so explicitly instead of improvising — and never contradict an "
+    "SOP with folklore. Claims the SOPs label '(working model)' are the agency's "
+    "operating theory — cite them as theory, not fact. Answers to pure data reads "
+    "('what's our rank for X') don't need SOP citations.\n\n"
     "HOW TO READ THE INSTRUMENTS (module-card rules — never misread these):\n"
     "- Rank tracker: position is lower=better. A null GSC position means NO DATA that "
     "day (no impressions / not connected), never 'dropped out'; read positions with "
@@ -1007,6 +1018,89 @@ def _ctx_strategist(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+# ---------------------------------------------------------------------------
+# SOP grounding — strategy-shaped questions ALWAYS carry the agency SOPs
+# (owner ruling, 2026-07-07). Two mechanisms, mirroring the strategist run:
+# a deterministic keyword gate injects a budgeted `sop_library` selection into
+# the prompt, and a `read_sop` tool lets the model pull any doc/section the
+# gate didn't cover (bounded rounds). Both surfaces (Slack + dashboard chat)
+# share this because both funnel through `interpret()`.
+# ---------------------------------------------------------------------------
+
+# Question shapes that must be SOP-grounded: strategy / changes of approach /
+# forecasting / prioritization / budget / process ("how do we…"). Generous by
+# design — a false positive costs prompt tokens, a false negative costs trust.
+_SOP_HINT_RE = re.compile(
+    r"strateg|forecast|project(?:ion|ed)?|trajector|"
+    r"improve|recommend|priorit|focus|approach|tactic|"
+    r"plan\b|planning|next step|what should|should we|what would|how do we|"
+    r"how should|why (?:is|are|did|has|have)|"
+    r"budget|allocat|retainer|spend|"
+    r"drop|decline|recover|penalt|deindex|"
+    r"link.?build|backlink|citation|review|gbp|"
+    r"reoptimi|optimi[sz]e|on.?page|"
+    r"ai visibility|ai overview|aio\b|aeo\b",
+    re.IGNORECASE,
+)
+
+# Question keywords → sop_library relevance domains (see sop_library._RELEVANCE),
+# joined with domains inferred from which modules are live in the context.
+_SOP_DOMAIN_HINTS: list[tuple[str, str]] = [
+    (r"maps|gbp|local pack|geo.?grid|review", "maps"),
+    (r"ai visibility|ai overview|ai mode|aio\b|aeo\b|chatgpt|perplexity|gemini", "ai_visibility"),
+    (r"link.?build|backlink|referring domain|citation|offpage|disavow", "offpage"),
+    (r"budget|retainer|allocat|spend|task plan|recipe", "budget"),
+    (r"content|blog|page|on.?page|silo|internal link|schema", "content"),
+    (r"drop|decline|fell|lost rank|penalt|deindex|cannibal", "organic_drop"),
+]
+
+
+def wants_sop_grounding(text: str) -> bool:
+    """True when the message is strategy-shaped and must carry the SOPs. Pure."""
+    return bool(_SOP_HINT_RE.search(text or ""))
+
+
+def sop_domains(question: str, context: dict) -> set[str]:
+    """The sop_library relevance domains for a question: keyword hints from the
+    question itself plus what's live/alerting in the client context. Pure."""
+    q = question or ""
+    domains = {d for pat, d in _SOP_DOMAIN_HINTS if re.search(pat, q, re.IGNORECASE)}
+    ctx = context or {}
+    if (ctx.get("organic_rank") or {}).get("open_drop_alerts"):
+        domains.add("organic_drop")
+    if "maps_geogrid" in ctx:
+        domains.add("maps")
+    if "ai_visibility" in ctx:
+        domains.add("ai_visibility")
+    return domains
+
+
+def _read_sop_tool() -> dict:
+    """The read_sop tool definition, with the live doc catalog in the description
+    so the model knows what exists (docs are static per deploy)."""
+    from services import sop_library
+
+    docs = ", ".join(sorted(sop_library.load_sop_docs())) or "none available"
+    return {
+        "name": "read_sop",
+        "description": (
+            "Fetch one agency SOP doc (or one section of it) to ground a strategy/"
+            "process answer. Use this whenever the question touches strategy, plans, "
+            "forecasts, budgets, drops, links, GBP/Maps, AI visibility or on-page "
+            "work and the SOP LIBRARY block doesn't already cover it. Available "
+            f"docs: {docs}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "doc": {"type": "string", "description": "SOP filename (or a distinctive part of it)."},
+                "section": {"type": "string", "description": "Optional heading substring to fetch just one section."},
+            },
+            "required": ["doc"],
+        },
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
@@ -1543,48 +1637,77 @@ async def interpret(
     Returns ("action", {"name": tool_name, "args": tool_input}) when the
     teammate is asking to trigger one of the available actions, else
     ("text", answer). Claude sees the cross-module context + thread history, the
-    action tools, and the free `fetch_live_gsc` tool — a live-GSC call is
-    executed inline (bounded rounds) and folded back into the answer; an action
-    call ⇒ ("action", …). `style="web"` swaps the Slack-mrkdwn voice for
+    action tools, and two in-answer tools — `read_sop` (SOP grounding) and the
+    free `fetch_live_gsc` (live Search Console pull) — both executed inline
+    (bounded rounds) and folded back into the answer; an action call ⇒
+    ("action", …). `style="web"` swaps the Slack-mrkdwn voice for
     dashboard-chat Markdown.
     """
     import anthropic
+
+    from services import sop_library
 
     blocks = []
     if history:
         blocks.append("Conversation so far (oldest first):\n" + format_history(history))
     blocks.append(f"Latest message: {question}")
     blocks.append(f"Client data (JSON):\n{format_context(client, context)}")
+    # Strategy-shaped question → the relevant SOPs ride along in the prompt
+    # (the read_sop tool covers anything the gate/selection missed).
+    if wants_sop_grounding(question):
+        sops = sop_library.select_sops_text(
+            sop_domains(question, context),
+            budget_chars=settings.slack_assistant_sop_budget_chars,
+        )
+        if sops:
+            blocks.append(
+                "SOP LIBRARY (ground strategy/process advice in these; cite doc + "
+                "section):\n" + sops
+            )
     user = "\n\n".join(blocks)
     api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
     messages: list[dict] = [{"role": "user", "content": user}]
-    for round_no in range(_LIVE_GSC_ROUNDS + 1):
-        # Last round withholds the live tool so the model must answer.
-        tools = _ACTION_TOOLS + ([_LIVE_GSC_TOOL] if round_no < _LIVE_GSC_ROUNDS else [])
+    tools = _ACTION_TOOLS + [_read_sop_tool(), _LIVE_GSC_TOOL]
+    # Bounded tool loop: read_sop / fetch_live_gsc calls are answered
+    # in-conversation; an action call returns immediately (actions never mix
+    # with in-answer tool reads — first wins).
+    max_rounds = max(settings.slack_assistant_sop_rounds, _LIVE_GSC_ROUNDS)
+    for round_no in range(max_rounds + 1):
+        final_round = round_no == max_rounds
         resp = await api.messages.create(
             model=settings.slack_assistant_model,
             max_tokens=settings.slack_assistant_max_tokens,
             system=_SYSTEM + (_WEB_STYLE if style == "web" else ""),
             tools=tools,
+            **({"tool_choice": {"type": "none"}} if final_round else {}),
             messages=messages,
         )
         for b in resp.content:
             if getattr(b, "type", None) == "tool_use" and b.name in _ACTIONS:
                 return ("action", {"name": b.name, "args": dict(b.input or {})})
-        live_calls = [
+        tool_calls = [
             b for b in resp.content
-            if getattr(b, "type", None) == "tool_use" and b.name == _LIVE_GSC_TOOL["name"]
+            if getattr(b, "type", None) == "tool_use"
+            and b.name in ("read_sop", _LIVE_GSC_TOOL["name"])
         ]
-        if not live_calls:
-            parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
-            return ("text", "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing.")
+        if not tool_calls or final_round:
+            break
         messages.append({"role": "assistant", "content": resp.content})
         results = []
-        for b in live_calls:
-            out = await _run_live_gsc(client["id"], dict(b.input or {}))
-            results.append({"type": "tool_result", "tool_use_id": b.id, "content": out})
+        for b in tool_calls:
+            args = dict(b.input or {})
+            if b.name == "read_sop":
+                text = sop_library.read_sop(args.get("doc", ""), args.get("section"))
+            else:
+                text = await _run_live_gsc(client["id"], args)
+            results.append({"type": "tool_result", "tool_use_id": b.id, "content": text})
+        if round_no == max_rounds - 1:
+            results.append(
+                {"type": "text", "text": "Tool budget exhausted — answer now with what you have."}
+            )
         messages.append({"role": "user", "content": results})
-    return ("text", "I couldn't generate an answer just now — try rephrasing.")
+    parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
+    return ("text", "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing.")
 
 
 async def _run_action(name: str, client_id: str, args: Optional[dict]) -> str:
