@@ -25,6 +25,7 @@ from services.local_seo_service import (
 from services.local_seo_silo import run_silo_plan_job
 from services.rank_location import run_rank_location_derive_job
 from services.service_page_plan import run_service_plan_job
+from services.rank_analysis_report import run_rank_keyword_report_job
 from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
 from services.citation_check import run_citation_check_job
@@ -337,6 +338,8 @@ async def _process_job(job: dict) -> None:
         await run_gsc_research_job(job)
     elif job_type == "rank_report":
         await run_rank_report_job(job)
+    elif job_type == "rank_keyword_report":
+        await run_rank_keyword_report_job(job)
     elif job_type == "serp_snapshot":
         await run_serp_snapshot_job(job)
     elif job_type == "maps_scan":

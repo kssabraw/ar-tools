@@ -227,6 +227,44 @@ def enqueue_due_serp_snapshots() -> int:
     return len(client_ids)
 
 
+def enqueue_due_keyword_reports() -> int:
+    """Weekly: enqueue an Organic Rank Analysis report per active keyword that has
+    a SERP snapshot to analyze (runs the day after the weekly snapshot pass so the
+    landscape is fresh). Gated on rank_analysis_auto_enabled; a keyword with no
+    snapshot is skipped (its competitive half needs one). Deduped by the
+    pending-row guard in enqueue_rank_keyword_report."""
+    if not settings.rank_analysis_auto_enabled:
+        return 0
+    from services.rank_analysis_report import enqueue_rank_keyword_report
+
+    supabase = get_supabase()
+    kws = (
+        supabase.table("tracked_keywords").select("id, keyword, client_id")
+        .eq("active", True).execute()
+    ).data or []
+    if not kws:
+        return 0
+    kw_ids = [k["id"] for k in kws]
+    with_snap: set[str] = set()
+    for i in range(0, len(kw_ids), 200):
+        chunk = kw_ids[i:i + 200]
+        with_snap.update(
+            r["keyword_id"] for r in (
+                supabase.table("serp_snapshots").select("keyword_id")
+                .in_("keyword_id", chunk)
+                .in_("status", ["complete", "partial"]).execute()
+            ).data or []
+        )
+    count = 0
+    for k in kws:
+        if k["id"] in with_snap:
+            if enqueue_rank_keyword_report(k["client_id"], k["id"], k["keyword"], trigger="weekly"):
+                count += 1
+    if count:
+        logger.info("gsc_scheduler.keyword_reports_enqueued", extra={"reports": count})
+    return count
+
+
 def enqueue_due_market() -> int:
     """Daily-triggered, monthly-effective: enqueue a market refresh per client
     with active keywords. The job only re-fetches keywords whose cached market
@@ -374,11 +412,13 @@ async def gsc_scheduler() -> None:
     maps_weekday = settings.maps_scan_weekday
     reopt_weekday = settings.reopt_plan_weekday
     strategist_weekday = settings.strategist_weekly_weekday
+    rank_analysis_weekday = settings.rank_analysis_weekly_weekday
     last_run_date: Optional[date] = None
     last_df_date: Optional[date] = None
     last_maps_date: Optional[date] = None
     last_reopt_date: Optional[date] = None
     last_strategist_date: Optional[date] = None
+    last_rank_analysis_date: Optional[date] = None
     last_asana_month: Optional[tuple] = None
     last_asana_workload_date: Optional[date] = None
     logger.info("gsc_scheduler.started", extra={"poll_interval_s": interval, "hour_utc": hour})
@@ -437,6 +477,12 @@ async def gsc_scheduler() -> None:
             if now.weekday() == strategist_weekday and should_run(now, last_strategist_date, hour):
                 enqueue_due_strategy_reviews()
                 last_strategist_date = now.date()
+            # Weekly Organic Rank Analysis reports (per keyword with a snapshot),
+            # the day after the weekly SERP-snapshot pass. No-ops entirely while
+            # rank_analysis_auto_enabled is false.
+            if now.weekday() == rank_analysis_weekday and should_run(now, last_rank_analysis_date, hour):
+                enqueue_due_keyword_reports()
+                last_rank_analysis_date = now.date()
             # Monthly Asana section automation: once per month on the configured
             # day-of-month, enqueue an asana_monthly job per mapped client (the
             # job itself no-ops if the month's section already exists).
