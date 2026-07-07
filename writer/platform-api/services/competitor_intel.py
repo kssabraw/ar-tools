@@ -373,11 +373,13 @@ def build_profiles(client_id: str, today: Optional[date] = None) -> dict:
     client_row = (
         supabase.table("clients").select("website_url, gbp").eq("id", client_id).limit(1).execute()
     ).data or [{}]
-    gbp = client_row[0].get("gbp") or {}
+    from services.gbp_service import rating_and_review_count
+
+    client_rating, client_reviews = rating_and_review_count(client_row[0].get("gbp"))
     client_ctx: dict = {
         "domain": normalize_domain(client_row[0].get("website_url")),
-        "gbp_rating": gbp.get("rating"),
-        "gbp_review_count": gbp.get("review_count") or gbp.get("reviews_count"),
+        "gbp_rating": client_rating,
+        "gbp_review_count": client_reviews,
     }
     try:
         from services import backlink_intel

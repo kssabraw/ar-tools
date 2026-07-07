@@ -704,11 +704,14 @@ def _gather_gbp(client: dict) -> Optional[dict]:
         t = r.get("text") if isinstance(r, dict) else (r if isinstance(r, str) else None)
         if t:
             texts.append(t[:240])
+    from services.gbp_service import rating_and_review_count
+
+    rating, review_count = rating_and_review_count(gbp)
     return {
         "business_name": gbp.get("business_name"),
         "address": gbp.get("address"),
-        "rating": gbp.get("rating"),
-        "review_count": gbp.get("review_count") or gbp.get("reviews_count"),
+        "rating": rating,
+        "review_count": review_count,
         "top_reviews": texts,
     }
 
