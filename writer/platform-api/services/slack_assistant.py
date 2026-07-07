@@ -8,10 +8,11 @@ content, keyword research, setup), fold in the thread's prior turns for
 continuity, ask Claude, and post the answer back **in-thread**. The bot's own
 posts (rank-drop alerts etc.) and other bots are ignored, so it never loops.
 
-Read-only Q&A — the assistant only reads and explains; it never triggers work
-(that's a later, carefully-authed step). Anyone in the workspace can ask
-(per the product decision); inbound requests are verified by Slack's request
-signature so the public endpoint can't be spoofed.
+Q&A plus a small action registry (_ACTIONS): the assistant can trigger existing
+jobs — scans, research, a strategist review, an Asana task-plan push — with paid
+or side-effecting actions staged behind an explicit reply-*yes* confirm. Anyone
+in the workspace can ask (per the product decision); inbound requests are
+verified by Slack's request signature so the public endpoint can't be spoofed.
 
 Split: pure helpers (signature verify, mention stripping, client resolution,
 history formatting) are import-light and unit-tested; the context build + thread
@@ -65,7 +66,8 @@ _SYSTEM = (
     "(e.g. a ranking drop + a content gap). Never invent numbers or modules.\n\n"
     "You can also TAKE ACTIONS via the provided tools (rebuild the Action Plan, "
     "run a Maps geo-grid scan, run GSC Research, run an AI Visibility scan, run a "
-    "strategist review). If the teammate is clearly asking you to run/start/trigger/"
+    "strategist review, push the latest monthly task plan to Asana). If the "
+    "teammate is clearly asking you to run/start/trigger/"
     "rebuild one of these for the client, call the matching tool instead of answering. "
     "If they're only asking about results or anything else, answer normally — do NOT "
     "call a tool for a question.\n\n"
@@ -574,7 +576,37 @@ def _act_ai_scan(client_id: str) -> str:
         raise
 
 
-# (tool name) → {label, paid, run}. Append here to add an action.
+def _act_push_task_plan(client_id: str) -> str:
+    from services import asana_monthly, asana_push, asana_service
+
+    if not asana_service.is_configured():
+        return "Asana isn't connected yet (ASANA_TOKEN + workspace) — set that up on the platform first."
+    if not asana_monthly.get_project_gid(client_id):
+        return "This client has no Asana project mapped yet — set it on their Asana Tasks page first."
+    rows = (
+        get_supabase()
+        .table("monthly_task_plans")
+        .select("id, month, plan")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        return "No monthly task plan exists for this client yet — generate one on the Task Plan page first."
+    plan_row = rows[0]
+    if not ((plan_row.get("plan") or {}).get("tasks")):
+        return "The latest task plan has no task lines to push (empty or frozen plan)."
+    asana_push.enqueue_asana_push(client_id, str(plan_row["id"]))
+    return (
+        f"✅ Pushing the latest task plan ({plan_row.get('month') or 'current month'}) to Asana — "
+        "tasks land on the board in a moment. Already-pushed lines are skipped."
+    )
+
+
+# (tool name) → {label, paid, run} (+ optional `note` — the parenthetical in the
+# reply-*yes* confirm; default is the API-budget wording). Append here to add an
+# action.
 _ACTIONS: dict[str, dict] = {
     "rebuild_action_plan": {"label": "rebuild the Action Plan", "paid": False, "run": _act_rebuild_plan},
     "run_maps_scan": {"label": "run a Maps geo-grid scan", "paid": True, "run": _act_maps_scan},
@@ -583,6 +615,14 @@ _ACTIONS: dict[str, dict] = {
     # SerMaStr strategist mode: "strategy review for <client>". Paid gating =
     # the reply-*yes* confirm (an LLM run + up to one paid nlp audit call).
     "run_strategy_review": {"label": "run a strategist review", "paid": True, "run": _act_strategy_review},
+    # Not paid-API spend, but it creates real tasks on the client's board — same
+    # reply-*yes* confirm gate (the `note` swaps the budget wording).
+    "push_task_plan": {
+        "label": "push the latest monthly task plan to Asana",
+        "paid": True,
+        "note": "creates real tasks on the client's Asana board",
+        "run": _act_push_task_plan,
+    },
 }
 _ACTION_TOOLS = [
     {"name": name, "description": meta["label"].capitalize() + " for the client.",
@@ -731,9 +771,10 @@ async def handle_message(event: dict) -> None:
             if meta["paid"]:
                 # 2) Stage paid actions behind an explicit confirm (guards spend).
                 _pending[pend_key] = {"action": payload, "client_id": client["id"]}
+                note = meta.get("note", "uses API budget")
                 await post_message(
                     channel,
-                    f"This will {meta['label']} for *{client['name']}* (uses API budget). "
+                    f"This will {meta['label']} for *{client['name']}* ({note}). "
                     "Reply *yes* to proceed.",
                     thread_ts,
                 )
