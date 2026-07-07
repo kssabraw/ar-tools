@@ -33,7 +33,7 @@ from services.reopt_planner import run_reopt_plan_job
 from services.asana_monthly import run_asana_monthly_job
 from services.serp_snapshot import run_serp_snapshot_job
 from services.local_dominator import run_maps_scan_job
-from services.maps_report import run_maps_report_job
+from services.maps_report import run_maps_image_backfill_job, run_maps_report_job
 from services.maps_analyzer import run_maps_analyze_job
 from services.competitor_gbp import run_competitor_gbp_job
 from services.review_analytics import run_review_intel_job
@@ -333,6 +333,8 @@ async def _process_job(job: dict) -> None:
         await run_maps_scan_job(job)
     elif job_type == "maps_report":
         await run_maps_report_job(job)
+    elif job_type == "maps_image_backfill":
+        await run_maps_image_backfill_job(job)
     elif job_type == "maps_analyze":
         await run_maps_analyze_job(job)
     elif job_type == "competitor_gbp":
