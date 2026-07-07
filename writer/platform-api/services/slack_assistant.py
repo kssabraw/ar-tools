@@ -116,6 +116,15 @@ _SYSTEM = (
     "not interchangeable (AIO/AI-Mode lean on GBP + top organic, ChatGPT leans Bing)."
 )
 
+# Appended to the system prompt when the assistant speaks through the dashboard
+# chatbox (routers/assistant.py) instead of Slack — same brain, different room.
+_WEB_STYLE = (
+    "\n\nSURFACE: you are answering in the AR Tools dashboard chat (a web app), NOT "
+    "Slack. Format with standard Markdown — **bold**, `-` bullets — and never mention "
+    "Slack, threads, or channels. When you name a tool/page (Action Plan, Campaign "
+    "Goals, Maps geo-grid, …) the teammate can open it from the client's workspace."
+)
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers (no I/O) — unit-tested.
@@ -983,7 +992,8 @@ _pending: dict[tuple, dict] = {}
 # Claude + Slack I/O.
 # ---------------------------------------------------------------------------
 async def interpret(
-    question: str, client: dict, context: dict, history: Optional[list[dict]] = None
+    question: str, client: dict, context: dict, history: Optional[list[dict]] = None,
+    style: str = "slack",
 ) -> tuple[str, object]:
     """Decide whether the message is a question or an action request.
 
@@ -991,6 +1001,7 @@ async def interpret(
     teammate is asking to trigger one of the available actions, else
     ("text", answer). Claude sees the cross-module context + thread history and
     the action tools; a tool call ⇒ action, otherwise a normal grounded answer.
+    `style="web"` swaps the Slack-mrkdwn voice for dashboard-chat Markdown.
     """
     import anthropic
 
@@ -1004,7 +1015,7 @@ async def interpret(
     resp = await api.messages.create(
         model=settings.slack_assistant_model,
         max_tokens=settings.slack_assistant_max_tokens,
-        system=_SYSTEM,
+        system=_SYSTEM + (_WEB_STYLE if style == "web" else ""),
         tools=_ACTION_TOOLS,
         messages=[{"role": "user", "content": user}],
     )

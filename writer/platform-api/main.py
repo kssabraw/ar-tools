@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 
 from config import settings
 from routers.asana import router as asana_router
+from routers.assistant import router as assistant_router
 from routers.brand import router as brand_router
 from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
@@ -164,6 +165,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
 
 
 app.include_router(asana_router)
+app.include_router(assistant_router)
 app.include_router(brand_router)
 app.include_router(brand_voice_router)
 app.include_router(briefs_router)
