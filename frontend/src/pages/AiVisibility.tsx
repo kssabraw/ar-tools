@@ -70,6 +70,18 @@ export function AiVisibility() {
     enabled: Boolean(clientId),
   })
 
+  // On mount / return, re-attach to an in-flight scan (started here earlier, or
+  // still running after navigating away) so the progress bar reappears. The
+  // scan itself runs server-side regardless; this only re-hydrates the UI.
+  const { data: activeScan } = useQuery<{ job_id: string | null }>({
+    queryKey: ['brand-scan-active', clientId],
+    queryFn: () => api.get<{ job_id: string | null }>(`/clients/${clientId}/brand/scan-active`),
+    enabled: Boolean(clientId),
+  })
+  useEffect(() => {
+    if (activeScan?.job_id && !jobId) setJobId(activeScan.job_id)
+  }, [activeScan?.job_id, jobId])
+
   // Poll the active scan job; refresh results when it finishes.
   const { data: jobStatus } = useQuery<ScanStatus>({
     queryKey: ['brand-scan-job', clientId, jobId],

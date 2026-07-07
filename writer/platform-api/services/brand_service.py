@@ -214,6 +214,25 @@ def get_scan_status(client_id: str, job_id: str) -> dict:
     return _safe(_q)
 
 
+def get_active_scan(client_id: str) -> dict:
+    """Return the most recent in-flight (`pending`/`running`) brand_scan job for
+    this client so the frontend can re-attach its progress bar after a reload or
+    navigating away and back. Returns {"job_id": None} when nothing is running."""
+    def _q():
+        res = (
+            get_supabase().table("async_jobs")
+            .select("id")
+            .eq("job_type", "brand_scan")
+            .eq("entity_id", client_id)
+            .in_("status", ["pending", "running"])
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute().data
+        )
+        return {"job_id": res[0]["id"] if res else None}
+    return _safe(_q)
+
+
 # ── history / trends ─────────────────────────────────────────────────────────
 _HISTORY_COLS = (
     "id, keyword_id, scan_batch_id, engine, status, mention_found, mention_type, "
