@@ -15,6 +15,9 @@ class AsanaProjectMapping(BaseModel):
     client_id: UUID
     project_gid: str
     auto_assignee_gids: list[str] = []
+    # Resolved from Asana at save time (validation) — None on reads / when
+    # Asana is unconfigured.
+    project_name: Optional[str] = None
 
 
 class AsanaProjectMappingRequest(BaseModel):

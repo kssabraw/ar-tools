@@ -515,6 +515,13 @@ async def add_task_to_section(section_gid: str, task_gid: str) -> Any:
     return await _post(f"/sections/{section_gid}/addTask", {"task": task_gid})
 
 
+async def get_project(project_gid: str) -> dict:
+    """One project's basics — used to validate a pasted project GID at save
+    time (a wrong number, e.g. a workspace id from the new Asana URL format,
+    404s here instead of failing later inside a push/monthly run)."""
+    return await _get(f"/projects/{project_gid}", {"opt_fields": "name"}) or {}
+
+
 async def list_sections(project_gid: str) -> list[dict]:
     """All sections in a project (used to find the insert anchor + idempotency)."""
     return await _get(f"/projects/{project_gid}/sections", {"opt_fields": "name"}) or []

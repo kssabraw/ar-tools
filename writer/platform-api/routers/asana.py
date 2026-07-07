@@ -179,12 +179,32 @@ async def set_project_mapping(
     auth: dict = Depends(require_auth),
 ) -> AsanaProjectMapping:
     supabase = get_supabase()
+    project_gid = body.project_gid.strip()
     gids = [g.strip() for g in body.auto_assignee_gids if g and g.strip()]
+
+    # Validate the GID against Asana before saving — a pasted workspace id
+    # (the first number in the new app.asana.com/1/<workspace>/project/<gid>
+    # URL format) or a project the token can't see 404s here, not later inside
+    # a monthly run / task-plan push.
+    project_name: str | None = None
+    if project_gid and asana_service.is_configured():
+        try:
+            project = await asana_service.get_project(project_gid)
+            project_name = project.get("name")
+        except Exception as exc:
+            logger.warning(
+                "asana_project_gid_invalid",
+                extra={"client_id": str(client_id), "project_gid": project_gid, "error": str(exc)},
+            )
+            raise HTTPException(
+                status_code=422, detail="asana_project_not_found_or_no_access"
+            ) from exc
+
     try:
         supabase.table("asana_client_projects").upsert(
             {
                 "client_id": str(client_id),
-                "project_gid": body.project_gid.strip(),
+                "project_gid": project_gid,
                 "auto_assignee_gids": gids,
                 "updated_at": "now()",
             }
@@ -192,7 +212,12 @@ async def set_project_mapping(
     except Exception as exc:
         logger.error("asana_set_mapping_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
-    return AsanaProjectMapping(client_id=client_id, project_gid=body.project_gid.strip(), auto_assignee_gids=gids)
+    return AsanaProjectMapping(
+        client_id=client_id,
+        project_gid=project_gid,
+        auto_assignee_gids=gids,
+        project_name=project_name,
+    )
 
 
 # ---------------------------------------------------------------------------

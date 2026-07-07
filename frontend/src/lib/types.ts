@@ -1353,6 +1353,8 @@ export interface AsanaProjectMapping {
   client_id: string
   project_gid: string
   auto_assignee_gids: string[]
+  // Resolved from Asana at save time (GID validation); null on plain reads.
+  project_name?: string | null
 }
 
 export interface AsanaTaskTemplateItem {
