@@ -411,7 +411,6 @@ async def gsc_scheduler() -> None:
     weekday = settings.dataforseo_rank_weekday
     maps_weekday = settings.maps_scan_weekday
     reopt_weekday = settings.reopt_plan_weekday
-    strategist_weekday = settings.strategist_weekly_weekday
     rank_analysis_weekday = settings.rank_analysis_weekly_weekday
     last_run_date: Optional[date] = None
     last_df_date: Optional[date] = None
@@ -471,11 +470,14 @@ async def gsc_scheduler() -> None:
             if now.weekday() == reopt_weekday and should_run(now, last_reopt_date, hour):
                 enqueue_due_reopt_plans()
                 last_reopt_date = now.date()
-            # Weekly SerMaStr strategist reviews (active-signal clients only,
-            # the day after the reopt build so the plan is fresh). The enqueue
-            # helper no-ops entirely while strategist_enabled is false.
-            if now.weekday() == strategist_weekday and should_run(now, last_strategist_date, hour):
-                enqueue_due_strategy_reviews()
+            # SerMaStr strategist reviews — now per-client staggered: each
+            # client has its own review weekday (clients.strategist_weekday,
+            # unset → the global default), so the due-check runs DAILY and the
+            # enqueue helper filters to the clients whose day is today. The
+            # durable weekly guard keeps each client to one scheduled run/week;
+            # the helper no-ops entirely while strategist_enabled is false.
+            if should_run(now, last_strategist_date, hour):
+                enqueue_due_strategy_reviews(now.weekday())
                 last_strategist_date = now.date()
             # Weekly Organic Rank Analysis reports (per keyword with a snapshot),
             # the day after the weekly SERP-snapshot pass. No-ops entirely while

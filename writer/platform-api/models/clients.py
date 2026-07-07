@@ -117,6 +117,10 @@ class ClientDetail(BaseModel):
     retainer_monthly: Optional[float] = None
     is_sab: bool = False
     client_type: Literal["local", "enterprise"] = "local"
+    # Per-client strategist review day (0=Mon..6=Sun). None → the global
+    # `strategist_weekly_weekday` default, so reviews can be staggered across
+    # the week instead of all landing on one day.
+    strategist_weekday: Optional[int] = None
 
     @field_validator("drive_folders", mode="before")
     @classmethod
@@ -163,6 +167,8 @@ class ClientCreateRequest(BaseModel):
     retainer_monthly: Optional[float] = None
     is_sab: Optional[bool] = None
     client_type: Optional[Literal["local", "enterprise"]] = None
+    # Per-client strategist review day (0=Mon..6=Sun); None → global default.
+    strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
     # Reference page URLs to scrape + analyze for structure mirroring.
     page_structure_urls: Optional[PageStructureUrls] = None
 
@@ -199,3 +205,5 @@ class ClientUpdateRequest(BaseModel):
     retainer_monthly: Optional[float] = None
     is_sab: Optional[bool] = None
     client_type: Optional[Literal["local", "enterprise"]] = None
+    # Per-client strategist review day (0=Mon..6=Sun); None → global default.
+    strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
