@@ -90,6 +90,8 @@ export interface Client extends ClientListItem {
   retainer_monthly: number | null
   is_sab: boolean
   client_type: 'local' | 'enterprise'
+  // Per-client SerMaStr review day (0=Mon..6=Sun); null → global default.
+  strategist_weekday: number | null
   updated_at: string
 }
 

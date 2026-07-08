@@ -274,6 +274,8 @@ async def create_client(
         row["is_sab"] = body.is_sab
     if body.client_type is not None:
         row["client_type"] = body.client_type
+    if body.strategist_weekday is not None:
+        row["strategist_weekday"] = body.strategist_weekday
     # Reference page structures: seed the pending entries so the row reflects the
     # configured URLs immediately; the scrape jobs are enqueued after insert.
     page_structures, ps_to_enqueue = _sync_page_structures({}, body.page_structure_urls)
@@ -391,6 +393,10 @@ async def update_client(
         updates["is_sab"] = body.is_sab
     if body.client_type is not None:
         updates["client_type"] = body.client_type
+    # Explicit-set semantics: an explicit null clears the per-client review day
+    # back to the global default (a plain `is not None` guard couldn't do that).
+    if "strategist_weekday" in body.model_fields_set:
+        updates["strategist_weekday"] = body.strategist_weekday
     if body.gbp_place_id is not None:
         updates["gbp_place_id"] = body.gbp_place_id
     if body.gbp is not None:

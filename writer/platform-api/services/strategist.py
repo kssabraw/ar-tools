@@ -687,21 +687,82 @@ def clients_due_opportunity_sweep(active: set[str], interval_days: int) -> set[s
     return quiet - recently_run
 
 
-def enqueue_due_strategy_reviews() -> int:
-    """Weekly scheduler pass: one scheduled strategist run per active-signal
-    client, plus quiet clients due the opportunity sweep (see
-    `clients_due_opportunity_sweep`). No-ops entirely while strategist_enabled
-    is false."""
+def clients_scheduled_within(days: int) -> set[str]:
+    """Client ids with a `scheduled`-trigger strategist run inside the last
+    `days` days. The durable "already ran this week" guard: the weekly weekday
+    gate lives in process memory, so without this a redeploy on the strategist
+    weekday re-fires the whole active-signal pass. `days <= 0` disables."""
+    if days <= 0:
+        return set()
+    supabase = get_supabase()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    return {
+        r["client_id"]
+        for r in (
+            supabase.table("strategy_reviews").select("client_id")
+            .eq("trigger", "scheduled")
+            .gte("created_at", cutoff).execute()
+        ).data or []
+        if r.get("client_id")
+    }
+
+
+def client_weekday_map(client_ids: set[str]) -> dict[str, int]:
+    """Map each client id to its assigned strategist weekday (0=Mon..6=Sun),
+    falling back to the global `strategist_weekly_weekday` when the client has
+    none set. Drives per-client staggering of the weekly pass."""
+    default = settings.strategist_weekly_weekday
+    result = {cid: default for cid in client_ids}
+    if not client_ids:
+        return result
+    supabase = get_supabase()
+    rows = (
+        supabase.table("clients")
+        .select("id, strategist_weekday")
+        .in_("id", list(client_ids))
+        .execute()
+    ).data or []
+    for r in rows:
+        wd = r.get("strategist_weekday")
+        if wd is not None:
+            result[r["id"]] = wd
+    return result
+
+
+def enqueue_due_strategy_reviews(today_weekday: Optional[int] = None) -> int:
+    """Daily scheduler pass: one scheduled strategist run per active-signal
+    client whose assigned strategist day is today, plus quiet clients due the
+    opportunity sweep (see `clients_due_opportunity_sweep`). Runs are staggered
+    per client via `clients.strategist_weekday` (unset → global default), so
+    this is called every day and filters to today's clients rather than gating
+    on one global weekday. No-ops entirely while strategist_enabled is false."""
     if not settings.strategist_enabled:
         return 0
+    if today_weekday is None:
+        today_weekday = datetime.now(timezone.utc).weekday()
     active = clients_with_active_signals()
-    due = set(active)
+    # Durable weekly guard: drop active clients that already had a scheduled run
+    # this week so a redeploy (or the daily re-check) can't re-fire the pass.
+    # (Quiet clients are already interval-gated inside the opportunity sweep.)
+    try:
+        recent = clients_scheduled_within(settings.strategist_weekly_interval_days)
+    except Exception as exc:  # a failed read must never silence the weekly pass
+        logger.warning("strategist.recent_scheduled_read_failed", extra={"error": str(exc)})
+        recent = set()
+    due = set(active) - recent
     try:
         due |= clients_due_opportunity_sweep(
             active, settings.strategist_opportunity_interval_days
         )
     except Exception as exc:  # the sweep must never break the weekly pass
         logger.warning("strategist.opportunity_sweep_failed", extra={"error": str(exc)})
+    # Per-client staggering: only enqueue clients whose assigned day is today.
+    try:
+        weekday_map = client_weekday_map(due)
+        due = {cid for cid in due if weekday_map.get(cid) == today_weekday}
+    except Exception as exc:  # a failed read must not drop the whole pass — the
+        # durable weekly guard still bounds it to once per client per week.
+        logger.warning("strategist.weekday_map_read_failed", extra={"error": str(exc)})
     enqueued = 0
     for client_id in sorted(due):
         if enqueue_strategy_review(client_id, trigger="scheduled"):

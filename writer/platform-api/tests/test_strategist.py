@@ -318,6 +318,96 @@ def test_opportunity_sweep_targets_quiet_clients_not_recently_run(monkeypatch):
     assert strategist.clients_due_opportunity_sweep({"a"}, 28) == {"c"}
 
 
+def test_clients_scheduled_within_durable_weekly_guard(monkeypatch):
+    from unittest.mock import MagicMock
+
+    # days <= 0 → disabled, no DB touched
+    assert strategist.clients_scheduled_within(0) == set()
+
+    supabase = MagicMock()
+    chain = supabase.table.return_value
+    chain.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = [
+        {"client_id": "a"}, {"client_id": "b"}, {"client_id": None},
+    ]
+    monkeypatch.setattr(strategist, "get_supabase", lambda: supabase)
+
+    assert strategist.clients_scheduled_within(6) == {"a", "b"}
+    # scoped to the scheduled trigger so escalation/on-demand runs don't count
+    chain.select.return_value.eq.assert_called_once_with("trigger", "scheduled")
+
+
+def test_weekly_pass_skips_active_clients_run_this_week(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "strategist_enabled", True)
+    monkeypatch.setattr(strategist, "clients_with_active_signals", lambda: {"a", "b"})
+    # b already had a scheduled run this week → only a is still due
+    monkeypatch.setattr(strategist, "clients_scheduled_within", lambda days: {"b"})
+    monkeypatch.setattr(
+        strategist, "clients_due_opportunity_sweep", lambda active, interval: set()
+    )
+    # every due client is assigned to today's weekday (3)
+    monkeypatch.setattr(strategist, "client_weekday_map", lambda ids: {c: 3 for c in ids})
+    enqueued: list[tuple] = []
+    monkeypatch.setattr(
+        strategist,
+        "enqueue_strategy_review",
+        lambda cid, trigger="on_demand": (enqueued.append((cid, trigger)), "rid")[1],
+    )
+
+    assert strategist.enqueue_due_strategy_reviews(3) == 1
+    assert enqueued == [("a", "scheduled")]
+
+
+def test_weekly_pass_staggers_by_assigned_weekday(monkeypatch):
+    from config import settings
+
+    monkeypatch.setattr(settings, "strategist_enabled", True)
+    monkeypatch.setattr(strategist, "clients_with_active_signals", lambda: {"a", "b", "c"})
+    monkeypatch.setattr(strategist, "clients_scheduled_within", lambda days: set())
+    monkeypatch.setattr(
+        strategist, "clients_due_opportunity_sweep", lambda active, interval: set()
+    )
+    # a → Mon(0), b → Tue(1), c → Mon(0)
+    monkeypatch.setattr(
+        strategist, "client_weekday_map", lambda ids: {"a": 0, "b": 1, "c": 0}
+    )
+    enqueued: list[tuple] = []
+    monkeypatch.setattr(
+        strategist,
+        "enqueue_strategy_review",
+        lambda cid, trigger="on_demand": (enqueued.append((cid, trigger)), "rid")[1],
+    )
+
+    # On Monday only a and c fire; b waits for Tuesday.
+    assert strategist.enqueue_due_strategy_reviews(0) == 2
+    assert enqueued == [("a", "scheduled"), ("c", "scheduled")]
+
+
+def test_client_weekday_map_falls_back_to_global_default(monkeypatch):
+    from unittest.mock import MagicMock
+    from config import settings
+
+    monkeypatch.setattr(settings, "strategist_weekly_weekday", 1)
+    supabase = MagicMock()
+    chain = supabase.table.return_value
+    # a has an explicit day (4); b is unset (null); c isn't returned at all
+    chain.select.return_value.in_.return_value.execute.return_value.data = [
+        {"id": "a", "strategist_weekday": 4},
+        {"id": "b", "strategist_weekday": None},
+    ]
+    monkeypatch.setattr(strategist, "get_supabase", lambda: supabase)
+
+    result = strategist.client_weekday_map({"a", "b", "c"})
+    assert result == {"a": 4, "b": 1, "c": 1}
+
+    # empty input never touches the DB
+    supabase2 = MagicMock()
+    monkeypatch.setattr(strategist, "get_supabase", lambda: supabase2)
+    assert strategist.client_weekday_map(set()) == {}
+    supabase2.table.assert_not_called()
+
+
 def test_opportunity_sweep_disabled_and_no_quiet(monkeypatch):
     from unittest.mock import MagicMock
 

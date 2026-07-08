@@ -40,6 +40,7 @@ interface FormData {
   retainer_monthly: string
   is_sab: boolean
   client_type: 'local' | 'enterprise'
+  strategist_weekday: string  // '' = global default, else '0'..'6'
 }
 
 const empty: FormData = {
@@ -49,7 +50,7 @@ const empty: FormData = {
   wordpress_site_url: '', wordpress_username: '', wordpress_app_password: '', wordpress_app_password_set: false,
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
-  retainer_monthly: '', is_sab: false, client_type: 'local',
+  retainer_monthly: '', is_sab: false, client_type: 'local', strategist_weekday: '',
 }
 
 // Per-content-type Drive folders. `type` is the backend content_type slug used
@@ -161,6 +162,7 @@ export function ClientForm() {
         retainer_monthly: existing.retainer_monthly != null ? String(existing.retainer_monthly) : '',
         is_sab: existing.is_sab ?? false,
         client_type: existing.client_type ?? 'local',
+        strategist_weekday: existing.strategist_weekday != null ? String(existing.strategist_weekday) : '',
       })
     }
   }, [existing])
@@ -236,6 +238,8 @@ export function ClientForm() {
         ...(form.retainer_monthly.trim() !== '' ? { retainer_monthly: Number(form.retainer_monthly) } : {}),
         is_sab: form.is_sab,
         client_type: form.client_type,
+        // Always send (number or null) so clearing back to the global default persists.
+        strategist_weekday: form.strategist_weekday !== '' ? Number(form.strategist_weekday) : null,
         page_structure_urls: {
           local_landing: form.ps_local_landing.trim() || null,
           service: form.ps_service.trim() || null,
@@ -494,6 +498,24 @@ export function ClientForm() {
                 Hidden address / service-area GBP
               </label>
               <p style={hintStyle}>SABs skip the GBP Blast in the monthly baseline stack ($130 vs $135).</p>
+            </div>
+            <div>
+              <label style={labelStyle}>Strategist Review Day</label>
+              <select
+                value={form.strategist_weekday}
+                onChange={(e) => setForm(f => ({ ...f, strategist_weekday: e.target.value }))}
+                style={{ ...inputStyle, width: 220, boxSizing: 'border-box' }}
+              >
+                <option value="">Default (global)</option>
+                <option value="0">Monday</option>
+                <option value="1">Tuesday</option>
+                <option value="2">Wednesday</option>
+                <option value="3">Thursday</option>
+                <option value="4">Friday</option>
+                <option value="5">Saturday</option>
+                <option value="6">Sunday</option>
+              </select>
+              <p style={hintStyle}>Weekday this client's SerMaStr review runs — stagger clients across the week.</p>
             </div>
           </div>
         </div>
