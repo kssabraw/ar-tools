@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LifeBuoy } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LifeBuoy, Sparkles } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -51,6 +51,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const clientId = currentClientId(location.pathname)
   const quickNav: NavItem[] = [
     { label: 'Home', to: '/', icon: <Home size={18} /> },
+    { label: 'SerMaStr', to: '/assistant', icon: <Sparkles size={18} /> },
     ...(clientId
       ? [{ label: 'Dashboard', to: `/clients/${clientId}`, icon: <LayoutDashboard size={18} /> }]
       : []),

@@ -59,7 +59,7 @@ function slackToMd(text: string): string {
   return text.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1**$2**')
 }
 
-export function SerMastrChat({ exampleClient }: { exampleClient?: string }) {
+export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClient?: string; fullPage?: boolean }) {
   const { user } = useAuth()
   const userId = user?.id ?? null
   const [state, setState] = useState<ChatState>(() => loadState(userId))
@@ -145,8 +145,8 @@ export function SerMastrChat({ exampleClient }: { exampleClient?: string }) {
     : 'Ask about a client’s SEO, or tell me to run something…'
 
   return (
-    <div style={card}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: state.messages.length > 0 ? 12 : 10 }}>
+    <div style={fullPage ? cardFull : card}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: state.messages.length > 0 || fullPage ? 12 : 10 }}>
         <span style={logo}><Sparkles size={15} /></span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 14, color: '#0f172a' }}>SerMaStr</div>
@@ -171,29 +171,37 @@ export function SerMastrChat({ exampleClient }: { exampleClient?: string }) {
         )}
       </div>
 
-      {state.messages.length > 0 && (
-        <div ref={scrollRef} style={thread}>
-          {state.messages.map((m, i) => (
-            m.role === 'user' ? (
-              <div key={i} style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                <div style={userBubble}>{m.content}</div>
-              </div>
-            ) : (
-              <div key={i} style={{ display: 'flex' }}>
-                <div style={botBubble}><Markdown>{slackToMd(m.content)}</Markdown></div>
-              </div>
-            )
-          ))}
-          {sending && (
-            <div style={{ display: 'flex' }}>
-              <div style={{ ...botBubble, color: '#94a3b8', fontSize: 13 }}>SerMaStr is thinking…</div>
+      {(state.messages.length > 0 || fullPage) && (
+        <div ref={scrollRef} style={fullPage ? threadFull : thread}>
+          {state.messages.length === 0 && fullPage ? (
+            <div style={emptyHint}>
+              Ask about a client’s SEO performance, or tell me to run something — the conversation stays here.
             </div>
-          )}
-          {!sending && state.pendingToken && (
-            <div style={{ display: 'flex', gap: 8, paddingLeft: 2 }}>
-              <button onClick={() => send('yes')} style={confirmBtn}>Confirm</button>
-              <button onClick={cancelPending} style={cancelBtn}>Cancel</button>
-            </div>
+          ) : (
+            <>
+              {state.messages.map((m, i) => (
+                m.role === 'user' ? (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <div style={userBubble}>{m.content}</div>
+                  </div>
+                ) : (
+                  <div key={i} style={{ display: 'flex' }}>
+                    <div style={botBubble}><Markdown>{slackToMd(m.content)}</Markdown></div>
+                  </div>
+                )
+              ))}
+              {sending && (
+                <div style={{ display: 'flex' }}>
+                  <div style={{ ...botBubble, color: '#94a3b8', fontSize: 13 }}>SerMaStr is thinking…</div>
+                </div>
+              )}
+              {!sending && state.pendingToken && (
+                <div style={{ display: 'flex', gap: 8, paddingLeft: 2 }}>
+                  <button onClick={() => send('yes')} style={confirmBtn}>Confirm</button>
+                  <button onClick={cancelPending} style={cancelBtn}>Cancel</button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
@@ -221,6 +229,12 @@ const card: React.CSSProperties = {
   background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12,
   padding: 16, marginBottom: 24,
 }
+// Dedicated-page variant: fill the available height so the message field is as
+// large as the viewport allows, with the input pinned to the bottom.
+const cardFull: React.CSSProperties = {
+  ...card, marginBottom: 0, height: '100%', minHeight: 0,
+  display: 'flex', flexDirection: 'column',
+}
 const logo: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   width: 30, height: 30, borderRadius: 8, flexShrink: 0,
@@ -244,6 +258,14 @@ const thread: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 10,
   maxHeight: 360, overflowY: 'auto', marginBottom: 12,
   paddingRight: 4,
+}
+// On the dedicated page the thread grows to fill the card instead of capping.
+const threadFull: React.CSSProperties = {
+  ...thread, maxHeight: 'none', flex: 1, minHeight: 0,
+}
+const emptyHint: React.CSSProperties = {
+  margin: 'auto', maxWidth: 380, textAlign: 'center',
+  color: '#94a3b8', fontSize: 13, lineHeight: 1.6,
 }
 const userBubble: React.CSSProperties = {
   background: '#6366f1', color: '#fff', fontSize: 13, lineHeight: 1.5,
