@@ -608,7 +608,7 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             detail="This run exceeds the workspace cost cap. Submit it for "
             "approval instead of running it directly.",
         )
-    if not store.try_mark_running(session_id):
+    if not store.try_claim_run(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A pipeline run is already in progress for this session.",
@@ -616,9 +616,9 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
     # Persist the §8.1 estimate so the cost banner (§8.4) can compare estimate vs
     # the live actual on owner and under-cap VA runs — not only the approval path
     # (submit-for-approval persists its own; an owner-approved run keeps that one).
-    # Best-effort: the run is already claimed (try_mark_running set status=running),
+    # Best-effort: the run is already claimed (try_claim_run set status=queued),
     # so a failed estimate write must NOT prevent submit_expand — otherwise the
-    # session would strand as `running` with no job. The estimate is cosmetic (the
+    # session would strand as `queued` with no job. The estimate is cosmetic (the
     # banner just loses its comparison line); the run itself is unaffected.
     try:
         store.update_session(
@@ -630,7 +630,7 @@ def expand_session(session_id: str, user: AuthedUser = Depends(require_user)) ->
             extra={"event": "estimate_persist_failed", "reason": repr(exc)},
         )
     jobs.submit_expand(session_id)
-    return {"status": "running", "session_id": session_id}
+    return {"status": "queued", "session_id": session_id}
 
 
 # ---- M9 cost estimate + approval workflow (PRD §8.4 / §11.3) --------------
@@ -725,13 +725,13 @@ def cancel_running_session(
     Partial metered spend persists (PRD §16.4 cost meter flushes on exit).
     Both roles, RLS-scoped — a VA can cancel their own session; the owner can
     cancel any visible session (§11.2 'VA can manage own sessions').
-    Pending-approval sessions use /cancel-approval; only a `running` session is
-    cancellable here."""
+    Pending-approval sessions use /cancel-approval; a `queued` or `running`
+    session is cancellable here (a queued one simply never starts)."""
     _require_session(user, session_id)
     bind_session_id(session_id)
     # Atomic check-and-set so a second concurrent /cancel doesn't 409 the first
-    # caller. If it returns False, the run wasn't running (already cancelled /
-    # completed / never started).
+    # caller. If it returns False, the run wasn't queued or running (already
+    # cancelled / completed / never started).
     claimed = store.try_mark_cancelled(session_id)
     if not claimed:
         raise HTTPException(
@@ -780,9 +780,9 @@ def approve_session(
     body: ApprovalDecisionBody,
     user: AuthedUser = Depends(require_owner),
 ) -> dict:
-    """Approve a pending run (PRD §11.3 step 6): record the decision, flip the
-    session to running, and kick off the pipeline (the cost-bearing /expand, same
-    entry point as a run-now session). Owner-only."""
+    """Approve a pending run (PRD §11.3 step 6): record the decision, claim the
+    run (queued, running once a worker picks it up), and kick off the pipeline
+    (the cost-bearing /expand, same entry point as a run-now session). Owner-only."""
     session = _require_session(user, session_id)
     bind_session_id(session_id)
     if session["status"] != "pending_approval":
@@ -795,9 +795,9 @@ def approve_session(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No silos to expand for this session.",
         )
-    # Claim the run atomically (pending_approval -> running) before recording the
+    # Claim the run atomically (pending_approval -> queued) before recording the
     # decision, so a double-approve can't double-spend.
-    if not store.try_mark_running(session_id):
+    if not store.try_claim_run(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A run is already in progress for this session.",
@@ -812,7 +812,7 @@ def approve_session(
     )
     jobs.submit_expand(session_id)
     logger.info("approval_approved", extra={"event": "approval_approved"})
-    return {"status": "running", "session_id": session_id}
+    return {"status": "queued", "session_id": session_id}
 
 
 @router.post("/sessions/{session_id}/reject")
@@ -882,7 +882,7 @@ def regate_session(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No keywords to re-gate. Run /expand first.",
         )
-    if not store.try_mark_running(session_id):
+    if not store.try_claim_run(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A run is already in progress for this session.",
@@ -911,7 +911,7 @@ def regate_session(
     )
     jobs.submit_regate(session_id, threshold, edge, resolution, cap, seed_terms, peer_terms)
     return {
-        "status": "running",
+        "status": "queued",
         "session_id": session_id,
         "relevance_threshold": threshold,
         "clustering_edge_threshold": edge,
@@ -971,7 +971,7 @@ def fanout_session(
         response.status_code = status.HTTP_200_OK
         return {"status": "estimate", "session_id": session_id, "estimate": estimate}
 
-    if not store.try_mark_running(session_id):
+    if not store.try_claim_run(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A run is already in progress for this session.",
@@ -998,7 +998,7 @@ def fanout_session(
         else s.active_per_silo_cap
     )
     jobs.submit_fanout(session_id, threshold, edge, resolution, cap, seed_terms, peer_terms)
-    return {"status": "running", "session_id": session_id, "estimate": estimate}
+    return {"status": "queued", "session_id": session_id, "estimate": estimate}
 
 
 @router.post("/sessions/{session_id}/routing-diagnostic")
@@ -1168,13 +1168,13 @@ def plan_articles(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No statistical clustering to plan from. Run /expand first.",
         )
-    if not store.try_mark_running(session_id):
+    if not store.try_claim_run(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A run is already in progress for this session.",
         )
     jobs.submit_plan(session_id, direct=bool(body and body.direct))
-    return {"status": "running", "session_id": session_id, "direct": bool(body and body.direct)}
+    return {"status": "queued", "session_id": session_id, "direct": bool(body and body.direct)}
 
 
 @router.get("/sessions/{session_id}/clusters")
@@ -1338,13 +1338,13 @@ def generate_architecture(
             detail="No article plan to build an architecture from. "
             "Run /plan-articles first.",
         )
-    if not store.try_mark_running(session_id):
+    if not store.try_claim_run(session_id):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="A run is already in progress for this session.",
         )
     jobs.submit_architecture(session_id)
-    return {"status": "running", "session_id": session_id}
+    return {"status": "queued", "session_id": session_id}
 
 
 @router.get("/sessions/{session_id}/architecture")

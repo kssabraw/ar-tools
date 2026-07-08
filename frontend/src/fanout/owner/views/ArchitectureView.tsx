@@ -30,11 +30,12 @@ export function ArchitectureView() {
     },
   });
 
-  // While regenerating, the session goes status=running and the workspace polls
-  // /summary. When it lands, pull the fresh architecture.
+  // While regenerating, the session goes status=queued (waiting for a worker
+  // slot) then running, and the workspace polls /summary. When it lands, pull
+  // the fresh architecture.
   const status = summary.data?.status;
   useEffect(() => {
-    if (busy && status && status !== "running") {
+    if (busy && status && status !== "running" && status !== "queued") {
       qc.invalidateQueries({ queryKey: ["architecture", sessionId] });
       setBusy(false);
     }

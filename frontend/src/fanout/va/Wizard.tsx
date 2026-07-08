@@ -981,7 +981,9 @@ function ProgressStep(p: { sessionId: string; onDone: () => void }) {
     queryFn: () => getSummary(p.sessionId),
     refetchInterval: (q) => {
       const s = q.state.data?.status;
-      return s === "running" || s === "awaiting_article_planning" ? 4000 : false;
+      return s === "queued" || s === "running" || s === "awaiting_article_planning"
+        ? 4000
+        : false;
     },
   });
 
@@ -1039,6 +1041,25 @@ function ProgressStep(p: { sessionId: string; onDone: () => void }) {
         <button className="btn btn-primary" style={{ width: "auto" }} onClick={p.onDone}>
           View results
         </button>
+      </div>
+    );
+  }
+
+  // Queued: claimed but waiting for one of the pool's worker slots — show an
+  // honest waiting card instead of the staged progress copy (nothing is
+  // executing and no spend has started).
+  if (status === "queued") {
+    return (
+      <div className="card" style={{ textAlign: "center" }}>
+        <div className="spinner" />
+        <h1 className="page-title" style={{ marginTop: 12 }}>Waiting for a free worker slot</h1>
+        <p className="muted">
+          Up to two pipeline runs execute at once; this one starts automatically
+          when a slot frees up. Nothing has been spent yet.
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <CancelRunButton sessionId={p.sessionId} />
+        </div>
       </div>
     );
   }

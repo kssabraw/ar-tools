@@ -26,6 +26,7 @@ import {
 } from "../shared/api";
 import { CLIENT_SCOPE } from "../shared/clientScope";
 import { AppShell } from "../shared/AppShell";
+import { CancelRunButton } from "../shared/CancelRunButton";
 import { LocationAutocomplete } from "../shared/LocationAutocomplete";
 import {
   RELATIONSHIP_LABELS,
@@ -129,11 +130,15 @@ export function SiloDiscovery({
     queryKey: ["summary", sessionId],
     queryFn: () => getSummary(sessionId!),
     enabled: !!sessionId && step === "pipeline",
-    // Poll while a run is in progress; stop once it reaches a terminal status —
-    // except keep polling a few more cycles past a stale zero-count read.
+    // Poll while a run is in progress (queued for a worker slot or executing);
+    // stop once it reaches a terminal status — except keep polling a few more
+    // cycles past a stale zero-count read.
     refetchInterval: (q) => {
       const d = q.state.data;
-      if (d?.status === "running") { staleSummaryRetries.current = 0; return 4000; }
+      if (d?.status === "running" || d?.status === "queued") {
+        staleSummaryRetries.current = 0;
+        return 4000;
+      }
       if (d && expansionLooksUnsettled(d) && staleSummaryRetries.current < 4) {
         staleSummaryRetries.current += 1;
         return 3000;
@@ -381,6 +386,25 @@ function PipelineView(p: {
 }) {
   const { summary, phase } = p;
   const status = summary?.status;
+
+  // Queued: the run is claimed but waiting for one of the pool's worker slots —
+  // show an honest waiting card instead of the animated progress bar (nothing
+  // is executing and no spend has started).
+  if (status === "queued") {
+    return (
+      <div className="card" style={{ textAlign: "center" }}>
+        <div className="spinner" />
+        <h1 className="page-title" style={{ marginTop: 12 }}>Waiting for a free worker slot</h1>
+        <p className="muted">
+          Up to two pipeline runs execute at once; this one starts automatically
+          when a slot frees up. Nothing has been spent yet.
+        </p>
+        <div style={{ marginTop: 12 }}>
+          <CancelRunButton sessionId={p.sessionId} />
+        </div>
+      </div>
+    );
+  }
 
   if (!summary || status === "running") {
     return phase === "planning" ? (

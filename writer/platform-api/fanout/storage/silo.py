@@ -219,36 +219,58 @@ def get_session_debug(session_id: str) -> dict:
     }
 
 
-def try_mark_running(session_id: str) -> bool:
-    """Atomically claim a session for a pipeline run: set status='running' only
-    if it isn't already running. Returns True if this caller acquired the run,
-    False if a run was already in progress. The `neq` makes the check-and-set a
-    single guarded UPDATE, so two concurrent callers can't both proceed
+def try_claim_run(session_id: str) -> bool:
+    """Atomically claim a session for a pipeline run: set status='queued' only if
+    no run is already claimed (queued or running). Returns True if this caller
+    acquired the run, False if a run was already in progress. The guarded UPDATE
+    makes the check-and-set atomic, so two concurrent callers can't both proceed
     (prevents duplicate rows + double API spend on a double-submit/retry).
-    Clears any stale last_error from a prior failed run."""
+    Clears any stale last_error from a prior failed run.
+
+    The claim is `queued`, not `running`: the worker pool caps concurrent runs,
+    so a submitted job may wait for a slot — `try_mark_started` flips it to
+    `running` when a worker actually picks it up. (Previously the claim itself
+    was `running`, so a queued run was indistinguishable from an executing one.)
+    """
     res = (
         get_service_client()
         .table("sessions")
-        .update({"status": "running", "last_error": None})
+        .update({"status": "queued", "last_error": None})
         .eq("id", session_id)
-        .neq("status", "running")
+        .not_.in_("status", ("queued", "running"))
+        .execute()
+    )
+    return bool(res.data)
+
+
+def try_mark_started(session_id: str) -> bool:
+    """Flip a queued claim to running — called by the worker when it actually
+    picks the job up. Returns False if the session is no longer queued (the user
+    cancelled while it waited for a slot), in which case the job must not run."""
+    res = (
+        get_service_client()
+        .table("sessions")
+        .update({"status": "running"})
+        .eq("id", session_id)
+        .eq("status", "queued")
         .execute()
     )
     return bool(res.data)
 
 
 def try_mark_cancelled(session_id: str) -> bool:
-    """Atomically flip a running session to cancelled. Returns True if this caller
-    landed the transition (status was 'running'), False if there was no run to
-    cancel (status was already cancelled, complete, error, awaiting_*, etc.).
-    Mirrors the try_mark_running check-and-set so two concurrent /cancel calls
-    can't both claim a cancel."""
+    """Atomically flip a queued-or-running session to cancelled. Returns True if
+    this caller landed the transition, False if there was no run to cancel
+    (status was already cancelled, complete, error, awaiting_*, etc.).
+    Mirrors the try_claim_run check-and-set so two concurrent /cancel calls
+    can't both claim a cancel. Cancelling a still-queued run needs no worker
+    cooperation — the worker's try_mark_started fails and the job never runs."""
     res = (
         get_service_client()
         .table("sessions")
         .update({"status": "cancelled", "last_error": "Cancelled by user"})
         .eq("id", session_id)
-        .eq("status", "running")
+        .in_("status", ("queued", "running"))
         .execute()
     )
     return bool(res.data)
@@ -1217,10 +1239,11 @@ def get_pipeline_summary(session_id: str) -> dict:
             k: _to_float(v) for k, v in (session.get("cost_breakdown") or {}).items()
         },
     }
-    # A run-in-progress, or a session parked at the approval gate, has no
-    # meaningful expansion/plan counts yet — return the cheap status-only payload
-    # (this endpoint is polled every few seconds).
-    if status in ("running", "pending_approval", "rejected"):
+    # A run in progress (queued for a worker slot or executing), or a session
+    # parked at the approval gate, has no meaningful expansion/plan counts yet —
+    # return the cheap status-only payload (this endpoint is polled every few
+    # seconds).
+    if status in ("queued", "running", "pending_approval", "rejected"):
         return {"status": status, "last_error": last_error, "approval": approval,
                 "cost": cost, "expansion": _EMPTY_EXPANSION, "plan": None,
                 "architecture": None}

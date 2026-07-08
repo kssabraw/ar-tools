@@ -110,6 +110,20 @@ export function SessionWorkspace() {
         {(session.isLoading || summary.isLoading) && <p className="muted">Loading session…</p>}
         {session.isError && <p className="form-error">Couldn’t load this session.</p>}
 
+        {status === "queued" && (
+          <div className="card" style={{ textAlign: "center" }}>
+            <div className="spinner" />
+            <p style={{ margin: 0, fontWeight: 600 }}>Waiting for a free worker slot…</p>
+            <p className="muted">
+              Up to two pipeline runs execute at once; this one starts automatically
+              when a slot frees up. Nothing has been spent yet.
+            </p>
+            <div style={{ marginTop: 12 }}>
+              <CancelRunButton sessionId={sessionId} />
+            </div>
+          </div>
+        )}
+
         {status === "running" && (
           <div className="card" style={{ textAlign: "center" }}>
             <div className="spinner" />
@@ -130,7 +144,8 @@ export function SessionWorkspace() {
           </div>
         )}
 
-        {status && status !== "running" && status !== "cancelled" && !hasResults(status) && (
+        {status && status !== "running" && status !== "queued" && status !== "cancelled" &&
+          !hasResults(status) && (
           <div className="card">
             <p style={{ margin: 0, fontWeight: 600 }}>This session hasn’t produced results yet.</p>
             <p className="muted" style={{ marginBottom: 0 }}>
