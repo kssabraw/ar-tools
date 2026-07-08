@@ -10,7 +10,14 @@ import {
 } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
 import { CLIENT_SCOPE, exitClientScope } from "../shared/clientScope";
-import { statusLabel, statusClass } from "../shared/sessionStatus";
+import { statusLabel, statusClass, isLiveStatus } from "../shared/sessionStatus";
+
+// While any session in the list is mid-run, poll so it flips to its terminal
+// status (e.g. "Ready to plan") on its own — no manual refresh needed. Stops
+// once nothing is live.
+const LIST_POLL_MS = 5000;
+const pollWhileLive = (q: { state: { data?: SessionListItem[] } }) =>
+  (q.state.data ?? []).some((s) => isLiveStatus(s.status)) ? LIST_POLL_MS : false;
 
 // Session browser. Research runs are scoped per client (opened from a client's
 // Content Scheduler card); the project grouping was removed. When opened without
@@ -25,11 +32,13 @@ export function SessionsPage() {
     queryKey: ["all-sessions", showArchived],
     queryFn: () => listAllSessions(showArchived),
     enabled: !clientId,
+    refetchInterval: pollWhileLive,
   });
   const clientSessions = useQuery({
     queryKey: ["client-sessions", clientId, showArchived],
     queryFn: () => listClientSessions(clientId!, showArchived),
     enabled: !!clientId,
+    refetchInterval: pollWhileLive,
   });
   const sessions = clientId ? clientSessions : allSessions;
 

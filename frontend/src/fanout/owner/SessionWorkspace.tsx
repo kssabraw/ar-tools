@@ -5,7 +5,7 @@ import { AppShell } from "../shared/AppShell";
 import { CancelRunButton } from "../shared/CancelRunButton";
 import { CostBanner } from "../shared/CostBanner";
 import { SessionIdChip } from "../shared/SessionIdChip";
-import { hasResults, statusClass, statusLabel } from "../shared/sessionStatus";
+import { hasResults, isLiveStatus, statusClass, statusLabel } from "../shared/sessionStatus";
 
 export interface SessionCtx {
   sessionId: string;
@@ -55,7 +55,7 @@ export function SessionWorkspace() {
   const summary = useQuery({
     queryKey: ["summary", sessionId],
     queryFn: () => getSummary(sessionId),
-    refetchInterval: (q) => (q.state.data?.status === "running" ? 4000 : false),
+    refetchInterval: (q) => (isLiveStatus(q.state.data?.status ?? "") ? 4000 : false),
   });
   const me = useQuery({ queryKey: ["me"], queryFn: getMe });
   const role: "owner" | "va" = me.data?.role === "owner" ? "owner" : "va";

@@ -23,6 +23,16 @@ export function statusClass(status: string): string {
   return "status-neutral";
 }
 
+// Statuses a background job will transition on its own (expansion / clustering /
+// article planning are running). A list or overview showing one of these is stale
+// the moment the job finishes, so it must keep polling until the status settles —
+// otherwise the user has to manually refresh to see a run flip to "Ready to plan".
+// `pending_approval` waits on a human decision, not a job, so it's intentionally
+// excluded (nothing to poll for).
+export function isLiveStatus(status: string): boolean {
+  return status === "running" || status === "running_pre_review";
+}
+
 // A session has results to show in the three views once it has reached the
 // article-planning stage (or beyond). Earlier statuses still belong to the
 // silo-discovery / expansion flow, which the workspace can't resume yet (M7a).
