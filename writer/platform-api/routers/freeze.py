@@ -1,6 +1,6 @@
 """Freeze Protocol endpoints — view, open, and lift a client freeze.
 
-Opening/lifting is admin-gated (the SOP's escalation owners are the Admins);
+Opening/lifting requires the staff tier (senior operators — staff or admin);
 viewing is any signed-in user (the freeze banner on the client workspace).
 """
 
@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from db.supabase_client import get_supabase
-from middleware.auth import require_admin, require_auth
+from middleware.auth import require_auth, require_staff
 from services import freeze as freeze_service
 
 router = APIRouter(tags=["freeze"])
@@ -44,7 +44,7 @@ async def get_freeze(client_id: str, auth: dict = Depends(require_auth)) -> dict
 async def create_freeze(
     client_id: str,
     body: FreezeCreateRequest,
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_staff),
 ) -> dict:
     if body.reason not in _VALID_REASONS:
         raise HTTPException(status_code=422, detail="invalid_reason")
@@ -55,6 +55,6 @@ async def create_freeze(
 
 
 @router.post("/clients/{client_id}/freeze/lift")
-async def lift_freeze(client_id: str, auth: dict = Depends(require_admin)) -> dict:
+async def lift_freeze(client_id: str, auth: dict = Depends(require_staff)) -> dict:
     lifted = freeze_service.lift_freeze(client_id, lifted_by=auth.get("user_id"))
     return {"lifted": lifted}

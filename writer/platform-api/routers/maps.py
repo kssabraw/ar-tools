@@ -16,7 +16,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Response
 
 from db.supabase_client import get_supabase
-from middleware.auth import require_admin, require_auth
+from middleware.auth import require_auth, require_staff
 from models.maps import (
     MapsAlert,
     MapsAlertsResponse,
@@ -315,10 +315,10 @@ async def backfill_maps_images(
 
 @router.post("/maps/backfill-images")
 async def backfill_maps_images_all(
-    overwrite: bool = False, auth: dict = Depends(require_admin),
+    overwrite: bool = False, auth: dict = Depends(require_staff),
 ) -> dict:
     """Fan out the saved-map-image backfill across every client with geo-grid
-    scans (one background job per client). Admin-only."""
+    scans (one background job per client). Staff+ only."""
     from services.maps_report import enqueue_maps_image_backfill_all
 
     job_ids = enqueue_maps_image_backfill_all(overwrite)

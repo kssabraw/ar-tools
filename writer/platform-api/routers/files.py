@@ -8,7 +8,7 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
 from db.supabase_client import get_supabase
-from middleware.auth import require_admin, require_auth
+from middleware.auth import require_auth, require_staff
 from models.files import FileUploadResponse, ImageUploadResponse, LogoUploadResponse
 from services.file_parser import FileParseError, parse_uploaded_file
 
@@ -89,7 +89,7 @@ async def upload_file(
 @router.post("/files/logo", response_model=LogoUploadResponse, status_code=201)
 async def upload_logo(
     file: UploadFile = File(...),
-    auth: dict = Depends(require_admin),
+    auth: dict = Depends(require_staff),
 ) -> LogoUploadResponse:
     """Upload a client logo (JPG/PNG) to the public client-logos bucket.
 

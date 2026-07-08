@@ -1,6 +1,6 @@
 """In-app Guides portal router.
 
-Reads are auth-gated (any signed-in user); writes are admin-gated. The DB table is
+Reads are auth-gated (any signed-in user); writes require the staff tier. The DB table is
 the source of truth (seeded with defaults at startup). The editor lists all guides
 (incl. disabled) via ?include_disabled=true.
 """
@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from middleware.auth import require_admin, require_auth
+from middleware.auth import require_auth, require_staff
 from models.guides import Guide, GuideCreateRequest, GuideUpdateRequest
 from services import guide_store
 
@@ -36,7 +36,7 @@ async def get_guide(slug: str, auth: dict = Depends(require_auth)) -> Guide:
 
 
 @router.post("/guides", response_model=Guide, status_code=201)
-async def create_guide(body: GuideCreateRequest, auth: dict = Depends(require_admin)) -> Guide:
+async def create_guide(body: GuideCreateRequest, auth: dict = Depends(require_staff)) -> Guide:
     row = guide_store.create_guide(
         slug=body.slug, title=body.title, body=body.body, summary=body.summary,
         category=body.category, icon=body.icon, sort_order=body.sort_order,
@@ -45,7 +45,7 @@ async def create_guide(body: GuideCreateRequest, auth: dict = Depends(require_ad
 
 
 @router.patch("/guides/{guide_id}", response_model=Guide)
-async def update_guide(guide_id: UUID, body: GuideUpdateRequest, auth: dict = Depends(require_admin)) -> Guide:
+async def update_guide(guide_id: UUID, body: GuideUpdateRequest, auth: dict = Depends(require_staff)) -> Guide:
     updates = body.model_dump(exclude_none=True)
     if not updates:
         raise HTTPException(status_code=422, detail="no_fields")
@@ -53,6 +53,6 @@ async def update_guide(guide_id: UUID, body: GuideUpdateRequest, auth: dict = De
 
 
 @router.delete("/guides/{guide_id}", status_code=204, response_class=Response)
-async def delete_guide(guide_id: UUID, auth: dict = Depends(require_admin)) -> Response:
+async def delete_guide(guide_id: UUID, auth: dict = Depends(require_staff)) -> Response:
     guide_store.delete_guide(str(guide_id))
     return Response(status_code=204)

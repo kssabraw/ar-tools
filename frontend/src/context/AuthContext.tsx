@@ -2,13 +2,20 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Session, User } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
-import type { Profile } from '../lib/types'
+import type { Profile, UserRole } from '../lib/types'
 
 interface AuthContextValue {
   session: Session | null
   user: User | null
   profile: Profile | null
+  role: UserRole | null
   isAdmin: boolean
+  // Senior operator (staff or admin) — everything except user/team management.
+  isStaff: boolean
+  // External read-only viewer.
+  isClient: boolean
+  // Any internal user (not a read-only client).
+  isInternal: boolean
   loading: boolean
   signIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
@@ -56,10 +63,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await supabase.auth.signOut()
   }
 
-  const isAdmin = profile?.role === 'admin'
+  const role = profile?.role ?? null
+  const isAdmin = role === 'admin'
+  const isStaff = role === 'admin' || role === 'staff'
+  const isClient = role === 'client'
+  const isInternal = role != null && role !== 'client'
 
   return (
-    <AuthContext.Provider value={{ session, user: session?.user ?? null, profile, isAdmin, loading, signIn, signOut }}>
+    <AuthContext.Provider
+      value={{
+        session,
+        user: session?.user ?? null,
+        profile,
+        role,
+        isAdmin,
+        isStaff,
+        isClient,
+        isInternal,
+        loading,
+        signIn,
+        signOut,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   )
