@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import re
+import secrets
 from typing import Optional
 
 from config import settings
@@ -148,6 +149,26 @@ def weak_area_names(weak_locations: Optional[dict], top_n: int = 8) -> list[str]
         tier = f" {a['tier']}" if a.get("tier") else ""
         out.append(f"{where}: priority {a.get('priority', 0)}{tier}, {a.get('pins', 0)} weak pins{octs}")
     return out
+
+
+def summarize_report_failures(
+    client_name: Optional[str], failures: list[tuple[str, str]], total: int,
+) -> dict:
+    """Build the {title, summary, severity} digest for a report-generation-failure
+    notification. `failures` is a list of (keyword, short_error). Pure; unit-tested."""
+    n = len(failures)
+    who = f" for {client_name}" if client_name else ""
+    title = f"Local Rank report generation failed ({n}/{total})"
+    keywords = ", ".join(f"“{kw}”" for kw, _ in failures[:8] if kw)
+    if n > 8:
+        keywords += f", +{n - 8} more"
+    first_error = next((err for _, err in failures if err), "") or "unknown error"
+    summary = (
+        f"{n} of {total} keyword report(s) failed to generate{who}."
+        + (f" Keywords: {keywords}." if keywords else "")
+        + f" First error: {first_error[:200]}"
+    )
+    return {"title": title, "summary": summary, "severity": "warning"}
 
 
 def build_snapshot(
@@ -286,8 +307,47 @@ _EMIT_TOOL = {
 }
 
 
+def _is_transient_anthropic_error(exc: Exception) -> bool:
+    """True for retryable Anthropic failures: the concurrent-connections / rate
+    limit 429, transient 5xx (overloaded), and connection drops. A truncated /
+    empty tool-use response is also retryable (raised as RuntimeError below)."""
+    import anthropic  # lazy: keep the pure rollup/snapshot helpers import-free
+
+    if isinstance(exc, (anthropic.RateLimitError, anthropic.APIConnectionError)):
+        return True
+    if isinstance(exc, anthropic.APIStatusError):
+        return exc.status_code == 429 or exc.status_code >= 500
+    # A max_tokens-truncated tool call yields an empty summary — worth one more try.
+    return isinstance(exc, RuntimeError) and "maps_report_empty_summary" in str(exc)
+
+
 async def _call_llm(snapshot: dict) -> dict:
-    """Run Claude with forced tool-use; returns {summary, weak_directions, top_competitors}."""
+    """Run Claude with forced tool-use; returns {summary, weak_directions,
+    top_competitors}. Retries transient failures (429 concurrent-connections /
+    rate limit, 5xx, connection errors) with exponential backoff + jitter so a
+    burst of concurrent per-keyword calls doesn't permanently fail rows."""
+    max_retries = settings.maps_report_max_retries
+    base = settings.maps_report_retry_base_seconds
+    attempt = 0
+    while True:
+        try:
+            return await _call_llm_once(snapshot)
+        except Exception as exc:  # noqa: BLE001 — classify then re-raise if terminal
+            if attempt >= max_retries or not _is_transient_anthropic_error(exc):
+                raise
+            # Exponential backoff with jitter (0.5–1.5×) to de-synchronize the
+            # concurrent per-keyword retries so they don't re-collide on the limit.
+            delay = base * (2 ** attempt) * (0.5 + secrets.randbelow(1000) / 1000.0)
+            logger.warning(
+                "maps_report_llm_retry",
+                extra={"attempt": attempt + 1, "delay_s": round(delay, 1), "error": str(exc)[:200]},
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
+async def _call_llm_once(snapshot: dict) -> dict:
+    """One forced tool-use Claude call; raises on empty/truncated output."""
     import anthropic  # lazy: keep the pure rollup/snapshot helpers import-free
 
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
@@ -624,6 +684,7 @@ async def run_maps_report_job(job: dict) -> None:
                     return result_row, None, exc
 
         generated: list[tuple[str, str, Optional[str]]] = []  # (keyword, markdown, image_url)
+        failures: list[tuple[str, str]] = []  # (keyword, short_error)
         for result_row, fields, exc in await asyncio.gather(*(_gen_one(r) for r in results)):
             img_url = image_urls.get(result_row["id"])
             if exc is not None or fields is None:
@@ -631,6 +692,7 @@ async def run_maps_report_job(job: dict) -> None:
                     "maps_report_keyword_failed",
                     extra={"scan_id": scan_id, "keyword": result_row.get("keyword"), "error": str(exc)},
                 )
+                failures.append((result_row.get("keyword"), str(exc)))
                 # Still persist the saved map image even when the narrative failed.
                 supabase.table("maps_scan_results").update(
                     {"report_status": "failed", "report_error": str(exc)[:500], "map_image_url": img_url}
@@ -640,6 +702,25 @@ async def run_maps_report_job(job: dict) -> None:
             supabase.table("maps_scan_results").update(fields).eq("id", result_row["id"]).execute()
             if fields.get("report_md"):
                 generated.append((result_row.get("keyword"), fields["report_md"], img_url))
+
+        # Surface failed report generation as a warning notification (best-effort)
+        # so a silently-failed batch is visible in-app + Slack instead of only in
+        # the row status. One digest per scan, never per keyword.
+        if failures:
+            try:
+                from services import notifications
+
+                digest = summarize_report_failures(client.get("name"), failures, len(results))
+                notifications.emit(
+                    client_id=scan_row.get("client_id"),
+                    kind="maps_report_failed",
+                    title=digest["title"],
+                    summary=digest["summary"],
+                    severity=digest["severity"],
+                    payload={"link": f"clients/{scan_row.get('client_id')}/maps", "scan_id": scan_id},
+                )
+            except Exception as exc:  # notifications are best-effort
+                logger.warning("maps_report_notify_failed", extra={"scan_id": scan_id, "error": str(exc)})
 
         doc_url = await _maybe_publish_doc(client, scan_row, generated)
         if doc_url:
