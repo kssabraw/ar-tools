@@ -1155,10 +1155,14 @@ def set_clusters_prepublish_action(
 
 
 def _count(table: str, **eqs) -> int:
-    q = get_service_client().table(table).select("id", count="exact", head=True)
+    # NOT head=True: postgrest 0.17 (supabase 2.9.1) discards the Content-Range
+    # total on HEAD responses (empty body -> JSONDecodeError -> count=0), so every
+    # head-only count silently reads 0. A GET with limit(1) keeps the transfer to
+    # one row while Content-Range still carries the exact total.
+    q = get_service_client().table(table).select("id", count="exact")
     for col, val in eqs.items():
         q = q.eq(col, val)
-    return q.execute().count or 0
+    return q.limit(1).execute().count or 0
 
 
 def _count_status_safe(session_id: str, status: str) -> int:

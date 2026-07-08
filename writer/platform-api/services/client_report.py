@@ -898,10 +898,12 @@ def _gather_work_delivered(supabase, client_id: str, period_start: date, period_
     counts: dict[str, int] = {}
     for ct in ("blog_post", "service_page", "location_page"):
         try:
+            # NOT head=True: the pinned postgrest discards the count on HEAD
+            # responses (always reads 0); limit(1) keeps the transfer to one row.
             n = (
-                supabase.table("runs").select("id", count="exact", head=True)
+                supabase.table("runs").select("id", count="exact")
                 .eq("client_id", client_id).eq("content_type", ct).eq("status", "complete")
-                .gte("created_at", start_iso).lt("created_at", end_iso).execute()
+                .gte("created_at", start_iso).lt("created_at", end_iso).limit(1).execute()
             ).count or 0
         except Exception:
             n = 0
@@ -909,9 +911,9 @@ def _gather_work_delivered(supabase, client_id: str, period_start: date, period_
             counts[ct] = n
     try:
         local = (
-            supabase.table("local_seo_pages").select("id", count="exact", head=True)
+            supabase.table("local_seo_pages").select("id", count="exact")
             .eq("client_id", client_id).is_("deleted_at", "null")
-            .gte("created_at", start_iso).lt("created_at", end_iso).execute()
+            .gte("created_at", start_iso).lt("created_at", end_iso).limit(1).execute()
         ).count or 0
     except Exception:
         local = 0

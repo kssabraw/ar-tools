@@ -614,18 +614,20 @@ def _ctx_ai_visibility(supabase, client_id: str, today: date) -> Optional[dict]:
 def _ctx_content(supabase, client_id: str, today: date) -> Optional[dict]:
     """Content produced: completed blog/service/location runs + Local SEO pages.
 
-    Uses head-only `count="exact"` queries (no row transfer) — these counts can
-    grow large for an active client and we only need the totals.
+    Uses `count="exact"` + limit(1) (one-row transfer) — these counts can grow
+    large for an active client and we only need the totals. NOT head=True: the
+    pinned postgrest discards the count on HEAD responses (always reads 0).
     """
     out: dict = {}
     by_type: dict[str, int] = {}
     for t in ("blog_post", "service_page", "location_page"):
         n = (
             supabase.table("runs")
-            .select("id", count="exact", head=True)
+            .select("id", count="exact")
             .eq("client_id", client_id)
             .eq("status", "complete")
             .eq("content_type", t)
+            .limit(1)
             .execute()
         ).count or 0
         if n:
@@ -635,18 +637,20 @@ def _ctx_content(supabase, client_id: str, today: date) -> Optional[dict]:
 
     saved = (
         supabase.table("local_seo_pages")
-        .select("id", count="exact", head=True)
+        .select("id", count="exact")
         .eq("client_id", client_id)
         .is_("deleted_at", "null")
+        .limit(1)
         .execute()
     ).count or 0
     if saved:
         published = (
             supabase.table("local_seo_pages")
-            .select("id", count="exact", head=True)
+            .select("id", count="exact")
             .eq("client_id", client_id)
             .is_("deleted_at", "null")
             .not_.is_("published_doc_id", "null")
+            .limit(1)
             .execute()
         ).count or 0
         out["local_seo_pages_saved"] = saved
@@ -734,15 +738,17 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
         # before concluding suburb-level targeting doesn't apply.
         pages = (
             supabase.table("local_seo_pages")
-            .select("id", count="exact", head=True)
+            .select("id", count="exact")
             .eq("client_id", client_id)
             .is_("deleted_at", "null")
+            .limit(1)
             .execute()
         ).count or 0
         scans = (
             supabase.table("maps_scans")
-            .select("id", count="exact", head=True)
+            .select("id", count="exact")
             .eq("client_id", client_id)
+            .limit(1)
             .execute()
         ).count or 0
         local = is_local_client(c, pages, scans)
@@ -962,9 +968,10 @@ def _ctx_syndication(supabase, client_id: str, today: date) -> Optional[dict]:
     for s in ("discovered", "rewriting", "published", "failed", "skipped"):
         n = (
             supabase.table("syndication_items")
-            .select("id", count="exact", head=True)
+            .select("id", count="exact")
             .eq("client_id", client_id)
             .eq("status", s)
+            .limit(1)
             .execute()
         ).count or 0
         if n:
