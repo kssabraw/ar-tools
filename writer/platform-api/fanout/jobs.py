@@ -1,18 +1,22 @@
 """Background execution for the long pipeline operations.
 
 `/expand`, `/plan-articles`, and `/regate` exceed Railway's ~5-min edge cap when
-run inside the request, so the endpoints claim the run (atomic status flip),
-submit the work here, and return 202 immediately. The frontend polls session
-status. Each job owns its terminal status: it sets `awaiting_article_planning` /
-`complete` on success, or `error` + `last_error` on failure.
+run inside the request, so the endpoints claim the run (atomic status flip to
+`queued`), submit the work here, and return 202 immediately. The frontend polls
+session status. When a pool worker actually picks the job up it flips the claim
+to `running` (`_claims_start` -> try_mark_started), so a run waiting for a slot
+is visibly *queued*, not indistinguishable from an executing one. Each job owns
+its terminal status: it sets `awaiting_article_planning` / `complete` on
+success, or `error` + `last_error` on failure.
 
 A bounded pool caps concurrent pipeline runs per process; the per-session run
-guard (try_mark_running) prevents the same session running twice. Jobs use the
+guard (try_claim_run) prevents the same session running twice. Jobs use the
 service client (no user token — the request already authorized the caller).
 
 Caveat (accepted for v1, real fix = a durable queue): a process restart mid-job
-strands the session at status='running'. Recovery is a new session until M7's
-resume lands.
+strands the session at status='running' (or 'queued' if it never started — that
+distinction now tells you whether any spend happened). Recovery is a new session
+until M7's resume lands.
 """
 
 import logging
@@ -144,6 +148,30 @@ def _metered(step: str):
     return decorator
 
 
+def _claims_start(fn):
+    """Flip the endpoint's `queued` claim to `running` when a worker actually
+    picks the job up. If the flip doesn't land, the session is no longer queued
+    — the user cancelled while it waited for a slot (or the state was reset) —
+    so skip the run entirely: no metering, no cancellation registration, no
+    external calls. Outermost of the job decorators for exactly that reason.
+    Only the session-status pipeline jobs (expand / plan / regate / fanout /
+    architecture) use this; the per-cluster jobs (SIE / brief / article) don't
+    ride session status."""
+
+    @wraps(fn)
+    def wrapper(session_id: str, *args, **kwargs):
+        if not store.try_mark_started(session_id):
+            logger.info(
+                "job_skipped_not_queued",
+                extra={"event": "job_skipped_not_queued", "step": fn.__name__,
+                       "session_id": session_id},
+            )
+            return None
+        return fn(session_id, *args, **kwargs)
+
+    return wrapper
+
+
 def _cancellable(fn):
     """Register the session's cancellation event for the job's lifetime and
     convert `CancelledByUser` into a clean `status='cancelled'` finish.
@@ -219,6 +247,7 @@ def submit_architecture(session_id: str) -> None:
     _EXECUTOR.submit(run_architecture_job, session_id)
 
 
+@_claims_start
 @_metered("expand")
 @_cancellable
 def run_expand_job(session_id: str) -> None:
@@ -299,6 +328,7 @@ def run_expand_job(session_id: str) -> None:
         )
 
 
+@_claims_start
 @_metered("article_planning")
 @_cancellable
 def run_plan_job(session_id: str, direct: bool = False) -> None:
@@ -392,6 +422,7 @@ def run_plan_job(session_id: str, direct: bool = False) -> None:
         )
 
 
+@_claims_start
 @_metered("regate")
 @_cancellable
 def run_regate_job(
@@ -453,6 +484,7 @@ def run_regate_job(
         )
 
 
+@_claims_start
 @_metered("recursive_fanout")
 @_cancellable
 def run_fanout_job(
@@ -546,6 +578,7 @@ def run_fanout_job(
         )
 
 
+@_claims_start
 @_metered("architecture")
 @_cancellable
 def run_architecture_job(session_id: str) -> None:
