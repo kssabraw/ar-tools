@@ -107,6 +107,15 @@ class Settings(BaseSettings):
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 
+    # Intent classification Step 3.3 - LLM arbitration for the no-signal case.
+    # When neither the keyword pattern precheck (3.1) nor the SERP-signal
+    # rules (3.2) match, the classifier used to default silently to
+    # informational/0.55. A cheap Haiku call (keyword + top SERP titles) now
+    # arbitrates instead; the informational default remains the degraded path
+    # when the call fails or returns an invalid label.
+    intent_llm_fallback_enabled: bool = True
+    intent_llm_fallback_model: str = "claude-haiku-4-5-20251001"
+
     # ------------------------------------------------------------
     # Service Page Brief Generator (PRD §7 - model tiering + cache)
     # ------------------------------------------------------------
