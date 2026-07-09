@@ -50,7 +50,9 @@ from .citation_coverage_validator import (
     CoverageValidationResult,
     validate_citation_coverage,
 )
-from .h2_body_length import H2BodyLengthResult, validate_h2_body_lengths
+# _split_h2_groups moved to h2_body_length so the post-write validators can
+# reuse the exact brief-group derivation for positional alignment.
+from .h2_body_length import H2BodyLengthResult, _split_h2_groups, validate_h2_body_lengths
 from .heading_sanitizer import SanitizationLog, sanitize_heading_structure
 from .heading_seo_optimizer import optimize_headings
 from .heading_entity_enforcer import enforce_heading_entities
@@ -128,35 +130,6 @@ def _validate_inputs(req: WriterRequest) -> tuple[str, str, list[dict], list[str
         )
 
     return (brief_kw, intent_type, heading_structure, faq_questions, citations)
-
-
-def _split_h2_groups(heading_structure: list[dict]) -> list[tuple[dict, list[dict]]]:
-    """Group H2s with their child H3s in order. FAQ + conclusion excluded."""
-    sorted_items = sorted(
-        [h for h in heading_structure if isinstance(h, dict)],
-        key=lambda h: h.get("order", 0),
-    )
-    groups: list[tuple[dict, list[dict]]] = []
-    current_h2: Optional[dict] = None
-    current_h3s: list[dict] = []
-    for item in sorted_items:
-        item_type = item.get("type")
-        level = item.get("level")
-        if item_type in ("faq-header", "faq-question", "conclusion") or level == "H1":
-            if current_h2:
-                groups.append((current_h2, current_h3s))
-                current_h2, current_h3s = None, []
-            continue
-        if level == "H2" and item_type == "content":
-            if current_h2:
-                groups.append((current_h2, current_h3s))
-            current_h2 = item
-            current_h3s = []
-        elif level == "H3" and item_type == "content" and current_h2:
-            current_h3s.append(item)
-    if current_h2:
-        groups.append((current_h2, current_h3s))
-    return groups
 
 
 def _scan_headings_for_banned(article: list[ArticleSection], banned_regex):

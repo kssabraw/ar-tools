@@ -590,3 +590,52 @@ async def test_validator_skips_when_h3_order_collides_with_h2_in_structure():
     # The H3 child lookup fails → fix #1 path: refuse retry, flag.
     assert state["calls"] == 0
     assert len(result.under_length_h2_sections) == 1
+
+
+@pytest.mark.asyncio
+async def test_validator_retries_correctly_after_order_resequencing():
+    """Regression: the pipeline resequences section orders (1..N by final
+    list position) BEFORE the validators run, so article orders no longer
+    match brief-structure orders. The old order-keyed lookup could hit the
+    wrong structure entry (the FAQ header also carries level H2) or
+    silently skip the retry. Positional alignment must retry the right
+    brief group regardless of the numbering skew."""
+    long_body = " ".join(["expanded"] * 200)
+    # Article as it looks post-resequencing: intro machinery occupies
+    # orders 1-4, the content H2 lands at 5 - while the BRIEF numbered it 2.
+    article = [
+        _h2(5, "Topic", "short body"),
+    ]
+    heading_structure = [
+        {"order": 1, "text": "kw", "level": "H1", "type": "content"},
+        {"order": 2, "text": "Topic", "level": "H2", "type": "content"},
+        # Order 5 in the brief is the FAQ header - the entry the old
+        # order-keyed lookup would have paired with the article's H2.
+        {"order": 5, "text": "Frequently Asked Questions", "level": "H2", "type": "faq-header"},
+        {"order": 6, "text": "Q1?", "level": "H3", "type": "faq-question"},
+    ]
+    fake, state = _make_retry_fn(long_body)
+
+    result = await validate_h2_body_lengths(
+        article,
+        min_h2_body_words=120,
+        keyword="k",
+        intent="how-to",
+        heading_structure=heading_structure,
+        section_budgets={},
+        filtered_terms=_filtered_terms(),
+        citations=[],
+        brand_voice_card=None,
+        banned_regex=None,
+        write_h2_group_fn=fake,
+    )
+
+    # The retry fired against the BRIEF's content H2 (not the FAQ header)...
+    assert state["calls"] == 1
+    assert result.retries_succeeded == 1
+    assert result.under_length_h2_sections == []
+    # ...and the spliced section kept the article's RESEQUENCED order (5),
+    # not the brief order (2), so the renderer's order-sort keeps it in place.
+    assert [s.order for s in result.validated_article] == [5]
+    assert result.validated_article[0].heading == "Topic"
+    assert result.validated_article[0].body == long_body
