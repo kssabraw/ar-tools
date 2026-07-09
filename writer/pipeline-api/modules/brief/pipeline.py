@@ -89,7 +89,12 @@ from .h3_selection import select_h3s_for_h2s
 from .intent import classify_intent
 from .intent_rewrite import rewrite_h2s_for_intent
 from .intent_template import get_template
-from .listicle_items import ensure_min_ranked_items
+from .listicle_items import (
+    apply_title_count,
+    ensure_min_ranked_items,
+    extract_title_count,
+    renumber_ranked_items,
+)
 from .llm import claude_json, embed_batch_large
 from .llm_scoring import score_top_candidates_llm
 from .mmr import select_h2s_mmr
@@ -1017,9 +1022,18 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
     # sparse pool (e.g. a "best X software" SERP whose per-tool headings were
     # dropped as bare entities) can leave a single-item "listicle". This pass
     # names the real items the listicle should rank and appends them until the
-    # floor is met. Runs on the FINAL structure (after assembly) so synthesized
+    # target is met. Runs on the FINAL structure (after assembly) so synthesized
     # items skip the mid-pipeline transforms; honest-fallback leaves the outline
-    # short rather than fabricate. No-op (no LLM call) when the floor is met.
+    # short rather than fabricate. No-op (no LLM call) when the target is met.
+    #
+    # Title/count reconciliation: when the title promises a number ("Top 10",
+    # "25 Best X"), that number - clamped to [min_h2_count, max_h2_count] -
+    # becomes the fill target so the body actually reaches it. Afterwards the
+    # ranked items are renumbered 1..N and the title's number is rewritten to
+    # the ACTUAL count, so the title never over- or under-promises: we bias
+    # toward keeping real items (never trim to shrink to a smaller title claim)
+    # and only lower the title's number when synthesis honestly couldn't reach
+    # it. The result is the invariant: title number == ranked-item count.
     if (
         settings.brief_listicle_min_items_enabled
         and intent_template.h2_pattern == "ranked_items"
@@ -1035,16 +1049,50 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
                 else []
             )
         )
-        await ensure_min_ranked_items(
+        title_count = extract_title_count(title_scope.title)
+        target_count = intent_template.min_h2_count
+        if title_count is not None:
+            target_count = min(
+                max(title_count, intent_template.min_h2_count),
+                intent_template.max_h2_count,
+            )
+        fill_result = await ensure_min_ranked_items(
             structure=heading_structure,
             keyword=keyword,
             title=title_scope.title,
             scope_statement=title_scope.scope_statement,
-            min_count=intent_template.min_h2_count,
+            min_count=target_count,
             max_count=intent_template.max_h2_count,
             grounding=listicle_grounding,
             model=settings.brief_listicle_min_items_model,
         )
+        # Reconcile the title's promised number with the count actually
+        # delivered. Only when the title carried a number - a numberless
+        # "Top Tools Ranked" title needs no reconciliation.
+        if title_count is not None:
+            ranked_count = fill_result.after_count
+            # Guarantee the body reads 1..N sequentially (fill only renumbers
+            # when it added items; a no-op leaves framing's numbering as-is).
+            renumber_ranked_items(heading_structure)
+            # Skip a degenerate rewrite to "Top 1"/"Top 0" - a near-empty
+            # listicle is the honest-fallback case already logged above; leaving
+            # the original title is the lesser evil there.
+            if title_count != ranked_count and ranked_count >= 2:
+                title_scope.title = apply_title_count(title_scope.title, ranked_count)
+                title_scope.h1 = apply_title_count(title_scope.h1, ranked_count)
+                # The assembled H1 was copied from the pre-reconciliation title.
+                if heading_structure and heading_structure[0].level == "H1":
+                    heading_structure[0].text = apply_title_count(
+                        heading_structure[0].text, ranked_count
+                    )
+                logger.info(
+                    "brief.listicle.title_count_reconciled",
+                    extra={
+                        "keyword": keyword,
+                        "title_count": title_count,
+                        "ranked_count": ranked_count,
+                    },
+                )
 
     # ---- Answer contract: guaranteed lead H2 (additive) ----
     # Ensure the page leads with the direct-answer section. Insert answer_heading
