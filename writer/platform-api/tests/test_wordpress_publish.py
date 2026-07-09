@@ -173,9 +173,10 @@ async def test_auth_failure_maps_to_auth_error(monkeypatch):
 # ── SEOPress meta title + on-page H1 routing ─────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_seo_title_routed_to_seopress_meta(monkeypatch):
-    """A distinct SEO title lands in SEOPress's meta-title field, separate from
-    the WordPress post title (which is the on-page H1)."""
+async def test_seo_title_routed_to_seo_plugin_meta(monkeypatch):
+    """A distinct SEO title lands in each supported SEO plugin's meta-title field
+    (SEOPress + Rank Math), separate from the WordPress post title (the H1). The
+    site keeps whichever key its installed plugin registered."""
     capture = {}
     _patch(monkeypatch, _FakeResponse(201, {"id": 1, "link": "u", "status": "draft"}), capture)
     await publish_to_wordpress(
@@ -185,8 +186,10 @@ async def test_seo_title_routed_to_seopress_meta(monkeypatch):
         html="<p>x</p>",
     )
     assert capture["json"]["title"] == "Retatrutide Dosage: mg Breakdown (2026)"
+    seo = "Retatrutide Dosage 2026: Starting mg, Escalation, Max 12mg"
     assert capture["json"]["meta"] == {
-        "_seopress_titles_title": "Retatrutide Dosage 2026: Starting mg, Escalation, Max 12mg"
+        "_seopress_titles_title": seo,
+        "rank_math_title": seo,
     }
 
 

@@ -41,11 +41,13 @@ _LEADING_H1_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
-# SEOPress stores a post's meta-title override in this post-meta key; it drives
-# the <title> tag independently of the WordPress post title. Passing it in the
-# REST `meta` object is a no-op on sites without SEOPress (unregistered meta keys
-# are ignored by the WP REST API).
-_SEOPRESS_TITLE_META_KEY = "_seopress_titles_title"
+# Post-meta keys the major SEO plugins read for a post's meta-title override —
+# each drives the <title> tag independently of the WordPress post title. We set
+# every known key; only the one the site's installed plugin registered takes
+# effect, and the rest are a no-op (the WP REST API silently ignores meta keys
+# that aren't registered for the site). SEOPress: `_seopress_titles_title`;
+# Rank Math: `rank_math_title`.
+_SEO_TITLE_META_KEYS = ("_seopress_titles_title", "rank_math_title")
 
 
 def _strip_leading_h1(html: str) -> str:
@@ -347,10 +349,11 @@ async def publish_to_wordpress(
     which breaks callers that pre-computed internal links against a known slug
     (the fanout writer).
 
-    `seo_title` (when distinct from `title`) is written to SEOPress's meta-title
-    field so the <title> tag / SERP result differs from the on-page H1; it is a
-    no-op on sites without SEOPress. `strip_leading_h1` removes a duplicate H1
-    from the top of the body (the post title already supplies the page's H1).
+    `seo_title` (when distinct from `title`) is written to the SEO plugin's
+    meta-title field (SEOPress + Rank Math) so the <title> tag / SERP result
+    differs from the on-page H1; it is a no-op on sites without a supported SEO
+    plugin. `strip_leading_h1` removes a duplicate H1 from the top of the body
+    (the post title already supplies the page's H1).
 
     Raises WordPressPublishError on missing config, a bad status, or a
     transport/API failure."""
@@ -398,11 +401,12 @@ async def publish_to_wordpress(
                 body["slug"] = slug
             if featured_id:
                 body["featured_media"] = featured_id
-            # Route a distinct SEO/meta title to SEOPress (drives the <title> tag
-            # separately from the post title / on-page H1).
+            # Route a distinct SEO/meta title to the site's SEO plugin (drives the
+            # <title> tag separately from the post title / on-page H1). We set every
+            # known plugin's key; the site keeps the one it recognizes.
             meta_title = (seo_title or "").strip()
             if meta_title and meta_title.lower() != (title or "").strip().lower():
-                body["meta"] = {_SEOPRESS_TITLE_META_KEY: meta_title}
+                body["meta"] = {key: meta_title for key in _SEO_TITLE_META_KEYS}
 
             result = await _rest_create(http, url, fallback_url, body, headers, resource)
     except WordPressPublishError:
