@@ -190,6 +190,42 @@ def test_run_brand_voice_scan_job_marks_failed_on_provider_error():
     assert update["status"] == "failed"
 
 
+# ── manual scan as a background job (enqueue + poll) ─────────────────────────
+
+def test_enqueue_scan_inserts_brand_voice_scan_job():
+    supabase = _supabase(update_returns=[{"id": "job-9"}])
+    with patch.object(brand_voice_service, "_get_client", return_value=_client_row()), \
+         patch.object(brand_voice_service, "get_supabase", return_value=supabase):
+        import asyncio
+        job_id = asyncio.run(brand_voice_service.enqueue_scan("client-1", force=True, user_id="u1"))
+    assert job_id == "job-9"
+    insert_arg = supabase.table.return_value.insert.call_args[0][0]
+    assert insert_arg["job_type"] == "brand_voice_scan"
+    assert insert_arg["entity_id"] == "client-1"
+    assert insert_arg["payload"] == {"client_id": "client-1", "user_id": "u1", "force": True}
+
+
+def test_get_scan_job_returns_status_scoped_to_client():
+    supabase = _supabase(update_returns=[
+        {"status": "complete", "error": None, "entity_id": "client-1"},
+    ])
+    supabase.table.return_value.limit.return_value = supabase.table.return_value
+    with patch.object(brand_voice_service, "get_supabase", return_value=supabase):
+        out = brand_voice_service.get_scan_job("job-1", "client-1")
+    assert out == {"status": "complete", "error": None}
+
+
+def test_get_scan_job_404s_for_other_client():
+    supabase = _supabase(update_returns=[
+        {"status": "complete", "error": None, "entity_id": "other-client"},
+    ])
+    supabase.table.return_value.limit.return_value = supabase.table.return_value
+    with patch.object(brand_voice_service, "get_supabase", return_value=supabase):
+        with pytest.raises(HTTPException) as exc:
+            brand_voice_service.get_scan_job("job-1", "client-1")
+    assert exc.value.status_code == 404
+
+
 # ── ensure_scannable (router pre-flight → real HTTP 409) ─────────────────────
 
 def test_ensure_scannable_blocks_user_structured_voice():

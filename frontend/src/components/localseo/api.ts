@@ -1,26 +1,23 @@
 import { api } from '../../lib/api'
 import type {
   AnalysisResult,
-  FindPageResult,
   LocalSeoPageDetail,
   LocalSeoPageListItem,
   LocationSuggestion,
-  PrecheckResult,
   RankabilityResult,
-  RelatedPagesResult,
   ScoreHistoryRow,
-  ScoreResult,
   SiloPlanJob,
   SiloPlanResult,
-  SocialPostsResult,
 } from './types'
 
 // All Local SEO calls go through platform-api, which proxies to the private
 // nlp service and owns persistence. The frontend never reaches nlp directly.
 
-// The action endpoints are heartbeat-SSE streams (see lib/api `stream`) so a
-// multi-minute generate/score/reoptimize isn't dropped by a proxy idle timeout.
-// They still resolve to the same typed payload as a plain POST would.
+// The long-running actions (generate / reoptimize / score / precheck / analyze /
+// find-page / related-pages / social-posts) enqueue a background async job and
+// return a { job_id, status } handle; poll `jobsStatus` for the terminal state +
+// result. Running server-side means they finish — and the result is retrievable
+// via a reconnecting poll — even if the user navigates away.
 export const localSeoApi = {
   // Background generation — enqueue a job and poll, so the UI can navigate away
   // (even to other clients) while the page generates server-side. The page lands
@@ -74,13 +71,13 @@ export const localSeoApi = {
 
   // Pre-write existing-page detection (in-tool + live site + GSC/DataForSEO
   // ranking). The New Page flow runs this first and, when it returns matches,
-  // offers reoptimize-vs-write-new before generating. SSE — the live scan + SERP
-  // lookup can take tens of seconds.
+  // offers reoptimize-vs-write-new before generating. Enqueued as a background
+  // job (the live scan + SERP lookup take tens of seconds) so the UI can navigate
+  // away and reconnect; the PrecheckResult comes back via `jobsStatus().result`.
   precheck: (
     clientId: string,
     body: { keyword: string; location: string; location_code?: number | null },
-    signal?: AbortSignal,
-  ) => api.stream<PrecheckResult>(`/clients/${clientId}/local-seo/precheck`, body, signal),
+  ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/precheck`, body),
 
   // Phase 3 — save (or clear) the client's default page-template URL.
   setPageTemplateDefault: (clientId: string, page_template_url: string | null) =>
@@ -96,10 +93,11 @@ export const localSeoApi = {
         (country ? `&country=${encodeURIComponent(country)}` : ''),
     ),
 
+  // Background job — poll jobsStatus for the AnalysisResult in `result`.
   analyze: (
     clientId: string,
     body: { keyword: string; location: string; location_code?: number | null; force_refresh?: boolean },
-  ) => api.stream<AnalysisResult>(`/clients/${clientId}/local-seo/analyze`, body),
+  ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/analyze`, body),
 
   // Map-pack rankability report — a single point-in-time, non-streaming check
   // (no LLM). The business identity is sourced server-side from the client's GBP;
@@ -109,9 +107,12 @@ export const localSeoApi = {
     body: { keyword: string; location: string; location_code?: number | null; sab_city?: string | null },
   ) => api.post<RankabilityResult>(`/clients/${clientId}/local-seo/rankability`, body),
 
+  // Background job — poll jobsStatus for the FindPageResult in `result`.
   findPage: (clientId: string, body: { keyword: string; location: string }) =>
-    api.stream<FindPageResult>(`/clients/${clientId}/local-seo/find-page`, body),
+    api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/find-page`, body),
 
+  // Background job — poll jobsStatus for the ScoreResult in `result`. Runs minutes
+  // when it analyzes competitors first, so it survives navigating away.
   score: (
     clientId: string,
     body: {
@@ -121,10 +122,11 @@ export const localSeoApi = {
       page_content?: string | null
       serp_analysis?: AnalysisResult | null
     },
-  ) => api.stream<ScoreResult>(`/clients/${clientId}/local-seo/score`, body),
+  ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/score`, body),
 
+  // Background job — poll jobsStatus for the RelatedPagesResult in `result`.
   relatedPages: (clientId: string, body: { keyword: string; location: string }) =>
-    api.stream<RelatedPagesResult>(`/clients/${clientId}/local-seo/related-pages`, body),
+    api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/related-pages`, body),
 
   // Plan Silo (Fanout-powered): enqueue the keyword-research pipeline, then poll.
   // It runs for minutes and bills DataForSEO/LLM, so it's an async job rather
@@ -151,10 +153,11 @@ export const localSeoApi = {
     },
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/reoptimize-async`, body),
 
+  // Background job — poll jobsStatus for the SocialPostsResult in `result`.
   socialPosts: (
     clientId: string,
     body: { keyword: string; location: string; page_content: string; serp_analysis?: AnalysisResult | null },
-  ) => api.stream<SocialPostsResult>(`/clients/${clientId}/local-seo/social-posts`, body),
+  ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/social-posts`, body),
 
   listPages: (clientId: string) =>
     api.get<LocalSeoPageListItem[]>(`/clients/${clientId}/local-seo/pages`),

@@ -772,3 +772,78 @@ async def test_publish_page_not_configured():
         with pytest.raises(HTTPException) as exc:
             await local_seo_service.publish_page("page-1", "user-1")
     assert exc.value.status_code == 503
+
+
+# ── interactive actions as background jobs ───────────────────────────────────
+
+def _action_job_supabase():
+    """A supabase mock for the single update the action-job handler performs
+    (async_jobs → update → eq → execute)."""
+    supabase = MagicMock()
+    table = MagicMock()
+    supabase.table.return_value = table
+    table.update.return_value = table
+    table.eq.return_value = table
+    table.insert.return_value = table
+    table.execute.return_value = MagicMock(data=[{"id": "job-1"}])
+    return supabase
+
+
+@pytest.mark.asyncio
+async def test_enqueue_action_inserts_local_seo_action_job():
+    supabase = _action_job_supabase()
+    supabase.table.return_value.execute.return_value = MagicMock(data=[{"id": "job-xyz"}])
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_client", return_value=_client_row()):
+        job_id = await local_seo_service.enqueue_action(
+            "client-1", "analyze", {"keyword": "plumber", "location": "Anaheim, CA"}, "user-1",
+        )
+    assert job_id == "job-xyz"
+    insert_arg = supabase.table.return_value.insert.call_args[0][0]
+    assert insert_arg["job_type"] == "local_seo_action"
+    assert insert_arg["entity_id"] == "client-1"
+    assert insert_arg["payload"]["action"] == "analyze"
+    assert insert_arg["payload"]["args"]["keyword"] == "plumber"
+    assert insert_arg["payload"]["user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_run_action_job_stores_result_on_complete():
+    job = {"id": "job-1", "payload": {
+        "action": "find_page", "client_id": "client-1",
+        "args": {"keyword": "plumber", "location": "Anaheim, CA"}, "user_id": "user-1",
+    }}
+    supabase = _action_job_supabase()
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "find_page", new=AsyncMock(return_value={"match": None})):
+        await local_seo_service.run_local_seo_action_job(job)
+    update_arg = supabase.table.return_value.update.call_args[0][0]
+    assert update_arg["status"] == "complete"
+    assert update_arg["result"] == {"match": None}
+
+
+@pytest.mark.asyncio
+async def test_run_action_job_records_failure():
+    job = {"id": "job-1", "payload": {
+        "action": "find_page", "client_id": "client-1",
+        "args": {"keyword": "x", "location": "y"}, "user_id": "u",
+    }}
+    supabase = _action_job_supabase()
+    err = HTTPException(status_code=400, detail="client_has_no_website")
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "find_page", new=AsyncMock(side_effect=err)):
+        await local_seo_service.run_local_seo_action_job(job)
+    update_arg = supabase.table.return_value.update.call_args[0][0]
+    assert update_arg["status"] == "failed"
+    assert "client_has_no_website" in update_arg["error"]
+
+
+@pytest.mark.asyncio
+async def test_run_action_job_unknown_action_fails():
+    job = {"id": "job-1", "payload": {"action": "bogus", "client_id": "c", "args": {}, "user_id": "u"}}
+    supabase = _action_job_supabase()
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        await local_seo_service.run_local_seo_action_job(job)
+    update_arg = supabase.table.return_value.update.call_args[0][0]
+    assert update_arg["status"] == "failed"
+    assert "unknown_local_seo_action" in update_arg["error"]

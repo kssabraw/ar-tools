@@ -19,6 +19,7 @@ from services.gsc_research import run_gsc_research_job
 from services.keyword_market import run_keyword_market_job
 from services.local_seo_service import (
     run_generate_job,
+    run_local_seo_action_job,
     run_reoptimize_page_job,
     run_reoptimize_url_job,
 )
@@ -368,6 +369,8 @@ async def _process_job(job: dict) -> None:
         await run_reoptimize_url_job(job)
     elif job_type == "local_seo_reoptimize_page":
         await run_reoptimize_page_job(job)
+    elif job_type == "local_seo_action":
+        await run_local_seo_action_job(job)
     elif job_type == "service_page_plan":
         await run_service_plan_job(job)
     elif job_type == "rank_location_derive":

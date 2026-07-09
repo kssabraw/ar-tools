@@ -51,3 +51,19 @@ class IcpResponse(BaseModel):
     analysis_status: Optional[str] = Field(
         default=None, description="'complete' (pages found) or 'partial'."
     )
+
+
+class IcpScanJob(BaseModel):
+    """Handle for a backgrounded ICP scan (enqueued async job). The scan runs
+    server-side, so the UI can navigate away; poll `.../scan/{job_id}` and refetch
+    the ICP on completion."""
+
+    job_id: str
+    status: str
+
+
+class IcpScanJobStatus(BaseModel):
+    """Poll result for a backgrounded ICP scan."""
+
+    status: str  # pending | running | complete | failed
+    error: Optional[str] = None

@@ -52,3 +52,19 @@ class BrandVoiceResponse(BaseModel):
     pages_sampled: Optional[int] = Field(
         default=None, description="Pages that produced usable text on the last scan."
     )
+
+
+class BrandVoiceScanJob(BaseModel):
+    """Handle for a backgrounded brand-voice scan (enqueued async job). The scan
+    runs server-side, so the UI can navigate away; poll `.../scan/{job_id}` and
+    refetch the voice on completion."""
+
+    job_id: str
+    status: str
+
+
+class BrandVoiceScanJobStatus(BaseModel):
+    """Poll result for a backgrounded brand-voice scan."""
+
+    status: str  # pending | running | complete | failed
+    error: Optional[str] = None

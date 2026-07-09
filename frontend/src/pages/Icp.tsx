@@ -5,6 +5,7 @@ import {
   ArrowLeft, Check, Pencil, RefreshCw, Sparkles, Target, User, Users, X,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import type { Client, DetectedIcp, Differentiator, IcpResponse, IcpSegment } from '../lib/types'
 import { icpApi } from '../components/icp/api'
 import { Spinner } from '../components/localseo/Spinner'
@@ -49,17 +50,28 @@ export function Icp() {
     queryClient.invalidateQueries({ queryKey: ['client', clientId] })
   }
 
-  const scanMut = useMutation({
-    mutationFn: (force: boolean) => icpApi.scan(clientId, force),
-    onSuccess: () => { invalidate(); setEditing(false) },
+  // Scan runs as a background job: enqueue, then poll the job status (persisted
+  // so navigating away and back reconnects). On completion the ICP has been
+  // written server-side, so we just refetch it.
+  const [scanError, setScanError] = useState<string | null>(null)
+  const scanJob = useResumableJob<null, { force: boolean }>({
+    storageKey: `icp:scan:${clientId}`,
+    poll: (jobId) => icpApi.scanStatus(clientId, jobId),
+    onComplete: () => { invalidate(); setEditing(false) },
+    onError: (err) => setScanError(err),
   })
+  const startScan = (force: boolean) => {
+    setScanError(null)
+    void scanJob.start(async () => (await icpApi.scan(clientId, force)).job_id, { force })
+  }
   const saveMut = useMutation({
     mutationFn: (raw_text: string) => icpApi.update(clientId, { raw_text }),
     onSuccess: () => { invalidate(); setEditing(false) },
   })
 
   const startEdit = () => { setDraft(icp?.raw_text ?? ''); setEditing(true) }
-  const busyError = scanMut.error || saveMut.error
+  const busyError =
+    scanError || (saveMut.error ? String((saveMut.error as Error).message) : null)
 
   return (
     <div style={{ padding: 32, maxWidth: 860 }}>
@@ -76,11 +88,11 @@ export function Icp() {
         apart — used by both the Blog Writer and Local SEO. Your own input always wins.
       </p>
 
-      {busyError && <div style={{ ...errorBox, marginBottom: 16 }}>{String((busyError as Error).message)}</div>}
+      {busyError && <div style={{ ...errorBox, marginBottom: 16 }}>{busyError}</div>}
 
       {isLoading ? (
         <div style={{ color: '#94a3b8', fontSize: 14 }}>Loading…</div>
-      ) : scanMut.isPending ? (
+      ) : scanJob.running ? (
         <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 12 }}>
           <Spinner size={18} />
           <span style={{ fontSize: 14, color: '#475569' }}>Analyzing your business…</span>
@@ -91,11 +103,11 @@ export function Icp() {
           onSave={() => saveMut.mutate(draft)} onCancel={() => setEditing(false)}
         />
       ) : !hasContent(icp, diffs) ? (
-        <EmptyState onDetect={() => scanMut.mutate(false)} onWriteOwn={startEdit} />
+        <EmptyState onDetect={() => startScan(false)} onWriteOwn={startEdit} />
       ) : (
         <IcpDisplay
           icp={icp} diffs={diffs}
-          onEdit={startEdit} onRescan={() => scanMut.mutate(true)}
+          onEdit={startEdit} onRescan={() => startScan(true)}
         />
       )}
     </div>

@@ -4,6 +4,7 @@ import {
   ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2,
 } from 'lucide-react'
 import { localSeoApi } from './api'
+import { useResumableJob } from '../../lib/useResumableJob'
 import type { LocalSeoPageDetail, SocialPostsResult } from './types'
 import { RelatedPagesList } from './RelatedPagesList'
 import { BulkCreateBar } from './BulkCreateBar'
@@ -115,12 +116,24 @@ export function GeneratedPageView({
   }
 
   // Social posts — lazily generated when the tab is first opened (each call
-  // costs an LLM round-trip; suite doesn't persist them).
+  // costs an LLM round-trip; suite doesn't persist them). Runs as a background
+  // job, persisted per page, so navigating away and back reconnects to it.
   const [social, setSocial] = useState<SocialPostsResult | null>(null)
-  const [socialLoading, setSocialLoading] = useState(false)
   const [socialError, setSocialError] = useState('')
   const [copiedPost, setCopiedPost] = useState<string | null>(null)
   const socialRequested = useRef(false)
+  const socialJob = useResumableJob<SocialPostsResult, null>({
+    storageKey: `localseo:social:${clientId}:${page.id}`,
+    poll: async (jobId) => {
+      const [st] = await localSeoApi.jobsStatus(clientId, [jobId])
+      return st
+        ? { status: st.status, result: (st.result as SocialPostsResult | null) ?? null, error: st.error }
+        : { status: 'running' }
+    },
+    onComplete: (data) => { if (data) setSocial(data); else setSocialError('No posts returned.') },
+    onError: (err) => setSocialError(err || 'Could not generate posts'),
+  })
+  const socialLoading = socialJob.running
 
   // Related pages — the Fanout-powered silo plan (same engine as the Plan Silo
   // tab), seeded from this page's keyword + area. Lazily kicked off when the tab
@@ -135,18 +148,13 @@ export function GeneratedPageView({
   )
 
   const fetchSocial = async () => {
-    setSocialLoading(true)
     setSocialError('')
-    try {
-      const data = await localSeoApi.socialPosts(clientId, {
+    await socialJob.start(async () => {
+      const { job_id } = await localSeoApi.socialPosts(clientId, {
         keyword, location, page_content: htmlToText(content_html),
       })
-      setSocial(data)
-    } catch (e) {
-      setSocialError(e instanceof Error ? e.message : 'Could not generate posts')
-    } finally {
-      setSocialLoading(false)
-    }
+      return job_id
+    }, null)
   }
 
   const fetchRelated = () => { bulk.reset(); void relatedPlan.run(keyword, location) }
@@ -154,7 +162,8 @@ export function GeneratedPageView({
   useEffect(() => {
     if (tab === 'social' && !socialRequested.current) {
       socialRequested.current = true
-      void fetchSocial()
+      // Skip if a prior job is already reconnecting or posts are already in hand.
+      if (socialJob.phase === 'idle' && !social) void fetchSocial()
     }
     if (tab === 'related' && !relatedRequested.current) {
       relatedRequested.current = true

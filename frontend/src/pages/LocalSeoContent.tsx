@@ -5,6 +5,7 @@ import {
   ArrowLeft, ArrowRight, Building2, CheckCircle2, ChevronDown, ChevronRight, MapPin, RotateCcw, Search, Sparkles, Trash2,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import type { Client } from '../lib/types'
 import { localSeoApi } from '../components/localseo/api'
 import { LocationAutocomplete } from '../components/localseo/LocationAutocomplete'
@@ -59,16 +60,24 @@ export function LocalSeoContent() {
     enabled: Boolean(clientId),
   })
 
+  // If a precheck job for this client was left in flight, resume on the New tab
+  // showing the checking screen — the precheck hook reconnects to the job on
+  // mount and transitions the view (choice / form) when it completes.
+  const precheckResuming =
+    typeof window !== 'undefined' &&
+    Boolean(window.localStorage.getItem(`localseo:precheck:${clientId}`))
+
   const [tab, setTab] = useState<'new' | 'plan' | 'reopt' | 'saved' | 'drafts' | 'history'>(
     // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / reopt / drafts / history).
-    searchParams.get('tab') === 'saved' ? 'saved'
+    precheckResuming ? 'new'
+      : searchParams.get('tab') === 'saved' ? 'saved'
       : searchParams.get('tab') === 'plan' ? 'plan'
       : searchParams.get('tab') === 'reopt' ? 'reopt'
       : searchParams.get('tab') === 'drafts' ? 'drafts'
       : searchParams.get('tab') === 'history' ? 'history'
       : 'new',
   )
-  const [view, setView] = useState<View>({ kind: 'form' })
+  const [view, setView] = useState<View>(precheckResuming ? { kind: 'prechecking' } : { kind: 'form' })
   const [keyword, setKeyword] = useState('')
   const [location, setLocation] = useState('')
   // DataForSEO location_code from a picked suggestion; null while free-typing.
@@ -229,28 +238,55 @@ export function LocalSeoContent() {
     setTab('saved')
   }
 
+  // Existing-page precheck runs as a background job (live-site scan + SERP lookup
+  // — tens of seconds). The in-flight job id is persisted, so navigating away and
+  // back reconnects: on matches the user still gets the choice screen instead of
+  // losing the gate. The result comes back via jobsStatus().result.
+  const precheckJob = useResumableJob<PrecheckResult, { kw: string; location: string; locationCode: number | null }>({
+    storageKey: `localseo:precheck:${clientId}`,
+    poll: async (jobId) => {
+      const [st] = await localSeoApi.jobsStatus(clientId, [jobId])
+      return st
+        ? { status: st.status, result: (st.result as PrecheckResult | null) ?? null, error: st.error }
+        : { status: 'running' }
+    },
+    onComplete: (result, meta, resumed) => {
+      // Rehydrate the form inputs (lost if the component remounted) so a follow-up
+      // action (reoptimize / write-new) still has the keyword + area it needs.
+      setKeyword(meta.kw); setLocation(meta.location); setLocationCode(meta.locationCode)
+      if (result && result.matches.length > 0) {
+        setView({ kind: 'choice', result, kw: meta.kw })
+        return
+      }
+      // No existing page. On a live run continue straight to generation; after a
+      // reconnect just return to the form (don't silently start writing a page).
+      if (resumed) setView({ kind: 'form' })
+      else void runGenerate(meta.kw)
+    },
+    onError: (_err, meta, resumed) => {
+      // Precheck is best-effort — a failure must never block page creation.
+      setKeyword(meta.kw); setLocation(meta.location); setLocationCode(meta.locationCode)
+      if (resumed) setView({ kind: 'form' })
+      else void runGenerate(meta.kw)
+    },
+  })
+
   // Primary "Create new page" action: gate on the existing-page precheck. If the
   // client already has (or ranks for) a page on this topic, pause and let the
   // user reoptimize it instead of writing a duplicate. No matches → write straight
   // away. A precheck failure is non-fatal — we fall through to generation so the
   // check can never block page creation.
-  const handleGenerate = async (kwOverride?: string) => {
+  const handleGenerate = (kwOverride?: string) => {
     const kw = (typeof kwOverride === 'string' ? kwOverride : keyword).trim()
     if (!kw || !location.trim()) return
     setError('')
     setView({ kind: 'prechecking' })
-    try {
-      const result = await localSeoApi.precheck(clientId, {
+    void precheckJob.start(async () => {
+      const { job_id } = await localSeoApi.precheck(clientId, {
         keyword: kw, location: location.trim(), location_code: locationCode,
       })
-      if (result.matches.length > 0) {
-        setView({ kind: 'choice', result, kw })
-        return
-      }
-    } catch {
-      // best-effort — don't block page creation on a precheck failure
-    }
-    await runGenerate(kw)
+      return job_id
+    }, { kw, location: location.trim(), locationCode })
   }
 
   // Reoptimize an existing match: an in-tool page opens in its detail view (with

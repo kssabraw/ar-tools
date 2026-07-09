@@ -182,6 +182,44 @@ def test_ensure_scannable_blocks_structured_allows_raw_only():
         with pytest.raises(HTTPException) as exc:
             icp_service.ensure_scannable("client-1", force=False)
     assert exc.value.status_code == 409
+
+
+# ── manual scan as a background job (enqueue + poll) ─────────────────────────
+
+def test_enqueue_scan_inserts_icp_scan_job():
+    supabase = _supabase()
+    supabase.table.return_value.execute.return_value = MagicMock(data=[{"id": "job-9"}])
+    with patch.object(icp_service, "_get_client", return_value=_client_row()), \
+         patch.object(icp_service, "get_supabase", return_value=supabase):
+        job_id = asyncio.run(icp_service.enqueue_scan("client-1", force=True, user_id="u1"))
+    assert job_id == "job-9"
+    insert_arg = supabase.table.return_value.insert.call_args[0][0]
+    assert insert_arg["job_type"] == "icp_scan"
+    assert insert_arg["entity_id"] == "client-1"
+    assert insert_arg["payload"] == {"client_id": "client-1", "user_id": "u1", "force": True}
+
+
+def test_get_scan_job_returns_status_scoped_to_client():
+    supabase = _supabase()
+    supabase.table.return_value.limit.return_value = supabase.table.return_value
+    supabase.table.return_value.execute.return_value = MagicMock(
+        data=[{"status": "running", "error": None, "entity_id": "client-1"}],
+    )
+    with patch.object(icp_service, "get_supabase", return_value=supabase):
+        out = icp_service.get_scan_job("job-1", "client-1")
+    assert out == {"status": "running", "error": None}
+
+
+def test_get_scan_job_404s_for_other_client():
+    supabase = _supabase()
+    supabase.table.return_value.limit.return_value = supabase.table.return_value
+    supabase.table.return_value.execute.return_value = MagicMock(
+        data=[{"status": "complete", "error": None, "entity_id": "other"}],
+    )
+    with patch.object(icp_service, "get_supabase", return_value=supabase):
+        with pytest.raises(HTTPException) as exc:
+            icp_service.get_scan_job("job-1", "client-1")
+    assert exc.value.status_code == 404
     raw_only = _client_row(detected_icp={"source": "user", "raw_text": "hi"})
     with patch.object(icp_service, "_get_client", return_value=raw_only):
         icp_service.ensure_scannable("client-1", force=False)  # no raise
