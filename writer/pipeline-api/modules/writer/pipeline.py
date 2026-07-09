@@ -39,6 +39,8 @@ from .brand_placement import brand_mention_present, build_brand_placement_plan
 from .budget import allocate_budget, CONCLUSION_BUDGET_TARGET
 from .citations import reconcile_citation_usage
 from .conclusion import write_conclusion
+from .format_qa import check_format_qa, check_notes_landed
+from .term_coverage import enforce_term_coverage
 from .distillation import distill_brand_voice, is_card_empty
 from .faqs import write_faqs
 from .intro import write_intro
@@ -620,6 +622,10 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     body_structure = (
         req.client_context.reference_page_body_structure if req.client_context else None
     )
+    # Per-run editorial guidance from the user - passed into every section
+    # prompt (plus intro + conclusion) so a note like "mention <brand> as one
+    # of the top 10" can land wherever it fits most naturally.
+    user_notes = (req.user_notes or "").strip() or None
     preceding_summaries_running: list[str] = []
     for h2_idx, (h2_item, h3_items) in enumerate(h2_groups):
         section_budget = section_budgets.get(h2_item.get("order"), 0)
@@ -643,6 +649,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             preceding_section_summaries=list(preceding_summaries_running),
             placement_directive=placement_plan.for_order(h2_item.get("order", -1)),
             reference_structure=body_structure,
+            user_notes=user_notes,
         )
         article.extend(result.sections)
         banned_terms_leaked_in_body.extend(result.banned_terms_leaked)
@@ -658,6 +665,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         brand_voice_card=brand_voice_card,
         banned_regex=banned_regex,
         conclusion_order=0,
+        user_notes=user_notes,
     )
     article.append(conclusion_section)
 
@@ -708,6 +716,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         reference_structure=(
             req.client_context.reference_page_structure if req.client_context else None
         ),
+        user_notes=user_notes,
     )
     # Insert intro right after H1 + (optional) h1-enrichment so the
     # render order is: H1 → enrichment → intro → body... → conclusion
@@ -752,9 +761,10 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # ---- Article structure validator ----
     # Non-blocking observability - surfaces orphan ordinal references
     # (e.g., "Step 3" with no Step 1/2), wrong-position intro, missing
-    # conclusion, FAQ-before-conclusion. Logged for review; doesn't
-    # abort an otherwise-valid run.
-    for warning in _validate_article_structure(article):
+    # conclusion, FAQ-before-conclusion. Logged + carried in metadata
+    # for the run-detail QA panel; doesn't abort an otherwise-valid run.
+    structure_warnings = _validate_article_structure(article)
+    for warning in structure_warnings:
         logger.warning(
             "writer.structure.%s",
             warning.split(":", 1)[0],
@@ -818,6 +828,29 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     article = coverage_result.validated_article
     _scan_headings_for_banned(article, banned_regex)
 
+    # ---- Term-coverage enforcement (owner spec 2026-07-09) ----
+    # Deterministic comparison of SIE targets vs delivered usage: tracked
+    # corpus quadgrams must each appear once; either entity 75% bar missed
+    # → one auto-rewrite of the weakest sections with the missing terms.
+    # Runs BEFORE citation reconciliation / format compliance / the QA
+    # judges so they all see the final (possibly rewritten) article.
+    term_coverage_result = await enforce_term_coverage(
+        article,
+        keyword=keyword,
+        intent=intent_type,
+        # The same (h2_item, h3_items) pairs the section loop wrote from -
+        # positional alignment, NOT order lookup (orders were resequenced).
+        h2_groups=h2_groups,
+        section_budgets=section_budgets,
+        filtered_terms=filtered_terms,
+        citations=citations,
+        brand_voice_card=brand_voice_card,
+        banned_regex=banned_regex,
+        placement_plan=placement_plan,
+    )
+    article = term_coverage_result.validated_article
+    _scan_headings_for_banned(article, banned_regex)
+
     # ---- Citation reconciliation ----
     citation_usage = reconcile_citation_usage(article, citations)
 
@@ -836,6 +869,22 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         icp_hook_phrase=placement_plan.icp_hook_phrase,
         brand_voice_card=brand_voice_card,
     )
+
+    # ---- End-of-run format QA ----
+    # The only check that validates the PLAN rather than the article's
+    # conformance to it: one Haiku call judging whether the final H2
+    # outline is the archetype the keyword calls for. Warn-and-accept.
+    format_qa = await check_format_qa(
+        keyword=keyword,
+        intent_type=intent_type,
+        title=title,
+        article=article,
+    )
+
+    # ---- Notes-landed judge ----
+    # Verifies the article honored the user's per-run writer notes (an LLM
+    # judge - paraphrase defeats string matching). Skipped when no notes.
+    notes_qa = await check_notes_landed(user_notes=user_notes, article=article)
 
     # ---- Metadata ----
     total_words = sum(s.word_count for s in article if s.type not in ("faq-header", "faq-question"))
@@ -906,6 +955,21 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         headings_entity_rewrites_applied=heading_entity_result.rewrites_applied,
         headings_entity_violation_count=heading_entity_result.violation_count,
         headings_entity_violations=heading_entity_result.flagged,
+        structure_warnings=structure_warnings,
+        format_qa_matches_intent=format_qa.matches_intent,
+        format_qa_expected_archetype=format_qa.expected_archetype,
+        format_qa_note=format_qa.note,
+        user_notes_verdicts=notes_qa.verdicts,
+        user_notes_landed_all=notes_qa.landed_all,
+        quadgrams_tracked=term_coverage_result.stats.quadgrams_tracked,
+        quadgrams_missing=term_coverage_result.stats.quadgrams_missing,
+        terms_over_cap=term_coverage_result.stats.terms_over_cap,
+        entity_unique_coverage_pct=term_coverage_result.stats.entity_unique_coverage_pct,
+        entity_total_coverage_pct=term_coverage_result.stats.entity_total_coverage_pct,
+        entities_missing=term_coverage_result.stats.entities_missing,
+        entity_rewrite_triggered=term_coverage_result.stats.entity_rewrite_triggered,
+        entity_rewrite_sections_retried=term_coverage_result.sections_retried,
+        entity_rewrite_resolved=term_coverage_result.rewrite_resolved,
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),

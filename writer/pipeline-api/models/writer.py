@@ -63,6 +63,12 @@ class WriterRequest(BaseModel):
     sie_output: dict[str, Any]
     research_output: Optional[dict[str, Any]] = None
     client_context: Optional[ClientContextInput] = None
+    # Free-form per-run editorial guidance typed by the user at run creation
+    # ("mention Zero Down Supply Chain Services as one of the top 10 best").
+    # Threaded into the section/intro/conclusion prompts. Deliberately not
+    # part of brief_output - the brief is client-agnostic and globally
+    # cached. Optional - None/absent leaves writing behavior unchanged.
+    user_notes: Optional[str] = None
 
 
 # ---- Brand voice card (output of Step 3.5a) ----
@@ -243,6 +249,42 @@ class WriterMetadata(BaseModel):
     headings_entity_rewrites_applied: int = 0
     headings_entity_violation_count: int = 0
     headings_entity_violations: list[dict] = []
+    # Post-assembly structure validator warnings (orphan "Step N" refs,
+    # intro out of position, missing conclusion, FAQ before conclusion).
+    # Previously log-only; carried here so the run-detail QA panel can
+    # surface them. Empty list is the steady state.
+    structure_warnings: list[str] = []
+    # End-of-run format QA (modules.writer.format_qa) - one Haiku call
+    # judging whether the final H2 outline is the right ARCHETYPE for the
+    # keyword (the only check that validates the plan itself, not the
+    # article's conformance to it). All None = check skipped or failed
+    # (unknown, the honest answer). matches_intent=False flags the run
+    # for editor review - warn-and-accept, never aborts.
+    format_qa_matches_intent: Optional[bool] = None
+    format_qa_expected_archetype: Optional[str] = None
+    format_qa_note: Optional[str] = None
+    # Notes-landed judge (format_qa.check_notes_landed) - did the article
+    # honor the per-run user_notes? One verdict per directive:
+    # {"note", "landed", "evidence"}. Empty + None = no notes were given,
+    # the check is disabled, or the judge failed (unknown).
+    user_notes_verdicts: list[dict] = []
+    user_notes_landed_all: Optional[bool] = None
+    # Term-coverage enforcement (modules.writer.term_coverage; owner spec
+    # 2026-07-09). Quadgram rule: the tracked corpus 4-grams must each
+    # appear at least once; `terms_over_cap` flags any required term above
+    # the stuffing cap. Entity rule: EITHER 75% bar missed (unique-entity
+    # coverage / total occurrences vs summed targets) triggers one
+    # auto-rewrite of the weakest sections; `entity_rewrite_resolved`
+    # records whether the retry cleared the bar (None = no rewrite ran).
+    quadgrams_tracked: list[str] = []
+    quadgrams_missing: list[str] = []
+    terms_over_cap: list[dict] = []
+    entity_unique_coverage_pct: Optional[float] = None
+    entity_total_coverage_pct: Optional[float] = None
+    entities_missing: list[str] = []
+    entity_rewrite_triggered: bool = False
+    entity_rewrite_sections_retried: int = 0
+    entity_rewrite_resolved: Optional[bool] = None
     schema_version: SchemaVersion = "1.9"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0

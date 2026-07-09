@@ -18,6 +18,7 @@ import logging
 import re
 from typing import Optional
 
+from config import settings
 from models.brief import IntentSignals, IntentType
 
 from .llm import claude_json
@@ -49,6 +50,11 @@ _LISTICLE_PREFIXES = ("best", "top")
 # of "best of N" and "N <thing>s" patterns without overfitting to specific
 # noun lists.
 _LISTICLE_NUM_PATTERN = re.compile(r"^\d+\s+\w+s\b")
+# Leading item count before a listicle prefix - "10 best X" / "7 top Y".
+# These miss both checks above: the keyword doesn't *start* with best/top,
+# and the word after the number ("best") isn't plural, so the num pattern
+# doesn't fire either. Strip the count once and re-check the prefixes.
+_LEADING_COUNT = re.compile(r"^\d+\s+")
 _COMPARISON_TOKENS = (" vs ", " versus ", " or ", "compared to")
 
 
@@ -71,8 +77,13 @@ def _keyword_pattern_precheck(keyword: str) -> Optional[tuple[IntentType, float]
     if any(kw.startswith(p) for p in _INFO_PREFIXES):
         return ("informational", 0.90)
 
-    # listicle - "best X" / "top X" / "<n> <plural-noun>"
+    # listicle - "best X" / "top X" / "<n> best X" / "<n> <plural-noun>"
     if any(kw.startswith(p + " ") for p in _LISTICLE_PREFIXES):
+        return ("listicle", 0.90)
+    kw_uncounted = _LEADING_COUNT.sub("", kw, count=1)
+    if kw_uncounted != kw and any(
+        kw_uncounted.startswith(p + " ") for p in _LISTICLE_PREFIXES
+    ):
         return ("listicle", 0.90)
     if _LISTICLE_NUM_PATTERN.match(kw):
         return ("listicle", 0.90)
@@ -96,6 +107,12 @@ def _is_numbered_listicle(titles: list[str]) -> bool:
     return count >= 3
 
 
+# classify_rules' no-signal fallback. Its 0.55 confidence sits below the
+# Step 3.3 arbitration threshold (`intent_llm_fallback_max_confidence`),
+# so a no-match outcome is always LLM-arbitrated when the fallback is on.
+RULES_NO_MATCH: tuple[IntentType, float] = ("informational", 0.55)
+
+
 def classify_rules(signals: IntentSignals, titles: list[str]) -> tuple[IntentType, float]:
     """Apply rule mapping. Returns (intent, confidence)."""
     matches: list[tuple[IntentType, float]] = []
@@ -116,10 +133,64 @@ def classify_rules(signals: IntentSignals, titles: list[str]) -> tuple[IntentTyp
         matches.append(("informational", 0.8))
 
     if not matches:
-        return ("informational", 0.55)
+        return RULES_NO_MATCH
 
     by_priority = sorted(matches, key=lambda m: INTENT_PRIORITY.index(m[0]))
     return by_priority[0]
+
+
+# Step 3.3 - LLM arbitration for the no-signal case. Valid labels the
+# fallback may return; anything else is treated as a failed call.
+_LLM_FALLBACK_INTENTS: frozenset[str] = frozenset(INTENT_PRIORITY) | {
+    "informational-commercial",
+}
+# 0.75 clears the review threshold (review_required = confidence < 0.75):
+# the LLM saw keyword + SERP titles, which is more signal than the bare
+# informational default it replaces.
+_LLM_FALLBACK_CONFIDENCE = 0.75
+
+
+async def llm_fallback_classify(
+    keyword: str,
+    titles: list[str],
+) -> Optional[tuple[IntentType, float]]:
+    """One cheap Haiku call for keywords where BOTH deterministic passes
+    came up empty - the bucket that previously defaulted straight to
+    informational/0.55 (e.g. "10 Best Freight Audit Companies 2026" on a
+    SERP whose titles don't literally start with digits). Returns None on
+    any API error or invalid label so the caller keeps the informational
+    default as the degraded path.
+    """
+    system = (
+        "You classify search intent for an SEO content brief. Respond with a "
+        'single JSON object: {"intent": "<label>"} where <label> is exactly '
+        "one of: informational, listicle, how-to, comparison, ecom, "
+        "local-seo, news, informational-commercial."
+    )
+    titles_block = "\n- ".join(t for t in titles[:5] if (t or "").strip())
+    user = (
+        f"Keyword: {keyword}\n"
+        + (f"Top SERP titles:\n- {titles_block}\n" if titles_block else "")
+        + "Which article archetype should content targeting this keyword use?"
+    )
+    try:
+        result = await claude_json(
+            system,
+            user,
+            max_tokens=60,
+            temperature=0,
+            model=settings.intent_llm_fallback_model,
+        )
+        intent = result.get("intent") if isinstance(result, dict) else None
+        if intent in _LLM_FALLBACK_INTENTS:
+            return (intent, _LLM_FALLBACK_CONFIDENCE)
+        logger.warning(
+            "intent.llm_fallback_invalid_label",
+            extra={"keyword": keyword, "label": intent},
+        )
+    except Exception as exc:
+        logger.warning("intent.llm_fallback_failed: %s", exc)
+    return None
 
 
 async def borderline_ecom_check(
@@ -204,6 +275,25 @@ async def classify_intent(
 
     # Step 3.2 - SERP-feature-signal classifier (UNCHANGED from v1.7)
     intent, confidence = classify_rules(signals, titles)
+
+    # Step 3.3 - LLM arbitration for low-confidence outcomes (below
+    # `intent_llm_fallback_max_confidence`, default 0.80). Confident
+    # deterministic matches (0.80-0.95) stay authoritative; anything weaker
+    # - today only the informational/0.55 no-match default - is arbitrated
+    # by a cheap Haiku call instead of being accepted silently. Degrades to
+    # the deterministic answer on any failure.
+    if (
+        confidence < settings.intent_llm_fallback_max_confidence
+        and settings.intent_llm_fallback_enabled
+    ):
+        llm_result = await llm_fallback_classify(keyword, titles)
+        if llm_result is not None:
+            intent, confidence = llm_result
+            logger.info(
+                "intent.llm_fallback_matched",
+                extra={"keyword": keyword, "intent": intent, "confidence": confidence},
+            )
+            return (intent, confidence, confidence < 0.75)
 
     if intent == "ecom":
         revised = await borderline_ecom_check(keyword, titles, signals, top_3_domains)

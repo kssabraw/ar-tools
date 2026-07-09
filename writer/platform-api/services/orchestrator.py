@@ -556,6 +556,10 @@ def _build_writer_payload(
         "brief_output": brief_output,
         "sie_output": sie_output,
         "research_output": research_output,
+        # Per-run editorial guidance typed at run creation ("mention <brand>
+        # as one of the top 10 best"). Rides the run row, never the cached
+        # client-agnostic brief.
+        "user_notes": (run.get("writer_notes") or "").strip() or None,
         "client_context": {
             "brand_guide_text": brand_guide_text,
             "brand_guide_format": brand_guide_format,

@@ -107,6 +107,53 @@ class Settings(BaseSettings):
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 
+    # Intent classification Step 3.3 - LLM arbitration for low-confidence
+    # outcomes. When the deterministic passes (keyword pattern precheck 3.1 +
+    # SERP-signal rules 3.2) land below `intent_llm_fallback_max_confidence`,
+    # a cheap Haiku call (keyword + top SERP titles) arbitrates instead of
+    # accepting the weak answer; the deterministic result remains the
+    # degraded path when the call fails or returns an invalid label. With
+    # today's rule confidences (matches 0.80-0.95, no-match default 0.55)
+    # the 0.80 threshold fires exactly on the no-match case; raise it via
+    # env to have Haiku double-check weaker signal matches too.
+    intent_llm_fallback_enabled: bool = True
+    intent_llm_fallback_model: str = "claude-haiku-4-5-20251001"
+    intent_llm_fallback_max_confidence: float = 0.80
+
+    # Writer end-of-run format QA. One cheap Haiku call after final assembly
+    # asking "given this keyword, is this H2 outline the right article
+    # archetype?" - the only check that validates the PLAN (the brief's
+    # intent) rather than the article's conformance to it. Warn-and-accept:
+    # a mismatch flags writer metadata for the run-detail QA panel, never
+    # aborts. Best-effort - any API error leaves the fields None (unknown).
+    writer_format_qa_enabled: bool = True
+    writer_format_qa_model: str = "claude-haiku-4-5-20251001"
+    # Companion end-of-run check: did the article actually honor the user's
+    # per-run writer notes? One Haiku call (shares writer_format_qa_model)
+    # splits the notes into distinct directives and judges each landed /
+    # not-landed against the final article text - an LLM judge (like the
+    # ICP callout check) because paraphrase defeats string matching
+    # ("ZDSCS" vs "Zero Down Supply Chain Services"). Warn-and-accept.
+    writer_notes_qa_enabled: bool = True
+
+    # Term-coverage enforcement (owner spec 2026-07-09). Deterministic, no
+    # LLM for the check itself - both sides (SIE targets + article usage)
+    # are already computed.
+    # - Quadgrams: the corpus-derived 4-word phrases in the SIE required
+    #   pool (top N tracked) must each appear at least once; any required
+    #   term above the occurrence cap flags as stuffing.
+    # - Entities: if unique-entity coverage OR total entity occurrences
+    #   fall below the 75% bar (either bar), the weakest sections are
+    #   auto-rewritten ONCE with the missing entities, then flagged if
+    #   still short (same warn-and-accept retry pattern as the word-floor
+    #   and citation-coverage validators).
+    writer_term_coverage_enabled: bool = True
+    writer_quadgram_track_max: int = 10
+    writer_term_occurrence_cap: int = 10
+    writer_entity_coverage_min: float = 0.75
+    writer_entity_rewrite_enabled: bool = True
+    writer_entity_rewrite_max_sections: int = 3
+
     # ------------------------------------------------------------
     # Service Page Brief Generator (PRD §7 - model tiering + cache)
     # ------------------------------------------------------------
