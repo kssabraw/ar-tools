@@ -2046,9 +2046,13 @@ async def publish_cluster_wordpress(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="client_not_found")
     # Pin the cluster's slug — the URL the session's internal links point at.
     slug = store.ensure_session_slugs(session_id).get(cluster_id)
+    # WP post title = the distinct SEO/meta title (drives the <title> tag); the
+    # on-page H1 is already the body's first element. Older articles have no
+    # seo_title and fall back to the H1.
+    wp_title = aj.get("seo_title") or title
     try:
         res = await publish_to_wordpress(
-            client=client_res.data, title=title, html=html, status=wp_status,
+            client=client_res.data, title=wp_title, html=html, status=wp_status,
             content_type="blog_post", slug=slug,
         )
     except WordPressPublishError as exc:

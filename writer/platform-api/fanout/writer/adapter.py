@@ -80,6 +80,7 @@ def adapt_brief(brief_json: dict) -> Brief:
     return Brief(
         keyword=brief_json.get("keyword") or "",
         title=title,
+        seo_title=(brief_json.get("seo_title") or "").strip(),
         intent_type=_intent(brief_json.get("intent_type")),
         scope_statement=brief_json.get("scope_statement"),
         heading_structure=headings,

@@ -29,6 +29,10 @@ class TitleScope:
     title: str
     scope_statement: str
     title_rationale: str = ""
+    # Distinct meta/SERP title (the <title> tag / WP post title), separate from
+    # `title` which is the on-page H1. Soft field — "" when the model omits it;
+    # consumers fall back to the H1.
+    seo_title: str = ""
 
 
 def validate_title_scope(d: dict) -> str | None:
@@ -55,10 +59,11 @@ def generate_title_scope(
         "type": "object",
         "properties": {
             "title": {"type": "string"},
+            "seo_title": {"type": "string"},
             "scope_statement": {"type": "string"},
             "title_rationale": {"type": "string"},
         },
-        "required": ["title", "scope_statement"],
+        "required": ["title", "seo_title", "scope_statement"],
     }
     context = (
         "Competitor SERP titles:\n" + "\n".join(f"- {t}" for t in serp_titles[:20])
@@ -70,7 +75,11 @@ def generate_title_scope(
         "Write an article title (50-80 chars preferred, 100 max) and a scope statement "
         "(<=500 chars). The scope statement MUST include a 'does not cover' clause naming "
         "1-3 adjacent topics this article will not address. Avoid generic AI-tells "
-        f"({', '.join(AI_TELLS)}). Mention the current year only if the topic warrants it."
+        f"({', '.join(AI_TELLS)}). Mention the current year only if the topic warrants it. "
+        "Also write a seo_title: the meta title tag (<=60 chars) shown in search results "
+        "and the browser tab — it must lead with the primary keyword, and it must be "
+        "WORDED DIFFERENTLY from the title (the title is the on-page H1; a page needs "
+        "distinct <title> and H1). Do not append the site/brand name."
     )
     last_err: str | None = None
     for attempt in range(max(1, max_attempts)):
@@ -93,10 +102,15 @@ def generate_title_scope(
             continue
         err = validate_title_scope(out)
         if err is None:
+            title_text = out["title"].strip()
+            seo_title = (out.get("seo_title") or "").strip()
+            if seo_title.lower() == title_text.lower():
+                seo_title = ""          # not distinct — consumers fall back to the H1
             return TitleScope(
-                title=out["title"].strip(),
+                title=title_text,
                 scope_statement=out["scope_statement"].strip(),
                 title_rationale=(out.get("title_rationale") or "").strip(),
+                seo_title=seo_title,
             )
         last_err = err
     raise TitleGenerationError(f"title_generation_failed: {last_err}")

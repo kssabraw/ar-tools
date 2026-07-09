@@ -283,8 +283,12 @@ def _auto_publish_to_wordpress(
                       .select("name, wordpress_site_url, wordpress_username, "
                               "wordpress_app_password")
                       .eq("id", client_id).single().execute().data)
+        # WP post title = the distinct SEO/meta title (drives the <title> tag);
+        # the on-page H1 is already the first element of the body HTML. Falls
+        # back to the H1 for articles written before seo_title existed.
         res = asyncio.run(publish_to_wordpress(
-            client=client_row, title=aj.get("title") or keyword or "Article",
+            client=client_row,
+            title=aj.get("seo_title") or aj.get("title") or keyword or "Article",
             html=html, status=wp_status if wp_status in ("draft", "publish") else "draft",
             content_type="blog_post", slug=slug))
         link = res.get("link") or ""

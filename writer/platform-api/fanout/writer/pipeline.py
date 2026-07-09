@@ -527,6 +527,7 @@ def generate_article(
     )
     return WriterOutput(
         keyword=brief.keyword, intent_type=brief.intent_type, title=title,
+        seo_title=brief.seo_title or "",
         article=article, article_markdown=article_markdown, article_html=article_html,
         key_takeaways=takeaways, intro=intro, cta=cta,
         citation_usage={"total_citations_available": 0, "citations_used": 0,
