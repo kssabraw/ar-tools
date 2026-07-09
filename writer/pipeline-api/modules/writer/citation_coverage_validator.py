@@ -49,7 +49,13 @@ from .citation_coverage import (
     coverage_for_body,
     coverage_retry_directive,
 )
-from .h2_body_length import _H2Group, _collect_h2_groups, _replace_group_in_article
+from .h2_body_length import (
+    _H2Group,
+    _collect_h2_groups,
+    _replace_group_in_article,
+    _restamp_orders,
+    _split_h2_groups,
+)
 from .brand_placement import BrandPlacementPlan
 from .reconciliation import FilteredSIETerms
 from .sections import SectionWriteResult, write_h2_group
@@ -162,16 +168,20 @@ async def validate_citation_coverage(
     if not groups:
         return CoverageValidationResult(validated_article=list(article))
 
-    structure_by_order: dict[int, dict] = {}
-    for h in heading_structure:
-        if isinstance(h, dict) and isinstance(h.get("order"), int):
-            structure_by_order[h["order"]] = h
-
-    def _lookup(order: int, expected_level: str) -> Optional[dict]:
-        item = structure_by_order.get(order)
-        if item is None or item.get("level") != expected_level:
-            return None
-        return item
+    # Align article groups with the brief's (h2_item, h3_items) groups
+    # POSITIONALLY - the i-th article group was written from the i-th
+    # brief group. Order-keyed lookup is unsafe: section orders were
+    # resequenced before this validator runs (see _split_h2_groups).
+    brief_groups = _split_h2_groups(heading_structure)
+    aligned = len(brief_groups) == len(groups)
+    if not aligned:
+        logger.warning(
+            "writer.coverage.group_alignment_mismatch",
+            extra={
+                "article_groups": len(groups),
+                "brief_groups": len(brief_groups),
+            },
+        )
 
     available_citation_ids = sorted({
         (c.get("citation_id") or "")
@@ -188,7 +198,7 @@ async def validate_citation_coverage(
     retries_succeeded = 0
     sections_softened = 0
 
-    for group in groups:
+    for group_idx, group in enumerate(groups):
         sections_in_group: list[ArticleSection] = (
             [group.h2_section] + [s for _, s in group.children]
         )
@@ -199,8 +209,7 @@ async def validate_citation_coverage(
             continue
 
         h2_order = group.h2_section.order
-        h2_item = _lookup(h2_order, "H2")
-        if h2_item is None:
+        if not aligned:
             # Defensive - flag without retrying.
             under_cited.append({
                 "section_order": h2_order,
@@ -210,19 +219,19 @@ async def validate_citation_coverage(
                 "threshold": threshold,
             })
             continue
+        h2_item, h3_items = brief_groups[group_idx]
 
-        h3_items: list[dict] = []
-        children_lookup_failed = False
-        for _, child in group.children:
-            child_struct = _lookup(child.order, "H3")
-            if child_struct is not None:
-                h3_items.append(child_struct)
-            else:
-                children_lookup_failed = True
-
-        if children_lookup_failed:
+        if len(h3_items) != len(group.children):
             # Same guard as Step 6.7 - refuse retry rather than dropping
             # H3 sections via section-count mismatch downstream.
+            logger.warning(
+                "writer.coverage.child_count_mismatch",
+                extra={
+                    "h2_text": (group.h2_section.heading or "")[:120],
+                    "article_children": len(group.children),
+                    "brief_children": len(h3_items),
+                },
+            )
             under_cited.append({
                 "section_order": h2_order,
                 "citable_claims": coverage.citable_claims,
@@ -259,7 +268,10 @@ async def validate_citation_coverage(
                 banned_regex=banned_regex,
                 coverage_retry_directive=directive,
                 placement_directive=(
-                    placement_plan.for_order(h2_order) if placement_plan else None
+                    # Anchors were planned against BRIEF orders - key on the
+                    # brief h2_item, not the resequenced article order.
+                    placement_plan.for_order(h2_item.get("order", -1))
+                    if placement_plan else None
                 ),
             )
         except Exception as exc:
@@ -282,6 +294,7 @@ async def validate_citation_coverage(
             )
             if new_coverage.ratio >= threshold:
                 retries_succeeded += 1
+                _restamp_orders(retry_result.sections, group)
                 result.validated_article = _replace_group_in_article(
                     result.validated_article, group, retry_result.sections,
                 )
@@ -298,6 +311,7 @@ async def validate_citation_coverage(
             # so soften acts on the more recent (likely better) text.
             current_sections = retry_result.sections
             current_coverage = new_coverage
+            _restamp_orders(retry_result.sections, group)
             result.validated_article = _replace_group_in_article(
                 result.validated_article, group, retry_result.sections,
             )

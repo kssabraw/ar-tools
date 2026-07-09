@@ -78,6 +78,53 @@ _CITATION_MARKER_RE = re.compile(r"\{\{cit_\d+\}\}")
 WriteH2GroupFn = Callable[..., Awaitable[SectionWriteResult]]
 
 
+def _split_h2_groups(heading_structure: list[dict]) -> list[tuple[dict, list[dict]]]:
+    """Group the brief's H2s with their child H3s in order. FAQ +
+    conclusion excluded. This is the SAME derivation the section-writing
+    loop uses (it lived in pipeline.py; moved here so the post-write
+    validators can align article groups with brief groups POSITIONALLY).
+
+    Positional alignment matters because the pipeline resequences section
+    orders (1..N by final list position) before the validators run, so an
+    article section's `order` no longer agrees with the brief structure's
+    `order` - an order-keyed lookup can silently hit the wrong entry
+    (e.g. the FAQ header, which also carries level H2)."""
+    sorted_items = sorted(
+        [h for h in heading_structure if isinstance(h, dict)],
+        key=lambda h: h.get("order", 0),
+    )
+    groups: list[tuple[dict, list[dict]]] = []
+    current_h2: Optional[dict] = None
+    current_h3s: list[dict] = []
+    for item in sorted_items:
+        item_type = item.get("type")
+        level = item.get("level")
+        if item_type in ("faq-header", "faq-question", "conclusion") or level == "H1":
+            if current_h2:
+                groups.append((current_h2, current_h3s))
+                current_h2, current_h3s = None, []
+            continue
+        if level == "H2" and item_type == "content":
+            if current_h2:
+                groups.append((current_h2, current_h3s))
+            current_h2 = item
+            current_h3s = []
+        elif level == "H3" and item_type == "content" and current_h2:
+            current_h3s.append(item)
+    if current_h2:
+        groups.append((current_h2, current_h3s))
+    return groups
+
+
+def _restamp_orders(new_sections: list[ArticleSection], group: "_H2Group") -> None:
+    """Retry sections carry the BRIEF's order values; the article was
+    resequenced (1..N). Re-stamp with the outgoing sections' orders so the
+    renderer's order-sort keeps the spliced group in place."""
+    old_sections = [group.h2_section] + [s for _, s in group.children]
+    for new_section, old_section in zip(new_sections, old_sections):
+        new_section.order = old_section.order
+
+
 @dataclass
 class H2BodyLengthResult:
     """Output of `validate_h2_body_lengths`."""
@@ -178,9 +225,9 @@ def _replace_group_in_article(
     # Determine the slice [start, end) the group occupies in `article`.
     start = group.h2_index
     end = start + 1 + len(group.children)
-    # Ensure the new sections preserve order metadata. write_h2_group
-    # returns ArticleSection objects with the original H2 + H3 order
-    # values, so we can splice without renumbering.
+    # Callers re-stamp `order` on the new sections first (via
+    # `_restamp_orders`) - write_h2_group returns BRIEF order values,
+    # which no longer match the resequenced article ordering.
     return article[:start] + list(new_sections) + article[end:]
 
 
@@ -217,43 +264,31 @@ async def validate_h2_body_lengths(
     if not groups:
         return H2BodyLengthResult(validated_article=list(article))
 
-    # Build lookup tables: order -> heading_structure dict, so we can
-    # rebuild the (h2_item, h3_items) tuple for the retry call without
-    # re-deriving from the article output.
-    structure_by_order: dict[int, dict] = {}
-    for h in heading_structure:
-        if isinstance(h, dict) and isinstance(h.get("order"), int):
-            structure_by_order[h["order"]] = h
-
-
-    def _lookup(order: int, expected_level: str) -> Optional[dict]:
-        """Phase 3 review fix #4 - guard against `order` collisions.
-        Brief assembly assigns unique sequential `order` values, but a
-        defensive level check guarantees we never pair an H2 with an
-        H3-keyed dict (or vice-versa) under last-wins dict semantics.
-        Returns None when the dict's level disagrees with the expected.
-        """
-        item = structure_by_order.get(order)
-        if item is None:
-            return None
-        if item.get("level") != expected_level:
-            logger.warning(
-                "writer.h2_length.level_mismatch",
-                extra={
-                    "order": order,
-                    "expected_level": expected_level,
-                    "got_level": item.get("level"),
-                },
-            )
-            return None
-        return item
+    # Align the article's content H2 groups with the brief's (h2_item,
+    # h3_items) groups POSITIONALLY - the i-th article group was written
+    # from the i-th brief group. Order-keyed lookup is unsafe here: the
+    # pipeline resequenced section orders before this validator runs, so
+    # section orders no longer agree with brief-structure orders.
+    brief_groups = _split_h2_groups(heading_structure)
+    aligned = len(brief_groups) == len(groups)
+    if not aligned:
+        # Alignment broken (a brief heading missing/mismatched, or the
+        # structure carries groups the article doesn't). Refuse retries -
+        # flag under-length groups as-is (warn-and-accept).
+        logger.warning(
+            "writer.h2_length.group_alignment_mismatch",
+            extra={
+                "article_groups": len(groups),
+                "brief_groups": len(brief_groups),
+            },
+        )
 
     result = H2BodyLengthResult(validated_article=list(article))
     under_length: list[dict] = []
     retries_attempted = 0
     retries_succeeded = 0
 
-    for group in groups:
+    for group_idx, group in enumerate(groups):
         sections_in_group: list[ArticleSection] = (
             [group.h2_section] + [s for _, s in group.children]
         )
@@ -262,37 +297,29 @@ async def validate_h2_body_lengths(
             continue
 
         h2_order = group.h2_section.order
-        h2_item = _lookup(h2_order, "H2")
-        if h2_item is None:
-            # No corresponding H2 entry in heading_structure (or order
-            # collided with a non-H2 dict). Can't drive a retry safely.
-            logger.warning(
-                "writer.h2_length.no_brief_heading",
-                extra={"h2_order": h2_order, "h2_text": group.h2_section.heading},
-            )
+        if not aligned:
             under_length.append({
                 "section_order": h2_order,
                 "word_count": group_words,
                 "floor": min_h2_body_words,
             })
             continue
+        h2_item, h3_items = brief_groups[group_idx]
 
-        h3_items: list[dict] = []
-        children_lookup_failed = False
-        for _, child in group.children:
-            child_struct = _lookup(child.order, "H3")
-            if child_struct is not None:
-                h3_items.append(child_struct)
-            else:
-                children_lookup_failed = True
-
-        # Phase 3 review fix #1 - refusing the retry when any child
-        # lookup failed is the safest correctness guarantee. A retry
-        # with fewer h3_items than original children would produce a
-        # section-count mismatch downstream and trigger our splice
-        # guard anyway; bailing here makes the intent explicit and
-        # avoids a wasted LLM call.
-        if children_lookup_failed:
+        # Phase 3 review fix #1 (recast for positional alignment) - a
+        # child-count disagreement between the article group and its
+        # brief group means a retry would produce a section-count
+        # mismatch downstream and trip the splice guard anyway; bailing
+        # here makes the intent explicit and avoids a wasted LLM call.
+        if len(h3_items) != len(group.children):
+            logger.warning(
+                "writer.h2_length.child_count_mismatch",
+                extra={
+                    "h2_text": (group.h2_section.heading or "")[:120],
+                    "article_children": len(group.children),
+                    "brief_children": len(h3_items),
+                },
+            )
             under_length.append({
                 "section_order": h2_order,
                 "word_count": group_words,
@@ -324,7 +351,10 @@ async def validate_h2_body_lengths(
                 banned_regex=banned_regex,
                 length_retry_directive=directive,
                 placement_directive=(
-                    placement_plan.for_order(h2_order) if placement_plan else None
+                    # Anchors were planned against BRIEF orders - key on the
+                    # brief h2_item, not the resequenced article order.
+                    placement_plan.for_order(h2_item.get("order", -1))
+                    if placement_plan else None
                 ),
             )
         except Exception as exc:
@@ -372,6 +402,7 @@ async def validate_h2_body_lengths(
 
         if retry_word_count >= min_h2_body_words:
             retries_succeeded += 1
+            _restamp_orders(retry_result.sections, group)
             result.validated_article = _replace_group_in_article(
                 result.validated_article, group, retry_result.sections,
             )
@@ -388,6 +419,7 @@ async def validate_h2_body_lengths(
 
         # Retry still under - accept whichever attempt has more words.
         if retry_word_count > group_words:
+            _restamp_orders(retry_result.sections, group)
             result.validated_article = _replace_group_in_article(
                 result.validated_article, group, retry_result.sections,
             )

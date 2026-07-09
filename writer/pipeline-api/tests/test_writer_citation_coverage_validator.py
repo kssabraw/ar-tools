@@ -308,3 +308,46 @@ async def test_validator_handles_retry_exception_with_soften():
     # Soften replaces the entire `a 30-day audit window` phrase with
     # `a typical audit window` (Phase 4 review fix #1).
     assert "a typical audit window" in body
+
+
+@pytest.mark.asyncio
+async def test_validator_retries_correctly_after_order_resequencing():
+    """Regression: article orders are resequenced (1..N by list position)
+    before the validators run, so they no longer match brief-structure
+    orders. The old order-keyed lookup could pair the article's H2 with
+    the wrong structure entry (the FAQ header also carries level H2) or
+    silently skip the retry. Positional alignment must retry against the
+    right brief group regardless of the numbering skew."""
+    # Post-resequencing article: the content H2 sits at order 5, while the
+    # BRIEF numbered it 2 and numbered its FAQ header 5.
+    article = [_h2(5, "Topic", "Revenue rose 27% YoY. Reported $100M in sales.")]
+    retry_body = (
+        "Revenue rose 27% YoY.{{cit_001}} Reported $100M in sales.{{cit_002}}"
+    )
+    fake, state = _make_retry_fn(retry_body)
+
+    result = await validate_citation_coverage(
+        article,
+        keyword="k", intent="how-to",
+        heading_structure=[
+            {"order": 1, "text": "kw", "level": "H1", "type": "content"},
+            {"order": 2, "text": "Topic", "level": "H2", "type": "content"},
+            {"order": 5, "text": "Frequently Asked Questions", "level": "H2", "type": "faq-header"},
+            {"order": 6, "text": "Q1?", "level": "H3", "type": "faq-question"},
+        ],
+        section_budgets={},
+        filtered_terms=_filtered_terms(),
+        citations=[
+            {"citation_id": "cit_001"},
+            {"citation_id": "cit_002"},
+        ],
+        brand_voice_card=None, banned_regex=None,
+        write_h2_group_fn=fake,
+    )
+    # The retry fired against the BRIEF's content H2 (not the FAQ header)...
+    assert state["calls"] == 1
+    assert result.retries_succeeded == 1
+    assert result.under_cited_sections == []
+    # ...and the spliced section kept the article's RESEQUENCED order (5).
+    assert [s.order for s in result.validated_article] == [5]
+    assert "{{cit_001}}" in result.validated_article[0].body
