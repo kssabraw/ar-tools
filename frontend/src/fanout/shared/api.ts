@@ -1151,6 +1151,18 @@ export const updateSchedulePublishTargets = (
   request<{ status: string; schedule: ContentSchedule }>(
     `/sessions/${sessionId}/schedules/${scheduleId}/publish-targets`,
     { method: "PATCH", body: JSON.stringify(body) });
+// Re-time a paused schedule's remaining articles to a new cadence (forward-only).
+export const updateScheduleCadence = (
+  sessionId: string, scheduleId: string,
+  body: {
+    mode: ScheduleRequest["mode"]; per_day?: number; start_date?: string;
+    time_of_day?: string; timezone?: string; weekday?: number;
+    day_of_month?: number; week_of_month?: number;
+  },
+) =>
+  request<{ status: string; rescheduled: number; schedule: ContentSchedule }>(
+    `/sessions/${sessionId}/schedules/${scheduleId}/cadence`,
+    { method: "PATCH", body: JSON.stringify(body) });
 export const cancelScheduleRun = (sessionId: string, runId: string) =>
   request<{ status: string; run_id: string }>(
     `/sessions/${sessionId}/schedule-runs/${runId}/cancel`, { method: "POST" });

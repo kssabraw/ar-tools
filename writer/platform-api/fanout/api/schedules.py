@@ -423,3 +423,65 @@ def update_publish_targets(
 
     row = schedule_store.update_schedule_fields(schedule_id, updates) or sched
     return {"status": "updated", "schedule": row}
+
+
+class CadenceBody(BaseModel):
+    # all_at_once | drip | fixed | weekly | monthly_date | monthly_weekday
+    mode: str
+    per_day: int | None = None
+    start_date: date | None = None
+    time_of_day: time | None = None
+    timezone: str = "UTC"
+    weekday: int | None = None
+    day_of_month: int | None = None
+    week_of_month: int | None = None
+
+
+@router.patch("/sessions/{session_id}/schedules/{schedule_id}/cadence")
+def update_cadence(
+    session_id: str, schedule_id: str, body: CadenceBody,
+    user: AuthedUser = Depends(require_user),
+) -> dict:
+    """Re-time a schedule's remaining (still-queued) articles to a new cadence — e.g.
+    1/week -> 1/day. Allowed only while **paused** (pause, re-time, resume). Forward-
+    only: completed/running articles keep their timestamps; the count and cost are
+    unchanged (same articles, new spacing). Re-plans the queued runs pillars-first (their
+    existing order) under the new cadence and updates the parent schedule's cadence
+    columns."""
+    sched = _require_schedule(user, session_id, schedule_id)
+    if sched["status"] != "paused":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Pause the schedule before changing its cadence.",
+        )
+    queued = schedule_store.queued_runs_ordered(schedule_id)
+    if not queued:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No queued articles left to reschedule.",
+        )
+    try:
+        planned = plan_runs(
+            [r["cluster_id"] for r in queued], mode=body.mode, per_day=body.per_day,
+            start_date=body.start_date, time_of_day=body.time_of_day, tz_name=body.timezone,
+            weekday=body.weekday, day_of_month=body.day_of_month,
+            week_of_month=body.week_of_month,
+        )
+    except ScheduleError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": str(exc), "min_per_day": exc.min_per_day},
+        ) from exc
+
+    rescheduled = schedule_store.apply_reschedule(queued, planned)
+    row = schedule_store.update_schedule_fields(schedule_id, {
+        "mode": body.mode,
+        "per_day": body.per_day,
+        "start_date": body.start_date.isoformat() if body.start_date else None,
+        "time_of_day": (body.time_of_day or time(9, 0)).isoformat(),
+        "timezone": body.timezone,
+    }) or sched
+    logger.info("schedule_cadence_changed",
+                extra={"event": "schedule_cadence_changed", "schedule_id": schedule_id,
+                       "mode": body.mode, "rescheduled": rescheduled})
+    return {"status": "updated", "rescheduled": rescheduled, "schedule": row}
