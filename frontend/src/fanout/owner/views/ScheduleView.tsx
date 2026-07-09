@@ -226,8 +226,12 @@ function ScheduleCard(p: {
   // client-linked session; WordPress additionally needs the client WP-configured.
   const canEditTargets = s.status === "paused";
   const pr = s.progress ?? {};
-  const done = (pr.complete ?? 0) + (pr.failed ?? 0) + (pr.cancelled ?? 0);
-  const total = pr.total ?? s.total_count;
+  // "Written" counts only completed articles — not failed, and not cancelled.
+  // Cancelled articles are dropped from the plan (the queue compacts), so they
+  // come out of the denominator too.
+  const written = pr.complete ?? 0;
+  const cancelled = pr.cancelled ?? 0;
+  const planned = Math.max(0, (pr.total ?? s.total_count) - cancelled);
   const label =
     s.mode === "all_at_once" ? "All at once"
       : s.mode === "fixed" ? `On ${s.start_date}`
@@ -261,9 +265,10 @@ function ScheduleCard(p: {
             )}
           </div>
           <div className="muted" style={{ fontSize: 13 }}>
-            {done} / {total} done
-            {pr.failed ? ` · ${pr.failed} failed` : ""}
+            {written} / {planned} written
             {pr.running ? ` · ${pr.running} writing` : ""}
+            {pr.failed ? ` · ${pr.failed} failed` : ""}
+            {cancelled ? ` · ${cancelled} cancelled` : ""}
           </div>
         </div>
         {s.status === "active" && (
