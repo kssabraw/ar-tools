@@ -50,6 +50,11 @@ export function Runs() {
   const [showNewRun, setShowNewRun] = useState(searchParams.get('new') === '1')
   const [keyword, setKeyword] = useState('')
   const [writerNotes, setWriterNotes] = useState('')
+  // Optional article-format override. '' = Auto (let the brief classify intent
+  // from the keyword, the default behavior). A non-empty value is a valid
+  // IntentType that beats the brief's keyword-pattern classifier — e.g. forcing
+  // a "Best X" keyword to a standard blog post instead of a ranked listicle.
+  const [intentOverride, setIntentOverride] = useState('')
   const [creating, setCreating] = useState(false)
 
   const { data: runsResp, isLoading: runsLoading, isFetching: runsFetching, refetch } = useQuery<RunListResponse>({
@@ -150,6 +155,7 @@ export function Runs() {
     mutationFn: (body: {
       client_id: string
       keyword: string
+      intent_override?: string
       sie_outlier_mode: string
       sie_force_refresh: boolean
       brief_force_refresh: boolean
@@ -160,6 +166,7 @@ export function Runs() {
       setShowNewRun(false)
       setKeyword('')
       setWriterNotes('')
+      setIntentOverride('')
     },
   })
 
@@ -179,6 +186,7 @@ export function Runs() {
       await createRun.mutateAsync({
         client_id: scopedClientId,
         keyword,
+        intent_override: intentOverride || undefined,
         sie_outlier_mode: 'safe',
         sie_force_refresh: false,
         brief_force_refresh: briefForceRefresh,
@@ -268,6 +276,27 @@ export function Runs() {
                 placeholder="e.g. best hvac systems 2026"
                 style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
               />
+            </div>
+            <div style={{ minWidth: 200 }}>
+              <label style={labelStyle}>Format</label>
+              {/* Optional intent override. 'Auto' lets the brief classify the
+                  article archetype from the keyword (default). Any explicit
+                  choice beats that classifier — e.g. keep a "Best X" keyword as
+                  a standard blog post instead of the auto-forced listicle, or
+                  force a listicle when the keyword doesn't start with best/top.
+                  Values must match the pipeline's IntentType literals. */}
+              <select
+                value={intentOverride}
+                onChange={e => setIntentOverride(e.target.value)}
+                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', background: '#fff', cursor: 'pointer' }}
+              >
+                <option value="">Auto (detect from keyword)</option>
+                <option value="informational">Standard blog post</option>
+                <option value="listicle">Listicle (ranked / “Best X”)</option>
+                <option value="how-to">How-to guide</option>
+                <option value="comparison">Comparison (X vs Y)</option>
+                <option value="informational-commercial">Buying guide (commercial)</option>
+              </select>
             </div>
             <div style={{ flexBasis: '100%', minWidth: 240 }}>
               <label style={labelStyle}>Notes for the writer (optional)</label>
