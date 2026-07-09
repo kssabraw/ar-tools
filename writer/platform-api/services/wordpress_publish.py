@@ -208,6 +208,97 @@ async def _sideload_images(
     return _IMG_SRC_RE.sub(_replace, html), featured_id
 
 
+def _looks_like_json(response: httpx.Response) -> bool:
+    """True when a response body is JSON — by declared content-type, else by a
+    leading `{`/`[` (some WP hosts mislabel JSON as text/html)."""
+    ctype = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
+    if ctype in ("application/json", "text/json") or ctype.endswith("+json"):
+        return True
+    if ctype.startswith("text/") or ctype in ("", "application/octet-stream"):
+        # Content-type is unhelpful — sniff the first non-space byte.
+        head = (response.text or "").lstrip()[:1]
+        return head in ("{", "[")
+    return False
+
+
+async def _rest_create(
+    http: httpx.AsyncClient,
+    primary_url: str,
+    fallback_url: str,
+    body: dict,
+    headers: dict,
+    resource: str,
+) -> dict:
+    """POST a create request to the WP REST API and return the parsed JSON dict.
+
+    Handles the common site-side breakages that used to surface only as an opaque
+    `wordpress_call_failed`:
+      * "Plain" permalinks (the pretty `/wp-json/` route 404s or serves the theme's
+        HTML) — retried once against the `?rest_route=` form.
+      * A reverse proxy / security plugin redirecting or returning an HTML page
+        instead of JSON — raised as a specific, actionable code.
+
+    Raises WordPressPublishError with a specific code; the caller maps it."""
+
+    async def _post(target: str) -> httpx.Response:
+        return await http.post(target, json=body, headers=headers)
+
+    resp = await _post(primary_url)
+    # Fall back to the ?rest_route= form when the pretty route can't serve JSON:
+    # a redirect, a 404, or a 2xx/3xx that returned HTML (Plain permalinks).
+    needs_fallback = (
+        resp.is_redirect
+        or resp.status_code == 404
+        or (resp.status_code < 400 and not _looks_like_json(resp))
+    )
+    if needs_fallback and fallback_url != primary_url:
+        logger.info(
+            "wordpress_rest_fallback resource=%s primary_status=%s", resource, resp.status_code
+        )
+        resp = await _post(fallback_url)
+
+    if resp.status_code in (401, 403):
+        logger.error(
+            "wordpress_http_error status=%s resource=%s body=%s",
+            resp.status_code, resource, (resp.text or "")[:300],
+        )
+        raise WordPressPublishError("wordpress_auth_failed")
+    if resp.status_code == 404:
+        logger.error(
+            "wordpress_http_error status=404 resource=%s body=%s",
+            resource, (resp.text or "")[:300],
+        )
+        raise WordPressPublishError("wordpress_rest_api_unreachable")
+    if resp.is_redirect:
+        logger.error(
+            "wordpress_rest_redirect status=%s resource=%s location=%s",
+            resp.status_code, resource, resp.headers.get("location", ""),
+        )
+        raise WordPressPublishError("wordpress_rest_redirect")
+    if resp.status_code >= 400:
+        logger.error(
+            "wordpress_http_error status=%s resource=%s body=%s",
+            resp.status_code, resource, (resp.text or "")[:300],
+        )
+        raise WordPressPublishError(f"wordpress_http_error_{resp.status_code}")
+
+    if not _looks_like_json(resp):
+        logger.error(
+            "wordpress_rest_not_json url=%s resource=%s content_type=%s body=%s",
+            str(resp.url), resource, resp.headers.get("content-type", ""), (resp.text or "")[:300],
+        )
+        raise WordPressPublishError("wordpress_rest_not_json")
+    try:
+        parsed = resp.json()
+    except Exception as exc:  # noqa: BLE001 — declared JSON but unparseable
+        logger.error(
+            "wordpress_rest_not_json url=%s resource=%s body=%s",
+            str(resp.url), resource, (resp.text or "")[:300],
+        )
+        raise WordPressPublishError("wordpress_rest_not_json") from exc
+    return parsed
+
+
 async def publish_to_wordpress(
     *,
     client: dict,
@@ -241,8 +332,12 @@ async def publish_to_wordpress(
 
     rest_base = _rest_base(client["wordpress_site_url"])
     site_host = urlparse(client["wordpress_site_url"].strip()).netloc
+    site_root = rest_base.rsplit("/wp-json", 1)[0]
     resource = _POST_TYPE_BY_CONTENT.get(content_type, "posts")
     url = f"{rest_base}/{resource}"
+    # ?rest_route= form of the same endpoint — works even when the site's permalinks
+    # are "Plain" (the pretty /wp-json/ route 404s / returns HTML in that case).
+    fallback_url = f"{site_root}/?rest_route=/wp/v2/{resource}"
     auth = _auth_header(client["wordpress_username"], client["wordpress_app_password"])
     headers = {"Authorization": auth, "Content-Type": "application/json"}
 
@@ -271,24 +366,11 @@ async def publish_to_wordpress(
             if featured_id:
                 body["featured_media"] = featured_id
 
-            response = await http.post(url, json=body, headers=headers)
-            response.raise_for_status()
-            result = response.json()
-    except httpx.HTTPStatusError as exc:
-        code = exc.response.status_code
-        # Detail in the message (not just extra) so it survives the plain stdout
-        # formatter and shows in the deploy logs.
-        logger.error(
-            "wordpress_http_error status=%s resource=%s body=%s",
-            code, resource, exc.response.text[:400],
-            extra={"status": code, "body": exc.response.text[:400], "resource": resource},
-        )
-        if code in (401, 403):
-            raise WordPressPublishError("wordpress_auth_failed") from exc
-        if code == 404:
-            raise WordPressPublishError("wordpress_rest_api_unreachable") from exc
-        raise WordPressPublishError(f"wordpress_http_error_{code}") from exc
+            result = await _rest_create(http, url, fallback_url, body, headers, resource)
+    except WordPressPublishError:
+        raise                       # already a specific, actionable code — don't mask it
     except Exception as exc:
+        # Transport-level failure (connect/timeout/TLS) — no HTTP response at all.
         logger.error("wordpress_call_failed error=%s", str(exc), extra={"error": str(exc)})
         raise WordPressPublishError("wordpress_call_failed") from exc
 
@@ -297,7 +379,6 @@ async def publish_to_wordpress(
 
     post_id = result.get("id")
     link = result.get("link")
-    site_root = rest_base.rsplit("/wp-json", 1)[0]
     edit_link = f"{site_root}/wp-admin/post.php?post={post_id}&action=edit"
     return {
         "post_id": post_id,

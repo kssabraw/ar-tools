@@ -259,6 +259,10 @@ async def publish_run(
                 "wordpress_site_url_must_be_https",
                 "invalid_status",
                 "content_is_empty",
+                # Site-side REST breakage the user fixes on their WordPress install
+                # (permalinks / an intercepting plugin) — actionable, not our fault.
+                "wordpress_rest_not_json",
+                "wordpress_rest_redirect",
             }
             status = 422 if str(exc) in client_errors else 502
             raise HTTPException(status_code=status, detail=str(exc)) from exc
