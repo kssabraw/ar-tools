@@ -39,9 +39,12 @@ class ScheduleBody(BaseModel):
     time_of_day: time | None = None
     timezone: str = "UTC"
     # Cadence anchors: weekday (0=Mon .. 6=Sun) for weekly + monthly_weekday;
-    # day_of_month (1-31) for monthly_date; week_of_month (1-4, or -1 = last) for
-    # monthly_weekday (e.g. weekday=0, week_of_month=1 => first Monday each month).
+    # weekdays (a set) for weekly with MULTIPLE days (each is its own slot every
+    # week, e.g. [1,3] => one Tue + one Thu weekly); day_of_month (1-31) for
+    # monthly_date; week_of_month (1-4, or -1 = last) for monthly_weekday
+    # (e.g. weekday=0, week_of_month=1 => first Monday each month).
     weekday: int | None = None
+    weekdays: list[int] | None = None
     day_of_month: int | None = None
     week_of_month: int | None = None
     site_base_url: str | None = None            # persisted to the session (links need it)
@@ -97,8 +100,8 @@ _PERIOD_LABEL = {"drip": "day", "weekly": "week",
 
 def _estimate(
     count: int, mode: str, per_day: int | None, start: date | None, *,
-    weekday: int | None = None, day_of_month: int | None = None,
-    week_of_month: int | None = None,
+    weekday: int | None = None, weekdays: list[int] | None = None,
+    day_of_month: int | None = None, week_of_month: int | None = None,
 ) -> dict:
     s = get_settings()
     cost = round(count * s.writer_article_cost_estimate_usd, 2)
@@ -118,7 +121,7 @@ def _estimate(
             from fanout.writer.schedule_planner import _period_dates
             dates = _period_dates(
                 mode, n_periods, start=start or date.today(), weekday=weekday,
-                day_of_month=day_of_month, week_of_month=week_of_month,
+                weekdays=weekdays, day_of_month=day_of_month, week_of_month=week_of_month,
             )
             if dates:
                 out["finish_date"] = dates[-1].isoformat()
@@ -142,7 +145,7 @@ def schedule_estimate(
     targets = [c for c in candidates if c not in pending]
     est = _estimate(
         len(targets), body.mode, body.per_day, body.start_date,
-        weekday=body.weekday, day_of_month=body.day_of_month,
+        weekday=body.weekday, weekdays=body.weekdays, day_of_month=body.day_of_month,
         week_of_month=body.week_of_month,
     )
     est["already_scheduled"] = len(candidates) - len(targets)
@@ -248,7 +251,7 @@ def create_schedule(
 
     est = _estimate(
         len(targets), body.mode, body.per_day, body.start_date,
-        weekday=body.weekday, day_of_month=body.day_of_month,
+        weekday=body.weekday, weekdays=body.weekdays, day_of_month=body.day_of_month,
         week_of_month=body.week_of_month,
     )
     s = get_settings()
@@ -263,7 +266,7 @@ def create_schedule(
         runs = plan_runs(
             targets, mode=body.mode, per_day=body.per_day, start_date=body.start_date,
             time_of_day=body.time_of_day, tz_name=body.timezone,
-            weekday=body.weekday, day_of_month=body.day_of_month,
+            weekday=body.weekday, weekdays=body.weekdays, day_of_month=body.day_of_month,
             week_of_month=body.week_of_month,
         )
     except ScheduleError as exc:
@@ -433,6 +436,7 @@ class CadenceBody(BaseModel):
     time_of_day: time | None = None
     timezone: str = "UTC"
     weekday: int | None = None
+    weekdays: list[int] | None = None           # weekly: multiple days, each a slot/week
     day_of_month: int | None = None
     week_of_month: int | None = None
 
@@ -464,7 +468,7 @@ def update_cadence(
         planned = plan_runs(
             [r["cluster_id"] for r in queued], mode=body.mode, per_day=body.per_day,
             start_date=body.start_date, time_of_day=body.time_of_day, tz_name=body.timezone,
-            weekday=body.weekday, day_of_month=body.day_of_month,
+            weekday=body.weekday, weekdays=body.weekdays, day_of_month=body.day_of_month,
             week_of_month=body.week_of_month,
         )
     except ScheduleError as exc:
