@@ -50,6 +50,57 @@ _LEADING_ORDINAL_RE = re.compile(r"^\s*#?\d+[\.\):]?\s+")
 # FAQ block heading types - the ranked-item region ends where these begin.
 _FAQ_TYPES = frozenset({"faq-header", "faq-question"})
 
+# A listicle title may promise a count ("Top 10", "25 Best X", "10 Best X in
+# 2026"). These locate that count so the ranked-item target and the title can
+# be reconciled. `\d{1,3}` (1-99x) deliberately never matches a 4-digit year:
+# "2026" has no word boundary between its inner digits, so `(\d{1,3})\b` can't
+# grab a slice of it, and the leading/`top `/`best`-anchored contexts keep a
+# year like "in 2026" from being read as a count.
+_TITLE_COUNT_PATTERNS = [
+    re.compile(r"^\s*(\d{1,3})\b"),                    # "10 Best X ..."
+    re.compile(r"\btop\s+(\d{1,3})\b", re.IGNORECASE),   # "Top 10 ..."
+    re.compile(r"\b(\d{1,3})\s+best\b", re.IGNORECASE),  # "the 10 best ..."
+]
+
+
+def _find_title_count(title: str):
+    """Return the regex match locating the listicle count, or None."""
+    text = title or ""
+    for pat in _TITLE_COUNT_PATTERNS:
+        m = pat.search(text)
+        if m:
+            return m
+    return None
+
+
+def extract_title_count(title: str) -> Optional[int]:
+    """Return the count a listicle title promises ("Top 10" -> 10), or None.
+
+    Never returns a 4-digit year (see `_TITLE_COUNT_PATTERNS`). Returns None
+    for a zero or absent count.
+    """
+    m = _find_title_count(title)
+    if not m:
+        return None
+    try:
+        n = int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def apply_title_count(title: str, count: int) -> str:
+    """Rewrite the count token in a listicle title to `count` in place.
+
+    Returns the title unchanged when it carries no count. Only the count
+    token is replaced, so a year or other numbers in the title are untouched.
+    """
+    m = _find_title_count(title)
+    if not m:
+        return title
+    start, end = m.start(1), m.end(1)
+    return title[:start] + str(count) + title[end:]
+
 
 @dataclass
 class ListicleFillResult:
@@ -76,7 +127,7 @@ def _content_h2_positions(structure: list[HeadingItem]) -> list[int]:
     ]
 
 
-def _renumber_ranked_items(structure: list[HeadingItem]) -> None:
+def renumber_ranked_items(structure: list[HeadingItem]) -> None:
     """Renumber every content H2 as "1. ", "2. ", ... in document order.
 
     Idempotent: strips any existing leading ordinal first, so re-running
@@ -280,7 +331,7 @@ async def ensure_min_ranked_items(
     )
     structure[faq_start:faq_start] = new_items
 
-    _renumber_ranked_items(structure)
+    renumber_ranked_items(structure)
     _reindex_order(structure)
 
     result.added = len(new_items)

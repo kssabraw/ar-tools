@@ -16,7 +16,9 @@ import pytest
 from models.brief import HeadingItem
 from modules.brief.intent_template import get_template
 from modules.brief.listicle_items import (
+    apply_title_count,
     ensure_min_ranked_items,
+    extract_title_count,
     strip_leading_ordinal,
     synthesize_item_names,
 )
@@ -214,6 +216,54 @@ async def test_dedups_against_existing_and_itself():
     assert result.added == 2  # Sifted + Enveyo only
     assert names.count("Sifted") == 1
     assert names.count("Reveel") == 1
+
+
+# ---------------------------------------------------------------------------
+# Title count extraction / rewrite (year-safety is the critical case)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("title,expected", [
+    ("Top 10 Parcel Tools Ranked", 10),
+    ("10 Best Parcel Tools in 2026", 10),          # count, NOT the year
+    ("25 Best Widgets for 2026", 25),
+    ("The 7 Best CRMs", 7),
+    ("Top 7 CRMs in 2026", 7),
+    # No count present -> None (and the year must never be read as a count).
+    ("Best Parcel Software in 2026: Top Tools Ranked", None),
+    ("Best Parcel Spend Management Software in 2026: Top Tools Ranked", None),
+    ("Top Tools Ranked for Shippers", None),
+    ("Best Widgets of 2026", None),
+])
+def test_extract_title_count(title, expected):
+    assert extract_title_count(title) == expected
+
+
+@pytest.mark.parametrize("title,count,expected", [
+    ("Top 10 Parcel Tools in 2026", 7, "Top 7 Parcel Tools in 2026"),   # year kept
+    ("10 Best Widgets 2026", 6, "6 Best Widgets 2026"),                  # year kept
+    ("25 Best CRMs", 10, "10 Best CRMs"),
+    ("Top Tools Ranked", 8, "Top Tools Ranked"),                        # no count -> unchanged
+    ("Best Software in 2026", 5, "Best Software in 2026"),              # no count -> unchanged
+])
+def test_apply_title_count(title, count, expected):
+    assert apply_title_count(title, count) == expected
+
+
+@pytest.mark.asyncio
+async def test_fill_target_can_exceed_min_for_a_titled_count():
+    # Simulates "Top 8": caller passes min_count=8 (the clamped title number).
+    structure = [_h1(), _ranked("Best Widget for Cost Control"), *_faq_block()]
+    llm = _make_llm([{"name": f"Tool{i}", "angle": "a"} for i in range(10)])
+
+    result = await ensure_min_ranked_items(
+        structure=structure,
+        keyword="k", title="Top 8 Widgets", scope_statement="s",
+        min_count=8, max_count=10,
+        llm_json_fn=llm,
+    )
+    assert result.after_count == 8
+    texts = _content_h2_texts(structure)
+    assert [t.split(".", 1)[0] for t in texts] == [str(i) for i in range(1, 9)]
 
 
 @pytest.mark.asyncio
