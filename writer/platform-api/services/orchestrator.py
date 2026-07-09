@@ -77,6 +77,10 @@ MODULE_PATHS: dict[str, str] = {
     "service_writer": "/service-write",
 }
 
+# Pause before retrying a dropped connection so a Railway redeploy rollover has
+# time to bring the replacement container up (swaps complete in a few seconds).
+RETRY_BACKOFF_SECONDS = 3.0
+
 
 def _extract_schema_version(module: str, result: dict) -> str | None:
     if module == "brief":
@@ -381,21 +385,39 @@ async def _call_module(
 
             result = response.json()
 
-    except (httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, httpx.HTTPStatusError) as exc:
         duration_ms = int((time.perf_counter() - start) * 1000)
         is_timeout = isinstance(exc, httpx.TimeoutException)
         is_5xx = isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+        # A transport error that isn't a timeout means the connection itself
+        # failed before a response arrived — most commonly the pipeline-api
+        # container was swapped out by a Railway redeploy mid-request
+        # (httpx.RemoteProtocolError, "Server disconnected without sending a
+        # response."), or a transient connect/read error. The response never
+        # landed, so there's nothing half-applied to worry about; retrying once
+        # sails through a rollover, which completes in seconds.
+        is_conn_drop = isinstance(exc, httpx.TransportError) and not is_timeout
 
-        if (is_timeout or is_5xx) and attempt == 1:
+        if (is_timeout or is_5xx or is_conn_drop) and attempt == 1:
             logger.warning(
                 "module_retry_attempt",
                 extra={"run_id": run_id, "pipeline_module": module, "error": str(exc)},
             )
             await _fail_module_output(output_id, str(exc))
+            # Give a redeploy rollover a moment to bring the new container up
+            # before retrying a dropped connection (a timeout/5xx already burned
+            # its own delay, so only pause for the fast-failing connection drop).
+            if is_conn_drop:
+                await asyncio.sleep(RETRY_BACKOFF_SECONDS)
             return await _call_module(module, run_id, payload, attempt=2)
 
         await _fail_module_output(output_id, str(exc))
-        code = "module_timeout" if is_timeout else "module_error"
+        if is_timeout:
+            code = "module_timeout"
+        elif is_conn_drop:
+            code = "module_unavailable"
+        else:
+            code = "module_error"
         raise StageError(module, Exception(f"{code}: {exc}")) from exc
 
     except Exception as exc:

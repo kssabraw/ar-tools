@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import pytest
+
 import services.orchestrator as orch
 
 
@@ -106,3 +109,79 @@ async def test_blog_path_does_not_call_service_modules():
             p.stop()
     assert "service_brief" not in calls and "service_writer" not in calls
     assert "brief" in calls and "writer" in calls
+
+
+# ----------------------------------------------------------------------
+# _call_module transport-error retry (connection drops from redeploys)
+# ----------------------------------------------------------------------
+
+def _ok_response(schema_version: str = "1.4"):
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"schema_version": schema_version, "cost_usd": 0.0}
+    return resp
+
+
+def _fake_async_client(post_mock):
+    """A factory standing in for httpx.AsyncClient whose `.post` is post_mock
+    (a shared AsyncMock, so its side_effect sequence spans retry attempts)."""
+    def factory(*args, **kwargs):
+        cm = MagicMock()
+        client = MagicMock()
+        client.post = post_mock
+        cm.__aenter__ = AsyncMock(return_value=client)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+    return factory
+
+
+def _call_module_patches(post_mock, sleep_mock):
+    return [
+        patch.object(orch, "_create_module_output", AsyncMock(return_value="out1")),
+        patch.object(orch, "_fail_module_output", AsyncMock()),
+        patch.object(orch, "_save_module_output", AsyncMock()),
+        patch.object(orch.asyncio, "sleep", sleep_mock),
+        patch.object(orch.httpx, "AsyncClient", _fake_async_client(post_mock)),
+    ]
+
+
+async def test_call_module_retries_connection_drop_then_succeeds():
+    # First attempt: the pipeline container was swapped mid-request (the exact
+    # error the user hit). Second attempt: the new container answers.
+    post = AsyncMock(side_effect=[
+        httpx.RemoteProtocolError("Server disconnected without sending a response."),
+        _ok_response("1.4"),
+    ])
+    sleep = AsyncMock()
+    ps = _call_module_patches(post, sleep)
+    for p in ps:
+        p.start()
+    try:
+        result = await orch._call_module("sie", "r1", {"k": "v"})
+    finally:
+        for p in ps:
+            p.stop()
+    assert result["schema_version"] == "1.4"
+    assert post.await_count == 2      # retried exactly once
+    sleep.assert_awaited_once()       # backed off before the retry
+
+
+async def test_call_module_connection_drop_exhausts_retry_as_unavailable():
+    # Both attempts drop — surface a StageError coded module_unavailable
+    # (distinct from module_timeout / module_error).
+    post = AsyncMock(side_effect=[
+        httpx.RemoteProtocolError("Server disconnected without sending a response."),
+        httpx.ConnectError("connection refused"),
+    ])
+    ps = _call_module_patches(post, AsyncMock())
+    for p in ps:
+        p.start()
+    try:
+        with pytest.raises(orch.StageError) as ei:
+            await orch._call_module("sie", "r1", {"k": "v"})
+    finally:
+        for p in ps:
+            p.stop()
+    assert ei.value.stage == "sie"
+    assert "module_unavailable" in str(ei.value.cause)
+    assert post.await_count == 2
