@@ -17,6 +17,8 @@ def create_schedule(
     content_type: str = "blog_post", location: str | None = None,
     location_code: int | None = None, auto_publish: bool = False,
     wp_publish: bool = False, wp_status: str = "draft",
+    weekday: int | None = None, weekdays: list[int] | None = None,
+    day_of_month: int | None = None, week_of_month: int | None = None,
 ) -> dict:
     """Insert the parent schedule + one queued run per planned cluster. Returns the parent
     row augmented with `run_count`. (Two statements — PostgREST has no multi-table txn; the
@@ -38,6 +40,8 @@ def create_schedule(
         "content_type": content_type, "location": location,
         "location_code": location_code, "auto_publish": auto_publish,
         "wp_publish": wp_publish, "wp_status": wp_status,
+        "weekday": weekday, "weekdays": weekdays,
+        "day_of_month": day_of_month, "week_of_month": week_of_month,
     }).execute().data[0]
 
     rows = [{
@@ -203,6 +207,66 @@ def cancel_run(run_id: str) -> bool:
            .update({"status": "cancelled"})
            .eq("id", run_id).eq("status", "queued").execute())
     return bool(res.data)
+
+
+def reinstate_run(run_id: str) -> bool:
+    """Un-cancel a run (cancelled -> queued), clearing its prior started/completed/
+    error state. Conditional on status='cancelled' so it can't resurrect a
+    complete/failed row. Returns whether it flipped."""
+    res = (get_service_client().table("scheduled_article_runs")
+           .update({"status": "queued", "started_at": None,
+                    "completed_at": None, "error": None})
+           .eq("id", run_id).eq("status", "cancelled").execute())
+    return bool(res.data)
+
+
+def reflow_queued(schedule_id: str) -> int:
+    """Re-pack a schedule's still-queued runs densely onto its cadence slots, from
+    the earliest currently-queued slot — so cancelling an article pulls the rest up
+    (no empty day) and reinstating one re-expands the tail. No-op for all_at_once /
+    fixed (no timeline gaps) and for a drained schedule. Returns runs re-timed.
+
+    Uses the cadence anchors persisted on the schedule; completed/running runs are
+    untouched (apply_reschedule filters to status='queued')."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    from fanout.writer.schedule_planner import plan_runs
+
+    sched = get_schedule(schedule_id)
+    if not sched or sched.get("mode") in ("all_at_once", "fixed"):
+        return 0
+    queued = queued_runs_ordered(schedule_id)
+    if not queued:
+        return 0
+    tz_name = sched.get("timezone") or "UTC"
+    try:
+        first = datetime.fromisoformat(queued[0]["scheduled_at"]).astimezone(ZoneInfo(tz_name))
+    except Exception:  # noqa: BLE001 — unparseable timestamp: leave the queue as-is
+        return 0
+    tod = _time_from(sched.get("time_of_day"))
+    try:
+        planned = plan_runs(
+            [r["cluster_id"] for r in queued], mode=sched["mode"],
+            per_day=sched.get("per_day"), start_date=first.date(), time_of_day=tod,
+            tz_name=tz_name, weekday=sched.get("weekday"), weekdays=sched.get("weekdays"),
+            day_of_month=sched.get("day_of_month"), week_of_month=sched.get("week_of_month"),
+        )
+    except Exception:  # noqa: BLE001 — never let a re-pack failure break cancel/reinstate
+        return 0
+    return apply_reschedule(queued, planned)
+
+
+def _time_from(value):
+    """Parse a stored time_of_day ('09:00:00' / '09:00') into a datetime.time; None -> 09:00."""
+    from datetime import time as _t
+
+    if not value:
+        return _t(9, 0)
+    try:
+        return _t.fromisoformat(str(value))
+    except ValueError:
+        return _t(9, 0)
 
 
 def complete_if_drained(schedule_id: str) -> None:

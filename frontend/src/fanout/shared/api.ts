@@ -1175,5 +1175,9 @@ export const updateScheduleCadence = (
     `/sessions/${sessionId}/schedules/${scheduleId}/cadence`,
     { method: "PATCH", body: JSON.stringify(body) });
 export const cancelScheduleRun = (sessionId: string, runId: string) =>
-  request<{ status: string; run_id: string }>(
+  request<{ status: string; run_id: string; reflowed?: number }>(
     `/sessions/${sessionId}/schedule-runs/${runId}/cancel`, { method: "POST" });
+// Un-cancel a previously cancelled article — reinstates it and re-flows the queue.
+export const reinstateScheduleRun = (sessionId: string, runId: string) =>
+  request<{ status: string; run_id: string }>(
+    `/sessions/${sessionId}/schedule-runs/${runId}/reinstate`, { method: "POST" });

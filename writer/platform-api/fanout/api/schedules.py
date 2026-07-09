@@ -292,6 +292,8 @@ def create_schedule(
         # publish target is the client's Drive folder).
         auto_publish=bool(body.auto_publish and session.get("client_id")),
         wp_publish=wp_publish, wp_status=body.wp_status if wp_publish else "draft",
+        weekday=body.weekday, weekdays=body.weekdays,
+        day_of_month=body.day_of_month, week_of_month=body.week_of_month,
     )
     logger.info("schedule_created", extra={"event": "schedule_created", "session_id": session_id,
                                            "mode": body.mode, "runs": len(runs), "skipped": skipped})
@@ -339,9 +341,44 @@ def cancel_schedule_run(
             status_code=status.HTTP_409_CONFLICT,
             detail="This article just started writing — too late to cancel.",
         )
+    reflowed = 0
     if run.get("content_schedule_id"):
+        # Pull the remaining queued articles up into the freed slot (no empty day).
+        reflowed = schedule_store.reflow_queued(run["content_schedule_id"])
         schedule_store.complete_if_drained(run["content_schedule_id"])
-    return {"status": "cancelled", "run_id": run_id}
+    return {"status": "cancelled", "run_id": run_id, "reflowed": reflowed}
+
+
+@router.post("/sessions/{session_id}/schedule-runs/{run_id}/reinstate")
+def reinstate_schedule_run(
+    session_id: str, run_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Un-cancel a previously cancelled article (changed your mind). Flips it back to
+    queued, reactivates the parent schedule if it had drained/cancelled, and re-flows
+    the queue so the reinstated article takes a slot (the tail extends by one)."""
+    _require_session(user, session_id)
+    run = schedule_store.get_run(run_id)
+    if not run or run["session_id"] != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if run["status"] != "cancelled":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This article is {run['status']} — only a cancelled one can be reinstated.",
+        )
+    if not schedule_store.reinstate_run(run_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Couldn't reinstate this article — its state changed.",
+        )
+    sched_id = run.get("content_schedule_id")
+    if sched_id:
+        sched = schedule_store.get_schedule(sched_id)
+        # A schedule that had fully drained (or was cancelled) must go active again
+        # so the worker will pick the reinstated article up.
+        if sched and sched["status"] in ("complete", "cancelled"):
+            schedule_store.set_schedule_status(sched_id, "active")
+        schedule_store.reflow_queued(sched_id)
+    return {"status": "queued", "run_id": run_id}
 
 
 def _require_schedule(user: AuthedUser, session_id: str, schedule_id: str) -> dict:
@@ -484,6 +521,9 @@ def update_cadence(
         "start_date": body.start_date.isoformat() if body.start_date else None,
         "time_of_day": (body.time_of_day or time(9, 0)).isoformat(),
         "timezone": body.timezone,
+        # Persist the anchors so a later cancel/reinstate re-flow uses this cadence.
+        "weekday": body.weekday, "weekdays": body.weekdays,
+        "day_of_month": body.day_of_month, "week_of_month": body.week_of_month,
     }) or sched
     logger.info("schedule_cadence_changed",
                 extra={"event": "schedule_cadence_changed", "schedule_id": schedule_id,
