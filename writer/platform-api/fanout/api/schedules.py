@@ -349,6 +349,34 @@ def cancel_schedule_run(
     return {"status": "cancelled", "run_id": run_id, "reflowed": reflowed}
 
 
+class BulkCancelBody(BaseModel):
+    run_ids: list[str]
+
+
+@router.post("/sessions/{session_id}/schedule-runs/cancel-bulk")
+def cancel_schedule_runs_bulk(
+    session_id: str, body: BulkCancelBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Cancel many still-queued article runs at once, then re-flow each affected
+    schedule ONCE (not per run) so the remaining articles compact without an empty
+    day. Non-queued / cross-session ids are skipped. Returns how many cancelled."""
+    _require_session(user, session_id)
+    cancelled = 0
+    affected: set[str] = set()
+    for run_id in (body.run_ids or [])[:2000]:
+        run = schedule_store.get_run(run_id)
+        if not run or run["session_id"] != session_id or run["status"] != "queued":
+            continue
+        if schedule_store.cancel_run(run_id):
+            cancelled += 1
+            if run.get("content_schedule_id"):
+                affected.add(run["content_schedule_id"])
+    for sched_id in affected:
+        schedule_store.reflow_queued(sched_id)
+        schedule_store.complete_if_drained(sched_id)
+    return {"status": "cancelled", "cancelled": cancelled}
+
+
 @router.post("/sessions/{session_id}/schedule-runs/{run_id}/reinstate")
 def reinstate_schedule_run(
     session_id: str, run_id: str, user: AuthedUser = Depends(require_user)

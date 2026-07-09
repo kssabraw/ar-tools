@@ -1177,6 +1177,11 @@ export const updateScheduleCadence = (
 export const cancelScheduleRun = (sessionId: string, runId: string) =>
   request<{ status: string; run_id: string; reflowed?: number }>(
     `/sessions/${sessionId}/schedule-runs/${runId}/cancel`, { method: "POST" });
+// Cancel many queued articles at once; the queue re-flows once per schedule.
+export const cancelScheduleRunsBulk = (sessionId: string, runIds: string[]) =>
+  request<{ status: string; cancelled: number }>(
+    `/sessions/${sessionId}/schedule-runs/cancel-bulk`,
+    { method: "POST", body: JSON.stringify({ run_ids: runIds }) });
 // Un-cancel a previously cancelled article — reinstates it and re-flows the queue.
 export const reinstateScheduleRun = (sessionId: string, runId: string) =>
   request<{ status: string; run_id: string }>(

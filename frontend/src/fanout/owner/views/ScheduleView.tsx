@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   cancelSchedule,
   cancelScheduleRun,
+  cancelScheduleRunsBulk,
   getClusters,
   getSession,
   listScheduleRuns,
@@ -58,6 +59,28 @@ export function ScheduleView() {
   const schedules = schedulesQ.data?.schedules ?? [];
   const runs = runsQ.data?.runs ?? [];
 
+  // Bulk-cancel selection (queued runs only). Pruned to still-queued ids on each render
+  // so a run that generated/cancelled since selection drops out automatically.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const visibleRuns = runs.slice(0, 500);
+  const queuedIds = visibleRuns.filter((r) => r.status === "queued").map((r) => r.id);
+  const selectedQueued = queuedIds.filter((id) => selected.has(id));
+  const toggleSel = (id: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const allQueuedSelected = queuedIds.length > 0 && selectedQueued.length === queuedIds.length;
+  const toggleAllQueued = () =>
+    setSelected(allQueuedSelected ? new Set() : new Set(queuedIds));
+  const bulkCancel = () => {
+    const ids = [...selectedQueued];
+    if (!ids.length) return;
+    act.mutate(() => cancelScheduleRunsBulk(sessionId, ids).then((r) => { setSelected(new Set()); return r; }));
+  };
+
   return (
     <div>
       <div className="edit-toolbar">
@@ -107,14 +130,45 @@ export function ScheduleView() {
 
       {runs.length > 0 && (
         <div className="card">
-          <h3 style={{ marginTop: 0 }}>Scheduled articles ({runs.length})</h3>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
+            <h3 style={{ margin: 0, flex: 1 }}>Scheduled articles ({runs.length})</h3>
+            {selectedQueued.length > 0 && (
+              <button
+                className="btn btn-sm link-danger"
+                disabled={act.isPending}
+                onClick={bulkCancel}
+              >
+                Cancel {selectedQueued.length} selected
+              </button>
+            )}
+          </div>
           <table className="kw-table">
             <thead>
-              <tr><th>Article</th><th>Scheduled</th><th>Status</th><th>Note</th><th></th></tr>
+              <tr>
+                <th style={{ width: 28 }}>
+                  <input
+                    type="checkbox"
+                    checked={allQueuedSelected}
+                    disabled={queuedIds.length === 0}
+                    title="Select all queued"
+                    onChange={toggleAllQueued}
+                  />
+                </th>
+                <th>Article</th><th>Scheduled</th><th>Status</th><th>Note</th><th></th>
+              </tr>
             </thead>
             <tbody>
-              {runs.slice(0, 500).map((r) => (
+              {visibleRuns.map((r) => (
                 <tr key={r.id}>
+                  <td>
+                    {r.status === "queued" && (
+                      <input
+                        type="checkbox"
+                        checked={selected.has(r.id)}
+                        onChange={() => toggleSel(r.id)}
+                      />
+                    )}
+                  </td>
                   <td>{clusterName(r.cluster_id)}</td>
                   <td>{new Date(r.scheduled_at).toLocaleString()}</td>
                   <td><span className={"badge " + statusBadge(r.status)}>{r.status}</span></td>
@@ -126,10 +180,7 @@ export function ScheduleView() {
                       <button
                         className="link-btn link-danger"
                         disabled={act.isPending}
-                        onClick={() => {
-                          if (confirm(`Cancel “${clusterName(r.cluster_id)}”? The rest move up to fill its slot.`))
-                            act.mutate(() => cancelScheduleRun(sessionId, r.id));
-                        }}
+                        onClick={() => act.mutate(() => cancelScheduleRun(sessionId, r.id))}
                       >
                         Cancel
                       </button>
@@ -175,8 +226,12 @@ function ScheduleCard(p: {
   // client-linked session; WordPress additionally needs the client WP-configured.
   const canEditTargets = s.status === "paused";
   const pr = s.progress ?? {};
-  const done = (pr.complete ?? 0) + (pr.failed ?? 0) + (pr.cancelled ?? 0);
-  const total = pr.total ?? s.total_count;
+  // "Written" counts only completed articles — not failed, and not cancelled.
+  // Cancelled articles are dropped from the plan (the queue compacts), so they
+  // come out of the denominator too.
+  const written = pr.complete ?? 0;
+  const cancelled = pr.cancelled ?? 0;
+  const planned = Math.max(0, (pr.total ?? s.total_count) - cancelled);
   const label =
     s.mode === "all_at_once" ? "All at once"
       : s.mode === "fixed" ? `On ${s.start_date}`
@@ -210,9 +265,10 @@ function ScheduleCard(p: {
             )}
           </div>
           <div className="muted" style={{ fontSize: 13 }}>
-            {done} / {total} done
-            {pr.failed ? ` · ${pr.failed} failed` : ""}
+            {written} / {planned} written
             {pr.running ? ` · ${pr.running} writing` : ""}
+            {pr.failed ? ` · ${pr.failed} failed` : ""}
+            {cancelled ? ` · ${cancelled} cancelled` : ""}
           </div>
         </div>
         {s.status === "active" && (
