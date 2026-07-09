@@ -1062,6 +1062,10 @@ export interface ScheduleRequest {
   // Opt-in: publish each finished piece to the linked client's Google Drive
   // folder (a Google Doc) right after it generates. Needs a client-linked session.
   auto_publish?: boolean;
+  // Opt-in (blog posts only): publish each finished article straight to the
+  // client's WordPress site at the slug its internal links point at.
+  wp_publish?: boolean;
+  wp_status?: "draft" | "publish";
 }
 export interface ScheduleEstimate {
   count: number;
@@ -1086,6 +1090,8 @@ export interface ContentSchedule {
   created_at: string;
   progress?: Record<string, number>;
   auto_publish?: boolean;
+  wp_publish?: boolean;
+  wp_status?: "draft" | "publish";
 }
 export interface ScheduledRun {
   id: string;

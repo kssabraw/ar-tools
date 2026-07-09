@@ -29,6 +29,9 @@ export function ScheduleModal(props: {
   // Client + market for this run — scope the Local SEO location typeahead.
   clientId?: string | null;
   locationCode?: number | null;
+  // Whether the linked client has WordPress configured (site URL + application
+  // password on its card) — gates the direct-to-WordPress option below.
+  wordpressAvailable?: boolean;
   onClose: () => void;
   onScheduled?: (scheduled: number) => void;
 }) {
@@ -64,9 +67,14 @@ export function ScheduleModal(props: {
   // Auto-publish each finished piece to the client's Drive folder. Only offered
   // for client-linked sessions (the publish target is the client's folder).
   const [autoPublish, setAutoPublish] = useState(false);
+  // Direct-to-WordPress (blog posts only): each finished article is created on
+  // the client's WP site at its cluster slug, as a draft or live.
+  const [wpPublish, setWpPublish] = useState(false);
+  const [wpStatus, setWpStatus] = useState<"draft" | "publish">("draft");
 
   const isLocalSeo = contentType === "local_seo_page";
   const isServicePage = contentType === "service_page";
+  const showWordPress = contentType === "blog_post" && !!clientId && !!props.wordpressAvailable;
   const locCountry = locationCode ? isoForLocationCode(locationCode) : undefined;
 
   const body: ScheduleRequest = {
@@ -88,6 +96,8 @@ export function ScheduleModal(props: {
         : undefined,
     location: isLocalSeo ? effectiveLocation || undefined : undefined,
     auto_publish: clientId ? autoPublish : undefined,
+    wp_publish: showWordPress ? wpPublish : undefined,
+    wp_status: showWordPress && wpPublish ? wpStatus : undefined,
   };
 
   // Live preview — re-estimates as the inputs change.
@@ -233,6 +243,43 @@ export function ScheduleModal(props: {
                 </span>
               </span>
             </label>
+          )}
+
+          {showWordPress && (
+            <div className="field">
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={wpPublish}
+                  onChange={(e) => setWpPublish(e.target.checked)}
+                  style={{ marginTop: 2 }}
+                />
+                <span>
+                  <span className="field-label">Publish to WordPress</span>
+                  <span className="field-hint">
+                    Create each finished article on the client's WordPress site at the URL its
+                    internal links point at (from the blog reference URL on the client card).
+                  </span>
+                </span>
+              </label>
+              {wpPublish && (
+                <div className="seg-radios" style={{ marginTop: 8 }}>
+                  {([
+                    ["draft", "As draft (review in wp-admin)"],
+                    ["publish", "Live immediately"],
+                  ] as ["draft" | "publish", string][]).map(([v, label]) => (
+                    <button
+                      key={v}
+                      type="button"
+                      className={"seg-radio" + (wpStatus === v ? " seg-radio-active" : "")}
+                      onClick={() => setWpStatus(v)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
 
           <div className="field">

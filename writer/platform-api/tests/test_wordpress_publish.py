@@ -96,6 +96,28 @@ async def test_publish_success_blog_post_hits_posts_endpoint(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_slug_pins_post_url(monkeypatch):
+    """An explicit slug is sent to WP so the published URL matches links computed
+    against it (the fanout writer's internal links); omitted, WP derives its own."""
+    capture = {}
+    resp = _FakeResponse(201, {"id": 43, "link": "u", "status": "draft"})
+    _patch(monkeypatch, resp, capture)
+    await publish_to_wordpress(
+        client=_CLIENT, title="T", html="<p>hi</p>", slug="retatrutide-dosage-guide"
+    )
+    assert capture["json"]["slug"] == "retatrutide-dosage-guide"
+
+
+@pytest.mark.asyncio
+async def test_no_slug_omits_field(monkeypatch):
+    capture = {}
+    resp = _FakeResponse(201, {"id": 44, "link": "u", "status": "draft"})
+    _patch(monkeypatch, resp, capture)
+    await publish_to_wordpress(client=_CLIENT, title="T", html="<p>hi</p>")
+    assert "slug" not in capture["json"]
+
+
+@pytest.mark.asyncio
 async def test_service_page_hits_pages_endpoint(monkeypatch):
     capture = {}
     resp = _FakeResponse(201, {"id": 7, "link": "u", "status": "publish"})
