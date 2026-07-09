@@ -102,6 +102,7 @@ class Brief(BaseModel):
 
     keyword: str
     title: str                                # H1 verbatim (no LLM regeneration, §2.1)
+    seo_title: str = ""                       # distinct <title>/WP post title ("" -> fall back to H1)
     intent_type: IntentType = IntentType.informational
     scope_statement: str | None = None
     heading_structure: list[BriefHeading] = Field(default_factory=list)
@@ -138,6 +139,7 @@ class WriterOutput(BaseModel):
     keyword: str
     intent_type: IntentType = IntentType.informational
     title: str = ""
+    seo_title: str = ""                        # distinct <title>/WP post title ("" -> fall back to title)
     article: list[ArticleItem] = Field(default_factory=list)
     article_markdown: str = ""
     article_html: str = ""

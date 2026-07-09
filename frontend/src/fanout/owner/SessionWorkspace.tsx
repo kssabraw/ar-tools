@@ -20,6 +20,9 @@ export interface SessionCtx {
   // Client + market for this run — scope the Schedule modal's location typeahead.
   clientId?: string | null;
   locationCode?: number | null;
+  // Whether the linked client has WordPress configured — gates the Schedule
+  // modal's direct-to-WordPress option.
+  wordpressAvailable?: boolean;
 }
 
 export function useSession() {
@@ -181,7 +184,7 @@ export function SessionWorkspace() {
         {status && hasResults(status) && session.data && (
           <Outlet
             context={
-              { sessionId, topics, topicName, role, contentType: session.data?.content_type, location: session.data?.location, clientId: session.data?.client_id, locationCode: session.data?.location_code } satisfies SessionCtx
+              { sessionId, topics, topicName, role, contentType: session.data?.content_type, location: session.data?.location, clientId: session.data?.client_id, locationCode: session.data?.location_code, wordpressAvailable: session.data?.publish_available?.wordpress } satisfies SessionCtx
             }
           />
         )}

@@ -72,6 +72,7 @@ export function ScheduleView() {
           defaultLocation={session.data?.location}
           clientId={session.data?.client_id}
           locationCode={session.data?.location_code}
+          wordpressAvailable={session.data?.publish_available?.wordpress}
           onClose={() => setShowModal(false)}
           onScheduled={(n) => { invalidate(); alert(`Scheduled ${n} article(s).`); }}
         />
@@ -157,6 +158,19 @@ function ScheduleCard(p: {
           {s.auto_publish && (
             <span className="badge badge-rel" style={{ marginLeft: 6 }} title="Each finished piece is auto-published to the client's Google Drive folder">
               ⬆ Auto-publish
+            </span>
+          )}
+          {s.wp_publish && (
+            <span
+              className="badge badge-rel"
+              style={{ marginLeft: 6 }}
+              title={
+                s.wp_status === "publish"
+                  ? "Each finished article goes live on the client's WordPress site"
+                  : "Each finished article is created as a draft on the client's WordPress site"
+              }
+            >
+              ⬆ WordPress{s.wp_status === "publish" ? " (live)" : " (draft)"}
             </span>
           )}
         </div>

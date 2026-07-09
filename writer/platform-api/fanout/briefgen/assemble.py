@@ -98,7 +98,8 @@ def build_brief_output(
     return BriefOutput(
         schema_version=SCHEMA_VERSION,
         keyword=keyword,
-        h1=title.title, title=title.title, title_rationale=title.title_rationale,
+        h1=title.title, title=title.title, seo_title=title.seo_title,
+        title_rationale=title.title_rationale,
         scope_statement=title.scope_statement,
         intent_type=intent.intent_type, intent_confidence=intent.intent_confidence,
         intent_review_required=intent.intent_review_required,

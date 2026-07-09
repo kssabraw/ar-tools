@@ -217,6 +217,7 @@ async def publish_to_wordpress(
     content_type: str = "blog_post",
     sideload_images: bool = True,
     featured_image_url: Optional[str] = None,
+    slug: Optional[str] = None,
 ) -> dict:
     """Create a post/page on the client's WordPress site; returns
     {post_id, link, status, edit_link, featured_media}.
@@ -227,8 +228,10 @@ async def publish_to_wordpress(
     the <img> srcs rewritten to the WP-hosted URLs, and (absent an explicit
     `featured_image_url`) the first becomes the post's featured image. An explicit
     `featured_image_url` is uploaded and set as the featured image regardless of
-    body images. Raises WordPressPublishError on missing config, a bad status, or
-    a transport/API failure."""
+    body images. `slug` pins the post's URL slug — without it WordPress derives
+    one from the title, which breaks callers that pre-computed internal links
+    against a known slug (the fanout writer). Raises WordPressPublishError on
+    missing config, a bad status, or a transport/API failure."""
     if status not in ALLOWED_STATUSES:
         raise WordPressPublishError("invalid_status")
     if not client_is_configured(client):
@@ -263,6 +266,8 @@ async def publish_to_wordpress(
                     logger.warning("wordpress_sideload_failed", extra={"error": str(exc)})
 
             body: dict = {"title": title, "content": html, "status": status}
+            if slug:
+                body["slug"] = slug
             if featured_id:
                 body["featured_media"] = featured_id
 

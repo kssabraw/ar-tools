@@ -15,7 +15,7 @@ Inputs (PRD §5 Step 3.5):
 
 Output (strict JSON, additionalProperties: false):
   {
-    "title": str (50-80 chars preferred, 100 max),
+    "title": str (keyword-leading; 2-4 entities; audience-voiced; no length cap),
     "scope_statement": str (≤500 chars, MUST include "does not cover"),
     "title_rationale": str (≤300 chars)
   }
@@ -40,7 +40,6 @@ from .llm import claude_json
 logger = logging.getLogger(__name__)
 
 
-MAX_TITLE_LEN = 100
 MAX_H1_LEN = 130
 MAX_SCOPE_LEN = 500
 MAX_RATIONALE_LEN = 300
@@ -97,7 +96,13 @@ Process:
 
 Hard requirements for the title (SEO / meta title - appears in browser
 tab, SERP snippet, and og:title):
-- 50-80 characters preferred; 100 character maximum
+- No character limit — write it as long as it needs to be, no longer
+- Lead with the primary keyword (or a close variant)
+- Include 2-4 entities: the specific products, people, places, or
+  concepts central to the topic (named things, not generic words)
+- Written for the target audience — use the vocabulary and framing that
+  audience actually uses (infer the audience from the SERP titles, meta
+  descriptions, and LLM answers)
 - AVOID generic AI-tells: "Ultimate Guide to", "Complete Guide",
   "Everything You Need to Know", "Definitive Guide", "Master [topic]"
 - Mention the current year ONLY when the topic genuinely warrants it
@@ -106,13 +111,17 @@ tab, SERP snippet, and og:title):
 
 Hard requirements for the h1 (on-page main heading - appears at the
 top of the article body):
-- 130 character maximum (longer leeway than the title)
-- Often similar to the title, but MAY be slightly more descriptive,
-  more conversational, or expand on the title's framing. The H1's job
-  is to confirm to the on-page reader that they landed on the right
-  article - it does NOT have to be SERP-optimized.
-- It is acceptable for h1 == title when the title already reads as a
-  natural on-page heading. Do not force a difference.
+- 130 character maximum
+- MUST include the targeted keyword (the seed keyword, or a close
+  grammatical variant of it), woven in naturally
+- MUST be grammatically correct — a real, natural-reading heading, never
+  an awkward keyword-stuffed string
+- Similar territory to the title, but MUST be worded differently — every
+  page carries a distinct <title> and H1 (agency standing rule). It may
+  be more descriptive, more conversational, or expand on the title's
+  framing. The H1's job is to confirm to the on-page reader that they
+  landed on the right article - it does NOT have to be SERP-optimized.
+- Never return an h1 identical to the title.
 - Same banned-phrase rules as the title.
 
 Hard requirements for the scope statement:
@@ -123,8 +132,8 @@ Hard requirements for the scope statement:
 
 Output strict JSON only - no preamble, no markdown fences, no commentary:
 {
-  "title": "SEO/meta title (50-80 chars preferred, ≤100 max)",
-  "h1": "On-page H1 heading (≤130 chars; may equal the title or expand it slightly)",
+  "title": "SEO/meta title (keyword-leading; 2-4 entities; audience-voiced; no length cap)",
+  "h1": "On-page H1 heading (≤130 chars; includes the targeted keyword; grammatically correct; worded differently from the title)",
   "scope_statement": "Defines/explains... [in-scope]. Does not cover [adjacent topics].",
   "title_rationale": "Brief explanation (≤300 chars) of why this title and angle"
 }
@@ -136,8 +145,8 @@ STRICTER_RETRY_PROMPT_SUFFIX = """\
 CRITICAL: Your previous response was rejected for a validation failure.
 Re-read the hard requirements. Output ONLY the JSON object with the three
 required fields, no surrounding text. The scope_statement MUST contain
-the literal phrase "does not cover". The title MUST be ≤100 characters
-and MUST NOT contain banned phrases.
+the literal phrase "does not cover". The title MUST NOT contain banned
+phrases and the h1 MUST NOT be identical to the title.
 """
 
 
@@ -197,8 +206,8 @@ def _validate_payload(payload: Any) -> tuple[bool, str, Optional[TitleScopeOutpu
     if not isinstance(title, str) or not title.strip():
         return False, "title_missing_or_empty", None
     title = title.strip()
-    if len(title) > MAX_TITLE_LEN:
-        return False, f"title_too_long ({len(title)} > {MAX_TITLE_LEN})", None
+    # No title length cap (owner ruling 2026-07-09) — the meta title is written
+    # for the audience with 2-4 entities; length is the model's judgment.
 
     title_lower = title.lower()
     for banned in BANNED_TITLE_PHRASES:
@@ -301,6 +310,15 @@ async def generate_title_and_scope(
 
         ok, reason, parsed = _validate_payload(payload)
         if ok and parsed is not None:
+            # Soft audit (owner ruling 2026-07-09): the H1 must include the
+            # targeted keyword. Not a hard gate — a grammatical variant of the
+            # keyword is legitimate and a substring check can't see it, so we
+            # warn for review rather than abort the run.
+            if seed_keyword.strip().lower() not in parsed.h1.lower():
+                logger.warning(
+                    "brief.title_scope.h1_missing_target_keyword",
+                    extra={"keyword": seed_keyword, "h1": parsed.h1},
+                )
             logger.info(
                 "brief.title_scope.generated",
                 extra={

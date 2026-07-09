@@ -53,6 +53,12 @@ class ScheduleBody(BaseModel):
     # folder as a Google Doc, right after it generates. Best-effort + requires a
     # client-linked session (no-ops otherwise).
     auto_publish: bool = False
+    # Opt-in (blog posts only): publish each finished article straight to the
+    # linked client's WordPress site, pinning the cluster's slug so the live URL
+    # matches the injected internal links. `wp_status` picks 'draft' (a human
+    # reviews + publishes in wp-admin) or 'publish' (live immediately).
+    wp_publish: bool = False
+    wp_status: str = "draft"                    # draft | publish
 
 
 # ----- helpers --------------------------------------------------------------
@@ -176,6 +182,23 @@ def create_schedule(
                 detail="A site base URL is required so internal links are absolute. Set it in the modal.",
             )
 
+    wp_publish = bool(body.wp_publish) and not (is_local_seo or is_service_page)
+    if wp_publish:
+        # Fail fast at schedule time — not silently per-run minutes/days later.
+        if body.wp_status not in ("draft", "publish"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="wp_status must be 'draft' or 'publish'.",
+            )
+        from fanout.api.sessions import _wordpress_publish_available
+
+        if not _wordpress_publish_available(session):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="WordPress publishing needs this session linked to a client with a "
+                       "WordPress site URL + application password on its card.",
+            )
+
     ordered = _ordered_targets(session_id, body.cluster_ids)
     pending = schedule_store.pending_cluster_ids(session_id)
     targets = [c for c in ordered if c not in pending]
@@ -222,6 +245,7 @@ def create_schedule(
         # Auto-publish only makes sense when the session is client-linked (the
         # publish target is the client's Drive folder).
         auto_publish=bool(body.auto_publish and session.get("client_id")),
+        wp_publish=wp_publish, wp_status=body.wp_status if wp_publish else "draft",
     )
     logger.info("schedule_created", extra={"event": "schedule_created", "session_id": session_id,
                                            "mode": body.mode, "runs": len(runs), "skipped": skipped})

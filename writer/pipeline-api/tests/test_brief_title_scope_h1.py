@@ -2,9 +2,9 @@
 Step 3.5 extension).
 
 The brief now emits BOTH a `title` (SEO/meta - browser tab, SERP) AND
-an `h1` (on-page main heading). They may be the same string or differ
-slightly. The H1 has a longer length cap (130 vs 100 chars) because
-on-page headings are allowed to be more descriptive than SERP titles.
+an `h1` (on-page main heading), worded differently (agency standing rule —
+every page carries a distinct <title> and H1). The title has no length cap
+(owner ruling 2026-07-09); the H1 keeps a 130-char cap.
 """
 
 from __future__ import annotations
@@ -14,7 +14,6 @@ import pytest
 from modules.brief.title_scope import (
     BANNED_TITLE_PHRASES,
     MAX_H1_LEN,
-    MAX_TITLE_LEN,
     TitleScopeOutput,
     _validate_payload,
     generate_title_and_scope,
@@ -88,9 +87,8 @@ def test_validator_rejects_h1_with_banned_phrase():
     assert "h1_contains_banned_phrase" in reason
 
 
-def test_validator_h1_can_exceed_title_length_cap():
-    """The H1 cap (130) is genuinely longer than the title cap (100)."""
-    long_h1 = "X" * (MAX_TITLE_LEN + 25)  # over title cap, under H1 cap
+def test_validator_h1_accepts_long_heading_under_cap():
+    long_h1 = "X" * (MAX_H1_LEN - 5)  # under the 130-char H1 cap
     payload = {
         "title": "Short title",
         "h1": long_h1,

@@ -16,6 +16,7 @@ def create_schedule(
     time_of_day: time | None = None, tz_name: str = "UTC",
     content_type: str = "blog_post", location: str | None = None,
     location_code: int | None = None, auto_publish: bool = False,
+    wp_publish: bool = False, wp_status: str = "draft",
 ) -> dict:
     """Insert the parent schedule + one queued run per planned cluster. Returns the parent
     row augmented with `run_count`. (Two statements — PostgREST has no multi-table txn; the
@@ -24,7 +25,9 @@ def create_schedule(
 
     `content_type` selects the generator the worker uses per run ('blog_post' -> the Fanout
     writer; 'local_seo_page' -> the suite's nlp-api Local SEO generator). For local SEO the
-    schedule also carries the target `location` (+ optional DataForSEO `location_code`)."""
+    schedule also carries the target `location` (+ optional DataForSEO `location_code`).
+    `wp_publish`/`wp_status` opt finished blog posts into the client's WordPress site
+    (as 'draft' or live 'publish')."""
     client = get_service_client()
     parent = client.table("content_schedules").insert({
         "session_id": session_id, "user_id": user_id, "mode": mode,
@@ -34,6 +37,7 @@ def create_schedule(
         "timezone": tz_name, "total_count": len(runs),
         "content_type": content_type, "location": location,
         "location_code": location_code, "auto_publish": auto_publish,
+        "wp_publish": wp_publish, "wp_status": wp_status,
     }).execute().data[0]
 
     rows = [{

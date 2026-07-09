@@ -88,6 +88,9 @@ class BriefOutput(BaseModel):
     # Title / scope (Step 3.5)
     h1: str = ""
     title: str = ""
+    # Distinct meta/SERP title (the <title> tag / WP post title). "" on briefs
+    # generated before this field existed — consumers fall back to the H1.
+    seo_title: str = ""
     title_rationale: str | None = None
     scope_statement: str | None = None
 
