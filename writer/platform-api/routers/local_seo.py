@@ -5,10 +5,10 @@ to the private nlp service. Every route is auth-gated; the nlp service is only
 reachable server-side.
 
 The long-running actions (generate / reoptimize / score / analyze / related /
-social / find-page) are returned as heartbeat SSE streams via `sse_response`
-so a multi-minute operation can't be killed by a load-balancer idle timeout.
-The client reads the stream and resolves on the final done / error event.
-GET / DELETE routes are instant and stay plain JSON.
+social / find-page / precheck) are enqueued as `async_jobs` and return a job
+handle; the client polls `.../jobs/status` for the result. Running server-side
+means the work completes — and the result is retrievable — even if the user
+navigates away and comes back. GET / DELETE routes are instant plain JSON.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from typing import Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from middleware.auth import require_auth
@@ -37,7 +36,6 @@ from models.local_seo import (
     LocalSeoPageDetail,
     LocalSeoPageListItem,
     LocalSeoPrecheckRequest,
-    LocalSeoPrecheckResult,
     LocalSeoRankabilityRequest,
     LocalSeoRankabilityResponse,
     LocalSeoRelatedPagesRequest,
@@ -50,9 +48,8 @@ from models.local_seo import (
     LocationSuggestion,
     PageTemplateDefaultRequest,
 )
-from services import local_seo_precheck, local_seo_service, local_seo_silo
+from services import local_seo_service, local_seo_silo
 from services.freeze import assert_not_frozen
-from sse import sse_response
 
 logger = logging.getLogger(__name__)
 
@@ -145,30 +142,26 @@ async def local_seo_jobs_status(
     return [LocalSeoJobStatus(**row) for row in rows]
 
 
-@router.post("/clients/{client_id}/local-seo/precheck")
+@router.post("/clients/{client_id}/local-seo/precheck", response_model=LocalSeoGenerateJob)
 async def precheck_local_seo_page(
     client_id: UUID,
     body: LocalSeoPrecheckRequest,
     auth: dict = Depends(require_auth),
-) -> StreamingResponse:
+) -> LocalSeoGenerateJob:
     """Detect existing/ranking pages for a keyword before generating a new one.
 
     Backs the New Page flow's automatic gate: the frontend runs this first and,
     when matches come back, lets the user reoptimize an existing page (or pick one
-    of several ranking pages) instead of writing a duplicate. SSE because the
-    live-site scan + SERP lookup can take tens of seconds.
+    of several ranking pages) instead of writing a duplicate. Enqueued as a
+    background job (the live-site scan + SERP lookup take tens of seconds) so the
+    UI can navigate away and reconnect; poll the result via `.../jobs/status`.
     """
-    async def _run() -> dict:
-        result = await local_seo_precheck.detect_existing_pages(
-            client_id=str(client_id),
-            keyword=body.keyword,
-            location=body.location,
-            location_code=body.location_code,
-            user_id=auth["user_id"],
-        )
-        return LocalSeoPrecheckResult(**result).model_dump(mode="json")
-
-    return sse_response(_run())
+    job_id = await local_seo_service.enqueue_action(
+        str(client_id), "precheck",
+        {"keyword": body.keyword, "location": body.location, "location_code": body.location_code},
+        auth["user_id"],
+    )
+    return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
 
 @router.put("/clients/{client_id}/local-seo/page-template-default")
@@ -181,64 +174,74 @@ async def set_local_seo_page_template_default(
     return local_seo_service.set_page_template_default(str(client_id), body.page_template_url)
 
 
-@router.post("/clients/{client_id}/local-seo/analyze")
+@router.post("/clients/{client_id}/local-seo/analyze", response_model=LocalSeoGenerateJob)
 async def analyze_local_seo(
     client_id: UUID,
     body: LocalSeoAnalyzeRequest,
     auth: dict = Depends(require_auth),
-) -> StreamingResponse:
-    return sse_response(local_seo_service.analyze(
-        client_id=str(client_id),
-        keyword=body.keyword,
-        location=body.location,
-        location_code=body.location_code,
-        force_refresh=body.force_refresh,
-    ))
+) -> LocalSeoGenerateJob:
+    """Competitor SERP analysis as a background job; poll `.../jobs/status`."""
+    job_id = await local_seo_service.enqueue_action(
+        str(client_id), "analyze",
+        {
+            "keyword": body.keyword, "location": body.location,
+            "location_code": body.location_code, "force_refresh": body.force_refresh,
+        },
+        auth["user_id"],
+    )
+    return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
 
-@router.post("/clients/{client_id}/local-seo/find-page")
+@router.post("/clients/{client_id}/local-seo/find-page", response_model=LocalSeoGenerateJob)
 async def find_local_seo_page(
     client_id: UUID,
     body: LocalSeoFindPageRequest,
     auth: dict = Depends(require_auth),
-) -> StreamingResponse:
-    return sse_response(local_seo_service.find_page(
-        client_id=str(client_id),
-        keyword=body.keyword,
-        location=body.location,
-    ))
+) -> LocalSeoGenerateJob:
+    """Website page-finder as a background job; poll `.../jobs/status`."""
+    job_id = await local_seo_service.enqueue_action(
+        str(client_id), "find_page",
+        {"keyword": body.keyword, "location": body.location},
+        auth["user_id"],
+    )
+    return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
 
-@router.post("/clients/{client_id}/local-seo/score")
+@router.post("/clients/{client_id}/local-seo/score", response_model=LocalSeoGenerateJob)
 async def score_local_seo_page(
     client_id: UUID,
     body: LocalSeoScoreRequest,
     auth: dict = Depends(require_auth),
-) -> StreamingResponse:
-    return sse_response(local_seo_service.score_page(
-        client_id=str(client_id),
-        keyword=body.keyword,
-        location=body.location,
-        location_code=body.location_code,
-        page_url=body.page_url,
-        page_content=body.page_content,
-        serp_analysis=body.serp_analysis,
-        user_id=auth["user_id"],
-        force_refresh=body.force_refresh,
-    ))
+) -> LocalSeoGenerateJob:
+    """Score a page against the 8 engines as a background job; poll `.../jobs/status`.
+    Runs minutes when it has to analyze competitors first, so it's backgrounded to
+    survive navigating away."""
+    job_id = await local_seo_service.enqueue_action(
+        str(client_id), "score",
+        {
+            "keyword": body.keyword, "location": body.location,
+            "location_code": body.location_code, "page_url": body.page_url,
+            "page_content": body.page_content, "serp_analysis": body.serp_analysis,
+            "force_refresh": body.force_refresh,
+        },
+        auth["user_id"],
+    )
+    return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
 
-@router.post("/clients/{client_id}/local-seo/related-pages")
+@router.post("/clients/{client_id}/local-seo/related-pages", response_model=LocalSeoGenerateJob)
 async def related_local_seo_pages(
     client_id: UUID,
     body: LocalSeoRelatedPagesRequest,
     auth: dict = Depends(require_auth),
-) -> StreamingResponse:
-    return sse_response(local_seo_service.related_pages(
-        client_id=str(client_id),
-        keyword=body.keyword,
-        location=body.location,
-    ))
+) -> LocalSeoGenerateJob:
+    """Related-page discovery as a background job; poll `.../jobs/status`."""
+    job_id = await local_seo_service.enqueue_action(
+        str(client_id), "related_pages",
+        {"keyword": body.keyword, "location": body.location},
+        auth["user_id"],
+    )
+    return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
 
 @router.post("/clients/{client_id}/local-seo/silo-plan", response_model=LocalSeoSiloPlanJob)
@@ -293,19 +296,22 @@ async def reoptimize_local_seo_page_async(
     return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
 
-@router.post("/clients/{client_id}/local-seo/social-posts")
+@router.post("/clients/{client_id}/local-seo/social-posts", response_model=LocalSeoGenerateJob)
 async def social_posts_local_seo(
     client_id: UUID,
     body: LocalSeoSocialPostsRequest,
     auth: dict = Depends(require_auth),
-) -> StreamingResponse:
-    return sse_response(local_seo_service.social_posts(
-        client_id=str(client_id),
-        keyword=body.keyword,
-        location=body.location,
-        page_content=body.page_content,
-        serp_analysis=body.serp_analysis,
-    ))
+) -> LocalSeoGenerateJob:
+    """GBP social-post generation as a background job; poll `.../jobs/status`."""
+    job_id = await local_seo_service.enqueue_action(
+        str(client_id), "social_posts",
+        {
+            "keyword": body.keyword, "location": body.location,
+            "page_content": body.page_content, "serp_analysis": body.serp_analysis,
+        },
+        auth["user_id"],
+    )
+    return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
 
 @router.post("/clients/{client_id}/local-seo/rankability", response_model=LocalSeoRankabilityResponse)

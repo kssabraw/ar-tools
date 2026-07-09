@@ -1055,6 +1055,106 @@ async def social_posts(
     })
 
 
+# ── interactive actions as background jobs ───────────────────────────────────
+# precheck / analyze / find-page / score / related-pages / social-posts used to
+# be heartbeat-SSE streams: from the user's view the work died the moment they
+# navigated away (the connection dropped and there was no job to poll back into).
+# Enqueued as `local_seo_action` jobs instead, they run to completion in the
+# worker and their result dict is stored on the job row, so the UI can leave and
+# reconnect (poll get_jobs_status) to pick the result up — matching how
+# generate / reoptimize already behave.
+
+_ACTION_JOB_TYPE = "local_seo_action"
+
+
+async def enqueue_action(client_id: str, action: str, args: dict, user_id: str) -> str:
+    """Enqueue a `local_seo_action` job (precheck/analyze/find_page/score/
+    related_pages/social_posts). Returns the job id. The client is validated up
+    front so a bad id fails fast (404) before the job is created; the poller reads
+    the result via get_jobs_status."""
+    _get_client(client_id)  # validate ownership / existence
+    res = (
+        get_supabase()
+        .table("async_jobs")
+        .insert(
+            {
+                "job_type": _ACTION_JOB_TYPE,
+                "entity_id": client_id,
+                "payload": {
+                    "client_id": client_id,
+                    "action": action,
+                    "args": args or {},
+                    "user_id": user_id,
+                },
+            }
+        )
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+async def _run_action(action: str, client_id: str, args: dict, user_id: str) -> dict:
+    """Dispatch a local_seo_action to the matching service call; returns its
+    JSON-serializable result dict (stored on the job row and polled by the UI)."""
+    if action == "precheck":
+        from services import local_seo_precheck
+        from models.local_seo import LocalSeoPrecheckResult
+        result = await local_seo_precheck.detect_existing_pages(
+            client_id=client_id, keyword=args["keyword"], location=args["location"],
+            location_code=args.get("location_code"), user_id=user_id,
+        )
+        return LocalSeoPrecheckResult(**result).model_dump(mode="json")
+    if action == "analyze":
+        return await analyze(
+            client_id=client_id, keyword=args["keyword"], location=args["location"],
+            location_code=args.get("location_code"), force_refresh=bool(args.get("force_refresh")),
+        )
+    if action == "find_page":
+        return await find_page(client_id=client_id, keyword=args["keyword"], location=args["location"])
+    if action == "score":
+        return await score_page(
+            client_id=client_id, keyword=args["keyword"], location=args["location"],
+            location_code=args.get("location_code"), page_url=args.get("page_url"),
+            page_content=args.get("page_content"), serp_analysis=args.get("serp_analysis"),
+            user_id=user_id, force_refresh=bool(args.get("force_refresh")),
+        )
+    if action == "related_pages":
+        return await related_pages(client_id=client_id, keyword=args["keyword"], location=args["location"])
+    if action == "social_posts":
+        return await social_posts(
+            client_id=client_id, keyword=args["keyword"], location=args["location"],
+            page_content=args["page_content"], serp_analysis=args.get("serp_analysis"),
+        )
+    raise HTTPException(status_code=400, detail="unknown_local_seo_action")
+
+
+async def run_local_seo_action_job(job: dict) -> None:
+    """async_jobs handler for job_type='local_seo_action'. Runs the interactive
+    action in the background and stores its result dict on the job row (polled via
+    get_jobs_status), so the UI survives navigating away."""
+    payload = job.get("payload") or {}
+    action = payload.get("action")
+    job_id = job["id"]
+    supabase = get_supabase()
+    try:
+        result = await _run_action(
+            action, payload["client_id"], payload.get("args") or {}, payload.get("user_id"),
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": result, "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.info("local_seo.action_job_complete", extra={"job_id": job_id, "action": action})
+    except Exception as exc:  # noqa: BLE001 — record the failure for the poller
+        detail = getattr(exc, "detail", None) or str(exc)
+        logger.warning(
+            "local_seo.action_job_failed",
+            extra={"job_id": job_id, "action": action, "error": str(detail)},
+        )
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+
+
 # Columns returned for the page-list views (Saved Pages + Drafts).
 _LIST_COLUMNS = (
     "id, client_id, keyword, location, page_title, composite_score, "

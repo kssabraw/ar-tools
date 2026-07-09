@@ -276,6 +276,44 @@ async def run_brand_voice_scan_job(job: dict) -> None:
         )
 
 
+async def enqueue_scan(client_id: str, force: bool, user_id: str) -> str:
+    """Enqueue a `brand_voice_scan` job for a manual Generate/Re-scan. Returns the
+    job id. Runs in the worker (`run_brand_voice_scan_job`), which persists the
+    voice, so the UI can navigate away and reconnect (poll `get_scan_job`). The
+    caller should `ensure_scannable` first to surface the supersede 409 up front."""
+    _get_client(client_id)  # validate ownership / existence
+    res = (
+        get_supabase()
+        .table("async_jobs")
+        .insert(
+            {
+                "job_type": "brand_voice_scan",
+                "entity_id": client_id,
+                "payload": {"client_id": client_id, "user_id": user_id, "force": bool(force)},
+            }
+        )
+        .execute()
+    )
+    return res.data[0]["id"]
+
+
+def get_scan_job(job_id: str, client_id: str) -> dict:
+    """Poll a brand-voice scan job (scoped to the client). Returns {status, error}.
+    On completion the caller refetches the voice via `get_brand_voice`."""
+    res = (
+        get_supabase()
+        .table("async_jobs")
+        .select("status, error, entity_id")
+        .eq("id", job_id)
+        .limit(1)
+        .execute()
+    )
+    if not res.data or res.data[0].get("entity_id") != client_id:
+        raise HTTPException(status_code=404, detail="scan_job_not_found")
+    row = res.data[0]
+    return {"status": row["status"], "error": row.get("error")}
+
+
 def update(
     client_id: str,
     *,

@@ -3,6 +3,7 @@ import {
   AlertTriangle, ArrowLeft, CheckCircle, ChevronDown, ChevronUp, XCircle,
 } from 'lucide-react'
 import { localSeoApi } from './api'
+import { useResumableJob } from '../../lib/useResumableJob'
 import type { AnalysisResult, Deficiency, LocalSeoPageDetail, ScoreResult } from './types'
 import { Spinner } from './Spinner'
 import {
@@ -46,7 +47,6 @@ export function PageScoreView({
   onLeaveBackground,
 }: Props) {
   const [result, setResult] = useState<ScoreResult | null>(null)
-  const [scoring, setScoring] = useState(false)
   const [reoptimizing, setReoptimizing] = useState(false)
   const [error, setError] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -62,30 +62,45 @@ export function PageScoreView({
     if (reoptPollRef.current) clearTimeout(reoptPollRef.current)
   }, [])
 
+  // Score runs as a background job (it analyzes competitors first, which can take
+  // minutes). The in-flight job id is persisted, so navigating away and back
+  // reconnects and re-displays the score when it lands.
+  const scoreJob = useResumableJob<ScoreResult, null>({
+    storageKey: `localseo:score:${clientId}:${keyword}:${pageUrl ?? 'html'}`,
+    poll: async (jobId) => {
+      const [st] = await localSeoApi.jobsStatus(clientId, [jobId])
+      return st
+        ? { status: st.status, result: (st.result as ScoreResult | null) ?? null, error: st.error }
+        : { status: 'running' }
+    },
+    onComplete: (data) => {
+      if (!data) { setError('Scoring returned no result.'); return }
+      setResult(data)
+      setSelected(new Set(data.deficiencies.map(d => d.engine_key)))
+    },
+    onError: (err) => setError(err || 'Scoring failed'),
+  })
+
   const runScore = async () => {
-    setScoring(true)
     setError('')
-    try {
-      const data = await localSeoApi.score(clientId, {
+    await scoreJob.start(async () => {
+      const { job_id } = await localSeoApi.score(clientId, {
         keyword, location,
         page_url: pageUrl ?? null,
         page_content: pageHtml ?? null,
         serp_analysis: serpAnalysis ?? null,
       })
-      setResult(data)
-      setSelected(new Set(data.deficiencies.map(d => d.engine_key)))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Scoring failed')
-    } finally {
-      setScoring(false)
-    }
+      return job_id
+    }, null)
   }
+  const scoring = scoreJob.running
 
-  // Auto-score on mount — the user explicitly opted into scoring this page.
+  // Auto-score on mount — the user explicitly opted into scoring this page —
+  // unless a prior score job was already in flight (the hook reconnects to it).
   useEffect(() => {
     if (startedRef.current) return
     startedRef.current = true
-    void runScore()
+    if (scoreJob.phase === 'idle' && !result) void runScore()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const runReoptimize = async (deficiencies: Deficiency[]) => {

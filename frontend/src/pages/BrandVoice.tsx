@@ -5,6 +5,7 @@ import {
   ArrowLeft, Check, Pencil, RefreshCw, Sparkles, ThumbsDown, ThumbsUp, User, X,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useResumableJob } from '../lib/useResumableJob'
 import type { BrandVoice, BrandVoiceResponse, Client, VoiceProfile } from '../lib/types'
 import { brandVoiceApi } from '../components/brandvoice/api'
 import { Spinner } from '../components/localseo/Spinner'
@@ -49,10 +50,20 @@ export function BrandVoice() {
     queryClient.invalidateQueries({ queryKey: ['client', clientId] })
   }
 
-  const scanMut = useMutation({
-    mutationFn: (force: boolean) => brandVoiceApi.scan(clientId, force),
-    onSuccess: () => { invalidate(); setEditing(false) },
+  // Scan runs as a background job: enqueue, then poll the job status (persisted
+  // in localStorage so navigating away and back reconnects). On completion the
+  // voice has been written server-side, so we just refetch it.
+  const [scanError, setScanError] = useState<string | null>(null)
+  const scanJob = useResumableJob<null, { force: boolean }>({
+    storageKey: `brandvoice:scan:${clientId}`,
+    poll: (jobId) => brandVoiceApi.scanStatus(clientId, jobId),
+    onComplete: () => { invalidate(); setEditing(false) },
+    onError: (err) => setScanError(err),
   })
+  const startScan = (force: boolean) => {
+    setScanError(null)
+    void scanJob.start(async () => (await brandVoiceApi.scan(clientId, force)).job_id, { force })
+  }
 
   const saveMut = useMutation({
     mutationFn: (raw_text: string) => brandVoiceApi.update(clientId, { raw_text }),
@@ -65,7 +76,10 @@ export function BrandVoice() {
   })
 
   const startEdit = () => { setDraft(bv?.raw_text ?? ''); setEditing(true) }
-  const busyError = scanMut.error || saveMut.error || recMut.error
+  const busyError =
+    scanError ||
+    (saveMut.error ? String((saveMut.error as Error).message) : null) ||
+    (recMut.error ? String((recMut.error as Error).message) : null)
 
   return (
     <div style={{ padding: 32, maxWidth: 820 }}>
@@ -84,13 +98,13 @@ export function BrandVoice() {
 
       {busyError && (
         <div style={{ ...errorBox, marginBottom: 16 }}>
-          {String((busyError as Error).message)}
+          {busyError}
         </div>
       )}
 
       {isLoading ? (
         <div style={{ color: '#94a3b8', fontSize: 14 }}>Loading…</div>
-      ) : scanMut.isPending ? (
+      ) : scanJob.running ? (
         <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 12 }}>
           <Spinner size={18} />
           <span style={{ fontSize: 14, color: '#475569' }}>
@@ -110,14 +124,14 @@ export function BrandVoice() {
       ) : !hasContent(bv) ? (
         <EmptyState
           hasWebsite={hasWebsite}
-          onGenerate={() => scanMut.mutate(false)}
+          onGenerate={() => startScan(false)}
           onWriteOwn={startEdit}
         />
       ) : (
         <VoiceDisplay
           bv={bv!}
           onEdit={startEdit}
-          onRescan={() => scanMut.mutate(true)}
+          onRescan={() => startScan(true)}
           onAccept={() => recMut.mutate(true)}
           onReject={() => recMut.mutate(false)}
           recPending={recMut.isPending}
