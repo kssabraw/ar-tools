@@ -9,8 +9,10 @@ import {
   listSchedules,
   pauseSchedule,
   resumeSchedule,
+  updateScheduleCadence,
   updateSchedulePublishTargets,
   type ContentSchedule,
+  type ScheduleRequest,
 } from "../../shared/api";
 import { ScheduleModal } from "../../shared/ScheduleModal";
 import { useSession } from "../SessionWorkspace";
@@ -95,6 +97,8 @@ export function ScheduleView() {
               }}
               onUpdateTargets={(body) =>
                 act.mutate(() => updateSchedulePublishTargets(sessionId, s.id, body))}
+              onUpdateCadence={(body) =>
+                act.mutate(() => updateScheduleCadence(sessionId, s.id, body))}
             />
           ))}
         </div>
@@ -149,6 +153,11 @@ function ScheduleCard(p: {
   onResume: () => void;
   onCancel: () => void;
   onUpdateTargets: (body: { auto_publish?: boolean; wp_publish?: boolean; wp_status?: "draft" | "publish" }) => void;
+  onUpdateCadence: (body: {
+    mode: ScheduleRequest["mode"]; per_day?: number; start_date?: string;
+    time_of_day?: string; timezone?: string; weekday?: number;
+    day_of_month?: number; week_of_month?: number;
+  }) => void;
 }) {
   const { s } = p;
   // Publish destinations are editable only while paused (forward-only — applies to
@@ -250,6 +259,108 @@ function ScheduleCard(p: {
           </div>
         </div>
       )}
+
+      {canEditTargets && (
+        <CadenceEditor s={s} busy={p.busy} onApply={p.onUpdateCadence} />
+      )}
+    </div>
+  );
+}
+
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const CADENCE_MODES: [ScheduleRequest["mode"], string][] = [
+  ["all_at_once", "All at once"],
+  ["drip", "N/day"],
+  ["weekly", "N/week"],
+  ["monthly_date", "N/month (date)"],
+  ["monthly_weekday", "N/month (weekday)"],
+  ["fixed", "On a date"],
+];
+
+// Re-time the remaining articles of a PAUSED schedule (forward-only). Compact cadence
+// form; seeded from the schedule's current values, applied via the cadence endpoint.
+function CadenceEditor(p: {
+  s: ContentSchedule;
+  busy: boolean;
+  onApply: (body: {
+    mode: ScheduleRequest["mode"]; per_day?: number; start_date?: string;
+    time_of_day?: string; timezone?: string; weekday?: number;
+    day_of_month?: number; week_of_month?: number;
+  }) => void;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const tz = useMemo(() => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", []);
+  const [mode, setMode] = useState<ScheduleRequest["mode"]>(p.s.mode as ScheduleRequest["mode"]);
+  const [perDay, setPerDay] = useState(p.s.per_day ?? 1);
+  const [startDate, setStartDate] = useState(p.s.start_date ?? today);
+  const [timeOfDay, setTimeOfDay] = useState(p.s.time_of_day?.slice(0, 5) ?? "09:00");
+  const [weekday, setWeekday] = useState(0);
+  const [dayOfMonth, setDayOfMonth] = useState(1);
+  const [weekOfMonth, setWeekOfMonth] = useState(1);
+
+  const periodic = mode === "drip" || mode === "weekly"
+    || mode === "monthly_date" || mode === "monthly_weekday";
+  const usesDate = periodic || mode === "fixed";
+
+  const apply = () => p.onApply({
+    mode,
+    per_day: periodic ? perDay : undefined,
+    start_date: usesDate ? startDate : undefined,
+    time_of_day: usesDate ? timeOfDay : undefined,
+    timezone: tz,
+    weekday: mode === "weekly" || mode === "monthly_weekday" ? weekday : undefined,
+    day_of_month: mode === "monthly_date" ? dayOfMonth : undefined,
+    week_of_month: mode === "monthly_weekday" ? weekOfMonth : undefined,
+  });
+
+  return (
+    <div style={{ borderTop: "1px solid var(--border, #e5e7eb)", paddingTop: 8 }}>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+        Cadence for the remaining articles (paused — takes effect on resume):
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <select className="input" style={{ width: "auto", fontSize: 13 }} value={mode}
+          disabled={p.busy} onChange={(e) => setMode(e.target.value as ScheduleRequest["mode"])}>
+          {CADENCE_MODES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+
+        {periodic && (
+          <input className="input" type="number" min={1} value={perDay}
+            style={{ width: 70, fontSize: 13 }} disabled={p.busy}
+            onChange={(e) => setPerDay(Math.max(1, Number(e.target.value) || 1))}
+            title={mode === "drip" ? "Per day" : mode === "weekly" ? "Per week" : "Per month"} />
+        )}
+        {(mode === "weekly" || mode === "monthly_weekday") && (
+          <select className="input" style={{ width: "auto", fontSize: 13 }} value={weekday}
+            disabled={p.busy} onChange={(e) => setWeekday(Number(e.target.value))}>
+            {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+          </select>
+        )}
+        {mode === "monthly_weekday" && (
+          <select className="input" style={{ width: "auto", fontSize: 13 }} value={weekOfMonth}
+            disabled={p.busy} onChange={(e) => setWeekOfMonth(Number(e.target.value))}>
+            {[[1, "First"], [2, "Second"], [3, "Third"], [4, "Fourth"], [-1, "Last"]]
+              .map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        )}
+        {mode === "monthly_date" && (
+          <input className="input" type="number" min={1} max={31} value={dayOfMonth}
+            style={{ width: 70, fontSize: 13 }} disabled={p.busy}
+            onChange={(e) => setDayOfMonth(Math.min(31, Math.max(1, Number(e.target.value) || 1)))}
+            title="Day of month" />
+        )}
+        {usesDate && (
+          <input className="input" type="date" value={startDate} min={today}
+            style={{ width: "auto", fontSize: 13 }} disabled={p.busy}
+            onChange={(e) => setStartDate(e.target.value)} />
+        )}
+        {usesDate && (
+          <input className="input" type="time" value={timeOfDay}
+            style={{ width: "auto", fontSize: 13 }} disabled={p.busy}
+            onChange={(e) => setTimeOfDay(e.target.value)} />
+        )}
+        <button className="btn btn-sm" disabled={p.busy} onClick={apply}>Apply cadence</button>
+      </div>
     </div>
   );
 }

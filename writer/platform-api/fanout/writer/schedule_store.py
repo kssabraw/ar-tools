@@ -134,6 +134,44 @@ def set_schedule_status(schedule_id: str, status: str) -> None:
         "id", schedule_id).execute()
 
 
+def queued_runs_ordered(schedule_id: str) -> list[dict]:
+    """The schedule's still-queued runs, in their planned order (by scheduled_at).
+    These are the articles a cadence change re-times — completed/running ones are
+    left alone. Paged above the ~1000-row read cap."""
+    client = get_service_client()
+    out: list[dict] = []
+    page = 0
+    while True:
+        rows = (client.table("scheduled_article_runs").select("id, cluster_id, scheduled_at")
+                .eq("content_schedule_id", schedule_id).eq("status", "queued")
+                .order("scheduled_at").order("id")
+                .range(page * 1000, page * 1000 + 999).execute().data or [])
+        out.extend(rows)
+        if len(rows) < 1000:
+            return out
+        page += 1
+
+
+def apply_reschedule(queued_runs: list[dict], planned_runs: list) -> int:
+    """Re-time queued runs to `planned_runs` (positionally — plan_runs preserves input
+    order). Groups runs sharing a target datetime into one update, so the write cost is
+    ~one call per distinct period, not per article. Still filtered on status='queued' so
+    a run the worker claimed between read and write is never stomped. Returns runs touched."""
+    from collections import defaultdict
+
+    client = get_service_client()
+    groups: dict[str, list[str]] = defaultdict(list)
+    for run, planned in zip(queued_runs, planned_runs):
+        groups[planned.scheduled_at.isoformat()].append(run["id"])
+    touched = 0
+    for iso, ids in groups.items():
+        for start in range(0, len(ids), 200):
+            res = (client.table("scheduled_article_runs").update({"scheduled_at": iso})
+                   .in_("id", ids[start:start + 200]).eq("status", "queued").execute())
+            touched += len(res.data or [])
+    return touched
+
+
 def update_schedule_fields(schedule_id: str, fields: dict) -> dict | None:
     """Patch arbitrary columns on a schedule (used for mid-run publish-target edits:
     auto_publish / wp_publish / wp_status). Returns the updated row. The worker reads
