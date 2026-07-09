@@ -175,8 +175,8 @@ async def test_auth_failure_maps_to_auth_error(monkeypatch):
 @pytest.mark.asyncio
 async def test_seo_title_routed_to_seo_plugin_meta(monkeypatch):
     """A distinct SEO title lands in each supported SEO plugin's meta-title field
-    (SEOPress + Rank Math), separate from the WordPress post title (the H1). The
-    site keeps whichever key its installed plugin registered."""
+    (SEOPress, Rank Math, Yoast), separate from the WordPress post title (the
+    H1). The site keeps whichever key its installed plugin registered."""
     capture = {}
     _patch(monkeypatch, _FakeResponse(201, {"id": 1, "link": "u", "status": "draft"}), capture)
     await publish_to_wordpress(
@@ -190,6 +190,7 @@ async def test_seo_title_routed_to_seo_plugin_meta(monkeypatch):
     assert capture["json"]["meta"] == {
         "_seopress_titles_title": seo,
         "rank_math_title": seo,
+        "_yoast_wpseo_title": seo,
     }
 
 

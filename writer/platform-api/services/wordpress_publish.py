@@ -45,9 +45,12 @@ _LEADING_H1_RE = re.compile(
 # each drives the <title> tag independently of the WordPress post title. We set
 # every known key; only the one the site's installed plugin registered takes
 # effect, and the rest are a no-op (the WP REST API silently ignores meta keys
-# that aren't registered for the site). SEOPress: `_seopress_titles_title`;
-# Rank Math: `rank_math_title`.
-_SEO_TITLE_META_KEYS = ("_seopress_titles_title", "rank_math_title")
+# that aren't registered for the site). SEOPress (`_seopress_titles_title`) and
+# Rank Math (`rank_math_title`) register their key for REST out of the box.
+# Yoast (`_yoast_wpseo_title`) does NOT — its title meta isn't REST-writable by
+# default, so on a stock Yoast site this key is ignored; it takes effect only
+# when the site registers the key for REST (a one-time mu-plugin snippet).
+_SEO_TITLE_META_KEYS = ("_seopress_titles_title", "rank_math_title", "_yoast_wpseo_title")
 
 
 def _strip_leading_h1(html: str) -> str:
@@ -350,10 +353,11 @@ async def publish_to_wordpress(
     (the fanout writer).
 
     `seo_title` (when distinct from `title`) is written to the SEO plugin's
-    meta-title field (SEOPress + Rank Math) so the <title> tag / SERP result
-    differs from the on-page H1; it is a no-op on sites without a supported SEO
-    plugin. `strip_leading_h1` removes a duplicate H1 from the top of the body
-    (the post title already supplies the page's H1).
+    meta-title field (SEOPress + Rank Math out of the box; Yoast when the site
+    registers its key for REST) so the <title> tag / SERP result differs from the
+    on-page H1; it is a no-op on sites without a supported SEO plugin.
+    `strip_leading_h1` removes a duplicate H1 from the top of the body (the post
+    title already supplies the page's H1).
 
     Raises WordPressPublishError on missing config, a bad status, or a
     transport/API failure."""
