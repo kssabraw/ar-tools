@@ -32,6 +32,7 @@ fetch + Claude call + Slack post do I/O.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -68,12 +69,15 @@ _MENTION_RE = re.compile(r"<@[A-Z0-9]+>")
 _SIG_MAX_SKEW_SECONDS = 60 * 5  # reject events older than 5 min (replay guard)
 
 _SYSTEM = (
-    "You are SerMastr, an in-house SEO strategist for an agency, answering a "
-    "teammate in Slack. You are given a JSON object describing ONE client across "
-    "the agency's SEO modules, keyed by module:\n"
+    "You are SerMastr, the agency's Director of SEO — a senior strategist "
+    "teammates come to for judgment, not just data. You are given a JSON object "
+    "describing ONE client across the agency's SEO modules, keyed by module:\n"
     "- campaign_goals: the client's success targets (rank, traffic, AI-visibility, "
     "local-pack goals) with a deterministic status each — achieved/on_track/behind/"
     "overdue.\n"
+    "- memories: durable notes YOU saved in past conversations (decisions, "
+    "commitments, client facts, preferences). Treat them as ground truth about "
+    "intent and history — follow up on commitments that are due.\n"
     "- competitors: named competitors profiled across every module — local-pack pins, "
     "GBP rating/reviews, DR/referring domains (tool reads — true RD ≈ ×10), organic "
     "top-10 keyword overlap, review velocity, and new pages they published in the last "
@@ -125,6 +129,43 @@ _SYSTEM = (
     "Slack-friendly (you may use *bold* and bullets). Lead with the answer. As a "
     "strategist, you may connect signals across modules when relevant (e.g. a "
     "ranking drop + a content gap). Never invent numbers or modules.\n\n"
+    "DIRECTOR'S VOICE: speak in the first person with a point of view — you own "
+    "these campaigns. Have opinions and commit to them: when the data supports a "
+    "call, make the call ('I'd put this month's budget into the location pages — "
+    "here's why') instead of listing neutral options. Push back when a teammate's "
+    "ask contradicts the data or an SOP: say what you'd do instead and show the "
+    "number or citation that changed your mind — respectfully, but don't be a "
+    "yes-machine. Volunteer what matters: if you notice something important the "
+    "teammate didn't ask about (an open drop, a goal quietly going behind, a "
+    "competitor move), append a one-line heads-up. End turns with the ball in "
+    "play — a concrete next move you can run or they can decide on ('Want me to "
+    "queue the scan?'), not a summary. Prioritize like a director: when several "
+    "things compete, say which you'd do first and why. Uncertainty is fine — "
+    "state it plainly ('the data's thin here, I'm 60/40') rather than hedging "
+    "with fluff.\n\n"
+    "BE CONVERSATIONAL — ASK WHEN UNSURE: you're a colleague in a back-and-forth, "
+    "not a one-shot answer box. When a request is ambiguous, underspecified, or you "
+    "need a detail to answer well or act correctly, ask a brief clarifying question "
+    "rather than guessing. Trigger cases: a keyword/page/metric they name could "
+    "match more than one thing; a goal, target, or timeframe is missing ('improve "
+    "our rankings' — which keywords, and by when?); an action needs a parameter they "
+    "didn't give; or two readings of the message would lead to different "
+    "answers/actions. Ask ONE focused question at a time, and still lead with "
+    "whatever you CAN already answer or observe so the turn isn't just a question. "
+    "Don't over-ask: when a sensible default exists, proceed and state the "
+    "assumption you made so they can correct it — reserve questions for gaps that "
+    "actually change the outcome. (Client identity and permission are already "
+    "handled for you: you'll be told which client, and every change is confirmed "
+    "before it runs — so don't spend a clarifying question on those.)\n\n"
+    "MEMORY: the `remember` tool saves one short durable note about this client "
+    "that you'll see in every future conversation (the memories module). Save "
+    "what a director writes down: decisions made in the conversation, "
+    "commitments ('we'll fund a link round in August'), client facts the suite "
+    "doesn't track, owner/teammate preferences, deadlines. Don't save what the "
+    "suite already tracks, and don't narrate the save — a brief 'noted' woven "
+    "into your reply is enough. When an existing memory is relevant, USE it: "
+    "reference past decisions naturally ('last time we agreed…'), and if a "
+    "commitment looks unmet or due, raise it.\n\n"
     "LIVE DATA: the stored context above is refreshed on a schedule (GSC daily, "
     "DataForSEO weekly). Two tools get you fresher reads:\n"
     "- fetch_live_gsc (free, use directly): pulls LIVE Search Console rows for the "
@@ -219,6 +260,27 @@ _SYSTEM = (
     "- AI visibility: single results are noisy by design — one engine flipping on one "
     "keyword is NOT a trend; read batch rollups and cross-batch trends; engines are "
     "not interchangeable (AIO/AI-Mode lean on GBP + top organic, ChatGPT leans Bing)."
+)
+
+# Portfolio mode — the turn names no client, so SerMastr answers at agency
+# altitude from a cross-client snapshot instead of asking "which client?".
+_PORTFOLIO_SYSTEM = (
+    "You are SerMastr, the agency's Director of SEO, answering a teammate about "
+    "the WHOLE client portfolio — no single client was named. You get a JSON "
+    "snapshot of every client: open ranking-drop alerts, open local-pack (Maps) "
+    "alerts, open offpage alerts, unread notifications, open campaign goals, and "
+    "an active FREEZE flag (a frozen client has all content/link output paused — "
+    "always the most urgent thing on the board). Answer agency-wide questions "
+    "from it: who needs attention this week, what's on fire, portfolio health. "
+    "Triage like a director — freezes first, then clients stacking multiple open "
+    "alerts, then drops, then quiet clients with nothing tracked (a setup gap "
+    "worth naming). Be concise and first-person: lead with the answer, name "
+    "specific clients with their numbers, and say which ONE thing you'd handle "
+    "first and why. This snapshot is counts only — for the detail behind a "
+    "number (which keywords, why it dropped) or to run/change anything, tell the "
+    "teammate to ask about that client by name and you'll pull the full picture. "
+    "If their question is really about one specific client you can't identify, "
+    "ask which client they mean. Never invent numbers or clients."
 )
 
 # Appended to the system prompt when the assistant speaks through the dashboard
@@ -362,6 +424,22 @@ def is_local_client(client: dict, local_seo_pages: int = 0, maps_scans: int = 0)
     )
 
 
+_PORTFOLIO_RE = re.compile(
+    r"\b(all|which|any|our|the|every|across)\s+(of\s+(our|the)\s+)?clients\b"
+    r"|\bportfolio\b|\bevery\s+client\b|\bacross\s+the\s+board\b|\bagency[- ]wide\b",
+    re.IGNORECASE,
+)
+
+
+def wants_portfolio(text: str) -> bool:
+    """Whether a message asks about the whole client portfolio. Pure.
+
+    Conservative phrase gate — used to lift a web-chat turn out of its sticky
+    single-client scope ('which clients need attention?' while scoped to Acme).
+    A message that NAMES a client always wins over this (checked by callers)."""
+    return bool(_PORTFOLIO_RE.search(text or ""))
+
+
 def is_affirmative(text: str) -> bool:
     """Whether a reply confirms a pending action (a 'yes'). Pure."""
     t = (text or "").strip().lower().rstrip("!.")
@@ -400,6 +478,56 @@ def build_context(client_id: str, today: Optional[date] = None) -> dict:
                 extra={"client_id": client_id, "ctx_module": key, "error": str(exc)},
             )
     return ctx
+
+
+def build_portfolio_context() -> dict:
+    """Cross-client attention snapshot for portfolio-mode turns (no client named).
+
+    Counts only — cheap batch reads, one per table, each isolated so a missing
+    table/column never breaks the turn. The per-client detail stays in
+    `build_context`; this answers "who needs attention?" at agency altitude.
+    """
+    supabase = get_supabase()
+    clients = (
+        supabase.table("clients").select("id, name, website_url").order("name").execute()
+    ).data or []
+
+    def _counts(table: str, filters) -> dict[str, int]:
+        try:
+            q = supabase.table(table).select("client_id")
+            rows = filters(q).execute().data or []
+        except Exception as exc:
+            logger.warning("portfolio_ctx_read_failed", extra={"table": table, "error": str(exc)})
+            return {}
+        out: dict[str, int] = {}
+        for r in rows:
+            cid = r.get("client_id")
+            if cid:
+                out[cid] = out.get(cid, 0) + 1
+        return out
+
+    rank_drops = _counts("rank_alerts", lambda q: q.is_("resolved_at", "null"))
+    maps_alerts = _counts("maps_alerts", lambda q: q.is_("resolved_at", "null"))
+    offpage = _counts("offpage_alerts", lambda q: q.is_("resolved_at", "null"))
+    unread = _counts("notifications", lambda q: q.eq("status", "unread"))
+    open_goals = _counts("campaign_goals", lambda q: q.is_("achieved_at", "null"))
+    frozen = set(_counts("client_freezes", lambda q: q.eq("status", "active")))
+
+    return {
+        "clients": [
+            {
+                "name": c.get("name"),
+                "frozen": c["id"] in frozen,
+                "open_rank_drops": rank_drops.get(c["id"], 0),
+                "open_maps_alerts": maps_alerts.get(c["id"], 0),
+                "open_offpage_alerts": offpage.get(c["id"], 0),
+                "open_goals": open_goals.get(c["id"], 0),
+                "unread_notifications": unread.get(c["id"], 0),
+            }
+            for c in clients
+        ],
+        "client_count": len(clients),
+    }
 
 
 # --- Module context providers (each: (supabase, client_id, today) -> dict|None) ---
@@ -1215,9 +1343,86 @@ def _read_sop_tool() -> dict:
     }
 
 
+# --- Durable memory (the `remember` tool + the memories context module) -----
+_MEMORY_CONTEXT_LIMIT = 30  # newest notes folded into each answer's context
+_MEMORY_KEEP = 100  # hard per-client cap — oldest rows trimmed past this
+
+_MEMORY_TOOL = {
+    "name": "remember",
+    "description": (
+        "Save one short durable note about this client to your long-term memory "
+        "(free — no confirmation; it appears in the `memories` module of every "
+        "future conversation about them). Use it when the conversation produces "
+        "something worth recalling weeks later: a decision, a commitment ('we'll "
+        "push location pages next month'), a client fact the suite doesn't track, "
+        "a teammate/owner preference, a deadline. Don't save data the suite "
+        "already tracks (ranks, alerts, goals) or conversational trivia."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "note": {
+                "type": "string",
+                "description": "The note — one short, self-contained sentence.",
+            }
+        },
+        "required": ["note"],
+    },
+}
+
+
+def _run_remember(client_id: str, args: dict, source: str) -> str:
+    """Persist one memory note; trims the store past the per-client cap."""
+    note = str(args.get("note") or "").strip()
+    if not note:
+        return "Nothing to save — pass a short note."
+    supabase = get_supabase()
+    supabase.table("assistant_memories").insert(
+        {"client_id": client_id, "content": note[:500], "source": source}
+    ).execute()
+    overflow = (
+        supabase.table("assistant_memories")
+        .select("id")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .range(_MEMORY_KEEP, _MEMORY_KEEP + 50)
+        .execute()
+    ).data or []
+    if overflow:
+        supabase.table("assistant_memories").delete().in_(
+            "id", [r["id"] for r in overflow]
+        ).execute()
+    return "Saved to memory."
+
+
+def _ctx_memories(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Durable notes saved by the `remember` tool in past conversations."""
+    rows = (
+        supabase.table("assistant_memories")
+        .select("content, source, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(_MEMORY_CONTEXT_LIMIT)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    return {
+        "notes": [
+            {
+                "note": r["content"],
+                "when": str(r.get("created_at") or "")[:10],
+                "source": r.get("source"),
+            }
+            for r in rows
+        ]
+    }
+
+
 # Registry — append a provider here to give SerMastr a new module (see build_context).
 _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
+    ("memories", _ctx_memories),
     ("competitors", _ctx_competitors),
     ("forecast", _ctx_forecast),
     ("trends", _ctx_trends),
@@ -2567,10 +2772,36 @@ def build_llm_tools() -> list[dict]:
     return tools
 
 
-async def _create_with_continuation(
-    api, system: str, messages: list[dict], tools: list[dict], tool_choice: Optional[dict] = None
+async def _one_llm_call(
+    api, system: str, messages: list[dict], tools: list[dict],
+    kwargs: dict, on_text=None,
 ):
-    """messages.create with bounded `pause_turn` continuation.
+    """One messages call — plain create, or a token stream when `on_text` is set.
+
+    `on_text` (an async callable taking a text delta) receives the answer as it
+    generates — the dashboard chat's SSE path. The returned message is the same
+    final object either way, so callers are stream-agnostic."""
+    call_kwargs = {
+        "model": settings.slack_assistant_model,
+        "max_tokens": settings.slack_assistant_max_tokens,
+        "system": system,
+        "messages": messages,
+        **({"tools": tools} if tools else {}),
+        **kwargs,
+    }
+    if on_text is None:
+        return await api.messages.create(**call_kwargs)
+    async with api.messages.stream(**call_kwargs) as stream:
+        async for delta in stream.text_stream:
+            await on_text(delta)
+        return await stream.get_final_message()
+
+
+async def _create_with_continuation(
+    api, system: str, messages: list[dict], tools: list[dict],
+    tool_choice: Optional[dict] = None, on_text=None,
+):
+    """messages call with bounded `pause_turn` continuation.
 
     A server-side web-search loop can pause a long turn (`stop_reason ==
     "pause_turn"`); re-sending the conversation with the assistant content
@@ -2579,26 +2810,12 @@ async def _create_with_continuation(
     fetch_live_gsc) keeps a consistent history. Bounded so a pathological
     turn can't spin forever — on exhaustion the last response is used as-is."""
     kwargs = {"tool_choice": tool_choice} if tool_choice else {}
-    resp = await api.messages.create(
-        model=settings.slack_assistant_model,
-        max_tokens=settings.slack_assistant_max_tokens,
-        system=system,
-        tools=tools,
-        messages=messages,
-        **kwargs,
-    )
+    resp = await _one_llm_call(api, system, messages, tools, kwargs, on_text)
     for _ in range(_PAUSE_TURN_CONTINUATIONS):
         if getattr(resp, "stop_reason", None) != "pause_turn":
             break
         messages.append({"role": "assistant", "content": resp.content})
-        resp = await api.messages.create(
-            model=settings.slack_assistant_model,
-            max_tokens=settings.slack_assistant_max_tokens,
-            system=system,
-            tools=tools,
-            messages=messages,
-            **kwargs,
-        )
+        resp = await _one_llm_call(api, system, messages, tools, kwargs, on_text)
     return resp
 
 
@@ -2618,7 +2835,7 @@ def extract_interpretation(content: list) -> tuple[str, object]:
 
 async def interpret(
     question: str, client: dict, context: dict, history: Optional[list[dict]] = None,
-    style: str = "slack",
+    style: str = "slack", on_event=None,
 ) -> tuple[str, object]:
     """Decide whether the message is a question or an action request.
 
@@ -2631,6 +2848,8 @@ async def interpret(
     rounds and folded back into the answer; web-search turns additionally
     resume through `pause_turn` continuations. An action call ⇒ ("action", …).
     `style="web"` swaps the Slack-mrkdwn voice for dashboard-chat Markdown.
+    `on_event` (async callable) streams the turn: {"type":"text","text":delta}
+    token deltas plus {"type":"status","label":…} tool-activity markers.
     """
     import anthropic
 
@@ -2660,18 +2879,23 @@ async def interpret(
         max_retries=_LLM_MAX_RETRIES,
     )
     messages: list[dict] = [{"role": "user", "content": user}]
-    tools = build_llm_tools() + [_read_sop_tool(), _LIVE_GSC_TOOL]
+    tools = build_llm_tools() + [_read_sop_tool(), _LIVE_GSC_TOOL, _MEMORY_TOOL]
     # Bounded tool loop: read_sop / fetch_live_gsc calls are answered
     # in-conversation; an action call returns immediately (actions never mix
     # with in-answer tool reads — first wins).
     max_rounds = max(settings.slack_assistant_sop_rounds, _LIVE_GSC_ROUNDS)
     system = _SYSTEM + (_WEB_STYLE if style == "web" else "")
+
+    async def on_text(delta: str) -> None:
+        await on_event({"type": "text", "text": delta})
+
     for round_no in range(max_rounds + 1):
         final_round = round_no == max_rounds
         try:
             resp = await _create_with_continuation(
                 api, system, messages, tools,
                 tool_choice={"type": "none"} if final_round else None,
+                on_text=on_text if on_event else None,
             )
         except anthropic.APIStatusError as exc:
             # Capacity exhaustion (retries included) is transient, not a fault —
@@ -2689,7 +2913,7 @@ async def interpret(
         tool_calls = [
             b for b in resp.content
             if getattr(b, "type", None) == "tool_use"
-            and b.name in ("read_sop", _LIVE_GSC_TOOL["name"])
+            and b.name in ("read_sop", _LIVE_GSC_TOOL["name"], _MEMORY_TOOL["name"])
         ]
         if not tool_calls or final_round:
             break
@@ -2697,8 +2921,20 @@ async def interpret(
         results = []
         for b in tool_calls:
             args = dict(b.input or {})
+            if on_event:
+                label = {
+                    "read_sop": f"Reading SOP: {args.get('doc', '')}".strip().rstrip(":"),
+                    _LIVE_GSC_TOOL["name"]: "Pulling live Search Console data",
+                    _MEMORY_TOOL["name"]: "Saving a note to memory",
+                }.get(b.name, "Working")
+                await on_event({"type": "status", "label": label})
             if b.name == "read_sop":
                 text = sop_library.read_sop(args.get("doc", ""), args.get("section"))
+            elif b.name == _MEMORY_TOOL["name"]:
+                text = await asyncio.to_thread(
+                    _run_remember, client["id"], args,
+                    "slack" if style == "slack" else "chat",
+                )
             else:
                 text = await _run_live_gsc(client["id"], args)
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": text})
@@ -2707,7 +2943,55 @@ async def interpret(
                 {"type": "text", "text": "Tool budget exhausted — answer now with what you have."}
             )
         messages.append({"role": "user", "content": results})
-    return extract_interpretation(resp.content)
+    kind, payload = extract_interpretation(resp.content)
+    if kind == "text" and getattr(resp, "stop_reason", None) == "max_tokens":
+        # Ran out of room — close cleanly instead of stopping mid-sentence. The
+        # truncated reply stays in history, so "continue" picks the thought up.
+        payload = str(payload).rstrip() + "\n\n_…I hit my reply-length limit — say “continue” and I'll pick up where I left off._"
+    return (kind, payload)
+
+
+async def interpret_portfolio(
+    question: str, portfolio: dict, history: Optional[list[dict]] = None,
+    style: str = "slack", on_event=None,
+) -> str:
+    """Answer an agency-wide question (no client named) from the cross-client
+    snapshot. One call, no tools — the snapshot is counts; per-client depth and
+    actions route through the single-client path once a client is named."""
+    import anthropic
+
+    blocks = []
+    if history:
+        blocks.append("Conversation so far (oldest first):\n" + format_history(history))
+    blocks.append(f"Latest message: {question}")
+    blocks.append(
+        "Portfolio snapshot (JSON):\n"
+        + json.dumps(portfolio, default=str, ensure_ascii=False)
+    )
+    api = anthropic.AsyncAnthropic(
+        api_key=settings.anthropic_api_key,
+        timeout=_LLM_TIMEOUT,
+        max_retries=_LLM_MAX_RETRIES,
+    )
+    system = _PORTFOLIO_SYSTEM + (_WEB_STYLE if style == "web" else "")
+
+    async def on_text(delta: str) -> None:
+        await on_event({"type": "text", "text": delta})
+
+    try:
+        resp = await _one_llm_call(
+            api, system, [{"role": "user", "content": "\n\n".join(blocks)}], [],
+            {}, on_text if on_event else None,
+        )
+    except anthropic.APIStatusError as exc:
+        if exc.status_code in _CAPACITY_STATUS_CODES:
+            return _BUSY_REPLY
+        raise
+    parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
+    reply = "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing."
+    if getattr(resp, "stop_reason", None) == "max_tokens":
+        reply += "\n\n_…I hit my reply-length limit — say “continue” and I'll pick up where I left off._"
+    return reply
 
 
 async def _run_action(name: str, client_id: str, args: Optional[dict]) -> str:
@@ -2795,13 +3079,18 @@ async def handle_message(event: dict) -> None:
         ).data or []
         client = resolve_client(question, clients)
         if not client:
-            names = ", ".join(c["name"] for c in clients[:8] if c.get("name"))
-            await post_message(
-                channel,
-                "Which client do you mean? Name them in your message"
-                + (f" — e.g. {names}." if names else "."),
-                thread_ts,
-            )
+            # Portfolio mode — a Director answers agency-wide questions instead
+            # of demanding a client name; the prompt asks "which client?" itself
+            # when the question is really about one it can't identify.
+            history = []
+            if event.get("thread_ts") and event.get("thread_ts") != event.get("ts"):
+                try:
+                    history = await fetch_thread_history(channel, event["thread_ts"], event.get("ts"))
+                except Exception as exc:
+                    logger.warning("slack_thread_history_failed", extra={"channel": channel, "error": str(exc)})
+            portfolio = build_portfolio_context()
+            reply = await interpret_portfolio(question, portfolio, history)
+            await post_message(channel, reply, thread_ts)
             return
 
         history: list[dict] = []

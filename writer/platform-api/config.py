@@ -285,7 +285,12 @@ class Settings(BaseSettings):
     slack_signing_secret: str = ""
     slack_assistant_enabled: bool = True
     slack_assistant_model: str = "claude-sonnet-4-6"
-    slack_assistant_max_tokens: int = 900
+    # Reply length hard stop. 900 clipped SOP-grounded strategy answers
+    # mid-sentence ("Want me to run a full…") — 2000 gives Director's-voice
+    # replies (opinion + numbers + citations + next move) room; the prompt's
+    # "be concise" rule is the real length governor. Still-truncated replies
+    # get an explicit "say continue" marker appended (see interpret()).
+    slack_assistant_max_tokens: int = 2000
     slack_assistant_max_keywords: int = 60   # cap keywords folded into the LLM context
     # Anthropic's server-side web_search tool on the assistant's Claude call —
     # lets SerMastr look up public info (reviews on TrustPilot/Google, competitor

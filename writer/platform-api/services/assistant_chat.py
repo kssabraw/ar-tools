@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi.concurrency import run_in_threadpool
@@ -94,6 +95,51 @@ def resolve_chat_client(
 
 
 # ---------------------------------------------------------------------------
+# Opening brief — the "since you were last here" digest on the /assistant page.
+# ---------------------------------------------------------------------------
+_BRIEF_HOURS = 48
+_BRIEF_LIMIT = 12
+
+
+def build_brief() -> dict:
+    """Deterministic recent-activity digest from the notifications feed.
+
+    No LLM — this greets the empty chat with what changed (drops opened, goals
+    hit, reports delivered) so the page opens with situational awareness. The
+    conversation itself starts when the user replies to any of it."""
+    supabase = get_supabase()
+    since = (datetime.now(timezone.utc) - timedelta(hours=_BRIEF_HOURS)).isoformat()
+    rows = (
+        supabase.table("notifications")
+        .select("client_id, kind, severity, title, created_at")
+        .gte("created_at", since)
+        .order("created_at", desc=True)
+        .limit(_BRIEF_LIMIT)
+        .execute()
+    ).data or []
+    names: dict[str, str] = {}
+    ids = list({r["client_id"] for r in rows if r.get("client_id")})
+    if ids:
+        for c in (
+            supabase.table("clients").select("id, name").in_("id", ids).execute()
+        ).data or []:
+            names[c["id"]] = c["name"]
+    return {
+        "window_hours": _BRIEF_HOURS,
+        "items": [
+            {
+                "client_name": names.get(r.get("client_id")),
+                "kind": r.get("kind"),
+                "severity": r.get("severity"),
+                "title": r.get("title"),
+                "created_at": r.get("created_at"),
+            }
+            for r in rows
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
 # The chat turn.
 # ---------------------------------------------------------------------------
 def _list_clients() -> list[dict]:
@@ -107,12 +153,16 @@ async def handle_chat(
     history: list[dict],
     sticky_client_id: Optional[str],
     pending_token: Optional[str],
+    on_event=None,
 ) -> dict:
     """Process one chatbox turn; returns the response payload dict.
 
     Shape: {reply, client_id?, client_name?, pending_token?} — `pending_token`
     is set when a confirm-gated action was staged and the frontend should offer
     a Confirm affordance (an affirmative reply carrying the token executes it).
+    `on_event` (async callable) streams the turn as it generates — text deltas
+    + tool-activity status markers — for the SSE endpoint; the returned dict is
+    the same either way (the frontend renders the final reply from it).
     """
     history = history[-_HISTORY_LIMIT:]
 
@@ -132,16 +182,28 @@ async def handle_chat(
 
     clients = await run_in_threadpool(_list_clients)
     client = resolve_chat_client(message, sticky_client_id, clients)
+    # An explicitly agency-wide ask ("which clients need attention?") lifts the
+    # turn out of the sticky single-client scope — but a NAMED client always wins.
+    if (
+        client
+        and slack_assistant.wants_portfolio(message)
+        and not slack_assistant.resolve_client(message, clients)
+    ):
+        client = None
     if not client:
-        names = ", ".join(c["name"] for c in clients[:8] if c.get("name"))
-        return {
-            "reply": "Which client do you mean? Name them in your message"
-            + (f" — e.g. {names}." if names else "."),
-        }
+        # Portfolio mode: answer at agency altitude from the cross-client
+        # snapshot; the prompt asks "which client?" itself when the question is
+        # really about one client it can't identify. Sticky scope is untouched
+        # (no client_id in the reply ⇒ the frontend keeps its current chip).
+        portfolio = await run_in_threadpool(slack_assistant.build_portfolio_context)
+        reply = await slack_assistant.interpret_portfolio(
+            message, portfolio, history, style="web", on_event=on_event
+        )
+        return {"reply": reply}
 
     context = await run_in_threadpool(slack_assistant.build_context, client["id"])
     kind, payload = await slack_assistant.interpret(
-        message, client, context, history, style="web"
+        message, client, context, history, style="web", on_event=on_event
     )
     base = {"client_id": client["id"], "client_name": client.get("name")}
 

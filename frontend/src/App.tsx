@@ -5,6 +5,7 @@ import { ProtectedRoute, AdminRoute } from './components/ProtectedRoute'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
 import { Home } from './pages/Home'
+import { Assistant } from './pages/Assistant'
 import { Runs } from './pages/Runs'
 import { RunDetail } from './pages/RunDetail'
 import { Clients } from './pages/Clients'
@@ -63,6 +64,7 @@ export default function App() {
                   <Layout>
                     <Routes>
                       <Route path="/" element={<Home />} />
+                      <Route path="/assistant" element={<Assistant />} />
                       {/* Topic Fan-out, merged in (Option C) — a native route
                           subtree that renders inside the suite Layout, so it
                           shares the suite sidebar. */}
