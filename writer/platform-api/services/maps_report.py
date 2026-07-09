@@ -30,8 +30,12 @@ from services.google_docs import GoogleDocError, create_google_doc
 
 logger = logging.getLogger(__name__)
 
-# Max concurrent per-keyword report generations within one scan's job.
-_REPORT_CONCURRENCY = 5
+# Max concurrent saved-map-image renders within one scan's job. This is a Google
+# Static Maps fetch + Supabase upload per keyword — NOT an Anthropic call — so it
+# is safe to keep parallel and is not throttled to the account's concurrent-
+# connections limit. The per-keyword LLM narrative fan-out is capped separately by
+# settings.maps_report_concurrency (see run_maps_report_job).
+_IMAGE_CONCURRENCY = 5
 
 # Generic tokens in a keyword that aren't a brandable "name keyword" signal.
 _STOPWORDS = {
@@ -647,7 +651,7 @@ async def run_maps_report_job(job: dict) -> None:
         # and must survive a failed narrative. Best-effort, bounded, isolated —
         # keyed by result id so both the success and failed updates below can stamp
         # map_image_url and the Doc can embed it.
-        img_sem = asyncio.Semaphore(_REPORT_CONCURRENCY)
+        img_sem = asyncio.Semaphore(_IMAGE_CONCURRENCY)
 
         async def _gen_image(result_row: dict) -> tuple[str, Optional[str]]:
             async with img_sem:
@@ -671,10 +675,13 @@ async def run_maps_report_job(job: dict) -> None:
 
         # Generate per-keyword reports concurrently (each is a ~1-min LLM call) so
         # a multi-keyword scan doesn't hold the single async-job worker for many
-        # minutes serially. Bounded so a large keyword set can't fan out an
-        # unbounded burst of Anthropic calls. Each keyword still fails in
-        # isolation; Supabase writes (sync) are done after, off the gather.
-        sem = asyncio.Semaphore(_REPORT_CONCURRENCY)
+        # minutes serially. Capped at settings.maps_report_concurrency — kept at or
+        # under the account's concurrent-connections ceiling so the per-keyword
+        # calls don't collide with each other and 429 (the retry budget then only
+        # has to absorb competing traffic from elsewhere in the suite, not self-
+        # inflicted contention). Each keyword still fails in isolation; Supabase
+        # writes (sync) are done after, off the gather.
+        sem = asyncio.Semaphore(max(1, settings.maps_report_concurrency))
 
         async def _gen_one(result_row: dict):
             async with sem:
