@@ -32,6 +32,26 @@ logger = logging.getLogger(__name__)
 _IMG_SRC_RE = re.compile(r"""(<img\b[^>]*?\bsrc=["'])([^"']+)(["'])""", re.IGNORECASE)
 _DEFAULT_IMAGE_MIME = "image/jpeg"
 
+# A leading <h1> (optionally wrapped in a Gutenberg heading block comment) at the
+# very top of the body. When the on-page H1 is sent as the WP post title, the
+# theme renders that title as the page's <h1>, so a body-level H1 would be a
+# duplicate — we strip the first one.
+_LEADING_H1_RE = re.compile(
+    r"^\s*(?:<!--\s*wp:heading[^>]*-->\s*)?<h1\b[^>]*>.*?</h1>\s*(?:<!--\s*/wp:heading\s*-->\s*)?",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# SEOPress stores a post's meta-title override in this post-meta key; it drives
+# the <title> tag independently of the WordPress post title. Passing it in the
+# REST `meta` object is a no-op on sites without SEOPress (unregistered meta keys
+# are ignored by the WP REST API).
+_SEOPRESS_TITLE_META_KEY = "_seopress_titles_title"
+
+
+def _strip_leading_h1(html: str) -> str:
+    """Remove a single leading <h1>…</h1> block from the body (best-effort)."""
+    return _LEADING_H1_RE.sub("", html, count=1)
+
 # WP statuses we expose. Default to draft so nothing goes live unreviewed.
 ALLOWED_STATUSES = {"draft", "publish"}
 # content_type → WP REST resource. Blog posts become posts; the conversion-
@@ -309,26 +329,39 @@ async def publish_to_wordpress(
     sideload_images: bool = True,
     featured_image_url: Optional[str] = None,
     slug: Optional[str] = None,
+    seo_title: Optional[str] = None,
+    strip_leading_h1: bool = False,
 ) -> dict:
     """Create a post/page on the client's WordPress site; returns
     {post_id, link, status, edit_link, featured_media}.
 
     `client` is the clients row (must carry wordpress_site_url/username/
-    app_password). `html` is the rendered post body. When `sideload_images` is
-    set, any images the content references are uploaded to the WP media library,
-    the <img> srcs rewritten to the WP-hosted URLs, and (absent an explicit
-    `featured_image_url`) the first becomes the post's featured image. An explicit
-    `featured_image_url` is uploaded and set as the featured image regardless of
-    body images. `slug` pins the post's URL slug — without it WordPress derives
-    one from the title, which breaks callers that pre-computed internal links
-    against a known slug (the fanout writer). Raises WordPressPublishError on
-    missing config, a bad status, or a transport/API failure."""
+    app_password). `title` is the WordPress post title — the theme renders it as
+    the page's visible <h1> — so callers should pass the on-page H1 here. `html`
+    is the rendered post body. When `sideload_images` is set, any images the
+    content references are uploaded to the WP media library, the <img> srcs
+    rewritten to the WP-hosted URLs, and (absent an explicit `featured_image_url`)
+    the first becomes the post's featured image. An explicit `featured_image_url`
+    is uploaded and set as the featured image regardless of body images. `slug`
+    pins the post's URL slug — without it WordPress derives one from the title,
+    which breaks callers that pre-computed internal links against a known slug
+    (the fanout writer).
+
+    `seo_title` (when distinct from `title`) is written to SEOPress's meta-title
+    field so the <title> tag / SERP result differs from the on-page H1; it is a
+    no-op on sites without SEOPress. `strip_leading_h1` removes a duplicate H1
+    from the top of the body (the post title already supplies the page's H1).
+
+    Raises WordPressPublishError on missing config, a bad status, or a
+    transport/API failure."""
     if status not in ALLOWED_STATUSES:
         raise WordPressPublishError("invalid_status")
     if not client_is_configured(client):
         raise WordPressPublishError("wordpress_not_configured")
     if not (html or "").strip():
         raise WordPressPublishError("content_is_empty")
+    if strip_leading_h1:
+        html = _strip_leading_h1(html)
 
     rest_base = _rest_base(client["wordpress_site_url"])
     site_host = urlparse(client["wordpress_site_url"].strip()).netloc
@@ -365,6 +398,11 @@ async def publish_to_wordpress(
                 body["slug"] = slug
             if featured_id:
                 body["featured_media"] = featured_id
+            # Route a distinct SEO/meta title to SEOPress (drives the <title> tag
+            # separately from the post title / on-page H1).
+            meta_title = (seo_title or "").strip()
+            if meta_title and meta_title.lower() != (title or "").strip().lower():
+                body["meta"] = {_SEOPRESS_TITLE_META_KEY: meta_title}
 
             result = await _rest_create(http, url, fallback_url, body, headers, resource)
     except WordPressPublishError:

@@ -220,31 +220,38 @@ async def publish_run(
 
     doc_html, wp_html, page_seo_title = _resolve_content(supabase, run_id, content_type)
     fallback_title = f"{run['keyword']} — {client['name']}"
+    # WordPress post title + optional SEOPress meta title, resolved per type.
+    wp_post_title = fallback_title
+    wp_seo_title: str | None = None
     if content_type in ("service_page", "location_page"):
         # Service/location pages carry their own H1 inside their rendering, so we
         # only set the post title here (no body-H1 injection), using the page's
         # own SEO title when present.
         title = page_seo_title or fallback_title
+        wp_post_title = title
     else:
-        # Blog posts: the SEO title becomes the WordPress post title (and the
-        # meta <title> + slug); the distinct on-page H1 is injected at the top of
-        # each body so it renders as the visible heading, separate from the title.
+        # Blog posts: the on-page H1 becomes the WordPress post title (the theme
+        # renders it as the visible <h1>) and the distinct SEO title is routed to
+        # SEOPress's meta-title field, so the <title> tag differs from the H1.
         seo_title, h1 = _resolve_blog_title_h1(supabase, run_id)
+        # Document title (Docs / GitHub): prefer the SEO title, else the fallback.
         title = seo_title or fallback_title
+        wp_post_title = h1 or seo_title or fallback_title
+        wp_seo_title = seo_title
+        # The Google Doc has no separate title/H1 concept, so inject the H1 as a
+        # heading at the top of the doc body. The WP body gets no injected H1 —
+        # the post title supplies the page's heading (avoids a duplicate H1).
         if h1:
-            heading = escape(h1)
-            doc_html = f"<h1>{heading}</h1>\n{doc_html}"
-            wp_html = (
-                f'<!-- wp:heading {{"level":1}} -->\n<h1>{heading}</h1>\n'
-                f"<!-- /wp:heading -->\n\n{wp_html}"
-            )
+            doc_html = f"<h1>{escape(h1)}</h1>\n{doc_html}"
     featured_image_url = run.get("featured_image_url")
 
     if body.destination == "wordpress":
         try:
             result = await publish_to_wordpress(
                 client=client,
-                title=title,
+                title=wp_post_title,
+                seo_title=wp_seo_title,
+                strip_leading_h1=True,
                 html=wp_html,
                 status=body.status,
                 content_type=content_type,
