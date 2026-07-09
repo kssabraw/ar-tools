@@ -276,9 +276,12 @@ async def publish_to_wordpress(
             result = response.json()
     except httpx.HTTPStatusError as exc:
         code = exc.response.status_code
+        # Detail in the message (not just extra) so it survives the plain stdout
+        # formatter and shows in the deploy logs.
         logger.error(
-            "wordpress_http_error",
-            extra={"status": code, "body": exc.response.text[:300], "resource": resource},
+            "wordpress_http_error status=%s resource=%s body=%s",
+            code, resource, exc.response.text[:400],
+            extra={"status": code, "body": exc.response.text[:400], "resource": resource},
         )
         if code in (401, 403):
             raise WordPressPublishError("wordpress_auth_failed") from exc
@@ -286,7 +289,7 @@ async def publish_to_wordpress(
             raise WordPressPublishError("wordpress_rest_api_unreachable") from exc
         raise WordPressPublishError(f"wordpress_http_error_{code}") from exc
     except Exception as exc:
-        logger.error("wordpress_call_failed", extra={"error": str(exc)})
+        logger.error("wordpress_call_failed error=%s", str(exc), extra={"error": str(exc)})
         raise WordPressPublishError("wordpress_call_failed") from exc
 
     if not isinstance(result, dict) or not result.get("id"):
