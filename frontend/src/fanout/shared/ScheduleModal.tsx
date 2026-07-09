@@ -8,12 +8,17 @@ import {
 } from "./api";
 import { LocationAutocomplete } from "./LocationAutocomplete";
 
-type Mode = "all_at_once" | "drip" | "fixed";
+type Mode = "all_at_once" | "drip" | "fixed" | "weekly" | "monthly_date" | "monthly_weekday";
 type ContentType = "blog_post" | "local_seo_page" | "service_page";
 
+// Periodic cadences place articles in per-period buckets of `perDay` (the count-per-period).
+const PERIODIC: Mode[] = ["drip", "weekly", "monthly_date", "monthly_weekday"];
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
 // M15 — Schedule modal (handoff §9.4). Whole-session ("Schedule all") or a chosen subset
-// (clusterIds). Three modes: all-at-once, drip N/day, or a specific delivery date. Live
-// preview (count after the double-book filter · finish date · cost) + the VA $90 gate.
+// (clusterIds). Cadences: all-at-once, drip N/day, a specific delivery date, or recurring
+// weekly / monthly (by date or by weekday-of-month). Live preview (count after the
+// double-book filter · finish date · cost) + the VA $90 gate.
 export function ScheduleModal(props: {
   sessionId: string;
   clusterIds?: string[];          // omit -> whole session
@@ -47,6 +52,12 @@ export function ScheduleModal(props: {
   const [perDay, setPerDay] = useState(5);
   const [startDate, setStartDate] = useState(today);
   const [timeOfDay, setTimeOfDay] = useState("09:00");
+  // Recurring-cadence anchors: weekday (0=Mon .. 6=Sun) for weekly + monthly-by-weekday;
+  // day-of-month (1-31) for monthly-by-date; occurrence (1-4, or -1 = last) for
+  // monthly-by-weekday.
+  const [weekday, setWeekday] = useState(0);
+  const [dayOfMonth, setDayOfMonth] = useState(1);
+  const [weekOfMonth, setWeekOfMonth] = useState(1);
   const [timezone] = useState(browserTz);
   const [baseUrl, setBaseUrl] = useState(props.baseUrl ?? "");
   // Up to 3 money-page URLs every article should link to (woven into the
@@ -74,16 +85,24 @@ export function ScheduleModal(props: {
 
   const isLocalSeo = contentType === "local_seo_page";
   const isServicePage = contentType === "service_page";
-  const showWordPress = contentType === "blog_post" && !!clientId && !!props.wordpressAvailable;
+  // Direct-to-WordPress is offered for every content type on a client-linked session
+  // whose client has WordPress configured.
+  const showWordPress = !!clientId && !!props.wordpressAvailable;
+  const isPeriodic = PERIODIC.includes(mode);
+  const usesStartDate = isPeriodic || mode === "fixed";
   const locCountry = locationCode ? isoForLocationCode(locationCode) : undefined;
 
   const body: ScheduleRequest = {
     mode,
     cluster_ids: clusterIds,
-    per_day: mode === "drip" ? perDay : undefined,
-    start_date: mode === "drip" || mode === "fixed" ? startDate : undefined,
-    time_of_day: mode === "drip" || mode === "fixed" ? timeOfDay : undefined,
+    per_day: isPeriodic ? perDay : undefined,
+    start_date: usesStartDate ? startDate : undefined,
+    time_of_day: usesStartDate ? timeOfDay : undefined,
     timezone,
+    // Cadence anchors, only for the modes that use them.
+    weekday: mode === "weekly" || mode === "monthly_weekday" ? weekday : undefined,
+    day_of_month: mode === "monthly_date" ? dayOfMonth : undefined,
+    week_of_month: mode === "monthly_weekday" ? weekOfMonth : undefined,
     content_type: contentType,
     // Only blog posts need a base URL (absolute internal links); Local SEO pages
     // need a target area; service pages are keyword-only.
@@ -102,7 +121,8 @@ export function ScheduleModal(props: {
 
   // Live preview — re-estimates as the inputs change.
   const est = useQuery({
-    queryKey: ["schedule-estimate", sessionId, mode, perDay, startDate, timeOfDay, clusterIds, contentType],
+    queryKey: ["schedule-estimate", sessionId, mode, perDay, startDate, timeOfDay,
+      weekday, dayOfMonth, weekOfMonth, clusterIds, contentType],
     queryFn: () => scheduleEstimate(sessionId, body),
   });
 
@@ -257,8 +277,9 @@ export function ScheduleModal(props: {
                 <span>
                   <span className="field-label">Publish to WordPress</span>
                   <span className="field-hint">
-                    Create each finished article on the client's WordPress site at the URL its
-                    internal links point at (from the blog reference URL on the client card).
+                    {contentType === "blog_post"
+                      ? "Create each finished article on the client's WordPress site at the URL its internal links point at (from the blog reference URL on the client card)."
+                      : "Create each finished page on the client's WordPress site (as a WordPress page)."}
                   </span>
                 </span>
               </label>
@@ -288,6 +309,9 @@ export function ScheduleModal(props: {
               {([
                 ["all_at_once", "All at once"],
                 ["drip", "Drip N/day"],
+                ["weekly", "N/week"],
+                ["monthly_date", "N/month (date)"],
+                ["monthly_weekday", "N/month (weekday)"],
                 ["fixed", "On a specific date"],
               ] as [Mode, string][]).map(([m, label]) => (
                 <button
@@ -302,15 +326,45 @@ export function ScheduleModal(props: {
             </div>
           </div>
 
-          {mode === "drip" && (
+          {isPeriodic && (
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <label className="field" style={{ flex: "0 0 90px" }}>
-                <span className="field-label">Per day</span>
+              <label className="field" style={{ flex: "0 0 100px" }}>
+                <span className="field-label">
+                  {mode === "drip" ? "Per day" : mode === "weekly" ? "Per week" : "Per month"}
+                </span>
                 <input className="input" type="number" min={1} value={perDay}
                   onChange={(e) => setPerDay(Math.max(1, Number(e.target.value) || 1))} />
               </label>
-              <label className="field" style={{ flex: 1 }}>
-                <span className="field-label">Start date</span>
+
+              {(mode === "weekly" || mode === "monthly_weekday") && (
+                <label className="field" style={{ flex: "0 0 140px" }}>
+                  <span className="field-label">Weekday</span>
+                  <select className="input" value={weekday}
+                    onChange={(e) => setWeekday(Number(e.target.value))}>
+                    {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                  </select>
+                </label>
+              )}
+              {mode === "monthly_weekday" && (
+                <label className="field" style={{ flex: "0 0 130px" }}>
+                  <span className="field-label">Occurrence</span>
+                  <select className="input" value={weekOfMonth}
+                    onChange={(e) => setWeekOfMonth(Number(e.target.value))}>
+                    {[[1, "First"], [2, "Second"], [3, "Third"], [4, "Fourth"], [-1, "Last"]]
+                      .map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select>
+                </label>
+              )}
+              {mode === "monthly_date" && (
+                <label className="field" style={{ flex: "0 0 110px" }}>
+                  <span className="field-label">Day of month</span>
+                  <input className="input" type="number" min={1} max={31} value={dayOfMonth}
+                    onChange={(e) => setDayOfMonth(Math.min(31, Math.max(1, Number(e.target.value) || 1)))} />
+                </label>
+              )}
+
+              <label className="field" style={{ flex: 1, minWidth: 130 }}>
+                <span className="field-label">{mode === "drip" ? "Start date" : "Starting from"}</span>
                 <input className="input" type="date" value={startDate} min={today}
                   onChange={(e) => setStartDate(e.target.value)} />
               </label>
@@ -346,7 +400,9 @@ export function ScheduleModal(props: {
             ) : est.data ? (
               <>
                 <strong>{count}</strong> {noun}{count === 1 ? "" : "s"}
-                {est.data.mode === "drip" && est.data.days ? <> · {est.data.days} days</> : null}
+                {est.data.periods && est.data.period_label
+                  ? <> · over {est.data.periods} {est.data.period_label}{est.data.periods === 1 ? "" : "s"}</>
+                  : null}
                 {est.data.finish_date ? <> · {est.data.mode === "fixed" ? "writes" : "finishes"} {est.data.finish_date}</> : null}
                 {mode !== "all_at_once" ? <> · {timeOfDay} {timezone}</> : null}
                 {" · "}~${est.data.cost_estimate_usd}

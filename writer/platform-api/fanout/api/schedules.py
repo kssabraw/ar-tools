@@ -29,12 +29,21 @@ router = APIRouter()
 
 
 class ScheduleBody(BaseModel):
-    mode: str                                   # all_at_once | drip | fixed
+    # all_at_once | drip | fixed | weekly | monthly_date | monthly_weekday
+    mode: str
     cluster_ids: list[str] | None = None        # None/[] -> the whole session
-    per_day: int | None = None                  # drip
-    start_date: date | None = None              # drip start / fixed target day
+    # Count per period for the periodic cadences (per day for drip, per week for
+    # weekly, per month for the monthly modes).
+    per_day: int | None = None
+    start_date: date | None = None              # periodic start / fixed target day
     time_of_day: time | None = None
     timezone: str = "UTC"
+    # Cadence anchors: weekday (0=Mon .. 6=Sun) for weekly + monthly_weekday;
+    # day_of_month (1-31) for monthly_date; week_of_month (1-4, or -1 = last) for
+    # monthly_weekday (e.g. weekday=0, week_of_month=1 => first Monday each month).
+    weekday: int | None = None
+    day_of_month: int | None = None
+    week_of_month: int | None = None
     site_base_url: str | None = None            # persisted to the session (links need it)
     # Up to 3 extra URLs (money pages — product/service/landing pages) every generated
     # article should link to, folded into the internal-link injection under the
@@ -82,18 +91,39 @@ def _ordered_targets(session_id: str, cluster_ids: list[str] | None) -> list[str
     return order_clusters(architecture, ids)
 
 
-def _estimate(count: int, mode: str, per_day: int | None, start: date | None) -> dict:
+_PERIOD_LABEL = {"drip": "day", "weekly": "week",
+                 "monthly_date": "month", "monthly_weekday": "month"}
+
+
+def _estimate(
+    count: int, mode: str, per_day: int | None, start: date | None, *,
+    weekday: int | None = None, day_of_month: int | None = None,
+    week_of_month: int | None = None,
+) -> dict:
     s = get_settings()
     cost = round(count * s.writer_article_cost_estimate_usd, 2)
     out = {"count": count, "cost_estimate_usd": cost, "mode": mode}
-    if mode == "drip" and per_day and count:
-        from fanout.writer.schedule_planner import schedule_days
-        days = schedule_days(count, per_day)
-        out["days"] = days
-        if start:
-            out["finish_date"] = finish_date(start, count, per_day).isoformat()
-    elif mode == "fixed" and start:
+    if mode == "fixed" and start:
         out["finish_date"] = start.isoformat()
+    elif mode in _PERIOD_LABEL and per_day and count:
+        import math
+
+        n_periods = math.ceil(count / per_day)
+        out["periods"] = n_periods
+        out["period_label"] = _PERIOD_LABEL[mode]
+        if mode == "drip":
+            out["days"] = n_periods                     # back-compat with the old key
+        # Best-effort finish date preview (the planner is the source of truth).
+        try:
+            from fanout.writer.schedule_planner import _period_dates
+            dates = _period_dates(
+                mode, n_periods, start=start or date.today(), weekday=weekday,
+                day_of_month=day_of_month, week_of_month=week_of_month,
+            )
+            if dates:
+                out["finish_date"] = dates[-1].isoformat()
+        except Exception:  # noqa: BLE001 — preview only; create validates for real
+            pass
     return out
 
 
@@ -110,7 +140,11 @@ def schedule_estimate(
     candidates = _session_cluster_ids(session_id, body.cluster_ids)
     pending = schedule_store.pending_cluster_ids(session_id)
     targets = [c for c in candidates if c not in pending]
-    est = _estimate(len(targets), body.mode, body.per_day, body.start_date)
+    est = _estimate(
+        len(targets), body.mode, body.per_day, body.start_date,
+        weekday=body.weekday, day_of_month=body.day_of_month,
+        week_of_month=body.week_of_month,
+    )
     est["already_scheduled"] = len(candidates) - len(targets)
     s = get_settings()
     est["requires_approval"] = (
@@ -182,7 +216,10 @@ def create_schedule(
                 detail="A site base URL is required so internal links are absolute. Set it in the modal.",
             )
 
-    wp_publish = bool(body.wp_publish) and not (is_local_seo or is_service_page)
+    # Direct-to-WordPress is offered for every content type (blog posts publish as
+    # posts; local SEO / service pages publish as pages, reusing each type's own
+    # publish path). It just needs the linked client to have WordPress configured.
+    wp_publish = bool(body.wp_publish)
     if wp_publish:
         # Fail fast at schedule time — not silently per-run minutes/days later.
         if body.wp_status not in ("draft", "publish"):
@@ -209,7 +246,11 @@ def create_schedule(
             detail="Nothing to schedule (no clusters, or all are already scheduled).",
         )
 
-    est = _estimate(len(targets), body.mode, body.per_day, body.start_date)
+    est = _estimate(
+        len(targets), body.mode, body.per_day, body.start_date,
+        weekday=body.weekday, day_of_month=body.day_of_month,
+        week_of_month=body.week_of_month,
+    )
     s = get_settings()
     if get_role(user) != "owner" and est["cost_estimate_usd"] > s.writer_schedule_approval_threshold_usd:
         return {
@@ -222,6 +263,8 @@ def create_schedule(
         runs = plan_runs(
             targets, mode=body.mode, per_day=body.per_day, start_date=body.start_date,
             time_of_day=body.time_of_day, tz_name=body.timezone,
+            weekday=body.weekday, day_of_month=body.day_of_month,
+            week_of_month=body.week_of_month,
         )
     except ScheduleError as exc:
         raise HTTPException(

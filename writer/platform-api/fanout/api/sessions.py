@@ -421,7 +421,9 @@ def get_session(
         seed_keyword=session.get("seed_keyword"),
         detected_audience=session.get("detected_audience"),
         silos=store.list_topics(session_id),
-        site_base_url=session.get("site_base_url"),
+        # Fall back to the linked client's website root so the schedule modal
+        # pre-fills the base URL instead of asking the user to retype it.
+        site_base_url=session.get("site_base_url") or _client_root_domain(session.get("client_id")),
         extra_link_urls=session.get("extra_link_urls") or [],
         content_type=(session.get("settings") or {}).get("content_type"),
         location=(session.get("settings") or {}).get("location"),
@@ -1920,6 +1922,35 @@ def _drive_publish_available(session: dict) -> bool:
     apps_script_ok = bool(getattr(suite_settings, "google_apps_script_url", None) and session.get("client_id"))
     oauth_ok = bool(_s.google_oauth_client_id and _s.google_oauth_refresh_token)
     return apps_script_ok or oauth_ok
+
+
+def _client_root_domain(client_id: str | None) -> str | None:
+    """The scheme+host root of the linked client's website (from `clients.website_url`),
+    e.g. 'https://example.com/blog/x' -> 'https://example.com'. Used to pre-fill the
+    schedule modal's site base URL so a client-linked session doesn't ask the user to
+    retype the domain. Best-effort — returns None on no client, no website, or a URL
+    with no host."""
+    if not client_id:
+        return None
+    from urllib.parse import urlsplit
+
+    from db.supabase_client import get_supabase
+    from services.gbp_service import normalize_website_url
+
+    try:
+        res = (
+            get_supabase().table("clients").select("website_url")
+            .eq("id", client_id).single().execute()
+        )
+    except Exception:  # noqa: BLE001 — pre-fill helper; absence is just "no default"
+        return None
+    website = normalize_website_url((res.data or {}).get("website_url"))
+    if not website:
+        return None
+    parts = urlsplit(website if "//" in website else f"https://{website}")
+    if not parts.netloc:
+        return None
+    return f"{parts.scheme or 'https'}://{parts.netloc}"
 
 
 def _wordpress_publish_available(session: dict) -> bool:

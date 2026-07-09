@@ -1043,12 +1043,18 @@ export const splitUncovered = (sessionId: string, clusterId: string) =>
 // ----- M15 content scheduling -----------------------------------------------
 
 export interface ScheduleRequest {
-  mode: "all_at_once" | "drip" | "fixed";
+  mode: "all_at_once" | "drip" | "fixed" | "weekly" | "monthly_date" | "monthly_weekday";
   cluster_ids?: string[];          // omit/[] -> whole session
-  per_day?: number;                // drip
-  start_date?: string;             // YYYY-MM-DD — drip start / fixed target day
+  per_day?: number;                // count per period (per day/week/month)
+  start_date?: string;             // YYYY-MM-DD — periodic start / fixed target day
   time_of_day?: string;            // HH:MM
   timezone?: string;
+  // Recurring-cadence anchors: weekday (0=Mon .. 6=Sun) for weekly + monthly_weekday;
+  // day_of_month (1-31) for monthly_date; week_of_month (1-4, or -1 = last) for
+  // monthly_weekday.
+  weekday?: number;
+  day_of_month?: number;
+  week_of_month?: number;
   site_base_url?: string;
   // Up to 3 money-page URLs every article should link to (persisted on the
   // session; woven into internal-link injection). [] clears; omit = untouched.
@@ -1071,7 +1077,9 @@ export interface ScheduleEstimate {
   count: number;
   cost_estimate_usd: number;
   mode: string;
-  days?: number;
+  days?: number;                   // drip (back-compat)
+  periods?: number;                // periodic cadences: number of periods spanned
+  period_label?: string;           // "day" | "week" | "month"
   finish_date?: string;
   already_scheduled: number;
   requires_approval: boolean;
