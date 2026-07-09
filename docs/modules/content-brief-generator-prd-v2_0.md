@@ -339,7 +339,7 @@ The title generation LLM must:
 - Avoid generic AI-tells in titling: "Ultimate Guide to", "Complete Guide", "Everything You Need to Know", "The Definitive Guide", "Master [topic]"
 - Produce a scope statement specific enough to be enforceable, not so specific that it preempts editorial judgment in the Writer Module
 - Include a `does not cover` clause in the scope statement that names 1–3 adjacent topics this article will explicitly not address
-- Stay within freshness/recency constraints: mention the current year only when the topic genuinely warrants it; do not reflexively stamp "in 2026" on every title
+- Freshness/recency (owner ruling 2026-07-09): the title and H1 MUST include the current year whenever appropriate for the topic (recency-sensitive, fast-moving, or version-specific subjects, or where searchers care that the information is current); omit it only for genuinely evergreen topics. The current year is injected into the prompt at run time.
 
 **Example output for seed `"what is tiktok shop"` with intent `informational`:**
 

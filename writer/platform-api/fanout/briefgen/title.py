@@ -10,6 +10,7 @@ Pure: `validate_title_scope`. Egress: `generate_title_scope` (LLM + retry).
 
 from __future__ import annotations
 
+import datetime as _dt
 from dataclasses import dataclass
 
 # Generic AI-tells the title must avoid (bundle §Step 3.5 prompt requirements).
@@ -71,11 +72,15 @@ def generate_title_scope(
         + "\n\nMeta descriptions:\n" + "\n".join(f"- {m}" for m in serp_metas[:20])
         + "\n\nAI answers:\n" + "\n".join(f"[{k}] {v[:600]}" for k, v in (llm_answers or {}).items())
     )
+    current_year = _dt.date.today().year
     base_rules = (
         "Write an article title (50-80 chars preferred, 100 max) and a scope statement "
         "(<=500 chars). The scope statement MUST include a 'does not cover' clause naming "
         "1-3 adjacent topics this article will not address. Avoid generic AI-tells "
-        f"({', '.join(AI_TELLS)}). Mention the current year only if the topic warrants it. "
+        f"({', '.join(AI_TELLS)}). The title and seo_title MUST include the current year "
+        f"({current_year}) whenever it is appropriate for the topic — recency-sensitive, "
+        "fast-moving, or version-specific subjects, or where searchers care that the "
+        "information is current; omit it only for genuinely evergreen topics. "
         "Also write a seo_title: the meta title tag shown in search results and the "
         "browser tab (no character limit — as long as it needs to be, no longer). It "
         "must lead with the primary keyword, include 2-4 entities central to the topic "

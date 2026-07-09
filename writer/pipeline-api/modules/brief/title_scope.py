@@ -30,6 +30,7 @@ Failure handling (PRD §5 Step 3.5):
 
 from __future__ import annotations
 
+import datetime
 import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
@@ -105,9 +106,10 @@ tab, SERP snippet, and og:title):
   descriptions, and LLM answers)
 - AVOID generic AI-tells: "Ultimate Guide to", "Complete Guide",
   "Everything You Need to Know", "Definitive Guide", "Master [topic]"
-- Mention the current year ONLY when the topic genuinely warrants it
-  (rapidly changing space, version-specific content). Do not reflexively
-  stamp a year on every title.
+- MUST include the current year (given in the user message) whenever it
+  is appropriate for the topic — recency-sensitive, fast-moving, or
+  version-specific subjects, or where searchers care that the
+  information is current. Omit it only for genuinely evergreen topics.
 
 Hard requirements for the h1 (on-page main heading - appears at the
 top of the article body):
@@ -116,6 +118,8 @@ top of the article body):
   grammatical variant of it), woven in naturally
 - MUST be grammatically correct — a real, natural-reading heading, never
   an awkward keyword-stuffed string
+- Same current-year rule as the title: include the year whenever
+  appropriate for the topic
 - Similar territory to the title, but MUST be worded differently — every
   page carries a distinct <title> and H1 (agency standing rule). It may
   be more descriptive, more conversational, or expand on the title's
@@ -177,7 +181,8 @@ def _format_user_prompt(
 
     return (
         f"Seed keyword: {seed_keyword}\n"
-        f"Classified intent: {intent_type}\n\n"
+        f"Classified intent: {intent_type}\n"
+        f"Current year: {datetime.date.today().year}\n\n"
         f"Top SERP titles (up to 20):\n{_bullets(serp_titles)}\n\n"
         f"Top SERP H1s (up to 20):\n{_bullets(serp_h1s)}\n\n"
         f"Top meta descriptions (up to 20):\n{_bullets(meta_descriptions)}\n\n"
