@@ -171,10 +171,17 @@ class Settings(BaseSettings):
     # budget truncates the forced tool-use JSON and yields an empty summary.
     maps_report_max_tokens: int = 8192
     # Per-keyword report generation fans out concurrent Anthropic calls within one
-    # scan's job; a burst can trip the account's concurrent-connections limit
-    # (HTTP 429). Retry those (and transient 5xx / connection errors) with
-    # exponential backoff + jitter rather than permanently failing the row.
-    maps_report_max_retries: int = 4
+    # scan's job. The account's concurrent-connections limit is low, so a wide
+    # fan-out trips HTTP 429 ("Number of concurrent connections has exceeded your
+    # rate limit") and the row fails. Cap the simultaneous per-keyword LLM calls
+    # at (well under) the account ceiling so they don't collide with each other;
+    # the image render + geocoding steps are not Anthropic-bound and stay parallel.
+    maps_report_concurrency: int = 2
+    # Retry transient failures (429 concurrent-connections / rate limit, 5xx,
+    # connection drops) with exponential backoff + jitter rather than permanently
+    # failing the row. The retry budget must outlast a competing ~1-min generation
+    # elsewhere in the suite, so it stays generous (2/4/8/16/32/64s at base 2.0).
+    maps_report_max_retries: int = 6
     maps_report_retry_base_seconds: float = 2.0
 
     # Organic Rank Analysis report — the per-keyword deep-dive (the organic
