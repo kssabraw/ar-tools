@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { Markdown } from './Markdown'
@@ -29,6 +30,15 @@ type ChatState = {
   clientName: string | null
   pendingToken: string | null
 }
+
+type BriefItem = {
+  client_name?: string | null
+  kind?: string
+  severity?: string
+  title: string
+  created_at?: string
+}
+type BriefResponse = { window_hours: number; items: BriefItem[] }
 
 const STORAGE_PREFIX = 'sermastr-chat-v1'
 // Pre-isolation key: a single shared bucket not tied to any user. Purged on
@@ -65,8 +75,21 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
   const [state, setState] = useState<ChatState>(() => loadState(userId))
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  // Live streaming turn: the partial reply as tokens arrive + the current
+  // tool-activity label ("Reading SOP…"). Cleared when the turn lands.
+  const [streaming, setStreaming] = useState('')
+  const [status, setStatus] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const prevUserId = useRef(userId)
+
+  // Opening brief — "since you were last here" across all clients, shown in
+  // the dedicated page's empty state so the chat opens with awareness.
+  const { data: brief } = useQuery<BriefResponse>({
+    queryKey: ['assistant-brief'],
+    queryFn: () => api.get<BriefResponse>('/assistant/brief'),
+    enabled: fullPage,
+    staleTime: 60_000,
+  })
 
   // Purge the pre-isolation shared bucket once, so an older suite version's
   // chat can't be read on a shared browser.
@@ -94,7 +117,38 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
   useEffect(() => {
     const el = scrollRef.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [state.messages.length, sending])
+  }, [state.messages.length, sending, streaming, status])
+
+  // The reply streams over SSE (tokens render as they generate). Falls back to
+  // the original blocking endpoint when the stream endpoint isn't deployed yet
+  // (the frontend can ship ahead of the backend).
+  async function requestReply(payload: unknown): Promise<ChatResponse> {
+    try {
+      let final: ChatResponse | null = null
+      let failure: string | null = null
+      await api.streamEvents('/assistant/chat/stream', payload, evt => {
+        if (evt.type === 'text') {
+          setStatus(null)
+          setStreaming(s => s + String(evt.text ?? ''))
+        } else if (evt.type === 'status') {
+          setStatus(String(evt.label ?? ''))
+        } else if (evt.type === 'done') {
+          final = evt as unknown as ChatResponse
+        } else if (evt.type === 'error') {
+          failure = String(evt.detail ?? 'assistant_error')
+        }
+      })
+      if (failure) throw new Error(failure)
+      if (!final) throw new Error('stream_ended_early')
+      return final
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : ''
+      if (detail === 'Not Found' || detail === 'stream_ended_early') {
+        return api.post<ChatResponse>('/assistant/chat', payload)
+      }
+      throw err
+    }
+  }
 
   async function send(text: string) {
     const message = text.trim()
@@ -103,8 +157,10 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
     setState(s => ({ ...s, messages: [...s.messages, { role: 'user', content: message }] }))
     setInput('')
     setSending(true)
+    setStreaming('')
+    setStatus(null)
     try {
-      const res = await api.post<ChatResponse>('/assistant/chat', {
+      const res = await requestReply({
         message,
         history,
         client_id: state.clientId,
@@ -129,6 +185,8 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
       setState(s => ({ ...s, messages: [...s.messages, { role: 'assistant', content: friendly }], pendingToken: null }))
     } finally {
       setSending(false)
+      setStreaming('')
+      setStatus(null)
     }
   }
 
@@ -174,8 +232,26 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
       {(state.messages.length > 0 || fullPage) && (
         <div ref={scrollRef} style={fullPage ? threadFull : thread}>
           {state.messages.length === 0 && fullPage ? (
-            <div style={emptyHint}>
-              Ask about a client’s SEO performance, or tell me to run something — the conversation stays here.
+            <div style={{ margin: 'auto', width: '100%', maxWidth: 520 }}>
+              {brief?.items?.length ? (
+                <div style={briefCard}>
+                  <div style={briefTitle}>While you were away</div>
+                  {brief.items.map((it, i) => (
+                    <div key={i} style={briefRow}>
+                      <span style={sevDot(it.severity)} />
+                      <span style={briefClient}>{it.client_name ?? 'Agency'}</span>
+                      <span style={briefText}>{it.title}</span>
+                    </div>
+                  ))}
+                  <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 12 }}>
+                    Ask me about any of these — or anything else.
+                  </div>
+                </div>
+              ) : (
+                <div style={emptyHint}>
+                  Ask about a client’s SEO performance, the whole portfolio, or tell me to run something — the conversation stays here.
+                </div>
+              )}
             </div>
           ) : (
             <>
@@ -192,7 +268,13 @@ export function SerMastrChat({ exampleClient, fullPage = false }: { exampleClien
               ))}
               {sending && (
                 <div style={{ display: 'flex' }}>
-                  <div style={{ ...botBubble, color: '#94a3b8', fontSize: 13 }}>SerMaStr is thinking…</div>
+                  {streaming ? (
+                    <div style={botBubble}><Markdown>{slackToMd(streaming)}</Markdown></div>
+                  ) : (
+                    <div style={{ ...botBubble, color: '#94a3b8', fontSize: 13 }}>
+                      {status ? `${status}…` : 'SerMaStr is thinking…'}
+                    </div>
+                  )}
                 </div>
               )}
               {!sending && state.pendingToken && (
@@ -264,9 +346,32 @@ const threadFull: React.CSSProperties = {
   ...thread, maxHeight: 'none', flex: 1, minHeight: 0,
 }
 const emptyHint: React.CSSProperties = {
-  margin: 'auto', maxWidth: 380, textAlign: 'center',
+  margin: '0 auto', maxWidth: 380, textAlign: 'center',
   color: '#94a3b8', fontSize: 13, lineHeight: 1.6,
 }
+const briefCard: React.CSSProperties = {
+  background: '#f8fafc', border: '1px solid #eef2f7', borderRadius: 12,
+  padding: '16px 18px',
+}
+const briefTitle: React.CSSProperties = {
+  fontSize: 11, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em',
+  textTransform: 'uppercase', marginBottom: 10,
+}
+const briefRow: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0',
+  fontSize: 13, minWidth: 0,
+}
+const briefClient: React.CSSProperties = {
+  color: '#334155', fontWeight: 600, flexShrink: 0,
+}
+const briefText: React.CSSProperties = {
+  color: '#64748b', minWidth: 0, overflow: 'hidden',
+  textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+}
+const sevDot = (severity?: string): React.CSSProperties => ({
+  width: 7, height: 7, borderRadius: 999, flexShrink: 0,
+  background: severity === 'critical' ? '#dc2626' : severity === 'warning' ? '#f59e0b' : '#6366f1',
+})
 const userBubble: React.CSSProperties = {
   background: '#6366f1', color: '#fff', fontSize: 13, lineHeight: 1.5,
   borderRadius: '12px 12px 2px 12px', padding: '8px 12px', maxWidth: '78%',

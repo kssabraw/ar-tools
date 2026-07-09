@@ -85,6 +85,53 @@ async function streamJson<T>(path: string, body: unknown, signal?: AbortSignal):
   return result
 }
 
+// POST to an SSE endpoint and surface EVERY event to a callback as it arrives
+// (unlike streamJson, which only resolves the final `done` result). Used by the
+// SerMaStr chat so replies render token-by-token. Resolves when the stream ends.
+export type StreamEvent = { type: string; [key: string]: unknown }
+
+async function streamEvents(
+  path: string,
+  body: unknown,
+  onEvent: (evt: StreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const headers = await authHeaders()
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+    signal,
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }))
+    throw new Error(err.detail ?? res.statusText)
+  }
+  if (!res.body) throw new Error('no_response_body')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    let nl: number
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, nl).trimEnd()
+      buffer = buffer.slice(nl + 1)
+      if (!line.startsWith('data:')) continue // keepalive comments
+      const payload = line.slice(5).trim()
+      if (!payload) continue
+      try {
+        onEvent(JSON.parse(payload) as StreamEvent)
+      } catch {
+        // malformed frame — skip rather than kill the stream
+      }
+    }
+  }
+}
+
 async function upload<T>(path: string, form: FormData): Promise<T> {
   // Multipart upload — let the browser set Content-Type (with boundary),
   // so we send only the auth header here.
@@ -110,4 +157,6 @@ export const api = {
   delete: <T>(path: string) => request<T>('DELETE', path),
   upload: <T>(path: string, form: FormData) => upload<T>(path, form),
   stream: <T>(path: string, body: unknown, signal?: AbortSignal) => streamJson<T>(path, body, signal),
+  streamEvents: (path: string, body: unknown, onEvent: (evt: StreamEvent) => void, signal?: AbortSignal) =>
+    streamEvents(path, body, onEvent, signal),
 }

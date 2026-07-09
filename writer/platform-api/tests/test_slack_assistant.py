@@ -1082,3 +1082,21 @@ def test_interpret_other_api_error_still_raises():
     anthropic = pytest.importorskip("anthropic")
     with pytest.raises(anthropic.APIStatusError):
         _capacity_interpret(500)
+
+
+# --- wants_portfolio (portfolio-mode phrase gate) ------------------------------
+def test_wants_portfolio_matches_agency_wide_asks():
+    assert slack_assistant.wants_portfolio("Which clients need attention this week?")
+    assert slack_assistant.wants_portfolio("give me a portfolio health check")
+    assert slack_assistant.wants_portfolio("how are all our clients doing?")
+    assert slack_assistant.wants_portfolio("any clients on fire today?")
+    assert slack_assistant.wants_portfolio("What's happening across the board?")
+    assert slack_assistant.wants_portfolio("an agency-wide summary please")
+
+
+def test_wants_portfolio_ignores_single_client_asks():
+    assert not slack_assistant.wants_portfolio("How is Acme Plumbing's campaign going?")
+    assert not slack_assistant.wants_portfolio("rebuild the action plan")
+    assert not slack_assistant.wants_portfolio("what should we improve next?")
+    assert not slack_assistant.wants_portfolio("")
+    assert not slack_assistant.wants_portfolio(None)
