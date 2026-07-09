@@ -221,14 +221,18 @@ def reinstate_run(run_id: str) -> bool:
 
 
 def reflow_queued(schedule_id: str) -> int:
-    """Re-pack a schedule's still-queued runs densely onto its cadence slots, from
-    the earliest currently-queued slot — so cancelling an article pulls the rest up
-    (no empty day) and reinstating one re-expands the tail. No-op for all_at_once /
-    fixed (no timeline gaps) and for a drained schedule. Returns runs re-timed.
+    """Re-pack a schedule's still-queued runs densely onto its cadence slots, from the
+    earliest *available* slot — so cancelling articles (even the soonest ones) pulls the
+    rest UP to reclaim the freed days, not merely closes interior gaps. No-op for
+    all_at_once / fixed (no timeline gaps) and for a drained schedule. Returns runs re-timed.
 
-    Uses the cadence anchors persisted on the schedule; completed/running runs are
-    untouched (apply_reschedule filters to status='queued')."""
-    from datetime import datetime
+    The re-flow start is the schedule's own cadence grid clamped to `max(start_date, today,
+    day-after-the-last-written/running-slot)` — never the past, never colliding with an
+    already-consumed slot, but as early as legitimately possible. Uses the cadence anchors
+    persisted on the schedule; completed/running runs are untouched (apply_reschedule filters
+    to status='queued')."""
+    from datetime import date as _date
+    from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
 
     from fanout.writer.schedule_planner import plan_runs
@@ -241,14 +245,34 @@ def reflow_queued(schedule_id: str) -> int:
         return 0
     tz_name = sched.get("timezone") or "UTC"
     try:
-        first = datetime.fromisoformat(queued[0]["scheduled_at"]).astimezone(ZoneInfo(tz_name))
-    except Exception:  # noqa: BLE001 — unparseable timestamp: leave the queue as-is
+        tz = ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001 — unknown tz: leave the queue as-is
         return 0
+    today = datetime.now(tz).date()
+    # Don't schedule before the schedule's own start, before today, or onto/into a slot
+    # already taken by a written/writing article (start the day after the last such one).
+    floor = today
+    sched_start = sched.get("start_date")
+    if sched_start:
+        try:
+            floor = max(floor, _date.fromisoformat(str(sched_start)))
+        except ValueError:
+            pass
+    consumed = (get_service_client().table("scheduled_article_runs")
+                .select("scheduled_at").eq("content_schedule_id", schedule_id)
+                .in_("status", ["complete", "running"])
+                .order("scheduled_at", desc=True).limit(1).execute().data or [])
+    if consumed:
+        try:
+            last = datetime.fromisoformat(consumed[0]["scheduled_at"]).astimezone(tz).date()
+            floor = max(floor, last + timedelta(days=1))
+        except Exception:  # noqa: BLE001
+            pass
     tod = _time_from(sched.get("time_of_day"))
     try:
         planned = plan_runs(
             [r["cluster_id"] for r in queued], mode=sched["mode"],
-            per_day=sched.get("per_day"), start_date=first.date(), time_of_day=tod,
+            per_day=sched.get("per_day"), start_date=floor, time_of_day=tod,
             tz_name=tz_name, weekday=sched.get("weekday"), weekdays=sched.get("weekdays"),
             day_of_month=sched.get("day_of_month"), week_of_month=sched.get("week_of_month"),
         )
