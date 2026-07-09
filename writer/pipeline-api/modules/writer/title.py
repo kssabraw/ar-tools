@@ -147,7 +147,9 @@ async def generate_h1_enrichment(
     keyword_variants: list[str],
     h1_targets: dict[str, int],
 ) -> str:
-    """A 1-sentence lede (≤25 words) immediately after the H1.
+    """A 1-sentence lede (≤25 words) immediately after the H1 — a direct 'X is Y'
+    definition of the main subject (AIO direct-definition rule, owner ruling
+    2026-07-09): a high-confidence anchor AI answer engines can quote verbatim.
 
     `entities` carries entity dicts (with `term` and `entity_category`)
     so we can filter to lede-relevant categories (services / equipment
@@ -200,8 +202,9 @@ async def generate_h1_enrichment(
     variants_list = ", ".join(top_variants) if top_variants else "none"
 
     system = (
-        "You write a single sentence (max 25 words) that introduces a blog "
-        "section. The sentence is NOT a heading. No promotional language. "
+        "You write a single sentence (max 25 words) that sits directly under a "
+        "blog post's H1 and DIRECTLY DEFINES the article's main subject in plain "
+        "'X is Y' form. The sentence is NOT a heading. No promotional language. "
         "Output JSON: {\"sentence\": \"...\"}."
     )
     user = (
@@ -211,7 +214,11 @@ async def generate_h1_enrichment(
         f"Related keywords: {related_list}\n"
         f"Keyword variants: {variants_list}\n\n"
         f"{coverage_block}\n\n"
-        "Write the lede sentence. Concise, factual, no marketing tone."
+        "Write the definition sentence: a standalone, factual 'X is Y' statement "
+        "an AI answer engine could quote verbatim (like: 'Lepidolite is a "
+        "lilac-grey lithium-bearing mica, used in crystal healing for its calming "
+        "lithium content'). Concise, factual, no marketing tone, no vague openers "
+        "('one of those', 'many people find')."
     )
     try:
         result = await claude_json(system, user, max_tokens=120, temperature=0.4)

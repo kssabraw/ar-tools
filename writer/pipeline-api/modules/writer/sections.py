@@ -48,7 +48,9 @@ WRITING RULES:
 - Markdown only (GitHub Flavored Markdown). No HTML.
 - DO NOT include the heading text inside the body. Heading goes in the "heading" field.
 - Every H2 section opens with a direct answer sentence (max 25 words). 1-2 supporting detail sentences. Then elaboration.
+- Write every key claim as a standalone, self-contained sentence that is fully understandable without the surrounding context (no pronouns pointing outside the sentence) - each key claim must be liftable verbatim into an AI answer.
 - Use bulleted/numbered lists and Markdown tables where they help comprehension. Distribute lists/tables across sections (do not stack in one).
+- Any table must put verifiable numbers/units or named noun-entities in its cells - never bare adjectives like "High", "Best", or "Reliable" - and must tie each specification to the specific scenario where it matters, quantifying trade-offs.
 - No promotional superlatives ("the best", "industry-leading", "world-class").
 - Cite specific facts using {{cit_N}} markers immediately after the closing punctuation of the sentence, like: "Heat pump installations grew 11% year over year.{{cit_001}}"
 - Use the citation_id values provided. Never invent citation IDs.
@@ -211,6 +213,14 @@ def _build_section_user_prompt(
 
     parts.append(f"\nH2_HEADING (order {h2_item.get('order')}): {h2_item.get('text')}")
     parts.append(f"WORD_BUDGET_FOR_H2: {section_budgets.get(h2_item.get('order'), 200)} words")
+
+    if current_h2_index == 0:
+        parts.append(
+            "\nThis is the FIRST content section of the article: if its core answer "
+            "is enumerable (steps, options, types), present that enumeration as a "
+            "short numbered or bulleted list immediately after the answer-first "
+            "opening - high on the page."
+        )
 
     if h3_items:
         parts.append("\nH3_SUBSECTIONS:")

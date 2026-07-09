@@ -72,16 +72,23 @@ def _cosine(a: list[float], b: list[float]) -> float:
 
 
 def _enrichment_lede(deps: WriterDeps, brief: Brief, sie: SieInput) -> str:
-    """§5.2.2 — 1 sentence ≤25 words, names ≥1 entity/key term, not a title restatement.
+    """§5.2.2 — 1 sentence ≤25 words directly under the H1, names ≥1 entity/key term,
+    not a title restatement. AIO direct-definition rule (owner ruling 2026-07-09): the
+    sentence is a plain 'X is Y' definition of the main subject — a high-confidence
+    anchor AI answer engines can quote verbatim, not vague topical context.
     Δ4a: with no qualifying entity category, anchor on the top supporting term."""
     anchors = [e.term for e in sie.entities[:5]] or [t.term for t in sie.terms.required[:5]]
     anchor_hint = ", ".join(anchors) or brief.keyword
     txt = deps.section_llm.complete_text(
-        system="You write a single-sentence topical lede for an article. No preamble.",
+        system="You write a single-sentence direct definition for an article. No preamble.",
         user=(
             f"Title: {brief.title}\nScope: {brief.scope_statement or ''}\n"
             f"Anchor terms (use at least one naturally): {anchor_hint}\n\n"
-            "Write ONE sentence (<=25 words) that sets topical context for the article. "
+            "Write ONE sentence (<=25 words) that DIRECTLY DEFINES the article's main "
+            "subject in plain 'X is Y' form — a standalone, factual definition that an "
+            "AI answer engine could quote verbatim (like: 'Lepidolite is a lilac-grey "
+            "lithium-bearing mica, used in crystal healing for its calming lithium "
+            "content'). No vague openers ('one of those', 'many people find'). "
             "Do not restate the title verbatim. No heading markers, no list markers."
         ),
         purpose="writer_enrichment_lede", max_tokens=120, temperature=0.5,
@@ -138,7 +145,7 @@ _INTENT_PATTERN_HINT = {
 
 def _write_group(
     deps: WriterDeps, brief: Brief, sie: SieInput, group: budget_mod.Group,
-    section_budget: int, *, retry_directive: str = "",
+    section_budget: int, *, retry_directive: str = "", is_first: bool = False,
 ) -> str:
     """§5.8 — one Sonnet call for an H2 group (parent + child H3s). Returns markdown
     body (H3s as `### ` subsections inside). No citation markers (no_citations)."""
@@ -164,6 +171,17 @@ def _write_group(
         + "Open with at least one answer-first paragraph (lead with a direct answer "
         + "sentence <=25 words) BEFORE any `### ` subheading — never start the section with "
         + "a subheading, and never make a subheading that merely restates the H2. "
+        + ("This is the FIRST content section of the article: if its core answer is "
+           "enumerable (steps, options, types), present that enumeration as a short "
+           "numbered or bulleted list immediately after the answer-first opening — "
+           "high on the page. " if is_first else "")
+        + "Write every key claim as a standalone, self-contained sentence that is fully "
+        + "understandable without the surrounding context (no pronouns pointing outside "
+        + "the sentence) — each key claim must be liftable verbatim into an AI answer. "
+        + "Any Markdown table you include must put verifiable numbers/units or named "
+        + "noun-entities in its cells — never bare adjectives like 'High', 'Best', or "
+        + "'Reliable' — and must tie each specification to the specific scenario where "
+        + "it matters, quantifying trade-offs. "
         + f"Every paragraph <= {fd.max_sentences_per_paragraph} sentences. "
         + "Do NOT fabricate statistics, percentages, dates, or study citations. "
         + _decision_fit_directive_text(group.parent.format_directive)
@@ -403,7 +421,7 @@ def generate_article(
     entity_names = [e.term for e in sie.entities if e.term]
     decision_fit_rendered = False
     order_cursor = 100  # provisional; re-sequenced at assembly
-    for g in kept_groups:
+    for g_index, g in enumerate(kept_groups):
         _check_timeout()
         # The whole group (parent H2 + all H3s) is written in one call, so size its budget
         # (and thus max_tokens) from the SUM of the parent + child allocations — not the
@@ -412,7 +430,7 @@ def generate_article(
             alloc.get(c.order, 0) for c in g.children)
         if _decision_fit_directive_text(g.parent.format_directive):
             decision_fit_rendered = True
-        prose = _write_group(deps, brief, sie, g, sec_budget)
+        prose = _write_group(deps, brief, sie, g, sec_budget, is_first=(g_index == 0))
 
         # §5.8.8 deterministic operational-claim soften (anti-fabrication guard).
         if coverage_enabled:
@@ -429,7 +447,7 @@ def generate_article(
         floor = h2_body_floor(brief.intent_type, brief.format_directives.min_h2_body_words)
         if v.word_count(prose) < floor:
             retry = _write_group(
-                deps, brief, sie, g, sec_budget,
+                deps, brief, sie, g, sec_budget, is_first=(g_index == 0),
                 retry_directive=(f"The previous draft was too short (floor {floor} words). "
                                  "Add substantive detail (not padding) and expand."),
             )
