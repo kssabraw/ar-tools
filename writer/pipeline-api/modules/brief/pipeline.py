@@ -89,6 +89,7 @@ from .h3_selection import select_h3s_for_h2s
 from .intent import classify_intent
 from .intent_rewrite import rewrite_h2s_for_intent
 from .intent_template import get_template
+from .listicle_items import ensure_min_ranked_items
 from .llm import claude_json, embed_batch_large
 from .llm_scoring import score_top_candidates_llm
 from .mmr import select_h2s_mmr
@@ -1008,6 +1009,42 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         faqs=faqs,
         title=title_scope.title,
     )
+
+    # ---- Step 11.6 - Listicle minimum ranked-item enforcement ----
+    # A `ranked_items` (listicle) outline must present at least the intent
+    # template's `min_h2_count` ranked H2s - one section per item. MMR selects
+    # ranked H2s from the SERP/fanout pool but never pads to that floor, so a
+    # sparse pool (e.g. a "best X software" SERP whose per-tool headings were
+    # dropped as bare entities) can leave a single-item "listicle". This pass
+    # names the real items the listicle should rank and appends them until the
+    # floor is met. Runs on the FINAL structure (after assembly) so synthesized
+    # items skip the mid-pipeline transforms; honest-fallback leaves the outline
+    # short rather than fabricate. No-op (no LLM call) when the floor is met.
+    if (
+        settings.brief_listicle_min_items_enabled
+        and intent_template.h2_pattern == "ranked_items"
+    ):
+        listicle_grounding = "\n".join(
+            [
+                h.text for h in heading_structure
+                if h.level == "H2" and h.type == "content"
+            ]
+            + (
+                [aio_insights.answer_text]
+                if aio_insights.available and aio_insights.answer_text
+                else []
+            )
+        )
+        await ensure_min_ranked_items(
+            structure=heading_structure,
+            keyword=keyword,
+            title=title_scope.title,
+            scope_statement=title_scope.scope_statement,
+            min_count=intent_template.min_h2_count,
+            max_count=intent_template.max_h2_count,
+            grounding=listicle_grounding,
+            model=settings.brief_listicle_min_items_model,
+        )
 
     # ---- Answer contract: guaranteed lead H2 (additive) ----
     # Ensure the page leads with the direct-answer section. Insert answer_heading

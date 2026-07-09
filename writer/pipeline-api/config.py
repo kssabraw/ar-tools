@@ -120,6 +120,25 @@ class Settings(BaseSettings):
     intent_llm_fallback_model: str = "claude-haiku-4-5-20251001"
     intent_llm_fallback_max_confidence: float = 0.80
 
+    # Listicle minimum ranked-item enforcement (Step 11.6). A `ranked_items`
+    # (listicle) brief must present at least the intent template's
+    # `min_h2_count` ranked H2s - one section per item (e.g. one per product
+    # / vendor / tool). The core assembly selects ranked H2s from the SERP /
+    # fanout heading pool and MMR-picks up to `max_h2_count`, but never PADS
+    # to reach `min_h2_count`: when the pool yields few ranked-shaped headings
+    # (e.g. a "best X software" SERP whose per-tool headings were dropped as
+    # bare entities by the relevance gate) the outline can land with a single
+    # ranked item - a listicle in name only. When enabled, one LLM call names
+    # the real items the listicle should rank and appends them as ranked
+    # sections until the floor is met (capped at `max_h2_count`). Honest-
+    # fallback by design: if the model can't name enough REAL items (or the
+    # call fails) the outline is left short rather than padded with invented
+    # entries. Sonnet (not Haiku) because naming real, current products needs
+    # world knowledge. Set False to restore the prior accept-a-short-listicle
+    # behavior.
+    brief_listicle_min_items_enabled: bool = True
+    brief_listicle_min_items_model: str = "claude-sonnet-4-6"
+
     # Writer end-of-run format QA. One cheap Haiku call after final assembly
     # asking "given this keyword, is this H2 outline the right article
     # archetype?" - the only check that validates the PLAN (the brief's
