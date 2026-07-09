@@ -95,6 +95,41 @@ async def test_llm_fallback_not_called_on_precheck_match():
 
 
 @pytest.mark.asyncio
+async def test_llm_fallback_not_called_at_or_above_threshold(monkeypatch):
+    """A featured-snippet informational match scores exactly 0.80 - at the
+    default threshold (strictly less-than) the deterministic answer stands."""
+    mock = AsyncMock(return_value={"intent": "listicle"})
+    with patch.object(intent_mod, "claude_json", mock):
+        intent, confidence, _ = await classify_intent(
+            keyword=_NO_SIGNAL_KEYWORD,
+            signals=IntentSignals(featured_snippet=True),
+            titles=[],
+            top_3_domains=[],
+        )
+    assert (intent, confidence) == ("informational", 0.8)
+    mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_llm_fallback_threshold_is_tunable(monkeypatch):
+    """Raising intent_llm_fallback_max_confidence makes Haiku double-check
+    weaker deterministic matches, not just the no-match default."""
+    monkeypatch.setattr(
+        intent_mod.settings, "intent_llm_fallback_max_confidence", 0.85
+    )
+    mock = AsyncMock(return_value={"intent": "listicle"})
+    with patch.object(intent_mod, "claude_json", mock):
+        intent, confidence, review = await classify_intent(
+            keyword=_NO_SIGNAL_KEYWORD,
+            signals=IntentSignals(featured_snippet=True),  # rules: 0.80 < 0.85
+            titles=[],
+            top_3_domains=[],
+        )
+    assert (intent, confidence, review) == ("listicle", 0.75, False)
+    mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_llm_fallback_respects_disabled_setting(monkeypatch):
     monkeypatch.setattr(intent_mod.settings, "intent_llm_fallback_enabled", False)
     mock = AsyncMock(return_value={"intent": "listicle"})

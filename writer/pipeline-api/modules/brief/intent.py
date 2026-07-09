@@ -107,8 +107,9 @@ def _is_numbered_listicle(titles: list[str]) -> bool:
     return count >= 3
 
 
-# classify_rules' no-signal fallback. Tuple-compared by classify_intent to
-# trigger the Step 3.3 LLM arbitration - keep in sync with classify_rules.
+# classify_rules' no-signal fallback. Its 0.55 confidence sits below the
+# Step 3.3 arbitration threshold (`intent_llm_fallback_max_confidence`),
+# so a no-match outcome is always LLM-arbitrated when the fallback is on.
 RULES_NO_MATCH: tuple[IntentType, float] = ("informational", 0.55)
 
 
@@ -275,11 +276,16 @@ async def classify_intent(
     # Step 3.2 - SERP-feature-signal classifier (UNCHANGED from v1.7)
     intent, confidence = classify_rules(signals, titles)
 
-    # Step 3.3 - LLM arbitration, ONLY when nothing matched at all. The
-    # deterministic passes stay authoritative when they fire; this replaces
-    # the silent informational/0.55 default for the long tail of phrasings
-    # no pattern enumerates. Degrades to that default on any failure.
-    if (intent, confidence) == RULES_NO_MATCH and settings.intent_llm_fallback_enabled:
+    # Step 3.3 - LLM arbitration for low-confidence outcomes (below
+    # `intent_llm_fallback_max_confidence`, default 0.80). Confident
+    # deterministic matches (0.80-0.95) stay authoritative; anything weaker
+    # - today only the informational/0.55 no-match default - is arbitrated
+    # by a cheap Haiku call instead of being accepted silently. Degrades to
+    # the deterministic answer on any failure.
+    if (
+        confidence < settings.intent_llm_fallback_max_confidence
+        and settings.intent_llm_fallback_enabled
+    ):
         llm_result = await llm_fallback_classify(keyword, titles)
         if llm_result is not None:
             intent, confidence = llm_result

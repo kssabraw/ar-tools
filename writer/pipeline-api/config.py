@@ -107,14 +107,18 @@ class Settings(BaseSettings):
     # 7-day brief cache (keyword + location_code shared across clients).
     brief_cache_ttl_days: int = 7
 
-    # Intent classification Step 3.3 - LLM arbitration for the no-signal case.
-    # When neither the keyword pattern precheck (3.1) nor the SERP-signal
-    # rules (3.2) match, the classifier used to default silently to
-    # informational/0.55. A cheap Haiku call (keyword + top SERP titles) now
-    # arbitrates instead; the informational default remains the degraded path
-    # when the call fails or returns an invalid label.
+    # Intent classification Step 3.3 - LLM arbitration for low-confidence
+    # outcomes. When the deterministic passes (keyword pattern precheck 3.1 +
+    # SERP-signal rules 3.2) land below `intent_llm_fallback_max_confidence`,
+    # a cheap Haiku call (keyword + top SERP titles) arbitrates instead of
+    # accepting the weak answer; the deterministic result remains the
+    # degraded path when the call fails or returns an invalid label. With
+    # today's rule confidences (matches 0.80-0.95, no-match default 0.55)
+    # the 0.80 threshold fires exactly on the no-match case; raise it via
+    # env to have Haiku double-check weaker signal matches too.
     intent_llm_fallback_enabled: bool = True
     intent_llm_fallback_model: str = "claude-haiku-4-5-20251001"
+    intent_llm_fallback_max_confidence: float = 0.80
 
     # ------------------------------------------------------------
     # Service Page Brief Generator (PRD §7 - model tiering + cache)
