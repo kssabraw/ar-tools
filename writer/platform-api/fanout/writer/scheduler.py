@@ -297,7 +297,9 @@ def _auto_publish_to_wordpress(
                     extra={"event": "wp_auto_published", "content_type": content_type,
                            "cluster_id": cluster_id, "client_id": client_id})
     except Exception as exc:  # noqa: BLE001 — WP auto-publish is best-effort
-        logger.warning("wp_auto_publish_failed",
+        # Reason in the message so it survives the plain stdout formatter.
+        logger.warning("wp_auto_publish_failed content_type=%s cluster=%s client=%s reason=%s",
+                       content_type, cluster_id, client_id, repr(exc),
                        extra={"event": "wp_auto_publish_failed", "content_type": content_type,
                               "cluster_id": cluster_id, "client_id": client_id,
                               "reason": repr(exc)})
