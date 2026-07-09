@@ -254,6 +254,7 @@ async def get_run(
         sie_terms_by_category=sie_terms_by_category,
         services=run.get("services") or [],
         featured_image_url=run.get("featured_image_url"),
+        writer_notes=run.get("writer_notes"),
     )
 
 
@@ -308,6 +309,7 @@ async def create_run(
         sie_outlier_mode=body.sie_outlier_mode,
         sie_force_refresh=body.sie_force_refresh,
         brief_force_refresh=body.brief_force_refresh,
+        writer_notes=(body.writer_notes or "").strip() or None,
         created_by=auth["user_id"],
     )
 
@@ -640,6 +642,9 @@ async def rerun(
             # for an unrelated reason a week ago).
             "sie_force_refresh": sie_force_refresh,
             "brief_force_refresh": brief_force_refresh,
+            # A rerun keeps the original's editorial guidance - the notes
+            # describe the article, not the attempt.
+            "writer_notes": original.get("writer_notes"),
             "status": "queued",
             "created_by": auth["user_id"],
         }

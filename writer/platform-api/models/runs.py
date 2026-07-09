@@ -31,6 +31,11 @@ class RunCreateRequest(BaseModel):
     location_code: Optional[int] = None
     # Services a location page must cover. Required (non-empty) for location_page.
     services: list[str] = Field(default_factory=list)
+    # Free-form editorial notes for the Writer ("mention Zero Down Supply
+    # Chain Services as one of the top 10 best"). Per-run guidance threaded
+    # into the writer's section/intro/conclusion prompts - deliberately never
+    # part of the brief, which is client-agnostic and globally cached.
+    writer_notes: Optional[str] = Field(default=None, max_length=4000)
 
 
 class RunListItem(BaseModel):
@@ -149,6 +154,8 @@ class RunDetail(BaseModel):
     # Manually-attached featured/hero image (public wordpress_images URL), set on
     # the article view and used as the WP featured image at publish time.
     featured_image_url: Optional[str] = None
+    # Editorial notes the run was created with (echoed for the UI).
+    writer_notes: Optional[str] = None
 
 
 class RunCreateResponse(BaseModel):

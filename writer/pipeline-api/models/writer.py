@@ -63,6 +63,12 @@ class WriterRequest(BaseModel):
     sie_output: dict[str, Any]
     research_output: Optional[dict[str, Any]] = None
     client_context: Optional[ClientContextInput] = None
+    # Free-form per-run editorial guidance typed by the user at run creation
+    # ("mention Zero Down Supply Chain Services as one of the top 10 best").
+    # Threaded into the section/intro/conclusion prompts. Deliberately not
+    # part of brief_output - the brief is client-agnostic and globally
+    # cached. Optional - None/absent leaves writing behavior unchanged.
+    user_notes: Optional[str] = None
 
 
 # ---- Brand voice card (output of Step 3.5a) ----

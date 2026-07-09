@@ -49,6 +49,7 @@ export function Runs() {
   const scopedClientId = searchParams.get('client') ?? undefined
   const [showNewRun, setShowNewRun] = useState(searchParams.get('new') === '1')
   const [keyword, setKeyword] = useState('')
+  const [writerNotes, setWriterNotes] = useState('')
   const [creating, setCreating] = useState(false)
 
   const { data: runsResp, isLoading: runsLoading, isFetching: runsFetching, refetch } = useQuery<RunListResponse>({
@@ -152,11 +153,13 @@ export function Runs() {
       sie_outlier_mode: string
       sie_force_refresh: boolean
       brief_force_refresh: boolean
+      writer_notes?: string
     }) => api.post('/runs', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['runs'] })
       setShowNewRun(false)
       setKeyword('')
+      setWriterNotes('')
     },
   })
 
@@ -179,6 +182,7 @@ export function Runs() {
         sie_outlier_mode: 'safe',
         sie_force_refresh: false,
         brief_force_refresh: briefForceRefresh,
+        writer_notes: writerNotes.trim() || undefined,
       })
     } finally {
       setCreating(false)
@@ -263,6 +267,20 @@ export function Runs() {
                 maxLength={150}
                 placeholder="e.g. best hvac systems 2026"
                 style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+              />
+            </div>
+            <div style={{ flexBasis: '100%', minWidth: 240 }}>
+              <label style={labelStyle}>Notes for the writer (optional)</label>
+              {/* Per-run editorial guidance threaded into the Writer's
+                  prompts - e.g. a company that must appear in a listicle,
+                  an angle to lead with. Never enters the cached brief. */}
+              <textarea
+                value={writerNotes}
+                onChange={e => setWriterNotes(e.target.value)}
+                maxLength={4000}
+                rows={2}
+                placeholder="e.g. mention Zero Down Supply Chain Services as one of the top 10 best"
+                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
               />
             </div>
             <div style={{ display: 'flex', gap: 8 }}>

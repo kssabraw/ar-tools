@@ -620,6 +620,10 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     body_structure = (
         req.client_context.reference_page_body_structure if req.client_context else None
     )
+    # Per-run editorial guidance from the user - passed into every section
+    # prompt (plus intro + conclusion) so a note like "mention <brand> as one
+    # of the top 10" can land wherever it fits most naturally.
+    user_notes = (req.user_notes or "").strip() or None
     preceding_summaries_running: list[str] = []
     for h2_idx, (h2_item, h3_items) in enumerate(h2_groups):
         section_budget = section_budgets.get(h2_item.get("order"), 0)
@@ -643,6 +647,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             preceding_section_summaries=list(preceding_summaries_running),
             placement_directive=placement_plan.for_order(h2_item.get("order", -1)),
             reference_structure=body_structure,
+            user_notes=user_notes,
         )
         article.extend(result.sections)
         banned_terms_leaked_in_body.extend(result.banned_terms_leaked)
@@ -658,6 +663,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         brand_voice_card=brand_voice_card,
         banned_regex=banned_regex,
         conclusion_order=0,
+        user_notes=user_notes,
     )
     article.append(conclusion_section)
 
@@ -708,6 +714,7 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         reference_structure=(
             req.client_context.reference_page_structure if req.client_context else None
         ),
+        user_notes=user_notes,
     )
     # Insert intro right after H1 + (optional) h1-enrichment so the
     # render order is: H1 → enrichment → intro → body... → conclusion

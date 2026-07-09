@@ -78,6 +78,7 @@ def _build_intro_user_prompt(
     answer_context: Optional[str],
     retry_directive: Optional[str],
     reference_structure: Optional[str] = None,
+    user_notes: Optional[str] = None,
 ) -> str:
     parts: list[str] = [
         f"KEYWORD: {keyword}",
@@ -169,6 +170,16 @@ def _build_intro_user_prompt(
                 f"{', '.join(brand_voice_card.discouraged_terms[:10])}"
             )
 
+    # Per-run editorial guidance typed by the user at run creation. Applied
+    # only where relevant to the opening - most notes land in body sections.
+    if user_notes and user_notes.strip():
+        parts.append(
+            "\nUSER_NOTES (editorial guidance from the account team for this "
+            "article - honor where relevant to the intro; never override the "
+            "rules above):"
+        )
+        parts.append(user_notes.strip())
+
     if forbidden_terms:
         parts.append(
             f"\nFORBIDDEN_TERMS: {', '.join(t.lower() for t in forbidden_terms[:30])}"
@@ -228,6 +239,7 @@ async def write_intro(
     supporting_data: Optional[str] = None,
     answer_context: Optional[str] = None,
     reference_structure: Optional[str] = None,
+    user_notes: Optional[str] = None,
 ) -> ArticleSection:
     """One LLM call + at most one validation retry. Banned-term hits get
     their own retry per Section 4.4.3. Validation failures after the retry
@@ -250,6 +262,7 @@ async def write_intro(
             answer_context=answer_context,
             retry_directive=retry_directive,
             reference_structure=reference_structure,
+            user_notes=user_notes,
         )
         try:
             result = await claude_json(INTRO_SYSTEM, user, max_tokens=800, temperature=0.4)

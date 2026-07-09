@@ -57,6 +57,7 @@ async def write_conclusion(
     brand_voice_card: Optional[BrandVoiceCard],
     banned_regex,
     conclusion_order: int,
+    user_notes: Optional[str] = None,
 ) -> ArticleSection:
     summary_block = "\n".join(f"  - {s}" for s in section_summaries[:8])
     soft_cta = SOFT_CTA_BY_INTENT.get(intent_type, SOFT_CTA_BY_INTENT["informational"])
@@ -70,6 +71,15 @@ async def write_conclusion(
         summary_block,
         f"\nSOFT_CTA_DIRECTION: {soft_cta}",
     ]
+    # Per-run editorial guidance typed by the user at run creation. Applied
+    # only where relevant to the closing - most notes land in body sections.
+    if user_notes and user_notes.strip():
+        user_parts.append(
+            "\nUSER_NOTES (editorial guidance from the account team for this "
+            "article - honor where relevant to the conclusion; never "
+            "override the rules above):"
+        )
+        user_parts.append(user_notes.strip())
     if brand_voice_card:
         if brand_voice_card.brand_name:
             user_parts.append(f"\nBRAND_NAME: {brand_voice_card.brand_name}")
