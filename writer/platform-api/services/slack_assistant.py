@@ -2943,7 +2943,12 @@ async def interpret(
                 {"type": "text", "text": "Tool budget exhausted — answer now with what you have."}
             )
         messages.append({"role": "user", "content": results})
-    return extract_interpretation(resp.content)
+    kind, payload = extract_interpretation(resp.content)
+    if kind == "text" and getattr(resp, "stop_reason", None) == "max_tokens":
+        # Ran out of room — close cleanly instead of stopping mid-sentence. The
+        # truncated reply stays in history, so "continue" picks the thought up.
+        payload = str(payload).rstrip() + "\n\n_…I hit my reply-length limit — say “continue” and I'll pick up where I left off._"
+    return (kind, payload)
 
 
 async def interpret_portfolio(
@@ -2983,7 +2988,10 @@ async def interpret_portfolio(
             return _BUSY_REPLY
         raise
     parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
-    return "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing."
+    reply = "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing."
+    if getattr(resp, "stop_reason", None) == "max_tokens":
+        reply += "\n\n_…I hit my reply-length limit — say “continue” and I'll pick up where I left off._"
+    return reply
 
 
 async def _run_action(name: str, client_id: str, args: Optional[dict]) -> str:
