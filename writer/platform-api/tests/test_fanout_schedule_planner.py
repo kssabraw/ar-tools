@@ -42,6 +42,38 @@ def test_weekly_requires_weekday():
                   time_of_day=_TOD)
 
 
+def test_weekly_multiple_weekdays_each_a_slot():
+    # One per selected weekday: Tue(1) + Thu(3), Mon 2026-07-06 start. Unsorted input.
+    runs = plan_runs([f"c{i}" for i in range(6)], mode="weekly", per_day=1,
+                     start_date=date(2026, 7, 6), time_of_day=_TOD, tz_name="UTC",
+                     weekdays=[3, 1])
+    assert _dates(runs) == [date(2026, 7, 7), date(2026, 7, 9), date(2026, 7, 14),
+                            date(2026, 7, 16), date(2026, 7, 21), date(2026, 7, 23)]
+
+
+def test_weekly_multiple_weekdays_per_slot_count():
+    # per_day=2 with two weekdays => 4/week (2 on each selected day).
+    runs = plan_runs([f"c{i}" for i in range(4)], mode="weekly", per_day=2,
+                     start_date=date(2026, 7, 6), time_of_day=_TOD, tz_name="UTC",
+                     weekdays=[1, 3])
+    counts = Counter(r.scheduled_at.date() for r in runs)
+    assert counts[date(2026, 7, 7)] == 2 and counts[date(2026, 7, 9)] == 2
+
+
+def test_weekly_multiple_weekdays_skips_pre_start_days():
+    # Wed start: Tue of that week is before start and skipped.
+    runs = plan_runs([f"c{i}" for i in range(3)], mode="weekly", per_day=1,
+                     start_date=date(2026, 7, 8), time_of_day=_TOD, tz_name="UTC",
+                     weekdays=[1, 3])
+    assert _dates(runs) == [date(2026, 7, 9), date(2026, 7, 14), date(2026, 7, 16)]
+
+
+def test_weekly_empty_weekdays_rejected():
+    with pytest.raises(ScheduleError):
+        plan_runs(_IDS, mode="weekly", per_day=1, start_date=date(2026, 7, 6),
+                  time_of_day=_TOD, weekdays=[])
+
+
 def test_monthly_date_anchors_next_month_when_day_passed():
     # 2/month on the 15th; start 07-20 -> Jul 15 already gone, so first is Aug 15.
     runs = plan_runs(_IDS, mode="monthly_date", per_day=2, start_date=date(2026, 7, 20),

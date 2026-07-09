@@ -101,16 +101,30 @@ def _nth_weekday_of_month(year: int, month: int, weekday: int, nth: int) -> date
 
 def _period_dates(
     mode: str, n_periods: int, *, start: date, weekday: int | None,
-    day_of_month: int | None, week_of_month: int | None,
+    weekdays: list[int] | None, day_of_month: int | None, week_of_month: int | None,
 ) -> list[date]:
-    """The local start-date of each successive period for a periodic cadence."""
+    """The local start-date of each successive period (bucket slot) for a periodic
+    cadence. Weekly supports MULTIPLE weekdays: each selected weekday is its own slot
+    every week (e.g. {Tue, Thu} = two slots/week), emitted chronologically."""
     if mode == "drip":
         return [start + timedelta(days=k) for k in range(n_periods)]
     if mode == "weekly":
-        if weekday is None:
-            raise ScheduleError("A weekly schedule requires a weekday (0=Mon .. 6=Sun).")
-        first = _first_weekday_on_or_after(start, weekday)
-        return [first + timedelta(weeks=k) for k in range(n_periods)]
+        days = sorted({d for d in (weekdays or ([weekday] if weekday is not None else []))
+                       if d is not None and 0 <= d <= 6})
+        if not days:
+            raise ScheduleError("A weekly schedule requires at least one weekday (0=Mon .. 6=Sun).")
+        base_monday = start - timedelta(days=start.weekday())   # Monday of start's week
+        out: list[date] = []
+        k = 0
+        while len(out) < n_periods:
+            for wd in days:                                     # ascending weekday -> chronological
+                d = base_monday + timedelta(days=k * 7 + wd)
+                if d >= start:
+                    out.append(d)
+                    if len(out) >= n_periods:
+                        break
+            k += 1
+        return out
     if mode == "monthly_date":
         if not day_of_month or not (1 <= day_of_month <= 31):
             raise ScheduleError("A monthly schedule requires a day of month (1-31).")
@@ -149,15 +163,18 @@ def _period_dates(
 def plan_runs(
     ordered_cluster_ids: list[str], *, mode: str, per_day: int | None = None,
     start_date: date | None = None, time_of_day: time | None = None, tz_name: str = "UTC",
-    weekday: int | None = None, day_of_month: int | None = None,
-    week_of_month: int | None = None, now_utc: datetime | None = None,
+    weekday: int | None = None, weekdays: list[int] | None = None,
+    day_of_month: int | None = None, week_of_month: int | None = None,
+    now_utc: datetime | None = None,
 ) -> list[PlannedRun]:
     """Compute each run's `scheduled_at`. Raises ScheduleError on bad params (incl. a
     schedule that would span > 365 days, carrying the `min_per_day` hint).
 
     Periodic modes (drip/weekly/monthly_date/monthly_weekday) place articles in
-    per-period buckets of `per_day` (the count-per-period), one bucket per successive
-    period; `weekday`/`day_of_month`/`week_of_month` anchor the weekly/monthly cadences."""
+    per-period buckets of `per_day` (the count per slot). For weekly, each selected
+    weekday is its own slot every week — pass `weekdays` (a set) for multiple days
+    (e.g. Tue+Thu = 2 slots/week); `weekday` is the single-day fallback.
+    `day_of_month`/`week_of_month` anchor the monthly cadences."""
     now = now_utc or datetime.now(timezone.utc)
     ids = [c for c in ordered_cluster_ids if c]
     if not ids:
@@ -181,7 +198,7 @@ def plan_runs(
     tod = time_of_day or time(9, 0)
     n_periods = math.ceil(len(ids) / per_day)
     period_dates = _period_dates(
-        mode, n_periods, start=start, weekday=weekday,
+        mode, n_periods, start=start, weekday=weekday, weekdays=weekdays,
         day_of_month=day_of_month, week_of_month=week_of_month,
     )
     span = (period_dates[-1] - start).days + 1 if period_dates else 0

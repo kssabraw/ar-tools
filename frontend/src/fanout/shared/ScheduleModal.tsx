@@ -55,9 +55,12 @@ export function ScheduleModal(props: {
   // Recurring-cadence anchors: weekday (0=Mon .. 6=Sun) for weekly + monthly-by-weekday;
   // day-of-month (1-31) for monthly-by-date; occurrence (1-4, or -1 = last) for
   // monthly-by-weekday.
-  const [weekday, setWeekday] = useState(0);
+  const [weekday, setWeekday] = useState(0);           // monthly_weekday: single day
+  const [weekdays, setWeekdays] = useState<number[]>([0]);  // weekly: one or more days
   const [dayOfMonth, setDayOfMonth] = useState(1);
   const [weekOfMonth, setWeekOfMonth] = useState(1);
+  const toggleWeekday = (i: number) =>
+    setWeekdays((prev) => (prev.includes(i) ? prev.filter((d) => d !== i) : [...prev, i]).sort((a, b) => a - b));
   const [timezone] = useState(browserTz);
   const [baseUrl, setBaseUrl] = useState(props.baseUrl ?? "");
   // Up to 3 money-page URLs every article should link to (woven into the
@@ -100,7 +103,8 @@ export function ScheduleModal(props: {
     time_of_day: usesStartDate ? timeOfDay : undefined,
     timezone,
     // Cadence anchors, only for the modes that use them.
-    weekday: mode === "weekly" || mode === "monthly_weekday" ? weekday : undefined,
+    weekday: mode === "monthly_weekday" ? weekday : undefined,
+    weekdays: mode === "weekly" ? weekdays : undefined,
     day_of_month: mode === "monthly_date" ? dayOfMonth : undefined,
     week_of_month: mode === "monthly_weekday" ? weekOfMonth : undefined,
     content_type: contentType,
@@ -122,7 +126,7 @@ export function ScheduleModal(props: {
   // Live preview — re-estimates as the inputs change.
   const est = useQuery({
     queryKey: ["schedule-estimate", sessionId, mode, perDay, startDate, timeOfDay,
-      weekday, dayOfMonth, weekOfMonth, clusterIds, contentType],
+      weekday, weekdays.join(","), dayOfMonth, weekOfMonth, clusterIds, contentType],
     queryFn: () => scheduleEstimate(sessionId, body),
   });
 
@@ -146,7 +150,9 @@ export function ScheduleModal(props: {
 
   // Blog posts need a base URL; Local SEO pages need a target area; service
   // pages are keyword-only (the client link is enforced server-side).
-  const missingRequirement = isServicePage ? false : isLocalSeo ? !effectiveLocation : !baseUrl.trim();
+  const contentMissing = isServicePage ? false : isLocalSeo ? !effectiveLocation : !baseUrl.trim();
+  // Weekly needs at least one weekday selected.
+  const missingRequirement = contentMissing || (mode === "weekly" && weekdays.length === 0);
   const count = est.data?.count ?? 0;
   const noun = isLocalSeo || isServicePage ? "page" : "article";
   const scope = clusterIds ? `${clusterIds.length} selected ${noun}(s)` : "the whole session";
@@ -332,13 +338,30 @@ export function ScheduleModal(props: {
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               <label className="field" style={{ flex: "0 0 100px" }}>
                 <span className="field-label">
-                  {mode === "drip" ? "Per day" : mode === "weekly" ? "Per week" : "Per month"}
+                  {mode === "drip" ? "Per day" : mode === "weekly" ? "Per day" : "Per month"}
                 </span>
                 <input className="input" type="number" min={1} value={perDay}
                   onChange={(e) => setPerDay(Math.max(1, Number(e.target.value) || 1))} />
               </label>
 
-              {(mode === "weekly" || mode === "monthly_weekday") && (
+              {mode === "weekly" && (
+                <div className="field" style={{ flex: "1 0 100%" }}>
+                  <span className="field-label">On these days (one “per day” count on each, every week)</span>
+                  <div className="seg-radios" style={{ flexWrap: "wrap" }}>
+                    {WEEKDAYS.map((d, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className={"seg-radio" + (weekdays.includes(i) ? " seg-radio-active" : "")}
+                        onClick={() => toggleWeekday(i)}
+                      >
+                        {d.slice(0, 3)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {mode === "monthly_weekday" && (
                 <label className="field" style={{ flex: "0 0 140px" }}>
                   <span className="field-label">Weekday</span>
                   <select className="input" value={weekday}

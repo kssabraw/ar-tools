@@ -155,7 +155,7 @@ function ScheduleCard(p: {
   onUpdateTargets: (body: { auto_publish?: boolean; wp_publish?: boolean; wp_status?: "draft" | "publish" }) => void;
   onUpdateCadence: (body: {
     mode: ScheduleRequest["mode"]; per_day?: number; start_date?: string;
-    time_of_day?: string; timezone?: string; weekday?: number;
+    time_of_day?: string; timezone?: string; weekday?: number; weekdays?: number[];
     day_of_month?: number; week_of_month?: number;
   }) => void;
 }) {
@@ -284,7 +284,7 @@ function CadenceEditor(p: {
   busy: boolean;
   onApply: (body: {
     mode: ScheduleRequest["mode"]; per_day?: number; start_date?: string;
-    time_of_day?: string; timezone?: string; weekday?: number;
+    time_of_day?: string; timezone?: string; weekday?: number; weekdays?: number[];
     day_of_month?: number; week_of_month?: number;
   }) => void;
 }) {
@@ -295,12 +295,16 @@ function CadenceEditor(p: {
   const [startDate, setStartDate] = useState(p.s.start_date ?? today);
   const [timeOfDay, setTimeOfDay] = useState(p.s.time_of_day?.slice(0, 5) ?? "09:00");
   const [weekday, setWeekday] = useState(0);
+  const [weekdays, setWeekdays] = useState<number[]>([0]);
   const [dayOfMonth, setDayOfMonth] = useState(1);
   const [weekOfMonth, setWeekOfMonth] = useState(1);
+  const toggleWeekday = (i: number) =>
+    setWeekdays((prev) => (prev.includes(i) ? prev.filter((d) => d !== i) : [...prev, i]).sort((a, b) => a - b));
 
   const periodic = mode === "drip" || mode === "weekly"
     || mode === "monthly_date" || mode === "monthly_weekday";
   const usesDate = periodic || mode === "fixed";
+  const applyDisabled = p.busy || (mode === "weekly" && weekdays.length === 0);
 
   const apply = () => p.onApply({
     mode,
@@ -308,7 +312,8 @@ function CadenceEditor(p: {
     start_date: usesDate ? startDate : undefined,
     time_of_day: usesDate ? timeOfDay : undefined,
     timezone: tz,
-    weekday: mode === "weekly" || mode === "monthly_weekday" ? weekday : undefined,
+    weekday: mode === "monthly_weekday" ? weekday : undefined,
+    weekdays: mode === "weekly" ? weekdays : undefined,
     day_of_month: mode === "monthly_date" ? dayOfMonth : undefined,
     week_of_month: mode === "monthly_weekday" ? weekOfMonth : undefined,
   });
@@ -328,9 +333,24 @@ function CadenceEditor(p: {
           <input className="input" type="number" min={1} value={perDay}
             style={{ width: 70, fontSize: 13 }} disabled={p.busy}
             onChange={(e) => setPerDay(Math.max(1, Number(e.target.value) || 1))}
-            title={mode === "drip" ? "Per day" : mode === "weekly" ? "Per week" : "Per month"} />
+            title={mode === "drip" ? "Per day" : mode === "weekly" ? "Per selected day, each week" : "Per month"} />
         )}
-        {(mode === "weekly" || mode === "monthly_weekday") && (
+        {mode === "weekly" && (
+          <div className="seg-radios" style={{ flexWrap: "wrap" }}>
+            {WEEKDAYS.map((d, i) => (
+              <button
+                key={i}
+                type="button"
+                className={"seg-radio" + (weekdays.includes(i) ? " seg-radio-active" : "")}
+                disabled={p.busy}
+                onClick={() => toggleWeekday(i)}
+              >
+                {d.slice(0, 3)}
+              </button>
+            ))}
+          </div>
+        )}
+        {mode === "monthly_weekday" && (
           <select className="input" style={{ width: "auto", fontSize: 13 }} value={weekday}
             disabled={p.busy} onChange={(e) => setWeekday(Number(e.target.value))}>
             {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
@@ -359,7 +379,10 @@ function CadenceEditor(p: {
             style={{ width: "auto", fontSize: 13 }} disabled={p.busy}
             onChange={(e) => setTimeOfDay(e.target.value)} />
         )}
-        <button className="btn btn-sm" disabled={p.busy} onClick={apply}>Apply cadence</button>
+        <button className="btn btn-sm" disabled={applyDisabled} onClick={apply}
+          title={mode === "weekly" && weekdays.length === 0 ? "Pick at least one weekday" : ""}>
+          Apply cadence
+        </button>
       </div>
     </div>
   );

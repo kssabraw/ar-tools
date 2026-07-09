@@ -1053,6 +1053,7 @@ export interface ScheduleRequest {
   // day_of_month (1-31) for monthly_date; week_of_month (1-4, or -1 = last) for
   // monthly_weekday.
   weekday?: number;
+  weekdays?: number[];             // weekly: multiple days, each a slot per week
   day_of_month?: number;
   week_of_month?: number;
   site_base_url?: string;
@@ -1156,7 +1157,7 @@ export const updateScheduleCadence = (
   sessionId: string, scheduleId: string,
   body: {
     mode: ScheduleRequest["mode"]; per_day?: number; start_date?: string;
-    time_of_day?: string; timezone?: string; weekday?: number;
+    time_of_day?: string; timezone?: string; weekday?: number; weekdays?: number[];
     day_of_month?: number; week_of_month?: number;
   },
 ) =>
