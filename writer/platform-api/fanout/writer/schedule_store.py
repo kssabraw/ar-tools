@@ -134,6 +134,17 @@ def set_schedule_status(schedule_id: str, status: str) -> None:
         "id", schedule_id).execute()
 
 
+def update_schedule_fields(schedule_id: str, fields: dict) -> dict | None:
+    """Patch arbitrary columns on a schedule (used for mid-run publish-target edits:
+    auto_publish / wp_publish / wp_status). Returns the updated row. The worker reads
+    these live per article, so a change applies to every run not yet generated."""
+    if not fields:
+        return get_schedule(schedule_id)
+    res = (get_service_client().table("content_schedules")
+           .update(fields).eq("id", schedule_id).execute())
+    return res.data[0] if res.data else None
+
+
 def cancel_schedule(schedule_id: str) -> int:
     """Cancel a schedule + all its still-pending (queued/running) runs. Returns runs cancelled.
     Completed/failed runs are left as historical record."""

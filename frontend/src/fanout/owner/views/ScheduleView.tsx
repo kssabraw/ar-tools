@@ -9,6 +9,7 @@ import {
   listSchedules,
   pauseSchedule,
   resumeSchedule,
+  updateSchedulePublishTargets,
   type ContentSchedule,
 } from "../../shared/api";
 import { ScheduleModal } from "../../shared/ScheduleModal";
@@ -84,12 +85,16 @@ export function ScheduleView() {
         <div style={{ display: "grid", gap: 10, marginBottom: 18 }}>
           {schedules.map((s) => (
             <ScheduleCard key={s.id} s={s} busy={act.isPending}
+              clientLinked={!!session.data?.client_id}
+              wordpressAvailable={!!session.data?.publish_available?.wordpress}
               onPause={() => act.mutate(() => pauseSchedule(sessionId, s.id))}
               onResume={() => act.mutate(() => resumeSchedule(sessionId, s.id))}
               onCancel={() => {
                 if (confirm("Cancel this schedule? Pending articles won’t be written (already-written ones stay)."))
                   act.mutate(() => cancelSchedule(sessionId, s.id));
               }}
+              onUpdateTargets={(body) =>
+                act.mutate(() => updateSchedulePublishTargets(sessionId, s.id, body))}
             />
           ))}
         </div>
@@ -138,56 +143,112 @@ export function ScheduleView() {
 function ScheduleCard(p: {
   s: ContentSchedule;
   busy: boolean;
+  clientLinked: boolean;
+  wordpressAvailable: boolean;
   onPause: () => void;
   onResume: () => void;
   onCancel: () => void;
+  onUpdateTargets: (body: { auto_publish?: boolean; wp_publish?: boolean; wp_status?: "draft" | "publish" }) => void;
 }) {
   const { s } = p;
+  // Publish destinations are editable only while paused (forward-only — applies to
+  // articles not yet written). Blog/local-SEO/service all support both targets on a
+  // client-linked session; WordPress additionally needs the client WP-configured.
+  const canEditTargets = s.status === "paused";
   const pr = s.progress ?? {};
   const done = (pr.complete ?? 0) + (pr.failed ?? 0) + (pr.cancelled ?? 0);
   const total = pr.total ?? s.total_count;
   const label =
     s.mode === "all_at_once" ? "All at once"
       : s.mode === "fixed" ? `On ${s.start_date}`
-        : `Drip ${s.per_day}/day from ${s.start_date}`;
+        : s.mode === "weekly" ? `${s.per_day}/week from ${s.start_date}`
+          : s.mode === "monthly_date" ? `${s.per_day}/month from ${s.start_date}`
+            : s.mode === "monthly_weekday" ? `${s.per_day}/month from ${s.start_date}`
+              : `Drip ${s.per_day}/day from ${s.start_date}`;
   return (
-    <div className="card" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px" }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600 }}>
-          {label} <span className={"badge " + scheduleBadge(s.status)}>{s.status}</span>
-          {s.auto_publish && (
-            <span className="badge badge-rel" style={{ marginLeft: 6 }} title="Each finished piece is auto-published to the client's Google Drive folder">
-              ⬆ Auto-publish
-            </span>
-          )}
-          {s.wp_publish && (
-            <span
-              className="badge badge-rel"
-              style={{ marginLeft: 6 }}
-              title={
-                s.wp_status === "publish"
-                  ? "Each finished article goes live on the client's WordPress site"
-                  : "Each finished article is created as a draft on the client's WordPress site"
-              }
-            >
-              ⬆ WordPress{s.wp_status === "publish" ? " (live)" : " (draft)"}
-            </span>
-          )}
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10, padding: "12px 14px" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600 }}>
+            {label} <span className={"badge " + scheduleBadge(s.status)}>{s.status}</span>
+            {s.auto_publish && (
+              <span className="badge badge-rel" style={{ marginLeft: 6 }} title="Each finished piece is auto-published to the client's Google Drive folder">
+                ⬆ Drive
+              </span>
+            )}
+            {s.wp_publish && (
+              <span
+                className="badge badge-rel"
+                style={{ marginLeft: 6 }}
+                title={
+                  s.wp_status === "publish"
+                    ? "Each finished article goes live on the client's WordPress site"
+                    : "Each finished article is created as a draft on the client's WordPress site"
+                }
+              >
+                ⬆ WordPress{s.wp_status === "publish" ? " (live)" : " (draft)"}
+              </span>
+            )}
+          </div>
+          <div className="muted" style={{ fontSize: 13 }}>
+            {done} / {total} done
+            {pr.failed ? ` · ${pr.failed} failed` : ""}
+            {pr.running ? ` · ${pr.running} writing` : ""}
+          </div>
         </div>
-        <div className="muted" style={{ fontSize: 13 }}>
-          {done} / {total} done
-          {pr.failed ? ` · ${pr.failed} failed` : ""}
-          {pr.running ? ` · ${pr.running} writing` : ""}
-        </div>
+        {s.status === "active" && (
+          <button className="btn btn-sm" disabled={p.busy} onClick={p.onPause}>Pause</button>
+        )}
+        {s.status === "paused" && (
+          <button className="btn btn-sm" disabled={p.busy} onClick={p.onResume}>Resume</button>
+        )}
+        {(s.status === "active" || s.status === "paused") && (
+          <button className="link-btn link-danger" disabled={p.busy} onClick={p.onCancel}>Cancel</button>
+        )}
       </div>
-      {s.status === "active" && (
-        <button className="btn btn-sm" disabled={p.busy} onClick={p.onPause}>Pause</button>
-      )}
-      {s.status === "paused" && (
-        <button className="btn btn-sm" disabled={p.busy} onClick={p.onResume}>Resume</button>
-      )}
-      {(s.status === "active" || s.status === "paused") && (
-        <button className="link-btn link-danger" disabled={p.busy} onClick={p.onCancel}>Cancel</button>
+
+      {canEditTargets && (p.clientLinked || p.wordpressAvailable) && (
+        <div style={{ borderTop: "1px solid var(--border, #e5e7eb)", paddingTop: 8 }}>
+          <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+            Publish destinations for the remaining articles (paused — takes effect on resume):
+          </div>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
+            {p.clientLinked && (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
+                <input
+                  type="checkbox"
+                  disabled={p.busy}
+                  checked={!!s.auto_publish}
+                  onChange={(e) => p.onUpdateTargets({ auto_publish: e.target.checked })}
+                />
+                Google Drive
+              </label>
+            )}
+            {p.wordpressAvailable && (
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14 }}>
+                <input
+                  type="checkbox"
+                  disabled={p.busy}
+                  checked={!!s.wp_publish}
+                  onChange={(e) => p.onUpdateTargets({ wp_publish: e.target.checked })}
+                />
+                WordPress
+              </label>
+            )}
+            {p.wordpressAvailable && s.wp_publish && (
+              <select
+                className="input"
+                style={{ width: "auto", fontSize: 13, padding: "2px 6px" }}
+                disabled={p.busy}
+                value={s.wp_status ?? "draft"}
+                onChange={(e) => p.onUpdateTargets({ wp_status: e.target.value as "draft" | "publish" })}
+              >
+                <option value="draft">As draft</option>
+                <option value="publish">Live</option>
+              </select>
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
