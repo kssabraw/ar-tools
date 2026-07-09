@@ -941,6 +941,15 @@ function collectQaFlags(run: RunDetailType): QaFlag[] {
       }.${wmeta.format_qa_note ? ` ${wmeta.format_qa_note}` : ''}`,
     })
   }
+  // Notes-landed judge - a writer note the article may not have honored.
+  for (const v of (wmeta?.user_notes_verdicts as { note?: string; landed?: boolean; evidence?: string }[] | undefined) ?? []) {
+    if (v.landed === false) {
+      flags.push({
+        severity: 'warn',
+        text: `Writer note may not have been honored: "${v.note ?? 'unknown directive'}"${v.evidence ? ` - ${v.evidence}` : ''}`,
+      })
+    }
+  }
   // Intent classified at low confidence - the brief flagged itself for review.
   if (brief?.intent_review_required === true) {
     flags.push({
@@ -1003,7 +1012,9 @@ function QaChecksCard({ run }: { run: RunDetailType }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#16a34a' }}>
           <CheckCircle size={15} />
           All QA checks passed
-          {formatQaPassed && ' - structure matches the keyword’s expected format.'}
+          {formatQaPassed && ' - structure matches the keyword’s expected format'}
+          {wmeta?.user_notes_landed_all === true && ' - writer notes honored'}
+          .
         </div>
       ) : (
         <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>

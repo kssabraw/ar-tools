@@ -263,6 +263,12 @@ class WriterMetadata(BaseModel):
     format_qa_matches_intent: Optional[bool] = None
     format_qa_expected_archetype: Optional[str] = None
     format_qa_note: Optional[str] = None
+    # Notes-landed judge (format_qa.check_notes_landed) - did the article
+    # honor the per-run user_notes? One verdict per directive:
+    # {"note", "landed", "evidence"}. Empty + None = no notes were given,
+    # the check is disabled, or the judge failed (unknown).
+    user_notes_verdicts: list[dict] = []
+    user_notes_landed_all: Optional[bool] = None
     schema_version: SchemaVersion = "1.9"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0

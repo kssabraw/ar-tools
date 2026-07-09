@@ -128,6 +128,13 @@ class Settings(BaseSettings):
     # aborts. Best-effort - any API error leaves the fields None (unknown).
     writer_format_qa_enabled: bool = True
     writer_format_qa_model: str = "claude-haiku-4-5-20251001"
+    # Companion end-of-run check: did the article actually honor the user's
+    # per-run writer notes? One Haiku call (shares writer_format_qa_model)
+    # splits the notes into distinct directives and judges each landed /
+    # not-landed against the final article text - an LLM judge (like the
+    # ICP callout check) because paraphrase defeats string matching
+    # ("ZDSCS" vs "Zero Down Supply Chain Services"). Warn-and-accept.
+    writer_notes_qa_enabled: bool = True
 
     # ------------------------------------------------------------
     # Service Page Brief Generator (PRD §7 - model tiering + cache)

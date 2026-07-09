@@ -80,6 +80,105 @@ def _content_h2_outline(article: list[ArticleSection]) -> list[str]:
     ]
 
 
+# ---------------------------------------------------------------------------
+# Notes-landed judge - did the article honor the user's writer notes?
+# ---------------------------------------------------------------------------
+
+_NOTES_SYSTEM = (
+    "You are a QA checker verifying that an article honored the account "
+    "team's editorial notes. Split the notes into distinct directives (a "
+    "single note may contain several). For each directive judge whether the "
+    "article satisfies it. Tolerate paraphrase and abbreviation - a "
+    "directive to mention 'Zero Down Supply Chain Services' is satisfied by "
+    "'ZDSCS' or a clear paraphrase of the company.\n\n"
+    'Respond with a single JSON object: {"directives": [{"note": '
+    '"<the directive, briefly restated>", "landed": <bool>, "evidence": '
+    '"<short quote from the article when landed, else why not>"}]}.'
+)
+
+# Bound the article text sent to the judge. 30k chars comfortably covers a
+# ~3000-word article with headings; anything longer is clipped from the end
+# (notes overwhelmingly land in title/intro/body, not the FAQ tail).
+_NOTES_ARTICLE_CLIP = 30_000
+
+
+@dataclass
+class NotesLandedResult:
+    # One entry per directive: {"note": str, "landed": bool, "evidence": str}
+    verdicts: list[dict]
+    # AND across directives. None = no notes, check disabled, or judge failed
+    # (unknown - the honest answer, same convention as the ICP callout judge).
+    landed_all: Optional[bool]
+
+
+_NOTES_UNKNOWN = NotesLandedResult([], None)
+
+
+def _article_text(article: list[ArticleSection]) -> str:
+    parts: list[str] = []
+    for s in article:
+        if s.heading:
+            parts.append(s.heading)
+        if s.body:
+            parts.append(s.body)
+    return "\n\n".join(parts)[:_NOTES_ARTICLE_CLIP]
+
+
+async def check_notes_landed(
+    *,
+    user_notes: Optional[str],
+    article: list[ArticleSection],
+) -> NotesLandedResult:
+    """One Haiku call judging whether the final article honored the user's
+    per-run writer notes. Skipped when there are no notes. Never raises."""
+    notes = (user_notes or "").strip()
+    if not notes or not settings.writer_notes_qa_enabled:
+        return _NOTES_UNKNOWN
+    text = _article_text(article)
+    if not text:
+        return _NOTES_UNKNOWN
+
+    user = (
+        f"EDITORIAL NOTES:\n{notes}\n\n"
+        f"ARTICLE:\n{text}\n\n"
+        "Judge each directive now."
+    )
+    try:
+        result = await claude_json(
+            _NOTES_SYSTEM,
+            user,
+            max_tokens=600,
+            temperature=0,
+            model=settings.writer_format_qa_model,
+        )
+        raw = result.get("directives") if isinstance(result, dict) else None
+        if not isinstance(raw, list) or not raw:
+            return _NOTES_UNKNOWN
+        verdicts: list[dict] = []
+        for d in raw:
+            if not isinstance(d, dict) or not isinstance(d.get("landed"), bool):
+                continue
+            verdicts.append({
+                "note": str(d.get("note") or "").strip()[:300],
+                "landed": d["landed"],
+                "evidence": str(d.get("evidence") or "").strip()[:300],
+            })
+        if not verdicts:
+            return _NOTES_UNKNOWN
+        landed_all = all(v["landed"] for v in verdicts)
+        if not landed_all:
+            logger.warning(
+                "writer.notes_qa.not_landed",
+                extra={
+                    "missed": [v["note"] for v in verdicts if not v["landed"]][:5],
+                },
+            )
+        return NotesLandedResult(verdicts, landed_all)
+    except Exception as exc:
+        logger.warning("writer.notes_qa.failed: %s", exc)
+        return _NOTES_UNKNOWN
+
+
 async def check_format_qa(
     *,
     keyword: str,

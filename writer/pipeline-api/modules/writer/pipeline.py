@@ -39,7 +39,7 @@ from .brand_placement import brand_mention_present, build_brand_placement_plan
 from .budget import allocate_budget, CONCLUSION_BUDGET_TARGET
 from .citations import reconcile_citation_usage
 from .conclusion import write_conclusion
-from .format_qa import check_format_qa
+from .format_qa import check_format_qa, check_notes_landed
 from .distillation import distill_brand_voice, is_card_empty
 from .faqs import write_faqs
 from .intro import write_intro
@@ -857,6 +857,11 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         article=article,
     )
 
+    # ---- Notes-landed judge ----
+    # Verifies the article honored the user's per-run writer notes (an LLM
+    # judge - paraphrase defeats string matching). Skipped when no notes.
+    notes_qa = await check_notes_landed(user_notes=user_notes, article=article)
+
     # ---- Metadata ----
     total_words = sum(s.word_count for s in article if s.type not in ("faq-header", "faq-question"))
     faq_words = sum(s.word_count for s in article if s.type == "faq-question")
@@ -930,6 +935,8 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         format_qa_matches_intent=format_qa.matches_intent,
         format_qa_expected_archetype=format_qa.expected_archetype,
         format_qa_note=format_qa.note,
+        user_notes_verdicts=notes_qa.verdicts,
+        user_notes_landed_all=notes_qa.landed_all,
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),
