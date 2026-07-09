@@ -307,8 +307,9 @@ def _auto_publish_to_wordpress(
 
 def _wp_publish_blog(session: dict, cluster_id: str, keyword: str, status: str) -> None:
     """Publish a blog article to WordPress, pinning the cluster slug (the URL the
-    session's internal links point at) and sending the distinct SEO title as the
-    post title with the H1 already in the body."""
+    session's internal links point at). The on-page H1 is sent as the post title
+    (the theme's visible <h1>) and the distinct SEO title is routed to SEOPress's
+    meta-title field."""
     import asyncio
 
     from fanout.storage import silo as store
@@ -331,9 +332,14 @@ def _wp_publish_blog(session: dict, cluster_id: str, keyword: str, status: str) 
                   .select("name, wordpress_site_url, wordpress_username, "
                           "wordpress_app_password")
                   .eq("id", session["client_id"]).single().execute().data)
+    # The on-page H1 becomes the WordPress post title (the theme renders it as the
+    # visible <h1>); the distinct SEO title is routed to SEOPress's meta-title
+    # field, and the body's own leading H1 is stripped to avoid a duplicate.
     res = asyncio.run(publish_to_wordpress(
         client=client_row,
-        title=aj.get("seo_title") or aj.get("title") or keyword or "Article",
+        title=aj.get("title") or keyword or "Article",
+        seo_title=aj.get("seo_title") or None,
+        strip_leading_h1=True,
         html=html, status=status, content_type="blog_post", slug=slug))
     link = res.get("link") or ""
     if slug and slug not in link:
