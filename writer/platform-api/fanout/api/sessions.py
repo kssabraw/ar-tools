@@ -160,6 +160,9 @@ class SiloDiscoveryResponse(BaseModel):
     degraded_notes: list[str] = []
     silos: list[dict] = []
     site_base_url: str | None = None
+    # User-specified extra internal-link targets (≤3 money-page URLs) — the Schedule
+    # modal pre-fills from these; persisted via the schedule-create endpoint.
+    extra_link_urls: list[str] = []
     # Intended content type chosen at session creation (lives in `settings`); the
     # Schedule modal seeds from it. Null/absent -> treat as blog_post.
     content_type: str | None = None
@@ -419,6 +422,7 @@ def get_session(
         detected_audience=session.get("detected_audience"),
         silos=store.list_topics(session_id),
         site_base_url=session.get("site_base_url"),
+        extra_link_urls=session.get("extra_link_urls") or [],
         content_type=(session.get("settings") or {}).get("content_type"),
         location=(session.get("settings") or {}).get("location"),
         client_id=session.get("client_id"),

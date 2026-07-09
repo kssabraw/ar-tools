@@ -18,6 +18,8 @@ export function ScheduleModal(props: {
   sessionId: string;
   clusterIds?: string[];          // omit -> whole session
   baseUrl?: string | null;
+  // Stored extra internal-link targets (money pages) — pre-fills the fields below.
+  extraLinkUrls?: string[] | null;
   // Content type chosen up front in the new-session flow (carried on the
   // session). Seeds the toggle below; the user can still switch here.
   defaultContentType?: ContentType | null;
@@ -44,6 +46,12 @@ export function ScheduleModal(props: {
   const [timeOfDay, setTimeOfDay] = useState("09:00");
   const [timezone] = useState(browserTz);
   const [baseUrl, setBaseUrl] = useState(props.baseUrl ?? "");
+  // Up to 3 money-page URLs every article should link to (woven into the
+  // internal-link injection). Fixed 3 slots; blanks are dropped on submit.
+  const [extraUrls, setExtraUrls] = useState<string[]>(() => {
+    const stored = props.extraLinkUrls ?? [];
+    return [stored[0] ?? "", stored[1] ?? "", stored[2] ?? ""];
+  });
   const [contentType, setContentType] = useState<ContentType>(
     props.defaultContentType ?? "blog_post",
   );
@@ -72,6 +80,12 @@ export function ScheduleModal(props: {
     // Only blog posts need a base URL (absolute internal links); Local SEO pages
     // need a target area; service pages are keyword-only.
     site_base_url: contentType === "blog_post" ? baseUrl.trim() || undefined : undefined,
+    // Blog only. The fields' current contents win (empty list clears stored extras);
+    // undefined on other content types leaves the session's stored value untouched.
+    extra_link_urls:
+      contentType === "blog_post"
+        ? extraUrls.map((u) => u.trim()).filter(Boolean)
+        : undefined,
     location: isLocalSeo ? effectiveLocation || undefined : undefined,
     auto_publish: clientId ? autoPublish : undefined,
   };
@@ -179,6 +193,28 @@ export function ScheduleModal(props: {
               />
               <span className="field-hint">Required — internal links are built as absolute URLs.</span>
             </label>
+          )}
+          {contentType === "blog_post" && (
+            <div className="field">
+              <span className="field-label">Extra link targets (optional)</span>
+              {extraUrls.map((u, i) => (
+                <input
+                  key={i}
+                  className="input"
+                  style={i > 0 ? { marginTop: 6 } : undefined}
+                  placeholder={`https://yoursite.com/your-money-page-${i + 1}/`}
+                  value={u}
+                  onChange={(e) =>
+                    setExtraUrls((prev) => prev.map((v, j) => (j === i ? e.target.value : v)))
+                  }
+                />
+              ))}
+              <span className="field-hint">
+                Up to 3 URLs (product / service / landing pages) every article should link to.
+                Woven into each article's internal links alongside its pillar and related
+                articles, within the 5-links-per-page cap.
+              </span>
+            </div>
           )}
 
           {clientId && (

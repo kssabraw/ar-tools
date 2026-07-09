@@ -67,6 +67,7 @@ export function ScheduleView() {
         <ScheduleModal
           sessionId={sessionId}
           baseUrl={session.data?.site_base_url}
+          extraLinkUrls={session.data?.extra_link_urls}
           defaultContentType={session.data?.content_type}
           defaultLocation={session.data?.location}
           clientId={session.data?.client_id}

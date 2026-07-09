@@ -44,6 +44,9 @@ export interface SiloDiscovery {
   degraded_notes: string[];
   silos: Silo[];
   site_base_url?: string | null;
+  // Stored extra internal-link targets (≤3 money-page URLs); the Schedule modal
+  // pre-fills from these.
+  extra_link_urls?: string[];
   // Intended content type chosen at session creation; the Schedule modal seeds
   // from it. Absent -> treat as blog_post.
   content_type?: "blog_post" | "local_seo_page" | null;
@@ -1047,6 +1050,9 @@ export interface ScheduleRequest {
   time_of_day?: string;            // HH:MM
   timezone?: string;
   site_base_url?: string;
+  // Up to 3 money-page URLs every article should link to (persisted on the
+  // session; woven into internal-link injection). [] clears; omit = untouched.
+  extra_link_urls?: string[];
   // 'local_seo_page' produces suite Local SEO pages (needs a client-linked
   // session + a target location); 'service_page' produces suite service pages
   // (client-linked, keyword-only); omit -> 'blog_post' (the Fanout writer).

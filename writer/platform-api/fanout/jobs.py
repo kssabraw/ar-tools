@@ -839,14 +839,53 @@ def submit_article(
     return True
 
 
+def _client_blog_url_style(session: dict | None):
+    """URL pattern inferred from the linked client's blog-post reference URL (the client
+    card's example blog post, stored at clients.page_structures.blog_post.url) — so
+    injected links match the site's real permalink structure (e.g. /blog/{slug}/) instead
+    of the assumed per-silo directories. None → the default scheme. Best-effort: any
+    failure (no client link, no reference, suite DB hiccup) falls back to the default."""
+    client_id = (session or {}).get("client_id")
+    if not client_id:
+        return None
+    try:
+        from db.supabase_client import get_supabase
+        from fanout.writer.link_targets import infer_url_style
+
+        rows = (
+            get_supabase().table("clients")
+            .select("page_structures")
+            .eq("id", client_id)
+            .limit(1)
+            .execute()
+            .data
+        )
+        structures = (rows[0] if rows else {}).get("page_structures") or {}
+        ref_url = (structures.get("blog_post") or {}).get("url") or ""
+        return infer_url_style(ref_url)
+    except Exception as exc:  # noqa: BLE001 — enrichment; the default scheme still works
+        logger.warning(
+            "client_url_style_lookup_failed",
+            extra={"event": "client_url_style_lookup_failed", "reason": repr(exc)},
+        )
+        return None
+
+
 def _inject_internal_links(session_id: str, cluster_id: str, article) -> None:
     """M15 — wrap the M6 architecture link graph into the article as absolute internal
     links, then re-serialize. No-op when the session has no `site_base_url` or no generated
-    architecture. Enrichment only — any failure is swallowed (the article still ships)."""
+    architecture. URLs follow the linked client's real permalink pattern when a blog-post
+    reference URL is on the client card; the session's user-specified extra link URLs
+    (money pages) are folded in under the ≤5-outbound cap. Enrichment only — any failure
+    is swallowed (the article still ships)."""
     try:
         from fanout.storage import silo as store
         from fanout.writer.link_injector import inject_links
-        from fanout.writer.link_targets import build_targets
+        from fanout.writer.link_targets import (
+            build_extra_targets,
+            build_targets,
+            merge_targets,
+        )
         from fanout.writer.serialize import to_html, to_markdown
 
         session = store.get_session(session_id)
@@ -864,9 +903,15 @@ def _inject_internal_links(session_id: str, cluster_id: str, article) -> None:
 
         targets, is_pillar = build_targets(
             cluster_id, architecture=architecture, clusters_by_id=clusters_by_id,
-            topics_by_id=topics_by_id, keywords_by_id=keywords_by_id, base_url=base_url)
+            topics_by_id=topics_by_id, keywords_by_id=keywords_by_id, base_url=base_url,
+            url_style=_client_blog_url_style(session))
         if not targets:
             return
+        extras = build_extra_targets((session or {}).get("extra_link_urls"))
+        if extras and not is_pillar:
+            # Not on pillars: their target list renders as the "In This Guide" children
+            # list, and money pages don't belong in it.
+            targets = merge_targets(targets, extras)
         result = inject_links(article.article, targets, is_pillar=is_pillar)
         article.article = result.article
         article.article_markdown = to_markdown(result.article)
