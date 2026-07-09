@@ -65,14 +65,26 @@ class AnthropicLLM:
         self._max_transport_attempts = max(1, max_transport_attempts)
 
     def _invoke(self, *, create_kwargs: dict, purpose: str):
-        """Shared transport-retry + cost/logging wrapper around messages.create.
-        Returns the raw response; callers extract the tool_use / text block."""
+        """Shared transport-retry + cost/logging wrapper around the Messages API.
+        Returns the raw response; callers extract the tool_use / text block.
+
+        STREAMING, not messages.create: the orchestrator's big chunk calls
+        (large prompt, up to 16k output tokens) can generate for many minutes,
+        and a non-streaming request sends no bytes until completion — idle
+        upstream connections get killed at ~2 minutes regardless of the
+        client-side timeout (observed in production as an APIConnectionError
+        retry loop that starved article planning). Streaming keeps bytes
+        flowing for the whole generation; get_final_message() returns the same
+        Message object messages.create would have, so callers are unchanged."""
         raise_if_cancelled()
         started = time.perf_counter()
         resp = None
         for attempt in range(self._max_transport_attempts):
             try:
-                resp = self._client.messages.create(model=self._model, **create_kwargs)
+                with self._client.messages.stream(
+                    model=self._model, **create_kwargs
+                ) as stream:
+                    resp = stream.get_final_message()
                 break
             except Exception as exc:  # noqa: BLE001 — surfaced as AnthropicError
                 # Retry only transient transport errors (rate-limit / overload /
