@@ -36,6 +36,11 @@ class ScheduleBody(BaseModel):
     time_of_day: time | None = None
     timezone: str = "UTC"
     site_base_url: str | None = None            # persisted to the session (links need it)
+    # Up to 3 extra URLs (money pages — product/service/landing pages) every generated
+    # article should link to, folded into the internal-link injection under the
+    # ≤5-outbound cap. Persisted to the session alongside site_base_url. None = leave
+    # the session's stored value untouched; [] = clear.
+    extra_link_urls: list[str] | None = None
     # Which generator each run uses. 'local_seo_page' needs a client-linked
     # session + a target `location`. 'service_page' needs a client-linked
     # session (keyword-only, no location/base URL); it creates a suite
@@ -204,6 +209,10 @@ def create_schedule(
     # Validated + approved + planned — now it's safe to persist the base URL.
     if body.site_base_url and body.site_base_url.strip() != session.get("site_base_url"):
         store.update_session(session_id, {"site_base_url": body.site_base_url.strip()})
+    if body.extra_link_urls is not None:
+        extras = [u.strip() for u in body.extra_link_urls if u and u.strip()][:3]
+        if extras != (session.get("extra_link_urls") or []):
+            store.update_session(session_id, {"extra_link_urls": extras})
 
     schedule = schedule_store.create_schedule(
         session_id=session_id, user_id=session["user_id"], mode=body.mode, runs=runs,
