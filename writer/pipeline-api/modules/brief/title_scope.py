@@ -112,6 +112,10 @@ tab, SERP snippet, and og:title):
 Hard requirements for the h1 (on-page main heading - appears at the
 top of the article body):
 - 130 character maximum
+- MUST include the targeted keyword (the seed keyword, or a close
+  grammatical variant of it), woven in naturally
+- MUST be grammatically correct — a real, natural-reading heading, never
+  an awkward keyword-stuffed string
 - Similar territory to the title, but MUST be worded differently — every
   page carries a distinct <title> and H1 (agency standing rule). It may
   be more descriptive, more conversational, or expand on the title's
@@ -129,7 +133,7 @@ Hard requirements for the scope statement:
 Output strict JSON only - no preamble, no markdown fences, no commentary:
 {
   "title": "SEO/meta title (keyword-leading; 2-4 entities; audience-voiced; no length cap)",
-  "h1": "On-page H1 heading (≤130 chars; worded differently from the title)",
+  "h1": "On-page H1 heading (≤130 chars; includes the targeted keyword; grammatically correct; worded differently from the title)",
   "scope_statement": "Defines/explains... [in-scope]. Does not cover [adjacent topics].",
   "title_rationale": "Brief explanation (≤300 chars) of why this title and angle"
 }
@@ -306,6 +310,15 @@ async def generate_title_and_scope(
 
         ok, reason, parsed = _validate_payload(payload)
         if ok and parsed is not None:
+            # Soft audit (owner ruling 2026-07-09): the H1 must include the
+            # targeted keyword. Not a hard gate — a grammatical variant of the
+            # keyword is legitimate and a substring check can't see it, so we
+            # warn for review rather than abort the run.
+            if seed_keyword.strip().lower() not in parsed.h1.lower():
+                logger.warning(
+                    "brief.title_scope.h1_missing_target_keyword",
+                    extra={"keyword": seed_keyword, "h1": parsed.h1},
+                )
             logger.info(
                 "brief.title_scope.generated",
                 extra={
