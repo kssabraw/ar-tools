@@ -120,6 +120,15 @@ class Settings(BaseSettings):
     intent_llm_fallback_model: str = "claude-haiku-4-5-20251001"
     intent_llm_fallback_max_confidence: float = 0.80
 
+    # Writer end-of-run format QA. One cheap Haiku call after final assembly
+    # asking "given this keyword, is this H2 outline the right article
+    # archetype?" - the only check that validates the PLAN (the brief's
+    # intent) rather than the article's conformance to it. Warn-and-accept:
+    # a mismatch flags writer metadata for the run-detail QA panel, never
+    # aborts. Best-effort - any API error leaves the fields None (unknown).
+    writer_format_qa_enabled: bool = True
+    writer_format_qa_model: str = "claude-haiku-4-5-20251001"
+
     # ------------------------------------------------------------
     # Service Page Brief Generator (PRD §7 - model tiering + cache)
     # ------------------------------------------------------------

@@ -249,6 +249,20 @@ class WriterMetadata(BaseModel):
     headings_entity_rewrites_applied: int = 0
     headings_entity_violation_count: int = 0
     headings_entity_violations: list[dict] = []
+    # Post-assembly structure validator warnings (orphan "Step N" refs,
+    # intro out of position, missing conclusion, FAQ before conclusion).
+    # Previously log-only; carried here so the run-detail QA panel can
+    # surface them. Empty list is the steady state.
+    structure_warnings: list[str] = []
+    # End-of-run format QA (modules.writer.format_qa) - one Haiku call
+    # judging whether the final H2 outline is the right ARCHETYPE for the
+    # keyword (the only check that validates the plan itself, not the
+    # article's conformance to it). All None = check skipped or failed
+    # (unknown, the honest answer). matches_intent=False flags the run
+    # for editor review - warn-and-accept, never aborts.
+    format_qa_matches_intent: Optional[bool] = None
+    format_qa_expected_archetype: Optional[str] = None
+    format_qa_note: Optional[str] = None
     schema_version: SchemaVersion = "1.9"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0

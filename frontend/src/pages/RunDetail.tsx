@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
-import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, Check, RotateCcw, Repeat, Play, ExternalLink } from 'lucide-react'
+import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, Check, RotateCcw, Repeat, Play, ExternalLink, AlertTriangle } from 'lucide-react'
 import {
   BriefCacheDecisionModal,
   type BriefCacheStatus,
@@ -532,6 +532,10 @@ export function RunDetail() {
         )}
       </div>
 
+      {/* QA checks - surfaces the review flags the pipeline already records
+          but previously buried in module output payloads and logs. */}
+      <QaChecksCard run={run} />
+
       {/* Title + H1 (each individually copyable). The title is the SEO/meta
           title (browser tab, SERP); the H1 is the on-page main heading.
           Often the same string but they're independently editable concepts. */}
@@ -907,6 +911,116 @@ function ErrorBanner({ msg }: { msg: string }) {
   return (
     <div style={{ marginBottom: 12, padding: '10px 14px', background: '#fef2f2', borderRadius: 8, color: '#dc2626', fontSize: 13 }}>
       {msg}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// QA checks card - surfaces the review flags the pipeline records (writer
+// metadata + brief intent flags) that previously lived only in the raw
+// payload JSON and server logs. Renders after the writer completes: a green
+// all-clear when nothing is flagged, otherwise an amber list per flag.
+// ---------------------------------------------------------------------------
+
+type QaFlag = { severity: 'warn' | 'info'; text: string }
+
+function collectQaFlags(run: RunDetailType): QaFlag[] {
+  const flags: QaFlag[] = []
+  const brief = run.module_outputs?.brief?.output_payload as Record<string, any> | null | undefined
+  const wmeta = (run.module_outputs?.writer?.output_payload as Record<string, any> | null | undefined)
+    ?.metadata as Record<string, any> | undefined
+  const fmt = (run.module_outputs?.writer?.output_payload as Record<string, any> | null | undefined)
+    ?.format_compliance as Record<string, any> | undefined
+
+  // Format QA - the "right kind of article?" verdict.
+  if (wmeta?.format_qa_matches_intent === false) {
+    flags.push({
+      severity: 'warn',
+      text: `Format QA: structure may not match the keyword${
+        wmeta.format_qa_expected_archetype ? ` (expected ${wmeta.format_qa_expected_archetype}, wrote ${brief?.intent_type ?? 'unknown'})` : ''
+      }.${wmeta.format_qa_note ? ` ${wmeta.format_qa_note}` : ''}`,
+    })
+  }
+  // Intent classified at low confidence - the brief flagged itself for review.
+  if (brief?.intent_review_required === true) {
+    flags.push({
+      severity: 'warn',
+      text: `Intent needs review: classified "${brief.intent_type}" at ${
+        typeof brief.intent_confidence === 'number' ? brief.intent_confidence.toFixed(2) : '?'
+      } confidence.`,
+    })
+  }
+  for (const w of (wmeta?.structure_warnings as string[] | undefined) ?? []) {
+    flags.push({ severity: 'warn', text: `Structure: ${w}` })
+  }
+  const leaked = (wmeta?.banned_terms_leaked_in_body as string[] | undefined) ?? []
+  if (leaked.length > 0) {
+    flags.push({ severity: 'warn', text: `Banned terms leaked into body: ${leaked.join(', ')}` })
+  }
+  const underLength = (wmeta?.under_length_h2_sections as unknown[] | undefined) ?? []
+  if (underLength.length > 0) {
+    flags.push({ severity: 'warn', text: `${underLength.length} section(s) below the word floor after retry.` })
+  }
+  const underCited = (wmeta?.under_cited_sections as unknown[] | undefined) ?? []
+  if (underCited.length > 0) {
+    flags.push({ severity: 'info', text: `${underCited.length} section(s) under 50% citation coverage after retry.` })
+  }
+  if (fmt && fmt.directives_satisfied === false) {
+    flags.push({
+      severity: 'info',
+      text: `Format directives unmet: lists ${fmt.lists_present}/${fmt.lists_required}, tables ${fmt.tables_present}/${fmt.tables_required}.`,
+    })
+  }
+  if (wmeta?.brand_mention_landed === false) {
+    flags.push({ severity: 'info', text: 'Brand mention did not land in its anchor section.' })
+  }
+  if (wmeta?.icp_callout_landed === false) {
+    flags.push({ severity: 'info', text: 'ICP callout did not land in its anchor section.' })
+  }
+  const droppedDupes = (wmeta?.duplicate_h2_headings_dropped as unknown[] | undefined) ?? []
+  const droppedFaq = (wmeta?.faq_like_h2_content_dropped as unknown[] | undefined) ?? []
+  if (droppedDupes.length + droppedFaq.length > 0) {
+    flags.push({
+      severity: 'info',
+      text: `Heading sanitizer dropped ${droppedDupes.length + droppedFaq.length} H2(s) from the brief outline.`,
+    })
+  }
+  return flags
+}
+
+function QaChecksCard({ run }: { run: RunDetailType }) {
+  const writerDone = run.module_outputs?.writer?.status === 'complete'
+  if (!writerDone) return null
+  const flags = collectQaFlags(run)
+  const wmeta = (run.module_outputs?.writer?.output_payload as Record<string, any> | null | undefined)
+    ?.metadata as Record<string, any> | undefined
+  const formatQaPassed = wmeta?.format_qa_matches_intent === true
+
+  return (
+    <div style={cardStyle}>
+      <h2 style={{ ...sectionTitle, marginBottom: 12 }}>QA Checks</h2>
+      {flags.length === 0 ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#16a34a' }}>
+          <CheckCircle size={15} />
+          All QA checks passed
+          {formatQaPassed && ' - structure matches the keyword’s expected format.'}
+        </div>
+      ) : (
+        <ul style={{ margin: 0, padding: 0, listStyle: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {flags.map((f, i) => (
+            <li key={i} style={{
+              display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 13, lineHeight: 1.5,
+              padding: '8px 12px', borderRadius: 8,
+              background: f.severity === 'warn' ? '#fffbeb' : '#f8fafc',
+              color: f.severity === 'warn' ? '#92400e' : '#475569',
+              border: `1px solid ${f.severity === 'warn' ? '#fde68a' : '#e2e8f0'}`,
+            }}>
+              <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 2, color: f.severity === 'warn' ? '#d97706' : '#94a3b8' }} />
+              <span>{f.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }

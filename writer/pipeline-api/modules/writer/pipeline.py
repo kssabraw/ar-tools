@@ -39,6 +39,7 @@ from .brand_placement import brand_mention_present, build_brand_placement_plan
 from .budget import allocate_budget, CONCLUSION_BUDGET_TARGET
 from .citations import reconcile_citation_usage
 from .conclusion import write_conclusion
+from .format_qa import check_format_qa
 from .distillation import distill_brand_voice, is_card_empty
 from .faqs import write_faqs
 from .intro import write_intro
@@ -759,9 +760,10 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # ---- Article structure validator ----
     # Non-blocking observability - surfaces orphan ordinal references
     # (e.g., "Step 3" with no Step 1/2), wrong-position intro, missing
-    # conclusion, FAQ-before-conclusion. Logged for review; doesn't
-    # abort an otherwise-valid run.
-    for warning in _validate_article_structure(article):
+    # conclusion, FAQ-before-conclusion. Logged + carried in metadata
+    # for the run-detail QA panel; doesn't abort an otherwise-valid run.
+    structure_warnings = _validate_article_structure(article)
+    for warning in structure_warnings:
         logger.warning(
             "writer.structure.%s",
             warning.split(":", 1)[0],
@@ -844,6 +846,17 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         brand_voice_card=brand_voice_card,
     )
 
+    # ---- End-of-run format QA ----
+    # The only check that validates the PLAN rather than the article's
+    # conformance to it: one Haiku call judging whether the final H2
+    # outline is the archetype the keyword calls for. Warn-and-accept.
+    format_qa = await check_format_qa(
+        keyword=keyword,
+        intent_type=intent_type,
+        title=title,
+        article=article,
+    )
+
     # ---- Metadata ----
     total_words = sum(s.word_count for s in article if s.type not in ("faq-header", "faq-question"))
     faq_words = sum(s.word_count for s in article if s.type == "faq-question")
@@ -913,6 +926,10 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         headings_entity_rewrites_applied=heading_entity_result.rewrites_applied,
         headings_entity_violation_count=heading_entity_result.violation_count,
         headings_entity_violations=heading_entity_result.flagged,
+        structure_warnings=structure_warnings,
+        format_qa_matches_intent=format_qa.matches_intent,
+        format_qa_expected_archetype=format_qa.expected_archetype,
+        format_qa_note=format_qa.note,
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),
