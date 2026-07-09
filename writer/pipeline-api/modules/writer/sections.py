@@ -168,6 +168,7 @@ def _build_section_user_prompt(
     citations_were_fallback: bool = False,
     length_retry_directive: Optional[str] = None,
     coverage_retry_directive: Optional[str] = None,
+    term_retry_directive: Optional[str] = None,
     section_category_aspirational: Optional[dict[str, int]] = None,
     article_title: Optional[str] = None,
     sibling_h2_titles: Optional[list[str]] = None,
@@ -429,6 +430,13 @@ def _build_section_user_prompt(
         # rewrite the sentence to remove the claim.
         parts.append(f"\nCOVERAGE_RETRY: {coverage_retry_directive}")
 
+    if term_retry_directive:
+        # Term-coverage enforcement retry directive. The validator passes
+        # this string when the article under-used the SIE entities (either
+        # 75% bar missed); it lists the missing terms this section must
+        # work in naturally.
+        parts.append(f"\nTERM_RETRY: {term_retry_directive}")
+
     if citations:
         valid_ids = sorted({c.get("citation_id", "") for c in citations if c.get("citation_id")})
         if citations_were_fallback:
@@ -549,6 +557,7 @@ async def write_h2_group(
     banned_regex,
     length_retry_directive: Optional[str] = None,
     coverage_retry_directive: Optional[str] = None,
+    term_retry_directive: Optional[str] = None,
     section_category_aspirational: Optional[dict[str, int]] = None,
     article_title: Optional[str] = None,
     sibling_h2_titles: Optional[list[str]] = None,
@@ -640,6 +649,7 @@ async def write_h2_group(
             citations_were_fallback=citations_were_fallback,
             length_retry_directive=length_retry_directive,
             coverage_retry_directive=coverage_retry_directive,
+            term_retry_directive=term_retry_directive,
             section_category_aspirational=section_category_aspirational,
             article_title=article_title,
             sibling_h2_titles=sibling_h2_titles,

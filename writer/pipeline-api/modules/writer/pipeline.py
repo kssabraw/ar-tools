@@ -40,6 +40,7 @@ from .budget import allocate_budget, CONCLUSION_BUDGET_TARGET
 from .citations import reconcile_citation_usage
 from .conclusion import write_conclusion
 from .format_qa import check_format_qa, check_notes_landed
+from .term_coverage import enforce_term_coverage
 from .distillation import distill_brand_voice, is_card_empty
 from .faqs import write_faqs
 from .intro import write_intro
@@ -827,6 +828,29 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     article = coverage_result.validated_article
     _scan_headings_for_banned(article, banned_regex)
 
+    # ---- Term-coverage enforcement (owner spec 2026-07-09) ----
+    # Deterministic comparison of SIE targets vs delivered usage: tracked
+    # corpus quadgrams must each appear once; either entity 75% bar missed
+    # → one auto-rewrite of the weakest sections with the missing terms.
+    # Runs BEFORE citation reconciliation / format compliance / the QA
+    # judges so they all see the final (possibly rewritten) article.
+    term_coverage_result = await enforce_term_coverage(
+        article,
+        keyword=keyword,
+        intent=intent_type,
+        # The same (h2_item, h3_items) pairs the section loop wrote from -
+        # positional alignment, NOT order lookup (orders were resequenced).
+        h2_groups=h2_groups,
+        section_budgets=section_budgets,
+        filtered_terms=filtered_terms,
+        citations=citations,
+        brand_voice_card=brand_voice_card,
+        banned_regex=banned_regex,
+        placement_plan=placement_plan,
+    )
+    article = term_coverage_result.validated_article
+    _scan_headings_for_banned(article, banned_regex)
+
     # ---- Citation reconciliation ----
     citation_usage = reconcile_citation_usage(article, citations)
 
@@ -937,6 +961,15 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         format_qa_note=format_qa.note,
         user_notes_verdicts=notes_qa.verdicts,
         user_notes_landed_all=notes_qa.landed_all,
+        quadgrams_tracked=term_coverage_result.stats.quadgrams_tracked,
+        quadgrams_missing=term_coverage_result.stats.quadgrams_missing,
+        terms_over_cap=term_coverage_result.stats.terms_over_cap,
+        entity_unique_coverage_pct=term_coverage_result.stats.entity_unique_coverage_pct,
+        entity_total_coverage_pct=term_coverage_result.stats.entity_total_coverage_pct,
+        entities_missing=term_coverage_result.stats.entities_missing,
+        entity_rewrite_triggered=term_coverage_result.stats.entity_rewrite_triggered,
+        entity_rewrite_sections_retried=term_coverage_result.sections_retried,
+        entity_rewrite_resolved=term_coverage_result.rewrite_resolved,
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
         generation_time_ms=int((time.perf_counter() - started) * 1000),

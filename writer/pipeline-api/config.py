@@ -136,6 +136,24 @@ class Settings(BaseSettings):
     # ("ZDSCS" vs "Zero Down Supply Chain Services"). Warn-and-accept.
     writer_notes_qa_enabled: bool = True
 
+    # Term-coverage enforcement (owner spec 2026-07-09). Deterministic, no
+    # LLM for the check itself - both sides (SIE targets + article usage)
+    # are already computed.
+    # - Quadgrams: the corpus-derived 4-word phrases in the SIE required
+    #   pool (top N tracked) must each appear at least once; any required
+    #   term above the occurrence cap flags as stuffing.
+    # - Entities: if unique-entity coverage OR total entity occurrences
+    #   fall below the 75% bar (either bar), the weakest sections are
+    #   auto-rewritten ONCE with the missing entities, then flagged if
+    #   still short (same warn-and-accept retry pattern as the word-floor
+    #   and citation-coverage validators).
+    writer_term_coverage_enabled: bool = True
+    writer_quadgram_track_max: int = 10
+    writer_term_occurrence_cap: int = 10
+    writer_entity_coverage_min: float = 0.75
+    writer_entity_rewrite_enabled: bool = True
+    writer_entity_rewrite_max_sections: int = 3
+
     # ------------------------------------------------------------
     # Service Page Brief Generator (PRD §7 - model tiering + cache)
     # ------------------------------------------------------------

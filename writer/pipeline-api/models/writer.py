@@ -269,6 +269,22 @@ class WriterMetadata(BaseModel):
     # the check is disabled, or the judge failed (unknown).
     user_notes_verdicts: list[dict] = []
     user_notes_landed_all: Optional[bool] = None
+    # Term-coverage enforcement (modules.writer.term_coverage; owner spec
+    # 2026-07-09). Quadgram rule: the tracked corpus 4-grams must each
+    # appear at least once; `terms_over_cap` flags any required term above
+    # the stuffing cap. Entity rule: EITHER 75% bar missed (unique-entity
+    # coverage / total occurrences vs summed targets) triggers one
+    # auto-rewrite of the weakest sections; `entity_rewrite_resolved`
+    # records whether the retry cleared the bar (None = no rewrite ran).
+    quadgrams_tracked: list[str] = []
+    quadgrams_missing: list[str] = []
+    terms_over_cap: list[dict] = []
+    entity_unique_coverage_pct: Optional[float] = None
+    entity_total_coverage_pct: Optional[float] = None
+    entities_missing: list[str] = []
+    entity_rewrite_triggered: bool = False
+    entity_rewrite_sections_retried: int = 0
+    entity_rewrite_resolved: Optional[bool] = None
     schema_version: SchemaVersion = "1.9"
     brief_schema_version: str = "2.0"
     generation_time_ms: int = 0

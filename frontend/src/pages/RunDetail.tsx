@@ -950,6 +950,42 @@ function collectQaFlags(run: RunDetailType): QaFlag[] {
       })
     }
   }
+  // Term-coverage enforcement (owner spec): entity 75% bars + quadgram
+  // min-1 + stuffing cap.
+  if (wmeta?.entity_rewrite_triggered === true) {
+    const unique = typeof wmeta.entity_unique_coverage_pct === 'number'
+      ? `${Math.round(wmeta.entity_unique_coverage_pct * 100)}% unique` : null
+    const total = typeof wmeta.entity_total_coverage_pct === 'number'
+      ? `${Math.round(wmeta.entity_total_coverage_pct * 100)}% of target volume` : null
+    const pcts = [unique, total].filter(Boolean).join(', ')
+    const missing = (wmeta.entities_missing as string[] | undefined) ?? []
+    if (wmeta.entity_rewrite_resolved === true) {
+      flags.push({
+        severity: 'info',
+        text: `Entity coverage fell below 75% and was auto-rewritten (${wmeta.entity_rewrite_sections_retried ?? 0} section(s)) - now at ${pcts}.`,
+      })
+    } else {
+      flags.push({
+        severity: 'warn',
+        text: `Entity coverage below 75% (${pcts})${
+          wmeta.entity_rewrite_sections_retried ? ` after rewriting ${wmeta.entity_rewrite_sections_retried} section(s)` : ''
+        }${missing.length ? ` - missing: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}` : ''}.`,
+      })
+    }
+  }
+  const quadsMissing = (wmeta?.quadgrams_missing as string[] | undefined) ?? []
+  if (quadsMissing.length > 0) {
+    flags.push({
+      severity: 'warn',
+      text: `${quadsMissing.length} corpus quadgram(s) never used: ${quadsMissing.slice(0, 5).join('; ')}${quadsMissing.length > 5 ? '…' : ''}`,
+    })
+  }
+  for (const t of (wmeta?.terms_over_cap as { term?: string; count?: number; cap?: number }[] | undefined) ?? []) {
+    flags.push({
+      severity: 'warn',
+      text: `Possible keyword stuffing: "${t.term}" used ${t.count} times (cap ${t.cap}).`,
+    })
+  }
   // Intent classified at low confidence - the brief flagged itself for review.
   if (brief?.intent_review_required === true) {
     flags.push({
