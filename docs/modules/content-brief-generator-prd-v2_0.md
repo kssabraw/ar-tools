@@ -325,7 +325,7 @@ The classifier's output is mapped (deterministic lookup, no LLM call) to a per-i
 
 ```json
 {
-  "title": "string (50–80 chars preferred, 100 char max)",
+  "title": "string (keyword-leading; 2–4 entities; written for the target audience; no length cap — owner ruling 2026-07-09)",
   "scope_statement": "string (≤500 chars)",
   "title_rationale": "string (≤300 chars)"
 }
@@ -356,7 +356,7 @@ The title generation LLM must:
 | Scenario | Behavior |
 |---|---|
 | LLM returns malformed JSON | One retry with stricter prompt; on second failure, abort run with `title_generation_failed` |
-| Title field empty or >100 chars | One retry; on second failure, abort with `title_generation_failed` |
+| Title field empty | One retry; on second failure, abort with `title_generation_failed` (no length cap — owner ruling 2026-07-09) |
 | Scope statement empty or missing `does not cover` clause | One retry with stricter prompt; on second failure, abort with `title_generation_failed` |
 
 ### Step 4 — Subtopic Aggregation (Mostly Unchanged from v1.7)
@@ -1465,7 +1465,7 @@ Cost increase from v1.7's $0.19–$0.53 range to v2.0.3's $0.37–$0.91 range re
 | **Step 3.1 match → skip Step 3.2 SERP-feature classification** | Yes |
 | Embedding model | OpenAI text-embedding-3-large |
 | **Title + scope statement generated per brief** | Yes (Step 3.5) |
-| **Title max length** | 100 chars |
+| **Title max length** | None (owner ruling 2026-07-09 — must be keyword-leading, carry 2–4 entities, and be written for the target audience; distinct from the on-page H1 per `_ORCHESTRATOR.md` §3) |
 | **Scope statement must include `does not cover` clause** | Yes |
 | **Relevance floor (heading-to-title cosine minimum)** | 0.55 |
 | **Restatement ceiling (heading-to-title cosine maximum)** | 0.78 |

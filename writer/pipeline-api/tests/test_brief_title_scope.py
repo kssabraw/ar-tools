@@ -10,7 +10,6 @@ import pytest
 from modules.brief.pipeline import BriefError
 from modules.brief.title_scope import (
     BANNED_TITLE_PHRASES,
-    MAX_TITLE_LEN,
     REQUIRED_SCOPE_PHRASE,
     TitleScopeOutput,
     generate_title_and_scope,
@@ -152,12 +151,18 @@ async def test_retry_on_missing_does_not_cover_clause():
 
 
 @pytest.mark.asyncio
-async def test_retry_on_overlong_title():
-    bad = dict(VALID_PAYLOAD, title="x" * (MAX_TITLE_LEN + 1))
-    res = await generate_title_and_scope(
-        **_INPUTS, llm_json_fn=_make_llm_mock(bad, VALID_PAYLOAD),
+async def test_long_title_accepted():
+    """No title length cap (owner ruling 2026-07-09) — a long audience-voiced
+    title with entities is valid on the first attempt, no retry."""
+    long_title = (
+        "TikTok Shop for Small Sellers: How Listings, the Fulfillment Center, "
+        "and Creator Affiliates Actually Work Together"
     )
-    assert len(res.title) <= MAX_TITLE_LEN
+    good = dict(VALID_PAYLOAD, title=long_title)
+    res = await generate_title_and_scope(
+        **_INPUTS, llm_json_fn=_make_llm_mock(good),
+    )
+    assert res.title == long_title
 
 
 @pytest.mark.asyncio
@@ -211,13 +216,13 @@ async def test_retry_on_llm_exception():
 @pytest.mark.asyncio
 async def test_aborts_after_two_validation_failures():
     bad1 = dict(VALID_PAYLOAD, scope_statement="no marker")
-    bad2 = dict(VALID_PAYLOAD, title="x" * 200)
+    bad2 = dict(VALID_PAYLOAD, title="The Ultimate Guide to TikTok Shop")
     with pytest.raises(BriefError) as ei:
         await generate_title_and_scope(
             **_INPUTS, llm_json_fn=_make_llm_mock(bad1, bad2),
         )
     assert ei.value.code == "title_generation_failed"
-    assert "title_too_long" in ei.value.message
+    assert "title_contains_banned_phrase" in ei.value.message
 
 
 @pytest.mark.asyncio
@@ -238,7 +243,7 @@ async def test_banned_phrase_check_is_case_insensitive():
     """Verify each banned phrase triggers rejection regardless of casing."""
     for banned in BANNED_TITLE_PHRASES:
         bad_title = banned.upper().strip() + " to TikTok Shop"
-        bad = dict(VALID_PAYLOAD, title=bad_title[:MAX_TITLE_LEN])
+        bad = dict(VALID_PAYLOAD, title=bad_title)
         with pytest.raises(BriefError):
             # Both attempts return the same banned title → abort
             await generate_title_and_scope(
