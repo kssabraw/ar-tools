@@ -176,11 +176,13 @@ def _process_run(row: dict) -> None:
             _auto_publish_to_client_drive(
                 content_type, session=session, cluster_id=cluster_id,
                 keyword=keyword, artifact=ok, user_id=row.get("user_id"))
-        # Opt-in direct-to-WordPress (blog posts only): the article lands on the
-        # client's site at the slug its internal links were computed against.
-        if success and content_type == "blog_post" and (schedule or {}).get("wp_publish"):
+        # Opt-in direct-to-WordPress: blog posts land at the slug their internal
+        # links were computed against; local SEO / service pages reuse their own
+        # publish paths (as WP pages).
+        if success and (schedule or {}).get("wp_publish"):
             _auto_publish_to_wordpress(
-                session=session, cluster_id=cluster_id, keyword=keyword,
+                content_type, session=session, cluster_id=cluster_id, keyword=keyword,
+                artifact=ok, user_id=row.get("user_id"),
                 wp_status=(schedule or {}).get("wp_status") or "draft")
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
         logger.error("scheduled_run_failed",
@@ -247,17 +249,17 @@ def _auto_publish_to_client_drive(
 
 
 def _auto_publish_to_wordpress(
-    *, session: dict, cluster_id: str, keyword: str, wp_status: str,
+    content_type: str, *, session: dict, cluster_id: str, keyword: str,
+    artifact, user_id: str | None, wp_status: str,
 ) -> None:
-    """Publish a just-generated blog post to the linked client's WordPress site,
-    pinning the cluster's slug so the live URL matches the internal links the
-    writer injected into every article. Best-effort — a publish failure is
-    logged and swallowed, never failing the generation run."""
+    """Publish a just-generated piece to the linked client's WordPress site.
+    Blog posts pin the cluster's slug so the live URL matches the internal links
+    the writer injected; local SEO / service pages reuse their own publish paths
+    (as WP pages). Best-effort — a publish failure is logged and swallowed, never
+    failing the generation run. Requires a client-linked session; no-ops otherwise."""
     import asyncio
 
-    from fanout.storage import silo as store
-    from fanout.writer import store as article_store
-
+    status = wp_status if wp_status in ("draft", "publish") else "draft"
     client_id = session.get("client_id")
     if not client_id:
         logger.info("wp_auto_publish_skipped",
@@ -265,48 +267,80 @@ def _auto_publish_to_wordpress(
                            "reason": "session not client-linked"})
         return
     try:
-        from db.supabase_client import get_supabase
-        from services.wordpress_publish import publish_to_wordpress
+        if content_type == "local_seo_page":
+            # First-class suite artifact — reuse its own WP publish path (which
+            # persists published_url on the page row).
+            from services import local_seo_service
 
-        art = article_store.get_latest_article(cluster_id)
-        aj = (art or {}).get("article_json") or {}
-        html = aj.get("article_html") or ""
-        if not html:
-            logger.warning("wp_auto_publish_skipped",
-                           extra={"event": "wp_auto_publish_skipped",
-                                  "cluster_id": cluster_id, "reason": "article has no HTML"})
-            return
-        # Same slug source as link injection (ensure_session_slugs is idempotent,
-        # so this is the slug the session's other articles already link to).
-        slug = store.ensure_session_slugs(session["id"]).get(cluster_id)
-        client_row = (get_supabase().table("clients")
-                      .select("name, wordpress_site_url, wordpress_username, "
-                              "wordpress_app_password")
-                      .eq("id", client_id).single().execute().data)
-        # WP post title = the distinct SEO/meta title (drives the <title> tag);
-        # the on-page H1 is already the first element of the body HTML. Falls
-        # back to the H1 for articles written before seo_title existed.
-        res = asyncio.run(publish_to_wordpress(
-            client=client_row,
-            title=aj.get("seo_title") or aj.get("title") or keyword or "Article",
-            html=html, status=wp_status if wp_status in ("draft", "publish") else "draft",
-            content_type="blog_post", slug=slug))
-        link = res.get("link") or ""
-        if slug and slug not in link:
-            # WP deduped the slug (e.g. -2 suffix) or its permalink base differs
-            # from the client card's reference URL — internal links to this post
-            # will 404 until it's fixed on the WP side.
-            logger.warning("wp_auto_publish_slug_mismatch",
-                           extra={"event": "wp_auto_publish_slug_mismatch",
-                                  "cluster_id": cluster_id, "slug": slug, "link": link})
+            if isinstance(artifact, str):
+                asyncio.run(local_seo_service.publish_page(
+                    artifact, user_id or "", destination="wordpress", status=status))
+        elif content_type == "service_page":
+            from db.supabase_client import get_supabase
+            from routers.publish import _resolve_content
+            from services.wordpress_publish import publish_to_wordpress
+
+            if isinstance(artifact, str):
+                _, html = _resolve_content(get_supabase(), artifact, "service_page")
+                if not (html or "").strip():
+                    return
+                client_row = (get_supabase().table("clients")
+                              .select("name, wordpress_site_url, wordpress_username, "
+                                      "wordpress_app_password")
+                              .eq("id", client_id).single().execute().data)
+                asyncio.run(publish_to_wordpress(
+                    client=client_row, title=keyword or "Service", html=html,
+                    status=status, content_type="service_page"))
+        else:  # blog_post
+            _wp_publish_blog(session, cluster_id, keyword, status)
         logger.info("wp_auto_published",
-                    extra={"event": "wp_auto_published", "cluster_id": cluster_id,
-                           "client_id": client_id, "post_id": res.get("post_id"),
-                           "status": res.get("status"), "link": link})
+                    extra={"event": "wp_auto_published", "content_type": content_type,
+                           "cluster_id": cluster_id, "client_id": client_id})
     except Exception as exc:  # noqa: BLE001 — WP auto-publish is best-effort
         logger.warning("wp_auto_publish_failed",
-                       extra={"event": "wp_auto_publish_failed", "cluster_id": cluster_id,
-                              "client_id": client_id, "reason": repr(exc)})
+                       extra={"event": "wp_auto_publish_failed", "content_type": content_type,
+                              "cluster_id": cluster_id, "client_id": client_id,
+                              "reason": repr(exc)})
+
+
+def _wp_publish_blog(session: dict, cluster_id: str, keyword: str, status: str) -> None:
+    """Publish a blog article to WordPress, pinning the cluster slug (the URL the
+    session's internal links point at) and sending the distinct SEO title as the
+    post title with the H1 already in the body."""
+    import asyncio
+
+    from fanout.storage import silo as store
+    from fanout.writer import store as article_store
+    from db.supabase_client import get_supabase
+    from services.wordpress_publish import publish_to_wordpress
+
+    art = article_store.get_latest_article(cluster_id)
+    aj = (art or {}).get("article_json") or {}
+    html = aj.get("article_html") or ""
+    if not html:
+        logger.warning("wp_auto_publish_skipped",
+                       extra={"event": "wp_auto_publish_skipped",
+                              "cluster_id": cluster_id, "reason": "article has no HTML"})
+        return
+    # Same slug source as link injection (ensure_session_slugs is idempotent, so
+    # this is the slug the session's other articles already link to).
+    slug = store.ensure_session_slugs(session["id"]).get(cluster_id)
+    client_row = (get_supabase().table("clients")
+                  .select("name, wordpress_site_url, wordpress_username, "
+                          "wordpress_app_password")
+                  .eq("id", session["client_id"]).single().execute().data)
+    res = asyncio.run(publish_to_wordpress(
+        client=client_row,
+        title=aj.get("seo_title") or aj.get("title") or keyword or "Article",
+        html=html, status=status, content_type="blog_post", slug=slug))
+    link = res.get("link") or ""
+    if slug and slug not in link:
+        # WP deduped the slug (e.g. -2 suffix) or its permalink base differs from
+        # the client card's reference URL — internal links to this post will 404
+        # until it's fixed on the WP side.
+        logger.warning("wp_auto_publish_slug_mismatch",
+                       extra={"event": "wp_auto_publish_slug_mismatch",
+                              "cluster_id": cluster_id, "slug": slug, "link": link})
 
 
 def _finish_run(run_id: str, status: str, *, error: str | None) -> None:

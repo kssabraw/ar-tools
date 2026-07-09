@@ -1,0 +1,84 @@
+"""Pure tests for the fanout schedule planner's cadences
+(fanout.writer.schedule_planner.plan_runs).
+
+Covers the recurring modes added on top of all_at_once / drip / fixed:
+weekly (N per week on a weekday), monthly_date (N per month on a day-of-month),
+and monthly_weekday (N per month on the Kth weekday, -1 = last). All finite:
+articles fill per-period buckets of `per_day` and the schedule ends once the
+batch is placed.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from datetime import date, time
+
+import pytest
+
+from fanout.writer.schedule_planner import ScheduleError, plan_runs
+
+_IDS = [f"c{i}" for i in range(5)]
+_TOD = time(9, 0)
+
+
+def _dates(runs):
+    return sorted({r.scheduled_at.date() for r in runs})
+
+
+def test_weekly_on_weekday_buckets_by_count():
+    # 2/week on Wednesday (weekday=2); start Mon 2026-07-06 -> first Wed 07-08.
+    runs = plan_runs(_IDS, mode="weekly", per_day=2, start_date=date(2026, 7, 6),
+                     time_of_day=_TOD, tz_name="UTC", weekday=2)
+    days = _dates(runs)
+    assert days == [date(2026, 7, 8), date(2026, 7, 15), date(2026, 7, 22)]
+    assert all(d.weekday() == 2 for d in days)
+    counts = Counter(r.scheduled_at.date() for r in runs)
+    assert counts[date(2026, 7, 8)] == 2 and counts[date(2026, 7, 22)] == 1
+
+
+def test_weekly_requires_weekday():
+    with pytest.raises(ScheduleError):
+        plan_runs(_IDS, mode="weekly", per_day=2, start_date=date(2026, 7, 6),
+                  time_of_day=_TOD)
+
+
+def test_monthly_date_anchors_next_month_when_day_passed():
+    # 2/month on the 15th; start 07-20 -> Jul 15 already gone, so first is Aug 15.
+    runs = plan_runs(_IDS, mode="monthly_date", per_day=2, start_date=date(2026, 7, 20),
+                     time_of_day=_TOD, tz_name="UTC", day_of_month=15)
+    assert _dates(runs) == [date(2026, 8, 15), date(2026, 9, 15), date(2026, 10, 15)]
+
+
+def test_monthly_date_clamps_to_month_length():
+    runs = plan_runs(["a"], mode="monthly_date", per_day=1, start_date=date(2027, 2, 1),
+                     time_of_day=_TOD, tz_name="UTC", day_of_month=31)
+    assert runs[0].scheduled_at.date() == date(2027, 2, 28)
+
+
+def test_monthly_weekday_first_monday():
+    runs = plan_runs(_IDS, mode="monthly_weekday", per_day=2, start_date=date(2026, 7, 6),
+                     time_of_day=_TOD, tz_name="UTC", weekday=0, week_of_month=1)
+    days = _dates(runs)
+    assert days == [date(2026, 7, 6), date(2026, 8, 3), date(2026, 9, 7)]
+    assert all(d.weekday() == 0 for d in days)
+
+
+def test_monthly_weekday_last_friday():
+    runs = plan_runs(["a"], mode="monthly_weekday", per_day=1, start_date=date(2026, 7, 1),
+                     time_of_day=_TOD, tz_name="UTC", weekday=4, week_of_month=-1)
+    assert runs[0].scheduled_at.date() == date(2026, 7, 31)
+
+
+def test_span_guard_carries_min_per_day_hint():
+    with pytest.raises(ScheduleError) as ei:
+        plan_runs([f"c{i}" for i in range(60)], mode="weekly", per_day=1,
+                  start_date=date(2026, 1, 1), time_of_day=_TOD, tz_name="UTC", weekday=0)
+    assert ei.value.min_per_day is not None
+
+
+def test_existing_modes_unchanged():
+    assert len(plan_runs(_IDS, mode="all_at_once")) == 5
+    assert len(plan_runs(_IDS, mode="drip", per_day=2, start_date=date(2026, 7, 6),
+                         time_of_day=_TOD)) == 5
+    fixed = plan_runs(_IDS, mode="fixed", start_date=date(2026, 7, 6), time_of_day=_TOD)
+    assert len({r.scheduled_at for r in fixed}) == 1
