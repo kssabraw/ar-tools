@@ -8,6 +8,7 @@ import {
   listScheduleRuns,
   listSchedules,
   pauseSchedule,
+  reinstateScheduleRun,
   resumeSchedule,
   updateScheduleCadence,
   updateSchedulePublishTargets,
@@ -126,11 +127,20 @@ export function ScheduleView() {
                         className="link-btn link-danger"
                         disabled={act.isPending}
                         onClick={() => {
-                          if (confirm(`Cancel “${clusterName(r.cluster_id)}”? It won’t be written.`))
+                          if (confirm(`Cancel “${clusterName(r.cluster_id)}”? The rest move up to fill its slot.`))
                             act.mutate(() => cancelScheduleRun(sessionId, r.id));
                         }}
                       >
                         Cancel
+                      </button>
+                    )}
+                    {r.status === "cancelled" && (
+                      <button
+                        className="link-btn"
+                        disabled={act.isPending}
+                        onClick={() => act.mutate(() => reinstateScheduleRun(sessionId, r.id))}
+                      >
+                        Reinstate
                       </button>
                     )}
                   </td>
