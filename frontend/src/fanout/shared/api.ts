@@ -83,7 +83,17 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     let detail = `Request failed (${resp.status})`;
     try {
       const body = await resp.json();
-      if (body?.detail) detail = body.detail;
+      const d = body?.detail;
+      if (typeof d === "string") {
+        detail = d;
+      } else if (d && typeof d === "object") {
+        // Some endpoints return a structured detail (e.g. the scheduler's
+        // {message, min_per_day}). Render the message, not "[object Object]".
+        detail = typeof d.message === "string" ? d.message : JSON.stringify(d);
+        if (typeof d.min_per_day === "number") {
+          detail += ` (use at least ${d.min_per_day} per period)`;
+        }
+      }
     } catch {
       /* keep default */
     }

@@ -11,7 +11,7 @@ batch is placed.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, time
+from datetime import date, time, timedelta
 
 import pytest
 
@@ -101,11 +101,13 @@ def test_monthly_weekday_last_friday():
     assert runs[0].scheduled_at.date() == date(2026, 7, 31)
 
 
-def test_span_guard_carries_min_per_day_hint():
-    with pytest.raises(ScheduleError) as ei:
-        plan_runs([f"c{i}" for i in range(60)], mode="weekly", per_day=1,
-                  start_date=date(2026, 1, 1), time_of_day=_TOD, tz_name="UTC", weekday=0)
-    assert ei.value.min_per_day is not None
+def test_no_span_cap_allows_multi_year_drip():
+    # 800 articles at 1/day spans > 2 years — no span cap (owner ruling 2026-07-09).
+    ids = [f"c{i}" for i in range(800)]
+    runs = plan_runs(ids, mode="drip", per_day=1, start_date=date(2026, 1, 1),
+                     time_of_day=_TOD, tz_name="UTC")
+    assert len(runs) == 800
+    assert runs[-1].scheduled_at.date() == date(2026, 1, 1) + timedelta(days=799)
 
 
 def test_existing_modes_unchanged():

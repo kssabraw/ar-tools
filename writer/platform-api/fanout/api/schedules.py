@@ -22,7 +22,7 @@ from fanout.auth.dependencies import get_role
 from fanout.config import get_settings
 from fanout.storage import silo as store
 from fanout.writer import schedule_store
-from fanout.writer.schedule_planner import ScheduleError, finish_date, order_clusters, plan_runs
+from fanout.writer.schedule_planner import ScheduleError, order_clusters, plan_runs
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
