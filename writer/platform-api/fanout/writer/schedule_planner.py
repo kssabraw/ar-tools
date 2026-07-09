@@ -9,7 +9,7 @@ layer's job.
   before its silo-mates — its up-link resolves. Stable + deterministic.
 - **all_at_once**: every run is due `now`.
 - **drip N/day**: run i is due `start_date + floor(i / per_day)` days at `time_of_day` in
-  `timezone`, stored as UTC. Validated so the schedule never spans > 365 days.
+  `timezone`, stored as UTC. There is no span cap — a large batch may drip over years.
 """
 
 from __future__ import annotations
@@ -19,8 +19,6 @@ import math
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
-
-MAX_SCHEDULE_DAYS = 365
 
 # Drip-like cadences: articles are placed in per-period buckets of `per_day` (the
 # count-per-period, reused across all of these), one bucket per successive period.
@@ -61,18 +59,6 @@ def order_clusters(architecture: dict | None, all_cluster_ids: list[str]) -> lis
             ordered.append(cid)
             seen.add(cid)
     return ordered
-
-
-def schedule_days(count: int, per_day: int) -> int:
-    """Calendar days a drip of `count` at `per_day` spans (the last day may be partial)."""
-    if per_day < 1:
-        raise ScheduleError("per_day must be >= 1")
-    return math.ceil(count / per_day)
-
-
-def finish_date(start: date, count: int, per_day: int) -> date:
-    """Date the last article is scheduled for (inclusive)."""
-    return start + timedelta(days=schedule_days(count, per_day) - 1)
 
 
 def _first_weekday_on_or_after(start: date, weekday: int) -> date:
@@ -167,8 +153,8 @@ def plan_runs(
     day_of_month: int | None = None, week_of_month: int | None = None,
     now_utc: datetime | None = None,
 ) -> list[PlannedRun]:
-    """Compute each run's `scheduled_at`. Raises ScheduleError on bad params (incl. a
-    schedule that would span > 365 days, carrying the `min_per_day` hint).
+    """Compute each run's `scheduled_at`. Raises ScheduleError on bad params (unknown
+    mode, missing anchor, no clusters). There is no span cap.
 
     Periodic modes (drip/weekly/monthly_date/monthly_weekday) place articles in
     per-period buckets of `per_day` (the count per slot). For weekly, each selected
@@ -201,12 +187,8 @@ def plan_runs(
         mode, n_periods, start=start, weekday=weekday, weekdays=weekdays,
         day_of_month=day_of_month, week_of_month=week_of_month,
     )
-    span = (period_dates[-1] - start).days + 1 if period_dates else 0
-    if span > MAX_SCHEDULE_DAYS:
-        raise ScheduleError(
-            f"Schedule spans {span} days (> {MAX_SCHEDULE_DAYS}). Increase the count per period.",
-            min_per_day=math.ceil(len(ids) / MAX_SCHEDULE_DAYS),
-        )
+    # No span cap (owner ruling 2026-07-09): a large evergreen batch may drip over
+    # years. The count/cost are unchanged; only the timeline lengthens.
     return [
         PlannedRun(cid, _local_to_utc(period_dates[i // per_day], tod, tz_name))
         for i, cid in enumerate(ids)
