@@ -152,8 +152,10 @@ export function ScheduleModal(props: {
   const scope = clusterIds ? `${clusterIds.length} selected ${noun}(s)` : "the whole session";
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal card" style={{ maxWidth: 560 }} onClick={(e) => e.stopPropagation()}>
+    // No backdrop-click dismiss: an accidental click outside the form shouldn't
+    // discard a half-filled schedule. Close only via the Close / Cancel buttons.
+    <div className="modal-overlay">
+      <div className="modal card" style={{ maxWidth: 560 }}>
         <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <h2 className="page-title" style={{ margin: 0 }}>Schedule content</h2>
           <button className="link-btn" onClick={onClose}>Close</button>
