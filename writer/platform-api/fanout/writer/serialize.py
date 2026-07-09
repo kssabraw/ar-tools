@@ -10,6 +10,8 @@ from __future__ import annotations
 import html
 import re
 
+from services.markdown_html import markdown_to_html
+
 from .models import ArticleItem
 from .validators import CITATION_MARKER_RE
 
@@ -87,7 +89,12 @@ def to_html(article: list[ArticleItem], citations: list[dict] | None = None) -> 
             if it.heading:
                 lines.append(f"<h2>{html.escape(it.heading)}</h2>")
             if it.body:
-                lines.append(f"<p>{_html_markers(html.escape(it.body), known)}</p>")
+                # The body is GFM markdown — it can carry tables, lists, bold, and
+                # links. Render it to real HTML (so a table becomes
+                # <table>/<tr>/<td> rather than escaped literal markdown) and then
+                # substitute citation markers on the rendered output. markdown_to_html
+                # escapes text and splits multi-paragraph bodies itself.
+                lines.append(_html_markers(markdown_to_html(it.body), known))
     if known:
         lines.append("<h2>Sources</h2>")
         items = []
