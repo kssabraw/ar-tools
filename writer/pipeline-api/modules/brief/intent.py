@@ -49,6 +49,11 @@ _LISTICLE_PREFIXES = ("best", "top")
 # of "best of N" and "N <thing>s" patterns without overfitting to specific
 # noun lists.
 _LISTICLE_NUM_PATTERN = re.compile(r"^\d+\s+\w+s\b")
+# Leading item count before a listicle prefix - "10 best X" / "7 top Y".
+# These miss both checks above: the keyword doesn't *start* with best/top,
+# and the word after the number ("best") isn't plural, so the num pattern
+# doesn't fire either. Strip the count once and re-check the prefixes.
+_LEADING_COUNT = re.compile(r"^\d+\s+")
 _COMPARISON_TOKENS = (" vs ", " versus ", " or ", "compared to")
 
 
@@ -71,8 +76,13 @@ def _keyword_pattern_precheck(keyword: str) -> Optional[tuple[IntentType, float]
     if any(kw.startswith(p) for p in _INFO_PREFIXES):
         return ("informational", 0.90)
 
-    # listicle - "best X" / "top X" / "<n> <plural-noun>"
+    # listicle - "best X" / "top X" / "<n> best X" / "<n> <plural-noun>"
     if any(kw.startswith(p + " ") for p in _LISTICLE_PREFIXES):
+        return ("listicle", 0.90)
+    kw_uncounted = _LEADING_COUNT.sub("", kw, count=1)
+    if kw_uncounted != kw and any(
+        kw_uncounted.startswith(p + " ") for p in _LISTICLE_PREFIXES
+    ):
         return ("listicle", 0.90)
     if _LISTICLE_NUM_PATTERN.match(kw):
         return ("listicle", 0.90)

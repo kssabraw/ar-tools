@@ -32,6 +32,8 @@ from modules.brief.intent import _keyword_pattern_precheck, classify_intent
     ("10 ways to save energy", "listicle", 0.90),
     ("5 reasons to switch", "listicle", 0.90),
     ("20 tips for new sellers", "listicle", 0.90),
+    ("10 best freight audit companies 2026", "listicle", 0.90),
+    ("7 top crm tools for agencies", "listicle", 0.90),
     # comparison (0.90)
     ("dogs vs cats", "comparison", 0.90),
     ("solar versus wind power", "comparison", 0.90),
@@ -77,6 +79,18 @@ def test_listicle_num_pattern_requires_plural_noun():
     assert _keyword_pattern_precheck("2026 hvac") is None
     # Plural noun → matches
     assert _keyword_pattern_precheck("2026 systems") == ("listicle", 0.90)
+
+
+def test_leading_count_before_listicle_prefix():
+    """"<n> best X" / "<n> top X" is a listicle even though the keyword
+    doesn't start with the prefix and the word after the number isn't
+    plural (the ZDSC '10 Best Freight Audit Companies 2026' regression)."""
+    assert _keyword_pattern_precheck("10 Best Freight Audit Companies 2026") == ("listicle", 0.90)
+    # The count is only stripped for the listicle prefix re-check - a bare
+    # number with no best/top after it still needs the plural-noun pattern.
+    assert _keyword_pattern_precheck("10 hvac maintenance") is None
+    # How-to phrasings keep their precedence: no leading count involved.
+    assert _keyword_pattern_precheck("how to pick the top 10 lenders") == ("how-to", 0.95)
 
 
 # ----------------------------------------------------------------------
