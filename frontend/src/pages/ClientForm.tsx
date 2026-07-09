@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
@@ -117,6 +117,14 @@ export function ClientForm() {
     enabled: isEdit,
   })
 
+  // Snapshot of the reference-page URLs as loaded into the form. On save,
+  // page_structure_urls is sent only when the fields differ from this snapshot —
+  // an untouched form omits the key and the server leaves stored references
+  // as-is. Without this, a save from a form loaded before the references were
+  // added (a stale tab, a teammate's concurrent edit) submits blanks and
+  // silently wipes them (last write wins).
+  const loadedPsRef = useRef<Record<string, string> | null>(null)
+
   // Deep-link support (e.g. /clients/:id/edit#gbp from the workspace) —
   // scroll the targeted section into view once it has rendered.
   useEffect(() => {
@@ -128,6 +136,14 @@ export function ClientForm() {
 
   useEffect(() => {
     if (existing) {
+      loadedPsRef.current = {
+        local_landing: existing.page_structures?.local_landing?.url ?? '',
+        service: existing.page_structures?.service?.url ?? '',
+        location: existing.page_structures?.location?.url ?? '',
+        blog_post: existing.page_structures?.blog_post?.url ?? '',
+        product: existing.page_structures?.product?.url ?? '',
+        solution: existing.page_structures?.solution?.url ?? '',
+      }
       setForm({
         name: existing.name,
         website_url: existing.website_url,
@@ -240,14 +256,31 @@ export function ClientForm() {
         client_type: form.client_type,
         // Always send (number or null) so clearing back to the global default persists.
         strategist_weekday: form.strategist_weekday !== '' ? Number(form.strategist_weekday) : null,
-        page_structure_urls: {
-          local_landing: form.ps_local_landing.trim() || null,
-          service: form.ps_service.trim() || null,
-          location: form.ps_location.trim() || null,
-          blog_post: form.ps_blog_post.trim() || null,
-          product: form.ps_product.trim() || null,
-          solution: form.ps_solution.trim() || null,
-        },
+        // Reference-page URLs: send only when the fields differ from what the form
+        // loaded (or on create). Omitting the key leaves stored references untouched
+        // server-side — so a save from a form that loaded before references were
+        // added elsewhere (stale tab / concurrent edit) can't silently wipe them.
+        // Explicitly clearing a loaded field still sends '' → server drops it.
+        ...(() => {
+          const current: Record<string, string> = {
+            local_landing: form.ps_local_landing.trim(),
+            service: form.ps_service.trim(),
+            location: form.ps_location.trim(),
+            blog_post: form.ps_blog_post.trim(),
+            product: form.ps_product.trim(),
+            solution: form.ps_solution.trim(),
+          }
+          const loaded = loadedPsRef.current
+          const unchanged =
+            isEdit && loaded && Object.keys(current).every(k => current[k] === (loaded[k] ?? '').trim())
+          return unchanged
+            ? {}
+            : {
+                page_structure_urls: Object.fromEntries(
+                  Object.entries(current).map(([k, v]) => [k, v || null]),
+                ),
+              }
+        })(),
       }
       if (isEdit) {
         await updateMutation.mutateAsync(payload)
