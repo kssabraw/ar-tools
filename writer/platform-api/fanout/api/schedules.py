@@ -368,3 +368,58 @@ def cancel_schedule(session_id: str, schedule_id: str, user: AuthedUser = Depend
     _require_schedule(user, session_id, schedule_id)
     cancelled = schedule_store.cancel_schedule(schedule_id)
     return {"status": "cancelled", "cancelled_runs": cancelled}
+
+
+class PublishTargetsBody(BaseModel):
+    # Any subset; omitted fields are left as-is. wp_status is 'draft' | 'publish'.
+    auto_publish: bool | None = None
+    wp_publish: bool | None = None
+    wp_status: str | None = None
+
+
+@router.patch("/sessions/{session_id}/schedules/{schedule_id}/publish-targets")
+def update_publish_targets(
+    session_id: str, schedule_id: str, body: PublishTargetsBody,
+    user: AuthedUser = Depends(require_user),
+) -> dict:
+    """Change where a schedule's remaining articles publish (Google Drive and/or
+    WordPress) mid-run. Allowed only while the schedule is **paused** — pause,
+    retarget, resume. The worker reads these flags live per article, so the change
+    is forward-only: it applies to every run not yet generated, never to already-
+    published pieces."""
+    session = _require_session(user, session_id)
+    sched = schedule_store.get_schedule(schedule_id)
+    if not sched or sched["session_id"] != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Schedule not found")
+    if sched["status"] != "paused":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Pause the schedule before changing where it publishes.",
+        )
+
+    updates: dict = {}
+    if body.auto_publish is not None:
+        # Drive publishing targets the client's folder — only meaningful when linked.
+        updates["auto_publish"] = bool(body.auto_publish and session.get("client_id"))
+    if body.wp_publish is not None:
+        wp = bool(body.wp_publish)
+        if wp:
+            from fanout.api.sessions import _wordpress_publish_available
+
+            if not _wordpress_publish_available(session):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="WordPress publishing needs this session linked to a client with a "
+                           "WordPress site URL + application password on its card.",
+                )
+        updates["wp_publish"] = wp
+    if body.wp_status is not None:
+        if body.wp_status not in ("draft", "publish"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="wp_status must be 'draft' or 'publish'.",
+            )
+        updates["wp_status"] = body.wp_status
+
+    row = schedule_store.update_schedule_fields(schedule_id, updates) or sched
+    return {"status": "updated", "schedule": row}

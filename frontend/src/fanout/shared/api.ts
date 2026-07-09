@@ -1142,6 +1142,15 @@ export const resumeSchedule = (sessionId: string, scheduleId: string) =>
 export const cancelSchedule = (sessionId: string, scheduleId: string) =>
   request<{ status: string; cancelled_runs: number }>(
     `/sessions/${sessionId}/schedules/${scheduleId}/cancel`, { method: "POST" });
+// Retarget a paused schedule's publish destinations (forward-only; applies to
+// articles not yet generated). Any subset of the three fields.
+export const updateSchedulePublishTargets = (
+  sessionId: string, scheduleId: string,
+  body: { auto_publish?: boolean; wp_publish?: boolean; wp_status?: "draft" | "publish" },
+) =>
+  request<{ status: string; schedule: ContentSchedule }>(
+    `/sessions/${sessionId}/schedules/${scheduleId}/publish-targets`,
+    { method: "PATCH", body: JSON.stringify(body) });
 export const cancelScheduleRun = (sessionId: string, runId: string) =>
   request<{ status: string; run_id: string }>(
     `/sessions/${sessionId}/schedule-runs/${runId}/cancel`, { method: "POST" });
