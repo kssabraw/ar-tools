@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
-  PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock,
+  PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
   ClipboardList, BookOpen, Share2, Target, Swords, Link2,
 } from 'lucide-react'
@@ -188,6 +188,13 @@ export function ClientWorkspace() {
               </Link>
             ) : undefined
           }
+        />
+        <ActionCard
+          icon={<CalendarPlus size={22} />}
+          label="Content Scheduler"
+          description="Paste or upload a keyword list, pick a page type — blog, service, location or Local SEO — and create every page now or drip them out on a schedule. Shows everything queued for this client, Fan-out included."
+          to={id ? `/clients/${id}/content-scheduler` : undefined}
+          cta="Open"
         />
         <ActionCard
           icon={<CalendarClock size={22} />}
