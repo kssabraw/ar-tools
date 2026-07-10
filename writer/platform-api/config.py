@@ -405,6 +405,15 @@ class Settings(BaseSettings):
     backlink_dr_min_behind: float = 10.0
     backlink_rd_min_behind: int = 25
 
+    # Backlink explorer tool (any-domain Site Explorer). The cheap views
+    # (overview/referring-domains/anchors/history) are cached per target for this
+    # many hours so repeat lookups don't re-bill DataForSEO; the expensive
+    # per-link list is fetched on demand (never persisted) and capped per call.
+    backlink_cache_ttl_hours: int = 24
+    backlink_referring_domains_limit: int = 100
+    backlink_anchors_limit: int = 100
+    backlink_links_max_limit: int = 100
+
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
     # than the competitor median; distinct topics competitors cover the client lacks).
