@@ -25,6 +25,14 @@ from services import rank_alerts, rank_status
 
 logger = logging.getLogger(__name__)
 
+# PostgREST caps an unbounded select at 1000 rows by default. The metric-fetch
+# queries below can exceed that for larger clients (keywords × trailing days),
+# so they pass an explicit high limit to avoid silently dropping rows — a
+# truncated fetch would leave keywords past the cutoff with no data merged in,
+# stranding them at status='no_data' even though ranks exist. Keep well above
+# any realistic client (keywords × rank_materialize_days).
+_MAX_METRIC_ROWS = 100000
+
 
 @dataclass
 class MaterializeResult:
@@ -129,6 +137,33 @@ def classify_source(merged_rows: list[dict]) -> str:
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
+def load_tracked_ranks(supabase, keyword_ids: list[str], start: date) -> dict[str, dict[str, int]]:
+    """Fetch the weekly DataForSEO ranks to blend into status, as
+    {keyword_id: {date_iso: tracked_rank}}.
+
+    Only rows with a non-null tracked_rank are requested (the sparse fallback
+    points — a couple per keyword), and an explicit high limit is set so
+    PostgREST's default 1000-row cap can't silently truncate the result for a
+    large client and strand later keywords at status='no_data'.
+    """
+    if not keyword_ids:
+        return {}
+    df_rows = (
+        supabase.table("rank_keyword_metrics")
+        .select("keyword_id, date, tracked_rank")
+        .in_("keyword_id", keyword_ids)
+        .gte("date", start.isoformat())
+        .not_.is_("tracked_rank", "null")
+        .limit(_MAX_METRIC_ROWS)
+        .execute()
+    ).data or []
+    df_by_kw: dict[str, dict[str, int]] = {}
+    for r in df_rows:
+        if r.get("tracked_rank") is not None:
+            df_by_kw.setdefault(r["keyword_id"], {})[str(r["date"])] = r["tracked_rank"]
+    return df_by_kw
+
+
 def _verified_property(supabase, client_id: str) -> Optional[dict]:
     res = (
         supabase.table("gsc_properties")
@@ -179,6 +214,7 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
             .eq("property_id", property_id)
             .gte("date", start.isoformat())
             .lte("date", today.isoformat())
+            .limit(_MAX_METRIC_ROWS)
             .execute()
         )
         gsc_index = index_gsc_rows(raw.data or [])
@@ -187,22 +223,13 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
             supabase.table("gsc_query_page_daily")
             .select("query, page, clicks, impressions")
             .eq("property_id", property_id)
+            .limit(_MAX_METRIC_ROWS)
             .execute()
         )
         canonical_by_query = resolve_canonical_pages(page_rows.data or [])
 
     # Existing DataForSEO ranks (weekly fallback wrote these); blend for status.
-    df_rows = (
-        supabase.table("rank_keyword_metrics")
-        .select("keyword_id, date, tracked_rank")
-        .in_("keyword_id", keyword_ids)
-        .gte("date", start.isoformat())
-        .execute()
-    ).data or []
-    df_by_kw: dict[str, dict[str, int]] = {}
-    for r in df_rows:
-        if r.get("tracked_rank") is not None:
-            df_by_kw.setdefault(r["keyword_id"], {})[str(r["date"])] = r["tracked_rank"]
+    df_by_kw = load_tracked_ranks(supabase, keyword_ids, start)
 
     total_rows = 0
     now_iso = "now()"
