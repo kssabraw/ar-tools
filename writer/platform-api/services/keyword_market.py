@@ -27,6 +27,16 @@ _BASE_URL = "https://api.dataforseo.com"
 _VOLUME_PATH = "/v3/keywords_data/google_ads/search_volume/live"
 _TIMEOUT = 60.0
 
+# DataForSEO Google Ads search_volume validation caps. A single keyword over
+# either cap fails the ENTIRE batch request ("Invalid Field: 'keywords'"), so
+# ineligible keywords are filtered out before the call (they simply get no
+# market data) instead of poisoning every other keyword in the refresh.
+_MAX_KEYWORD_CHARS = 80
+_MAX_KEYWORD_WORDS = 10
+# The endpoint accepts at most 1000 keywords per request; larger sets are
+# chunked into multiple requests (billed per request, not per keyword).
+_MAX_KEYWORDS_PER_REQUEST = 1000
+
 # Organic click-through rate by position — a standard decay curve used to turn
 # (volume, position, cpc) into an estimated monthly traffic value. Approximate;
 # good enough for a relative ROI argument in client reviews (PRD §12).
@@ -70,6 +80,30 @@ def estimate_monthly_value(
     return round(value, 2)
 
 
+def market_eligible(keyword: str) -> bool:
+    """Whether DataForSEO's Google Ads endpoint will accept this keyword
+    (length + word-count caps). Ineligible keywords (long conversational
+    queries, full questions) are skipped rather than sent."""
+    kw = (keyword or "").strip()
+    if not kw or len(kw) > _MAX_KEYWORD_CHARS:
+        return False
+    return len(kw.split()) <= _MAX_KEYWORD_WORDS
+
+
+def partition_market_keywords(keywords: list[str]) -> tuple[list[str], list[str]]:
+    """Split into (eligible, skipped) for a market fetch. Pure."""
+    eligible: list[str] = []
+    skipped: list[str] = []
+    for kw in keywords:
+        (eligible if market_eligible(kw) else skipped).append(kw)
+    return eligible, skipped
+
+
+def chunk_keywords(keywords: list[str], size: int = _MAX_KEYWORDS_PER_REQUEST) -> list[list[str]]:
+    """Chunk a keyword list to the endpoint's per-request cap. Pure."""
+    return [keywords[i : i + size] for i in range(0, len(keywords), size)]
+
+
 def parse_market_items(items: list[dict]) -> dict[str, dict]:
     """Map DataForSEO search-volume items to {keyword: {volume, cpc, competition}}."""
     out: dict[str, dict] = {}
@@ -92,24 +126,38 @@ def parse_market_items(items: list[dict]) -> dict[str, dict]:
 # Fetch
 # ----------------------------------------------------------------------------
 async def fetch_market(keywords: list[str], location_code: int) -> dict[str, dict]:
-    """Batch fetch market data for keywords (one DataForSEO call)."""
-    if not keywords:
+    """Batch fetch market data for keywords. Filters out keywords DataForSEO
+    would reject (one bad keyword fails the whole request) and chunks the rest
+    to the 1000-keyword per-request cap (one POST per chunk)."""
+    eligible, skipped = partition_market_keywords(keywords)
+    if skipped:
+        logger.info(
+            "keyword_market_skipped_ineligible",
+            extra={"skipped": len(skipped), "sample": skipped[:3]},
+        )
+    if not eligible:
         return {}
-    payload = [
-        {
-            "keywords": keywords,
-            "location_code": location_code,
-            "language_code": settings.dataforseo_default_language_code,
-        }
-    ]
+
+    out: dict[str, dict] = {}
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(f"{_BASE_URL}{_VOLUME_PATH}", headers=_auth_header(), json=payload)
-        resp.raise_for_status()
-        body = resp.json()
-    tasks = body.get("tasks") or []
-    if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
-        raise RuntimeError(f"dataforseo_market_error: {tasks[0].get('status_message') if tasks else 'no tasks'}")
-    return parse_market_items(tasks[0].get("result") or [])
+        for chunk in chunk_keywords(eligible):
+            payload = [
+                {
+                    "keywords": chunk,
+                    "location_code": location_code,
+                    "language_code": settings.dataforseo_default_language_code,
+                }
+            ]
+            resp = await client.post(f"{_BASE_URL}{_VOLUME_PATH}", headers=_auth_header(), json=payload)
+            resp.raise_for_status()
+            body = resp.json()
+            tasks = body.get("tasks") or []
+            if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
+                raise RuntimeError(
+                    f"dataforseo_market_error: {tasks[0].get('status_message') if tasks else 'no tasks'}"
+                )
+            out.update(parse_market_items(tasks[0].get("result") or []))
+    return out
 
 
 # ----------------------------------------------------------------------------

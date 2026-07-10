@@ -544,9 +544,11 @@ class Settings(BaseSettings):
     # Visibility report narrative (published as a Google Doc). Suite-default
     # Claude, matching the Maps Local Rank Analysis report.
     brand_report_model: str = "claude-sonnet-4-6"
-    # Per keyword×engine attempt budget for transient errors (matches the source
-    # app's 2 retries). Auth/quota/rate-limit errors are terminal (no retry).
-    brand_scan_max_retries: int = 2
+    # Per keyword×engine attempt budget for transient errors (429 rate-limit,
+    # 5xx, connection drops), retried with exponential backoff + jitter.
+    # Auth/payment errors are terminal (no retry).
+    brand_scan_max_retries: int = 3
+    brand_scan_retry_base_seconds: float = 2.0
     # How many keyword×engine cells a scan processes concurrently. Bounds the
     # network-bound LLM/SERP calls so a large scan doesn't monopolise the shared
     # job worker for many minutes (each cell still awaits its providers).

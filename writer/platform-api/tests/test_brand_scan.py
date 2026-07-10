@@ -15,6 +15,11 @@ from services import brand_scan as bs
 from services.brand_scan import ProviderError, ScanFailed
 
 
+async def _no_sleep(_delay):
+    """Patched over asyncio.sleep so retry-backoff tests run instantly."""
+    return None
+
+
 # ── citation / text extraction ───────────────────────────────────────────────
 def test_extract_openai_pulls_text_and_url_citations():
     output = [
@@ -242,13 +247,42 @@ def test_scan_keyword_engine_competitors_via_regex_fallback_when_no_key(monkeypa
     assert names == ["Rival Co"]                 # complete matrix, zero extra API calls
 
 
-def test_scan_keyword_engine_terminal_error_raises(monkeypatch):
+def test_scan_keyword_engine_429_retries_then_fails_with_rate_limit_reason(monkeypatch):
+    # 429 is transient (retried with backoff), NOT terminal — but when every
+    # attempt rate-limits, the cell fails with the user-facing rate-limit reason.
+    calls = {"n": 0}
+
     async def fake_dispatch(engine, keyword, brand):
+        calls["n"] += 1
         raise ProviderError(429, "rate limited")
 
     monkeypatch.setattr(bs, "_dispatch", fake_dispatch)
-    with pytest.raises(ScanFailed):
+    monkeypatch.setattr(bs.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(bs.settings, "brand_scan_max_retries", 2)
+    with pytest.raises(ScanFailed) as exc:
         asyncio.run(bs.scan_keyword_engine("kw", "Acme", "perplexity", []))
+    assert calls["n"] == 3  # initial + 2 retries — no longer instant-terminal
+    assert exc.value.reason == "Rate limit exceeded"
+
+
+def test_scan_keyword_engine_429_retry_then_succeeds(monkeypatch):
+    # A transient rate limit that clears on the second attempt completes the
+    # cell instead of failing it (the pre-fix behavior).
+    calls = {"n": 0}
+
+    async def flaky(engine, keyword, brand):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ProviderError(429, "rate limited")
+        return ("Acme is listed.", [])
+
+    monkeypatch.setattr(bs, "_dispatch", flaky)
+    monkeypatch.setattr(bs.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(bs, "analyze_mention", _stub_analyze(found=True))
+    result = asyncio.run(bs.scan_keyword_engine("kw", "Acme", "chatgpt", []))
+    assert calls["n"] == 2
+    assert result["retry_count"] == 1
+    assert result["mention_found"] is True
 
 
 def test_scan_keyword_engine_terminal_surfaces_provider_reason(monkeypatch):
@@ -303,6 +337,7 @@ def test_scan_keyword_engine_retries_then_succeeds(monkeypatch):
         return ("Acme is listed.", [])
 
     monkeypatch.setattr(bs, "_dispatch", flaky_dispatch)
+    monkeypatch.setattr(bs.asyncio, "sleep", _no_sleep)
     monkeypatch.setattr(bs, "analyze_mention", _stub_analyze(found=True))
 
     result = asyncio.run(bs.scan_keyword_engine("kw", "Acme", "gemini", []))
@@ -322,6 +357,7 @@ def test_scan_keyword_engine_retries_on_transient_exception(monkeypatch):
         return ("Acme is listed.", [])
 
     monkeypatch.setattr(bs, "_dispatch", flaky)
+    monkeypatch.setattr(bs.asyncio, "sleep", _no_sleep)
     monkeypatch.setattr(bs, "analyze_mention", _stub_analyze(found=True))
     result = asyncio.run(bs.scan_keyword_engine("kw", "Acme", "gemini", []))
     assert calls["n"] == 2

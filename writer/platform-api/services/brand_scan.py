@@ -28,6 +28,7 @@ import base64
 import json
 import logging
 import re
+import secrets
 import uuid
 from typing import Optional
 
@@ -51,8 +52,10 @@ ENGINE_ORDER = [
 ENGINES = set(ENGINE_ORDER)
 
 # Provider HTTP statuses that are terminal for a scan (no point retrying):
-# auth, payment/quota, forbidden, and rate-limit.
-_TERMINAL_STATUSES = {401, 402, 403, 429}
+# auth, payment, and forbidden. Rate-limit (429) is NOT terminal — it's a
+# transient saturation signal, retried with backoff like 5xx (previously it
+# hard-failed the cell, which is exactly when a retry would have succeeded).
+_TERMINAL_STATUSES = {401, 402, 403}
 
 # Some providers (notably Google Gemini) return an auth/permission failure as a
 # 400 rather than a 40x — e.g. an invalid key is `400 API_KEY_INVALID` and a
@@ -716,8 +719,10 @@ async def scan_keyword_engine(
     """Run a single keyword×engine scan: dispatch → classify → competitor pass →
     response analysis.
 
-    Retries transient provider errors up to `brand_scan_max_retries`; auth/quota/
-    rate-limit errors are terminal. Raises `ScanFailed` on terminal failure.
+    Retries transient provider errors (429 rate-limit, 5xx, connection drops)
+    up to `brand_scan_max_retries` with exponential backoff + jitter; auth/
+    payment errors are terminal. Raises `ScanFailed` on terminal failure or
+    when the retry budget exhausts.
 
     `client_ctx` (domain / gbp / competitor_domains / tracked_names) enriches the
     cell with the structured response analysis (sources, position, competitor
@@ -727,9 +732,20 @@ async def scan_keyword_engine(
     retry_count = 0
     meta: dict = {}
     max_retries = settings.brand_scan_max_retries
+    rate_limited = False
+
+    async def _backoff() -> None:
+        # Exponential backoff with jitter (0.5–1.5×) so concurrent cells that
+        # collided on a provider's rate limit don't re-collide in lockstep.
+        delay = settings.brand_scan_retry_base_seconds * (2 ** retry_count) * (
+            0.5 + secrets.randbelow(1000) / 1000.0
+        )
+        await asyncio.sleep(delay)
+
     while retry_count <= max_retries and result is None:
         try:
             dispatched = await _dispatch(engine, keyword, brand)
+            rate_limited = False
         except ScanFailed:
             # Config errors (no API key / unknown engine) — terminal, don't retry.
             raise
@@ -743,20 +759,23 @@ async def scan_keyword_engine(
                     "brand_scan.provider_terminal",
                     extra={"engine": engine, "status": exc.status, "reason": reason},
                 )
-                if exc.status == 429:
-                    raise ScanFailed("Rate limit exceeded")
                 detail = f": {reason}" if reason else ""
                 raise ScanFailed(f"{engine} auth/quota error (HTTP {exc.status}){detail}")
+            rate_limited = exc.status == 429
             logger.info(
                 "brand_scan.provider_retry",
                 extra={"engine": engine, "status": exc.status, "reason": reason},
             )
             retry_count += 1
+            if retry_count <= max_retries:
+                await _backoff()
             continue
         except Exception:
             # Connection resets / timeouts (httpx / openai / anthropic) are
             # transient — retry rather than failing the cell outright.
             retry_count += 1
+            if retry_count <= max_retries:
+                await _backoff()
             continue
         # AIO executors return (text, citations, meta); the rest return a 2-tuple.
         if len(dispatched) == 3:
@@ -772,6 +791,10 @@ async def scan_keyword_engine(
         )
 
     if result is None:
+        if rate_limited:
+            # Every attempt died on the provider's rate limit — keep the
+            # user-facing reason the matrix already knows how to display.
+            raise ScanFailed("Rate limit exceeded")
         raise ScanFailed("Failed to get a valid AI response after retries")
 
     # Competitor mentions are folded into the single rich classifier call above

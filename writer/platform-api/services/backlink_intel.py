@@ -82,8 +82,13 @@ async def fetch_and_store(client_id: str) -> dict:
     rows: list[dict] = []
     skipped = 0
 
-    client = supabase.table("clients").select("website").eq("id", client_id).limit(1).execute().data
-    client_domain = domain_of(client[0].get("website")) if client else None
+    client = (
+        supabase.table("clients").select("website_url, gbp").eq("id", client_id).limit(1).execute().data
+    )
+    client_domain = None
+    if client:
+        gbp = client[0].get("gbp") or {}
+        client_domain = domain_of(client[0].get("website_url") or gbp.get("website"))
     targets: list[tuple[str, bool]] = []
     if client_domain:
         targets.append((client_domain, True))

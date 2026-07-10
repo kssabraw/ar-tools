@@ -35,6 +35,47 @@ def test_estimate_value_none_when_missing_inputs():
     assert keyword_market.estimate_monthly_value(0, 3.0, 4.0) is None
 
 
+# --- batch shaping: eligibility + chunking ----------------------------------
+# A single keyword over DataForSEO's caps fails the WHOLE request ("Invalid
+# Field: 'keywords'"), so ineligible keywords are filtered pre-call; >1000
+# keywords are chunked into multiple requests.
+
+def test_market_eligible_accepts_normal_keywords():
+    assert keyword_market.market_eligible("emergency plumber sydney")
+    assert keyword_market.market_eligible("who's the best plumber")
+    assert keyword_market.market_eligible("a a a a a a a a a a")  # exactly 10 words
+
+
+def test_market_eligible_rejects_over_caps():
+    # The live failure case: a full conversational question.
+    assert not keyword_market.market_eligible(
+        "Who's the best IT support company near me for a law firm with strict compliance needs"
+    )
+    assert not keyword_market.market_eligible("x" * 81)                 # > 80 chars
+    assert not keyword_market.market_eligible(" ".join(["word"] * 11))  # > 10 words
+    assert not keyword_market.market_eligible("")
+    assert not keyword_market.market_eligible("   ")
+
+
+def test_partition_keeps_order_and_splits():
+    long_kw = "x" * 100
+    wordy_kw = " ".join(["w"] * 12)
+    eligible, skipped = keyword_market.partition_market_keywords(
+        ["good one", long_kw, "another good", wordy_kw]
+    )
+    assert eligible == ["good one", "another good"]
+    assert skipped == [long_kw, wordy_kw]
+
+
+def test_chunk_keywords_respects_cap():
+    kws = [f"kw {i}" for i in range(2500)]
+    chunks = keyword_market.chunk_keywords(kws, size=1000)
+    assert [len(c) for c in chunks] == [1000, 1000, 500]
+    assert chunks[0][0] == "kw 0" and chunks[2][-1] == "kw 2499"
+    assert keyword_market.chunk_keywords([], size=1000) == []
+    assert keyword_market.chunk_keywords(["a"], size=1000) == [["a"]]
+
+
 def test_parse_market_items():
     history = [{"year": 2025, "month": 6, "search_volume": 2600}]
     items = [
