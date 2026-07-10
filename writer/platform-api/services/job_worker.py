@@ -52,6 +52,7 @@ from services.silo_dedup import process_silo_dedup_job
 from services.strategist import run_strategy_review_job
 from services.internal_linking import run_internal_link_analyze_job, run_internal_link_apply_job
 from services.syndication_service import run_syndication_item_job, run_syndication_scan_job
+from services.content_batch import run_content_batch_item_job
 from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
 
 logger = logging.getLogger(__name__)
@@ -403,6 +404,8 @@ async def _process_job(job: dict) -> None:
         await run_internal_link_analyze_job(job)
     elif job_type == "internal_link_apply":
         await run_internal_link_apply_job(job)
+    elif job_type == "content_batch_item":
+        await run_content_batch_item_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 
