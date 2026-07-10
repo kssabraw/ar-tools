@@ -9,6 +9,18 @@ import { Sparkline } from './Sparkline'
 import { PositionChart } from './PositionChart'
 import { MetricsChart } from './MetricsChart'
 
+interface RankSummary {
+  headline: string
+  narrative: string
+  stats: {
+    keyword_count: number; page_one: number; striking: number
+    climbing: number; dropping: number; at_risk: number
+    avg_position: number | null; clicks_30d: number; impressions_30d: number
+  }
+  top_gainer: { keyword: string; delta: number; position: number | null } | null
+  top_decliner: { keyword: string; delta: number; position: number | null } | null
+}
+
 export function RankOverview({ clientId }: { clientId: string }) {
   const { data: ov } = useQuery<Overview>({
     queryKey: ['rank-overview', clientId],
@@ -17,6 +29,10 @@ export function RankOverview({ clientId }: { clientId: string }) {
   const { data: keywords } = useQuery<KeywordSummary[]>({
     queryKey: ['rank-keywords', clientId],
     queryFn: () => api.get<KeywordSummary[]>(`/clients/${clientId}/rank/keywords`),
+  })
+  const { data: summary } = useQuery<RankSummary>({
+    queryKey: ['rank-summary', clientId],
+    queryFn: () => api.get<RankSummary>(`/clients/${clientId}/rank/summary`),
   })
 
   const triage = useMemo(() => {
@@ -50,6 +66,21 @@ export function RankOverview({ clientId }: { clientId: string }) {
 
   return (
     <div>
+      {/* Plain-English whole-tracker summary (deterministic, server-computed). */}
+      {summary && (
+        <div style={summaryCard}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <BarChart3 size={16} color="#4f46e5" />
+            <span style={{ fontSize: 12.5, fontWeight: 700, color: '#4f46e5', letterSpacing: '0.01em' }}>
+              {summary.headline}
+            </span>
+          </div>
+          <p style={{ margin: 0, fontSize: 14, lineHeight: 1.65, color: '#1f2937' }}>
+            {summary.narrative}
+          </p>
+        </div>
+      )}
+
       {!gsc && (
         <div style={dfBanner}>
           No Search Console connection — this client’s rankings come from DataForSEO live SERP checks.
@@ -183,3 +214,4 @@ function Kpi({ icon, label, value, emphasis }: { icon: React.ReactNode; label: s
 const chartTitle: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: '#0f172a', margin: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }
 const chartHint: React.CSSProperties = { fontSize: 12, color: '#94a3b8', margin: '4px 0 12px' }
 const dfBanner: React.CSSProperties = { background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#0369a1', marginBottom: 20, lineHeight: 1.5 }
+const summaryCard: React.CSSProperties = { background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '14px 16px', marginBottom: 20 }

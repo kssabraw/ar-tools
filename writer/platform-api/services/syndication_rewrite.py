@@ -97,13 +97,20 @@ async def rewrite_unique(title: str, markdown: str) -> tuple[str, str]:
     source = markdown if len(markdown) <= 24_000 else markdown[:24_000]
     user = f"Source title: {title or '(none)'}\n\nSource article (Markdown):\n\n{source}"
 
+    from services.report_llm import retry_transient
+
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     try:
-        message = await client.messages.create(
-            model=settings.syndication_rewrite_model,
-            max_tokens=settings.syndication_rewrite_max_tokens,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user}],
+        # Transient failures (429/5xx/connection) retry with backoff — one 429
+        # previously failed the item outright.
+        message = await retry_transient(
+            lambda: client.messages.create(
+                model=settings.syndication_rewrite_model,
+                max_tokens=settings.syndication_rewrite_max_tokens,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user}],
+            ),
+            log_tag="syndication_rewrite",
         )
     except Exception as exc:  # noqa: BLE001 — map provider errors to our envelope
         logger.warning("syndication_rewrite_failed", extra={"error": str(exc)})

@@ -20,6 +20,7 @@ per pin (integer, 1 = best; `null` = not ranked at that pin).
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from statistics import mean
 from typing import Optional
@@ -389,6 +390,41 @@ def _store_results(
     return len(inserts)
 
 
+# In-memory poll pacing: scan_id → (next_allowed_monotonic, consecutive_errors).
+# A scan whose GET keeps failing (e.g. a Local Dominator 429) previously
+# re-polled on EVERY scheduler tick — a tight retry loop across up to 50
+# scans/tick. Failed polls now back off exponentially (30s → 10 min cap) while
+# healthy scans keep the normal tick cadence. In-memory is fine: the poller
+# runs in the single scheduler process; a restart merely resets the pacing.
+_POLL_BACKOFF: dict[str, tuple[float, int]] = {}
+_POLL_BACKOFF_BASE_SECONDS = 30.0
+_POLL_BACKOFF_CAP_SECONDS = 600.0
+
+
+def _poll_allowed(scan_id: str) -> bool:
+    entry = _POLL_BACKOFF.get(scan_id)
+    return entry is None or time.monotonic() >= entry[0]
+
+
+def _record_poll_error(scan_id: str) -> None:
+    errors = (_POLL_BACKOFF.get(scan_id) or (0.0, 0))[1] + 1
+    delay = min(_POLL_BACKOFF_CAP_SECONDS, _POLL_BACKOFF_BASE_SECONDS * (2 ** (errors - 1)))
+    _POLL_BACKOFF[scan_id] = (time.monotonic() + delay, errors)
+
+
+def _clear_poll_backoff(scan_id: str) -> None:
+    _POLL_BACKOFF.pop(scan_id, None)
+
+
+def _past_poll_timeout(scan_row: dict) -> bool:
+    requested = scan_row.get("requested_at") or scan_row.get("created_at")
+    if not requested:
+        return False
+    started = datetime.fromisoformat(str(requested).replace("Z", "+00:00"))
+    age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
+    return age_min > settings.maps_scan_poll_timeout_minutes
+
+
 async def poll_scan(scan_row: dict) -> str:
     """Poll one in-flight scan; store results + mark complete when done, or fail
     it on timeout. Returns the resulting status."""
@@ -403,18 +439,24 @@ async def poll_scan(scan_row: dict) -> str:
         status, rows = await get_scan_rows(scan_uuid)
     except Exception as exc:
         logger.warning("maps_scan_poll_error", extra={"scan_id": scan_id, "error": str(exc)})
-        return "polling"  # transient — try again next tick (until timeout below)
+        # Apply the same age timeout here — a permanently-failing GET previously
+        # kept the row 'polling' forever (the timeout only ran on a 202).
+        if _past_poll_timeout(scan_row):
+            supabase.table("maps_scans").update(
+                {"status": "failed", "error": "poll_timeout"}
+            ).eq("id", scan_id).execute()
+            _clear_poll_backoff(scan_id)
+            return "failed"
+        _record_poll_error(scan_id)
+        return "polling"  # transient — retried on a backoff schedule
 
+    _clear_poll_backoff(scan_id)
     if status == "running":
-        requested = scan_row.get("requested_at") or scan_row.get("created_at")
-        if requested:
-            started = datetime.fromisoformat(str(requested).replace("Z", "+00:00"))
-            age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
-            if age_min > settings.maps_scan_poll_timeout_minutes:
-                supabase.table("maps_scans").update(
-                    {"status": "failed", "error": "poll_timeout"}
-                ).eq("id", scan_id).execute()
-                return "failed"
+        if _past_poll_timeout(scan_row):
+            supabase.table("maps_scans").update(
+                {"status": "failed", "error": "poll_timeout"}
+            ).eq("id", scan_id).execute()
+            return "failed"
         return "polling"
 
     # Complete — fetch the per-pin businesses for competitor capture (best-effort),
@@ -453,6 +495,9 @@ async def poll_scan(scan_row: dict) -> str:
 async def _poll_rows(rows: list[dict]) -> int:
     advanced = 0
     for scan_row in rows:
+        # Skip scans still inside their error-backoff window (see _POLL_BACKOFF).
+        if not _poll_allowed(scan_row.get("id")):
+            continue
         try:
             await poll_scan(scan_row)
             advanced += 1

@@ -1,0 +1,146 @@
+"""Unit tests for the pure parse helpers in services/backlinks_api.py and the
+target-normalization helper in services/backlink_explorer.py — no network."""
+
+import pytest
+
+from services import backlinks_api
+from services import backlink_explorer
+
+
+# ---------------------------------------------------------------------------
+# parse_summary
+# ---------------------------------------------------------------------------
+def test_parse_summary_derives_dofollow_and_dr():
+    body = {"tasks": [{"status_code": 20000, "result": [{
+        "target": "example.com", "referring_domains": 120, "referring_main_domains": 110,
+        "backlinks": 900, "backlinks_nofollow": 300, "broken_backlinks": 12,
+        "referring_ips": 80, "referring_subnets": 70, "rank": 456,
+        "first_seen": "2020-01-01", "lost_date": None,
+    }]}]}
+    out = backlinks_api.parse_summary(body)
+    assert out["referring_domains"] == 120
+    assert out["dofollow"] == 600            # 900 - 300
+    assert out["nofollow"] == 300
+    assert out["domain_rating"] == 45.6      # 456 / 10
+    assert out["broken_backlinks"] == 12
+
+
+def test_parse_summary_handles_missing_nofollow():
+    body = {"tasks": [{"status_code": 20000, "result": [{"backlinks": 10}]}]}
+    out = backlinks_api.parse_summary(body)
+    assert out["dofollow"] is None           # can't derive without nofollow
+    assert out["domain_rating"] is None      # no rank
+
+
+def test_parse_summary_raises_on_error():
+    body = {"tasks": [{"status_code": 40400, "status_message": "bad", "result": None}]}
+    with pytest.raises(RuntimeError, match="dataforseo_backlinks_summary_error"):
+        backlinks_api.parse_summary(body)
+
+
+# ---------------------------------------------------------------------------
+# parse_referring_domains
+# ---------------------------------------------------------------------------
+def test_parse_referring_domains_maps_rank_and_lost():
+    body = {"tasks": [{"status_code": 20000, "result": [{"items": [
+        {"domain": "a.com", "rank": 300, "backlinks": 20, "backlinks_nofollow": 5,
+         "first_seen": "2021-01-01", "lost_date": None, "is_new": True},
+        {"domain": "b.com", "rank": 100, "backlinks": 4, "backlinks_nofollow": 4,
+         "first_seen": "2020-01-01", "lost_date": "2023-06-01"},
+    ]}]}]}
+    out = backlinks_api.parse_referring_domains(body)
+    assert out[0] == {"domain": "a.com", "domain_rating": 30.0, "backlinks": 20,
+                      "dofollow": 15, "first_seen": "2021-01-01", "last_seen": None,
+                      "is_lost": False, "is_new": True}
+    assert out[1]["is_lost"] is True
+    assert out[1]["last_seen"] == "2023-06-01"
+    assert out[1]["dofollow"] == 0
+
+
+def test_parse_referring_domains_empty():
+    body = {"tasks": [{"status_code": 20000, "result": [{"items": []}]}]}
+    assert backlinks_api.parse_referring_domains(body) == []
+
+
+# ---------------------------------------------------------------------------
+# parse_anchors / parse_history
+# ---------------------------------------------------------------------------
+def test_parse_anchors():
+    body = {"tasks": [{"status_code": 20000, "result": [{"items": [
+        {"anchor": "click here", "backlinks": 50, "backlinks_nofollow": 10,
+         "referring_domains": 12, "first_seen": "2019-01-01"},
+    ]}]}]}
+    out = backlinks_api.parse_anchors(body)
+    assert out == [{"anchor": "click here", "backlinks": 50, "referring_domains": 12,
+                    "dofollow": 40, "first_seen": "2019-01-01"}]
+
+
+def test_parse_history_series():
+    body = {"tasks": [{"status_code": 20000, "result": [{"items": [
+        {"date": "2024-01-01", "referring_domains": 100, "backlinks": 800, "rank": 400,
+         "new_referring_domains": 5, "lost_referring_domains": 2,
+         "new_backlinks": 30, "lost_backlinks": 10},
+    ]}]}]}
+    out = backlinks_api.parse_history(body)
+    assert out[0]["referring_domains"] == 100
+    assert out[0]["domain_rating"] == 40.0
+    assert out[0]["new_referring_domains"] == 5
+
+
+# ---------------------------------------------------------------------------
+# parse_backlinks (link list) — flags + pagination total
+# ---------------------------------------------------------------------------
+def test_parse_backlinks_flags_and_total():
+    body = {"tasks": [{"status_code": 20000, "result": [{"total_count": 5321, "items": [
+        {"url_from": "https://a.com/x", "domain_from": "a.com", "url_to": "https://t.com/",
+         "anchor": "great tool", "dofollow": True, "domain_from_rank": 500, "page_from_rank": 350,
+         "first_seen": "2022-01-01", "last_seen": "2024-01-01",
+         "is_new": False, "is_lost": False, "is_broken": True},
+    ]}]}]}
+    out = backlinks_api.parse_backlinks(body)
+    assert out["total_count"] == 5321
+    link = out["links"][0]
+    assert link["domain_rating"] == 50.0
+    assert link["page_rating"] == 35.0
+    assert link["is_broken"] is True
+    assert link["dofollow"] is True
+
+
+# ---------------------------------------------------------------------------
+# fetch_backlinks mode guard (pure branch, no network) — invalid mode coerced
+# ---------------------------------------------------------------------------
+def test_link_modes_constant():
+    assert "one_per_domain" in backlinks_api.LINK_MODES
+    assert "one_per_subdomain" not in backlinks_api.LINK_MODES
+
+
+# ---------------------------------------------------------------------------
+# normalize_target
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("raw,expected", [
+    ("example.com", ("example.com", "domain")),
+    ("https://example.com", ("example.com", "domain")),
+    ("https://www.example.com/", ("example.com", "domain")),
+    ("http://www.example.com", ("example.com", "domain")),
+    ("blog.example.com", ("blog.example.com", "subdomain")),
+    ("https://shop.example.co.uk", ("shop.example.co.uk", "subdomain")),
+    ("example.com/blog/post-1", ("example.com/blog/post-1", "url")),
+    ("https://example.com/pricing", ("example.com/pricing", "url")),
+])
+def test_normalize_target(raw, expected):
+    assert backlink_explorer.normalize_target(raw) == expected
+
+
+def test_normalize_target_rejects_empty():
+    with pytest.raises(ValueError):
+        backlink_explorer.normalize_target("   ")
+
+
+# ---------------------------------------------------------------------------
+# link filter map
+# ---------------------------------------------------------------------------
+def test_link_filter_map_covers_tabs():
+    for key in ("all", "dofollow", "nofollow", "new", "lost", "broken"):
+        assert key in backlink_explorer._LINK_FILTERS
+    assert backlink_explorer._LINK_FILTERS["broken"] == [["is_broken", "=", True]]
+    assert backlink_explorer._LINK_FILTERS["all"] is None

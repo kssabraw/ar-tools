@@ -88,9 +88,9 @@ export function SiloDiscovery({
   // on the session so the Schedule modal pre-fills it.
   const [location, setLocation] = useState("");
   const [locationInput, setLocationInput] = useState("");
-  // §7.8 metrics enrichment toggle (default off; opt in per run to add the
-  // DataForSEO volume/CPC/KD cost).
-  const [enrichMetrics, setEnrichMetrics] = useState(false);
+  // §7.8 metrics enrichment toggle (default on; opt out per run to skip the
+  // DataForSEO volume/CPC/KD cost). Matches the VA wizard default.
+  const [enrichMetrics, setEnrichMetrics] = useState(true);
   const [showOptional, setShowOptional] = useState(false);
 
   function applyResult(d: Discovery) {

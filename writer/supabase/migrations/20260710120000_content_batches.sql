@@ -117,5 +117,6 @@ alter table async_jobs
     'page_backlink_intel', 'strategy_review', 'maps_image_backfill',
     'brand_voice_scan', 'icp_scan', 'asana_push', 'competitor_intel',
     'gbp_metrics_ingest', 'internal_link_analyze', 'internal_link_apply',
-    'rank_keyword_report', 'local_seo_action', 'content_batch_item'
+    'rank_keyword_report', 'local_seo_action', 'backlink_snapshot',
+    'content_batch_item'
   ]));

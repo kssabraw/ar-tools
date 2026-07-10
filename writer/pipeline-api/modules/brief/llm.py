@@ -17,6 +17,13 @@ subtopic extraction, parallel writer-side scoring) and unbounded
 concurrency reliably trips HTTP 429 rate_limit_error. The semaphore is
 acquired in `claude_json` and `claude_text` so every call site is
 protected without requiring per-caller throttling.
+
+On top of the semaphore, every call retries transient failures (429 rate
+limit, 529 overloaded / 5xx, connection drops) with exponential backoff +
+jitter (`anthropic_max_retries` / `anthropic_retry_base_seconds`) — the
+semaphore can't help when the ACCOUNT is saturated by the suite's other
+services sharing the key, and without retries a single 429 failed the
+module and therefore the whole run.
 """
 
 from __future__ import annotations
@@ -26,8 +33,10 @@ import json
 import logging
 import math
 import re
+import secrets
 from typing import Any, Optional
 
+import anthropic
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 import httpx
@@ -82,6 +91,48 @@ _STRICT_JSON_SUFFIX = (
     "\n\nIMPORTANT: Respond with ONLY a single JSON object. "
     "No prose preamble, no commentary, no markdown code fences."
 )
+
+
+def _is_transient_anthropic_error(exc: Exception) -> bool:
+    """Retryable Anthropic failures: 429 rate limit, 529 overloaded / 5xx,
+    and connection drops. Auth/bad-request errors fail fast."""
+    if isinstance(exc, (anthropic.RateLimitError, anthropic.APIConnectionError)):
+        return True
+    if isinstance(exc, anthropic.APIStatusError):
+        return exc.status_code == 429 or exc.status_code >= 500
+    return False
+
+
+async def _create_message(client: AsyncAnthropic, create_kwargs: dict[str, Any]) -> Any:
+    """One semaphore-guarded `messages.create` with transient-error retries.
+
+    The semaphore prevents self-inflicted concurrency 429s; this loop covers
+    account-wide saturation (the shared Anthropic key serves other suite
+    services too). Backoff sleeps happen OUTSIDE the semaphore so a
+    backing-off call never holds a concurrency slot, and jitter (0.5-1.5x)
+    de-synchronizes parallel fan-out calls so they don't re-collide."""
+    semaphore = _get_anthropic_semaphore()
+    attempt = 0
+    while True:
+        try:
+            async with semaphore:
+                return await client.messages.create(**create_kwargs)
+        except Exception as exc:  # noqa: BLE001 — classify, re-raise if terminal
+            if attempt >= settings.anthropic_max_retries or not _is_transient_anthropic_error(exc):
+                raise
+            delay = settings.anthropic_retry_base_seconds * (2 ** attempt) * (
+                0.5 + secrets.randbelow(1000) / 1000.0
+            )
+            logger.warning(
+                "anthropic_transient_retry",
+                extra={
+                    "attempt": attempt + 1,
+                    "delay_s": round(delay, 1),
+                    "error": str(exc)[:200],
+                },
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
 
 
 def _extract_json_payload(text: str) -> Any:
@@ -159,7 +210,6 @@ async def claude_json(
     use_model = model or CLAUDE_MODEL
 
     last_error: Optional[Exception] = None
-    semaphore = _get_anthropic_semaphore()
     for attempt in range(2):
         sys_prompt = system if attempt == 0 else system + _STRICT_JSON_SUFFIX
         create_kwargs: dict[str, Any] = {
@@ -170,8 +220,7 @@ async def claude_json(
         }
         if temperature is not None:
             create_kwargs["temperature"] = temperature
-        async with semaphore:
-            message = await client.messages.create(**create_kwargs)
+        message = await _create_message(client, create_kwargs)
         text = "".join(
             block.text for block in message.content if getattr(block, "type", "") == "text"
         )
@@ -217,14 +266,13 @@ async def claude_text(
     temperature: float = 0.3,
 ) -> str:
     client = get_anthropic()
-    async with _get_anthropic_semaphore():
-        message = await client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            system=system,
-            messages=[{"role": "user", "content": user}],
-        )
+    message = await _create_message(client, {
+        "model": CLAUDE_MODEL,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+    })
     return "".join(
         block.text for block in message.content if getattr(block, "type", "") == "text"
     ).strip()

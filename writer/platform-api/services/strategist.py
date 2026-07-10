@@ -503,16 +503,24 @@ async def run_strategy_review(
     paid_used = 0
     emitted: Optional[dict] = None
 
+    # Transient-retry each round: a single 429 (the shared Anthropic account
+    # saturates under scan/report bursts) previously failed the entire review
+    # job — one of the most expensive artifacts in the suite to lose.
+    from services.report_llm import retry_transient
+
     # loop bound: every non-emit round consumes ≥1 drill-down, +2 slack rounds
     for round_no in range(max_dd + 3):
         force_emit = round_no >= max_dd + 1 or len(drilldowns) >= max_dd
-        resp = await api.messages.create(
-            model=settings.strategist_model,
-            max_tokens=settings.strategist_max_tokens,
-            system=_SYSTEM,
-            tools=tools,
-            tool_choice={"type": "tool", "name": "emit_strategy_review"} if force_emit else {"type": "auto"},
-            messages=messages,
+        resp = await retry_transient(
+            lambda: api.messages.create(
+                model=settings.strategist_model,
+                max_tokens=settings.strategist_max_tokens,
+                system=_SYSTEM,
+                tools=tools,
+                tool_choice={"type": "tool", "name": "emit_strategy_review"} if force_emit else {"type": "auto"},
+                messages=messages,
+            ),
+            log_tag="strategist",
         )
         usage["input_tokens"] += getattr(resp.usage, "input_tokens", 0) or 0
         usage["output_tokens"] += getattr(resp.usage, "output_tokens", 0) or 0

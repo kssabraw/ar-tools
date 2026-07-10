@@ -25,6 +25,14 @@ from services import rank_alerts, rank_status
 
 logger = logging.getLogger(__name__)
 
+# PostgREST caps an unbounded select at 1000 rows by default. The metric-fetch
+# queries below can exceed that for larger clients (keywords × trailing days),
+# so they pass an explicit high limit to avoid silently dropping rows — a
+# truncated fetch would leave keywords past the cutoff with no data merged in,
+# stranding them at status='no_data' even though ranks exist. Keep well above
+# any realistic client (keywords × rank_materialize_days).
+_MAX_METRIC_ROWS = 100000
+
 
 @dataclass
 class MaterializeResult:
@@ -126,9 +134,50 @@ def classify_source(merged_rows: list[dict]) -> str:
     return "gsc"  # GSC-only or no-data-yet (the default)
 
 
+def resolve_status(computed_status: str, fallback_has_run: bool) -> str:
+    """Split 'no_data' into 'unranked' vs genuinely-unfetched.
+
+    compute_status returns 'no_data' for an all-null series. Once the client's
+    DataForSEO fallback has run at least once it looks up every non-GSC-covered
+    keyword each cycle, so an all-null keyword was actually checked and the
+    domain simply isn't in the SERP → 'unranked' (tracked, not ranking). Absent
+    any fetch it's still awaiting first data → 'no_data'.
+    """
+    if computed_status == "no_data" and fallback_has_run:
+        return "unranked"
+    return computed_status
+
+
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
+def load_tracked_ranks(supabase, keyword_ids: list[str], start: date) -> dict[str, dict[str, int]]:
+    """Fetch the weekly DataForSEO ranks to blend into status, as
+    {keyword_id: {date_iso: tracked_rank}}.
+
+    Only rows with a non-null tracked_rank are requested (the sparse fallback
+    points — a couple per keyword), and an explicit high limit is set so
+    PostgREST's default 1000-row cap can't silently truncate the result for a
+    large client and strand later keywords at status='no_data'.
+    """
+    if not keyword_ids:
+        return {}
+    df_rows = (
+        supabase.table("rank_keyword_metrics")
+        .select("keyword_id, date, tracked_rank")
+        .in_("keyword_id", keyword_ids)
+        .gte("date", start.isoformat())
+        .not_.is_("tracked_rank", "null")
+        .limit(_MAX_METRIC_ROWS)
+        .execute()
+    ).data or []
+    df_by_kw: dict[str, dict[str, int]] = {}
+    for r in df_rows:
+        if r.get("tracked_rank") is not None:
+            df_by_kw.setdefault(r["keyword_id"], {})[str(r["date"])] = r["tracked_rank"]
+    return df_by_kw
+
+
 def _verified_property(supabase, client_id: str) -> Optional[dict]:
     res = (
         supabase.table("gsc_properties")
@@ -179,6 +228,7 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
             .eq("property_id", property_id)
             .gte("date", start.isoformat())
             .lte("date", today.isoformat())
+            .limit(_MAX_METRIC_ROWS)
             .execute()
         )
         gsc_index = index_gsc_rows(raw.data or [])
@@ -187,22 +237,25 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
             supabase.table("gsc_query_page_daily")
             .select("query, page, clicks, impressions")
             .eq("property_id", property_id)
+            .limit(_MAX_METRIC_ROWS)
             .execute()
         )
         canonical_by_query = resolve_canonical_pages(page_rows.data or [])
 
     # Existing DataForSEO ranks (weekly fallback wrote these); blend for status.
-    df_rows = (
-        supabase.table("rank_keyword_metrics")
-        .select("keyword_id, date, tracked_rank")
-        .in_("keyword_id", keyword_ids)
-        .gte("date", start.isoformat())
+    df_by_kw = load_tracked_ranks(supabase, keyword_ids, start)
+
+    # Has the DataForSEO fallback ever run for this client? If so, an all-null
+    # keyword was actually looked up and isn't in the SERP → 'unranked' (vs a
+    # brand-new keyword awaiting its first fetch → 'no_data').
+    fetch_cfg = (
+        supabase.table("rank_fetch_config")
+        .select("last_fetched_at")
+        .eq("client_id", client_id)
+        .limit(1)
         .execute()
-    ).data or []
-    df_by_kw: dict[str, dict[str, int]] = {}
-    for r in df_rows:
-        if r.get("tracked_rank") is not None:
-            df_by_kw.setdefault(r["keyword_id"], {})[str(r["date"])] = r["tracked_rank"]
+    ).data
+    fallback_has_run = bool(fetch_cfg and fetch_cfg[0].get("last_fetched_at"))
 
     total_rows = 0
     now_iso = "now()"
@@ -225,7 +278,7 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
                 series = [(r["date"], r.get("tracked_rank")) for r in merged]
             else:
                 series = [(r["date"], r.get("gsc_position")) for r in merged]
-            status = rank_status.compute_status(series)
+            status = resolve_status(rank_status.compute_status(series), fallback_has_run)
 
             # Collect rank-drop alert signals for this keyword (reconciled below).
             alert_inputs.append(

@@ -789,6 +789,39 @@ export const listExports = (sessionId: string) =>
 export const downloadExport = (exportId: string) =>
   request<CsvExportResult>(`/exports/${exportId}/download`);
 
+// ---- Keyword Research report (PDF) ---------------------------------------
+export interface KeywordReportResult {
+  report_id: string;
+  session_id: string;
+  title: string;
+  download_url: string | null;   // signed `reports` bucket URL (null if storage failed)
+  drive_url: string | null;      // Google Drive copy (null if not client-linked)
+  generated_at: string;
+}
+
+export interface KeywordReportListItem {
+  id: string;
+  session_id: string;
+  title: string;
+  drive_url: string | null;
+  status: string;
+  generated_at: string;
+  has_download: boolean;
+}
+
+// Generate a client-facing PDF report (silos, demand, top opportunities, content
+// plan + keyword appendix), saved to the client's Drive folder + downloadable.
+export const createKeywordReport = (sessionId: string) =>
+  request<KeywordReportResult>(`/sessions/${sessionId}/report`, { method: "POST" });
+
+// Past reports for a session, newest first.
+export const listKeywordReports = (sessionId: string) =>
+  request<KeywordReportListItem[]>(`/sessions/${sessionId}/reports`);
+
+// Re-issue a fresh signed download URL for a past report PDF.
+export const downloadKeywordReport = (reportId: string) =>
+  request<{ report_id: string; download_url: string }>(`/reports/${reportId}/download`);
+
 // §9.1 bulk action — stream a flat CSV of just the selected keyword ids.
 // Transient (no Storage snapshot, no Exports-tab row); the browser saves the
 // blob directly. The `request<T>` JSON helper above doesn't fit (this returns a

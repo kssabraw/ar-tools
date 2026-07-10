@@ -28,6 +28,7 @@ import base64
 import json
 import logging
 import re
+import secrets
 import uuid
 from typing import Optional
 
@@ -51,8 +52,10 @@ ENGINE_ORDER = [
 ENGINES = set(ENGINE_ORDER)
 
 # Provider HTTP statuses that are terminal for a scan (no point retrying):
-# auth, payment/quota, forbidden, and rate-limit.
-_TERMINAL_STATUSES = {401, 402, 403, 429}
+# auth, payment, and forbidden. Rate-limit (429) is NOT terminal — it's a
+# transient saturation signal, retried with backoff like 5xx (previously it
+# hard-failed the cell, which is exactly when a retry would have succeeded).
+_TERMINAL_STATUSES = {401, 402, 403}
 
 # Some providers (notably Google Gemini) return an auth/permission failure as a
 # 400 rather than a 40x — e.g. an invalid key is `400 API_KEY_INVALID` and a
@@ -160,8 +163,13 @@ def _extract_claude(content: list) -> tuple[str, list[str]]:
     return text, citations
 
 
-def _extract_dataforseo_ai(items: list, keyword: str, brand: str, label: str) -> tuple[str, list[str]]:
-    """Pull AI Overview / AI Mode text + references out of a DataForSEO SERP."""
+def _extract_dataforseo_ai(items: list, keyword: str, brand: str, label: str) -> tuple[str, list[str], bool]:
+    """Pull AI Overview / AI Mode text + references out of a DataForSEO SERP.
+
+    The third tuple element is `feature_present`: False when Google showed no
+    AI answer for the query (the feature didn't fire). A not-fired cell is a
+    valid "the feature wasn't there" result, not a brand miss — the rollups
+    exclude it from the visibility score."""
     text, citations = "", []
     for item in items or []:
         if item.get("type") in ("ai_overview", "ai_mode"):
@@ -186,8 +194,9 @@ def _extract_dataforseo_ai(items: list, keyword: str, brand: str, label: str) ->
             f'Google did not generate one for this search, which means "{brand}" '
             f"does not appear in {label} for this query.",
             [],
+            False,
         )
-    return text, citations
+    return text, citations, True
 
 
 def _dedup(seq: list[str]) -> list[str]:
@@ -341,9 +350,14 @@ async def _execute_dataforseo(keyword: str, brand: str, ai_mode: bool) -> tuple[
     if not tasks or not (tasks[0].get("result") or []):
         raise ProviderError(500, "No SERP results returned")
     items = (tasks[0]["result"][0] or {}).get("items") or []
-    text, citations = _extract_dataforseo_ai(items, keyword, brand, "AI Mode" if ai_mode else "AI Overview")
+    text, citations, feature_present = _extract_dataforseo_ai(
+        items, keyword, brand, "AI Mode" if ai_mode else "AI Overview")
     inline_domains, reference_domains = _extract_aio_domains(items)
-    meta = {"aio_inline_domains": inline_domains, "aio_reference_domains": reference_domains}
+    meta = {
+        "aio_inline_domains": inline_domains,
+        "aio_reference_domains": reference_domains,
+        "feature_present": feature_present,
+    }
     return text, citations, meta
 
 
@@ -705,8 +719,10 @@ async def scan_keyword_engine(
     """Run a single keyword×engine scan: dispatch → classify → competitor pass →
     response analysis.
 
-    Retries transient provider errors up to `brand_scan_max_retries`; auth/quota/
-    rate-limit errors are terminal. Raises `ScanFailed` on terminal failure.
+    Retries transient provider errors (429 rate-limit, 5xx, connection drops)
+    up to `brand_scan_max_retries` with exponential backoff + jitter; auth/
+    payment errors are terminal. Raises `ScanFailed` on terminal failure or
+    when the retry budget exhausts.
 
     `client_ctx` (domain / gbp / competitor_domains / tracked_names) enriches the
     cell with the structured response analysis (sources, position, competitor
@@ -716,9 +732,20 @@ async def scan_keyword_engine(
     retry_count = 0
     meta: dict = {}
     max_retries = settings.brand_scan_max_retries
+    rate_limited = False
+
+    async def _backoff() -> None:
+        # Exponential backoff with jitter (0.5–1.5×) so concurrent cells that
+        # collided on a provider's rate limit don't re-collide in lockstep.
+        delay = settings.brand_scan_retry_base_seconds * (2 ** retry_count) * (
+            0.5 + secrets.randbelow(1000) / 1000.0
+        )
+        await asyncio.sleep(delay)
+
     while retry_count <= max_retries and result is None:
         try:
             dispatched = await _dispatch(engine, keyword, brand)
+            rate_limited = False
         except ScanFailed:
             # Config errors (no API key / unknown engine) — terminal, don't retry.
             raise
@@ -732,20 +759,23 @@ async def scan_keyword_engine(
                     "brand_scan.provider_terminal",
                     extra={"engine": engine, "status": exc.status, "reason": reason},
                 )
-                if exc.status == 429:
-                    raise ScanFailed("Rate limit exceeded")
                 detail = f": {reason}" if reason else ""
                 raise ScanFailed(f"{engine} auth/quota error (HTTP {exc.status}){detail}")
+            rate_limited = exc.status == 429
             logger.info(
                 "brand_scan.provider_retry",
                 extra={"engine": engine, "status": exc.status, "reason": reason},
             )
             retry_count += 1
+            if retry_count <= max_retries:
+                await _backoff()
             continue
         except Exception:
             # Connection resets / timeouts (httpx / openai / anthropic) are
             # transient — retry rather than failing the cell outright.
             retry_count += 1
+            if retry_count <= max_retries:
+                await _backoff()
             continue
         # AIO executors return (text, citations, meta); the rest return a 2-tuple.
         if len(dispatched) == 3:
@@ -761,6 +791,10 @@ async def scan_keyword_engine(
         )
 
     if result is None:
+        if rate_limited:
+            # Every attempt died on the provider's rate limit — keep the
+            # user-facing reason the matrix already knows how to display.
+            raise ScanFailed("Rate limit exceeded")
         raise ScanFailed("Failed to get a valid AI response after retries")
 
     # Competitor mentions are folded into the single rich classifier call above
@@ -775,6 +809,10 @@ async def scan_keyword_engine(
             _fallback_competitor_record(result["raw_response"], name) for name in capped
         ]
     result["retry_count"] = retry_count
+    # Whether the AI feature actually fired (AIO/AI-Mode engines only; every
+    # other engine is always "present"). A not-present cell is excluded from the
+    # visibility score by the rollups.
+    result["feature_present"] = bool(meta.get("feature_present", True))
 
     # Structured response analysis (best-effort, never fatal to the scan).
     result["response_analysis"] = None
@@ -978,8 +1016,12 @@ async def run_brand_scan_job(job: dict) -> None:
                     # the explanation instantly (no on-click generation). Best-
                     # effort — a missing/failed diagnose leaves the column null
                     # and the on-demand /diagnose endpoint can still backfill it.
+                    # Skip auto-diagnosis when the AI feature never fired — the
+                    # brand isn't "invisible", there was simply no AI answer to
+                    # appear in, so an invisibility diagnosis would be misleading.
+                    feature_present = result.get("feature_present", True)
                     diagnosis = None
-                    if settings.brand_autodiagnose_enabled and not result["mention_found"]:
+                    if settings.brand_autodiagnose_enabled and not result["mention_found"] and feature_present:
                         diagnosis = await _autodiagnose(client_id, brand, keyword, result["raw_response"])
                     supabase.table("brand_mention_history").update({
                         "status": "completed",
@@ -995,6 +1037,7 @@ async def run_brand_scan_job(job: dict) -> None:
                         "retry_count": result["retry_count"],
                         "response_analysis": result.get("response_analysis"),
                         "invisibility_diagnosis": diagnosis,
+                        "feature_present": feature_present,
                         "updated_at": "now()",
                     }).eq("id", row_id).execute()
                     counts["completed"] += 1

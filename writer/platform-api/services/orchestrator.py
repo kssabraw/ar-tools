@@ -753,8 +753,35 @@ async def _orchestrate_service_page(
 # ---------------------------------------------------------------------------
 
 
+# Global cap on concurrently-EXECUTING runs. Every run-create request spawns an
+# independent orchestrate_run background task, and each run fires brief+SIE in
+# parallel (each a heavy Claude fan-out inside pipeline-api) — with no cap, N
+# simultaneous run-creates multiplied straight into the shared Anthropic
+# account's rate limit (the demand-side amplifier behind the 429 saturation).
+# Excess runs simply wait here in their queued status; nothing is dropped.
+# Lazily constructed so the semaphore binds to the running event loop.
+_run_gate: Optional[asyncio.Semaphore] = None
+
+
+def _get_run_gate() -> asyncio.Semaphore:
+    global _run_gate
+    if _run_gate is None:
+        _run_gate = asyncio.Semaphore(max(1, settings.max_concurrent_runs))
+    return _run_gate
+
+
 async def orchestrate_run(run_id: str) -> None:
-    """Full pipeline orchestration as a background task."""
+    """Full pipeline orchestration as a background task, gated by the global
+    run-concurrency cap (`max_concurrent_runs`)."""
+    gate = _get_run_gate()
+    if gate.locked():
+        logger.info("run_waiting_for_slot", extra={"run_id": run_id})
+    async with gate:
+        await _orchestrate_run_impl(run_id)
+
+
+async def _orchestrate_run_impl(run_id: str) -> None:
+    """The actual pipeline orchestration (see orchestrate_run)."""
     run_id_ctx.set(run_id)
     logger.info("run_dispatched", extra={"run_id": run_id})
 

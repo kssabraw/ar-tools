@@ -312,17 +312,20 @@ _EMIT_TOOL = {
 
 
 def _is_transient_anthropic_error(exc: Exception) -> bool:
-    """True for retryable Anthropic failures: the concurrent-connections / rate
-    limit 429, transient 5xx (overloaded), and connection drops. A truncated /
-    empty tool-use response is also retryable (raised as RuntimeError below)."""
-    import anthropic  # lazy: keep the pure rollup/snapshot helpers import-free
+    """True for retryable failures on either provider: rate limit (429),
+    transient 5xx (overloaded), and connection drops. A truncated / empty
+    tool-use response is also retryable (raised as RuntimeError below)."""
+    from services import report_llm
 
-    if isinstance(exc, (anthropic.RateLimitError, anthropic.APIConnectionError)):
-        return True
-    if isinstance(exc, anthropic.APIStatusError):
-        return exc.status_code == 429 or exc.status_code >= 500
     # A max_tokens-truncated tool call yields an empty summary — worth one more try.
-    return isinstance(exc, RuntimeError) and "maps_report_empty_summary" in str(exc)
+    if isinstance(exc, RuntimeError) and "maps_report_empty_summary" in str(exc):
+        return True
+    return report_llm.is_transient_llm_error(exc)
+
+
+def _report_model() -> str:
+    return (settings.maps_report_openai_model
+            if settings.maps_report_provider == "openai" else settings.maps_report_model)
 
 
 async def _call_llm(snapshot: dict) -> dict:
@@ -351,30 +354,25 @@ async def _call_llm(snapshot: dict) -> dict:
 
 
 async def _call_llm_once(snapshot: dict) -> dict:
-    """One forced tool-use Claude call; raises on empty/truncated output."""
-    import anthropic  # lazy: keep the pure rollup/snapshot helpers import-free
+    """One forced tool-use call on the configured provider; raises on
+    empty/truncated output."""
+    from services import report_llm
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    response = await client.messages.create(
-        model=settings.maps_report_model,
-        max_tokens=settings.maps_report_max_tokens,
+    out = await report_llm.run_forced_tool(
+        provider=settings.maps_report_provider,
+        model=_report_model(),
         system=SYSTEM_PROMPT,
-        tools=[_EMIT_TOOL],
-        tool_choice={"type": "tool", "name": "emit_report"},
-        messages=[{"role": "user", "content": build_user_prompt(snapshot)}],
+        user=build_user_prompt(snapshot),
+        tool_name="emit_report",
+        tool_description=_EMIT_TOOL["description"],
+        input_schema=_EMIT_TOOL["input_schema"],
+        max_tokens=settings.maps_report_max_tokens,
     )
-    out = None
-    for block in response.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == "emit_report":
-            out = block.input or {}
-            break
-    if out is None:
-        raise RuntimeError(f"maps_report_llm_no_tool_use (stop={response.stop_reason})")
-    # A truncated tool-use response (e.g. stop_reason='max_tokens') yields an
-    # empty/partial input and no usable summary — fail loudly so it's retryable
-    # rather than silently storing an empty "complete" report.
+    # A truncated tool-use response yields an empty/partial input and no usable
+    # summary — fail loudly so it's retryable rather than silently storing an
+    # empty "complete" report.
     if not (out.get("summary") or "").strip():
-        raise RuntimeError(f"maps_report_empty_summary (stop={response.stop_reason})")
+        raise RuntimeError("maps_report_empty_summary")
     return out
 
 

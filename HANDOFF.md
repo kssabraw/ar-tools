@@ -478,7 +478,7 @@ memory. Also works in **DMs**. It answers questions AND can **take actions**
   thread_broadcast}` and **no `bot_id`** (skips the bot's own/alerts + other bots +
   retries). `message` events also cover @mentions (the mention is stripped), so we
   do **not** also handle `app_mention` — that would double-reply.
-- **Logic:** `services/slack_assistant.py` — pure helpers (`verify_slack_signature`,
+- **Logic:** the `services/slack_assistant/` package (helpers/prompts/context/actions/llm; split 2026-07-10) — pure helpers (`verify_slack_signature`,
   `strip_mention`, `resolve_client`, `format_context`, `format_history`, unit-tested)
   + `build_context` + `fetch_thread_history` (conversations.replies → prior turns)
   + `interpret` (Claude tool-use, `slack_assistant_model`=`claude-sonnet-4-6`, folds

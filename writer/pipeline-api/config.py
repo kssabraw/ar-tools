@@ -80,6 +80,18 @@ class Settings(BaseSettings):
     # account tiers; 5 is safe for the default Anthropic plan.
     anthropic_max_concurrency: int = 5
 
+    # Transient-error retry for every Claude call (429 rate limit, 529
+    # overloaded, 5xx, connection drops): exponential backoff + jitter,
+    # sleeping OUTSIDE the concurrency semaphore so a backing-off call
+    # doesn't hold a slot. The semaphore only prevents self-inflicted
+    # concurrency 429s — account-wide saturation (other suite services
+    # sharing the key) still surfaces as 429 here, and without retries a
+    # single 429 failed the whole module and therefore the whole run.
+    # Budget: 2/4/8/16s (×0.5-1.5 jitter) ≈ up to ~45s, well inside the
+    # brief/writer module timeouts.
+    anthropic_max_retries: int = 4
+    anthropic_retry_base_seconds: float = 2.0
+
     # SIE v1.1 - Hybrid entity scoring (replaces the prior hard
     # salience >= 0.40 gate at NLP-extract time). Google NLP returns
     # everything above the floor; entities are then scored on a

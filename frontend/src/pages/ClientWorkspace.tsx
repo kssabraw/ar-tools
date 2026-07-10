@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
-  PenLine, MapPin, Search, TrendingUp, Map, Activity, CalendarClock, CalendarPlus,
+  PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
   ClipboardList, BookOpen, Share2, Target, Swords, Link2,
 } from 'lucide-react'
@@ -190,6 +190,13 @@ export function ClientWorkspace() {
           }
         />
         <ActionCard
+          icon={<Search size={22} />}
+          label="Keyword Research"
+          description="Discover and cluster keyword opportunities into topic silos for this client — opens the Topic Fan-out keyword-research & planning tool."
+          href={id ? `/fanout/?client_id=${id}&client_name=${encodeURIComponent(client?.name ?? '')}` : '/fanout/'}
+          cta="Open"
+        />
+        <ActionCard
           icon={<CalendarPlus size={22} />}
           label="Content Scheduler"
           description="Paste or upload a keyword list, pick a page type — blog, service, location or Local SEO — and create every page now or drip them out on a schedule. Shows everything queued for this client, Fan-out included."
@@ -299,6 +306,13 @@ export function ClientWorkspace() {
           cta="Open"
         />
         <ActionCard
+          icon={<Link2 size={22} />}
+          label="Backlink Explorer"
+          description="This client's backlink profile — domain rating, referring domains, anchor mix, gained/lost/broken links and history — pulled on demand. Look up any competitor's domain too."
+          to={id ? `/clients/${id}/backlinks` : undefined}
+          cta="Open"
+        />
+        <ActionCard
           icon={<ListChecks size={22} />}
           label="Action Plan"
           description="A prioritized reoptimization to-do list built from this client's rank signals — drops to fix, winnable quick wins & Search Console opportunities, each linked to the tool that does it."
@@ -349,28 +363,6 @@ export function ClientWorkspace() {
         />
       </Section>
 
-      {/* ── More tools (de-emphasized roadmap) ──────────────────────── */}
-      <Section title="More tools" subtitle="Additional modules on the roadmap.">
-        {moreTools.map(t => {
-          // Carry the current client into the Fanout app so it shows only this
-          // client's runs (client-scoped runs) and tags new runs to it.
-          const href = t.href && id
-            ? `${t.href}?client_id=${id}&client_name=${encodeURIComponent(client?.name ?? '')}`
-            : t.href
-          return (
-            <ActionCard
-              key={t.label}
-              icon={t.icon}
-              label={t.label}
-              description={t.description}
-              href={href}
-              cta={href ? 'Open' : undefined}
-              badge="Coming soon"
-              compact
-            />
-          )
-        })}
-      </Section>
     </div>
   )
 }
@@ -404,19 +396,6 @@ function icpCopy(client?: Client): string {
     ? 'Set by you — your profile supersedes the app-detected one across both tools.'
     : 'AI-detected — review, edit, or replace it with your own.'
 }
-
-const moreTools: { label: string; description: string; icon: React.ReactNode; href?: string }[] = [
-  {
-    label: 'Keyword Research',
-    description: 'Discover and cluster keyword opportunities, enriched with Search Console data.',
-    icon: <Search size={20} />,
-  },
-  {
-    label: 'Ranking-Drop Agent',
-    description: 'Detects ranking drops and recommends fixes from your SOPs.',
-    icon: <Activity size={20} />,
-  },
-]
 
 function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
