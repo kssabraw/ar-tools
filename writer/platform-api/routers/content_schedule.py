@@ -24,7 +24,7 @@ from models.content_batch import (
     ContentBatchEstimateRequest,
     ContentBatchEstimateResponse,
 )
-from services import content_batch, content_schedule_store as store
+from services import content_batch, content_schedule_feed, content_schedule_store as store
 from services.freeze import assert_not_frozen
 
 router = APIRouter(tags=["content-scheduler"])
@@ -156,6 +156,14 @@ async def create_batch(
         status="created", created=True, batch_id=batch["id"], count=len(items),
         skipped=skipped, enqueued=enqueued, estimate=est_resp,
     )
+
+
+@router.get("/clients/{client_id}/scheduled-content")
+async def scheduled_content(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The unified per-client feed for the workspace 'Scheduled Content' card:
+    suite Content Scheduler batches + client-linked Fanout schedules, normalized
+    and newest-first. Read-only; the Fanout half degrades to empty on any error."""
+    return {"items": content_schedule_feed.unified_feed(str(client_id))}
 
 
 @router.get("/clients/{client_id}/content-batches")
