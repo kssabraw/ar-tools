@@ -8,12 +8,15 @@ export const STATUS_META: Record<KeywordStatus, { label: string; color: string; 
   volatile:     { label: 'Volatile',     color: '#b45309', bg: '#fef3c7' },
   dropping:     { label: 'Dropping',     color: '#c2410c', bg: '#ffedd5' },
   deindex_risk: { label: 'At risk',      color: '#b91c1c', bg: '#fee2e2' },
+  unranked:     { label: 'Not in top 100', color: '#6d28d9', bg: '#ede9fe' },
   no_data:      { label: 'No data yet',  color: '#94a3b8', bg: '#f8fafc' },
 }
 
 // "Needs attention" first — drives the default triage sort (PRD §8.3).
+// 'unranked' (checked, ranks nowhere) sits above 'no_data' (awaiting first
+// fetch): it's a real, tracked state and a standing opportunity, not a gap.
 export const STATUS_ORDER: KeywordStatus[] = [
-  'deindex_risk', 'dropping', 'volatile', 'climbing', 'stable', 'no_data',
+  'deindex_risk', 'dropping', 'volatile', 'climbing', 'stable', 'unranked', 'no_data',
 ]
 
 export function statusRank(s: KeywordStatus): number {

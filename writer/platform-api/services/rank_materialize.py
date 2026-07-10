@@ -134,6 +134,20 @@ def classify_source(merged_rows: list[dict]) -> str:
     return "gsc"  # GSC-only or no-data-yet (the default)
 
 
+def resolve_status(computed_status: str, fallback_has_run: bool) -> str:
+    """Split 'no_data' into 'unranked' vs genuinely-unfetched.
+
+    compute_status returns 'no_data' for an all-null series. Once the client's
+    DataForSEO fallback has run at least once it looks up every non-GSC-covered
+    keyword each cycle, so an all-null keyword was actually checked and the
+    domain simply isn't in the SERP → 'unranked' (tracked, not ranking). Absent
+    any fetch it's still awaiting first data → 'no_data'.
+    """
+    if computed_status == "no_data" and fallback_has_run:
+        return "unranked"
+    return computed_status
+
+
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
@@ -231,6 +245,18 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
     # Existing DataForSEO ranks (weekly fallback wrote these); blend for status.
     df_by_kw = load_tracked_ranks(supabase, keyword_ids, start)
 
+    # Has the DataForSEO fallback ever run for this client? If so, an all-null
+    # keyword was actually looked up and isn't in the SERP → 'unranked' (vs a
+    # brand-new keyword awaiting its first fetch → 'no_data').
+    fetch_cfg = (
+        supabase.table("rank_fetch_config")
+        .select("last_fetched_at")
+        .eq("client_id", client_id)
+        .limit(1)
+        .execute()
+    ).data
+    fallback_has_run = bool(fetch_cfg and fetch_cfg[0].get("last_fetched_at"))
+
     total_rows = 0
     now_iso = "now()"
     alert_inputs: list[tuple[str, str, list]] = []  # (keyword_id, keyword, signals)
@@ -252,7 +278,7 @@ def materialize_client(client_id: str, today: Optional[date] = None) -> Material
                 series = [(r["date"], r.get("tracked_rank")) for r in merged]
             else:
                 series = [(r["date"], r.get("gsc_position")) for r in merged]
-            status = rank_status.compute_status(series)
+            status = resolve_status(rank_status.compute_status(series), fallback_has_run)
 
             # Collect rank-drop alert signals for this keyword (reconciled below).
             alert_inputs.append(

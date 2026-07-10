@@ -8,7 +8,7 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 KeywordStatus = Literal[
-    "climbing", "stable", "volatile", "dropping", "deindex_risk", "no_data"
+    "climbing", "stable", "volatile", "dropping", "deindex_risk", "unranked", "no_data"
 ]
 
 
