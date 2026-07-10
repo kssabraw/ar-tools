@@ -7,6 +7,13 @@ import hmac
 
 from services import slack_assistant
 
+# The package facade re-exports everything, so calls go through
+# `slack_assistant.…` unchanged — but monkeypatching must target the DEFINING
+# submodule (patching a re-exported name on the facade doesn't rebind the
+# implementation module's global).
+from services.slack_assistant import actions as sa_actions
+from services.slack_assistant import context as sa_context
+
 
 SECRET = "shhh-signing-secret"
 
@@ -105,7 +112,7 @@ def test_resolve_ignores_generic_tokens():
 # build_context registry behavior (providers isolated; empties omitted)
 # ---------------------------------------------------------------------------
 def test_build_context_assembles_isolates_and_omits(monkeypatch):
-    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: object())
+    monkeypatch.setattr(sa_context, "get_supabase", lambda: object())
 
     def good(sb, cid, today):
         return {"ok": True}
@@ -117,7 +124,7 @@ def test_build_context_assembles_isolates_and_omits(monkeypatch):
         raise RuntimeError("module down")
 
     monkeypatch.setattr(
-        slack_assistant,
+        sa_context,
         "_CONTEXT_PROVIDERS",
         [("alpha", good), ("beta", empty), ("gamma", boom)],
     )
@@ -367,7 +374,7 @@ def test_stage_pick_task_resolves_disambiguates_and_guards(monkeypatch):
 
     from services import asana_service
 
-    monkeypatch.setattr(slack_assistant, "_asana_ready", lambda cid: ("777", None))
+    monkeypatch.setattr(sa_actions, "_asana_ready", lambda cid: ("777", None))
     tasks = [
         {"gid": "t1", "name": "Fix GBP categories", "completed": False,
          "assignee": {"name": "Ivy Gervacio"}},
@@ -400,7 +407,7 @@ def test_stage_pick_task_resolves_disambiguates_and_guards(monkeypatch):
     assert outcome == "reply" and "Fix GBP categories" in reply
 
     # unready Asana → the guard's guidance passes straight through
-    monkeypatch.setattr(slack_assistant, "_asana_ready", lambda cid: (None, "not set up"))
+    monkeypatch.setattr(sa_actions, "_asana_ready", lambda cid: (None, "not set up"))
     outcome, reply = asyncio.run(
         slack_assistant._stage_pick_task("c1", {"task_name": "gbp"}, "permanently delete")
     )
@@ -411,12 +418,12 @@ def test_stage_add_task_matches_assignee_and_flags_unknown(monkeypatch):
     import asyncio
     from unittest.mock import MagicMock
 
-    monkeypatch.setattr(slack_assistant, "_asana_ready", lambda cid: ("777", None))
+    monkeypatch.setattr(sa_actions, "_asana_ready", lambda cid: ("777", None))
     supabase = MagicMock()
     supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
         {"gid": "g1", "name": "Ivy Gervacio"},
     ]
-    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+    monkeypatch.setattr(sa_actions, "get_supabase", lambda: supabase)
 
     # An explicit due date wins and is echoed in the confirm.
     outcome, staged = asyncio.run(
@@ -517,7 +524,7 @@ def test_push_task_plan_action_guards_and_enqueues(monkeypatch):
     supabase = MagicMock()
     chain = supabase.table.return_value.select.return_value.eq.return_value.order.return_value.limit.return_value.execute
     chain.return_value.data = []
-    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+    monkeypatch.setattr(sa_actions, "get_supabase", lambda: supabase)
     enqueued = []
     monkeypatch.setattr(asana_push, "enqueue_asana_push", lambda cid, pid: enqueued.append((cid, pid)))
     out = slack_assistant._act_push_task_plan("c1")
@@ -619,7 +626,7 @@ def test_stage_update_profile_confirms_change_and_skips_noop(monkeypatch):
     import asyncio
 
     monkeypatch.setattr(
-        slack_assistant, "_client_row", lambda cid, cols: {"retainer_monthly": 3000.0}
+        sa_actions, "_client_row", lambda cid, cols: {"retainer_monthly": 3000.0}
     )
     outcome, staged = asyncio.run(
         slack_assistant._stage_update_profile("c1", {"field": "retainer_monthly", "value": "$4,500"})
@@ -645,7 +652,7 @@ def test_stage_add_and_remove_cities(monkeypatch):
     import asyncio
 
     monkeypatch.setattr(
-        slack_assistant, "_client_row", lambda cid, cols: {"target_cities": ["Austin", "Waco"]}
+        sa_actions, "_client_row", lambda cid, cols: {"target_cities": ["Austin", "Waco"]}
     )
     outcome, staged = asyncio.run(
         slack_assistant._stage_add_cities("c1", {"cities": ["waco", "Temple"]})
@@ -725,7 +732,7 @@ def test_stage_remove_tracked_keyword_resolves_and_disambiguates(monkeypatch):
         {"id": "k1", "keyword": "roof repair"},
         {"id": "k2", "keyword": "roof repair near me"},
     ]
-    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+    monkeypatch.setattr(sa_actions, "get_supabase", lambda: supabase)
 
     outcome, staged = asyncio.run(
         slack_assistant._stage_remove_tracked_keyword("c1", {"keyword": "roof repair"})
@@ -782,7 +789,7 @@ def test_act_add_tracked_keywords_upserts_and_enqueues(monkeypatch):
     from services import keyword_market, rank_materialize
 
     supabase = MagicMock()
-    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+    monkeypatch.setattr(sa_actions, "get_supabase", lambda: supabase)
     mats, markets = [], []
     monkeypatch.setattr(rank_materialize, "enqueue_materialize", lambda cid: mats.append(cid))
     monkeypatch.setattr(
@@ -805,7 +812,7 @@ def test_act_update_profile_website_triggers_rescrape(monkeypatch):
     from unittest.mock import MagicMock
 
     supabase = MagicMock()
-    monkeypatch.setattr(slack_assistant, "get_supabase", lambda: supabase)
+    monkeypatch.setattr(sa_actions, "get_supabase", lambda: supabase)
     out = slack_assistant._act_update_profile(
         "c1", {"field": "website_url", "coerced_value": "https://new.acme.com"}
     )
