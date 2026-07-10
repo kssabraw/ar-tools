@@ -57,19 +57,21 @@ def test_extract_claude_reads_text_and_web_search_results():
 
 
 def test_extract_dataforseo_empty_returns_not_visible_message():
-    text, citations = bs._extract_dataforseo_ai([], "burst pipe sydney", "Acme", "AI Overview")
+    text, citations, present = bs._extract_dataforseo_ai([], "burst pipe sydney", "Acme", "AI Overview")
     assert "No Google AI Overview" in text
     assert "Acme" in text
     assert citations == []
+    assert present is False  # the feature didn't fire
 
 
 def test_extract_dataforseo_pulls_ai_overview_text_and_refs():
     items = [{"type": "ai_overview",
               "items": [{"text": "Acme Plumbing is great.",
                          "references": [{"url": "https://r.com"}]}]}]
-    text, citations = bs._extract_dataforseo_ai(items, "kw", "Acme", "AI Overview")
+    text, citations, present = bs._extract_dataforseo_ai(items, "kw", "Acme", "AI Overview")
     assert "Acme Plumbing is great." in text
     assert citations == ["https://r.com"]
+    assert present is True  # the AI Overview fired
 
 
 def test_extract_aio_domains_splits_inline_links_from_references():

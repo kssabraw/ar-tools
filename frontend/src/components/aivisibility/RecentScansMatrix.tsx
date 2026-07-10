@@ -13,12 +13,13 @@ import './animations.css'
 // (read off the same rows' competitor_results — those cells aren't clickable,
 // the drill-down analysis is brand-specific).
 
-type CellState = 'none' | 'pending' | 'failed' | 'found' | 'notfound' | 'nocomp'
+type CellState = 'none' | 'pending' | 'failed' | 'found' | 'notfound' | 'nocomp' | 'absent'
 
 function cellState(m: Mention | undefined, competitor: string | undefined): { state: CellState; title: string } {
   if (!m) return { state: 'none', title: 'Not scanned' }
   if (competitor) {
     if (m.status !== 'completed') return { state: m.status === 'failed' ? 'failed' : 'pending', title: m.status }
+    if (m.feature_present === false) return { state: 'absent', title: "AI Overview didn't appear for this search" }
     const cr = compResultFor(m, competitor)
     if (!cr) return { state: 'nocomp', title: 'Competitor not included in this scan' }
     return cr.found
@@ -27,6 +28,11 @@ function cellState(m: Mention | undefined, competitor: string | undefined): { st
   }
   if (m.status === 'failed') return { state: 'failed', title: m.failure_reason ?? 'Scan failed' }
   if (m.status === 'queued' || m.status === 'processing') return { state: 'pending', title: m.status }
+  // The Google AI feature didn't fire — a genuine "no AI answer shown", not a
+  // brand miss. Marked distinctly and excluded from the visibility score.
+  if (m.feature_present === false) {
+    return { state: 'absent', title: "AI Overview didn't appear for this search — not counted in the visibility score" }
+  }
   if (m.mention_found) return { state: 'found', title: 'Mentioned — click for details' }
   return { state: 'notfound', title: 'Not found — click for why + details' }
 }
@@ -58,6 +64,18 @@ function Badge({ state }: { state: CellState }) {
   }
   if (state === 'failed') {
     return <span style={{ ...style, color: '#94a3b8', fontSize: 9, fontWeight: 700 }}>!</span>
+  }
+  if (state === 'absent') {
+    // Neutral "not applicable" marker — the AI feature didn't fire, so the cell
+    // is neither a hit nor a miss. A slashed circle, distinct from the red ✗.
+    return (
+      <span style={style}>
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#94a3b8" strokeWidth="2.5" aria-hidden="true">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M5.6 5.6 18.4 18.4" />
+        </svg>
+      </span>
+    )
   }
   // pending — pulsing dot
   return (
@@ -132,7 +150,7 @@ export function RecentScansMatrix(props: {
           {ENGINE_ORDER.map(e => {
             const m = latestByCell.get(`${k.id}::${e}`)
             const { state, title } = cellState(m, competitor)
-            const clickable = !competitor && m?.status === 'completed'
+            const clickable = !competitor && m?.status === 'completed' && state !== 'absent'
             const aioKind =
               !competitor && m?.status === 'completed' && AIO_ENGINES.has(e)
                 ? m.response_analysis?.aio?.mention_kind
@@ -147,7 +165,7 @@ export function RecentScansMatrix(props: {
                   cursor: clickable ? 'pointer' : 'default',
                 }}
               >
-                <span style={{ position: 'relative', display: 'inline-flex', opacity: state === 'none' || state === 'nocomp' ? 0.22 : 1 }}>
+                <span style={{ position: 'relative', display: 'inline-flex', opacity: state === 'none' || state === 'nocomp' ? 0.22 : state === 'absent' ? 0.4 : 1 }}>
                   <EngineIcon engine={e} size={22} />
                   <Badge state={state} />
                   {aioKind && <AioBadge kind={aioKind} />}

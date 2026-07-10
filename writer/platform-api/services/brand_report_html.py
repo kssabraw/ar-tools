@@ -77,7 +77,8 @@ def score_label(score: float) -> str:
 # ── pure aggregation ─────────────────────────────────────────────────────────
 def aggregate_range(rows: list[dict], keyword_labels: dict[str, str]) -> dict:
     """Roll completed mention rows in a date range into the report figures.
-    Pure. Every scan cell counts (no per-cell dedup — LABS semantics)."""
+    Pure. Every scan cell counts (no per-cell dedup — LABS semantics), except
+    cells where a Google AI feature didn't fire (feature_present is False)."""
     engines = {e: {"scans": 0, "mentions": 0} for e in ENGINE_ORDER}
     keywords: dict[str, dict] = {}
     competitors: dict[str, dict] = {}
@@ -86,6 +87,10 @@ def aggregate_range(rows: list[dict], keyword_labels: dict[str, str]) -> dict:
 
     for r in rows:
         if r.get("status") != "completed":
+            continue
+        # Exclude cells where the Google AI feature didn't fire — a feature that
+        # never appeared isn't a visibility miss (mirrors compute_trends).
+        if r.get("feature_present") is False:
             continue
         eng = r.get("engine")
         hit = bool(r.get("mention_found"))
@@ -302,7 +307,7 @@ def _fetch_mention_rows(supabase, client_id: str, start: date, end: date) -> tup
     while True:
         batch = (
             supabase.table("brand_mention_history")
-            .select("keyword_id, engine, status, mention_found, confidence_score, competitor_results, created_at")
+            .select("keyword_id, engine, status, mention_found, confidence_score, competitor_results, feature_present, created_at")
             .eq("client_id", client_id)
             .eq("is_competitor_scan", False)
             .eq("status", "completed")

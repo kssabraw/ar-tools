@@ -237,7 +237,7 @@ def get_active_scan(client_id: str) -> dict:
 _HISTORY_COLS = (
     "id, keyword_id, scan_batch_id, engine, status, mention_found, mention_type, "
     "sentiment, confidence_score, citations, competitor_results, reasoning, snippet, "
-    "invisibility_diagnosis, response_analysis, failure_reason, created_at"
+    "invisibility_diagnosis, response_analysis, failure_reason, feature_present, created_at"
 )
 
 
@@ -282,6 +282,10 @@ def compute_trends(rows: list[dict]) -> list[dict]:
     batches: dict[str, dict] = {}
     for r in rows:
         if r.get("status") != "completed":
+            continue
+        # An AI feature that didn't fire (AIO/AI-Mode absent) is not a miss —
+        # exclude it from the visibility + health score entirely.
+        if r.get("feature_present") is False:
             continue
         batch = r.get("scan_batch_id") or "_"
         b = batches.setdefault(batch, {

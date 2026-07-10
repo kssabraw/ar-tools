@@ -61,7 +61,9 @@ function ResultCard({ m, index, keyword, onOpen }: {
   const meta = engineMeta(m.engine)
   const found = m.mention_found === true
   const failed = m.status === 'failed'
-  const accent = failed ? '#cbd5e1' : found ? '#15803d' : '#b91c1c'
+  // The Google AI feature didn't fire for this query — not a hit, not a miss.
+  const absent = !failed && m.feature_present === false
+  const accent = failed ? '#cbd5e1' : absent ? '#cbd5e1' : found ? '#15803d' : '#b91c1c'
   const ra = m.response_analysis ?? undefined
   const rank = ra?.position?.rank
   const total = ra?.position?.total_businesses
@@ -95,7 +97,9 @@ function ResultCard({ m, index, keyword, onOpen }: {
             )}
           </div>
         </div>
-        {!failed && <FoundPill found={found} />}
+        {!failed && (absent
+          ? <span title="Google didn't generate an AI Overview for this search — excluded from the visibility score" style={absentPill}>No AI Overview</span>
+          : <FoundPill found={found} />)}
       </div>
 
       {/* AR graft: position / prominence */}
@@ -124,8 +128,15 @@ function ResultCard({ m, index, keyword, onOpen }: {
         <div style={{ fontSize: 12, color: '#b91c1c' }}>Scan failed: {m.failure_reason ?? 'unknown error'}</div>
       )}
 
+      {/* feature didn't fire */}
+      {absent && (
+        <div style={{ fontSize: 12, color: '#64748b' }}>
+          Google didn't show an AI Overview for this search, so it isn't counted in the visibility score.
+        </div>
+      )}
+
       {/* metrics */}
-      {!failed && (
+      {!failed && !absent && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 12 }}>
           <div>
             <div style={metricLabel}>Sentiment</div>
@@ -166,7 +177,7 @@ function ResultCard({ m, index, keyword, onOpen }: {
       {/* footer */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderTop: '1px solid #f1f5f9', paddingTop: 8, marginTop: 'auto' }}>
         <span style={{ fontSize: 11, color: '#94a3b8' }}>{relativeTime(m.created_at)}</span>
-        {m.status === 'completed' && (
+        {m.status === 'completed' && !absent && (
           !found ? (
             <button style={hasDiagnosis ? outlineBtn : diagnoseBtn} onClick={() => onOpen(m, keyword)}>
               <Stethoscope size={12} /> {hasDiagnosis ? 'View diagnosis' : 'Diagnose'}
@@ -183,6 +194,11 @@ function ResultCard({ m, index, keyword, onOpen }: {
 }
 
 const metricLabel: React.CSSProperties = { fontSize: 10.5, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 4 }
+const absentPill: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', whiteSpace: 'nowrap', background: '#f1f5f9',
+  color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 999, padding: '2px 9px',
+  fontSize: 11, fontWeight: 600,
+}
 const outlineBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 5, background: '#fff', color: '#475569',
   border: '1px solid #e2e8f0', borderRadius: 7, padding: '5px 10px', fontSize: 11.5, fontWeight: 600, cursor: 'pointer',

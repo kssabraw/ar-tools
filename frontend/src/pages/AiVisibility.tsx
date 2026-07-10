@@ -234,7 +234,7 @@ function Overview(props: {
         h.created_at ? new Date(h.created_at).toLocaleString() : '',
         keywordById.get(h.keyword_id ?? '') ?? '',
         CSV_ENGINE_LABELS[h.engine] ?? engineMeta(h.engine).label,
-        h.mention_found == null ? '' : h.mention_found ? 'Yes' : 'No',
+        h.feature_present === false ? 'N/A (no AI Overview)' : h.mention_found == null ? '' : h.mention_found ? 'Yes' : 'No',
         h.mention_type ?? '',
         h.sentiment == null ? '' : h.sentiment.toFixed(2),
         h.confidence_score == null ? '' : `${Math.round(h.confidence_score * 100)}%`,
@@ -373,7 +373,7 @@ function Overview(props: {
           />
           <p style={{ fontSize: 12, color: '#94a3b8', marginTop: 10 }}>
             {viewing === 'brand'
-              ? <>Tip: click any cell for the full breakdown — position, sources the AI trusted, competitor reasons, and (for not-found cells) why the brand is invisible. On Google columns, <span style={{ color: '#7c3aed' }}>🔗</span> = linked inline in the answer, <span style={{ color: '#94a3b8' }}>◦</span> = cited in the sources strip only.</>
+              ? <>Tip: click any cell for the full breakdown — position, sources the AI trusted, competitor reasons, and (for not-found cells) why the brand is invisible. On Google columns, <span style={{ color: '#7c3aed' }}>🔗</span> = linked inline in the answer, <span style={{ color: '#94a3b8' }}>◦</span> = cited in the sources strip only. A <span style={{ color: '#94a3b8' }}>⊘</span> badge means Google showed no AI Overview for that search — it isn't counted in the visibility score.</>
               : <>Showing where <strong>{viewing}</strong> appears. A dimmed engine means that keyword×engine wasn't scanned with competitors included.</>}
           </p>
 

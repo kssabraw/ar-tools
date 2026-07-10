@@ -34,6 +34,31 @@ def test_compute_trends_rolls_up_per_engine_and_overall():
     assert b["created_at"] == "2026-06-01T10:00:00Z"
 
 
+def test_compute_trends_excludes_cells_where_ai_feature_did_not_fire():
+    # An AIO cell where Google showed no AI Overview (feature_present False) is
+    # neither a hit nor a miss — it must not drag down visibility or health.
+    rows = [
+        _row("b1", "chatgpt", True, "2026-06-01T10:00:00Z"),
+        _row("b1", "google_ai_overview", False, "2026-06-01T10:00:05Z"),
+    ]
+    rows[1]["feature_present"] = False
+    b = bsvc.compute_trends(rows)[0]
+    # Only the chatgpt cell counts → 1/1 = 100%, and the AIO engine is absent.
+    assert b["total"] == 1 and b["found"] == 1
+    assert b["visibility_pct"] == 100.0
+    assert "google_ai_overview" not in b["engines"]
+
+
+def test_compute_trends_counts_cells_where_ai_feature_fired():
+    rows = [
+        _row("b1", "chatgpt", True, "2026-06-01T10:00:00Z"),
+        {**_row("b1", "google_ai_overview", False, "2026-06-01T10:00:05Z"), "feature_present": True},
+    ]
+    b = bsvc.compute_trends(rows)[0]
+    assert b["total"] == 2 and b["found"] == 1
+    assert b["engines"]["google_ai_overview"]["visibility_pct"] == 0.0
+
+
 def test_compute_trends_health_score_and_competitors():
     rows = [
         {**_row("b1", "chatgpt", True, "2026-06-01T10:00:00Z"),

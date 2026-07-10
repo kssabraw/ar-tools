@@ -66,6 +66,18 @@ def test_aggregate_range_counts_and_pcts():
     assert comps["Acme"]["mentions"] == 1 and comps["FlowFix"]["mentions"] == 0
 
 
+def test_aggregate_range_excludes_cells_where_ai_feature_did_not_fire():
+    absent = _row("k1", "google_ai_overview", False)
+    absent["feature_present"] = False
+    rows = [_row("k1", "chatgpt", True), absent]
+    data = aggregate_range(rows, LABELS)
+    # Only the chatgpt cell counts toward totals + the keyword's pct.
+    assert data["totals"]["scans"] == 1 and data["totals"]["mentions"] == 1
+    assert data["totals"]["visibility_pct"] == 100.0
+    engines = {e["engine"] for e in data["engines"]}
+    assert "google_ai_overview" not in engines
+
+
 def test_render_html_structure():
     rows = [_row("k1", "chatgpt", True, comps=[{"name": "Acme", "found": True}])]
     data = aggregate_range(rows, LABELS)

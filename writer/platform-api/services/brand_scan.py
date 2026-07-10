@@ -160,8 +160,13 @@ def _extract_claude(content: list) -> tuple[str, list[str]]:
     return text, citations
 
 
-def _extract_dataforseo_ai(items: list, keyword: str, brand: str, label: str) -> tuple[str, list[str]]:
-    """Pull AI Overview / AI Mode text + references out of a DataForSEO SERP."""
+def _extract_dataforseo_ai(items: list, keyword: str, brand: str, label: str) -> tuple[str, list[str], bool]:
+    """Pull AI Overview / AI Mode text + references out of a DataForSEO SERP.
+
+    The third tuple element is `feature_present`: False when Google showed no
+    AI answer for the query (the feature didn't fire). A not-fired cell is a
+    valid "the feature wasn't there" result, not a brand miss — the rollups
+    exclude it from the visibility score."""
     text, citations = "", []
     for item in items or []:
         if item.get("type") in ("ai_overview", "ai_mode"):
@@ -186,8 +191,9 @@ def _extract_dataforseo_ai(items: list, keyword: str, brand: str, label: str) ->
             f'Google did not generate one for this search, which means "{brand}" '
             f"does not appear in {label} for this query.",
             [],
+            False,
         )
-    return text, citations
+    return text, citations, True
 
 
 def _dedup(seq: list[str]) -> list[str]:
@@ -341,9 +347,14 @@ async def _execute_dataforseo(keyword: str, brand: str, ai_mode: bool) -> tuple[
     if not tasks or not (tasks[0].get("result") or []):
         raise ProviderError(500, "No SERP results returned")
     items = (tasks[0]["result"][0] or {}).get("items") or []
-    text, citations = _extract_dataforseo_ai(items, keyword, brand, "AI Mode" if ai_mode else "AI Overview")
+    text, citations, feature_present = _extract_dataforseo_ai(
+        items, keyword, brand, "AI Mode" if ai_mode else "AI Overview")
     inline_domains, reference_domains = _extract_aio_domains(items)
-    meta = {"aio_inline_domains": inline_domains, "aio_reference_domains": reference_domains}
+    meta = {
+        "aio_inline_domains": inline_domains,
+        "aio_reference_domains": reference_domains,
+        "feature_present": feature_present,
+    }
     return text, citations, meta
 
 
@@ -775,6 +786,10 @@ async def scan_keyword_engine(
             _fallback_competitor_record(result["raw_response"], name) for name in capped
         ]
     result["retry_count"] = retry_count
+    # Whether the AI feature actually fired (AIO/AI-Mode engines only; every
+    # other engine is always "present"). A not-present cell is excluded from the
+    # visibility score by the rollups.
+    result["feature_present"] = bool(meta.get("feature_present", True))
 
     # Structured response analysis (best-effort, never fatal to the scan).
     result["response_analysis"] = None
@@ -978,8 +993,12 @@ async def run_brand_scan_job(job: dict) -> None:
                     # the explanation instantly (no on-click generation). Best-
                     # effort — a missing/failed diagnose leaves the column null
                     # and the on-demand /diagnose endpoint can still backfill it.
+                    # Skip auto-diagnosis when the AI feature never fired — the
+                    # brand isn't "invisible", there was simply no AI answer to
+                    # appear in, so an invisibility diagnosis would be misleading.
+                    feature_present = result.get("feature_present", True)
                     diagnosis = None
-                    if settings.brand_autodiagnose_enabled and not result["mention_found"]:
+                    if settings.brand_autodiagnose_enabled and not result["mention_found"] and feature_present:
                         diagnosis = await _autodiagnose(client_id, brand, keyword, result["raw_response"])
                     supabase.table("brand_mention_history").update({
                         "status": "completed",
@@ -995,6 +1014,7 @@ async def run_brand_scan_job(job: dict) -> None:
                         "retry_count": result["retry_count"],
                         "response_analysis": result.get("response_analysis"),
                         "invisibility_diagnosis": diagnosis,
+                        "feature_present": feature_present,
                         "updated_at": "now()",
                     }).eq("id", row_id).execute()
                     counts["completed"] += 1

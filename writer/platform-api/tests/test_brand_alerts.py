@@ -29,6 +29,17 @@ def test_index_batch_summarizes_completed_brand_rows():
     assert idx["misinfo"][0]["field"] == "phone"
 
 
+def test_index_batch_excludes_cells_where_ai_feature_did_not_fire():
+    absent = _row("k1", "google_ai_overview", False)
+    absent["feature_present"] = False
+    rows = [_row("k1", "chatgpt", True), absent]
+    idx = ba.index_batch(rows)
+    # The AIO cell that didn't fire is excluded — no false "engine dark"/drop.
+    assert idx["cells"] == {("k1", "chatgpt"): True}
+    assert idx["overall"] == (1, 1)
+    assert "google_ai_overview" not in idx["engines"]
+
+
 def test_detect_changes_only_compares_shared_cells():
     prev = ba.index_batch([_row("k1", "chatgpt", True), _row("k2", "claude", True)])
     # k2/claude missing this scan (different scope); k1/chatgpt flipped to not-found.

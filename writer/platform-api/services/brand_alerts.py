@@ -59,6 +59,10 @@ def index_batch(
     for r in rows:
         if r.get("status") != "completed" or r.get("is_competitor_scan"):
             continue
+        # A cell where the Google AI feature didn't fire isn't a measured miss —
+        # exclude it so it can't trigger a false "engine went dark" / drop alert.
+        if r.get("feature_present") is False:
+            continue
         engine = r.get("engine")
         kid = r.get("keyword_id")
         if not engine:
