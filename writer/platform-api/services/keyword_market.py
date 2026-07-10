@@ -310,6 +310,26 @@ async def refresh_client_market(client_id: str, today: Optional[date] = None) ->
     return result
 
 
+async def refresh_brand_market(client_id: str, *, force: bool = False) -> dict:
+    """The same refresh for the AI Visibility module's active brand keywords —
+    scope='brand' of the keyword_market job. Feeds the headless lead-valuation
+    engine (services/lead_valuation.py); the UI surfaces were removed 2026-07-10
+    but the engine + this fill are kept for a future tool."""
+    supabase = get_supabase()
+    location_code = _client_location_code(supabase, client_id)
+    if location_code is None:
+        return {"status": "failed", "error": "client_not_found", "fetched": 0}
+
+    keywords = (
+        supabase.table("brand_tracked_keywords").select("keyword")
+        .eq("client_id", client_id).eq("is_active", True).execute()
+    ).data or []
+    kw_list = [k["keyword"] for k in keywords]
+    if not kw_list:
+        return {"status": "ok", "fetched": 0}
+    return await refresh_keywords(supabase, kw_list, location_code, force=force)
+
+
 def market_job_pending(supabase, client_id: str, scope: str) -> bool:
     """Is a keyword_market job for this client+scope already pending/running?"""
     rows = (
@@ -327,7 +347,7 @@ def market_job_pending(supabase, client_id: str, scope: str) -> bool:
 
 def enqueue_keyword_market(client_id: str, *, scope: str = "rank", force: bool = False) -> None:
     """Enqueue a market refresh (idempotent per client+scope). scope='rank'
-    covers the rank tracker's tracked_keywords."""
+    covers tracked_keywords; scope='brand' covers brand_tracked_keywords."""
     supabase = get_supabase()
     if market_job_pending(supabase, client_id, scope):
         return
@@ -350,7 +370,10 @@ async def run_keyword_market_job(job: dict) -> None:
             {"status": "failed", "error": "missing client_id", "completed_at": "now()"}
         ).eq("id", job_id).execute()
         return
-    result = await refresh_client_market(client_id)
+    if (payload.get("scope") or "rank") == "brand":
+        result = await refresh_brand_market(client_id, force=bool(payload.get("force")))
+    else:
+        result = await refresh_client_market(client_id)
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.get("status") == "ok" else "failed",
