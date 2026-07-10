@@ -144,3 +144,36 @@ def test_link_filter_map_covers_tabs():
         assert key in backlink_explorer._LINK_FILTERS
     assert backlink_explorer._LINK_FILTERS["broken"] == [["is_broken", "=", True]]
     assert backlink_explorer._LINK_FILTERS["all"] is None
+
+
+# ---------------------------------------------------------------------------
+# diff_domains (new/lost referring-domain diffing)
+# ---------------------------------------------------------------------------
+def test_diff_domains_new_and_lost():
+    out = backlink_explorer.diff_domains({"a.com", "b.com"}, ["b.com", "c.com", "d.com"])
+    assert out == {"new": ["c.com", "d.com"], "lost": ["a.com"]}
+
+
+def test_diff_domains_no_change():
+    out = backlink_explorer.diff_domains({"a.com", "b.com"}, ["a.com", "b.com"])
+    assert out == {"new": [], "lost": []}
+
+
+def test_diff_domains_ignores_empty():
+    out = backlink_explorer.diff_domains({"a.com"}, ["a.com", None, ""])
+    assert out == {"new": [], "lost": []}
+
+
+# ---------------------------------------------------------------------------
+# should_alert (threshold gate — defaults 10 new / 10 lost)
+# ---------------------------------------------------------------------------
+def test_should_alert_below_threshold():
+    assert backlink_explorer.should_alert(3, 4) is False
+
+
+def test_should_alert_on_new():
+    assert backlink_explorer.should_alert(10, 0) is True
+
+
+def test_should_alert_on_lost():
+    assert backlink_explorer.should_alert(0, 12) is True

@@ -413,6 +413,18 @@ class Settings(BaseSettings):
     backlink_referring_domains_limit: int = 100
     backlink_anchors_limit: int = 100
     backlink_links_max_limit: int = 100
+    # A shared daily ceiling on paid DataForSEO backlink calls (a refresh is ~4
+    # endpoint calls, a link-list page is 1). 0 disables the guard. Ad-hoc
+    # lookups and scheduled re-snapshots draw from the same day's budget.
+    backlink_daily_call_budget: int = 1000
+    # Tracked-target re-snapshot cadence + how many referring domains must be
+    # gained/lost between snapshots before a tracked target alerts its client.
+    backlink_tracking_enabled: bool = True
+    backlink_tracking_interval_days: int = 7
+    backlink_alert_new_domains_min: int = 10
+    backlink_alert_lost_domains_min: int = 10
+    # Cap on synthetic is_lost rows written per snapshot (surfaced in the UI).
+    backlink_lost_rows_cap: int = 200
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner

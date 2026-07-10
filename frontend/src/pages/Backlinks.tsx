@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  ArrowLeft, ExternalLink, Link2, RefreshCw, Search, TrendingUp,
+  ArrowLeft, Bell, BellOff, ExternalLink, Link2, RefreshCw, Search, TrendingUp,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
@@ -39,6 +39,10 @@ interface BacklinkLink {
   first_seen: string | null; is_new: boolean; is_lost: boolean; is_broken: boolean
 }
 interface LinksResponse { total_count: number | null; links: BacklinkLink[]; limit: number; offset: number; filter: string }
+interface TrackedTarget {
+  id: string; target: string; label: string | null
+  latest: { referring_domains: number | null; domain_rating: number | null; new_domains: number | null; lost_domains: number | null; captured_at: string | null } | null
+}
 
 const LINK_FILTERS = ['all', 'dofollow', 'nofollow', 'new', 'lost', 'broken'] as const
 type LinkFilter = (typeof LINK_FILTERS)[number]
@@ -60,9 +64,27 @@ export function Backlinks() {
     enabled: Boolean(id),
   })
 
+  const queryClient = useQueryClient()
   const [query, setQuery] = useState('')
   const [submitted, setSubmitted] = useState<string | null>(null)
   const [tab, setTab] = useState<'overview' | 'links'>('overview')
+
+  // Tracked targets (client-scoped only) — scheduled re-snapshots + alerts.
+  const { data: trackedResp } = useQuery<{ tracked: TrackedTarget[] }>({
+    queryKey: ['backlinks-tracked', id],
+    queryFn: () => api.get<{ tracked: TrackedTarget[] }>(`/clients/${id}/backlinks/tracked`),
+    enabled: Boolean(id),
+  })
+  const tracked = trackedResp?.tracked ?? []
+  const invalidateTracked = () => queryClient.invalidateQueries({ queryKey: ['backlinks-tracked', id] })
+  const trackMut = useMutation({
+    mutationFn: (target: string) => api.post(`/clients/${id}/backlinks/tracked`, { target }),
+    onSuccess: invalidateTracked,
+  })
+  const untrackMut = useMutation({
+    mutationFn: (targetId: string) => api.delete(`/clients/${id}/backlinks/tracked/${targetId}`),
+    onSuccess: invalidateTracked,
+  })
 
   // Prefill + auto-analyze the client's own domain when opened from a workspace.
   useEffect(() => {
@@ -106,6 +128,34 @@ export function Backlinks() {
         anchors and history are cached for 24h; the full link list is fetched on demand.
       </p>
 
+      {/* Tracked domains (client mode) */}
+      {id && tracked.length > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 8 }}>
+            Tracked domains
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {tracked.map((t) => {
+              const nd = t.latest?.new_domains ?? 0
+              const ld = t.latest?.lost_domains ?? 0
+              return (
+                <button
+                  key={t.id}
+                  style={trackedChip}
+                  onClick={() => { setQuery(t.target); setSubmitted(t.target); setTab('overview'); lookup.mutate({ target: t.target, force: false }) }}
+                  title="Analyze this tracked domain"
+                >
+                  <span style={{ fontWeight: 600, color: '#334155' }}>{t.label || t.target}</span>
+                  {t.latest?.domain_rating != null && <span style={{ color: '#94a3b8' }}>DR {t.latest.domain_rating.toFixed(0)}</span>}
+                  {nd > 0 && <span style={{ color: '#047857' }}>+{nd}</span>}
+                  {ld > 0 && <span style={{ color: '#b91c1c' }}>−{ld}</span>}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Search bar */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
         <div style={{ position: 'relative', flex: 1 }}>
@@ -145,6 +195,22 @@ export function Backlinks() {
             <span style={{ fontSize: 12, color: '#94a3b8' }}>
               {data.cached ? 'cached' : 'fresh'} · {shortDate(data.captured_at)}
             </span>
+            {id && (() => {
+              const existing = tracked.find((t) => t.target === data.target)
+              return existing ? (
+                <button style={{ ...ghostBtn, marginLeft: 'auto', padding: '5px 10px' }}
+                  disabled={untrackMut.isPending} onClick={() => untrackMut.mutate(existing.id)}
+                  title="Stop scheduled re-checks + alerts">
+                  <BellOff size={13} /> Tracking
+                </button>
+              ) : (
+                <button style={{ ...primaryBtn, marginLeft: 'auto', padding: '5px 10px' }}
+                  disabled={trackMut.isPending} onClick={() => trackMut.mutate(data.target)}
+                  title="Re-check weekly and alert on gained/lost referring domains">
+                  <Bell size={13} /> Track
+                </button>
+              )
+            })()}
           </div>
 
           {/* Overview stat strip */}
@@ -410,3 +476,7 @@ const filterChip: React.CSSProperties = {
   padding: '5px 12px', borderRadius: 999, cursor: 'pointer', textTransform: 'capitalize',
 }
 const filterChipActive: React.CSSProperties = { color: '#4f46e5', background: '#eef2ff', border: '1px solid #c7d2fe' }
+const trackedChip: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, background: '#fff',
+  border: '1px solid #e2e8f0', borderRadius: 999, padding: '5px 12px', cursor: 'pointer',
+}
