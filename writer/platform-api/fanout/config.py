@@ -364,6 +364,10 @@ class Settings(BaseSettings):
     writer_section_model: str = "claude-sonnet-4-6"
     writer_short_model: str = "claude-haiku-4-5"
     writer_word_budget: int = 2500
+    # Keyword Research report — the exec-summary narrative (best-effort; falls
+    # back to a deterministic summary when the LLM is unavailable).
+    keyword_report_model: str = "claude-sonnet-4-6"
+    keyword_report_max_tokens: int = 600
     # §7 names 90s, but that target predates sequential Sonnet section writing: one
     # section ran ~30s live, so a 4-6 section article needs more headroom. The job is an
     # async polled background job (not request-bound), so a larger budget is safe.

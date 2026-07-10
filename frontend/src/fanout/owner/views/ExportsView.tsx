@@ -1,11 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createExport,
+  createKeywordReport,
   downloadExport,
+  downloadKeywordReport,
   getSummary,
   listExports,
+  listKeywordReports,
   type CsvExportFormat,
   type CsvExportListItem,
+  type KeywordReportListItem,
 } from "../../shared/api";
 import { useSession } from "../SessionWorkspace";
 
@@ -32,8 +36,25 @@ export function ExportsView() {
 
   const summary = useQuery({ queryKey: ["summary", sessionId], queryFn: () => getSummary(sessionId) });
   const exportsQ = useQuery({ queryKey: ["exports", sessionId], queryFn: () => listExports(sessionId) });
+  const reportsQ = useQuery({ queryKey: ["kw-reports", sessionId], queryFn: () => listKeywordReports(sessionId) });
 
   const architectureReady = Boolean(summary.data?.architecture);
+
+  const genReport = useMutation({
+    mutationFn: () => createKeywordReport(sessionId),
+    onSuccess: (res) => {
+      const url = res.download_url || res.drive_url;
+      if (url) openDownload(url);
+      qc.invalidateQueries({ queryKey: ["kw-reports", sessionId] });
+    },
+    onError: (e: Error) => alert(e.message),
+  });
+
+  const redownloadReport = useMutation({
+    mutationFn: (reportId: string) => downloadKeywordReport(reportId),
+    onSuccess: (res) => openDownload(res.download_url),
+    onError: (e: Error) => alert(e.message),
+  });
 
   const gen = useMutation({
     mutationFn: (format: CsvExportFormat) => createExport(sessionId, format),
@@ -57,6 +78,92 @@ export function ExportsView() {
 
   return (
     <div>
+      <div className="card">
+        <p style={{ margin: 0, fontWeight: 600 }}>Keyword research report (PDF)</p>
+        <p className="muted" style={{ marginTop: 4 }}>
+          A client-facing PDF — executive summary, topic silos, search demand, top opportunities,
+          the content plan, and a full keyword appendix. Saved to the client’s Google Drive folder
+          (when the session is linked to a client) and downloadable below.
+        </p>
+        <div className="export-actions">
+          <button
+            className="btn btn-primary"
+            style={{ width: "auto" }}
+            disabled={genReport.isPending}
+            onClick={() => genReport.mutate()}
+          >
+            {genReport.isPending ? (
+              <>
+                <span className="spinner-sm" />
+                Generating…
+              </>
+            ) : (
+              "Generate report"
+            )}
+          </button>
+        </div>
+        {genReport.data?.drive_url && !genReport.isPending && (
+          <p className="muted" style={{ marginTop: 8 }}>
+            Latest report saved to Drive:{" "}
+            <a href={genReport.data.drive_url} target="_blank" rel="noopener noreferrer">
+              open in Drive
+            </a>
+          </p>
+        )}
+      </div>
+
+      {reportsQ.data && reportsQ.data.length > 0 && (
+        <>
+          <h2 className="section-title" style={{ marginTop: 24 }}>
+            Past reports
+          </h2>
+          <div className="table-scroll">
+            <table className="kw-table">
+              <thead>
+                <tr>
+                  <th>Report</th>
+                  <th>Generated</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {reportsQ.data.map((r: KeywordReportListItem) => (
+                  <tr key={r.id}>
+                    <td>{r.title}</td>
+                    <td className="cell-muted">{new Date(r.generated_at).toLocaleString()}</td>
+                    <td className="num">
+                      {r.drive_url && (
+                        <a
+                          href={r.drive_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="link-btn"
+                          style={{ marginRight: 12 }}
+                        >
+                          Drive
+                        </a>
+                      )}
+                      {r.has_download && (
+                        <button
+                          className="link-btn"
+                          disabled={redownloadReport.isPending}
+                          onClick={() => redownloadReport.mutate(r.id)}
+                        >
+                          Download
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      <h2 className="section-title" style={{ marginTop: 24 }}>
+        Export data
+      </h2>
       <div className="card">
         <p style={{ margin: 0, fontWeight: 600 }}>Download CSV</p>
         <p className="muted" style={{ marginTop: 4 }}>
