@@ -26,6 +26,30 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
+async def retry_transient(fn, *, max_retries: int = 4, base_seconds: float = 2.0, log_tag: str = "llm"):
+    """Run `await fn()` retrying transient provider failures (429 rate limit,
+    5xx/529 overloaded, connection drops) with exponential backoff + jitter.
+    Non-transient errors re-raise immediately. Shared by every service whose
+    single Claude/OpenAI call previously died on the first 429."""
+    import asyncio
+    import secrets
+
+    attempt = 0
+    while True:
+        try:
+            return await fn()
+        except Exception as exc:  # noqa: BLE001 — classify, re-raise if terminal
+            if attempt >= max_retries or not is_transient_llm_error(exc):
+                raise
+            delay = base_seconds * (2 ** attempt) * (0.5 + secrets.randbelow(1000) / 1000.0)
+            logger.warning(
+                f"{log_tag}_transient_retry",
+                extra={"attempt": attempt + 1, "delay_s": round(delay, 1), "error": str(exc)[:200]},
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
+
+
 def is_transient_llm_error(exc: Exception) -> bool:
     """True for retryable provider failures on EITHER provider: rate limit (429),
     transient 5xx (overloaded), and connection drops. Lazy-imports each SDK so

@@ -30,9 +30,11 @@ fatal to the batch (the same resilience as refresh_client_ranks).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import re
+import secrets
 from datetime import date, timedelta
 from typing import Optional
 from urllib.parse import urlparse
@@ -525,6 +527,44 @@ def parse_backlinks_summary(body: dict) -> dict:
 # ----------------------------------------------------------------------------
 # Fetch (I/O)
 # ----------------------------------------------------------------------------
+# A snapshot fires ~20-25 sequential DataForSEO calls per keyword (SERP + intent
+# + one backlinks summary per URL + one domain summary per domain), so a rate
+# limit mid-capture used to silently degrade the snapshot to `partial`. Retry
+# 429/5xx a few times with backoff before letting the per-item isolation kick in.
+_DFS_MAX_RETRIES = 3
+_DFS_RETRY_BASE_SECONDS = 2.0
+
+
+async def _post_dfs(path: str, payload: list[dict]) -> dict:
+    """One DataForSEO POST with 429/5xx retry + exponential backoff (jittered,
+    honoring Retry-After when the response carries one). Returns the JSON body."""
+    attempt = 0
+    while True:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(f"{_BASE_URL}{path}", headers=_auth_header(), json=payload)
+        if resp.status_code == 429 or resp.status_code >= 500:
+            if attempt >= _DFS_MAX_RETRIES:
+                resp.raise_for_status()
+            try:
+                retry_after = float(resp.headers.get("Retry-After") or 0)
+            except ValueError:
+                retry_after = 0.0
+            delay = max(
+                retry_after,
+                _DFS_RETRY_BASE_SECONDS * (2 ** attempt) * (0.5 + secrets.randbelow(1000) / 1000.0),
+            )
+            logger.warning(
+                "serp_snapshot_dfs_retry",
+                extra={"path": path, "status": resp.status_code,
+                       "attempt": attempt + 1, "delay_s": round(delay, 1)},
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
+            continue
+        resp.raise_for_status()
+        return resp.json()
+
+
 async def fetch_serp(keyword: str, location_code: int, language_code: str, depth: int) -> list[dict]:
     """Full SERP item list (AIO + organic + features) for `keyword`."""
     payload = [
@@ -536,10 +576,7 @@ async def fetch_serp(keyword: str, location_code: int, language_code: str, depth
             "calculate_rectangles": False,
         }
     ]
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(f"{_BASE_URL}{_SERP_PATH}", headers=_auth_header(), json=payload)
-        resp.raise_for_status()
-        body = resp.json()
+    body = await _post_dfs(_SERP_PATH, payload)
     tasks = body.get("tasks") or []
     if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
         msg = tasks[0].get("status_message") if tasks else "no tasks"
@@ -550,10 +587,7 @@ async def fetch_serp(keyword: str, location_code: int, language_code: str, depth
 async def fetch_intent(keyword: str, language_code: str) -> list[dict]:
     """Labs search-intent result items for `keyword`."""
     payload = [{"keywords": [keyword], "language_code": language_code}]
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(f"{_BASE_URL}{_INTENT_PATH}", headers=_auth_header(), json=payload)
-        resp.raise_for_status()
-        body = resp.json()
+    body = await _post_dfs(_INTENT_PATH, payload)
     tasks = body.get("tasks") or []
     if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
         msg = tasks[0].get("status_message") if tasks else "no tasks"
@@ -571,10 +605,7 @@ async def fetch_backlinks_summary(target_url: str) -> dict:
             "include_subdomains": False,
         }
     ]
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(f"{_BASE_URL}{_BACKLINKS_PATH}", headers=_auth_header(), json=payload)
-        resp.raise_for_status()
-        body = resp.json()
+    body = await _post_dfs(_BACKLINKS_PATH, payload)
     return parse_backlinks_summary(body)
 
 
@@ -594,10 +625,7 @@ async def fetch_domain_summary(domain: str) -> dict:
             "include_subdomains": True,
         }
     ]
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(f"{_BASE_URL}{_BACKLINKS_PATH}", headers=_auth_header(), json=payload)
-        resp.raise_for_status()
-        body = resp.json()
+    body = await _post_dfs(_BACKLINKS_PATH, payload)
     summary = parse_backlinks_summary(body)
     return {
         "domain_rating": summary["url_rating"],

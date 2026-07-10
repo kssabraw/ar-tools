@@ -125,6 +125,17 @@ DATAFORSEO_LOGIN     = os.environ.get("DATAFORSEO_LOGIN", "")
 DATAFORSEO_PASSWORD  = os.environ.get("DATAFORSEO_PASSWORD", "")
 SCRAPEOWL_API_KEY    = os.environ.get("SCRAPEOWL_API_KEY", "")
 ANTHROPIC_API_KEY    = os.environ.get("ANTHROPIC_API_KEY", "")
+# SDK-level retry budget for every Anthropic client in this service. The SDK
+# retries 429 rate-limit / 529 overloaded / 5xx / connection errors with
+# exponential backoff and honors Retry-After; the default (2) was too thin when
+# the shared account is saturated by the rest of the suite — a 429 on the main
+# generation call then failed the whole local_seo_generate job.
+ANTHROPIC_MAX_RETRIES = int(os.environ.get("ANTHROPIC_MAX_RETRIES", "5"))
+# ScrapeOwl 429 handling: retry in place with backoff (honoring Retry-After) at
+# the same price tier instead of letting a rate-limited scrape escalate to the
+# ~2× JS-render tier.
+SCRAPEOWL_MAX_RETRIES = int(os.environ.get("SCRAPEOWL_MAX_RETRIES", "3"))
+SCRAPEOWL_RETRY_BASE  = float(os.environ.get("SCRAPEOWL_RETRY_BASE", "1.0"))
 
 # Entity analysis: TextRazor (replaced Google Cloud NLP — cheaper + Wikipedia/
 # Wikidata linking). Single endpoint; key passed via the X-TextRazor-Key header.
@@ -916,10 +927,21 @@ def _apply_rdfa_markup(html: str, entities: list) -> str:
 
 # ── Step 2: ScrapeOwl — fetch raw HTML for each URL ──────────────────────────
 
-async def _scrape_one(url: str, client: httpx.AsyncClient, render_js: bool = False) -> Optional[str]:
+async def _scrape_one(
+    url: str,
+    client: httpx.AsyncClient,
+    render_js: bool = False,
+    rate_limited: Optional[set] = None,
+) -> Optional[str]:
     """
     Single ScrapeOwl request. render_js=True costs ~2× but handles JS-heavy sites.
     Returns None on failure.
+
+    A 429 rate limit is retried in place with backoff (honoring Retry-After) at
+    the SAME price tier — previously a rate-limited pass-1 scrape returned None
+    and got escalated to the pricier JS-render pass, so being throttled
+    *increased* spend. If the 429 persists after retries, the url is recorded in
+    `rate_limited` (when provided) so callers can skip escalation entirely.
     """
     try:
         payload: dict = {
@@ -932,12 +954,29 @@ async def _scrape_one(url: str, client: httpx.AsyncClient, render_js: bool = Fal
         if render_js:
             payload["render_js"] = True
             payload["wait_for_selector"] = "body"   # wait until body is present
-        response = await client.post(
-            SCRAPEOWL_ENDPOINT,
-            content=json.dumps(payload),
-            headers={"Content-Type": "application/json"},
-            timeout=45.0,
-        )
+        response = None
+        for attempt in range(SCRAPEOWL_MAX_RETRIES + 1):
+            response = await client.post(
+                SCRAPEOWL_ENDPOINT,
+                content=json.dumps(payload),
+                headers={"Content-Type": "application/json"},
+                timeout=45.0,
+            )
+            if response.status_code != 429:
+                break
+            if attempt < SCRAPEOWL_MAX_RETRIES:
+                try:
+                    retry_after = float(response.headers.get("Retry-After") or 0)
+                except ValueError:
+                    retry_after = 0.0
+                delay = max(retry_after, SCRAPEOWL_RETRY_BASE * (2 ** attempt))
+                logger.warning(f"ScrapeOwl 429 for {url}, retrying in {delay:.1f}s (attempt {attempt + 1})")
+                await asyncio.sleep(delay)
+        if response.status_code == 429:
+            logger.warning(f"ScrapeOwl rate-limited for {url} after {SCRAPEOWL_MAX_RETRIES} retries")
+            if rate_limited is not None:
+                rate_limited.add(url)
+            return None
         if response.status_code != 200:
             logger.warning(f"ScrapeOwl HTTP {response.status_code} for {url}: {response.text[:200]}")
             return None
@@ -962,30 +1001,34 @@ async def scrape_urls(urls: List[str]) -> tuple[List[str], dict]:
     cost_info breaks down pages scraped at each tier for billing.
     """
     sem = asyncio.Semaphore(10)
+    rate_limited: set = set()
 
     async def attempt(url: str, render_js: bool) -> Optional[str]:
         async with sem:
-            return await _scrape_one(url, client, render_js=render_js)
+            return await _scrape_one(url, client, render_js=render_js, rate_limited=rate_limited)
 
     async with httpx.AsyncClient() as client:
         # Pass 1: no JS
         pass1 = await asyncio.gather(*[attempt(url, False) for url in urls])
-        failed_urls = [url for url, html in zip(urls, pass1) if not html]
+        # A url that failed on a persistent 429 is throttled, not JS-broken —
+        # escalating it to the ~2× render tier would just pay more to be
+        # throttled again. Only content failures go to pass 2.
+        failed_urls = [
+            url for url, html in zip(urls, pass1) if not html and url not in rate_limited
+        ]
 
-        # Pass 2: retry failures with JS rendering
+        # Pass 2: retry content failures with JS rendering
         pass2: List[Optional[str]] = []
         if failed_urls:
             logger.info(f"Retrying {len(failed_urls)} failed URLs with JS rendering")
             pass2 = await asyncio.gather(*[attempt(url, True) for url in failed_urls])
 
-    # Merge: keep pass1 results, fill gaps with pass2
-    fail_iter = iter(pass2)
-    merged: List[Optional[str]] = []
-    for html in pass1:
-        if html:
-            merged.append(html)
-        else:
-            merged.append(next(fail_iter, None))
+    # Merge: keep pass1 results, fill gaps with pass2 (keyed by url so skipped
+    # rate-limited gaps don't shift the alignment).
+    pass2_by_url = dict(zip(failed_urls, pass2))
+    merged: List[Optional[str]] = [
+        html if html else pass2_by_url.get(url) for url, html in zip(urls, pass1)
+    ]
 
     pages = [html for html in merged if html]
     js_success = sum(1 for html in pass2 if html)
@@ -2007,7 +2050,7 @@ async def _classify_urls_with_ai(urls: List[str]) -> Dict[str, str]:
         import anthropic
         import json as json_lib
 
-        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
 
         url_list = "\n".join(urls)
         prompt = f"""Classify each URL from a business website. Return ONLY a JSON object mapping URL→type.
@@ -2156,7 +2199,7 @@ async def analyze_business_with_anthropic(
         import anthropic
         import json as json_lib
 
-        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
 
         has_pages = bool(pages)
 
@@ -2341,7 +2384,7 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
     has_content = bool(page_contents)
     content_text = "\n\n---\n\n".join(page_contents) if page_contents else ""
 
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
 
     # Tool definitions force structured JSON output — Anthropic validates against
     # the schema server-side, so we can't hit a JSON parse error from unescaped
@@ -4372,7 +4415,7 @@ async def find_page_for_keyword(request: Request, body: FindPageRequest):
             if ANTHROPIC_API_KEY and candidate_pool:
                 try:
                     import anthropic  # local import — matches every other LLM call site here
-                    _ac = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+                    _ac = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
                     url_list_text = "\n".join(f"{i+1}. {u}" for i, u in enumerate(candidate_pool))
 
                     # Build location context line
@@ -4484,7 +4527,7 @@ async def score_page(request: Request, body: ScorePageRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
 
     # geo_mode: "national" service-page scoring drops the geo engines + de-geos
     # gbp_maps/entity_establishment (location-agnostic). Default "local" is the
@@ -4999,7 +5042,7 @@ async def augment_page(request: Request, body: AugmentPageRequest):
     user_prompt = "\n".join(parts)
 
     import anthropic as _anthropic
-    aclient = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    aclient = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
 
     msg = None
     for attempt in range(2):
@@ -5213,7 +5256,7 @@ async def generate_page(request: Request, body: GeneratePageRequest):
     import anthropic as _anthropic
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
@@ -5615,7 +5658,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
     import anthropic as _anthropic
 
     async def _worker(q: asyncio.Queue):
-        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
         city = body.location.split(",")[0].strip()
         _worker_start = time.monotonic()
 
@@ -5904,7 +5947,7 @@ async def reoptimize_section(request: Request, body: ReoptimizeSectionRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
 
     engine_label = _SECTION_ENGINE_LABELS.get(body.engine, body.engine)
     city = body.location.split(",")[0].strip()
@@ -5992,7 +6035,7 @@ async def related_pages(request: Request, body: RelatedPagesRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    haiku_client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    haiku_client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
 
     total_input_tokens = 0
     total_output_tokens = 0
@@ -6117,7 +6160,7 @@ async def generate_social_posts(request: Request, body: SocialPostsRequest):
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
 
     city = body.location.split(",")[0].strip()
     page_text = body.page_content[:4000]  # cap context to keep cost low
@@ -6759,7 +6802,7 @@ async def generate_press_release(request: Request, body: PressReleaseGenerationR
         raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
 
     import anthropic as _anthropic
-    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
 
     city = body.location.split(",")[0].strip()
     page_url = (body.page_url or body.website or "").strip()

@@ -179,15 +179,37 @@ def _send_email_sync(subject: str, body: str) -> None:
         server.send_message(msg)
 
 
+# Slack rate-limits chat.postMessage at ~1 msg/sec/channel and answers 429 with
+# a Retry-After header. Sweep producers (rank drops, offpage alerts, …) can
+# enqueue a burst of dispatch jobs, and a dropped 429 silently lost the message
+# — honor Retry-After (bounded) and retry a couple of times instead.
+_SLACK_MAX_RETRIES = 2
+_SLACK_RETRY_AFTER_CAP_SECONDS = 30.0
+
+
 async def _send_slack(text: str) -> None:
+    import asyncio
+
+    body: dict = {}
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        resp = await client.post(
-            _SLACK_POST_URL,
-            headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
-            json={"channel": settings.slack_default_channel, "text": text, "mrkdwn": True},
-        )
-        resp.raise_for_status()
-        body = resp.json()
+        for attempt in range(_SLACK_MAX_RETRIES + 1):
+            resp = await client.post(
+                _SLACK_POST_URL,
+                headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
+                json={"channel": settings.slack_default_channel, "text": text, "mrkdwn": True},
+            )
+            if resp.status_code == 429 and attempt < _SLACK_MAX_RETRIES:
+                try:
+                    retry_after = float(resp.headers.get("Retry-After") or 1)
+                except ValueError:
+                    retry_after = 1.0
+                delay = min(max(retry_after, 1.0), _SLACK_RETRY_AFTER_CAP_SECONDS)
+                logger.warning("slack_rate_limited", extra={"retry_in_s": delay, "attempt": attempt + 1})
+                await asyncio.sleep(delay)
+                continue
+            resp.raise_for_status()
+            body = resp.json()
+            break
     if not body.get("ok"):
         raise RuntimeError(f"slack_error: {body.get('error')}")
 

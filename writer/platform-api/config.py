@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = ""
     pipeline_api_url: str = "http://ar-tools.railway.internal:8080"
     nlp_api_url: str = "http://nlp.railway.internal:8080"
+    # Global cap on concurrently-executing blog/service-page runs (each fires
+    # brief+SIE in parallel — heavy Claude fan-outs in pipeline-api). Excess
+    # runs wait in their queued status; see orchestrator._get_run_gate.
+    max_concurrent_runs: int = 3
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""

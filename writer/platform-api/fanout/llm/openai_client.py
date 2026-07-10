@@ -10,6 +10,7 @@ Every model call emits an `llm_call` structured log (PRD §16.3).
 
 import json
 import logging
+import random
 import re
 import time
 
@@ -30,6 +31,23 @@ logger = logging.getLogger(__name__)
 
 class LLMError(Exception):
     pass
+
+
+# Transport-retry parity with the Anthropic client (fanout/llm/anthropic_client
+# .py::_is_retryable): 429 rate limit, timeouts, connection drops, and 5xx are
+# transient — previously any OpenAI 429 raised LLMError immediately, aborting
+# silo grounding/proposal outright.
+_MAX_TRANSPORT_ATTEMPTS = 4
+
+
+def _is_retryable(exc: Exception) -> bool:
+    import openai
+
+    if isinstance(exc, (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError)):
+        return True
+    if isinstance(exc, openai.APIStatusError):
+        return exc.status_code == 429 or exc.status_code >= 500
+    return False
 
 
 def _extract_json(text: str):
@@ -76,10 +94,19 @@ class OpenAILLM:
         kwargs: dict = {"model": self._silo_model, "input": prompt}
         if browsing:
             kwargs["tools"] = [{"type": self._web_search_tool}]
-        try:
-            resp = self._client.responses.create(**kwargs)
-        except Exception as exc:  # noqa: BLE001 — surfaced as LLMError to caller
-            raise LLMError(f"OpenAI call failed ({purpose}): {exc}") from exc
+        resp = None
+        for attempt in range(_MAX_TRANSPORT_ATTEMPTS):
+            raise_if_cancelled()
+            try:
+                resp = self._client.responses.create(**kwargs)
+                break
+            except Exception as exc:  # noqa: BLE001 — surfaced as LLMError to caller
+                # Mirror the Anthropic client: exponential backoff + jitter on
+                # transient transport errors (1.5s/3s/6s, capped at 8s).
+                if _is_retryable(exc) and attempt < _MAX_TRANSPORT_ATTEMPTS - 1:
+                    time.sleep(min(8.0, 1.5 * (2 ** attempt)) + random.uniform(0, 0.5))
+                    continue
+                raise LLMError(f"OpenAI call failed ({purpose}): {exc}") from exc
         latency_ms = round((time.perf_counter() - started) * 1000, 2)
 
         usage = getattr(resp, "usage", None)
