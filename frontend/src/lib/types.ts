@@ -158,7 +158,7 @@ export interface IngestJobStatus {
 }
 
 export type KeywordStatus =
-  | 'climbing' | 'stable' | 'volatile' | 'dropping' | 'deindex_risk' | 'no_data'
+  | 'climbing' | 'stable' | 'volatile' | 'dropping' | 'deindex_risk' | 'unranked' | 'no_data'
 
 export interface KeywordSummary {
   id: string

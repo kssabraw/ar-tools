@@ -91,3 +91,16 @@ def test_load_tracked_ranks_empty_keyword_ids_short_circuits():
     assert rank_materialize.load_tracked_ranks(supabase, [], date(2026, 4, 1)) == {}
     # No query issued when there are no keywords.
     assert calls == {}
+
+
+def test_resolve_status_maps_no_data_to_unranked_after_a_fetch():
+    # Checked by the DataForSEO fallback but ranks nowhere → 'unranked'.
+    assert rank_materialize.resolve_status("no_data", True) == "unranked"
+    # Never fetched yet → stays 'no_data'.
+    assert rank_materialize.resolve_status("no_data", False) == "no_data"
+
+
+def test_resolve_status_leaves_ranked_statuses_untouched():
+    for s in ("climbing", "stable", "volatile", "dropping", "deindex_risk"):
+        assert rank_materialize.resolve_status(s, True) == s
+        assert rank_materialize.resolve_status(s, False) == s
