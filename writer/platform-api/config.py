@@ -454,6 +454,17 @@ class Settings(BaseSettings):
     # empty (no gate). Keep ≳ a single item's runtime so an interactive job waits
     # behind at most the currently-running bulk item.
     local_seo_bulk_job_spacing_seconds: int = 180
+    # Content Scheduler (suite bulk page creation + scheduling). Max keywords per
+    # batch; per-content-type $/page cost estimate (the deliberate fix for the
+    # Fanout scheduler's caveat of estimating every type at the blog constant);
+    # and the VA approval threshold — a team_member whose batch estimate exceeds
+    # it is blocked pending a senior operator (staff/admin never gated).
+    content_batch_max_items: int = 200
+    content_batch_cost_blog_usd: float = 0.75
+    content_batch_cost_service_usd: float = 0.60
+    content_batch_cost_location_usd: float = 0.60
+    content_batch_cost_local_seo_usd: float = 0.90
+    content_batch_approval_threshold_usd: float = 90.0
     # Target-city discovery: the silo planner serves the seed city plus the other
     # cities a business targets — from its GBP service area, a manual list on the
     # client, place-names on its own site, and cities within

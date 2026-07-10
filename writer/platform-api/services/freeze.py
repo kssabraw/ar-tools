@@ -45,6 +45,7 @@ FREEZE_GATED_JOB_TYPES = {
     "local_seo_reoptimize_url",
     "local_seo_reoptimize_page",
     "syndication_item",
+    "content_batch_item",
 }
 
 _REASON_TITLES = {
