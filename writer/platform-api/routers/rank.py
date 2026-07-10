@@ -366,6 +366,36 @@ async def get_overview(client_id: UUID, auth: dict = Depends(require_auth)) -> O
     )
 
 
+@router.get("/clients/{client_id}/rank/summary")
+async def get_rank_summary(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Plain-English whole-tracker summary for the Overview tab — deterministic
+    (no LLM / no paid call), built from the same per-keyword summaries the
+    Overview already computes."""
+    from services import rank_summary
+
+    supabase = get_supabase()
+    kws = (
+        supabase.table("tracked_keywords")
+        .select("*")
+        .eq("client_id", str(client_id))
+        .eq("active", True)
+        .order("keyword")
+        .execute()
+    ).data or []
+    summaries = _build_summaries(supabase, str(client_id), kws, date.today())
+    client_row = (
+        supabase.table("clients").select("name").eq("id", str(client_id)).limit(1).execute()
+    ).data
+    client_name = client_row[0]["name"] if client_row else None
+    return rank_summary.build_rank_summary(
+        [s.model_dump() for s in summaries],
+        client_name=client_name,
+        gsc_connected=_gsc_connected(supabase, str(client_id)),
+        striking_min=settings.striking_distance_min,
+        striking_max=settings.striking_distance_max,
+    )
+
+
 @router.get("/clients/{client_id}/rank/brand-search", response_model=BrandSearchResponse)
 async def get_brand_search(
     client_id: UUID, days: int = 90, auth: dict = Depends(require_auth)
