@@ -22,7 +22,6 @@ import { ScanDetailSheet } from '../components/aivisibility/ScanDetailSheet'
 import { VisibilityTrendsChart } from '../components/aivisibility/VisibilityTrendsChart'
 import { CompetitorTrendsChart } from '../components/aivisibility/CompetitorTrendsChart'
 import { CompetitorComparisonCard } from '../components/aivisibility/CompetitorComparisonCard'
-import { LeadValuationCard } from '../components/aivisibility/LeadValuationCard'
 import { ExportReportDialog } from '../components/aivisibility/ExportReportDialog'
 import '../components/aivisibility/animations.css'
 
@@ -341,7 +340,7 @@ function Overview(props: {
             </div>
           )}
 
-          {/* Competitive comparison + lead valuation */}
+          {/* Competitive comparison */}
           <CompetitorComparisonCard
             brandName={brandName}
             healthScore={healthScore}
@@ -350,7 +349,6 @@ function Overview(props: {
             competitorNames={competitors.map(c => c.competitor_name)}
             onManageCompetitors={onManageCompetitors}
           />
-          <LeadValuationCard clientId={clientId} activeKeywords={activeKeywords} latestByCell={latestByCell} />
 
           {/* Whose mentions the matrix shows: this brand, or a tracked competitor. */}
           {competitors.length > 0 && (

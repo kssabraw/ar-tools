@@ -10,10 +10,7 @@ download / print; the Doc report keeps publishing to Drive.
 
 Sections (LABS order): white-label header · brand H1 · business profile +
 tracked keywords · health-score gradient card · performance by engine ·
-keyword performance · competitor benchmarking · lead valuation · footer.
-Lead valuation reads the shared keyword_market cache only (never a live
-DataForSEO call — report generation stays fast; the Lead Valuation card is
-what populates the cache).
+keyword performance · competitor benchmarking · footer.
 """
 
 from __future__ import annotations
@@ -140,30 +137,6 @@ def aggregate_range(rows: list[dict], keyword_labels: dict[str, str]) -> dict:
     }
 
 
-def build_lead_valuation(keyword_stats: list[dict], market_by_kw: dict[str, dict]) -> dict | None:
-    """Per keyword: volume x CPC x visibility gap (share of scanned cells where
-    the brand wasn't found). None when no keyword has market data."""
-    rows = []
-    for k in keyword_stats:
-        m = market_by_kw.get(k["keyword"].lower()) or {}
-        vol, cpc = m.get("search_volume"), m.get("cpc")
-        if vol is None or cpc is None or not k["scans"]:
-            continue
-        gap = 1 - k["mentions"] / k["scans"]
-        rows.append({"keyword": k["keyword"], "volume": vol, "cpc": float(cpc), "gap": gap,
-                     "cost": float(vol) * float(cpc) * gap})
-    if not rows:
-        return None
-    total = sum(r["cost"] for r in rows)
-    return {
-        "total": round(total),
-        "avg_cpc": round(sum(r["cpc"] for r in rows) / len(rows), 2),
-        "monthly_searches": sum(r["volume"] for r in rows),
-        "gap_pct": round(100 * sum(r["gap"] for r in rows) / len(rows)),
-        "rows": sorted(rows, key=lambda r: -r["cost"]),
-    }
-
-
 # ── HTML rendering (pure) ────────────────────────────────────────────────────
 _TABLE = f'width:100%;border-collapse:collapse;margin-bottom:24px;font-size:13px'
 _TH = f'border:1px solid {_CELL_BORDER};padding:10px 12px;text-align:left'
@@ -180,7 +153,7 @@ def _pct_span(p: float) -> str:
 
 
 def render_html(*, client: dict, agency_name: str, date_range_label: str,
-                tracked_keywords: list[dict], data: dict, valuation: dict | None,
+                tracked_keywords: list[dict], data: dict,
                 generated_on: str) -> str:
     """The full standalone report document. Pure string building, all inline
     CSS (it must survive being saved/emailed/printed on its own)."""
@@ -294,22 +267,7 @@ def render_html(*, client: dict, agency_name: str, date_range_label: str,
 <thead><tr><th style="{_TH};background:{_TABLE_HEAD}">Competitor</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Visibility Share</th><th style="{_TH};background:{_TABLE_HEAD};text-align:center">Mentions</th></tr></thead>
 <tbody>{"".join(comp_rows)}</tbody></table>''')
 
-    # 8 — growth opportunity (upbeat framing per the client-report tone ruling:
-    # the same volume × CPC × gap math, presented as value to capture, not loss)
-    if valuation and valuation["total"] > 0:
-        parts.append(f'''<div style="background:{_BOX};border:1px solid {_H2_UNDERLINE};border-radius:8px;padding:20px;margin-bottom:24px">
-  <h2 style="color:{_BRAND};font-size:18px;margin:0 0 8px">Monthly Growth Opportunity</h2>
-  <div style="font-size:42px;font-weight:bold;color:{_BRAND}">${valuation["total"]:,}<span style="font-size:16px;font-weight:normal">/mo</span></div>
-  <div style="font-size:12px;color:{_MUTED};margin-bottom:14px">The estimated monthly value of the AI answers these keywords can still win — measured by what the equivalent paid clicks would cost.</div>
-  <div style="display:flex;justify-content:space-around;text-align:center">
-    <div><div style="font-size:11px;color:{_MUTED}">Avg. CPC</div><div style="font-size:20px;font-weight:600">${valuation["avg_cpc"]:.2f}</div></div>
-    <div><div style="font-size:11px;color:{_MUTED}">Monthly Searches</div><div style="font-size:20px;font-weight:600">{valuation["monthly_searches"]:,}</div></div>
-    <div><div style="font-size:11px;color:{_MUTED}">Room to Grow</div><div style="font-size:20px;font-weight:600;color:{_BRAND}">{valuation["gap_pct"]}%</div></div>
-  </div>
-  <div style="font-size:11px;color:{_FAINT};margin-top:14px">Estimated from search volume × CPC × current AI visibility per keyword — a prioritisation guide, not a revenue guarantee.</div>
-</div>''')
-
-    # 9 — footer
+    # 8 — footer
     parts.append(f'''<div style="border-top:1px solid #e5e7eb;margin-top:34px;padding-top:14px;text-align:center;color:{_FAINT};font-size:12px">
   <div>Report generated on {_esc(generated_on)}</div>
   <div>AI Visibility Report — Answer Engine Optimization Diagnostics</div>
@@ -364,10 +322,7 @@ def _fetch_mention_rows(supabase, client_id: str, start: date, end: date) -> tup
 
 async def generate_html_report(client_id: str, start_date: str | None, end_date: str | None) -> dict:
     """Assemble the report for a date range (defaults: last 30 days). DB reads
-    + the keyword_market cache only — no LLM, no paid calls; synchronous-fast."""
-    from services.dataforseo_rank import location_code_for
-    from services.keyword_market import fetch_cached_market
-
+    only — no LLM, no paid calls; synchronous-fast."""
     supabase = get_supabase()
     client_res = _safe(lambda: (
         supabase.table("clients")
@@ -398,16 +353,6 @@ async def generate_html_report(client_id: str, start_date: str | None, end_date:
     data = aggregate_range(rows, keyword_labels)
     data["truncated"] = truncated
 
-    # Lead valuation from the shared market cache (best-effort, never live).
-    valuation = None
-    try:
-        kw_list = [k["keyword"] for k in keywords if k.get("is_active")]
-        if kw_list and data["keywords"]:
-            market = fetch_cached_market(supabase, kw_list, location_code_for(client))
-            valuation = build_lead_valuation(data["keywords"], market)
-    except Exception as exc:  # pragma: no cover - cache read is best-effort
-        logger.warning("brand_report_html_market_failed", extra={"client_id": client_id, "error": str(exc)})
-
     range_label = f"{start.strftime('%b %d, %Y')} – {end.strftime('%b %d, %Y')}"
 
     html = render_html(
@@ -416,7 +361,6 @@ async def generate_html_report(client_id: str, start_date: str | None, end_date:
         date_range_label=range_label,
         tracked_keywords=keywords,
         data=data,
-        valuation=valuation,
         generated_on=datetime.now(timezone.utc).strftime("%b %d, %Y"),
     )
     return {"html": html}
