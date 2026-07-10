@@ -17,8 +17,10 @@ latest stored SERP snapshot — no fresh capture.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import secrets
 from typing import Optional
 
 from config import settings
@@ -168,31 +170,59 @@ _EMIT_TOOL = {
 }
 
 
-async def _call_llm(snap: dict) -> dict:
-    """Run Claude with forced tool-use; returns {summary, headline, top_blockers}."""
-    import anthropic  # lazy: keep the pure assembler import-free
+def _report_model() -> str:
+    return (settings.rank_analysis_openai_model
+            if settings.rank_analysis_provider == "openai" else settings.rank_analysis_model)
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    response = await client.messages.create(
-        model=settings.rank_analysis_model,
-        max_tokens=settings.rank_analysis_max_tokens,
+
+def _is_transient(exc: Exception) -> bool:
+    from services import report_llm
+
+    if isinstance(exc, RuntimeError) and "rank_analysis_empty_summary" in str(exc):
+        return True
+    return report_llm.is_transient_llm_error(exc)
+
+
+async def _call_llm_once(snap: dict) -> dict:
+    """One forced tool-use call on the configured provider; raises on
+    empty/truncated output."""
+    from services import report_llm
+
+    out = await report_llm.run_forced_tool(
+        provider=settings.rank_analysis_provider,
+        model=_report_model(),
         system=SYSTEM_PROMPT,
-        tools=[_EMIT_TOOL],
-        tool_choice={"type": "tool", "name": "emit_report"},
-        messages=[{"role": "user", "content": build_user_prompt(snap)}],
+        user=build_user_prompt(snap),
+        tool_name="emit_report",
+        tool_description=_EMIT_TOOL["description"],
+        input_schema=_EMIT_TOOL["input_schema"],
+        max_tokens=settings.rank_analysis_max_tokens,
     )
-    out = None
-    for block in response.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == "emit_report":
-            out = block.input or {}
-            break
-    if out is None:
-        raise RuntimeError(f"rank_analysis_llm_no_tool_use (stop={response.stop_reason})")
-    # A truncated tool-use response yields an empty/partial input — fail loudly so
-    # it's retryable rather than silently storing an empty "complete" report.
     if not (out.get("summary") or "").strip():
-        raise RuntimeError(f"rank_analysis_empty_summary (stop={response.stop_reason})")
+        raise RuntimeError("rank_analysis_empty_summary")
     return out
+
+
+async def _call_llm(snap: dict) -> dict:
+    """Run the configured provider with forced tool-use; returns {summary,
+    headline, top_blockers}. Retries transient failures (429 / 5xx / connection
+    drops / truncation) with exponential backoff + jitter."""
+    max_retries = settings.rank_analysis_max_retries
+    base = settings.rank_analysis_retry_base_seconds
+    attempt = 0
+    while True:
+        try:
+            return await _call_llm_once(snap)
+        except Exception as exc:  # noqa: BLE001 — classify then re-raise if terminal
+            if attempt >= max_retries or not _is_transient(exc):
+                raise
+            delay = base * (2 ** attempt) * (0.5 + secrets.randbelow(1000) / 1000.0)
+            logger.warning(
+                "rank_analysis_llm_retry",
+                extra={"attempt": attempt + 1, "delay_s": round(delay, 1), "error": str(exc)[:200]},
+            )
+            await asyncio.sleep(delay)
+            attempt += 1
 
 
 # ----------------------------------------------------------------------------
