@@ -10,8 +10,10 @@ See docs/modules/organic-rank-tracker-prd-v1_0.md §4, §6.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import secrets
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -26,6 +28,22 @@ logger = logging.getLogger(__name__)
 _BASE_URL = "https://api.dataforseo.com"
 _VOLUME_PATH = "/v3/keywords_data/google_ads/search_volume/live"
 _TIMEOUT = 60.0
+
+# DataForSEO Google Ads search_volume validation caps. A single keyword over
+# either cap fails the ENTIRE batch request ("Invalid Field: 'keywords'"), so
+# ineligible keywords are filtered out before the call (they simply get no
+# market data) instead of poisoning every other keyword in the refresh.
+_MAX_KEYWORD_CHARS = 80
+_MAX_KEYWORD_WORDS = 10
+# The endpoint accepts at most 1000 keywords per request; larger sets are
+# chunked into multiple requests (billed per request, not per keyword).
+_MAX_KEYWORDS_PER_REQUEST = 1000
+
+# Rate-limit retry (mirrors serp_snapshot._post_dfs). DataForSEO throttling can
+# arrive as an HTTP 429 OR as an HTTP 200 whose task body says "Too many
+# requests" — both are retried with backoff before failing the refresh job.
+_DFS_MAX_RETRIES = 3
+_DFS_RETRY_BASE_SECONDS = 2.0
 
 # Organic click-through rate by position — a standard decay curve used to turn
 # (volume, position, cpc) into an estimated monthly traffic value. Approximate;
@@ -70,6 +88,39 @@ def estimate_monthly_value(
     return round(value, 2)
 
 
+def market_eligible(keyword: str) -> bool:
+    """Whether DataForSEO's Google Ads endpoint will accept this keyword
+    (length + word-count caps). Ineligible keywords (long conversational
+    queries, full questions) are skipped rather than sent."""
+    kw = (keyword or "").strip()
+    if not kw or len(kw) > _MAX_KEYWORD_CHARS:
+        return False
+    return len(kw.split()) <= _MAX_KEYWORD_WORDS
+
+
+def partition_market_keywords(keywords: list[str]) -> tuple[list[str], list[str]]:
+    """Split into (eligible, skipped) for a market fetch. Pure."""
+    eligible: list[str] = []
+    skipped: list[str] = []
+    for kw in keywords:
+        (eligible if market_eligible(kw) else skipped).append(kw)
+    return eligible, skipped
+
+
+def chunk_keywords(keywords: list[str], size: int = _MAX_KEYWORDS_PER_REQUEST) -> list[list[str]]:
+    """Chunk a keyword list to the endpoint's per-request cap. Pure."""
+    return [keywords[i : i + size] for i in range(0, len(keywords), size)]
+
+
+def is_rate_limited_body(body: dict) -> bool:
+    """Whether a DataForSEO response body signals throttling despite HTTP 200
+    (the observed live failure: task status_message 'Too many requests.'). Pure."""
+    tasks = body.get("tasks") or []
+    task = tasks[0] if tasks else {}
+    msg = str(task.get("status_message") or body.get("status_message") or "").lower()
+    return "too many requests" in msg
+
+
 def parse_market_items(items: list[dict]) -> dict[str, dict]:
     """Map DataForSEO search-volume items to {keyword: {volume, cpc, competition}}."""
     out: dict[str, dict] = {}
@@ -92,24 +143,71 @@ def parse_market_items(items: list[dict]) -> dict[str, dict]:
 # Fetch
 # ----------------------------------------------------------------------------
 async def fetch_market(keywords: list[str], location_code: int) -> dict[str, dict]:
-    """Batch fetch market data for keywords (one DataForSEO call)."""
-    if not keywords:
+    """Batch fetch market data for keywords. Filters out keywords DataForSEO
+    would reject (one bad keyword fails the whole request) and chunks the rest
+    to the 1000-keyword per-request cap (one POST per chunk)."""
+    eligible, skipped = partition_market_keywords(keywords)
+    if skipped:
+        logger.info(
+            "keyword_market_skipped_ineligible",
+            extra={"skipped": len(skipped), "sample": skipped[:3]},
+        )
+    if not eligible:
         return {}
-    payload = [
-        {
-            "keywords": keywords,
-            "location_code": location_code,
-            "language_code": settings.dataforseo_default_language_code,
-        }
-    ]
+
+    out: dict[str, dict] = {}
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        for chunk in chunk_keywords(eligible):
+            payload = [
+                {
+                    "keywords": chunk,
+                    "location_code": location_code,
+                    "language_code": settings.dataforseo_default_language_code,
+                }
+            ]
+            body = await _post_volume(client, payload)
+            tasks = body.get("tasks") or []
+            if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
+                raise RuntimeError(
+                    f"dataforseo_market_error: {tasks[0].get('status_message') if tasks else 'no tasks'}"
+                )
+            out.update(parse_market_items(tasks[0].get("result") or []))
+    return out
+
+
+async def _post_volume(client: httpx.AsyncClient, payload: list[dict]) -> dict:
+    """One search_volume POST with rate-limit retry + exponential backoff
+    (jittered, honoring Retry-After). Retries HTTP 429/5xx AND HTTP-200 bodies
+    whose task says "Too many requests". After the budget exhausts, the last
+    response is returned/raised as before so the caller's validation applies."""
+    attempt = 0
+    while True:
         resp = await client.post(f"{_BASE_URL}{_VOLUME_PATH}", headers=_auth_header(), json=payload)
-        resp.raise_for_status()
-        body = resp.json()
-    tasks = body.get("tasks") or []
-    if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
-        raise RuntimeError(f"dataforseo_market_error: {tasks[0].get('status_message') if tasks else 'no tasks'}")
-    return parse_market_items(tasks[0].get("result") or [])
+        throttled_http = resp.status_code == 429 or resp.status_code >= 500
+        body: Optional[dict] = None
+        if not throttled_http:
+            resp.raise_for_status()
+            body = resp.json()
+            if not is_rate_limited_body(body):
+                return body
+        if attempt >= _DFS_MAX_RETRIES:
+            if body is not None:
+                return body  # body-level throttle after retries → caller raises
+            resp.raise_for_status()
+        try:
+            retry_after = float(resp.headers.get("Retry-After") or 0)
+        except ValueError:
+            retry_after = 0.0
+        delay = max(
+            retry_after,
+            _DFS_RETRY_BASE_SECONDS * (2 ** attempt) * (0.5 + secrets.randbelow(1000) / 1000.0),
+        )
+        logger.warning(
+            "keyword_market_dfs_retry",
+            extra={"status": resp.status_code, "attempt": attempt + 1, "delay_s": round(delay, 1)},
+        )
+        await asyncio.sleep(delay)
+        attempt += 1
 
 
 # ----------------------------------------------------------------------------
@@ -212,24 +310,6 @@ async def refresh_client_market(client_id: str, today: Optional[date] = None) ->
     return result
 
 
-async def refresh_brand_market(client_id: str, *, force: bool = False) -> dict:
-    """The same refresh for the AI Visibility module's active brand keywords
-    (Lead Valuation card) — scope='brand' of the keyword_market job."""
-    supabase = get_supabase()
-    location_code = _client_location_code(supabase, client_id)
-    if location_code is None:
-        return {"status": "failed", "error": "client_not_found", "fetched": 0}
-
-    keywords = (
-        supabase.table("brand_tracked_keywords").select("keyword")
-        .eq("client_id", client_id).eq("is_active", True).execute()
-    ).data or []
-    kw_list = [k["keyword"] for k in keywords]
-    if not kw_list:
-        return {"status": "ok", "fetched": 0}
-    return await refresh_keywords(supabase, kw_list, location_code, force=force)
-
-
 def market_job_pending(supabase, client_id: str, scope: str) -> bool:
     """Is a keyword_market job for this client+scope already pending/running?"""
     rows = (
@@ -247,7 +327,7 @@ def market_job_pending(supabase, client_id: str, scope: str) -> bool:
 
 def enqueue_keyword_market(client_id: str, *, scope: str = "rank", force: bool = False) -> None:
     """Enqueue a market refresh (idempotent per client+scope). scope='rank'
-    covers tracked_keywords; scope='brand' covers brand_tracked_keywords."""
+    covers the rank tracker's tracked_keywords."""
     supabase = get_supabase()
     if market_job_pending(supabase, client_id, scope):
         return
@@ -270,10 +350,7 @@ async def run_keyword_market_job(job: dict) -> None:
             {"status": "failed", "error": "missing client_id", "completed_at": "now()"}
         ).eq("id", job_id).execute()
         return
-    if (payload.get("scope") or "rank") == "brand":
-        result = await refresh_brand_market(client_id, force=bool(payload.get("force")))
-    else:
-        result = await refresh_client_market(client_id)
+    result = await refresh_client_market(client_id)
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.get("status") == "ok" else "failed",

@@ -111,4 +111,5 @@ class BrandMentionResponse(BaseModel):
     invisibility_diagnosis: Optional[str] = None
     response_analysis: Optional[dict] = None
     failure_reason: Optional[str] = None
+    feature_present: Optional[bool] = None
     created_at: Optional[str] = None

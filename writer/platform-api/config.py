@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     supabase_service_role_key: str = ""
     pipeline_api_url: str = "http://ar-tools.railway.internal:8080"
     nlp_api_url: str = "http://nlp.railway.internal:8080"
+    # Global cap on concurrently-executing blog/service-page runs (each fires
+    # brief+SIE in parallel — heavy Claude fan-outs in pipeline-api). Excess
+    # runs wait in their queued status; see orchestrator._get_run_gate.
+    max_concurrent_runs: int = 3
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
@@ -183,6 +187,13 @@ class Settings(BaseSettings):
     # elsewhere in the suite, so it stays generous (2/4/8/16/32/64s at base 2.0).
     maps_report_max_retries: int = 6
     maps_report_retry_base_seconds: float = 2.0
+    # Provider for the report narrative. Defaults to OpenAI: a per-keyword scan
+    # fans out concurrent report calls that collided with the rest of the suite
+    # on one saturated Anthropic account (sustained 429s that outlasted the retry
+    # budget), so the report runs on OpenAI's separate quota. Set
+    # MAPS_REPORT_PROVIDER=anthropic to revert (uses maps_report_model then).
+    maps_report_provider: str = "openai"          # openai | anthropic
+    maps_report_openai_model: str = "gpt-5.4"
 
     # Organic Rank Analysis report — the per-keyword deep-dive (the organic
     # analogue of the Local Rank Analysis report). Sonnet writes an observational
@@ -192,6 +203,13 @@ class Settings(BaseSettings):
     # automatically when a rank-drop alert opens, and weekly per keyword.
     rank_analysis_model: str = "claude-sonnet-4-6"
     rank_analysis_max_tokens: int = 8192
+    # Provider for the report narrative — see maps_report_provider. Defaults to
+    # OpenAI (the twin per-keyword report shares the same Anthropic 429 exposure).
+    # Set RANK_ANALYSIS_PROVIDER=anthropic to revert (uses rank_analysis_model).
+    rank_analysis_provider: str = "openai"        # openai | anthropic
+    rank_analysis_openai_model: str = "gpt-5.4"
+    rank_analysis_max_retries: int = 6
+    rank_analysis_retry_base_seconds: float = 2.0
     # Weekly auto-generation: gated on this flag; runs the day after the weekly
     # SERP-snapshot capture so the latest landscape is available to analyze.
     rank_analysis_auto_enabled: bool = True
@@ -530,9 +548,11 @@ class Settings(BaseSettings):
     # Visibility report narrative (published as a Google Doc). Suite-default
     # Claude, matching the Maps Local Rank Analysis report.
     brand_report_model: str = "claude-sonnet-4-6"
-    # Per keyword×engine attempt budget for transient errors (matches the source
-    # app's 2 retries). Auth/quota/rate-limit errors are terminal (no retry).
-    brand_scan_max_retries: int = 2
+    # Per keyword×engine attempt budget for transient errors (429 rate-limit,
+    # 5xx, connection drops), retried with exponential backoff + jitter.
+    # Auth/payment errors are terminal (no retry).
+    brand_scan_max_retries: int = 3
+    brand_scan_retry_base_seconds: float = 2.0
     # How many keyword×engine cells a scan processes concurrently. Bounds the
     # network-bound LLM/SERP calls so a large scan doesn't monopolise the shared
     # job worker for many minutes (each cell still awaits its providers).

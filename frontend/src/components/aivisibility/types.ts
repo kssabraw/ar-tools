@@ -36,6 +36,9 @@ export interface Mention {
   invisibility_diagnosis: string | null
   response_analysis: RespAnalysis | null
   failure_reason: string | null
+  // False when a Google AI feature (AI Overview / AI Mode) didn't fire for the
+  // query — the cell is excluded from the visibility score and shown as absent.
+  feature_present: boolean | null
   created_at: string | null
 }
 

@@ -60,6 +60,7 @@ from services.orchestrator import recover_stuck_runs
 from fanout.api import exports as fanout_exports
 from fanout.api import health as fanout_health
 from fanout.api import projects as fanout_projects
+from fanout.api import reports as fanout_reports
 from fanout.api import schedules as fanout_schedules
 from fanout.api import sessions as fanout_sessions
 from fanout.writer import scheduler as fanout_scheduler
@@ -209,6 +210,7 @@ app.include_router(fanout_health.router, prefix=_FANOUT_PREFIX)
 app.include_router(fanout_projects.router, prefix=_FANOUT_PREFIX)
 app.include_router(fanout_sessions.router, prefix=_FANOUT_PREFIX)
 app.include_router(fanout_exports.router, prefix=_FANOUT_PREFIX)
+app.include_router(fanout_reports.router, prefix=_FANOUT_PREFIX)
 app.include_router(fanout_schedules.router, prefix=_FANOUT_PREFIX)
 
 

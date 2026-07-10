@@ -194,22 +194,29 @@ async def llm_annotate_structure(
 
     truncated_html = html[:60_000] if len(html) > 60_000 else html
 
+    from services.report_llm import retry_transient
+
     client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    message = await client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2048,
-        system=_SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": (
-                    f"Reference page type: {page_type}\n\n"
-                    f"Parsed sections (index, level, heading, size, blocks):\n"
-                    f"{_outline_digest(outline)}\n\n"
-                    f"Main-content HTML for context:\n\n{truncated_html}"
-                ),
-            }
-        ],
+    # Transient failures (429/5xx/connection) retry with backoff — one 429
+    # previously failed the whole page_structure_scrape job.
+    message = await retry_transient(
+        lambda: client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=_SYSTEM_PROMPT,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Reference page type: {page_type}\n\n"
+                        f"Parsed sections (index, level, heading, size, blocks):\n"
+                        f"{_outline_digest(outline)}\n\n"
+                        f"Main-content HTML for context:\n\n{truncated_html}"
+                    ),
+                }
+            ],
+        ),
+        log_tag="page_structure",
     )
 
     raw = message.content[0].text.strip()

@@ -49,15 +49,23 @@ def _keyword_id(supabase, client_id: str, keyword: str) -> Optional[str]:
 
 
 async def _subagent(system: str, user: str) -> str:
-    """One bounded Sonnet call for the two summarizing subagents."""
+    """One bounded Sonnet call for the two summarizing subagents. Transient
+    failures (429/5xx/connection) retry with backoff so a saturated account
+    degrades the tool result only after the budget exhausts."""
     import anthropic
 
+    from services.report_llm import retry_transient
+
     api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
-    resp = await api.messages.create(
-        model=settings.strategist_subagent_model,
-        max_tokens=settings.strategist_subagent_max_tokens,
-        system=system,
-        messages=[{"role": "user", "content": user}],
+    resp = await retry_transient(
+        lambda: api.messages.create(
+            model=settings.strategist_subagent_model,
+            max_tokens=settings.strategist_subagent_max_tokens,
+            system=system,
+            messages=[{"role": "user", "content": user}],
+        ),
+        max_retries=2,
+        log_tag="strategist_subagent",
     )
     return "\n".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
 
