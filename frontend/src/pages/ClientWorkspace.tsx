@@ -190,6 +190,13 @@ export function ClientWorkspace() {
           }
         />
         <ActionCard
+          icon={<Search size={22} />}
+          label="Keyword Research"
+          description="Discover and cluster keyword opportunities into topic silos for this client — opens the Topic Fan-out keyword-research & planning tool."
+          href={id ? `/fanout/?client_id=${id}&client_name=${encodeURIComponent(client?.name ?? '')}` : '/fanout/'}
+          cta="Open"
+        />
+        <ActionCard
           icon={<CalendarClock size={22} />}
           label="Create Mass Posts"
           description="Plan and mass-generate this client's blog posts & Local SEO pages on a monthly schedule — opens the Topic Fan-out keyword-research, planning & scheduling tool."
@@ -399,11 +406,6 @@ function icpCopy(client?: Client): string {
 }
 
 const moreTools: { label: string; description: string; icon: React.ReactNode; href?: string }[] = [
-  {
-    label: 'Keyword Research',
-    description: 'Discover and cluster keyword opportunities, enriched with Search Console data.',
-    icon: <Search size={20} />,
-  },
   {
     label: 'Ranking-Drop Agent',
     description: 'Detects ranking drops and recommends fixes from your SOPs.',
