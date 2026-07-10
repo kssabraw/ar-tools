@@ -299,6 +299,13 @@ export function ClientWorkspace() {
           cta="Open"
         />
         <ActionCard
+          icon={<Link2 size={22} />}
+          label="Backlink Explorer"
+          description="This client's backlink profile — domain rating, referring domains, anchor mix, gained/lost/broken links and history — pulled on demand. Look up any competitor's domain too."
+          to={id ? `/clients/${id}/backlinks` : undefined}
+          cta="Open"
+        />
+        <ActionCard
           icon={<ListChecks size={22} />}
           label="Action Plan"
           description="A prioritized reoptimization to-do list built from this client's rank signals — drops to fix, winnable quick wins & Search Console opportunities, each linked to the tool that does it."

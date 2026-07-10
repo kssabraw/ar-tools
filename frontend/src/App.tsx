@@ -21,6 +21,7 @@ import { LocationPages } from './pages/LocationPages'
 import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
 import { CampaignGoals } from './pages/CampaignGoals'
+import { Backlinks } from './pages/Backlinks'
 import { Competitors } from './pages/Competitors'
 import { Forecast } from './pages/Forecast'
 import { Sops } from './pages/Sops'
@@ -65,6 +66,7 @@ export default function App() {
                     <Routes>
                       <Route path="/" element={<Home />} />
                       <Route path="/assistant" element={<Assistant />} />
+                      <Route path="/backlinks" element={<Backlinks />} />
                       {/* Topic Fan-out, merged in (Option C) — a native route
                           subtree that renders inside the suite Layout, so it
                           shares the suite sidebar. */}
@@ -89,6 +91,7 @@ export default function App() {
                       <Route path="/clients/:id/action-plan" element={<ActionPlan />} />
                       <Route path="/clients/:id/goals" element={<CampaignGoals />} />
                       <Route path="/clients/:id/competitors" element={<Competitors />} />
+                      <Route path="/clients/:id/backlinks" element={<Backlinks />} />
                       <Route path="/clients/:id/forecast" element={<Forecast />} />
                       <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />
