@@ -157,6 +157,10 @@ writer/pipeline-api/
 
 ## Conventions to follow
 
+### Refactoring policy (owner-agreed 2026-07-10)
+
+**No speculative refactoring sweeps.** Oversized modules are split **lazily — as step zero of the next feature that lands in them**, never on their own. The proven recipe is the `services/slack_assistant/` package split (PR #320): pure verbatim code move along existing registry/section seams, a re-exporting facade `__init__.py` so every caller keeps working unchanged, test monkeypatch targets re-pointed at the defining submodules, full test suite green before and after. Current watchlist (split when a feature next touches them): `services/strategy_digest.py` (provider-registry seam), `routers/rank.py` (by resource), `services/client_report.py` (gatherers vs HTML builders — Phase 2 lands here), `frontend/src/pages/MapsGeogrid.tsx` (extract tab views). Big-but-flat catalogs (`lib/types.ts`, `fanout/shared/api.ts`) and the **vendored `fanout/` backend** (divergence must stay additive) are explicitly NOT candidates.
+
 ### Naming
 
 - Modules and files: `snake_case.py`
