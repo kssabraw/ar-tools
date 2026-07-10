@@ -76,6 +76,92 @@ def test_chunk_keywords_respects_cap():
     assert keyword_market.chunk_keywords(["a"], size=1000) == [["a"]]
 
 
+# --- rate-limit retry -------------------------------------------------------
+# DataForSEO throttling arrives as HTTP 429 OR as an HTTP 200 whose task body
+# says "Too many requests" (the observed live failure) — both retry.
+
+def test_is_rate_limited_body_detects_task_message():
+    assert keyword_market.is_rate_limited_body(
+        {"tasks": [{"status_code": 40202, "status_message": "Too many requests."}]}
+    )
+    assert keyword_market.is_rate_limited_body({"status_message": "TOO MANY REQUESTS"})
+    assert not keyword_market.is_rate_limited_body(
+        {"tasks": [{"status_code": 20000, "status_message": "Ok."}]}
+    )
+    assert not keyword_market.is_rate_limited_body({})
+
+
+class _StubResponse:
+    def __init__(self, status_code=200, body=None, headers=None):
+        self.status_code = status_code
+        self._body = body or {}
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"http {self.status_code}")
+
+    def json(self):
+        return self._body
+
+
+class _StubClient:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.calls = 0
+
+    async def post(self, *args, **kwargs):
+        self.calls += 1
+        return self._responses.pop(0)
+
+
+def test_post_volume_retries_http_429_then_succeeds(monkeypatch):
+    import asyncio
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(keyword_market.asyncio, "sleep", no_sleep)
+    ok_body = {"tasks": [{"status_code": 20000, "result": []}]}
+    client = _StubClient([_StubResponse(429), _StubResponse(200, ok_body)])
+    body = asyncio.run(keyword_market._post_volume(client, [{}]))
+    assert body == ok_body
+    assert client.calls == 2
+
+
+def test_post_volume_retries_body_level_throttle(monkeypatch):
+    import asyncio
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(keyword_market.asyncio, "sleep", no_sleep)
+    throttled = {"tasks": [{"status_code": 40202, "status_message": "Too many requests."}]}
+    ok_body = {"tasks": [{"status_code": 20000, "result": []}]}
+    client = _StubClient([_StubResponse(200, throttled), _StubResponse(200, ok_body)])
+    body = asyncio.run(keyword_market._post_volume(client, [{}]))
+    assert body == ok_body
+    assert client.calls == 2
+
+
+def test_post_volume_returns_throttled_body_after_budget(monkeypatch):
+    # Persistent body-level throttle: after the retry budget the throttled body
+    # is returned so fetch_market's >=40000 validation raises the same error as
+    # before (job failed, re-enqueued by the daily scheduler).
+    import asyncio
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(keyword_market.asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(keyword_market, "_DFS_MAX_RETRIES", 2)
+    throttled = {"tasks": [{"status_code": 40202, "status_message": "Too many requests."}]}
+    client = _StubClient([_StubResponse(200, throttled)] * 3)
+    body = asyncio.run(keyword_market._post_volume(client, [{}]))
+    assert keyword_market.is_rate_limited_body(body)
+    assert client.calls == 3  # initial + 2 retries
+
+
 def test_parse_market_items():
     history = [{"year": 2025, "month": 6, "search_volume": 2600}]
     items = [

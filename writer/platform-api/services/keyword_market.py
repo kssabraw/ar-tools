@@ -10,8 +10,10 @@ See docs/modules/organic-rank-tracker-prd-v1_0.md §4, §6.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
+import secrets
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -36,6 +38,12 @@ _MAX_KEYWORD_WORDS = 10
 # The endpoint accepts at most 1000 keywords per request; larger sets are
 # chunked into multiple requests (billed per request, not per keyword).
 _MAX_KEYWORDS_PER_REQUEST = 1000
+
+# Rate-limit retry (mirrors serp_snapshot._post_dfs). DataForSEO throttling can
+# arrive as an HTTP 429 OR as an HTTP 200 whose task body says "Too many
+# requests" — both are retried with backoff before failing the refresh job.
+_DFS_MAX_RETRIES = 3
+_DFS_RETRY_BASE_SECONDS = 2.0
 
 # Organic click-through rate by position — a standard decay curve used to turn
 # (volume, position, cpc) into an estimated monthly traffic value. Approximate;
@@ -104,6 +112,15 @@ def chunk_keywords(keywords: list[str], size: int = _MAX_KEYWORDS_PER_REQUEST) -
     return [keywords[i : i + size] for i in range(0, len(keywords), size)]
 
 
+def is_rate_limited_body(body: dict) -> bool:
+    """Whether a DataForSEO response body signals throttling despite HTTP 200
+    (the observed live failure: task status_message 'Too many requests.'). Pure."""
+    tasks = body.get("tasks") or []
+    task = tasks[0] if tasks else {}
+    msg = str(task.get("status_message") or body.get("status_message") or "").lower()
+    return "too many requests" in msg
+
+
 def parse_market_items(items: list[dict]) -> dict[str, dict]:
     """Map DataForSEO search-volume items to {keyword: {volume, cpc, competition}}."""
     out: dict[str, dict] = {}
@@ -148,9 +165,7 @@ async def fetch_market(keywords: list[str], location_code: int) -> dict[str, dic
                     "language_code": settings.dataforseo_default_language_code,
                 }
             ]
-            resp = await client.post(f"{_BASE_URL}{_VOLUME_PATH}", headers=_auth_header(), json=payload)
-            resp.raise_for_status()
-            body = resp.json()
+            body = await _post_volume(client, payload)
             tasks = body.get("tasks") or []
             if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
                 raise RuntimeError(
@@ -158,6 +173,41 @@ async def fetch_market(keywords: list[str], location_code: int) -> dict[str, dic
                 )
             out.update(parse_market_items(tasks[0].get("result") or []))
     return out
+
+
+async def _post_volume(client: httpx.AsyncClient, payload: list[dict]) -> dict:
+    """One search_volume POST with rate-limit retry + exponential backoff
+    (jittered, honoring Retry-After). Retries HTTP 429/5xx AND HTTP-200 bodies
+    whose task says "Too many requests". After the budget exhausts, the last
+    response is returned/raised as before so the caller's validation applies."""
+    attempt = 0
+    while True:
+        resp = await client.post(f"{_BASE_URL}{_VOLUME_PATH}", headers=_auth_header(), json=payload)
+        throttled_http = resp.status_code == 429 or resp.status_code >= 500
+        body: Optional[dict] = None
+        if not throttled_http:
+            resp.raise_for_status()
+            body = resp.json()
+            if not is_rate_limited_body(body):
+                return body
+        if attempt >= _DFS_MAX_RETRIES:
+            if body is not None:
+                return body  # body-level throttle after retries → caller raises
+            resp.raise_for_status()
+        try:
+            retry_after = float(resp.headers.get("Retry-After") or 0)
+        except ValueError:
+            retry_after = 0.0
+        delay = max(
+            retry_after,
+            _DFS_RETRY_BASE_SECONDS * (2 ** attempt) * (0.5 + secrets.randbelow(1000) / 1000.0),
+        )
+        logger.warning(
+            "keyword_market_dfs_retry",
+            extra={"status": resp.status_code, "attempt": attempt + 1, "delay_s": round(delay, 1)},
+        )
+        await asyncio.sleep(delay)
+        attempt += 1
 
 
 # ----------------------------------------------------------------------------
