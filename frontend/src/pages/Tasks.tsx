@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarPlus, CheckCircle2, Circle, KanbanSquare, List, Plus, Search } from 'lucide-react'
+import { ArrowLeft, CalendarPlus, CheckCircle2, Circle, KanbanSquare, List, Plus, RotateCcw, Search, Trash2 } from 'lucide-react'
 import { api } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import { TaskDetail } from '../components/tasks/TaskDetail'
 import type {
   Client,
@@ -11,6 +12,7 @@ import type {
   TaskItem,
   TaskSection,
   TaskStatus,
+  TaskTrashItem,
 } from '../lib/types'
 
 // Native task manager — per-client board/list (Phase 1,
@@ -43,15 +45,32 @@ function dueLabel(t: TaskItem): string | null {
 export function Tasks() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
+  const { isAdmin } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [view, setView] = useState<'board' | 'list'>('board')
   const [q, setQ] = useState('')
   const [assignee, setAssignee] = useState('')
   const [category, setCategory] = useState('')
   const [sectionFilter, setSectionFilter] = useState('')
-  const [selectedTask, setSelectedTask] = useState<string | null>(null)
+  const [showTrash, setShowTrash] = useState(false)
   const [quickAdd, setQuickAdd] = useState<Record<string, string>>({})
   const [genResult, setGenResult] = useState<string | null>(null)
+
+  // Drawer state lives in the URL (?task=…) so mention notifications can
+  // deep-link straight to a task.
+  const selectedTask = searchParams.get('task')
+  const setSelectedTask = (taskId: string | null) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        if (taskId) next.set('task', taskId)
+        else next.delete('task')
+        return next
+      },
+      { replace: true },
+    )
+  }
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
@@ -112,6 +131,23 @@ export function Tasks() {
   const createSectionMut = useMutation({
     mutationFn: (name: string) => api.post(`/clients/${id}/task-sections`, { name, kind: 'custom' }),
     onSuccess: invalidateBoard,
+  })
+  const { data: trash = [] } = useQuery<TaskTrashItem[]>({
+    queryKey: ['task-trash', id],
+    queryFn: () => api.get<TaskTrashItem[]>(`/clients/${id}/tasks/trash`),
+    enabled: Boolean(id) && showTrash,
+  })
+  const invalidateTrash = () => {
+    invalidateBoard()
+    queryClient.invalidateQueries({ queryKey: ['task-trash', id] })
+  }
+  const restoreMut = useMutation({
+    mutationFn: (taskId: string) => api.post(`/tasks/${taskId}/restore`, {}),
+    onSuccess: invalidateTrash,
+  })
+  const purgeMut = useMutation({
+    mutationFn: (taskId: string) => api.delete(`/tasks/${taskId}/permanent`),
+    onSuccess: invalidateTrash,
   })
 
   const sections: TaskSection[] = board?.sections ?? []
@@ -316,6 +352,9 @@ export function Tasks() {
           {sections.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         <span style={{ flex: 1 }} />
+        <button onClick={() => setShowTrash((v) => !v)} style={toolbarBtn(showTrash)} title="Trash">
+          <Trash2 size={14} /> Trash
+        </button>
         <button
           onClick={() => {
             const name = window.prompt('New section name:')
@@ -334,7 +373,42 @@ export function Tasks() {
         <div style={{ marginBottom: 14, padding: '8px 12px', borderRadius: 8, background: '#eef2ff', color: '#4f46e5', fontSize: 13 }}>{genResult}</div>
       )}
 
-      {isLoading ? (
+      {showTrash ? (
+        <div style={{ maxWidth: 720 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#334155', marginBottom: 6 }}>
+            Trash <span style={{ color: '#94a3b8', fontWeight: 500 }}>{trash.length}</span>
+          </div>
+          {trash.length === 0 ? (
+            <div style={{ color: '#94a3b8', fontSize: 13, padding: '16px 0' }}>Trash is empty.</div>
+          ) : (
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
+              {trash.map((t) => (
+                <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', borderBottom: '1px solid #f8fafc' }}>
+                  <span style={{ flex: 1, fontSize: 13, color: '#64748b' }}>
+                    {t.name}
+                    {t.parent_task_id && <span style={{ fontSize: 11, color: '#cbd5e1' }}> (subtask)</span>}
+                  </span>
+                  <span style={{ fontSize: 11, color: '#cbd5e1' }}>{new Date(t.deleted_at).toLocaleDateString()}</span>
+                  <button
+                    onClick={() => restoreMut.mutate(t.id)}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 7, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                  >
+                    <RotateCcw size={11} /> Restore
+                  </button>
+                  {isAdmin && (
+                    <button
+                      onClick={() => { if (window.confirm(`Permanently delete "${t.name}"? This cannot be undone.`)) purgeMut.mutate(t.id) }}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 7, border: '1px solid #fecaca', background: '#fff', color: '#dc2626', fontSize: 11, fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      <Trash2 size={11} /> Delete forever
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : isLoading ? (
         <div style={{ color: '#64748b', fontSize: 13 }}>Loading…</div>
       ) : tasks.length === 0 && sections.length === 0 ? (
         <div style={{ color: '#94a3b8', fontSize: 13, padding: '32px 0', textAlign: 'center' }}>

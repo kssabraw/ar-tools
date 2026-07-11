@@ -1756,10 +1756,42 @@ export interface TaskActivityItem {
 export interface TaskDetailResponse extends TaskItem {
   subtasks: TaskItem[]
   activity: TaskActivityItem[]
+  comments?: TaskComment[]
+  attachments?: TaskAttachment[]
+  watchers?: string[]
 }
 
 export interface MyTasksResponse {
   members: { gid: string; name: string }[]
   gid: string | null
   buckets: Partial<Record<'overdue' | 'today' | 'this_week' | 'later' | 'no_date', TaskItem[]>>
+}
+
+export interface TaskComment {
+  id: string
+  task_id: string
+  author_id: string
+  author_name?: string | null
+  body: string
+  mentions: string[] | null
+  created_at: string
+  edited_at: string | null
+}
+
+export interface TaskAttachment {
+  id: string
+  task_id: string
+  file_name: string
+  mime_type: string | null
+  size_bytes: number | null
+  created_at: string
+  url?: string | null
+}
+
+export interface TaskTrashItem {
+  id: string
+  name: string
+  parent_task_id: string | null
+  deleted_at: string
+  assignee_name: string | null
 }

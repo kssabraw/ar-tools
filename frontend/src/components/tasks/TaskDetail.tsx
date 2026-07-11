@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CheckCircle2, Circle, Plus, RotateCcw, Trash2, X } from 'lucide-react'
+import { Bell, BellOff, CheckCircle2, Circle, Copy, Paperclip, Plus, RotateCcw, Send, Trash2, X } from 'lucide-react'
 import { api } from '../../lib/api'
+import { useAuth } from '../../context/AuthContext'
 import type { TaskCategory, TaskDetailResponse, TaskStatus } from '../../lib/types'
 
 // Right-side drawer for one task: edit fields, work the subtask checklist,
@@ -36,6 +37,8 @@ const ACTIVITY_LABELS: Record<string, string> = {
   due_changed: 'changed a date',
   estimate_changed: 'changed the estimate',
   moved: 'moved the task',
+  commented: 'commented',
+  attached: 'attached a file',
   completed: 'completed the task',
   reopened: 'reopened the task',
   auto_closed: 'auto-closed (signal resolved)',
@@ -43,9 +46,20 @@ const ACTIVITY_LABELS: Record<string, string> = {
   restored: 'restored from trash',
 }
 
+function formatBytes(n: number | null): string {
+  if (n == null) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`
+}
+
 export function TaskDetail({ taskId, statuses, categories, members, onClose, invalidateKeys }: TaskDetailProps) {
   const queryClient = useQueryClient()
+  const { user, isAdmin } = useAuth()
+  const fileInput = useRef<HTMLInputElement>(null)
   const [newSubtask, setNewSubtask] = useState('')
+  const [newComment, setNewComment] = useState('')
+  const [editingComment, setEditingComment] = useState<{ id: string; body: string } | null>(null)
   const [nameDraft, setNameDraft] = useState<string | null>(null)
   const [descDraft, setDescDraft] = useState<string | null>(null)
 
@@ -103,6 +117,48 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
       invalidate()
     },
   })
+  const commentMut = useMutation({
+    mutationFn: (body: string) => api.post(`/tasks/${taskId}/comments`, { body }),
+    onSuccess: () => {
+      setNewComment('')
+      invalidate()
+    },
+  })
+  const editCommentMut = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: string }) => api.patch(`/tasks/comments/${id}`, { body }),
+    onSuccess: () => {
+      setEditingComment(null)
+      invalidate()
+    },
+  })
+  const deleteCommentMut = useMutation({
+    mutationFn: (id: string) => api.delete(`/tasks/comments/${id}`),
+    onSuccess: invalidate,
+  })
+  const uploadMut = useMutation({
+    mutationFn: (file: globalThis.File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return api.upload(`/tasks/${taskId}/attachments`, form)
+    },
+    onSuccess: invalidate,
+  })
+  const deleteAttachmentMut = useMutation({
+    mutationFn: (id: string) => api.delete(`/tasks/attachments/${id}`),
+    onSuccess: invalidate,
+  })
+  const watchMut = useMutation({
+    mutationFn: (watching: boolean) =>
+      watching ? api.delete(`/tasks/${taskId}/watch`) : api.post(`/tasks/${taskId}/watch`, {}),
+    onSuccess: invalidate,
+  })
+  const duplicateMut = useMutation({
+    mutationFn: () => api.post(`/tasks/${taskId}/duplicate`, { with_subtasks: true }),
+    onSuccess: () => {
+      invalidate()
+      onClose()
+    },
+  })
 
   const patchField = (field: string, value: unknown) => {
     if (!task) return
@@ -144,6 +200,24 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
                 <CheckCircle2 size={13} /> Complete
               </button>
             )
+          )}
+          {task && (
+            <button
+              onClick={() => watchMut.mutate(Boolean(user && task.watchers?.includes(user.id)))}
+              title={user && task.watchers?.includes(user.id) ? 'Stop watching' : 'Watch this task'}
+              style={{ border: 'none', background: 'none', color: user && task.watchers?.includes(user.id) ? '#6366f1' : '#cbd5e1', cursor: 'pointer', padding: 4 }}
+            >
+              {user && task.watchers?.includes(user.id) ? <Bell size={15} /> : <BellOff size={15} />}
+            </button>
+          )}
+          {task && (
+            <button
+              onClick={() => duplicateMut.mutate()}
+              title="Duplicate (with checklist)"
+              style={{ border: 'none', background: 'none', color: '#cbd5e1', cursor: 'pointer', padding: 4 }}
+            >
+              <Copy size={15} />
+            </button>
           )}
           {task && (
             <button
@@ -277,6 +351,106 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '7px 12px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', fontSize: 12, fontWeight: 600, cursor: 'pointer', opacity: newSubtask.trim() ? 1 : 0.5 }}
               >
                 <Plus size={13} /> Add
+              </button>
+            </div>
+          </div>
+
+          {/* Attachments */}
+          <div style={{ marginTop: 18 }}>
+            <div style={label}>Attachments</div>
+            {(task.attachments ?? []).map((a) => (
+              <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: '1px solid #f8fafc' }}>
+                <Paperclip size={13} color="#94a3b8" />
+                {a.url ? (
+                  <a href={a.url} target="_blank" rel="noreferrer" style={{ flex: 1, fontSize: 13, color: '#4f46e5', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {a.file_name}
+                  </a>
+                ) : (
+                  <span style={{ flex: 1, fontSize: 13, color: '#64748b' }}>{a.file_name}</span>
+                )}
+                <span style={{ fontSize: 11, color: '#cbd5e1' }}>{formatBytes(a.size_bytes)}</span>
+                <button
+                  onClick={() => deleteAttachmentMut.mutate(a.id)}
+                  title="Remove"
+                  style={{ border: 'none', background: 'none', color: '#e2e8f0', cursor: 'pointer', padding: 2 }}
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            ))}
+            <input
+              ref={fileInput}
+              type="file"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) uploadMut.mutate(f)
+                e.target.value = ''
+              }}
+            />
+            <button
+              onClick={() => fileInput.current?.click()}
+              disabled={uploadMut.isPending}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 5, marginTop: 8, padding: '6px 12px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+            >
+              <Paperclip size={13} /> {uploadMut.isPending ? 'Uploading…' : 'Attach file'}
+            </button>
+            {uploadMut.isError && (
+              <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>Upload failed — {String((uploadMut.error as Error)?.message ?? 'try again')}</div>
+            )}
+          </div>
+
+          {/* Comments */}
+          <div style={{ marginTop: 18 }}>
+            <div style={label}>Comments</div>
+            {(task.comments ?? []).map((c) => (
+              <div key={c.id} style={{ padding: '8px 0', borderBottom: '1px solid #f8fafc' }}>
+                <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: '#334155' }}>{c.author_name ?? 'Someone'}</span>
+                  <span style={{ fontSize: 11, color: '#cbd5e1' }}>
+                    {new Date(c.created_at).toLocaleString()}{c.edited_at ? ' · edited' : ''}
+                  </span>
+                  {user && c.author_id === user.id && editingComment?.id !== c.id && (
+                    <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
+                      <button onClick={() => setEditingComment({ id: c.id, body: c.body })} style={{ border: 'none', background: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 11, padding: 0 }}>Edit</button>
+                      <button onClick={() => deleteCommentMut.mutate(c.id)} style={{ border: 'none', background: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 11, padding: 0 }}>Delete</button>
+                    </span>
+                  )}
+                  {isAdmin && user && c.author_id !== user.id && (
+                    <button onClick={() => deleteCommentMut.mutate(c.id)} style={{ marginLeft: 'auto', border: 'none', background: 'none', color: '#cbd5e1', cursor: 'pointer', fontSize: 11, padding: 0 }}>Delete</button>
+                  )}
+                </div>
+                {editingComment?.id === c.id ? (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <input
+                      value={editingComment.body}
+                      onChange={(e) => setEditingComment({ id: c.id, body: e.target.value })}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && editingComment.body.trim()) editCommentMut.mutate({ id: c.id, body: editingComment.body.trim() }) }}
+                      style={{ ...input, flex: 1 }}
+                      autoFocus
+                    />
+                    <button onClick={() => setEditingComment(null)} style={{ border: 'none', background: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 11 }}>Cancel</button>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 13, color: '#334155', marginTop: 3, whiteSpace: 'pre-wrap' }}>{c.body}</div>
+                )}
+              </div>
+            ))}
+            <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+              <input
+                value={newComment}
+                onChange={(e) => setNewComment(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && newComment.trim()) commentMut.mutate(newComment.trim()) }}
+                placeholder="Comment… (@Name to mention)"
+                style={{ ...input, flex: 1 }}
+              />
+              <button
+                onClick={() => newComment.trim() && commentMut.mutate(newComment.trim())}
+                disabled={!newComment.trim() || commentMut.isPending}
+                title="Send"
+                style={{ display: 'inline-flex', alignItems: 'center', padding: '7px 12px', borderRadius: 8, border: 'none', background: '#6366f1', color: '#fff', cursor: 'pointer', opacity: newComment.trim() ? 1 : 0.5 }}
+              >
+                <Send size={14} />
               </button>
             </div>
           </div>

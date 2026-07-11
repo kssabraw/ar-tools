@@ -164,6 +164,77 @@ def test_bucket_by_due():
 
 
 # ---------------------------------------------------------------------------
+# task_collab pure helpers (Phase 2)
+# ---------------------------------------------------------------------------
+def test_parse_mentions_full_and_first_name():
+    from services.task_collab import parse_mentions
+
+    candidates = [
+        {"id": "u1", "full_name": "Ivy Lane"},
+        {"id": "u2", "full_name": "Minda Reyes"},
+        {"id": "u3", "full_name": "Kyle"},
+    ]
+    assert parse_mentions("ping @Ivy Lane and @minda about this", candidates) == ["u1", "u2"]
+    assert parse_mentions("@kyle please review", candidates) == ["u3"]
+    assert parse_mentions("no mentions here", candidates) == []
+    assert parse_mentions("", candidates) == []
+    # Repeated mention → deduped; unknown @names ignored.
+    assert parse_mentions("@Ivy @ivy @nobody", candidates) == ["u1"]
+
+
+def test_safe_filename():
+    from services.task_collab import safe_filename
+
+    assert safe_filename("report (final).pdf") == "report_final_.pdf"
+    assert safe_filename("../../etc/passwd") == "passwd"
+    assert safe_filename(None) == "upload"
+    assert len(safe_filename("x" * 500)) == 120
+
+
+def test_duplicate_task_copies_fields_not_source(monkeypatch):
+    from services import task_collab
+
+    original = {
+        "id": "t1",
+        "name": "GBP Blast",
+        "client_id": "c1",
+        "section_id": "sec1",
+        "description": "desc",
+        "assignee_gid": "g1",
+        "assignee_name": "Ivy",
+        "category": "gbp_authority",
+        "due_date": "2026-07-20",
+        "start_date": None,
+        "est_hours": 1.5,
+        "sort_order": 3,
+        "library_task_name": "GBP Blast",
+        "source": "monthly",
+        "source_ref": "monthly:c1:2026-07:r1",
+        "subtasks": [{"name": "Step 1"}, {"name": "Step 2"}],
+    }
+    monkeypatch.setattr(task_service, "get_task_detail", lambda tid: original)
+    created = {}
+
+    def _create(name, **kwargs):
+        created.update({"name": name, **kwargs})
+        return {"id": "t2", "name": name, "client_id": kwargs.get("client_id")}
+
+    sub_calls = []
+    monkeypatch.setattr(task_service, "create_task", _create)
+    monkeypatch.setattr(
+        task_service, "create_subtasks", lambda parent, names, **kw: sub_calls.append(list(names))
+    )
+
+    copy = task_collab.duplicate_task("t1", with_subtasks=True, actor_id="u1")
+    assert copy["id"] == "t2"
+    assert created["name"] == "GBP Blast (copy)"
+    assert created["assignee_gid"] == "g1" and created["est_hours"] == 1.5
+    # A duplicate is a manual task — the producer key must NOT carry over.
+    assert "source" not in created and "source_ref" not in created
+    assert sub_calls == [["Step 1", "Step 2"]]
+
+
+# ---------------------------------------------------------------------------
 # Monthly generation orchestration (mocked DB)
 # ---------------------------------------------------------------------------
 @pytest.fixture()

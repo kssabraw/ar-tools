@@ -91,6 +91,14 @@ class TaskReorderRequest(BaseModel):
     ordered_ids: list[str] = Field(default_factory=list)
 
 
+class TaskCommentRequest(BaseModel):
+    body: str
+
+
+class TaskDuplicateRequest(BaseModel):
+    with_subtasks: bool = True
+
+
 class TaskGenerateMonthRequest(BaseModel):
     # "YYYY-MM" or "YYYY-MM-DD"; omitted → the current month.
     month: Optional[str] = None

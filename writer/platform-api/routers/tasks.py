@@ -13,15 +13,18 @@ import logging
 from datetime import date
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
+from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_admin, require_auth
 from models.tasks import (
     LibraryChecklist,
     TaskCategoryItem,
     TaskCategoryReplaceRequest,
+    TaskCommentRequest,
     TaskCreateRequest,
+    TaskDuplicateRequest,
     TaskGenerateMonthRequest,
     TaskGenerateMonthResponse,
     TaskReorderRequest,
@@ -31,7 +34,7 @@ from models.tasks import (
     TaskStatusReplaceRequest,
     TaskUpdateRequest,
 )
-from services import task_monthly, task_service, task_workload
+from services import task_collab, task_monthly, task_service, task_workload
 
 logger = logging.getLogger(__name__)
 
@@ -387,6 +390,18 @@ async def my_tasks(gid: str | None = None, auth: dict = Depends(require_auth)) -
 
 
 # ---------------------------------------------------------------------------
+# Mention candidates (static route — must register before /tasks/{task_id})
+# ---------------------------------------------------------------------------
+@router.get("/tasks/mention-candidates")
+async def mention_candidates(auth: dict = Depends(require_auth)) -> list[dict]:
+    try:
+        return task_collab.mention_candidates()
+    except Exception as exc:
+        logger.error("mention_candidates_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+# ---------------------------------------------------------------------------
 # Task CRUD (kept AFTER the static /tasks/* routes so those match first)
 # ---------------------------------------------------------------------------
 @router.post("/tasks")
@@ -432,6 +447,10 @@ async def reorder_tasks(body: TaskReorderRequest, auth: dict = Depends(require_a
 async def task_detail(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
     try:
         task = task_service.get_task_detail(str(task_id))
+        if task:
+            task["comments"] = task_collab.list_comments(str(task_id))
+            task["attachments"] = task_collab.list_attachments(str(task_id))
+            task["watchers"] = task_collab.list_watchers(str(task_id))
     except Exception as exc:
         logger.error("task_detail_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
@@ -494,4 +513,174 @@ async def restore_task(task_id: UUID, auth: dict = Depends(require_auth)) -> dic
         return {"restored": True}
     except Exception as exc:
         logger.error("task_restore_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+# ---------------------------------------------------------------------------
+# Collaboration (Phase 2): comments, attachments, watchers, duplicate, trash
+# ---------------------------------------------------------------------------
+def _load_task_or_404(task_id: UUID) -> dict:
+    rows = (
+        get_supabase()
+        .table("tasks")
+        .select("id, client_id, section_id, name")
+        .eq("id", str(task_id))
+        .is_("deleted_at", "null")
+        .limit(1)
+        .execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return rows[0]
+
+
+@router.get("/tasks/{task_id}/comments")
+async def list_comments(task_id: UUID, auth: dict = Depends(require_auth)) -> list[dict]:
+    try:
+        return task_collab.list_comments(str(task_id))
+    except Exception as exc:
+        logger.error("task_comments_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/tasks/{task_id}/comments")
+async def create_comment(
+    task_id: UUID, body: TaskCommentRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    text = body.body.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty_comment")
+    task = _load_task_or_404(task_id)
+    try:
+        return task_collab.create_comment(task, auth["user_id"], text)
+    except Exception as exc:
+        logger.error("task_comment_create_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.patch("/tasks/comments/{comment_id}")
+async def edit_comment(
+    comment_id: UUID, body: TaskCommentRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    text = body.body.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty_comment")
+    try:
+        updated = task_collab.update_comment(str(comment_id), auth["user_id"], text)
+    except Exception as exc:
+        logger.error("task_comment_edit_failed", extra={"comment_id": str(comment_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not updated:
+        raise HTTPException(status_code=403, detail="not_comment_author")
+    return updated
+
+
+@router.delete("/tasks/comments/{comment_id}")
+async def remove_comment(comment_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    try:
+        ok = task_collab.delete_comment(
+            str(comment_id), auth["user_id"], is_admin=auth.get("role") == "admin"
+        )
+    except Exception as exc:
+        logger.error("task_comment_delete_failed", extra={"comment_id": str(comment_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not ok:
+        raise HTTPException(status_code=403, detail="not_comment_author")
+    return {"deleted": True}
+
+
+@router.get("/tasks/{task_id}/attachments")
+async def list_attachments(task_id: UUID, auth: dict = Depends(require_auth)) -> list[dict]:
+    try:
+        return task_collab.list_attachments(str(task_id))
+    except Exception as exc:
+        logger.error("task_attachments_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/tasks/{task_id}/attachments", status_code=201)
+async def upload_attachment(
+    task_id: UUID, file: UploadFile = File(...), auth: dict = Depends(require_auth)
+) -> dict:
+    task = _load_task_or_404(task_id)
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty_file")
+    if len(data) > settings.task_attachment_max_mb * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="file_too_large")
+    try:
+        return task_collab.add_attachment(
+            task,
+            file_name=file.filename or "upload",
+            data=data,
+            mime_type=file.content_type,
+            uploaded_by=auth["user_id"],
+        )
+    except Exception as exc:
+        logger.error("task_attachment_upload_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=502, detail="attachment_upload_failed") from exc
+
+
+@router.delete("/tasks/attachments/{attachment_id}")
+async def remove_attachment(attachment_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    try:
+        ok = task_collab.delete_attachment(str(attachment_id))
+    except Exception as exc:
+        logger.error("task_attachment_delete_failed", extra={"attachment_id": str(attachment_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not ok:
+        raise HTTPException(status_code=404, detail="attachment_not_found")
+    return {"deleted": True}
+
+
+@router.post("/tasks/{task_id}/watch")
+async def watch_task(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    _load_task_or_404(task_id)
+    task_collab.add_watchers(str(task_id), [auth["user_id"]])
+    return {"watching": True}
+
+
+@router.delete("/tasks/{task_id}/watch")
+async def unwatch_task(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    try:
+        task_collab.remove_watcher(str(task_id), auth["user_id"])
+    except Exception as exc:
+        logger.error("task_unwatch_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return {"watching": False}
+
+
+@router.post("/tasks/{task_id}/duplicate")
+async def duplicate_task(
+    task_id: UUID, body: TaskDuplicateRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    try:
+        copy = task_collab.duplicate_task(
+            str(task_id), with_subtasks=body.with_subtasks, actor_id=auth.get("user_id")
+        )
+    except Exception as exc:
+        logger.error("task_duplicate_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not copy:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return copy
+
+
+@router.get("/clients/{client_id}/tasks/trash")
+async def list_trash(client_id: UUID, auth: dict = Depends(require_auth)) -> list[dict]:
+    try:
+        return task_collab.list_trash(str(client_id))
+    except Exception as exc:
+        logger.error("task_trash_list_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.delete("/tasks/{task_id}/permanent")
+async def purge_task(task_id: UUID, auth: dict = Depends(require_admin)) -> dict:
+    """Permanent delete — admin-only (PRD §14)."""
+    try:
+        task_collab.purge_task(str(task_id))
+        return {"deleted": True}
+    except Exception as exc:
+        logger.error("task_purge_failed", extra={"task_id": str(task_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc

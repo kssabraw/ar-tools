@@ -739,6 +739,8 @@ class Settings(BaseSettings):
     # workload thresholds reuse the asana_* defaults above — one knob set for
     # both systems during the transition.
     native_tasks_enabled: bool = False
+    # Per-file cap for task attachments (the bucket also enforces 20 MB).
+    task_attachment_max_mb: int = 20
 
     class Config:
         env_file = ".env"
