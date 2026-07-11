@@ -42,6 +42,8 @@ async def backlink_lookup(body: BacklinkLookupRequest, auth: dict = Depends(requ
             created_by=auth.get("sub"),
             force=body.force,
         )
+    except backlink_explorer.BudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail="backlink_budget_exceeded") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
@@ -66,8 +68,53 @@ async def backlink_links(
         return await backlink_explorer.list_links(
             target, filter_key=filter, mode=mode, limit=limit, offset=offset,
         )
+    except backlink_explorer.BudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail="backlink_budget_exceeded") from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("backlink_links_failed", extra={"target": target, "error": str(exc)})
         raise HTTPException(status_code=502, detail="backlink_provider_error") from exc
+
+
+# ----------------------------------------------------------------------------
+# Tracked targets (client-scoped) — scheduled re-snapshots + new/lost alerts
+# ----------------------------------------------------------------------------
+class TrackRequest(BaseModel):
+    target: str
+    label: Optional[str] = None
+
+
+@router.get("/clients/{client_id}/backlinks/tracked")
+async def list_tracked(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Tracked targets for a client + each one's latest snapshot summary."""
+    try:
+        return {"tracked": backlink_explorer.list_tracked(str(client_id))}
+    except Exception as exc:
+        logger.error("backlink_tracked_list_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/clients/{client_id}/backlinks/tracked")
+async def track(client_id: UUID, body: TrackRequest, auth: dict = Depends(require_auth)) -> dict:
+    """Track a domain for this client (its own or a competitor's) + kick a first capture."""
+    try:
+        return backlink_explorer.track_target(
+            str(client_id), body.target, label=body.label, created_by=auth.get("sub"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("backlink_track_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.delete("/clients/{client_id}/backlinks/tracked/{target_id}")
+async def untrack(client_id: UUID, target_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Stop tracking a target (its snapshots are kept)."""
+    try:
+        backlink_explorer.untrack_target(str(client_id), str(target_id))
+        return {"ok": True}
+    except Exception as exc:
+        logger.error("backlink_untrack_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc

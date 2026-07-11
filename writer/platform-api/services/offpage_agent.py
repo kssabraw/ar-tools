@@ -149,6 +149,20 @@ def analyze_client(client_id: str) -> dict:
     if change["type"] in still_open:
         return {"opened": opened, "resolved": resolved}  # episode dedup
 
+    details = {"captured_at": series[0].get("captured_at") if series else None}
+    # Enrich a loss with the *actual* referring domains that dropped, when the
+    # client's own domain is tracked in the Backlink Explorer — turns "RD fell"
+    # into a concrete replacement list. Best-effort; absent tracking, unchanged.
+    if change["type"] == "rd_loss":
+        try:
+            from services import backlink_explorer
+
+            velocity = backlink_explorer.client_own_domain_change(client_id)
+            if velocity and velocity.get("lost_sample"):
+                details["lost_domains"] = velocity["lost_sample"]
+        except Exception:
+            logger.warning("offpage.lost_domain_enrich_failed", extra={"client_id": client_id})
+
     supabase.table("offpage_alerts").insert(
         {
             "client_id": client_id,
@@ -157,7 +171,7 @@ def analyze_client(client_id: str) -> dict:
             "to_rd": change["to_rd"],
             "delta_pct": change["delta_pct"],
             "message": alert_message(change),
-            "details": {"captured_at": series[0].get("captured_at") if series else None},
+            "details": details,
         }
     ).execute()
     opened.append(change["type"])

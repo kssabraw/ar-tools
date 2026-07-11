@@ -691,7 +691,7 @@ def _prov_backlinks(supabase, client_id: str, today: date, now: datetime) -> Opt
     if not client:
         return None
     comparison = intel.get("comparison") or {}
-    return {
+    out = {
         "client_dr": client.get("domain_rating"),
         "client_referring_domains": client.get("referring_domains"),
         "competitor_median_dr": comparison.get("competitor_median_dr"),
@@ -699,6 +699,22 @@ def _prov_backlinks(supabase, client_id: str, today: date, now: datetime) -> Opt
         "note": "competitor RD reads are tool-visibility discounted ×10 per the SOP shared definition",
         "captured_at": client.get("captured_at"),
     }
+    # Link velocity from the Backlink Explorer (when the client's own domain is
+    # tracked) — the gained/lost referring domains since the last check, so the
+    # strategist can read link momentum, not just a static authority gap.
+    from services import backlink_explorer
+
+    velocity = backlink_explorer.client_own_domain_change(client_id)
+    if velocity:
+        out["link_velocity"] = {
+            "new_domains": velocity.get("new_domains"),
+            "lost_domains": velocity.get("lost_domains"),
+            "lost_sample": velocity.get("lost_sample"),
+            "new_sample": velocity.get("new_sample"),
+            "as_of": velocity.get("captured_at"),
+            "note": "gained/lost referring domains since the previous tracked snapshot",
+        }
+    return out
 
 
 def _prov_campaign_goals(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:

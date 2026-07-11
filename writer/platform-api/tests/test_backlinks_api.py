@@ -144,3 +144,86 @@ def test_link_filter_map_covers_tabs():
         assert key in backlink_explorer._LINK_FILTERS
     assert backlink_explorer._LINK_FILTERS["broken"] == [["is_broken", "=", True]]
     assert backlink_explorer._LINK_FILTERS["all"] is None
+
+
+# ---------------------------------------------------------------------------
+# diff_domains (new/lost referring-domain diffing)
+# ---------------------------------------------------------------------------
+def test_diff_domains_new_and_lost():
+    out = backlink_explorer.diff_domains({"a.com", "b.com"}, ["b.com", "c.com", "d.com"])
+    assert out == {"new": ["c.com", "d.com"], "lost": ["a.com"]}
+
+
+def test_diff_domains_no_change():
+    out = backlink_explorer.diff_domains({"a.com", "b.com"}, ["a.com", "b.com"])
+    assert out == {"new": [], "lost": []}
+
+
+def test_diff_domains_ignores_empty():
+    out = backlink_explorer.diff_domains({"a.com"}, ["a.com", None, ""])
+    assert out == {"new": [], "lost": []}
+
+
+# ---------------------------------------------------------------------------
+# _diff_for_snapshot — baseline + API-failure guard (no false total-loss)
+# ---------------------------------------------------------------------------
+def test_diff_for_snapshot_baseline_is_empty():
+    # No previous snapshot → baseline, never "all new".
+    assert backlink_explorer._diff_for_snapshot(None, True, set(), ["a.com", "b.com"]) == {"new": [], "lost": []}
+
+
+def test_diff_for_snapshot_suppressed_when_fetch_failed():
+    # RD fetch failed (rd_ok False) with an empty current list — must NOT report
+    # every previous domain as lost (that would be a false outage-driven alert).
+    assert backlink_explorer._diff_for_snapshot("s1", False, {"a.com", "b.com"}, []) == {"new": [], "lost": []}
+
+
+def test_diff_for_snapshot_genuine_total_loss_still_reported():
+    # A SUCCESSFUL empty fetch is a genuine total loss — still diffed.
+    out = backlink_explorer._diff_for_snapshot("s1", True, {"a.com", "b.com"}, [])
+    assert out == {"new": [], "lost": ["a.com", "b.com"]}
+
+
+def test_diff_for_snapshot_normal():
+    out = backlink_explorer._diff_for_snapshot("s1", True, {"a.com"}, ["a.com", "c.com"])
+    assert out == {"new": ["c.com"], "lost": []}
+
+
+# ---------------------------------------------------------------------------
+# should_alert (threshold gate — defaults 10 new / 10 lost)
+# ---------------------------------------------------------------------------
+def test_should_alert_below_threshold():
+    assert backlink_explorer.should_alert(3, 4) is False
+
+
+def test_should_alert_on_new():
+    assert backlink_explorer.should_alert(10, 0) is True
+
+
+def test_should_alert_on_lost():
+    assert backlink_explorer.should_alert(0, 12) is True
+
+
+# ---------------------------------------------------------------------------
+# match_own_domain_target (agent-layer own-domain lookup)
+# ---------------------------------------------------------------------------
+def test_match_own_domain_target_finds_bare_domain():
+    targets = [
+        {"target": "sub.example.com", "target_type": "subdomain"},
+        {"target": "example.com", "target_type": "domain"},
+    ]
+    assert backlink_explorer.match_own_domain_target(targets, "example.com")["target_type"] == "domain"
+
+
+def test_match_own_domain_target_case_insensitive():
+    targets = [{"target": "Example.com", "target_type": "domain"}]
+    assert backlink_explorer.match_own_domain_target(targets, "example.com") is not None
+
+
+def test_match_own_domain_target_none_when_only_url_tracked():
+    targets = [{"target": "example.com/pricing", "target_type": "url"}]
+    assert backlink_explorer.match_own_domain_target(targets, "example.com") is None
+
+
+def test_match_own_domain_target_none_without_domain():
+    assert backlink_explorer.match_own_domain_target([{"target": "x.com", "target_type": "domain"}], None) is None
