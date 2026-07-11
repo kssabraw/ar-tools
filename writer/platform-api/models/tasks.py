@@ -95,6 +95,12 @@ class TaskCommentRequest(BaseModel):
     body: str
 
 
+class TaskViewRequest(BaseModel):
+    name: str
+    config: dict  # {view, group_by?, filters:{q, assignee, category, section, preset}, scope?}
+    shared: bool = False
+
+
 class TaskDuplicateRequest(BaseModel):
     with_subtasks: bool = True
 

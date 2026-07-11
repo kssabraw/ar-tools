@@ -128,7 +128,10 @@ def list_comments(task_id: str) -> list[dict]:
 
 def create_comment(task: dict, author_id: str, body: str) -> dict:
     """Insert a comment: parse mentions, auto-watch author + mentioned, write
-    the 'commented' activity, and notify mentioned users (best-effort)."""
+    the 'commented' activity, and notify (best-effort): mentioned users get a
+    ``task_mention``; pre-existing watchers (beyond the author + the mentioned,
+    who already heard) get one ``task_comment`` (PRD §6.11)."""
+    watchers_before = list_watchers(task["id"])
     mentions = parse_mentions(body, mention_candidates())
     row = (
         get_supabase()
@@ -166,6 +169,26 @@ def create_comment(task: dict, author_id: str, body: str) -> dict:
             )
         except Exception as exc:  # a notify failure never fails the comment
             logger.warning("task_mention_notify_failed", extra={"task_id": task["id"], "error": str(exc)})
+
+    other_watchers = [w for w in watchers_before if w != author_id and w not in mentions]
+    if other_watchers:
+        try:
+            author = profile_names([author_id]).get(author_id, "Someone")
+            link = (
+                f"/clients/{task['client_id']}/tasks?task={task['id']}"
+                if task.get("client_id")
+                else "/my-tasks"
+            )
+            notifications.emit(
+                client_id=task.get("client_id"),
+                kind="task_comment",
+                title=f"{author} commented on '{task.get('name')}'",
+                summary=body[:300],
+                severity="info",
+                payload={"link": link, "task_id": task["id"], "watchers": other_watchers},
+            )
+        except Exception as exc:
+            logger.warning("task_comment_notify_failed", extra={"task_id": task["id"], "error": str(exc)})
 
     row["author_name"] = profile_names([author_id]).get(author_id)
     return row

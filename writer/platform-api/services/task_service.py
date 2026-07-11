@@ -240,9 +240,34 @@ def create_subtasks(
     return len(rows)
 
 
+def _notify_assignment(task: dict) -> None:
+    """Best-effort 'assigned to you' notification (PRD §6.11). Recipients are
+    agency-level channels for v1 (in-app + Slack) — per-user routing waits on
+    the profiles unification, so `task_notification_prefs` isn't enforced yet."""
+    try:
+        from services import notifications
+
+        who = task.get("assignee_name") or task.get("assignee_gid")
+        link = (
+            f"/clients/{task['client_id']}/tasks?task={task['id']}"
+            if task.get("client_id")
+            else "/my-tasks"
+        )
+        notifications.emit(
+            client_id=task.get("client_id"),
+            kind="task_assigned",
+            title=f"{who} was assigned '{task.get('name')}'",
+            summary=(f"Due {task['due_date']}" if task.get("due_date") else None),
+            severity="info",
+            payload={"link": link, "task_id": task["id"], "assignee_gid": task.get("assignee_gid")},
+        )
+    except Exception as exc:
+        logger.warning("task_assign_notify_failed", extra={"task_id": task.get("id"), "error": str(exc)})
+
+
 def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) -> dict:
     """Partial-update a task; every meaningful field change writes an activity
-    row. Returns the updated row."""
+    row; an assignee change notifies. Returns the updated row."""
     supabase = get_supabase()
     before_rows = supabase.table("tasks").select("*").eq("id", task_id).limit(1).execute().data
     if not before_rows:
@@ -254,6 +279,12 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
     updated = supabase.table("tasks").update(payload).eq("id", task_id).execute().data[0]
     for entry in diff_activity(before, changes):
         record_activity(task_id, entry["kind"], actor_id=actor_id, detail=entry["detail"])
+    if (
+        "assignee_gid" in changes
+        and changes.get("assignee_gid")
+        and changes["assignee_gid"] != before.get("assignee_gid")
+    ):
+        _notify_assignment(updated)
     return updated
 
 

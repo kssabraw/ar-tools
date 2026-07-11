@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, CalendarPlus, CheckCircle2, Circle, KanbanSquare, List, Plus, RotateCcw, Search, Trash2 } from 'lucide-react'
+import { ArrowLeft, CalendarDays, CalendarPlus, CheckCircle2, Circle, KanbanSquare, List, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import { TaskDetail } from '../components/tasks/TaskDetail'
+import { TaskCalendar } from '../components/tasks/TaskCalendar'
 import type {
   Client,
   TaskBoardResponse,
@@ -25,6 +26,31 @@ interface Member {
   name: string | null
   weekly_hours?: number | null
 }
+
+type ViewMode = 'board' | 'list' | 'calendar'
+type Preset = '' | 'overdue' | 'due_week' | 'unassigned'
+
+interface ViewConfig {
+  view?: ViewMode
+  q?: string
+  assignee?: string
+  category?: string
+  section?: string
+  preset?: Preset
+}
+
+interface SavedView {
+  id: string
+  name: string
+  config: ViewConfig
+  shared: boolean
+}
+
+const BUILTIN_VIEWS: { key: Preset; label: string }[] = [
+  { key: 'overdue', label: 'Overdue' },
+  { key: 'due_week', label: 'Due this week' },
+  { key: 'unassigned', label: 'Unassigned' },
+]
 
 const chip = (color: string | null | undefined, text: string) => (
   <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: 999, background: (color ?? '#94a3b8') + '1a', color: color ?? '#64748b', fontSize: 11, fontWeight: 600 }}>
@@ -48,11 +74,13 @@ export function Tasks() {
   const { isAdmin } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const [view, setView] = useState<'board' | 'list'>('board')
+  const [view, setView] = useState<ViewMode>('board')
   const [q, setQ] = useState('')
   const [assignee, setAssignee] = useState('')
   const [category, setCategory] = useState('')
   const [sectionFilter, setSectionFilter] = useState('')
+  const [preset, setPreset] = useState<Preset>('')
+  const [activeSavedView, setActiveSavedView] = useState<SavedView | null>(null)
   const [showTrash, setShowTrash] = useState(false)
   const [quickAdd, setQuickAdd] = useState<Record<string, string>>({})
   const [genResult, setGenResult] = useState<string | null>(null)
@@ -132,6 +160,25 @@ export function Tasks() {
     mutationFn: (name: string) => api.post(`/clients/${id}/task-sections`, { name, kind: 'custom' }),
     onSuccess: invalidateBoard,
   })
+  const { data: savedViews = [] } = useQuery<SavedView[]>({
+    queryKey: ['task-views'],
+    queryFn: () => api.get<SavedView[]>('/tasks/views'),
+  })
+  const saveViewMut = useMutation({
+    mutationFn: ({ name, shared, config }: { name: string; shared: boolean; config: ViewConfig }) =>
+      api.post<SavedView>('/tasks/views', { name, shared, config }),
+    onSuccess: (v) => {
+      setActiveSavedView(v)
+      queryClient.invalidateQueries({ queryKey: ['task-views'] })
+    },
+  })
+  const deleteViewMut = useMutation({
+    mutationFn: (viewId: string) => api.delete(`/tasks/views/${viewId}`),
+    onSuccess: () => {
+      setActiveSavedView(null)
+      queryClient.invalidateQueries({ queryKey: ['task-views'] })
+    },
+  })
   const { data: trash = [] } = useQuery<TaskTrashItem[]>({
     queryKey: ['task-trash', id],
     queryFn: () => api.get<TaskTrashItem[]>(`/clients/${id}/tasks/trash`),
@@ -163,8 +210,49 @@ export function Tasks() {
     if (assignee) rows = rows.filter((t) => t.assignee_gid === assignee)
     if (category) rows = rows.filter((t) => t.category === category)
     if (sectionFilter) rows = rows.filter((t) => t.section_id === sectionFilter)
+    if (preset) {
+      const today = new Date().toISOString().slice(0, 10)
+      const weekEnd = new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10)
+      if (preset === 'overdue') rows = rows.filter((t) => !t.completed && t.due_date != null && t.due_date < today)
+      else if (preset === 'due_week') rows = rows.filter((t) => !t.completed && t.due_date != null && t.due_date >= today && t.due_date <= weekEnd)
+      else if (preset === 'unassigned') rows = rows.filter((t) => !t.completed && !t.assignee_gid)
+    }
     return rows
-  }, [board?.tasks, q, assignee, category, sectionFilter])
+  }, [board?.tasks, q, assignee, category, sectionFilter, preset])
+
+  const applyViewConfig = (cfg: ViewConfig) => {
+    setView(cfg.view ?? 'board')
+    setQ(cfg.q ?? '')
+    setAssignee(cfg.assignee ?? '')
+    setCategory(cfg.category ?? '')
+    setSectionFilter(cfg.section ?? '')
+    setPreset(cfg.preset ?? '')
+  }
+
+  const onViewSelect = (value: string) => {
+    if (!value) return
+    if (value === 'save') {
+      const name = window.prompt('Name this view:')
+      if (!name?.trim()) return
+      const shared = window.confirm('Share this view with the whole team?\n(OK = shared, Cancel = private)')
+      saveViewMut.mutate({
+        name: name.trim(),
+        shared,
+        config: { view, q, assignee, category, section: sectionFilter, preset },
+      })
+      return
+    }
+    if (value.startsWith('builtin:')) {
+      setActiveSavedView(null)
+      applyViewConfig({ view: 'list', preset: value.slice(8) as Preset })
+      return
+    }
+    const saved = savedViews.find((v) => v.id === value)
+    if (saved) {
+      setActiveSavedView(saved)
+      applyViewConfig(saved.config)
+    }
+  }
 
   const onDropToStatus = (taskId: string, status: TaskStatus) => {
     const task = tasks.find((t) => t.id === taskId)
@@ -335,6 +423,40 @@ export function Tasks() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         <button onClick={() => setView('board')} style={toolbarBtn(view === 'board')}><KanbanSquare size={14} /> Board</button>
         <button onClick={() => setView('list')} style={toolbarBtn(view === 'list')}><List size={14} /> List</button>
+        <button onClick={() => setView('calendar')} style={toolbarBtn(view === 'calendar')}><CalendarDays size={14} /> Calendar</button>
+        <select value="" onChange={(e) => onViewSelect(e.target.value)} style={selectStyle}>
+          <option value="">Views…</option>
+          {BUILTIN_VIEWS.map((b) => (
+            <option key={b.key} value={`builtin:${b.key}`}>{b.label}</option>
+          ))}
+          {savedViews.length > 0 && <option disabled>— saved —</option>}
+          {savedViews.map((v) => (
+            <option key={v.id} value={v.id}>{v.name}{v.shared ? ' (team)' : ''}</option>
+          ))}
+          <option value="save">＋ Save current view…</option>
+        </select>
+        {activeSavedView && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 999, background: '#eef2ff', color: '#4f46e5', fontSize: 12, fontWeight: 600 }}>
+            {activeSavedView.name}
+            {(!activeSavedView.shared || isAdmin) && (
+              <button
+                onClick={() => deleteViewMut.mutate(activeSavedView.id)}
+                title="Delete this saved view"
+                style={{ border: 'none', background: 'none', color: '#a5b4fc', cursor: 'pointer', padding: 0, display: 'inline-flex' }}
+              >
+                <X size={12} />
+              </button>
+            )}
+          </span>
+        )}
+        {preset && !activeSavedView && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 999, background: '#fef3c7', color: '#b45309', fontSize: 12, fontWeight: 600 }}>
+            {BUILTIN_VIEWS.find((b) => b.key === preset)?.label}
+            <button onClick={() => setPreset('')} style={{ border: 'none', background: 'none', color: '#d0a24a', cursor: 'pointer', padding: 0, display: 'inline-flex' }}>
+              <X size={12} />
+            </button>
+          </span>
+        )}
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 10px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff' }}>
           <Search size={13} color="#94a3b8" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search…" style={{ border: 'none', outline: 'none', fontSize: 12, width: 130, background: 'transparent', color: '#0f172a' }} />
@@ -414,7 +536,9 @@ export function Tasks() {
         <div style={{ color: '#94a3b8', fontSize: 13, padding: '32px 0', textAlign: 'center' }}>
           No tasks yet. Hit <strong>Generate this month</strong> to build the month from this client's template, or add a section and create tasks manually.
         </div>
-      ) : view === 'board' ? boardView : listView}
+      ) : view === 'board' ? boardView : view === 'calendar' ? (
+        <TaskCalendar tasks={tasks} onSelect={setSelectedTask} />
+      ) : listView}
 
       {selectedTask && (
         <TaskDetail

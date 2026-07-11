@@ -33,6 +33,7 @@ from models.tasks import (
     TaskStatusItem,
     TaskStatusReplaceRequest,
     TaskUpdateRequest,
+    TaskViewRequest,
 )
 from services import task_collab, task_monthly, task_service, task_workload
 
@@ -398,6 +399,74 @@ async def mention_candidates(auth: dict = Depends(require_auth)) -> list[dict]:
         return task_collab.mention_candidates()
     except Exception as exc:
         logger.error("mention_candidates_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+# ---------------------------------------------------------------------------
+# Saved views (PRD §6.7) — static /tasks/views routes, before /tasks/{task_id}
+# ---------------------------------------------------------------------------
+@router.get("/tasks/views")
+async def list_views(auth: dict = Depends(require_auth)) -> list[dict]:
+    """The caller's private views + the shared (owner-less) ones."""
+    try:
+        rows = (
+            get_supabase()
+            .table("task_saved_views")
+            .select("*")
+            .or_(f"owner_id.eq.{auth['user_id']},owner_id.is.null")
+            .order("name")
+            .execute()
+        ).data or []
+        for r in rows:
+            r["shared"] = r.get("owner_id") is None
+        return rows
+    except Exception as exc:
+        logger.error("task_views_list_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/tasks/views")
+async def create_view(body: TaskViewRequest, auth: dict = Depends(require_auth)) -> dict:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="missing_name")
+    try:
+        row = (
+            get_supabase()
+            .table("task_saved_views")
+            .insert(
+                {
+                    "owner_id": None if body.shared else auth["user_id"],
+                    "name": name,
+                    "config": body.config,
+                }
+            )
+            .execute()
+        ).data[0]
+        row["shared"] = row.get("owner_id") is None
+        return row
+    except Exception as exc:
+        logger.error("task_view_create_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.delete("/tasks/views/{view_id}")
+async def delete_view(view_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Delete a view — your own always; shared views need admin."""
+    supabase = get_supabase()
+    try:
+        rows = supabase.table("task_saved_views").select("owner_id").eq("id", str(view_id)).limit(1).execute().data
+        if not rows:
+            raise HTTPException(status_code=404, detail="view_not_found")
+        owner = rows[0].get("owner_id")
+        if owner != auth["user_id"] and not (owner is None and auth.get("role") == "admin"):
+            raise HTTPException(status_code=403, detail="forbidden")
+        supabase.table("task_saved_views").delete().eq("id", str(view_id)).execute()
+        return {"deleted": True}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("task_view_delete_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
 
 

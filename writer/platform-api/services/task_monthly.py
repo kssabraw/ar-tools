@@ -213,6 +213,7 @@ def generate_month_for_client(client_id: str, target: date) -> dict:
     created = 0
     existing = 0
     errors: list[str] = []
+    assigned_counts: dict[str, int] = {}
     for idx, row in enumerate(templates):
         name = (row.get("name") or "").strip()
         if not name:
@@ -239,6 +240,8 @@ def generate_month_for_client(client_id: str, target: date) -> dict:
             if subtasks:
                 task_service.create_subtasks(task, subtasks)
             created += 1
+            who = row.get("assignee_name") or row.get("assignee_gid") or "Unassigned"
+            assigned_counts[who] = assigned_counts.get(who, 0) + 1
         except Exception as exc:  # one bad task shouldn't abort the rest
             errors.append(f"{name}: {str(exc)[:120]}")
             logger.warning(
@@ -247,6 +250,24 @@ def generate_month_for_client(client_id: str, target: date) -> dict:
             )
 
     status = "created" if created else ("exists" if existing else "skipped")
+    if created:
+        # One digest per generation run (not one ping per task) — covers the
+        # PRD's "assigned to you incl. auto-distribution results" without
+        # flooding the channel on the 1st of the month. Best-effort.
+        try:
+            from services import notifications
+
+            breakdown = ", ".join(f"{who} {n}" for who, n in sorted(assigned_counts.items(), key=lambda kv: -kv[1]))
+            notifications.emit(
+                client_id=client_id,
+                kind="task_month_generated",
+                title=f"{label}: {created} task{'s' if created != 1 else ''} generated",
+                summary=breakdown,
+                severity="info",
+                payload={"link": f"/clients/{client_id}/tasks", "section_id": section["id"]},
+            )
+        except Exception as exc:
+            logger.warning("task_month_notify_failed", extra={"client_id": client_id, "error": str(exc)})
     logger.info(
         "task_monthly.generated",
         extra={"client_id": client_id, "section": label, "created_count": created, "existing": existing, "errors": len(errors)},
