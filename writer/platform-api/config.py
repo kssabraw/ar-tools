@@ -433,6 +433,10 @@ class Settings(BaseSettings):
     backlink_alert_lost_domains_min: int = 10
     # Cap on synthetic is_lost rows written per snapshot (surfaced in the UI).
     backlink_lost_rows_cap: int = 200
+    # Auto-track each client's own domain for backlink monitoring (so alerts +
+    # agent enrichment work without manual per-client setup). Idempotent and
+    # respects a manual untrack; the daily budget caps the added spend.
+    backlink_auto_track_client_domain: bool = True
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
