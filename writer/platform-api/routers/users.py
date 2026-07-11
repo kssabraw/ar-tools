@@ -16,6 +16,7 @@ from models.users import (
     UserInviteRequest,
     UserResponse,
     UserRoleUpdateRequest,
+    UserSlackLinkRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ router = APIRouter(tags=["users"])
 @router.get("/users", response_model=list[UserResponse])
 async def list_users(auth: dict = Depends(require_admin)) -> list[UserResponse]:
     supabase = get_supabase()
-    profiles = supabase.table("profiles").select("id, full_name, role, created_at").execute()
+    profiles = supabase.table("profiles").select("id, full_name, role, created_at, slack_user_id").execute()
 
     # Get emails from auth.users via admin API
     users_resp = supabase.auth.admin.list_users()
@@ -43,6 +44,7 @@ async def list_users(auth: dict = Depends(require_admin)) -> list[UserResponse]:
                 full_name=p.get("full_name"),
                 role=p["role"],
                 created_at=p["created_at"],
+                slack_user_id=p.get("slack_user_id"),
             )
         )
     return out
@@ -148,6 +150,52 @@ async def update_user_role(
         full_name=p.get("full_name"),
         role=p["role"],
         created_at=p["created_at"],
+        slack_user_id=p.get("slack_user_id"),
+    )
+
+
+@router.patch("/users/{user_id}/slack-link", response_model=UserResponse)
+async def link_user_slack(
+    user_id: UUID,
+    body: UserSlackLinkRequest,
+    auth: dict = Depends(require_admin),
+) -> UserResponse:
+    """Link (or clear) a suite login's Slack user id (PACE identity bridge).
+    Admin-only. A Slack id already linked to a different profile is rejected."""
+    supabase = get_supabase()
+    slack_id = (body.slack_user_id or "").strip() or None
+
+    if slack_id:
+        clash = (
+            supabase.table("profiles")
+            .select("id")
+            .eq("slack_user_id", slack_id)
+            .neq("id", str(user_id))
+            .limit(1)
+            .execute()
+        ).data
+        if clash:
+            raise HTTPException(status_code=409, detail="slack_id_already_linked")
+
+    result = (
+        supabase.table("profiles")
+        .update({"slack_user_id": slack_id})
+        .eq("id", str(user_id))
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="user_not_found")
+
+    p = result.data[0]
+    user_resp = supabase.auth.admin.get_user_by_id(str(user_id))
+    email = user_resp.user.email if user_resp and user_resp.user else ""
+    return UserResponse(
+        id=p["id"],
+        email=email,
+        full_name=p.get("full_name"),
+        role=p["role"],
+        created_at=p["created_at"],
+        slack_user_id=p.get("slack_user_id"),
     )
 
 

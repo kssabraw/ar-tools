@@ -17,6 +17,13 @@ class UserResponse(BaseModel):
     full_name: Optional[str] = None
     role: str
     created_at: str
+    # PACE identity bridge: the Slack user this suite login maps to, if linked.
+    slack_user_id: Optional[str] = None
+
+
+class UserSlackLinkRequest(BaseModel):
+    # An empty/blank value clears the link. Slack user ids look like "U01ABCDEF".
+    slack_user_id: Optional[str] = None
 
 
 class UserInviteRequest(BaseModel):

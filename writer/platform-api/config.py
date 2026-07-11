@@ -774,6 +774,11 @@ class Settings(BaseSettings):
     pace_untriaged_grace_days: int = 2
     # Cap the (later) daily digest.
     pace_digest_max_items: int = 8
+    # Permission matrix — the two "via policy" cells (PRD §3.2). Defaults:
+    # any internal user can read a board (internal-tool norm); month generation
+    # is admin-only (loosen to "staff" to let leads generate).
+    pace_perm_read_board_min_role: str = "team_member"
+    pace_perm_generate_month_min_role: str = "admin"
 
     class Config:
         env_file = ".env"
