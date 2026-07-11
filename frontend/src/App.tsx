@@ -28,6 +28,8 @@ import { Forecast } from './pages/Forecast'
 import { Sops } from './pages/Sops'
 import { Guides } from './pages/Guides'
 import { AsanaTasks } from './pages/AsanaTasks'
+import { Tasks } from './pages/Tasks'
+import { MyTasks } from './pages/MyTasks'
 import { TeamWorkload } from './pages/TeamWorkload'
 import { TaskLibrary } from './pages/TaskLibrary'
 import { ClientReports } from './pages/ClientReports'
@@ -97,6 +99,7 @@ export default function App() {
                       <Route path="/clients/:id/forecast" element={<Forecast />} />
                       <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />
+                      <Route path="/clients/:id/tasks" element={<Tasks />} />
                       <Route path="/clients/:id/reports" element={<ClientReports />} />
                       <Route path="/clients/:id/ai-visibility" element={<AiVisibility />} />
                       <Route path="/clients/:id/maps" element={<MapsGeogrid />} />
@@ -106,6 +109,7 @@ export default function App() {
                       <Route path="/clients/:id/edit" element={<AdminRoute><ClientForm /></AdminRoute>} />
                       <Route path="/articles" element={<Articles />} />
                       <Route path="/silos" element={<Silos />} />
+                      <Route path="/my-tasks" element={<MyTasks />} />
                       <Route path="/workload" element={<TeamWorkload />} />
                       <Route path="/asana/task-library" element={<TaskLibrary />} />
                       <Route path="/playbook" element={<Sops />} />

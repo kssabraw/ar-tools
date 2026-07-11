@@ -296,6 +296,109 @@ def restore_task(task_id: str, *, actor_id: Optional[str] = None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reads (board / detail / My Tasks)
+# ---------------------------------------------------------------------------
+def list_board_tasks(client_id: Optional[str], include_completed: bool = True) -> list[dict]:
+    """All live top-level tasks on one board (a client's, or the null-client
+    internal board), oldest sort first."""
+    q = (
+        get_supabase()
+        .table("tasks")
+        .select("*")
+        .is_("deleted_at", "null")
+        .is_("parent_task_id", "null")
+        .order("sort_order")
+        .order("created_at")
+    )
+    q = q.eq("client_id", client_id) if client_id else q.is_("client_id", "null")
+    if not include_completed:
+        q = q.eq("completed", False)
+    return q.execute().data or []
+
+
+def subtask_progress(parent_ids: list[str]) -> dict[str, dict]:
+    """``{parent_id: {"total": n, "done": n}}`` for the given parents (live
+    subtasks only) — the "3/5" card rollup."""
+    if not parent_ids:
+        return {}
+    rows = (
+        get_supabase()
+        .table("tasks")
+        .select("parent_task_id, completed")
+        .in_("parent_task_id", parent_ids)
+        .is_("deleted_at", "null")
+        .execute()
+    ).data or []
+    progress: dict[str, dict] = {}
+    for r in rows:
+        pid = r.get("parent_task_id")
+        if not pid:
+            continue
+        entry = progress.setdefault(pid, {"total": 0, "done": 0})
+        entry["total"] += 1
+        if r.get("completed"):
+            entry["done"] += 1
+    return progress
+
+
+def get_task_detail(task_id: str) -> Optional[dict]:
+    """One task + its live subtasks (ordered) + its activity feed."""
+    supabase = get_supabase()
+    rows = supabase.table("tasks").select("*").eq("id", task_id).is_("deleted_at", "null").limit(1).execute().data
+    if not rows:
+        return None
+    task = rows[0]
+    task["subtasks"] = (
+        supabase.table("tasks")
+        .select("*")
+        .eq("parent_task_id", task_id)
+        .is_("deleted_at", "null")
+        .order("sort_order")
+        .order("created_at")
+        .execute()
+    ).data or []
+    task["activity"] = (
+        supabase.table("task_activity")
+        .select("*")
+        .eq("task_id", task_id)
+        .order("created_at", desc=True)
+        .limit(50)
+        .execute()
+    ).data or []
+    return task
+
+
+# Due buckets for My Tasks, in display order.
+_BUCKETS = ("overdue", "today", "this_week", "later", "no_date")
+
+
+def bucket_by_due(rows: list[dict], today) -> dict[str, list[dict]]:
+    """Group open tasks into Overdue / Today / This week / Later / No date.
+    "This week" = the next 7 days after today. Pure — unit-tested."""
+    from datetime import date as _date, timedelta
+
+    buckets: dict[str, list[dict]] = {b: [] for b in _BUCKETS}
+    week_end = today + timedelta(days=7)
+    for r in rows:
+        raw = r.get("due_date")
+        if not raw:
+            buckets["no_date"].append(r)
+            continue
+        due = _date.fromisoformat(raw) if isinstance(raw, str) else raw
+        if due < today:
+            buckets["overdue"].append(r)
+        elif due == today:
+            buckets["today"].append(r)
+        elif due <= week_end:
+            buckets["this_week"].append(r)
+        else:
+            buckets["later"].append(r)
+    for b in ("overdue", "today", "this_week", "later"):
+        buckets[b].sort(key=lambda r: (r.get("due_date") or "", r.get("name") or ""))
+    return buckets
+
+
+# ---------------------------------------------------------------------------
 # Producer auto-close (§11)
 # ---------------------------------------------------------------------------
 def close_task_by_source(source: str, source_ref: str) -> bool:

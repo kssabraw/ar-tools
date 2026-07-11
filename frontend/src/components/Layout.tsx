@@ -1,6 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LifeBuoy, Sparkles, Link2 } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LifeBuoy, Sparkles, Link2, ListChecks } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -9,6 +9,7 @@ interface NavItem {
 }
 
 const nav: NavItem[] = [
+  { label: 'My Tasks', to: '/my-tasks', icon: <ListChecks size={18} /> },
   { label: 'Runs', to: '/runs', icon: <LayoutDashboard size={18} /> },
   { label: 'Articles', to: '/articles', icon: <BookOpen size={18} /> },
   { label: 'Silos', to: '/silos', icon: <Layers size={18} /> },

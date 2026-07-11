@@ -43,6 +43,54 @@ class LibraryChecklist(BaseModel):
     subtasks: list[str] = Field(default_factory=list)
 
 
+class TaskCreateRequest(BaseModel):
+    name: str
+    client_id: Optional[str] = None
+    section_id: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    description: Optional[str] = None
+    assignee_gid: Optional[str] = None
+    assignee_name: Optional[str] = None
+    status_key: Optional[str] = None
+    category: Optional[str] = None
+    due_date: Optional[str] = None
+    start_date: Optional[str] = None
+    est_hours: Optional[float] = None
+    sort_order: int = 0
+
+
+class TaskUpdateRequest(BaseModel):
+    """Partial update — only provided fields change (None clears a nullable
+    field only when explicitly present in the payload)."""
+
+    name: Optional[str] = None
+    description: Optional[str] = None
+    section_id: Optional[str] = None
+    assignee_gid: Optional[str] = None
+    assignee_name: Optional[str] = None
+    status_key: Optional[str] = None
+    category: Optional[str] = None
+    due_date: Optional[str] = None
+    start_date: Optional[str] = None
+    est_hours: Optional[float] = None
+    sort_order: Optional[int] = None
+
+
+class TaskSectionCreateRequest(BaseModel):
+    name: str
+    kind: str = "custom"  # month | backlog | custom
+    period_month: Optional[str] = None
+
+
+class TaskSectionUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    sort_order: Optional[int] = None
+
+
+class TaskReorderRequest(BaseModel):
+    ordered_ids: list[str] = Field(default_factory=list)
+
+
 class TaskGenerateMonthRequest(BaseModel):
     # "YYYY-MM" or "YYYY-MM-DD"; omitted → the current month.
     month: Optional[str] = None

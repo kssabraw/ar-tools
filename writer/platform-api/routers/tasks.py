@@ -21,10 +21,15 @@ from models.tasks import (
     LibraryChecklist,
     TaskCategoryItem,
     TaskCategoryReplaceRequest,
+    TaskCreateRequest,
     TaskGenerateMonthRequest,
     TaskGenerateMonthResponse,
+    TaskReorderRequest,
+    TaskSectionCreateRequest,
+    TaskSectionUpdateRequest,
     TaskStatusItem,
     TaskStatusReplaceRequest,
+    TaskUpdateRequest,
 )
 from services import task_monthly, task_service, task_workload
 
@@ -224,4 +229,269 @@ async def native_workload(auth: dict = Depends(require_auth)) -> dict:
         return task_workload.build_team_workload()
     except Exception as exc:
         logger.error("task_workload_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+# ---------------------------------------------------------------------------
+# Board read (Phase 1): a client's sections + live top-level tasks + subtask
+# progress in one call — the per-client Tasks page's single data source.
+# ---------------------------------------------------------------------------
+def _section_sort_key(s: dict) -> tuple:
+    # Month sections newest-first (current month leads the board), then
+    # backlog/custom in their manual order.
+    if s.get("kind") == "month" and s.get("period_month"):
+        return (0, "", s["period_month"])
+    return (1, s.get("sort_order") or 0, "")
+
+
+@router.get("/clients/{client_id}/task-board")
+async def task_board(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    try:
+        sections = (
+            get_supabase()
+            .table("task_sections")
+            .select("*")
+            .eq("client_id", str(client_id))
+            .execute()
+        ).data or []
+        months = sorted(
+            [s for s in sections if s.get("kind") == "month" and s.get("period_month")],
+            key=lambda s: s["period_month"],
+            reverse=True,
+        )
+        rest = sorted(
+            [s for s in sections if not (s.get("kind") == "month" and s.get("period_month"))],
+            key=lambda s: (s.get("sort_order") or 0, s.get("name") or ""),
+        )
+        tasks = task_service.list_board_tasks(str(client_id))
+        progress = task_service.subtask_progress([t["id"] for t in tasks])
+        for t in tasks:
+            p = progress.get(t["id"]) or {"total": 0, "done": 0}
+            t["subtask_total"] = p["total"]
+            t["subtask_done"] = p["done"]
+        return {"sections": months + rest, "tasks": tasks}
+    except Exception as exc:
+        logger.error("task_board_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+# ---------------------------------------------------------------------------
+# Sections
+# ---------------------------------------------------------------------------
+@router.post("/clients/{client_id}/task-sections")
+async def create_section(
+    client_id: UUID, body: TaskSectionCreateRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="missing_name")
+    if body.kind not in ("month", "backlog", "custom"):
+        raise HTTPException(status_code=400, detail="invalid_kind")
+    try:
+        return (
+            get_supabase()
+            .table("task_sections")
+            .insert(
+                {
+                    "client_id": str(client_id),
+                    "name": name,
+                    "kind": body.kind,
+                    "period_month": body.period_month,
+                }
+            )
+            .execute()
+        ).data[0]
+    except Exception as exc:
+        if "uq_task_sections_board_name" in str(exc) or "duplicate" in str(exc).lower():
+            raise HTTPException(status_code=409, detail="section_exists") from exc
+        logger.error("task_section_create_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.patch("/task-sections/{section_id}")
+async def update_section(
+    section_id: UUID, body: TaskSectionUpdateRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    changes = body.model_dump(exclude_unset=True)
+    if "name" in changes:
+        changes["name"] = (changes["name"] or "").strip()
+        if not changes["name"]:
+            raise HTTPException(status_code=400, detail="missing_name")
+    if not changes:
+        raise HTTPException(status_code=400, detail="no_changes")
+    try:
+        rows = (
+            get_supabase().table("task_sections").update(changes).eq("id", str(section_id)).execute()
+        ).data
+    except Exception as exc:
+        logger.error("task_section_update_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not rows:
+        raise HTTPException(status_code=404, detail="section_not_found")
+    return rows[0]
+
+
+@router.delete("/task-sections/{section_id}")
+async def delete_section(section_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Delete a section; its tasks stay (section_id → null via FK) so nothing
+    is silently lost. 200 + body — the suite convention (FastAPI asserts on
+    204 routes that could carry a body)."""
+    try:
+        get_supabase().table("task_sections").delete().eq("id", str(section_id)).execute()
+        return {"deleted": True}
+    except Exception as exc:
+        logger.error("task_section_delete_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+# ---------------------------------------------------------------------------
+# My Tasks (cross-client). Assignees are Asana member gids in v1, so identity
+# is a "viewing as" team-member selection (?gid=...); default = first member.
+# ---------------------------------------------------------------------------
+@router.get("/tasks/mine")
+async def my_tasks(gid: str | None = None, auth: dict = Depends(require_auth)) -> dict:
+    from services.asana_workload import get_team_members
+
+    try:
+        members = [
+            {"gid": m["gid"], "name": m.get("name") or m["gid"]} for m in get_team_members()
+        ]
+        valid = {m["gid"] for m in members}
+        resolved = gid if gid in valid else (members[0]["gid"] if members else None)
+        if not resolved:
+            return {"members": [], "gid": None, "buckets": {}}
+        rows = (
+            get_supabase()
+            .table("tasks")
+            .select("id, client_id, section_id, name, status_key, category, due_date, est_hours")
+            .eq("assignee_gid", resolved)
+            .eq("completed", False)
+            .is_("deleted_at", "null")
+            .is_("parent_task_id", "null")
+            .execute()
+        ).data or []
+        client_ids = sorted({r["client_id"] for r in rows if r.get("client_id")})
+        names: dict[str, str] = {}
+        if client_ids:
+            crows = (
+                get_supabase().table("clients").select("id, name").in_("id", client_ids).execute()
+            ).data or []
+            names = {c["id"]: c.get("name") for c in crows}
+        for r in rows:
+            r["client_name"] = names.get(r.get("client_id"))
+        buckets = task_service.bucket_by_due(rows, date.today())
+        return {"members": members, "gid": resolved, "buckets": buckets}
+    except Exception as exc:
+        logger.error("my_tasks_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+# ---------------------------------------------------------------------------
+# Task CRUD (kept AFTER the static /tasks/* routes so those match first)
+# ---------------------------------------------------------------------------
+@router.post("/tasks")
+async def create_task(body: TaskCreateRequest, auth: dict = Depends(require_auth)) -> dict:
+    if not body.name.strip():
+        raise HTTPException(status_code=400, detail="missing_name")
+    try:
+        return task_service.create_task(
+            body.name,
+            client_id=body.client_id,
+            section_id=body.section_id,
+            parent_task_id=body.parent_task_id,
+            description=body.description,
+            assignee_gid=body.assignee_gid,
+            assignee_name=body.assignee_name,
+            status_key=body.status_key,
+            category=body.category,
+            due_date=body.due_date,
+            start_date=body.start_date,
+            est_hours=body.est_hours,
+            sort_order=body.sort_order,
+            created_by=auth.get("user_id"),
+        )
+    except Exception as exc:
+        logger.error("task_create_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/tasks/reorder")
+async def reorder_tasks(body: TaskReorderRequest, auth: dict = Depends(require_auth)) -> dict:
+    """Persist a manual ordering: sort_order = index in ordered_ids."""
+    supabase = get_supabase()
+    try:
+        for idx, task_id in enumerate(body.ordered_ids):
+            supabase.table("tasks").update({"sort_order": idx}).eq("id", task_id).execute()
+    except Exception as exc:
+        logger.error("task_reorder_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return {"updated": len(body.ordered_ids)}
+
+
+@router.get("/tasks/{task_id}")
+async def task_detail(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    try:
+        task = task_service.get_task_detail(str(task_id))
+    except Exception as exc:
+        logger.error("task_detail_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not task:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return task
+
+
+@router.patch("/tasks/{task_id}")
+async def update_task(
+    task_id: UUID, body: TaskUpdateRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    changes = body.model_dump(exclude_unset=True)
+    if "name" in changes and not (changes["name"] or "").strip():
+        raise HTTPException(status_code=400, detail="missing_name")
+    if not changes:
+        raise HTTPException(status_code=400, detail="no_changes")
+    try:
+        return task_service.update_task(str(task_id), changes, actor_id=auth.get("user_id"))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="task_not_found") from exc
+    except Exception as exc:
+        logger.error("task_update_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/tasks/{task_id}/complete")
+async def complete_task(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    try:
+        return task_service.complete_task(str(task_id), actor_id=auth.get("user_id"))
+    except Exception as exc:
+        logger.error("task_complete_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/tasks/{task_id}/reopen")
+async def reopen_task(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    try:
+        return task_service.reopen_task(str(task_id), actor_id=auth.get("user_id"))
+    except Exception as exc:
+        logger.error("task_reopen_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.delete("/tasks/{task_id}")
+async def trash_task(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Soft-delete (Trash). Permanent delete lands with the Phase 2 Trash UI."""
+    try:
+        task_service.soft_delete_task(str(task_id), actor_id=auth.get("user_id"))
+        return {"deleted": True}
+    except Exception as exc:
+        logger.error("task_trash_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/tasks/{task_id}/restore")
+async def restore_task(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    try:
+        task_service.restore_task(str(task_id), actor_id=auth.get("user_id"))
+        return {"restored": True}
+    except Exception as exc:
+        logger.error("task_restore_failed", extra={"task_id": str(task_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc

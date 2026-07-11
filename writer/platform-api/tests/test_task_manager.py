@@ -145,6 +145,24 @@ def test_select_due_tasks_buckets():
     assert buckets["g2"]["overdue"] == ["Also late"]
 
 
+def test_bucket_by_due():
+    today = date(2026, 7, 11)
+    rows = [
+        {"name": "Old", "due_date": "2026-07-01"},
+        {"name": "Now", "due_date": "2026-07-11"},
+        {"name": "Soon", "due_date": "2026-07-15"},
+        {"name": "Edge", "due_date": "2026-07-18"},   # today+7 → this_week
+        {"name": "Far", "due_date": "2026-08-11"},
+        {"name": "Someday", "due_date": None},
+    ]
+    buckets = task_service.bucket_by_due(rows, today)
+    assert [r["name"] for r in buckets["overdue"]] == ["Old"]
+    assert [r["name"] for r in buckets["today"]] == ["Now"]
+    assert [r["name"] for r in buckets["this_week"]] == ["Soon", "Edge"]
+    assert [r["name"] for r in buckets["later"]] == ["Far"]
+    assert [r["name"] for r in buckets["no_date"]] == ["Someday"]
+
+
 # ---------------------------------------------------------------------------
 # Monthly generation orchestration (mocked DB)
 # ---------------------------------------------------------------------------
