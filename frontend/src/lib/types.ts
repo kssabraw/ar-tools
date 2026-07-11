@@ -1682,3 +1682,116 @@ export interface StrategyReviewList {
   reviews: StrategyReview[]
   enabled: boolean
 }
+
+// ── Native task manager (in-app-task-manager-prd-v1_0) ─────────────────────
+
+export interface TaskStatus {
+  key: string
+  label: string
+  color: string | null
+  category: 'not_started' | 'in_progress' | 'blocked' | 'done'
+  is_initial: boolean
+  is_done: boolean
+  sort_order: number
+  active: boolean
+}
+
+export interface TaskCategory {
+  key: string
+  label: string
+  color: string | null
+  sort_order: number
+  active: boolean
+}
+
+export interface TaskSection {
+  id: string
+  client_id: string | null
+  name: string
+  kind: 'month' | 'backlog' | 'custom'
+  period_month: string | null
+  sort_order: number
+}
+
+export interface TaskItem {
+  id: string
+  client_id: string | null
+  section_id: string | null
+  parent_task_id: string | null
+  name: string
+  description: string | null
+  assignee_gid: string | null
+  assignee_name: string | null
+  status_key: string | null
+  category: string | null
+  due_date: string | null
+  start_date: string | null
+  est_hours: number | null
+  completed: boolean
+  completed_at: string | null
+  sort_order: number
+  source: string
+  library_task_name: string | null
+  created_at: string
+  // Board rollup (top-level tasks only)
+  subtask_total?: number
+  subtask_done?: number
+  // My Tasks enrichment
+  client_name?: string | null
+}
+
+export interface TaskBoardResponse {
+  sections: TaskSection[]
+  tasks: TaskItem[]
+}
+
+export interface TaskActivityItem {
+  id: string
+  kind: string
+  actor_id: string | null
+  detail: Record<string, unknown> | null
+  created_at: string
+}
+
+export interface TaskDetailResponse extends TaskItem {
+  subtasks: TaskItem[]
+  activity: TaskActivityItem[]
+  comments?: TaskComment[]
+  attachments?: TaskAttachment[]
+  watchers?: string[]
+}
+
+export interface MyTasksResponse {
+  members: { gid: string; name: string }[]
+  gid: string | null
+  buckets: Partial<Record<'overdue' | 'today' | 'this_week' | 'later' | 'no_date', TaskItem[]>>
+}
+
+export interface TaskComment {
+  id: string
+  task_id: string
+  author_id: string
+  author_name?: string | null
+  body: string
+  mentions: string[] | null
+  created_at: string
+  edited_at: string | null
+}
+
+export interface TaskAttachment {
+  id: string
+  task_id: string
+  file_name: string
+  mime_type: string | null
+  size_bytes: number | null
+  created_at: string
+  url?: string | null
+}
+
+export interface TaskTrashItem {
+  id: string
+  name: string
+  parent_task_id: string | null
+  deleted_at: string
+  assignee_name: string | null
+}

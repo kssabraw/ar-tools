@@ -18,6 +18,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 
+from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
 from models.asana import (
@@ -55,8 +56,16 @@ async def asana_status(auth: dict = Depends(require_auth)) -> dict:
 # ---------------------------------------------------------------------------
 @router.get("/asana/workload")
 async def workload(auth: dict = Depends(require_auth)) -> dict:
-    """Per-person open-task load + same-day due clustering for the team list."""
+    """Per-person open-task load + same-day due clustering for the team list.
+
+    Data source follows the parallel-run flag: native ``tasks`` once
+    ``native_tasks_enabled`` is flipped, Asana fetches until then — the
+    Workload page needs no change at cutover."""
     try:
+        if settings.native_tasks_enabled:
+            from services import task_workload
+
+            return task_workload.build_team_workload()
         return await asana_workload.build_team_workload()
     except Exception as exc:
         logger.error("asana_workload_failed", extra={"error": str(exc)})

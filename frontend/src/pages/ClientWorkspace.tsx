@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -340,6 +340,13 @@ export function ClientWorkspace() {
         title="Project Management"
         subtitle="Plan and dispatch this client's delivery work."
       >
+        <ActionCard
+          icon={<KanbanSquare size={22} />}
+          label="Tasks"
+          description="The native task board — this client's monthly delivery work as a Kanban/list with subtask checklists, statuses & assignees. Replacing Asana; runs in parallel during the transition."
+          to={id ? `/clients/${id}/tasks` : undefined}
+          cta="Open"
+        />
         <ActionCard
           icon={<ClipboardList size={22} />}
           label="Asana Tasks"

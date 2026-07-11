@@ -1043,6 +1043,12 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
         # writing another identical no-op row.
         plan = latest[0]
 
+    # Native task manager producer (PRD §11): mirror the plan's top actions
+    # into tasks (create new, auto-close departed). Self-gated + best-effort.
+    from services import task_producers
+
+    task_producers.sync_action_plan_tasks(client_id, actions)
+
     # Notify only the routine weekly digest — an on-drop refresh rides the
     # rank-drop notification that already fired; a manual run means the user is
     # already looking. Don't ping for an empty plan.

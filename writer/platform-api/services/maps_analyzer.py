@@ -715,10 +715,17 @@ def reconcile_alerts(
         alert_id for key, alert_id in open_by_key.items() if key not in active_keys
     ]
 
+    created: list[dict] = []
     if inserts:
-        supabase.table("maps_alerts").insert(inserts).execute()
+        created = supabase.table("maps_alerts").insert(inserts).execute().data or []
     if resolve_ids:
         supabase.table("maps_alerts").update({"resolved_at": "now()"}).in_("id", resolve_ids).execute()
+
+    # Native task manager producer (PRD §11). Self-gated + best-effort inside.
+    if created or resolve_ids:
+        from services import task_producers
+
+        task_producers.on_maps_alerts(client_id, created, resolve_ids)
 
     if inserts or resolve_ids:
         logger.info(

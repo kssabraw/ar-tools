@@ -1,6 +1,7 @@
+import { useEffect, useState } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LifeBuoy, Sparkles, Link2 } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LifeBuoy, Sparkles, Link2, ListChecks, Menu, X } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -9,6 +10,7 @@ interface NavItem {
 }
 
 const nav: NavItem[] = [
+  { label: 'My Tasks', to: '/my-tasks', icon: <ListChecks size={18} /> },
   { label: 'Runs', to: '/runs', icon: <LayoutDashboard size={18} /> },
   { label: 'Articles', to: '/articles', icon: <BookOpen size={18} /> },
   { label: 'Silos', to: '/silos', icon: <Layers size={18} /> },
@@ -37,6 +39,20 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const { user, signOut, isAdmin } = useAuth()
   const location = useLocation()
   const navigate = useNavigate()
+
+  // Mobile (PWA, PRD §13): the sidebar collapses behind a hamburger and slides
+  // over the content; it closes on any navigation.
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 768px)').matches)
+  const [mobileOpen, setMobileOpen] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 768px)')
+    const onChange = () => setIsMobile(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+  useEffect(() => {
+    setMobileOpen(false)
+  }, [location.pathname])
 
   // Team management is admin-only (matches the /team AdminRoute guard).
   const mainNav: NavItem[] = [
@@ -85,6 +101,26 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div style={{ display: 'flex', minHeight: '100vh', fontFamily: 'system-ui, sans-serif' }}>
+      {isMobile && (
+        <button
+          onClick={() => setMobileOpen((v) => !v)}
+          aria-label="Menu"
+          style={{
+            position: 'fixed', top: 12, left: 12, zIndex: 70,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            width: 38, height: 38, borderRadius: 10, border: '1px solid #e2e8f0',
+            background: '#fff', color: '#0f172a', cursor: 'pointer', boxShadow: '0 1px 3px rgba(15,23,42,0.12)',
+          }}
+        >
+          {mobileOpen ? <X size={18} /> : <Menu size={18} />}
+        </button>
+      )}
+      {isMobile && mobileOpen && (
+        <div
+          onClick={() => setMobileOpen(false)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.4)', zIndex: 55 }}
+        />
+      )}
       <aside style={{
         width: 220,
         background: '#0f172a',
@@ -92,6 +128,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
         display: 'flex',
         flexDirection: 'column',
         padding: '24px 0',
+        ...(isMobile
+          ? {
+              position: 'fixed', top: 0, bottom: 0, left: 0, zIndex: 60,
+              transform: mobileOpen ? 'translateX(0)' : 'translateX(-100%)',
+              transition: 'transform 0.2s ease', overflowY: 'auto',
+            }
+          : {}),
       }}>
         <div style={{ padding: '0 20px 24px', borderBottom: '1px solid #1e293b' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -126,7 +169,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
-      <main style={{ flex: 1, background: '#f8fafc', overflow: 'auto' }}>
+      <main style={{ flex: 1, background: '#f8fafc', overflow: 'auto', ...(isMobile ? { paddingTop: 48 } : {}) }}>
         {children}
       </main>
     </div>

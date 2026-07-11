@@ -256,10 +256,18 @@ def reconcile_alerts(
         if atype not in active_by_kw.get(kid, set())
     ]
 
+    created: list[dict] = []
     if inserts:
-        supabase.table("rank_alerts").insert(inserts).execute()
+        created = supabase.table("rank_alerts").insert(inserts).execute().data or []
     if resolve_ids:
         supabase.table("rank_alerts").update({"resolved_at": "now()"}).in_("id", resolve_ids).execute()
+
+    # Native task manager producer (PRD §11): open a task per new drop, close
+    # tasks whose alert auto-resolved. Self-gated + best-effort inside.
+    if created or resolve_ids:
+        from services import task_producers
+
+        task_producers.on_rank_alerts(client_id, created, resolve_ids)
 
     if inserts or resolve_ids:
         logger.info(

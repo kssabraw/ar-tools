@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { RefreshCw, AlertTriangle, Users, CheckCircle2, Plus, Trash2, Save } from 'lucide-react'
+import { RefreshCw, AlertTriangle, Users, CheckCircle2, Plus, Trash2, Save, DownloadCloud } from 'lucide-react'
 import { api } from '../lib/api'
+import { useAuth } from '../context/AuthContext'
 import type { AsanaWorkloadReport, AsanaWorkloadMember, AsanaTeamMember, AsanaUser } from '../lib/types'
 
 // Team Workload — a suite-level read view of each tracked team member's open
@@ -9,7 +10,32 @@ import type { AsanaWorkloadReport, AsanaWorkloadMember, AsanaTeamMember, AsanaUs
 // person's weekly capacity. Flags same-day over-capacity + backlog. Includes a
 // "Team & capacity" editor. The daily proactive alert is server-side (Phase 3).
 // See docs/modules/asana-task-integration-plan-v1_0.md §4.
+interface ImportStatus {
+  status: string
+  result?: Record<string, unknown> | null
+  error?: string | null
+}
+
 export function TeamWorkload() {
+  const { isAdmin } = useAuth()
+  const importQc = useQueryClient()
+  const [importStarted, setImportStarted] = useState(false)
+  const { data: importStatus } = useQuery<ImportStatus>({
+    queryKey: ['task-import-status'],
+    queryFn: () => api.get<ImportStatus>('/tasks/import/asana/status'),
+    enabled: isAdmin,
+    refetchInterval: (query) => {
+      const s = query.state.data?.status
+      return importStarted && (s === 'pending' || s === 'running') ? 4000 : false
+    },
+  })
+  const importMut = useMutation({
+    mutationFn: () => api.post<{ status: string }>('/tasks/import/asana', {}),
+    onSuccess: () => {
+      setImportStarted(true)
+      importQc.invalidateQueries({ queryKey: ['task-import-status'] })
+    },
+  })
   const queryClient = useQueryClient()
 
   const { data: report, isLoading, refetch, isFetching } = useQuery<AsanaWorkloadReport>({
@@ -38,11 +64,38 @@ export function TeamWorkload() {
             due the same day.
           </p>
         </div>
-        <button style={refreshBtn} onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCw size={14} style={isFetching ? { animation: 'spin 1s linear infinite' } : undefined} />
-          {isFetching ? 'Refreshing…' : 'Refresh'}
-        </button>
+        <span style={{ display: 'inline-flex', gap: 8 }}>
+          {isAdmin && (
+            <button
+              style={refreshBtn}
+              onClick={() => importMut.mutate()}
+              disabled={importMut.isPending || importStatus?.status === 'running' || importStatus?.status === 'pending'}
+              title="Snapshot every mapped client's Asana board into the native task manager (idempotent — re-runs only fill gaps)"
+            >
+              <DownloadCloud size={14} />
+              {importMut.isPending || importStatus?.status === 'running' || importStatus?.status === 'pending'
+                ? 'Importing from Asana…'
+                : 'Import Asana boards'}
+            </button>
+          )}
+          <button style={refreshBtn} onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw size={14} style={isFetching ? { animation: 'spin 1s linear infinite' } : undefined} />
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </span>
       </div>
+      {importStatus?.status === 'complete' && importStatus.result && (
+        <div style={{ margin: '10px 0 0', padding: '8px 12px', borderRadius: 8, background: '#f0fdf4', color: '#15803d', fontSize: 13 }}>
+          Asana import done — {String(importStatus.result.tasks ?? 0)} tasks (+{String(importStatus.result.subtasks ?? 0)} subtasks)
+          across {String(importStatus.result.clients ?? 0)} clients; {String(importStatus.result.existing ?? 0)} already imported,
+          {' '}{String(importStatus.result.checklists_seeded ?? 0)} library checklists seeded.
+        </div>
+      )}
+      {importStatus?.status === 'failed' && (
+        <div style={{ margin: '10px 0 0', padding: '8px 12px', borderRadius: 8, background: '#fef2f2', color: '#b91c1c', fontSize: 13 }}>
+          Asana import failed — {importStatus.error ?? 'see server logs'}.
+        </div>
+      )}
 
       {report?.thresholds && (
         <div style={{ fontSize: 12, color: '#94a3b8', margin: '8px 0 20px' }}>

@@ -643,6 +643,50 @@ async def list_project_category_options(project_gid: str) -> list[dict]:
     return []
 
 
+async def _get_paged(path: str, params: dict) -> list[dict]:
+    """GET with offset pagination — accumulates every page's ``data``. Used by
+    the migration importer, which needs complete task lists (unlike the
+    conversational lookups, which cap at one page)."""
+    items: list[dict] = []
+    offset: Optional[str] = None
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        while True:
+            page_params = dict(params)
+            if offset:
+                page_params["offset"] = offset
+            resp = await client.get(f"{_BASE_URL}{path}", headers=_headers(), params=page_params)
+            resp.raise_for_status()
+            body = resp.json()
+            items.extend(body.get("data") or [])
+            offset = ((body.get("next_page") or {}).get("offset"))
+            if not offset:
+                return items
+
+
+async def list_project_tasks_full(project_gid: str) -> list[dict]:
+    """EVERY task in a project with the fields the importer maps (paginated)."""
+    return await _get_paged(
+        f"/projects/{project_gid}/tasks",
+        {
+            "opt_fields": (
+                "name,completed,due_on,num_subtasks,assignee.name,"
+                "memberships.section.name,memberships.project.gid,"
+                "custom_fields.name,custom_fields.number_value,"
+                "custom_fields.enum_value.name,custom_fields.display_value"
+            ),
+            "limit": 100,
+        },
+    )
+
+
+async def list_task_subtasks(task_gid: str) -> list[dict]:
+    """A task's subtasks [{gid, name, completed, assignee.name, due_on}]."""
+    return await _get_paged(
+        f"/tasks/{task_gid}/subtasks",
+        {"opt_fields": "name,completed,due_on,assignee.name", "limit": 100},
+    )
+
+
 async def list_member_open_tasks(user_gid: str) -> list[dict]:
     """A member's incomplete tasks across the workspace (with due dates).
 

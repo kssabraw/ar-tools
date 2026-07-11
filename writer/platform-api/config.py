@@ -729,6 +729,29 @@ class Settings(BaseSettings):
     # Flag a member whose open backlog exceeds this many weeks of their capacity.
     asana_workload_backlog_weeks: float = 2.0
 
+    # Native In-App Task Manager (docs/modules/in-app-task-manager-prd-v1_0.md).
+    # Master flag for the parallel-run: while False, the native scheduler hooks
+    # (monthly generation, due sweep, native workload alert) stay dormant and
+    # the Workload page keeps reading Asana — the team's execution surface is
+    # unchanged. Flip to true at cutover (or during the parallel-run cycle).
+    # On-demand endpoints (generate-month, native workload read) work
+    # regardless: they only touch the new task_* tables. The monthly cadence
+    # reuses asana_month_generate_day / asana_month_target_offset, and the
+    # workload thresholds reuse the asana_* defaults above — one knob set for
+    # both systems during the transition.
+    native_tasks_enabled: bool = False
+    # Per-file cap for task attachments (the bucket also enforces 20 MB).
+    task_attachment_max_mb: int = 20
+    # Suite auto-integration producers (PRD §11) — each is double-gated on
+    # native_tasks_enabled AND its own flag, so they can be enabled one at a
+    # time. content_run is opt-in (the PRD marks it optional).
+    task_producer_rank_drop_enabled: bool = True
+    task_producer_maps_alert_enabled: bool = True
+    task_producer_action_plan_enabled: bool = True
+    # Only the top-N plan actions become tasks (the plan is priority-sorted).
+    task_producer_action_plan_max: int = 10
+    task_producer_content_run_enabled: bool = False
+
     class Config:
         env_file = ".env"
 

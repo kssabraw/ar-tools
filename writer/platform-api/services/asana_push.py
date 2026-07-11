@@ -164,7 +164,14 @@ async def push_task_plan(client_id: str, plan_row_id: str) -> dict:
 
     Idempotent per line via the plan row's `asana_push` map. Returns
     {status, created, skipped, errors, section} — status 'skipped' with a
-    reason when Asana/the mapping/the plan is absent."""
+    reason when Asana/the mapping/the plan is absent.
+
+    Cutover (native task manager Phase 5): once ``native_tasks_enabled`` is on,
+    the push targets the NATIVE task board instead of Asana — same per-line
+    idempotency ledger (`monthly_task_plans.asana_push`, gid = the native task
+    id, url = a board deep link), so the Task Plan UI keeps working unchanged."""
+    if settings.native_tasks_enabled:
+        return _push_task_plan_native(client_id, plan_row_id)
     if not asana_service.is_configured():
         return {"status": "skipped", "reason": "asana_not_configured"}
 
@@ -296,12 +303,99 @@ async def run_asana_push_job(job: dict) -> None:
 # ---------------------------------------------------------------------------
 # Strategist proposal push (Strategist Phase 5)
 # ---------------------------------------------------------------------------
+def _push_task_plan_native(client_id: str, plan_row_id: str) -> dict:
+    """The native-board sibling of push_task_plan (post-cutover write target)."""
+    from services import task_monthly, task_service
+
+    supabase = get_supabase()
+    rows = (
+        supabase.table("monthly_task_plans").select("*")
+        .eq("id", plan_row_id).eq("client_id", client_id).limit(1).execute()
+    ).data
+    if not rows:
+        return {"status": "failed", "reason": "plan_not_found"}
+    plan_row = rows[0]
+    tasks = ((plan_row.get("plan") or {}).get("tasks")) or []
+    if not tasks:
+        return {"status": "skipped", "reason": "plan_has_no_tasks"}
+
+    today = date.today()
+    label = asana_service.month_label(today)
+    section = task_monthly.ensure_month_section(client_id, today)
+    members = _team_members(supabase)
+    names = {m.get("gid"): m.get("name") for m in members}
+    plan_link = _deep_link(f"clients/{client_id}/task-plan")
+
+    pushed: dict = dict(plan_row.get("asana_push") or {})
+    created = 0
+    skipped = 0
+    errors: list[str] = []
+    for idx, task in enumerate(tasks):
+        key = task_key(task, idx)
+        if pushed.get(key, {}).get("gid"):
+            skipped += 1
+            continue
+        try:
+            name = task.get("label") or task.get("task_type") or "Task"
+            gid = match_member_gid(primary_assignee_name(task.get("assignee")), members)
+            row = task_service.create_task(
+                name,
+                client_id=client_id,
+                section_id=section["id"],
+                assignee_gid=gid,
+                assignee_name=names.get(gid),
+                description=task_notes(task, label, plan_link),
+                sort_order=idx,
+                source="task_plan",
+                source_ref=f"{plan_row_id}:{key}",
+            )
+            pushed[key] = {
+                "gid": row["id"],
+                "url": f"/clients/{client_id}/tasks?task={row['id']}",
+                "name": name,
+            }
+            created += 1
+            supabase.table("monthly_task_plans").update({"asana_push": pushed}).eq(
+                "id", plan_row_id
+            ).execute()
+        except Exception as exc:  # one bad line must not abort the rest
+            errors.append(f"{task.get('label')}: {str(exc)[:120]}")
+            logger.warning(
+                "task_plan_push_native_failed",
+                extra={"client_id": client_id, "task": task.get("label"), "error": str(exc)},
+            )
+    return {
+        "status": "ok" if not errors else "partial",
+        "created": created,
+        "skipped": skipped,
+        "errors": errors,
+        "section": label,
+        "target": "native",
+    }
+
+
 async def push_proposal(client_id: str, review_id: str, proposal: dict) -> Optional[dict]:
-    """Create one Asana task for an approved strategist proposal.
+    """Create one task for an approved strategist proposal — native board once
+    ``native_tasks_enabled`` is on, the client's Asana project until then.
 
     Best-effort: returns {gid, url} or None (unconfigured / unmapped / API
-    error) — approval itself must never fail over Asana."""
+    error) — approval itself must never fail over the task write."""
     try:
+        if settings.native_tasks_enabled:
+            from services import task_monthly, task_service
+
+            section = task_monthly.ensure_month_section(client_id, date.today())
+            row = task_service.create_task(
+                proposal_task_name(proposal),
+                client_id=client_id,
+                section_id=section["id"],
+                description=proposal_task_notes(
+                    proposal, _deep_link(f"clients/{client_id}/action-plan")
+                ),
+                source="strategy_proposal",
+                source_ref=f"{review_id}:{proposal_task_name(proposal)[:100].casefold()}",
+            )
+            return {"gid": row["id"], "url": f"/clients/{client_id}/tasks?task={row['id']}"}
         if not asana_service.is_configured():
             return None
         project_gid = get_project_gid(client_id)

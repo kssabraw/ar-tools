@@ -213,10 +213,13 @@ def _act_push_task_plan(client_id: str, args: Optional[dict] = None) -> str:
 
 
 def _asana_ready(client_id: str) -> tuple[Optional[str], Optional[str]]:
-    """(project_gid, None) when the client's Asana board is usable, else
-    (None, guidance string)."""
+    """(project_gid, None) when the client's task board is usable, else
+    (None, guidance string). Post-cutover (native_tasks_enabled) the native
+    board needs no Asana config/mapping — returns a "native" sentinel."""
     from services import asana_monthly, asana_service
 
+    if settings.native_tasks_enabled:
+        return "native", None
     if not asana_service.is_configured():
         return None, "Asana isn't connected yet (ASANA_TOKEN + workspace) — set that up on the platform first."
     project_gid = asana_monthly.get_project_gid(client_id)
@@ -291,6 +294,35 @@ async def _act_add_task(client_id: str, args: Optional[dict] = None) -> str:
     from services import asana_push, asana_service
 
     args = args or {}
+    if settings.native_tasks_enabled:
+        # Cutover: create on the native board (same staged args — assignee_gid
+        # resolved against asana_team_members, which stays the capacity roster).
+        from services import task_monthly, task_service
+
+        section = task_monthly.ensure_month_section(client_id, date.today())
+        gid = args.get("assignee_gid")
+        assignee_name = None
+        if gid:
+            rows = (
+                get_supabase().table("asana_team_members").select("name").eq("gid", gid).limit(1).execute()
+            ).data
+            assignee_name = rows[0].get("name") if rows else None
+        row = task_service.create_task(
+            (args.get("task_name") or "Task")[:250],
+            client_id=client_id,
+            section_id=section["id"],
+            assignee_gid=gid,
+            assignee_name=assignee_name,
+            due_date=(args.get("due_date") or "").strip() or None,
+            description=(
+                f"AR Tools · created via SerMastr\n{args['notes']}"
+                if args.get("notes")
+                else "AR Tools · created via SerMastr"
+            ),
+        )
+        who = "" if gid else " (unassigned)"
+        when = f" · due {row['due_date']}" if row.get("due_date") else ""
+        return f"✅ Created *“{row['name']}”*{who}{when} — /clients/{client_id}/tasks?task={row['id']}"
     project_gid, problem = _asana_ready(client_id)
     if problem:
         return problem
@@ -334,7 +366,30 @@ async def _stage_pick_task(client_id: str, args: dict, verb: str) -> tuple[str, 
     project_gid, problem = _asana_ready(client_id)
     if problem:
         return "reply", problem
-    tasks = await asana_service.list_project_tasks(project_gid)
+    if settings.native_tasks_enabled:
+        # Cutover: match against the native board (adapted to the Asana row
+        # shape match_open_tasks already understands).
+        rows = (
+            get_supabase()
+            .table("tasks")
+            .select("id, name, assignee_name")
+            .eq("client_id", client_id)
+            .eq("completed", False)
+            .is_("deleted_at", "null")
+            .is_("parent_task_id", "null")
+            .execute()
+        ).data or []
+        tasks = [
+            {
+                "gid": r["id"],
+                "name": r.get("name"),
+                "completed": False,
+                "assignee": {"name": r["assignee_name"]} if r.get("assignee_name") else None,
+            }
+            for r in rows
+        ]
+    else:
+        tasks = await asana_service.list_project_tasks(project_gid)
     matches = match_open_tasks(tasks, query)
     if not matches:
         open_names = [t.get("name") for t in tasks if not t.get("completed") and t.get("name")]
@@ -372,6 +427,11 @@ async def _act_remove_task(client_id: str, args: Optional[dict] = None) -> str:
     args = args or {}
     if not args.get("task_gid"):
         return "I lost track of which task to delete — ask again naming the task."
+    if settings.native_tasks_enabled:
+        from services import task_service
+
+        task_service.soft_delete_task(args["task_gid"])
+        return f"🗑️ Moved *“{args.get('task_name')}”* to the board's Trash (restorable there)."
     await asana_service.delete_task(args["task_gid"])
     return f"🗑️ Deleted *“{args.get('task_name')}”* from the board."
 
@@ -382,6 +442,11 @@ async def _act_complete_task(client_id: str, args: Optional[dict] = None) -> str
     args = args or {}
     if not args.get("task_gid"):
         return "I lost track of which task to complete — ask again naming the task."
+    if settings.native_tasks_enabled:
+        from services import task_service
+
+        task_service.complete_task(args["task_gid"])
+        return f"✅ Marked *“{args.get('task_name')}”* complete."
     await asana_service.complete_task(args["task_gid"])
     return f"✅ Marked *“{args.get('task_name')}”* complete."
 

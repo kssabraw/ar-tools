@@ -283,6 +283,10 @@ async def publish_run(
             }).eq("id", str(run_id)).execute()
         except Exception as exc:  # noqa: BLE001 — non-fatal bookkeeping
             logger.warning("wp_publish_persist_failed", extra={"run_id": str(run_id), "error": str(exc)})
+        # Close the native "Review & publish" task, if the producer opened one.
+        from services import task_producers
+
+        task_producers.on_run_published(str(run_id))
         logger.info(
             "wordpress_published",
             extra={
@@ -358,6 +362,10 @@ async def publish_run(
         }).eq("id", str(run_id)).execute()
     except Exception as exc:  # noqa: BLE001 — non-fatal bookkeeping
         logger.warning("doc_publish_persist_failed", extra={"run_id": str(run_id), "error": str(exc)})
+    # Close the native "Review & publish" task, if the producer opened one.
+    from services import task_producers
+
+    task_producers.on_run_published(str(run_id))
 
     logger.info(
         "doc_published",
