@@ -65,6 +65,18 @@ def should_alert(new_count: int, lost_count: int) -> bool:
             or lost_count >= settings.backlink_alert_lost_domains_min)
 
 
+def match_own_domain_target(targets: list, client_domain: Optional[str]) -> Optional[dict]:
+    """The tracked target row that IS the client's own domain (bare-domain type),
+    or None. Pure — the agent-layer read of a client's own backlink monitoring."""
+    if not client_domain:
+        return None
+    cd = client_domain.lower()
+    for t in targets:
+        if t.get("target_type") == "domain" and (t.get("target") or "").lower() == cd:
+            return t
+    return None
+
+
 # ----------------------------------------------------------------------------
 # Daily paid-call budget
 # ----------------------------------------------------------------------------
@@ -376,6 +388,47 @@ def list_tracked(client_id: str) -> list[dict]:
                     ("referring_domains", "backlinks", "domain_rating", "new_domains",
                      "lost_domains", "captured_at")} if snap else None)})
     return out
+
+
+def client_own_domain_change(client_id: str) -> Optional[dict]:
+    """The client's own-domain backlink link-velocity from the Backlink Explorer,
+    for the agent layer (offpage enrichment, strategist digest). Returns the
+    latest tracked snapshot's gained/lost referring domains (+ samples) or None
+    when the client hasn't tracked their own domain. Best-effort — never raises."""
+    try:
+        from services.dataforseo_rank import extract_domain
+
+        sb = get_supabase()
+        client = (sb.table("clients").select("website_url").eq("id", client_id).limit(1).execute()).data
+        if not client:
+            return None
+        domain = extract_domain(client[0].get("website_url") or "")
+        if not domain:
+            return None
+        targets = (
+            sb.table("backlink_targets").select("*")
+            .eq("client_id", client_id).eq("tracked", True).execute()
+        ).data or []
+        target = match_own_domain_target(targets, domain)
+        if not target:
+            return None
+        snap = _latest_snapshot(target["id"])
+        if not snap:
+            return None
+        raw = snap.get("raw") or {}
+        return {
+            "domain": domain,
+            "domain_rating": snap.get("domain_rating"),
+            "referring_domains": snap.get("referring_domains"),
+            "new_domains": snap.get("new_domains") or 0,
+            "lost_domains": snap.get("lost_domains") or 0,
+            "lost_sample": (raw.get("lost_domains") or [])[:10],
+            "new_sample": (raw.get("new_domains") or [])[:10],
+            "captured_at": snap.get("captured_at"),
+        }
+    except Exception as exc:
+        logger.warning("backlink_own_domain_change_failed", extra={"client_id": client_id, "error": str(exc)})
+        return None
 
 
 def _emit_backlink_alert(target_row: dict, new_count: int, lost_count: int) -> None:

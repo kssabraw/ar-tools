@@ -241,12 +241,16 @@ def build_offpage_actions(client_id: str, offpage_alerts: list[dict]) -> list[di
     for a in offpage_alerts:
         alert_type = a.get("alert_type")
         if alert_type == "rd_loss":
+            diagnosis = a.get("message") or "Referring domains fell between captures."
+            lost = (a.get("details") or {}).get("lost_domains") or []
+            if lost:
+                diagnosis += " Recently lost referring domains include: " + ", ".join(lost[:8]) + "."
             actions.append(
                 {
                     "kind": "rd_loss",
                     "source": "organic",
                     "keyword": "Backlink profile",
-                    "diagnosis": a.get("message") or "Referring domains fell between captures.",
+                    "diagnosis": diagnosis,
                     "recommendation": "Aggregate link loss (SOP §A.5) — build a replacement plan via the "
                     "Recipe Engine: generate this month's task plan and fund the referring-domains "
                     "variable (the lost RD marks it deficient automatically).",

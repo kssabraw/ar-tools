@@ -72,6 +72,21 @@ def test_offpage_actions_render_sop_responses():
     assert loss["sort"] > spike["sort"]  # loss outranks spike within the tier
 
 
+def test_rd_loss_diagnosis_names_lost_domains_when_present():
+    # A tracked own-domain snapshot enriches the alert details with the actual
+    # dropped domains — the planner surfaces them in the diagnosis.
+    alerts = [{"alert_type": "rd_loss", "message": "RD fell 20%.", "delta_pct": -20,
+               "details": {"lost_domains": ["good-blog.com", "news-site.org"]}}]
+    loss = next(a for a in build_offpage_actions("c1", alerts) if a["kind"] == "rd_loss")
+    assert "good-blog.com" in loss["diagnosis"]
+    assert "news-site.org" in loss["diagnosis"]
+
+
+def test_rd_loss_diagnosis_unchanged_without_details():
+    loss = build_offpage_actions("c1", [{"alert_type": "rd_loss", "message": "RD fell.", "delta_pct": -20}])[0]
+    assert loss["diagnosis"] == "RD fell."
+
+
 def test_offpage_sits_between_drops_and_cannibalization():
     drop = build_actions(
         "c1", [{"keyword": "x", "alert_type": "weekly_drop", "message": "m"}], [], {}

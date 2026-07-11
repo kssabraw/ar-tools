@@ -177,3 +177,28 @@ def test_should_alert_on_new():
 
 def test_should_alert_on_lost():
     assert backlink_explorer.should_alert(0, 12) is True
+
+
+# ---------------------------------------------------------------------------
+# match_own_domain_target (agent-layer own-domain lookup)
+# ---------------------------------------------------------------------------
+def test_match_own_domain_target_finds_bare_domain():
+    targets = [
+        {"target": "sub.example.com", "target_type": "subdomain"},
+        {"target": "example.com", "target_type": "domain"},
+    ]
+    assert backlink_explorer.match_own_domain_target(targets, "example.com")["target_type"] == "domain"
+
+
+def test_match_own_domain_target_case_insensitive():
+    targets = [{"target": "Example.com", "target_type": "domain"}]
+    assert backlink_explorer.match_own_domain_target(targets, "example.com") is not None
+
+
+def test_match_own_domain_target_none_when_only_url_tracked():
+    targets = [{"target": "example.com/pricing", "target_type": "url"}]
+    assert backlink_explorer.match_own_domain_target(targets, "example.com") is None
+
+
+def test_match_own_domain_target_none_without_domain():
+    assert backlink_explorer.match_own_domain_target([{"target": "x.com", "target_type": "domain"}], None) is None
