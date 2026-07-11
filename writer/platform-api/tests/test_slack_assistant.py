@@ -254,6 +254,77 @@ def test_run_live_gsc_reports_unconfigured(monkeypatch):
     assert "not configured" in out
 
 
+def test_list_nonindexed_reports_unconfigured(monkeypatch):
+    import asyncio
+
+    from services import gsc_service
+
+    monkeypatch.setattr(gsc_service, "is_configured", lambda: False)
+    out = asyncio.run(slack_assistant._run_list_nonindexed("c1", {}))
+    assert "not configured" in out
+
+
+def test_list_nonindexed_collects_reasons_and_skips_indexed(monkeypatch):
+    """The sweep keeps only non-PASS pages, tagging each with its coverage
+    reason, and never lets one failing inspection sink the batch."""
+    import asyncio
+    import json
+
+    from services import gsc_service, rank_materialize, site_page_index
+    from services import dataforseo_rank
+
+    monkeypatch.setattr(gsc_service, "is_configured", lambda: True)
+    monkeypatch.setattr(
+        rank_materialize, "_verified_property", lambda sb, cid: {"site_url": "https://ex.com/"}
+    )
+    # Client row + locale.
+    class _Resp:
+        data = [{"website_url": "https://ex.com/"}]
+
+    class _Q:
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self): return _Resp()
+
+    monkeypatch.setattr(
+        slack_assistant.llm, "get_supabase",
+        lambda: type("S", (), {"table": lambda self, *a: _Q()})(),
+    )
+    monkeypatch.setattr(dataforseo_rank, "location_code_for", lambda row: 2840)
+
+    async def _discover(website, loc):
+        return (
+            ["https://ex.com/a", "https://ex.com/b", "https://ex.com/c", "https://ex.com/d"],
+            "sitemap",
+        )
+
+    monkeypatch.setattr(site_page_index, "discover_site_urls", _discover)
+
+    verdicts = {
+        "https://ex.com/a": {"verdict": "PASS", "coverage_state": "Submitted and indexed"},
+        "https://ex.com/b": {"verdict": "NEUTRAL", "coverage_state": "Crawled - currently not indexed"},
+        "https://ex.com/c": {"verdict": "NEUTRAL", "coverage_state": "Page with redirect"},
+        # /d raises — must be captured as an inspection error, not a crash.
+    }
+
+    def _inspect(site_url, url):
+        if url == "https://ex.com/d":
+            raise RuntimeError("quota exceeded")
+        return verdicts[url]
+
+    monkeypatch.setattr(gsc_service, "inspect_url", _inspect)
+
+    out = asyncio.run(slack_assistant._run_list_nonindexed("c1", {}))
+    payload = json.loads(out)
+    assert payload["indexed_count"] == 1
+    assert payload["nonindexed_count"] == 2
+    reasons = {r["url"]: r["reason"] for r in payload["nonindexed"]}
+    assert reasons["https://ex.com/b"] == "Crawled - currently not indexed"
+    assert reasons["https://ex.com/c"] == "Page with redirect"
+    assert payload["inspection_errors"] and payload["inspection_errors"][0]["url"] == "https://ex.com/d"
+
+
 def test_context_providers_cover_all_modules():
     keys = [k for k, _ in slack_assistant._CONTEXT_PROVIDERS]
     for expected in (

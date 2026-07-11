@@ -184,6 +184,136 @@ async def _run_live_gsc(client_id: str, args: dict) -> str:
     return json.dumps(payload, default=str)[:_LIVE_GSC_RESULT_CHARS]
 
 
+# ---------------------------------------------------------------------------
+# Non-indexed pages — inspect the client's known pages via the GSC URL
+# Inspection API and report those Google hasn't indexed, each with its reason.
+# GSC exposes NO bulk index-coverage API (the Page Indexing report is UI-only),
+# so we discover the client's pages from its sitemap and inspect each one — a
+# bounded, one-call-per-URL sweep. Free (Search Console API), so no confirm.
+# ---------------------------------------------------------------------------
+_NONINDEXED_DEFAULT = 40   # URLs inspected per call when the model doesn't specify
+_NONINDEXED_MAX = 80       # hard cap (URL Inspection quota + latency bound)
+_NONINDEXED_CONCURRENCY = 5
+_NONINDEXED_RESULT_CHARS = 6000
+
+_LIST_NONINDEXED_TOOL = {
+    "name": "list_nonindexed_pages",
+    "description": (
+        "List this client's pages that Google has NOT indexed, each with the "
+        "reason from Search Console (the coverageState — e.g. 'Crawled - currently "
+        "not indexed', 'Discovered - currently not indexed', 'Page with redirect', "
+        "'Duplicate, Google chose different canonical than user', 'Excluded by "
+        "noindex tag', 'URL is unknown to Google'). Free — no confirmation. "
+        "Discovers the client's pages from its sitemap and runs GSC URL Inspection "
+        "on each. Bounded: GSC has no bulk index-coverage API, so it inspects up to "
+        f"{_NONINDEXED_MAX} URLs per call and reports how many it checked and "
+        "whether the list was truncated. Use for questions like 'which pages aren't "
+        "indexed and why', 'is anything deindexed', or 'why isn't <page> indexed'."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "search": {
+                "type": "string",
+                "description": "Optional case-insensitive URL substring to inspect a subset (e.g. '/blog/' or a specific slug).",
+            },
+            "limit": {
+                "type": "integer",
+                "description": f"Max pages to inspect (default {_NONINDEXED_DEFAULT}, hard max {_NONINDEXED_MAX}).",
+            },
+        },
+    },
+}
+
+
+async def _run_list_nonindexed(client_id: str, args: dict) -> str:
+    """Inspect the client's sitemap pages and return the non-indexed ones with
+    their GSC coverage reason. Returns a JSON summary string; errors return an
+    explanatory string (never raises) so Claude can explain the gap."""
+    from services import gsc_service, rank_materialize, site_page_index
+    from services.dataforseo_rank import extract_domain, location_code_for
+
+    if not gsc_service.is_configured():
+        return "Non-indexed check unavailable: the agency Search Console service-account key is not configured."
+    supabase = get_supabase()
+    prop = rank_materialize._verified_property(supabase, client_id)
+    if not prop:
+        return (
+            "Non-indexed check unavailable: no verified Search Console property for "
+            "this client — connect one on the Rankings page. (URL Inspection needs a "
+            "verified property.)"
+        )
+    try:
+        rows = (
+            supabase.table("clients").select("*").eq("id", client_id).limit(1).execute()
+        ).data or []
+    except Exception as exc:
+        return f"Non-indexed check failed reading the client: {exc}"
+    client_row = rows[0] if rows else {}
+    website = (client_row.get("website_url") or "").strip()
+    if not website:
+        return "No website on file for this client, so there are no pages to inspect."
+
+    location_code = location_code_for(client_row)
+    try:
+        urls, source = await site_page_index.discover_site_urls(website, location_code)
+    except Exception as exc:
+        return f"Non-indexed check failed discovering pages: {exc}"
+    if not urls:
+        return (
+            f"Couldn't discover any pages for {extract_domain(website) or website} "
+            "(no readable sitemap and no indexed-URL fallback), so there's nothing to inspect."
+        )
+
+    needle = (args.get("search") or "").strip().lower()
+    if needle:
+        urls = [u for u in urls if needle in u.lower()]
+        if not urls:
+            return f"No discovered pages matched the filter '{needle}'."
+    cap = max(1, min(int(args.get("limit") or _NONINDEXED_DEFAULT), _NONINDEXED_MAX))
+    to_inspect = urls[:cap]
+    truncated = len(urls) > cap
+
+    site_url = prop["site_url"]
+    sem = asyncio.Semaphore(_NONINDEXED_CONCURRENCY)
+
+    async def _inspect(u: str) -> tuple:
+        async with sem:
+            try:
+                r = await asyncio.to_thread(gsc_service.inspect_url, site_url, u)
+                return (u, r.get("verdict"), r.get("coverage_state"), None)
+            except Exception as exc:  # one bad URL never sinks the sweep
+                return (u, None, None, str(exc)[:120])
+
+    results = await asyncio.gather(*[_inspect(u) for u in to_inspect])
+    nonindexed = [
+        {"url": u, "verdict": v, "reason": cov or "unknown"}
+        for (u, v, cov, err) in results
+        if err is None and v != "PASS"
+    ]
+    errors = [{"url": u, "error": err} for (u, v, cov, err) in results if err]
+    payload = {
+        "property": site_url,
+        "website": website,
+        "url_source": source,  # "sitemap" | "google_index"
+        "discovered": len(urls),
+        "inspected": len(to_inspect),
+        "truncated": truncated,
+        "filter": needle or None,
+        "indexed_count": sum(1 for (_u, v, _c, err) in results if err is None and v == "PASS"),
+        "nonindexed_count": len(nonindexed),
+        "nonindexed": nonindexed,
+        "inspection_errors": errors[:5] or None,
+        "note": (
+            "GSC has no bulk index-coverage API — this inspects sitemap-discovered URLs "
+            "one at a time via URL Inspection, so coverage is bounded by the inspect cap. "
+            "'reason' is Google's coverageState; benign states (redirect / duplicate / "
+            "alternate canonical) mean the page is on Google under a different URL, not lost."
+        ),
+    }
+    return json.dumps(payload, default=str)[:_NONINDEXED_RESULT_CHARS]
+
+
 def build_llm_tools() -> list[dict]:
     """The tool list for the assistant's Claude call.
 
@@ -313,7 +443,7 @@ async def interpret(
         max_retries=_LLM_MAX_RETRIES,
     )
     messages: list[dict] = [{"role": "user", "content": user}]
-    tools = build_llm_tools() + [_read_sop_tool(), _LIVE_GSC_TOOL, _MEMORY_TOOL]
+    tools = build_llm_tools() + [_read_sop_tool(), _LIVE_GSC_TOOL, _LIST_NONINDEXED_TOOL, _MEMORY_TOOL]
     # Bounded tool loop: read_sop / fetch_live_gsc calls are answered
     # in-conversation; an action call returns immediately (actions never mix
     # with in-answer tool reads — first wins).
@@ -347,7 +477,7 @@ async def interpret(
         tool_calls = [
             b for b in resp.content
             if getattr(b, "type", None) == "tool_use"
-            and b.name in ("read_sop", _LIVE_GSC_TOOL["name"], _MEMORY_TOOL["name"])
+            and b.name in ("read_sop", _LIVE_GSC_TOOL["name"], _LIST_NONINDEXED_TOOL["name"], _MEMORY_TOOL["name"])
         ]
         if not tool_calls or final_round:
             break
@@ -359,6 +489,7 @@ async def interpret(
                 label = {
                     "read_sop": f"Reading SOP: {args.get('doc', '')}".strip().rstrip(":"),
                     _LIVE_GSC_TOOL["name"]: "Pulling live Search Console data",
+                    _LIST_NONINDEXED_TOOL["name"]: "Checking Search Console for non-indexed pages",
                     _MEMORY_TOOL["name"]: "Saving a note to memory",
                 }.get(b.name, "Working")
                 await on_event({"type": "status", "label": label})
@@ -369,6 +500,8 @@ async def interpret(
                     _run_remember, client["id"], args,
                     "slack" if style == "slack" else "chat",
                 )
+            elif b.name == _LIST_NONINDEXED_TOOL["name"]:
+                text = await _run_list_nonindexed(client["id"], args)
             else:
                 text = await _run_live_gsc(client["id"], args)
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": text})
