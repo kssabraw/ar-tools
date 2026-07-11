@@ -154,6 +154,7 @@ async def handle_chat(
     sticky_client_id: Optional[str],
     pending_token: Optional[str],
     on_event=None,
+    action_context=None,
 ) -> dict:
     """Process one chatbox turn; returns the response payload dict.
 
@@ -163,8 +164,28 @@ async def handle_chat(
     `on_event` (async callable) streams the turn as it generates — text deltas
     + tool-activity status markers — for the SSE endpoint; the returned dict is
     the same either way (the frontend renders the final reply from it).
+    `action_context` (a `pace_auth.ActionContext`) is the authenticated actor,
+    used only by the PACE delegate below.
     """
     history = history[-_HISTORY_LIMIT:]
+
+    # 0) PACE (delivery PM) gets first refusal when enabled (default off → inert,
+    # SerMaStr behaviour unchanged). It handles project-management-shaped turns +
+    # its own actor-bound confirm tokens; anything else returns None and falls
+    # through to the SerMaStr flow below.
+    from config import settings as _settings
+
+    if _settings.pace_enabled and action_context is not None:
+        try:
+            from services import pace_agent
+
+            handled = await pace_agent.maybe_handle_web(
+                message, history, sticky_client_id, pending_token, action_context, on_event
+            )
+            if handled is not None:
+                return handled
+        except Exception as exc:  # PACE must never break the SerMaStr path
+            logger.warning("pace_web_delegate_failed", extra={"error": str(exc)})
 
     # 1) Confirmation of a staged action — the token pins the exact action +
     # client, so the "yes" needn't name anything.
