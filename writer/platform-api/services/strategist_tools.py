@@ -117,6 +117,41 @@ async def _run_competitor_profile(client_id: str, args: dict) -> str:
     return _clip(_dump({"client_comparison": assembled.get("client"), "competitor": match}))
 
 
+async def _run_backlink_profile(client_id: str, args: dict) -> str:
+    """The client's tracked backlink authority from the Backlink Explorer —
+    beyond the digest's summary: per tracked domain (own + tracked competitors)
+    the latest DR / RD / backlinks / linked-pages, own-domain link velocity with
+    the actual gained/lost domain names, and the top pages by referring domains.
+    Deterministic read over stored snapshots — free."""
+    from services import backlink_explorer
+
+    tracked = backlink_explorer.list_tracked(client_id)
+    if not tracked:
+        return ("No tracked backlink targets for this client yet (auto-track runs daily "
+                "for clients with a website; the first snapshot may still be pending).")
+    out: dict = {
+        "tracked_domains": [
+            {"domain": t.get("label") or t.get("target"), "latest": t.get("latest")}
+            for t in tracked[:8]
+        ],
+    }
+    velocity = backlink_explorer.client_own_domain_change(client_id)
+    if velocity:
+        out["own_domain_velocity"] = velocity
+        # Top pages by RD from the own domain's latest snapshot — where the
+        # authority actually lives.
+        own = backlink_explorer.match_own_domain_target(tracked, velocity.get("domain"))
+        if own:
+            snap = backlink_explorer._latest_snapshot(own["id"])
+            if snap:
+                pages = backlink_explorer._read_pages(snap["id"])
+                out["top_pages_by_rd"] = [
+                    {k: p.get(k) for k in ("url", "page_rating", "referring_domains", "backlinks")}
+                    for p in pages[:10]
+                ]
+    return _clip(_dump(out))
+
+
 async def _run_client_capacity(client_id: str, args: dict) -> str:
     """Team capacity + current cross-client plan load. The roles matrix lives
     in _ORCHESTRATOR §6; the load read sums this month's stored task plans."""
@@ -384,6 +419,22 @@ TOOLS: dict[str, dict] = {
         },
         "paid": False,
         "run": _run_competitor_profile,
+    },
+    "backlink_profile": {
+        "description": (
+            "The client's tracked backlink authority from the Backlink Explorer, beyond the "
+            "digest summary: per tracked domain (own + tracked competitors) the latest DR / "
+            "referring domains / total backlinks / linked-pages count; the own-domain link "
+            "velocity with the ACTUAL gained/lost domain names since the previous weekly "
+            "snapshot; and the top pages by referring domains (where the authority lives). "
+            "Deterministic read of stored snapshots — free. Trap notes: DR/RD are tool reads "
+            "(true RD ≈ ×10 per the SOP shared definition); velocity needs ≥2 tracked "
+            "snapshots — a missing velocity block means the baseline was just captured, not "
+            "zero movement."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+        "paid": False,
+        "run": _run_backlink_profile,
     },
     "episode_timeline": {
         "description": (

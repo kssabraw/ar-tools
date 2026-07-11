@@ -120,3 +120,27 @@ def test_merge_authority_homepage_ur_for_maps_rows():
     out = ar.merge_authority(rows, {"b.com": 30.0, "https://b.com/": 28.0}, {})
     assert out[0]["ur"] == 28.0
     assert out[0]["rd"] is None
+
+
+# ---------------------------------------------------------------------------
+# SerMaStr formatting (slack_assistant.actions.format_authority_rows)
+# ---------------------------------------------------------------------------
+def test_format_authority_rows_organic_marks_client():
+    from services.slack_assistant.actions import format_authority_rows
+    rows = [
+        {"position": 1, "domain": "a.com", "dr": 40.0, "ur": 22.0, "rd": 310, "is_client": False},
+        {"position": None, "domain": "client.com", "dr": 12.0, "ur": None, "rd": 45, "is_client": True},
+    ]
+    out = format_authority_rows(rows, "organic")
+    assert "#1 a.com — DR 40.0 · UR 22.0 · RD 310" in out
+    assert "#n/r client.com" in out
+    assert "← *you*" in out
+
+
+def test_format_authority_rows_maps_uses_names_and_caps():
+    from services.slack_assistant.actions import format_authority_rows
+    rows = [{"name": f"biz{i}", "domain": f"b{i}.com", "dr": i, "ur": None, "rd": None,
+             "is_client": False} for i in range(12)]
+    out = format_authority_rows(rows, "maps", limit=8)
+    assert out.count("• biz") == 8
+    assert "RD —" in out

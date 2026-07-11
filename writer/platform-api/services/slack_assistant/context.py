@@ -524,6 +524,41 @@ def _ctx_campaign_goals(supabase, client_id: str, today: date) -> Optional[dict]
     }
 
 
+def _ctx_backlinks(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Backlink Explorer — tracked domains' authority (DR / referring domains /
+    pages) + the client's own-domain link velocity (gained/lost since the
+    previous weekly snapshot, with domain names)."""
+    from services import backlink_explorer
+
+    tracked = backlink_explorer.list_tracked(client_id)
+    if not tracked:
+        return None
+    out: dict = {
+        "tracked_domains": [
+            {
+                "domain": t.get("label") or t.get("target"),
+                "dr": (t.get("latest") or {}).get("domain_rating"),
+                "referring_domains": (t.get("latest") or {}).get("referring_domains"),
+                "backlinks": (t.get("latest") or {}).get("backlinks"),
+                "linked_pages": (t.get("latest") or {}).get("pages_count"),
+                "new_domains_last_check": (t.get("latest") or {}).get("new_domains"),
+                "lost_domains_last_check": (t.get("latest") or {}).get("lost_domains"),
+                "as_of": (t.get("latest") or {}).get("captured_at"),
+            }
+            for t in tracked[:6]
+        ],
+        "note": "DR/RD are DataForSEO tool reads; new/lost counts are vs the previous weekly snapshot",
+    }
+    velocity = backlink_explorer.client_own_domain_change(client_id)
+    if velocity and (velocity.get("new_sample") or velocity.get("lost_sample")):
+        out["own_domain_velocity"] = {
+            "new_sample": velocity.get("new_sample"),
+            "lost_sample": velocity.get("lost_sample"),
+            "as_of": velocity.get("captured_at"),
+        }
+    return out
+
+
 def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
     """Assembled competitor profiles so competitive questions get real data."""
     from services import competitor_intel
@@ -909,6 +944,7 @@ _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
     ("memories", _ctx_memories),
     ("competitors", _ctx_competitors),
+    ("backlinks", _ctx_backlinks),
     ("forecast", _ctx_forecast),
     ("trends", _ctx_trends),
     ("organic_rank", _ctx_organic_rank),

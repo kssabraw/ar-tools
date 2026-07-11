@@ -896,6 +896,138 @@ async def _act_live_serp(client_id: str, args: Optional[dict] = None) -> str:
     return f"Live SERP for *{keyword}* (just checked) — {domain} ranks:\n{lines}"
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Backlink Explorer actions — live paid pulls, confirm-gated.
+# ─────────────────────────────────────────────────────────────────────────────
+async def _stage_backlink_lookup(client_id: str, args: dict) -> "tuple[str, dict | str]":
+    from services import backlink_explorer
+
+    raw = (args.get("domain") or "").strip()
+    if not raw:
+        return "reply", "Which domain should I look up?"
+    try:
+        target, target_type = backlink_explorer.normalize_target(raw)
+    except ValueError:
+        return "reply", f"“{raw}” doesn't look like a domain or URL I can analyze."
+    staged = {"target": target, "target_type": target_type}
+    staged["_confirm"] = (
+        f"run a backlink lookup for *{target}* "
+        "(up to 3 paid DataForSEO calls — free if it was checked in the last 24h)"
+    )
+    return "confirm", staged
+
+
+async def _act_backlink_lookup(client_id: str, args: Optional[dict] = None) -> str:
+    from services import backlink_explorer
+
+    target = (args or {}).get("target")
+    if not target:
+        return "I lost track of the domain — ask again naming it."
+    try:
+        result = await backlink_explorer.lookup(target, client_id=client_id)
+    except backlink_explorer.BudgetExceeded:
+        return "The daily backlink API budget is used up — cached lookups still work; fresh pulls resume tomorrow."
+    ov = result.get("overview") or {}
+    dr = ov.get("domain_rating")
+    lines = [
+        f"*Backlink profile — {result.get('target')}*"
+        + (" _(cached)_" if result.get("cached") else ""),
+        f"DR {dr if dr is not None else '—'} · "
+        f"{(ov.get('referring_domains') or 0):,} referring domains · "
+        f"{(ov.get('backlinks') or 0):,} backlinks · "
+        f"{(ov.get('pages_count') or 0):,} linked pages",
+    ]
+    pages = result.get("pages") or []
+    if pages:
+        lines.append("Top pages by referring domains:")
+        lines += [
+            f"  • {p.get('url')} — UR {p.get('page_rating') if p.get('page_rating') is not None else '—'}"
+            f" · {(p.get('referring_domains') or 0):,} RD"
+            for p in pages[:5]
+        ]
+    lines.append("Full detail (anchors, referring-domain list, link list) is on the Backlinks page.")
+    return "\n".join(lines)
+
+
+def format_authority_rows(rows: list, kind: str, limit: int = 8) -> str:
+    """Compact Slack rendering of authority-report rows. Pure (unit-tested)."""
+    out = []
+    for r in rows[:limit]:
+        who = (f"#{r.get('position') or 'n/r'} {r.get('domain') or r.get('url') or '?'}"
+               if kind == "organic" else f"{r.get('name') or r.get('domain') or '?'}")
+        dr = r.get("dr")
+        ur = r.get("ur")
+        rd = r.get("rd")
+        out.append(
+            f"  • {who} — DR {dr if dr is not None else '—'}"
+            f" · UR {ur if ur is not None else '—'}"
+            f" · RD {f'{rd:,}' if rd is not None else '—'}"
+            + (" ← *you*" if r.get("is_client") else "")
+        )
+    return "\n".join(out)
+
+
+async def _stage_authority_report(client_id: str, args: dict) -> "tuple[str, dict | str]":
+    scope = (args.get("scope") or "").strip().lower()
+    if scope == "maps":
+        staged = {"scope": "maps"}
+        staged["_confirm"] = (
+            "run an RD/DR/UR authority report for the *local-pack leaderboard* "
+            "vs this client (2 paid DataForSEO calls)"
+        )
+        return "confirm", staged
+    # organic — resolve the keyword the same way the rank-tracker actions do.
+    query = (args.get("keyword") or "").strip()
+    if not query:
+        return "reply", "Which tracked keyword should the authority report cover? (Or say 'local pack' for the Maps version.)"
+    rows = (
+        get_supabase().table("tracked_keywords").select("id, keyword")
+        .eq("client_id", client_id).execute()
+    ).data or []
+    matches = match_named(rows, query, key="keyword")
+    if not matches:
+        listing = "; ".join(r["keyword"] for r in rows[:10]) or "none"
+        return "reply", f"“{query}” isn't a tracked keyword. Tracked: {listing}."
+    if len(matches) > 1:
+        listing = "\n".join(f"• {r['keyword']}" for r in matches[:8])
+        return "reply", f"“{query}” matches {len(matches)} tracked keywords — which one?\n{listing}"
+    staged = {"scope": "organic", "keyword_id": matches[0]["id"], "keyword": matches[0]["keyword"]}
+    staged["_confirm"] = (
+        f"run an RD/DR/UR authority report for *“{matches[0]['keyword']}”* — everyone in its "
+        "latest SERP snapshot vs this client (2 paid DataForSEO calls)"
+    )
+    return "confirm", staged
+
+
+async def _act_authority_report(client_id: str, args: Optional[dict] = None) -> str:
+    from services import authority_report
+    from services.backlink_explorer import BudgetExceeded
+
+    args = args or {}
+    try:
+        if args.get("scope") == "maps":
+            result = await authority_report.build_maps_authority(client_id)
+            if result.get("needs_scan"):
+                return "No completed geo-grid scan yet — run a Maps scan first, then rerun this report."
+            header = "*Authority report — local pack vs you* (DR · UR home · referring domains)"
+        else:
+            keyword_id = args.get("keyword_id")
+            if not keyword_id:
+                return "I lost track of the keyword — ask again naming it."
+            result = await authority_report.build_organic_authority(client_id, keyword_id)
+            if result.get("needs_snapshot"):
+                return (f"No SERP snapshot exists for *“{args.get('keyword')}”* yet — capture one from the "
+                        "Rankings page (camera button), then rerun the report.")
+            header = f"*Authority report — “{result.get('keyword')}”* (DR · UR of ranking page · referring domains)"
+    except BudgetExceeded:
+        return "The daily backlink API budget is used up — try again tomorrow."
+    rows = result.get("rows") or []
+    if not rows:
+        return "The report came back empty — nothing to compare."
+    kind = "maps" if args.get("scope") == "maps" else "organic"
+    return header + "\n" + format_authority_rows(rows, kind)
+
+
 # SOP task-catalog labels the LLM matches a new task against so its standard
 # delivery turnaround can default the Asana due date (services/task_catalog.py).
 _SOP_TASK_ENUM = task_catalog.catalog_labels()
@@ -915,6 +1047,34 @@ _ACTIONS: dict[str, dict] = {
     "run_maps_scan": {"label": "run a Maps geo-grid scan", "paid": True, "run": _act_maps_scan},
     "run_gsc_research": {"label": "run a GSC Research analysis", "paid": True, "run": _act_gsc_research},
     "run_ai_visibility_scan": {"label": "run an AI Visibility scan", "paid": True, "run": _act_ai_scan},
+    "run_backlink_lookup": {
+        "label": "run a backlink lookup",
+        "paid": True,
+        "note": "up to 3 paid DataForSEO calls — free if checked in the last 24h",
+        "run": _act_backlink_lookup,
+        "stage": _stage_backlink_lookup,
+        "params": {
+            "properties": {
+                "domain": {"type": "string", "description": "The domain, subdomain, or URL to analyze — the client's own, a competitor's, or any site named in the conversation."},
+            },
+            "required": ["domain"],
+        },
+    },
+    "run_authority_report": {
+        "label": "run an RD/DR/UR authority report",
+        "paid": True,
+        "note": "2 paid DataForSEO calls",
+        "run": _act_authority_report,
+        "stage": _stage_authority_report,
+        "params": {
+            "properties": {
+                "scope": {"type": "string", "enum": ["organic", "maps"],
+                          "description": "organic = everyone in a tracked keyword's latest SERP snapshot vs the client; maps = the local-pack leaderboard from the latest geo-grid scan vs the client."},
+                "keyword": {"type": "string", "description": "For organic scope: the tracked keyword (or a distinctive part of it)."},
+            },
+            "required": ["scope"],
+        },
+    },
     # SerMaStr strategist mode: "strategy review for <client>". Paid gating =
     # the reply-*yes* confirm (an LLM run + up to one paid nlp audit call).
     "run_strategy_review": {"label": "run a strategist review", "paid": True, "run": _act_strategy_review},
