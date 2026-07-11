@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, BarChart3, Camera, CheckCircle2, ChevronDown, ChevronRight, Download, Loader2, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, Upload, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { ArrowRight, BarChart3, Camera, CheckCircle2, ChevronDown, ChevronRight, Download, Gauge, Loader2, Pin, PinOff, Plus, RefreshCw, Trash2, TrendingDown, TrendingUp, Minus, Upload, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { KeywordStatus, KeywordSummary, KeywordTrendline, KeywordPagesResponse, RankabilityResponse, TrendPoint, DataForSeoRefreshEnqueue, DataForSeoRefreshStatus } from '../../lib/types'
 import { toCsv, downloadCsv, parseKeywordsFromCsv } from '../../lib/csv'
@@ -10,6 +10,7 @@ import { Sparkline } from './Sparkline'
 import { PositionChart } from './PositionChart'
 import { SerpSnapshots } from './SerpSnapshots'
 import { OrganicRankReport } from './OrganicRankReport'
+import { AuthorityReport } from '../AuthorityReport'
 
 // How long the rankability progress banner polls before handing the remaining
 // captures off to the background (a snapshot job can stall on slow backlink
@@ -376,6 +377,7 @@ function KeywordRow({ k, clientId, showGsc }: {
   const [open, setOpen] = useState(false)
   const [snapshotOpen, setSnapshotOpen] = useState(false)
   const [reportOpen, setReportOpen] = useState(false)
+  const [authorityOpen, setAuthorityOpen] = useState(false)
   const meta = STATUS_META[k.status]
   const isDf = k.primary_source === 'dataforseo'
 
@@ -480,6 +482,8 @@ function KeywordRow({ k, clientId, showGsc }: {
               onClick={() => setSnapshotOpen(true)} title="Competitive SERP snapshot"><Camera size={13} /></button>
             <button style={{ ...outlineBtn, padding: '4px 7px', color: '#6366f1' }}
               onClick={() => setReportOpen(true)} title="Organic Rank Analysis report"><BarChart3 size={13} /></button>
+            <button style={{ ...outlineBtn, padding: '4px 7px', color: '#6366f1' }}
+              onClick={() => setAuthorityOpen(true)} title="Authority report (DR · UR · RD)"><Gauge size={13} /></button>
             <button style={{ ...outlineBtn, padding: '4px 7px', color: '#dc2626' }}
               onClick={() => deleteMut.mutate()} title="Stop tracking"><Trash2 size={13} /></button>
           </div>
@@ -493,6 +497,13 @@ function KeywordRow({ k, clientId, showGsc }: {
       {reportOpen && (
         <tr><td colSpan={colSpan}>
           <OrganicRankReport keywordId={k.id} keyword={k.keyword} onClose={() => setReportOpen(false)} />
+        </td></tr>
+      )}
+      {authorityOpen && (
+        <tr><td colSpan={colSpan}>
+          <AuthorityReport kind="organic" title={k.keyword}
+            endpoint={`/clients/${clientId}/authority/organic`} body={{ keyword_id: k.id }}
+            onClose={() => setAuthorityOpen(false)} />
         </td></tr>
       )}
       {open && (

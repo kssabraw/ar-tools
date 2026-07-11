@@ -39,6 +39,8 @@ _SUMMARY_PATH = "/v3/backlinks/summary/live"
 _REFERRING_DOMAINS_PATH = "/v3/backlinks/referring_domains/live"
 _ANCHORS_PATH = "/v3/backlinks/anchors/live"
 _DOMAIN_PAGES_PATH = "/v3/backlinks/domain_pages/live"
+_BULK_RANKS_PATH = "/v3/backlinks/bulk_ranks/live"
+_BULK_RD_PATH = "/v3/backlinks/bulk_referring_domains/live"
 _HISTORY_PATH = "/v3/backlinks/history/live"
 _BACKLINKS_PATH = "/v3/backlinks/backlinks/live"
 _TIMEOUT = 60.0
@@ -167,6 +169,28 @@ def parse_domain_pages(body: dict) -> list[dict]:
     return out
 
 
+def parse_bulk_ranks(body: dict) -> dict:
+    """{target: rating} from a bulk_ranks response. A domain target's rank is
+    the DR-equivalent; a URL target's rank is the UR-equivalent — both ÷ 10."""
+    out: dict = {}
+    for it in _items(_first_result(body, "dataforseo_backlinks_bulk_ranks_error")):
+        target = it.get("target")
+        if target:
+            out[target] = _rank_to_rating(it.get("rank"))
+    return out
+
+
+def parse_bulk_referring_domains(body: dict) -> dict:
+    """{target: referring_domains} from a bulk_referring_domains response."""
+    out: dict = {}
+    for it in _items(_first_result(body, "dataforseo_backlinks_bulk_rd_error")):
+        target = it.get("target")
+        if target:
+            rd = it.get("referring_domains")
+            out[target] = rd if rd is not None else it.get("referring_main_domains")
+    return out
+
+
 def parse_history(body: dict) -> list[dict]:
     """Monthly RD/backlinks series for the trend chart."""
     out: list[dict] = []
@@ -269,6 +293,23 @@ async def fetch_domain_pages(target: str, target_type: str = "domain", limit: in
                 "include_subdomains": _include_subdomains(target_type),
                 "order_by": ["referring_domains,desc"]}]
     return parse_domain_pages(await _post(_DOMAIN_PAGES_PATH, payload))
+
+
+async def fetch_bulk_ranks(targets: list[str]) -> dict:
+    """DR/UR-equivalent (rank ÷ 10) for up to 1000 mixed domain/URL targets in
+    ONE billed call. {} for an empty target list (no call made)."""
+    if not targets:
+        return {}
+    body = await _post(_BULK_RANKS_PATH, [{"targets": targets[:1000]}])
+    return parse_bulk_ranks(body)
+
+
+async def fetch_bulk_referring_domains(targets: list[str]) -> dict:
+    """Referring-domain counts for up to 1000 targets in ONE billed call."""
+    if not targets:
+        return {}
+    body = await _post(_BULK_RD_PATH, [{"targets": targets[:1000]}])
+    return parse_bulk_referring_domains(body)
 
 
 async def fetch_history(target: str, target_type: str = "domain", date_from: Optional[str] = None) -> list[dict]:

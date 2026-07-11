@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight, Bell, Check, X } from 'lucide-react'
+import { ArrowLeft, Gauge, Map, Play, Trash2, MapPin, Download, Printer, Square, ToggleLeft, ToggleRight, Bell, Check, X } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import type {
@@ -13,6 +13,7 @@ import type {
   MapsGbpAuditResponse, MapsRelevanceResponse, MapsRelevanceRow, MapsReviewIntelResponse,
   MapsScanDetail, MapsScanResultRow, MapsScanSummary, MapsSolvResponse, MapsTrendsResponse,
 } from '../lib/types'
+import { AuthorityReport } from '../components/AuthorityReport'
 import { GeoGridMap, TrendChart } from '../components/maps/visuals'
 import { Markdown } from '../components/Markdown'
 import { rankColor, TREND_METRICS } from '../components/maps/rank'
@@ -143,11 +144,16 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
   })
 
   const busy = scanning || runMut.isPending
+  const [authorityOpen, setAuthorityOpen] = useState(false)
   // One-off run + a stop control (while a scan is in flight) + the quick weekly
   // schedule toggle, grouped so they sit together above the heatmap.
   const controls = (
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
       <ScheduleToggle clientId={clientId} />
+      <button style={outlineBtn} onClick={() => setAuthorityOpen((v) => !v)}
+        title="DR · UR · referring domains for the local-pack leaderboard vs you (2 paid calls)">
+        <Gauge size={13} /> Authority report
+      </button>
       {busy && (
         <button style={{ ...outlineBtn, color: '#dc2626', borderColor: '#fecaca' }} onClick={() => cancelMut.mutate()} disabled={cancelMut.isPending}>
           <Square size={13} /> {cancelMut.isPending ? 'Stopping…' : 'Stop scan'}
@@ -189,6 +195,11 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
         </div>
         {controls}
       </div>
+      {authorityOpen && (
+        <AuthorityReport kind="maps" title="local pack"
+          endpoint={`/clients/${clientId}/authority/maps`}
+          onClose={() => setAuthorityOpen(false)} />
+      )}
       {(scanning || runMut.isPending) && <InProgressBanner />}
 
       {latest.results.length === 0 ? (
