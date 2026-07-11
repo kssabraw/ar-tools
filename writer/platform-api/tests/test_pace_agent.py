@@ -9,11 +9,21 @@ suite; these tests pin the routing + gating + actor-binding around it.
 
 from __future__ import annotations
 
-import pytest
-
 from services import pace_agent
 from services.pace_agent import PACE_ACTIONS
 from services.pace_auth import ActionContext
+
+
+def test_referenced_config_keys_exist():
+    """Regression guard: every settings.pace_* the persona/digest touch at
+    runtime must be defined on the settings object (a missing key AttributeErrors
+    only once pace_enabled is flipped — invisible to the default-off suite)."""
+    from config import settings
+
+    for key in ("pace_enabled", "pace_model", "pace_max_tokens", "pace_digest_weekday_only"):
+        assert hasattr(settings, key), f"settings.{key} is not defined"
+    assert isinstance(settings.pace_model, str) and settings.pace_model
+    assert isinstance(settings.pace_max_tokens, int)
 
 
 def _staff(pid="p_staff"):

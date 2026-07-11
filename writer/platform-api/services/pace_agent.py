@@ -365,7 +365,14 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
     """Handle a web chat turn if it's PACE's (a PACE pending token, or a
     PACE-shaped message). Returns the chat payload dict when handled, else None
     → fall through to SerMaStr. On web the confirmer is the authenticated
-    session, so actor-binding is inherent; we still check it."""
+    session, so actor-binding is inherent; we still check it.
+
+    The deterministic reads (client list, board digest, brief/portfolio text)
+    do blocking Supabase I/O, so they're pushed to a threadpool to keep the
+    request event loop free — matching `assistant_chat.handle_chat`'s convention
+    (the Slack path mirrors `handle_message`, which reads synchronously)."""
+    from fastapi.concurrency import run_in_threadpool
+
     from services.slack_assistant import is_affirmative, resolve_client
 
     # 1) Confirm a staged PACE web action (its own token store).
@@ -386,13 +393,15 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
         return None
     try:
         if is_personal_brief(message):
-            return {"reply": personal_brief_text(context)}
-        clients = (get_supabase().table("clients").select("id, name").execute()).data or []
+            return {"reply": await run_in_threadpool(personal_brief_text, context)}
+        clients = await run_in_threadpool(
+            lambda: (get_supabase().table("clients").select("id, name").execute()).data or []
+        )
         named = resolve_client(message, clients)
         client = named or (next((c for c in clients if c["id"] == sticky_client_id), None) if sticky_client_id else None)
         if not client:
-            return {"reply": _portfolio_pace_text()}
-        board = build_pace_context(client["id"])
+            return {"reply": await run_in_threadpool(_portfolio_pace_text)}
+        board = await run_in_threadpool(build_pace_context, client["id"])
         kind, payload = await interpret_pace(message, client, board, history, style="web", on_event=on_event)
         base = {"client_id": client["id"], "client_name": client.get("name")}
         if kind == "action":
