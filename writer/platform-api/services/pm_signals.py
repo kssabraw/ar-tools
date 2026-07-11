@@ -240,7 +240,8 @@ def build_client_signals(client_id: str, today: Optional[date] = None,
         )
         if is_stale(days, thr):
             stale.append({"id": t["id"], "name": t.get("name"), "assignee_name": t.get("assignee_name"),
-                          "status_key": t.get("status_key"), "days": days, "threshold": thr})
+                          "status_key": t.get("status_key"), "category": cat_by_key.get(t.get("status_key")),
+                          "days": days, "threshold": thr})
     stale.sort(key=lambda s: s["days"], reverse=True)
 
     overdue = [
