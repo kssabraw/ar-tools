@@ -74,6 +74,9 @@ class AsanaTeamMemberItem(BaseModel):
     name: Optional[str] = None
     weekly_hours: Optional[float] = None
     active: bool = True
+    # Native task manager identity bridge: the suite user (profiles.id) this
+    # tracked member is, if linked. Nullable — an unlinked member is unchanged.
+    profile_id: Optional[str] = None
 
 
 class AsanaTeamMembersReplaceRequest(BaseModel):

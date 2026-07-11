@@ -1529,6 +1529,8 @@ export interface AsanaTeamMember {
   name: string | null
   weekly_hours: number | null
   active: boolean
+  // Native task manager identity bridge: the suite user this member is (if linked).
+  profile_id?: string | null
 }
 
 export interface AsanaLibraryTaskItem {
@@ -1536,6 +1538,13 @@ export interface AsanaLibraryTaskItem {
   default_hours: number | null
   default_category_name: string | null
   active: boolean
+}
+
+// Native task manager: a library task's default subtask checklist (keyed by
+// library task name), copied onto generated tasks as real subtasks.
+export interface LibraryChecklist {
+  library_name: string
+  subtasks: string[]
 }
 
 export interface AsanaTaskTemplateRef {
@@ -1764,6 +1773,8 @@ export interface TaskDetailResponse extends TaskItem {
 export interface MyTasksResponse {
   members: { gid: string; name: string }[]
   gid: string | null
+  // The logged-in user's own linked member gid (identity bridge), if any.
+  my_gid?: string | null
   buckets: Partial<Record<'overdue' | 'today' | 'this_week' | 'later' | 'no_date', TaskItem[]>>
 }
 

@@ -210,6 +210,12 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
     queryFn: () => api.get<AsanaUser[]>('/asana/workspace-users'),
     enabled: configured,
   })
+  // Suite login users, for the identity-bridge link (reuses the mention
+  // candidates endpoint — id + full_name, external 'client' viewers excluded).
+  const { data: profiles } = useQuery<{ id: string; full_name: string }[]>({
+    queryKey: ['task-mention-candidates'],
+    queryFn: () => api.get<{ id: string; full_name: string }[]>('/tasks/mention-candidates'),
+  })
 
   const [rows, setRows] = useState<AsanaTeamMember[]>([])
   const [picker, setPicker] = useState('')
@@ -243,7 +249,8 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
       <h2 style={cardTitle}>Team &amp; capacity</h2>
       <p style={cardSub}>
         Who to track + each person’s weekly hours. Blank capacity uses the default
-        {defaultWeekly != null ? ` (${defaultWeekly}h/wk)` : ''}.
+        {defaultWeekly != null ? ` (${defaultWeekly}h/wk)` : ''}. Link a member to a
+        suite login so their <strong>My Tasks</strong> opens on their own tasks automatically.
       </p>
 
       {!configured && (
@@ -255,8 +262,16 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
 
       {rows.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {rows.map((r, i) => (
-            <div key={r.gid} style={{ display: 'grid', gridTemplateColumns: '1fr 160px 36px', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 2 }}>
+            <span>Member</span><span>Hrs / week</span><span>Suite user (My Tasks)</span><span />
+          </div>
+          {rows.map((r, i) => {
+            // A profile already linked to a DIFFERENT member can't be picked here.
+            const takenElsewhere = new Set(
+              rows.filter((_, j) => j !== i).map((x) => x.profile_id).filter(Boolean) as string[],
+            )
+            return (
+            <div key={r.gid} style={{ display: 'grid', gridTemplateColumns: '1fr 130px 190px 36px', gap: 8, alignItems: 'center' }}>
               <span style={{ fontSize: 13, color: '#0f172a' }}>
                 {r.name ?? r.gid}
                 {emailByGid.get(r.gid) && (
@@ -275,6 +290,22 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
                   setRows((rs) => rs.map((x, j) => (j === i ? { ...x, weekly_hours: v } : x)))
                 }}
               />
+              <select
+                style={input}
+                value={r.profile_id ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value || null
+                  setRows((rs) => rs.map((x, j) => (j === i ? { ...x, profile_id: v } : x)))
+                }}
+                title="Link this member to a suite login so their My Tasks auto-resolves"
+              >
+                <option value="">— not linked —</option>
+                {(profiles ?? [])
+                  .filter((p) => !takenElsewhere.has(p.id))
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>{p.full_name}</option>
+                  ))}
+              </select>
               <button
                 style={{ ...iconBtn, color: '#dc2626' }}
                 title="Remove"
@@ -283,7 +314,8 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
                 <Trash2 size={14} />
               </button>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
