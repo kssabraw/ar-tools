@@ -41,8 +41,9 @@ _LINK_FILTERS = {
     "broken": [["is_broken", "=", True]],
 }
 
-# A refresh fires the four cheap endpoints; a link-list page is one call.
-_REFRESH_CALL_COST = 4
+# A default refresh fires three cheap endpoints (summary + pages + history);
+# the tracked job adds the RD list (+1); a link-list page or lazy tab is 1.
+_REFRESH_CALL_COST = 3
 
 
 # ----------------------------------------------------------------------------
@@ -257,48 +258,61 @@ def _is_fresh(snapshot: Optional[dict]) -> bool:
 
 def _previous_domains(target_id: str) -> tuple[Optional[str], set]:
     """The (snapshot_id, referring-domain set) of the target's most recent prior
-    snapshot — the baseline for new/lost diffing. (None, empty) if none yet."""
+    snapshot THAT CARRIES RD ROWS — the baseline for new/lost diffing. Interactive
+    lookups no longer fetch the RD list (it's a lazy tab load), so the latest
+    snapshot may legitimately have none; diffing against it would misread every
+    domain as new. Looks back a bounded number of snapshots for one with rows.
+    (None, empty) when no prior RD capture exists."""
     sb = get_supabase()
     prev = (
         sb.table("backlink_snapshots").select("id")
-        .eq("target_id", target_id).order("captured_at", desc=True).limit(1).execute()
-    ).data
-    if not prev:
-        return None, set()
-    prev_id = prev[0]["id"]
-    rows = (
-        sb.table("backlink_referring_domains").select("domain")
-        .eq("snapshot_id", prev_id).eq("is_lost", False).execute()
+        .eq("target_id", target_id).order("captured_at", desc=True).limit(10).execute()
     ).data or []
-    return prev_id, {r["domain"] for r in rows if r.get("domain")}
+    for p in prev:
+        rows = (
+            sb.table("backlink_referring_domains").select("domain")
+            .eq("snapshot_id", p["id"]).eq("is_lost", False).execute()
+        ).data or []
+        domains = {r["domain"] for r in rows if r.get("domain")}
+        if domains:
+            return p["id"], domains
+    return None, set()
 
 
-async def _refresh(target: str, target_type: str, target_id: str) -> dict:
-    """Fire the four cheap endpoints concurrently, persist a snapshot + children.
-    Degrades per-endpoint — a single failure never aborts the whole refresh.
-    Diffs referring domains vs the previous snapshot for gained/lost tracking."""
-    _reserve_budget(_REFRESH_CALL_COST)
-    prev_snapshot_id, prev_domains = _previous_domains(target_id)
-    summary_r, rd_r, anchors_r, history_r = await asyncio.gather(
+async def _refresh(target: str, target_type: str, target_id: str, include_rd: bool = False) -> dict:
+    """Persist a fresh snapshot. Default (interactive): summary + per-page
+    breakdown + history — 3 cheap calls; the referring-domains list and anchors
+    are LAZY tab loads, not part of the default pull. ``include_rd`` (the tracked
+    weekly job) adds the RD list so new/lost diffing + alerts keep working.
+    Degrades per-endpoint — a single failure never aborts the whole refresh."""
+    _reserve_budget(_REFRESH_CALL_COST + (1 if include_rd else 0))
+    prev_snapshot_id, prev_domains = _previous_domains(target_id) if include_rd else (None, set())
+
+    fetches = [
         backlinks_api.fetch_summary(target, target_type),
-        backlinks_api.fetch_referring_domains(target, target_type, limit=settings.backlink_referring_domains_limit),
-        backlinks_api.fetch_anchors(target, target_type, limit=settings.backlink_anchors_limit),
+        backlinks_api.fetch_domain_pages(target, target_type, limit=settings.backlink_pages_limit),
         backlinks_api.fetch_history(target, target_type),
-        return_exceptions=True,
-    )
+    ]
+    if include_rd:
+        fetches.append(backlinks_api.fetch_referring_domains(
+            target, target_type, limit=settings.backlink_referring_domains_limit))
+    results = await asyncio.gather(*fetches, return_exceptions=True)
+    summary_r, pages_r, history_r = results[0], results[1], results[2]
+    rd_r = results[3] if include_rd else []
+
     summary = summary_r if isinstance(summary_r, dict) else {}
+    pages = pages_r if isinstance(pages_r, list) else []
+    history = history_r if isinstance(history_r, list) else []
     rd_ok = isinstance(rd_r, list)
     referring_domains = rd_r if rd_ok else []
-    anchors = anchors_r if isinstance(anchors_r, list) else []
-    history = history_r if isinstance(history_r, list) else []
-    for label, res in (("summary", summary_r), ("referring_domains", rd_r), ("anchors", anchors_r), ("history", history_r)):
+    for label, res in (("summary", summary_r), ("pages", pages_r), ("history", history_r), ("referring_domains", rd_r)):
         if isinstance(res, Exception):
             logger.warning("backlink_refresh_partial", extra={"target": target, "view": label, "error": str(res)})
 
-    # Diff referring domains vs the previous snapshot. A target's first snapshot
-    # is a baseline (no gains/losses) so it never reads as "all N are new".
+    # Diff referring domains vs the previous RD-carrying snapshot. Only
+    # meaningful on include_rd pulls; a first capture is a baseline.
     cur_domains = [rd.get("domain") for rd in referring_domains]
-    diff = _diff_for_snapshot(prev_snapshot_id, rd_ok, prev_domains, cur_domains)
+    diff = _diff_for_snapshot(prev_snapshot_id, include_rd and rd_ok, prev_domains, cur_domains)
     new_set = set(diff["new"])
     lost = diff["lost"]
 
@@ -314,14 +328,21 @@ async def _refresh(target: str, target_type: str, target_id: str) -> dict:
             "referring_ips": summary.get("referring_ips"),
             "referring_subnets": summary.get("referring_subnets"),
             "domain_rating": summary.get("domain_rating"),
-            "new_domains": len(diff["new"]),
-            "lost_domains": len(lost),
+            "pages_count": len(pages) if pages else None,
+            "new_domains": len(diff["new"]) if include_rd and rd_ok else None,
+            "lost_domains": len(lost) if include_rd and rd_ok else None,
             "raw": {"summary": summary, "history": history,
                     "new_domains": diff["new"][:100], "lost_domains": lost[:100]},
         }).execute()
     ).data[0]
     snapshot_id = snap["id"]
 
+    if pages:
+        sb.table("backlink_pages").insert(
+            [{"snapshot_id": snapshot_id, **{k: p.get(k) for k in
+              ("url", "page_rating", "referring_domains", "backlinks", "first_seen")}}
+             for p in pages]
+        ).execute()
     if referring_domains:
         sb.table("backlink_referring_domains").insert(
             [{"snapshot_id": snapshot_id, "domain": rd.get("domain"),
@@ -338,12 +359,6 @@ async def _refresh(target: str, target_type: str, target_id: str) -> dict:
             [{"snapshot_id": snapshot_id, "domain": d, "is_lost": True, "is_new": False}
              for d in lost[: settings.backlink_lost_rows_cap]]
         ).execute()
-    if anchors:
-        sb.table("backlink_anchors").insert(
-            [{"snapshot_id": snapshot_id, **{k: a.get(k) for k in
-              ("anchor", "backlinks", "referring_domains", "dofollow", "first_seen")}}
-             for a in anchors]
-        ).execute()
 
     sb.table("backlink_targets").update(
         {"last_refreshed_at": datetime.now(timezone.utc).isoformat()}
@@ -351,17 +366,25 @@ async def _refresh(target: str, target_type: str, target_id: str) -> dict:
     return snap
 
 
-def _read_children(snapshot_id: str) -> tuple[list[dict], list[dict]]:
-    sb = get_supabase()
-    rds = (
-        sb.table("backlink_referring_domains").select("*")
+def _read_pages(snapshot_id: str) -> list[dict]:
+    return (
+        get_supabase().table("backlink_pages").select("*")
+        .eq("snapshot_id", snapshot_id).order("referring_domains", desc=True).execute()
+    ).data or []
+
+
+def _read_rds(snapshot_id: str) -> list[dict]:
+    return (
+        get_supabase().table("backlink_referring_domains").select("*")
         .eq("snapshot_id", snapshot_id).order("domain_rating", desc=True).execute()
     ).data or []
-    anchors = (
-        sb.table("backlink_anchors").select("*")
+
+
+def _read_anchors(snapshot_id: str) -> list[dict]:
+    return (
+        get_supabase().table("backlink_anchors").select("*")
         .eq("snapshot_id", snapshot_id).order("backlinks", desc=True).execute()
     ).data or []
-    return rds, anchors
 
 
 async def lookup(
@@ -381,7 +404,6 @@ async def lookup(
         if row is None:
             row = get_or_create_target(target, target_type, client_id=client_id, created_by=created_by)
         snapshot = await _refresh(target, target_type, row["id"])
-    referring_domains, anchors = _read_children(snapshot["id"])
     raw = snapshot.get("raw") or {}
     return {
         "target": target,
@@ -392,11 +414,74 @@ async def lookup(
         "captured_at": snapshot.get("captured_at"),
         "overview": {k: snapshot.get(k) for k in
                      ("referring_domains", "backlinks", "dofollow", "nofollow",
-                      "broken_backlinks", "referring_ips", "referring_subnets", "domain_rating")},
-        "referring_domains": referring_domains,
-        "anchors": anchors,
+                      "broken_backlinks", "referring_ips", "referring_subnets",
+                      "domain_rating", "pages_count")},
+        "pages": _read_pages(snapshot["id"]),
         "history": raw.get("history") or [],
     }
+
+
+async def _lazy_children(
+    raw_target: str, kind: str, client_id: Optional[str] = None, force: bool = False
+) -> dict:
+    """Lazy tab load for the referring-domains list or anchors: serve the latest
+    snapshot's cached rows when present (free), else ONE explicit paid call whose
+    result is persisted onto that snapshot for the next 24h. ``kind`` ∈
+    {"referring_domains", "anchors"}."""
+    target, target_type = normalize_target(raw_target)
+    row = _find_target(target, target_type, client_id)
+    snapshot = _latest_snapshot(row["id"]) if row else None
+    if snapshot is None:
+        # No snapshot to attach to — a per-page drill-in (or a tab opened before
+        # any lookup). One explicit paid call, returned live, not persisted.
+        _reserve_budget(1)
+        if kind == "referring_domains":
+            fetched = await backlinks_api.fetch_referring_domains(
+                target, target_type, limit=settings.backlink_referring_domains_limit)
+        else:
+            fetched = await backlinks_api.fetch_anchors(
+                target, target_type, limit=settings.backlink_anchors_limit)
+        return {"target": target, "cached": False, "captured_at": None, kind: fetched}
+    reader = _read_rds if kind == "referring_domains" else _read_anchors
+    rows = reader(snapshot["id"])
+    if rows and not force:
+        return {"target": target, "cached": True, "captured_at": snapshot.get("captured_at"), kind: rows}
+    _reserve_budget(1)
+    if rows:
+        # force refresh — replace the stale rows rather than stacking duplicates
+        table = "backlink_referring_domains" if kind == "referring_domains" else "backlink_anchors"
+        get_supabase().table(table).delete().eq("snapshot_id", snapshot["id"]).execute()
+    if kind == "referring_domains":
+        fetched = await backlinks_api.fetch_referring_domains(
+            target, target_type, limit=settings.backlink_referring_domains_limit)
+        if fetched:
+            get_supabase().table("backlink_referring_domains").insert(
+                [{"snapshot_id": snapshot["id"], "domain": rd.get("domain"),
+                  "domain_rating": rd.get("domain_rating"), "backlinks": rd.get("backlinks"),
+                  "dofollow": rd.get("dofollow"), "first_seen": rd.get("first_seen"),
+                  "last_seen": rd.get("last_seen"), "is_new": False,
+                  "is_lost": bool(rd.get("is_lost"))}
+                 for rd in fetched]
+            ).execute()
+    else:
+        fetched = await backlinks_api.fetch_anchors(
+            target, target_type, limit=settings.backlink_anchors_limit)
+        if fetched:
+            get_supabase().table("backlink_anchors").insert(
+                [{"snapshot_id": snapshot["id"], **{k: a.get(k) for k in
+                  ("anchor", "backlinks", "referring_domains", "dofollow", "first_seen")}}
+                 for a in fetched]
+            ).execute()
+    return {"target": target, "cached": False, "captured_at": snapshot.get("captured_at"),
+            kind: reader(snapshot["id"])}
+
+
+async def load_referring_domains(raw_target: str, client_id: Optional[str] = None, force: bool = False) -> dict:
+    return await _lazy_children(raw_target, "referring_domains", client_id=client_id, force=force)
+
+
+async def load_anchors(raw_target: str, client_id: Optional[str] = None, force: bool = False) -> dict:
+    return await _lazy_children(raw_target, "anchors", client_id=client_id, force=force)
 
 
 async def list_links(
@@ -498,7 +583,8 @@ def auto_track_client_domains() -> int:
     return created
 
 
-_LATEST_FIELDS = ("referring_domains", "backlinks", "domain_rating", "new_domains", "lost_domains", "captured_at")
+_LATEST_FIELDS = ("referring_domains", "backlinks", "domain_rating", "new_domains",
+                  "lost_domains", "pages_count", "captured_at")
 
 
 def list_tracked(client_id: str) -> list[dict]:
@@ -618,7 +704,7 @@ async def run_backlink_snapshot_job(job: dict) -> None:
         if not row:
             raise RuntimeError("target_not_found")
         target_row = row[0]
-        snap = await _refresh(target_row["target"], target_row["target_type"], target_id)
+        snap = await _refresh(target_row["target"], target_row["target_type"], target_id, include_rd=True)
         new_count = snap.get("new_domains") or 0
         lost_count = snap.get("lost_domains") or 0
         # Gate on the net total-RD movement so top-N window churn (a domain

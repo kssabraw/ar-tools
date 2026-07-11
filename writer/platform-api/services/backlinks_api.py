@@ -38,6 +38,7 @@ _BASE_URL = "https://api.dataforseo.com"
 _SUMMARY_PATH = "/v3/backlinks/summary/live"
 _REFERRING_DOMAINS_PATH = "/v3/backlinks/referring_domains/live"
 _ANCHORS_PATH = "/v3/backlinks/anchors/live"
+_DOMAIN_PAGES_PATH = "/v3/backlinks/domain_pages/live"
 _HISTORY_PATH = "/v3/backlinks/history/live"
 _BACKLINKS_PATH = "/v3/backlinks/backlinks/live"
 _TIMEOUT = 60.0
@@ -146,6 +147,26 @@ def parse_anchors(body: dict) -> list[dict]:
     return out
 
 
+def parse_domain_pages(body: dict) -> list[dict]:
+    """Per-page authority breakdown of a domain target ("Best by links"):
+    one row per page — UR (rank ÷ 10), referring domains, backlinks."""
+    out: list[dict] = []
+    for it in _items(_first_result(body, "dataforseo_backlinks_domain_pages_error")):
+        url = it.get("url") or it.get("page_address")
+        if not url:
+            continue
+        out.append(
+            {
+                "url": url,
+                "page_rating": _rank_to_rating(it.get("rank")),
+                "referring_domains": it.get("referring_domains"),
+                "backlinks": it.get("backlinks"),
+                "first_seen": it.get("first_seen"),
+            }
+        )
+    return out
+
+
 def parse_history(body: dict) -> list[dict]:
     """Monthly RD/backlinks series for the trend chart."""
     out: list[dict] = []
@@ -240,6 +261,14 @@ async def fetch_anchors(target: str, target_type: str = "domain", limit: int = 1
                 "backlinks_status_type": "live", "include_subdomains": _include_subdomains(target_type),
                 "order_by": ["backlinks,desc"]}]
     return parse_anchors(await _post(_ANCHORS_PATH, payload))
+
+
+async def fetch_domain_pages(target: str, target_type: str = "domain", limit: int = 100) -> list[dict]:
+    payload = [{"target": target, "limit": limit, "internal_list_limit": 1,
+                "backlinks_status_type": "live",
+                "include_subdomains": _include_subdomains(target_type),
+                "order_by": ["referring_domains,desc"]}]
+    return parse_domain_pages(await _post(_DOMAIN_PAGES_PATH, payload))
 
 
 async def fetch_history(target: str, target_type: str = "domain", date_from: Optional[str] = None) -> list[dict]:

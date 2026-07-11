@@ -78,6 +78,46 @@ async def backlink_links(
 
 
 # ----------------------------------------------------------------------------
+# Lazy tab loads — referring-domains list + anchors are NOT part of the default
+# lookup; each is one explicit paid call, cached onto the latest snapshot.
+# ----------------------------------------------------------------------------
+async def _lazy_route(loader, target: str, client_id: Optional[UUID], force: bool) -> dict:
+    if not (settings.dataforseo_login and settings.dataforseo_password):
+        raise HTTPException(status_code=503, detail="dataforseo_not_configured")
+    try:
+        return await loader(target, client_id=str(client_id) if client_id else None, force=force)
+    except backlink_explorer.BudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail="backlink_budget_exceeded") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("backlink_lazy_load_failed", extra={"target": target, "error": str(exc)})
+        raise HTTPException(status_code=502, detail="backlink_provider_error") from exc
+
+
+@router.get("/backlinks/referring-domains")
+async def backlink_referring_domains(
+    target: str = Query(...),
+    client_id: Optional[UUID] = Query(None),
+    force: bool = Query(False),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """The referring-domains list for a looked-up target (lazy tab load)."""
+    return await _lazy_route(backlink_explorer.load_referring_domains, target, client_id, force)
+
+
+@router.get("/backlinks/anchors")
+async def backlink_anchors(
+    target: str = Query(...),
+    client_id: Optional[UUID] = Query(None),
+    force: bool = Query(False),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """The anchor-text distribution for a looked-up target (lazy tab load)."""
+    return await _lazy_route(backlink_explorer.load_anchors, target, client_id, force)
+
+
+# ----------------------------------------------------------------------------
 # Tracked targets (client-scoped) — scheduled re-snapshots + new/lost alerts
 # ----------------------------------------------------------------------------
 class TrackRequest(BaseModel):

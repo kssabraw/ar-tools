@@ -303,3 +303,28 @@ def test_ensure_autotrack_no_website_returns_false(monkeypatch):
     monkeypatch.setattr(backlink_explorer.settings, "backlink_auto_track_client_domain", True)
     assert backlink_explorer.ensure_client_domain_tracked("c1", "") is False
     assert backlink_explorer.ensure_client_domain_tracked("c1", None) is False
+
+
+# ---------------------------------------------------------------------------
+# parse_domain_pages (per-page breakdown)
+# ---------------------------------------------------------------------------
+def test_parse_domain_pages_maps_rank_and_skips_urlless():
+    body = {"tasks": [{"status_code": 20000, "result": [{"items": [
+        {"url": "https://example.com/", "rank": 350, "referring_domains": 80,
+         "backlinks": 400, "first_seen": "2020-01-01"},
+        {"rank": 100},  # no url → skipped
+        {"page_address": "https://example.com/services", "rank": 120,
+         "referring_domains": 6, "backlinks": 9},
+    ]}]}]}
+    out = backlinks_api.parse_domain_pages(body)
+    assert len(out) == 2
+    assert out[0] == {"url": "https://example.com/", "page_rating": 35.0,
+                      "referring_domains": 80, "backlinks": 400, "first_seen": "2020-01-01"}
+    assert out[1]["url"] == "https://example.com/services"  # page_address fallback
+    assert out[1]["page_rating"] == 12.0
+
+
+def test_parse_domain_pages_raises_on_error():
+    body = {"tasks": [{"status_code": 40400, "status_message": "bad", "result": None}]}
+    with pytest.raises(RuntimeError, match="dataforseo_backlinks_domain_pages_error"):
+        backlinks_api.parse_domain_pages(body)
