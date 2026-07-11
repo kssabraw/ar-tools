@@ -16,17 +16,36 @@ from services import freeze
 
 
 # ---------------------------------------------------------------------------
-# should_auto_freeze — only a hard not-indexed verdict freezes automatically
+# should_warn_deindex — coverageState is the authority, not the coarse verdict.
+# Detection is warn-only (nothing auto-freezes), and benign NEUTRAL states must
+# never alarm — those were the source of the false-positive deindex warnings.
 # ---------------------------------------------------------------------------
-def test_auto_freeze_on_not_indexed():
-    assert freeze.should_auto_freeze("not_indexed", "Page with redirect") is True
-    assert freeze.should_auto_freeze("not_indexed", None) is True
+def test_warn_on_genuinely_not_indexed_neutral():
+    assert freeze.should_warn_deindex("NEUTRAL", "Crawled - currently not indexed") is True
+    assert freeze.should_warn_deindex("NEUTRAL", "Discovered - currently not indexed") is True
+    assert freeze.should_warn_deindex("NEUTRAL", "URL is unknown to Google") is True
 
 
-def test_no_auto_freeze_on_indexed_or_unknown():
-    assert freeze.should_auto_freeze("indexed", None) is False
-    # API hiccups / missing verdicts must never freeze a client
-    assert freeze.should_auto_freeze("unknown", None) is False
+def test_no_warn_on_benign_neutral_states():
+    # A homepage on Google under a different canonical (http/https, www, redirect,
+    # duplicate, alternate) is NOT deindexed — this is the false-positive class.
+    assert freeze.should_warn_deindex("NEUTRAL", "Page with redirect") is False
+    assert freeze.should_warn_deindex("NEUTRAL", "Duplicate, Google chose different canonical than user") is False
+    assert freeze.should_warn_deindex("NEUTRAL", "Alternate page with proper canonical tag") is False
+    assert freeze.should_warn_deindex("NEUTRAL", "Excluded by 'noindex' tag") is False
+
+
+def test_warn_on_fail_verdict():
+    assert freeze.should_warn_deindex("FAIL", "Not found (404)") is True
+    assert freeze.should_warn_deindex("FAIL", "Submitted URL seems to be a Soft 404") is True
+
+
+def test_no_warn_on_pass_or_unknown():
+    assert freeze.should_warn_deindex("PASS", "Submitted and indexed") is False
+    # API hiccups / missing verdicts must never alarm
+    assert freeze.should_warn_deindex(None, None) is False
+    assert freeze.should_warn_deindex("NEUTRAL", None) is False  # NEUTRAL without a deindex coverage string
+    assert freeze.should_warn_deindex("VERDICT_UNSPECIFIED", None) is False
 
 
 # ---------------------------------------------------------------------------
