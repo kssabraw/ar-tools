@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type { TeamUser } from '../lib/types'
-import { UserPlus, Trash2, KeyRound, Mail, Check, X, Shield } from 'lucide-react'
+import { UserPlus, Trash2, KeyRound, Mail, Check, X, Shield, MessageSquare } from 'lucide-react'
 
 const ROLE_LABELS: Record<TeamUser['role'], string> = {
   admin: 'Admin',
@@ -49,6 +49,8 @@ export function Team() {
   const [roleId, setRoleId] = useState<string | null>(null)
   const [pwOpenId, setPwOpenId] = useState<string | null>(null)
   const [pwValue, setPwValue] = useState('')
+  const [slackOpenId, setSlackOpenId] = useState<string | null>(null)
+  const [slackValue, setSlackValue] = useState('')
   // Transient confirmation for actions that don't change the list (reset/set pw).
   const [flash, setFlash] = useState<{ id: string; msg: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -111,6 +113,20 @@ export function Team() {
   const resetMutation = useMutation({
     mutationFn: (id: string) => api.post(`/users/${id}/password-reset`, { redirect_to: PW_REDIRECT }),
     onSuccess: (_d, id) => showFlash(id, 'Reset email sent'),
+    onError: (e: Error) => setError(e.message),
+  })
+
+  // PACE identity bridge: link a login to its Slack user id (so PACE knows who
+  // "I" am in Slack). An empty value clears the link.
+  const slackMutation = useMutation({
+    mutationFn: ({ id, slack_user_id }: { id: string; slack_user_id: string | null }) =>
+      api.patch(`/users/${id}/slack-link`, { slack_user_id }),
+    onSuccess: (_d, vars) => {
+      setSlackOpenId(null)
+      setSlackValue('')
+      qc.invalidateQueries({ queryKey: ['users'] })
+      showFlash(vars.id, vars.slack_user_id ? 'Slack account linked' : 'Slack link cleared')
+    },
     onError: (e: Error) => setError(e.message),
   })
 
@@ -279,6 +295,9 @@ export function Team() {
                   {u.full_name && (
                     <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{u.email}</div>
                   )}
+                  <div style={{ fontSize: 11, color: u.slack_user_id ? '#4338ca' : '#cbd5e1', marginTop: 2 }}>
+                    {u.slack_user_id ? `Slack: ${u.slack_user_id}` : 'Slack: not linked'}
+                  </div>
                 </div>
 
                 {!isSelf && (
@@ -357,6 +376,39 @@ export function Team() {
                           <X size={14} />
                         </button>
                       </div>
+                    ) : slackOpenId === u.id ? (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault()
+                          slackMutation.mutate({ id: u.id, slack_user_id: slackValue.trim() || null })
+                        }}
+                        style={{ display: 'flex', gap: 6, alignItems: 'center' }}
+                      >
+                        <input
+                          type="text"
+                          value={slackValue}
+                          onChange={(e) => setSlackValue(e.target.value)}
+                          placeholder="Slack user id (e.g. U01ABCDEF) — blank to clear"
+                          autoFocus
+                          style={{ ...inputStyle, width: 300 }}
+                        />
+                        <button
+                          type="submit"
+                          disabled={slackMutation.isPending}
+                          style={{ ...iconBtn, color: '#16a34a', borderColor: '#86efac' }}
+                          title="Save Slack link"
+                        >
+                          <Check size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setSlackOpenId(null); setSlackValue('') }}
+                          style={iconBtn}
+                          title="Cancel"
+                        >
+                          <X size={14} />
+                        </button>
+                      </form>
                     ) : (
                       <>
                         <button
@@ -380,6 +432,13 @@ export function Team() {
                           title="Change role"
                         >
                           <Shield size={13} /> Change role
+                        </button>
+                        <button
+                          onClick={() => { setError(null); setSlackOpenId(u.id); setSlackValue(u.slack_user_id ?? '') }}
+                          style={textBtn}
+                          title="Link this login to a Slack user (for PACE)"
+                        >
+                          <MessageSquare size={13} /> {u.slack_user_id ? 'Slack link' : 'Link Slack'}
                         </button>
                         <button
                           onClick={() => { setError(null); setRemoveId(u.id) }}

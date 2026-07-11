@@ -752,6 +752,40 @@ class Settings(BaseSettings):
     task_producer_action_plan_max: int = 10
     task_producer_content_run_enabled: bool = False
 
+    # PACE — Project Assignment, Coordination & Execution agent
+    # (docs/modules/project-manager-agent-plan-v1_0.md). Phase 0A ships only the
+    # deterministic pm_signals layer (pure reads, no LLM, no writes, wired to
+    # nothing) — these knobs parameterize the pure builders; the master gate +
+    # persona/model land with later phases.
+    pace_enabled: bool = False
+    # Staleness thresholds — days-in-current-status by status KEY; the coarse
+    # category fallback covers any status key not listed (configurable statuses).
+    pace_stale_thresholds: dict = {
+        "blocked": 3, "in_review": 5, "sent_to_client": 5, "in_progress": 10,
+    }
+    pace_stale_category_fallback: dict = {"blocked": 3, "in_progress": 10}
+    # Month-pace heuristic (§2b): grace, min board size to judge, and the
+    # first-N-business-days suppression window.
+    pace_month_pace_grace: float = 0.15
+    pace_month_pace_min_tasks: int = 4
+    pace_month_pace_suppress_business_days: int = 3
+    # Untriaged: don't flag a brand-new unassigned/dateless task until it's this
+    # many days old (so freshly-created work isn't nagged immediately).
+    pace_untriaged_grace_days: int = 2
+    # Cap the (later) daily digest.
+    pace_digest_max_items: int = 8
+    # Suppress the daily digest on weekends (Sat/Sun) — VA-facing, workdays only.
+    pace_digest_weekday_only: bool = True
+    # Permission matrix — the two "via policy" cells (PRD §3.2). Defaults:
+    # any internal user can read a board (internal-tool norm); month generation
+    # is admin-only (loosen to "staff" to let leads generate).
+    pace_perm_read_board_min_role: str = "team_member"
+    pace_perm_generate_month_min_role: str = "admin"
+    # PACE persona (Phase 3) — cheap model, small budget (delivery Q&A + action
+    # arg-filling, not strategy prose).
+    pace_model: str = "claude-haiku-4-5-20251001"
+    pace_max_tokens: int = 1200
+
     class Config:
         env_file = ".env"
 

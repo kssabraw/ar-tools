@@ -126,30 +126,49 @@ def emit(
     summary: Optional[str] = None,
     severity: str = "info",
     payload: Optional[dict] = None,
+    dedupe_key: Optional[str] = None,
 ) -> Optional[str]:
     """Record an in-app notification and enqueue its email/Slack dispatch.
 
     Best-effort: never raises into the caller (a notification failure must not
     break the producer's own work). Returns the notification id, or None.
+
+    ``dedupe_key`` (optional) gives **atomic** idempotency via the unique
+    ``notifications.dedupe_key`` index: if a row with this key already exists
+    (e.g. a rolling-deploy re-run of a daily digest), the insert conflicts and
+    this is a clean no-op returning None — no duplicate notification. The DB
+    constraint is the arbiter (no query-guard TOCTOU race).
     """
     if not settings.notifications_enabled:
         return None
     try:
         supabase = get_supabase()
-        row = (
-            supabase.table("notifications")
-            .insert(
-                {
-                    "client_id": client_id,
-                    "kind": kind,
-                    "severity": severity,
-                    "title": title,
-                    "summary": summary,
-                    "payload": payload,
-                }
-            )
-            .execute()
-        )
+        insert_row = {
+            "client_id": client_id,
+            "kind": kind,
+            "severity": severity,
+            "title": title,
+            "summary": summary,
+            "payload": payload,
+            "dedupe_key": dedupe_key,
+        }
+        try:
+            row = supabase.table("notifications").insert(insert_row).execute()
+        except Exception as insert_exc:
+            # A dedupe_key conflict means someone already emitted this — a clean
+            # no-op. Disambiguate a genuine conflict from any other insert error
+            # by re-checking for the key's existence (the constraint is atomic).
+            if dedupe_key:
+                existing = (
+                    supabase.table("notifications")
+                    .select("id")
+                    .eq("dedupe_key", dedupe_key)
+                    .limit(1)
+                    .execute()
+                )
+                if existing.data:
+                    return None
+            raise insert_exc
         notification_id = row.data[0]["id"]
         # Only enqueue an external-delivery job when a channel is actually set up.
         if email_configured() or slack_configured():

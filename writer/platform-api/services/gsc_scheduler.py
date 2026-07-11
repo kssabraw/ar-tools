@@ -396,6 +396,7 @@ async def gsc_scheduler() -> None:
     from services.task_monthly import enqueue_due_task_months
     from services.task_workload import enqueue_due_sweep
     from services.task_workload import run_workload_alert as run_native_workload_alert
+    from services.pace_digest import run_daily_digest as run_pace_digest
     from services.brand_schedule import enqueue_due_brand_scans
     from services.client_report_schedule import enqueue_due_report_schedules
     from services.content_batch import enqueue_due_content_items
@@ -463,6 +464,9 @@ async def gsc_scheduler() -> None:
                 # Daily native-task due sweep (due-today/overdue digest).
                 # Self-gated: no-ops while native_tasks_enabled is false.
                 enqueue_due_sweep()
+                # Daily PACE delivery digest (deterministic; atomic dedupe_key).
+                # Self-gated: no-ops while pace_enabled is false.
+                run_pace_digest()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,

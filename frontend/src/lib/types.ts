@@ -21,6 +21,8 @@ export interface TeamUser {
   full_name: string | null
   role: UserRole
   created_at: string
+  // PACE identity bridge: the Slack user this login maps to, if linked.
+  slack_user_id?: string | null
 }
 
 export interface ClientListItem {

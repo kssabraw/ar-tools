@@ -56,11 +56,14 @@ async def assistant_chat_turn(
     if not settings.anthropic_api_key:
         raise HTTPException(status_code=503, detail="assistant_not_configured")
     try:
+        from services import pace_auth
+
         result = await assistant_chat.handle_chat(
             body.message.strip(),
             [t.model_dump() for t in body.history],
             body.client_id,
             body.pending_token,
+            action_context=pace_auth.context_from_auth(auth),
         )
     except HTTPException:
         raise
@@ -89,6 +92,10 @@ async def assistant_chat_stream(
     async def on_event(evt: dict) -> None:
         await queue.put(evt)
 
+    from services import pace_auth
+
+    actor = pace_auth.context_from_auth(auth)
+
     async def produce() -> None:
         try:
             result = await assistant_chat.handle_chat(
@@ -97,6 +104,7 @@ async def assistant_chat_stream(
                 body.client_id,
                 body.pending_token,
                 on_event=on_event,
+                action_context=actor,
             )
             await queue.put({"type": "done", **result})
         except Exception as exc:

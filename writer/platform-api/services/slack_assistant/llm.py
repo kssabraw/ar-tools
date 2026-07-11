@@ -627,6 +627,20 @@ async def handle_message(event: dict) -> None:
     question = strip_mention(event.get("text", ""))
     if not (channel and question):
         return
+
+    # 0) PACE (delivery PM) gets first refusal — but only when enabled (default
+    # off → this branch is inert and SerMaStr is byte-for-byte unchanged). It
+    # answers project-management-shaped messages + its own actor-bound confirms;
+    # anything else returns False and falls straight through to SerMaStr below.
+    if settings.pace_enabled:
+        try:
+            from services import pace_agent, pace_auth
+            actor = pace_auth.resolve_slack_actor(event.get("user"), channel)
+            if await pace_agent.maybe_handle_slack(event, actor):
+                return
+        except Exception as exc:  # PACE must never break the SerMaStr path
+            logger.warning("pace_slack_delegate_failed", extra={"channel": channel, "error": str(exc)})
+
     try:
         # 1) Confirmation of a pending paid action ("yes") — runs the stored action
         # (which carries its own client_id, so the "yes" needn't name a client).
