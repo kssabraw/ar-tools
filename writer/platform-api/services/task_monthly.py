@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -186,12 +187,14 @@ def assign_auto_tasks(client_id: str, templates: list[dict]) -> int:
 # ---------------------------------------------------------------------------
 # Core: generate one month for one client
 # ---------------------------------------------------------------------------
-def generate_month_for_client(client_id: str, target: date) -> dict:
+def generate_month_for_client(client_id: str, target: date, *, actor_id: Optional[str] = None) -> dict:
     """Create/populate the "<Month YYYY>" section for ``target`` from the
     client's template. Idempotent per task (source_ref); re-runs fill gaps.
 
-    Returns ``{status, section, created, existing, errors}``. Never raises for
-    a "nothing to do" condition — those return a status the caller surfaces.
+    ``actor_id`` (PACE §3.2) stamps ``created_by`` on the generated tasks +
+    subtasks so a PACE-triggered generation is audited; scheduled generation
+    passes None (a system actor). Returns ``{status, section, created, existing,
+    errors}``. Never raises for a "nothing to do" condition.
     """
     label = month_label(target)
 
@@ -232,13 +235,14 @@ def generate_month_for_client(client_id: str, target: date) -> dict:
                 source="monthly",
                 source_ref=month_source_ref(client_id, target, str(row.get("id"))),
                 library_task_name=name,
+                created_by=actor_id,
             )
             if task.get("_existing"):
                 existing += 1
                 continue
             subtasks = checklists.get(name.casefold()) or []
             if subtasks:
-                task_service.create_subtasks(task, subtasks)
+                task_service.create_subtasks(task, subtasks, created_by=actor_id)
             created += 1
             who = row.get("assignee_name") or row.get("assignee_gid") or "Unassigned"
             assigned_counts[who] = assigned_counts.get(who, 0) + 1
@@ -285,8 +289,11 @@ def generate_month_for_client(client_id: str, target: date) -> dict:
 # ---------------------------------------------------------------------------
 # Job enqueue + handler (async_jobs type 'task_month_generate')
 # ---------------------------------------------------------------------------
-def enqueue_task_month(client_id: str, target: date, trigger: str = "scheduled") -> None:
-    """Enqueue a task_month_generate job (deduped against any in-flight one)."""
+def enqueue_task_month(client_id: str, target: date, trigger: str = "scheduled",
+                       actor_id: Optional[str] = None) -> None:
+    """Enqueue a task_month_generate job (deduped against any in-flight one).
+    ``actor_id`` (PACE) rides the payload so the async generation stamps the
+    initiating actor on the created tasks; None = scheduled/system."""
     supabase = get_supabase()
     existing = (
         supabase.table("async_jobs")
@@ -303,7 +310,8 @@ def enqueue_task_month(client_id: str, target: date, trigger: str = "scheduled")
         {
             "job_type": "task_month_generate",
             "entity_id": client_id,
-            "payload": {"client_id": client_id, "month": target.isoformat(), "trigger": trigger},
+            "payload": {"client_id": client_id, "month": target.isoformat(),
+                        "trigger": trigger, "actor_id": actor_id},
         }
     ).execute()
 
@@ -321,7 +329,9 @@ async def run_task_month_job(job: dict) -> None:
         ).eq("id", job_id).execute()
         return
     try:
-        result = generate_month_for_client(client_id, date.fromisoformat(month))
+        result = generate_month_for_client(
+            client_id, date.fromisoformat(month), actor_id=payload.get("actor_id")
+        )
     except Exception as exc:
         logger.warning("task_month_job_failed", extra={"client_id": client_id, "error": str(exc)})
         supabase.table("async_jobs").update(
