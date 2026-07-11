@@ -896,29 +896,76 @@ async def _orchestrate_run_impl(run_id: str) -> None:
         )
 
 
+def should_resume(run: dict, max_resumes: int) -> bool:
+    """Whether an orphaned run gets auto-resumed (vs marked failed). Pure.
+    A missing resume_count (pre-migration rows) counts as 0."""
+    if max_resumes <= 0:
+        return False
+    return int(run.get("resume_count") or 0) < max_resumes
+
+
+# Auto-resume tasks are fire-and-forget; keep references so the event loop
+# can't garbage-collect them mid-run (the standard create_task pattern).
+_RESUME_TASKS: set = set()
+
+
+def _spawn_resume(run_id: str) -> None:
+    task = asyncio.create_task(orchestrate_run(run_id))
+    _RESUME_TASKS.add(task)
+    task.add_done_callback(_RESUME_TASKS.discard)
+
+
 async def recover_stuck_runs() -> None:
-    """On startup, mark any runs stuck in non-terminal states as failed."""
+    """On startup, recover runs stranded in non-terminal states by the previous
+    process dying mid-run (deploy/crash — orchestrate_run is an in-process
+    background task, so it doesn't survive a restart).
+
+    Each orphaned run is RE-DISPATCHED through orchestrate_run, which loads its
+    completed module_outputs and skips them — so a resume re-runs only the
+    interrupted stage, not the whole pipeline. `resume_count` bounds the
+    auto-resumes (`run_auto_resume_max`, default 2) so a run that keeps dying
+    (e.g. one whose generation crashes the service) fails permanently instead
+    of crash-looping; past the cap it fails with the old recovery message.
+    Resumed runs respect the global run-concurrency gate like any other run."""
     try:
         result = (
             _sb()
             .table("runs")
-            .select("id, status")
+            .select("id, status, resume_count")
             .in_("status", list(NON_TERMINAL_STATUSES))
             .execute()
         )
         stuck = result.data or []
+        resumed = failed = 0
         for run in stuck:
-            logger.warning(
-                "startup_recovery_run_failed",
-                extra={"run_id": run["id"], "stuck_status": run["status"]},
-            )
-            await _set_run_status(
-                run["id"],
-                "failed",
-                error_stage="recovery",
-                error_message="Service restarted mid-run. Please re-run.",
-            )
+            if should_resume(run, settings.run_auto_resume_max):
+                attempt = int(run.get("resume_count") or 0) + 1
+                logger.warning(
+                    "startup_recovery_run_resumed",
+                    extra={"run_id": run["id"], "stuck_status": run["status"],
+                           "resume_attempt": attempt},
+                )
+                _sb().table("runs").update(
+                    {"resume_count": attempt, "updated_at": "now()"}
+                ).eq("id", run["id"]).execute()
+                _spawn_resume(run["id"])
+                resumed += 1
+            else:
+                logger.warning(
+                    "startup_recovery_run_failed",
+                    extra={"run_id": run["id"], "stuck_status": run["status"]},
+                )
+                await _set_run_status(
+                    run["id"],
+                    "failed",
+                    error_stage="recovery",
+                    error_message="Service restarted mid-run. Please re-run.",
+                )
+                failed += 1
         if stuck:
-            logger.info("startup_recovery_complete", extra={"recovered": len(stuck)})
+            logger.info(
+                "startup_recovery_complete",
+                extra={"resumed": resumed, "failed": failed},
+            )
     except Exception as exc:
         logger.error("startup_recovery_failed", extra={"error": str(exc)})
