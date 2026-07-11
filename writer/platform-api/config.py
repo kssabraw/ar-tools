@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     # briefly carried a duplicate definition of this field (=5 further down,
     # which silently won) — keep it defined exactly once.
     max_concurrent_runs: int = 3
+    # Auto-resume runs orphaned by a service restart (deploy/crash mid-run):
+    # startup recovery re-dispatches them (the orchestrator skips completed
+    # module_outputs, so only the interrupted stage re-runs) at most this many
+    # times per run; past the cap the run fails with the old "Service restarted
+    # mid-run" message. 0 disables auto-resume (always fail, the old behavior).
+    run_auto_resume_max: int = 2
     scrapeowl_api_key: str = ""
     openai_api_key: str = ""
     anthropic_api_key: str = ""
