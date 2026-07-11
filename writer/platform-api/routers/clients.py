@@ -297,6 +297,14 @@ async def create_client(
         _enqueue_page_structure_scrape(client["id"], page_type, url)
     # Auto-generate the brand voice + ICP so they exist without a manual scan.
     _enqueue_auto_brand_voice_icp(client, auth["user_id"])
+    # Auto-track the client's own domain for backlink monitoring (best-effort;
+    # the daily scheduler pass also backfills, so a failure here self-heals).
+    try:
+        from services import backlink_explorer
+
+        backlink_explorer.ensure_client_domain_tracked(client["id"], client.get("website_url"))
+    except Exception as exc:
+        logger.warning("client_backlink_autotrack_failed", extra={"client_id": client["id"], "error": str(exc)})
     # Auto-derive the rank-tracking location from the GBP (best-effort, async).
     if body.gbp is not None:
         rank_location.enqueue_location_derive(client["id"])

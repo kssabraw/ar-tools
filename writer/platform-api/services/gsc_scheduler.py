@@ -403,7 +403,7 @@ async def gsc_scheduler() -> None:
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
     from services.page_backlink_intel import enqueue_due_page_backlinks
-    from services.backlink_explorer import enqueue_due_backlink_snapshots
+    from services.backlink_explorer import auto_track_client_domains, enqueue_due_backlink_snapshots
     from services.response_episodes import run_episode_sync
 
     from services.strategist import enqueue_due_strategy_reviews
@@ -452,8 +452,10 @@ async def gsc_scheduler() -> None:
                 enqueue_due_competitor_intel()
                 run_trend_sweep()
                 enqueue_due_page_backlinks()
-                # Tracked-target backlink re-snapshots (interval-gated per target;
+                # Auto-track each client's own domain (idempotent), then run the
+                # tracked-target backlink re-snapshots (interval-gated per target;
                 # the paid pull draws from the daily backlink budget).
+                auto_track_client_domains()
                 enqueue_due_backlink_snapshots()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still

@@ -453,6 +453,51 @@ def untrack_target(client_id: str, target_id: str) -> None:
         .eq("id", target_id).eq("client_id", client_id).execute()
 
 
+def ensure_client_domain_tracked(client_id: str, website_url: Optional[str]) -> bool:
+    """Auto-track a client's own domain for backlink monitoring. Idempotent AND
+    curation-respecting: creates a tracked target only when NO target row exists
+    yet for the client's domain, so a user's manual untrack is never resurrected
+    (mirrors the competitor auto-discovery rule). The target is keyed exactly as
+    ``client_own_domain_change`` expects — ``extract_domain`` + ``domain`` type —
+    so the agent enrichment matches it. Returns True if it created one."""
+    if not settings.backlink_auto_track_client_domain:
+        return False
+    from services.dataforseo_rank import extract_domain
+
+    domain = extract_domain(website_url or "")
+    if not domain:
+        return False
+    if _find_target(domain, "domain", client_id) is not None:
+        return False  # a row already exists (tracked or manually untracked) — leave it
+    row = get_or_create_target(domain, "domain", client_id=client_id)
+    get_supabase().table("backlink_targets").update(
+        {"tracked": True, "label": domain}
+    ).eq("id", row["id"]).execute()
+    enqueue_snapshot(row["id"])
+    return True
+
+
+def auto_track_client_domains() -> int:
+    """Daily: ensure every client with a website has its own domain tracked for
+    backlink monitoring. Idempotent no-op for already-handled clients; best-effort
+    per client. Returns the count newly auto-tracked."""
+    if not settings.backlink_auto_track_client_domain:
+        return 0
+    clients = (get_supabase().table("clients").select("id, website_url").execute()).data or []
+    created = 0
+    for c in clients:
+        if not (c.get("website_url") or "").strip():
+            continue
+        try:
+            if ensure_client_domain_tracked(c["id"], c.get("website_url")):
+                created += 1
+        except Exception as exc:
+            logger.warning("backlink_auto_track_failed", extra={"client_id": c["id"], "error": str(exc)})
+    if created:
+        logger.info("backlink_auto_track_created", extra={"count": created})
+    return created
+
+
 _LATEST_FIELDS = ("referring_domains", "backlinks", "domain_rating", "new_domains", "lost_domains", "captured_at")
 
 

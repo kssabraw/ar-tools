@@ -289,3 +289,17 @@ def test_is_recent_missing_or_bad():
     now = datetime(2026, 7, 11, tzinfo=timezone.utc)
     assert backlink_explorer.is_recent(None, 21, now=now) is False
     assert backlink_explorer.is_recent("not-a-date", 21, now=now) is False
+
+
+# ---------------------------------------------------------------------------
+# ensure_client_domain_tracked — guard short-circuits (no DB I/O reached)
+# ---------------------------------------------------------------------------
+def test_ensure_autotrack_disabled_returns_false(monkeypatch):
+    monkeypatch.setattr(backlink_explorer.settings, "backlink_auto_track_client_domain", False)
+    assert backlink_explorer.ensure_client_domain_tracked("c1", "https://example.com") is False
+
+
+def test_ensure_autotrack_no_website_returns_false(monkeypatch):
+    monkeypatch.setattr(backlink_explorer.settings, "backlink_auto_track_client_domain", True)
+    assert backlink_explorer.ensure_client_domain_tracked("c1", "") is False
+    assert backlink_explorer.ensure_client_domain_tracked("c1", None) is False
