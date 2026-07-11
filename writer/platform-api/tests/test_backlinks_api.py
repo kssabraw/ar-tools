@@ -165,6 +165,31 @@ def test_diff_domains_ignores_empty():
 
 
 # ---------------------------------------------------------------------------
+# _diff_for_snapshot — baseline + API-failure guard (no false total-loss)
+# ---------------------------------------------------------------------------
+def test_diff_for_snapshot_baseline_is_empty():
+    # No previous snapshot → baseline, never "all new".
+    assert backlink_explorer._diff_for_snapshot(None, True, set(), ["a.com", "b.com"]) == {"new": [], "lost": []}
+
+
+def test_diff_for_snapshot_suppressed_when_fetch_failed():
+    # RD fetch failed (rd_ok False) with an empty current list — must NOT report
+    # every previous domain as lost (that would be a false outage-driven alert).
+    assert backlink_explorer._diff_for_snapshot("s1", False, {"a.com", "b.com"}, []) == {"new": [], "lost": []}
+
+
+def test_diff_for_snapshot_genuine_total_loss_still_reported():
+    # A SUCCESSFUL empty fetch is a genuine total loss — still diffed.
+    out = backlink_explorer._diff_for_snapshot("s1", True, {"a.com", "b.com"}, [])
+    assert out == {"new": [], "lost": ["a.com", "b.com"]}
+
+
+def test_diff_for_snapshot_normal():
+    out = backlink_explorer._diff_for_snapshot("s1", True, {"a.com"}, ["a.com", "c.com"])
+    assert out == {"new": ["c.com"], "lost": []}
+
+
+# ---------------------------------------------------------------------------
 # should_alert (threshold gate — defaults 10 new / 10 lost)
 # ---------------------------------------------------------------------------
 def test_should_alert_below_threshold():

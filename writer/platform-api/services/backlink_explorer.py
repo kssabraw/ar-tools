@@ -65,6 +65,18 @@ def should_alert(new_count: int, lost_count: int) -> bool:
             or lost_count >= settings.backlink_alert_lost_domains_min)
 
 
+def _diff_for_snapshot(prev_snapshot_id, rd_ok: bool, prev_domains, cur_domains) -> dict:
+    """The gained/lost diff to record on a snapshot. Pure.
+
+    Suppressed (no gains/losses) when there is no previous snapshot (baseline)
+    OR the referring-domains fetch FAILED (``rd_ok`` False) — an empty result
+    from an API outage must NOT read as "every referring domain was lost" and
+    fire a false loss alert. A genuinely-empty successful fetch still diffs."""
+    if prev_snapshot_id is None or not rd_ok:
+        return {"new": [], "lost": []}
+    return diff_domains(prev_domains, cur_domains)
+
+
 def match_own_domain_target(targets: list, client_domain: Optional[str]) -> Optional[dict]:
     """The tracked target row that IS the client's own domain (bare-domain type),
     or None. Pure — the agent-layer read of a client's own backlink monitoring."""
@@ -214,7 +226,8 @@ async def _refresh(target: str, target_type: str, target_id: str) -> dict:
         return_exceptions=True,
     )
     summary = summary_r if isinstance(summary_r, dict) else {}
-    referring_domains = rd_r if isinstance(rd_r, list) else []
+    rd_ok = isinstance(rd_r, list)
+    referring_domains = rd_r if rd_ok else []
     anchors = anchors_r if isinstance(anchors_r, list) else []
     history = history_r if isinstance(history_r, list) else []
     for label, res in (("summary", summary_r), ("referring_domains", rd_r), ("anchors", anchors_r), ("history", history_r)):
@@ -224,7 +237,7 @@ async def _refresh(target: str, target_type: str, target_id: str) -> dict:
     # Diff referring domains vs the previous snapshot. A target's first snapshot
     # is a baseline (no gains/losses) so it never reads as "all N are new".
     cur_domains = [rd.get("domain") for rd in referring_domains]
-    diff = {"new": [], "lost": []} if prev_snapshot_id is None else diff_domains(prev_domains, cur_domains)
+    diff = _diff_for_snapshot(prev_snapshot_id, rd_ok, prev_domains, cur_domains)
     new_set = set(diff["new"])
     lost = diff["lost"]
 
@@ -475,9 +488,16 @@ async def run_backlink_snapshot_job(job: dict) -> None:
             _emit_backlink_alert(target_row, new_count, lost_count)
         sb.table("async_jobs").update({"status": "complete", "completed_at": "now()"}).eq("id", job_id).execute()
     except BudgetExceeded as exc:
-        # Budget exhausted — leave pending for a later tick rather than failing.
-        logger.info("backlink_snapshot_deferred", extra={"target_id": target_id, "reason": str(exc)})
-        sb.table("async_jobs").update({"status": "pending", "scheduled_at": "now()"}).eq("id", job_id).execute()
+        # Daily budget exhausted — the cap won't free until the date rolls, so
+        # retrying intra-day is futile. Mark terminal (NOT re-pending: the claim
+        # increments attempts and refuses past max_attempts, which would strand
+        # the job as un-runnable AND block re-enqueue via the pending/running
+        # dedup). enqueue_due_backlink_snapshots re-enqueues a fresh job (attempts
+        # reset) on the next daily tick, since last_refreshed_at stayed old.
+        logger.info("backlink_snapshot_deferred_budget", extra={"target_id": target_id, "reason": str(exc)})
+        sb.table("async_jobs").update(
+            {"status": "failed", "error": "budget_exceeded", "completed_at": "now()"}
+        ).eq("id", job_id).execute()
     except Exception as exc:
         logger.warning("backlink_snapshot_failed", extra={"target_id": target_id, "error": str(exc)})
         sb.table("async_jobs").update(
