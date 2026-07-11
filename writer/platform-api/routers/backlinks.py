@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from config import settings
 from middleware.auth import require_auth
-from services import backlink_explorer
+from services import authority_report, backlink_explorer
 
 router = APIRouter(tags=["backlinks"])
 logger = logging.getLogger(__name__)
@@ -115,6 +115,46 @@ async def backlink_anchors(
 ) -> dict:
     """The anchor-text distribution for a looked-up target (lazy tab load)."""
     return await _lazy_route(backlink_explorer.load_anchors, target, client_id, force)
+
+
+# ----------------------------------------------------------------------------
+# Authority reports (RD / DR / UR) — the rank trackers' on-demand comparison of
+# link authority vs the competitors each tracker already knows about.
+# ----------------------------------------------------------------------------
+class OrganicAuthorityRequest(BaseModel):
+    keyword_id: UUID
+
+
+@router.post("/clients/{client_id}/authority/organic")
+async def organic_authority(
+    client_id: UUID, body: OrganicAuthorityRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    """Fresh RD/DR/UR for everyone in a tracked keyword's latest SERP snapshot
+    (2 paid bulk calls). Returns needs_snapshot when no snapshot exists yet."""
+    if not (settings.dataforseo_login and settings.dataforseo_password):
+        raise HTTPException(status_code=503, detail="dataforseo_not_configured")
+    try:
+        return await authority_report.build_organic_authority(str(client_id), str(body.keyword_id))
+    except backlink_explorer.BudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail="backlink_budget_exceeded") from exc
+    except Exception as exc:
+        logger.error("authority_organic_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=502, detail="backlink_provider_error") from exc
+
+
+@router.post("/clients/{client_id}/authority/maps")
+async def maps_authority(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Fresh RD/DR/homepage-UR for the latest geo-grid scan's local-pack
+    leaderboard vs the client (2 paid bulk calls). needs_scan when no scan."""
+    if not (settings.dataforseo_login and settings.dataforseo_password):
+        raise HTTPException(status_code=503, detail="dataforseo_not_configured")
+    try:
+        return await authority_report.build_maps_authority(str(client_id))
+    except backlink_explorer.BudgetExceeded as exc:
+        raise HTTPException(status_code=429, detail="backlink_budget_exceeded") from exc
+    except Exception as exc:
+        logger.error("authority_maps_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=502, detail="backlink_provider_error") from exc
 
 
 # ----------------------------------------------------------------------------
