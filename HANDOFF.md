@@ -1,6 +1,38 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-07-05 · **SerMaStr Phases 0–4 BUILT — dormant behind `strategist_enabled=false`** (latest)
+## ⏩ Update — 2026-07-11 · **LeadOff market-intelligence module (v1 read-only) BUILT** (latest)
+
+The suite's pre-client "which market do we enter" tool — the LeadOff scanner's
+graded board (34,352 US city×category markets + neighborhood combos), served
+from Supabase schema `market_scanner` into a new suite-level page.
+
+**What exists (detail in the CLAUDE.md paragraph + `docs/modules/leadoff-prd-v1_0.md`):**
+- Backend: `services/leadoff_db.py` (schema-scoped client, fanout pattern),
+  `services/leadoff.py` (pure grade/economics logic), `routers/leadoff.py`
+  (`GET /leadoff/board`, `GET /leadoff/market-brief`). Config:
+  `leadoff_prefetch_rows`. No migration — the `market_scanner` tables are
+  populated by the external scanner; `service_role` grants already applied.
+- Frontend: `pages/LeadOff.tsx` at `/leadoff` + sidebar entry (Radar icon).
+- Agent layer: `docs/sops/LeadOff_Market_Intelligence_SOP.md` (+ byte-identical
+  vendored copy in `agent_docs/sops/`, registered in `docs/sops/README.md`).
+
+**Verification done:** 15 new pytest green (`tests/test_leadoff.py`, pure
+logic); `npm run build` clean. Full backend suite NOT run in this (Windows)
+workspace — deps aren't installed locally; note `test_sop_library.py`'s
+vendored-sync test fails on clean `main` here too (a cp1252 locale artifact
+reading `_ORCHESTRATOR.md`, passes on Linux/CI) — pre-existing, not from this
+change.
+
+### 🚦 To activate
+1. Supabase dashboard → API settings → **Exposed schemas** → add
+   `market_scanner`. (Grants to `service_role` are already applied.) Without
+   this, `/leadoff/*` returns PostgREST schema errors.
+2. Deploy PLATFORM + frontend as usual. No env vars needed for v1 (read-only).
+3. Smoke: open `/leadoff` → board renders with `data 2026-07`; click a row →
+   brief shows top-5 competitors; Vancouver WA Locksmith should show cached
+   scouting enrichment (RD/velocity from the shared caches).
+
+## ⏩ Update — 2026-07-05 · **SerMaStr Phases 0–4 BUILT — dormant behind `strategist_enabled=false`**
 
 The strategist agent from `docs/modules/seo-strategist-agent-plan-v1_0.md` is
 **built end-to-end (Phases 0–4; Phase 5 Asana push deliberately out of scope)**
