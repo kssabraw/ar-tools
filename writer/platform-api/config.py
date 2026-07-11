@@ -421,6 +421,7 @@ class Settings(BaseSettings):
     backlink_referring_domains_limit: int = 100
     backlink_anchors_limit: int = 100
     backlink_links_max_limit: int = 100
+    backlink_pages_limit: int = 100  # per-page breakdown rows per snapshot
     # A shared daily ceiling on paid DataForSEO backlink calls (a refresh is ~4
     # endpoint calls, a link-list page is 1). 0 disables the guard. Ad-hoc
     # lookups and scheduled re-snapshots draw from the same day's budget.
