@@ -950,10 +950,22 @@ export interface RankingTrend {
   sample_count: number
 }
 
+// AI-visibility share trend (first scan batch vs latest). Higher share is
+// better; `direction` "up" means the share rose (improved), kept polarity-
+// aligned with RankingTrend so the UI treats "up" as green for all axes.
+export interface VisibilityTrend {
+  first_pct: number | null
+  latest_pct: number | null
+  delta: number | null // latest_pct - first_pct; positive = improved
+  direction: 'up' | 'down' | 'flat' | null
+  sample_count: number
+}
+
 export interface ClientRankingHealth {
   client_id: string
   organic: RankingTrend
   maps: RankingTrend
+  visibility?: VisibilityTrend
 }
 
 export interface RankingHealthResponse {

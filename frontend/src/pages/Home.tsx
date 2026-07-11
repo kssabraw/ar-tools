@@ -2,47 +2,86 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import type { ClientListItem, ClientRankingHealth, RankingHealthResponse, RankingTrend, UnreadCountsResponse } from '../lib/types'
+import type { ClientListItem, ClientRankingHealth, RankingHealthResponse, RankingTrend, VisibilityTrend, UnreadCountsResponse } from '../lib/types'
 import { Plus, Globe, Bell } from 'lucide-react'
 
 function initials(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
 }
 
-// One average-rank trend (latest run vs first). Lower rank is better, so an "up"
-// direction (rank number dropped) is an improvement → green up-arrow; "down" is
-// worse → red down-arrow. Renders nothing when there's no latest value to show.
-function TrendRow({ label, trend }: { label: string; trend: RankingTrend }) {
-  if (trend.latest_avg == null) return null
-  const up = trend.direction === 'up'
-  const down = trend.direction === 'down'
+// Shared row layout: a label, a current-value readout, and a direction chip.
+// `direction` "up" always means improved (green up-arrow) regardless of axis —
+// the backend normalizes polarity, so lower-is-better rank and higher-is-better
+// visibility both map "up" → green.
+function MetricRow({ label, value, direction, delta, deltaSuffix = '' }: {
+  label: string
+  value: string
+  direction: 'up' | 'down' | 'flat' | null
+  delta: number | null
+  deltaSuffix?: string
+}) {
+  const up = direction === 'up'
+  const down = direction === 'down'
   const color = up ? '#16a34a' : down ? '#dc2626' : '#94a3b8'
   const arrow = up ? '▲' : down ? '▼' : '–'
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
       <span style={{ color: '#334155', flex: 1 }}>{label}</span>
-      <span style={{ color: '#64748b', fontWeight: 600 }}>avg #{trend.latest_avg.toFixed(1)}</span>
+      <span style={{ color: '#64748b', fontWeight: 600 }}>{value}</span>
       <span style={{ color, fontSize: 11, fontWeight: 700, flexShrink: 0, minWidth: 46, textAlign: 'right' }}>
-        {arrow}{trend.delta != null && trend.direction !== 'flat' ? ` ${Math.abs(trend.delta).toFixed(1)}` : ''}
+        {arrow}{delta != null && direction !== 'flat' ? ` ${Math.abs(delta).toFixed(1)}${deltaSuffix}` : ''}
       </span>
     </div>
   )
 }
 
-// Average organic + maps ranking trend (most recent run vs the first) for a
-// client tile. Renders nothing for clients with neither tracked, so non-ranking
-// tiles are unchanged.
+// One average-rank trend (latest run vs first). Lower rank is better; an "up"
+// direction (rank number dropped) is the improvement. Renders nothing when
+// there's no latest value to show.
+function TrendRow({ label, trend }: { label: string; trend: RankingTrend }) {
+  if (trend.latest_avg == null) return null
+  return (
+    <MetricRow
+      label={label}
+      value={`avg #${trend.latest_avg.toFixed(1)}`}
+      direction={trend.direction}
+      delta={trend.delta}
+    />
+  )
+}
+
+// AI-visibility share trend (latest scan batch vs first). Higher share is
+// better; the backend already normalizes "up" → improved. Renders nothing when
+// there's no latest value to show.
+function VisibilityRow({ label, trend }: { label: string; trend: VisibilityTrend }) {
+  if (trend.latest_pct == null) return null
+  return (
+    <MetricRow
+      label={label}
+      value={`${trend.latest_pct.toFixed(0)}% visible`}
+      direction={trend.direction}
+      delta={trend.delta}
+      deltaSuffix="%"
+    />
+  )
+}
+
+// Organic + maps ranking trend and AI-visibility share (most recent run vs the
+// first) for a client tile. Renders nothing for clients tracking none of the
+// three, so non-ranking tiles are unchanged.
 function RankTrendBlock({ health }: { health?: ClientRankingHealth }) {
   if (!health) return null
   const hasOrganic = health.organic.latest_avg != null
   const hasMaps = health.maps.latest_avg != null
-  if (!hasOrganic && !hasMaps) return null
+  const hasVisibility = health.visibility?.latest_pct != null
+  if (!hasOrganic && !hasMaps && !hasVisibility) return null
   return (
     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #f1f5f9' }}>
-      <div style={threatLabel}>Average ranking · latest vs first</div>
+      <div style={threatLabel}>Performance · latest vs first</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <TrendRow label="Organic" trend={health.organic} />
         <TrendRow label="Maps" trend={health.maps} />
+        {health.visibility && <VisibilityRow label="AI Visibility" trend={health.visibility} />}
       </div>
     </div>
   )
