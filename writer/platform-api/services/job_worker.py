@@ -38,6 +38,7 @@ from services.client_report import run_client_report_job
 from services.reopt_planner import run_reopt_plan_job
 from services.asana_monthly import run_asana_monthly_job
 from services.asana_push import run_asana_push_job
+from services.task_import import run_import_job as run_task_import_job
 from services.task_monthly import run_task_month_job
 from services.task_workload import run_due_sweep_job
 from services.serp_snapshot import run_serp_snapshot_job
@@ -401,6 +402,8 @@ async def _process_job(job: dict) -> None:
         await run_task_month_job(job)
     elif job_type == "task_due_sweep":
         await run_due_sweep_job(job)
+    elif job_type == "task_import_asana":
+        await run_task_import_job(job)
     elif job_type == "client_report":
         await run_client_report_job(job)
     elif job_type == "syndication_scan":

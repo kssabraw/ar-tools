@@ -741,6 +741,15 @@ class Settings(BaseSettings):
     native_tasks_enabled: bool = False
     # Per-file cap for task attachments (the bucket also enforces 20 MB).
     task_attachment_max_mb: int = 20
+    # Suite auto-integration producers (PRD §11) — each is double-gated on
+    # native_tasks_enabled AND its own flag, so they can be enabled one at a
+    # time. content_run is opt-in (the PRD marks it optional).
+    task_producer_rank_drop_enabled: bool = True
+    task_producer_maps_alert_enabled: bool = True
+    task_producer_action_plan_enabled: bool = True
+    # Only the top-N plan actions become tasks (the plan is priority-sorted).
+    task_producer_action_plan_max: int = 10
+    task_producer_content_run_enabled: bool = False
 
     class Config:
         env_file = ".env"

@@ -309,6 +309,11 @@ def enqueue_due_asana_monthly(target: date) -> int:
     Idempotent at execution (the job no-ops if the section exists)."""
     if not settings.asana_monthly_enabled or not asana_service.is_configured():
         return 0
+    # Cutover (native task manager Phase 5): once native tasks are on, the
+    # native monthly generation owns the cadence and Asana goes read-only —
+    # the PRD's parallel-run model (team executes in AR Tools).
+    if settings.native_tasks_enabled:
+        return 0
     rows = (
         get_supabase()
         .table("asana_client_projects")

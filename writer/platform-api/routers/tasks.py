@@ -403,6 +403,31 @@ async def mention_candidates(auth: dict = Depends(require_auth)) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Asana migration importer (PRD §15) — admin one-shot, idempotent re-runs
+# ---------------------------------------------------------------------------
+@router.post("/tasks/import/asana")
+async def import_asana(auth: dict = Depends(require_admin)) -> dict:
+    from services import task_import
+
+    try:
+        return task_import.enqueue_import()
+    except Exception as exc:
+        logger.error("task_import_enqueue_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/tasks/import/asana/status")
+async def import_asana_status(auth: dict = Depends(require_auth)) -> dict:
+    from services import task_import
+
+    try:
+        return task_import.latest_import_job() or {"status": "never_run"}
+    except Exception as exc:
+        logger.error("task_import_status_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+# ---------------------------------------------------------------------------
 # Saved views (PRD §6.7) — static /tasks/views routes, before /tasks/{task_id}
 # ---------------------------------------------------------------------------
 @router.get("/tasks/views")

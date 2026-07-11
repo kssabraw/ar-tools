@@ -235,6 +235,55 @@ def test_duplicate_task_copies_fields_not_source(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Producers (Phase 4) + importer (Phase 5) pure helpers
+# ---------------------------------------------------------------------------
+def test_action_source_ref_stable_across_rebuilds():
+    from services.task_producers import action_source_ref
+
+    a = {"kind": "quick_win", "keyword": "Roof Repair", "recommendation": "Reoptimize the page"}
+    b = {"kind": "quick_win", "keyword": "roof repair", "recommendation": "Different wording"}
+    assert action_source_ref("c1", a) == action_source_ref("c1", b)  # same item, new build
+    assert action_source_ref("c1", a) != action_source_ref("c2", a)  # per-client
+    no_kw = {"kind": "consolidate", "cta_label": "Open GSC Research"}
+    assert action_source_ref("c1", no_kw) == "c1:consolidate:open gsc research"
+
+
+def test_import_map_status_variants():
+    from services.task_import import map_status
+
+    assert map_status("Not Started", "not_started") == "not_started"
+    assert map_status("Sent For Approval", "not_started") == "in_review"
+    assert map_status("With Client", "not_started") == "sent_to_client"
+    assert map_status("Waiting on URL to Go Live", "not_started") == "client_approved"
+    assert map_status("Done", "not_started") == "complete"
+    assert map_status("On Hold", "not_started") == "blocked"
+    # Unknown / blank → the initial status.
+    assert map_status("Some Custom State", "not_started") == "not_started"
+    assert map_status(None, "not_started") == "not_started"
+
+
+def test_import_field_and_section_helpers():
+    from services.task_import import extract_enum_field, month_period, section_name_of
+
+    task = {
+        "custom_fields": [
+            {"name": "Status", "enum_value": {"name": "In Progress"}},
+            {"name": "Service Type", "enum_value": None, "display_value": "Link Building"},
+        ],
+        "memberships": [
+            {"project": {"gid": "other"}, "section": {"name": "Backlog"}},
+            {"project": {"gid": "proj1"}, "section": {"name": "July 2026"}},
+        ],
+    }
+    assert extract_enum_field(task, "Status") == "In Progress"
+    assert extract_enum_field(task, "service type") == "Link Building"
+    assert extract_enum_field(task, "Missing") is None
+    assert section_name_of(task, "proj1") == "July 2026"
+    assert month_period("July 2026") == "2026-07-01"
+    assert month_period("Backlog") is None
+
+
+# ---------------------------------------------------------------------------
 # Monthly generation orchestration (mocked DB)
 # ---------------------------------------------------------------------------
 @pytest.fixture()

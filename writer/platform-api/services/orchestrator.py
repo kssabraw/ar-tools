@@ -169,6 +169,13 @@ async def _set_run_status(
     if status in ("complete", "failed"):
         await _sync_silo_promotion_status(run_id, run_status=status)
 
+    # Native task manager producer (PRD §11, opt-in): a completed run opens a
+    # "Review & publish" task. Self-gated + best-effort inside.
+    if status == "complete":
+        from services import task_producers
+
+        task_producers.on_run_completed(run_id)
+
 
 async def _sync_silo_promotion_status(run_id: str, run_status: str) -> None:
     """Update the silo candidate (if any) that promoted this run."""
