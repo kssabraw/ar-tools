@@ -349,8 +349,11 @@ async def delete_section(section_id: UUID, auth: dict = Depends(require_auth)) -
 
 
 # ---------------------------------------------------------------------------
-# My Tasks (cross-client). Assignees are Asana member gids in v1, so identity
-# is a "viewing as" team-member selection (?gid=...); default = first member.
+# My Tasks (cross-client). Assignees are Asana member gids in v1; the identity
+# bridge (asana_team_members.profile_id) auto-resolves the logged-in user to
+# their linked member, so a linked person sees their own tasks by default. An
+# explicit ?gid= (the "viewing as" picker) always wins — a lead can view
+# anyone. Unlinked users fall back to the first member.
 # ---------------------------------------------------------------------------
 @router.get("/tasks/mine")
 async def my_tasks(gid: str | None = None, auth: dict = Depends(require_auth)) -> dict:
@@ -361,9 +364,23 @@ async def my_tasks(gid: str | None = None, auth: dict = Depends(require_auth)) -
             {"gid": m["gid"], "name": m.get("name") or m["gid"]} for m in get_team_members()
         ]
         valid = {m["gid"] for m in members}
-        resolved = gid if gid in valid else (members[0]["gid"] if members else None)
+        # The current user's own linked member (identity bridge), if any.
+        my_gid = None
+        link = (
+            get_supabase()
+            .table("asana_team_members")
+            .select("gid")
+            .eq("profile_id", auth["user_id"])
+            .limit(1)
+            .execute()
+        ).data
+        if link and link[0]["gid"] in valid:
+            my_gid = link[0]["gid"]
+        resolved = (
+            gid if gid in valid else (my_gid if my_gid else (members[0]["gid"] if members else None))
+        )
         if not resolved:
-            return {"members": [], "gid": None, "buckets": {}}
+            return {"members": [], "gid": None, "my_gid": my_gid, "buckets": {}}
         rows = (
             get_supabase()
             .table("tasks")
@@ -384,7 +401,7 @@ async def my_tasks(gid: str | None = None, auth: dict = Depends(require_auth)) -
         for r in rows:
             r["client_name"] = names.get(r.get("client_id"))
         buckets = task_service.bucket_by_due(rows, date.today())
-        return {"members": members, "gid": resolved, "buckets": buckets}
+        return {"members": members, "gid": resolved, "my_gid": my_gid, "buckets": buckets}
     except Exception as exc:
         logger.error("my_tasks_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc

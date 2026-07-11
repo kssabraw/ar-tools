@@ -78,7 +78,7 @@ async def list_team_members(auth: dict = Depends(require_auth)) -> list[AsanaTea
     rows = (
         get_supabase()
         .table("asana_team_members")
-        .select("gid, name, weekly_hours, active")
+        .select("gid, name, weekly_hours, active, profile_id")
         .order("name")
         .execute()
     ).data or []
@@ -90,8 +90,14 @@ async def replace_team_members(
     body: AsanaTeamMembersReplaceRequest,
     auth: dict = Depends(require_auth),
 ) -> list[AsanaTeamMemberItem]:
-    """Replace the tracked team list (gid + name + weekly capacity)."""
+    """Replace the tracked team list (gid + name + weekly capacity + the
+    optional suite-user link)."""
     supabase = get_supabase()
+    # A suite user maps to at most one member (matches the partial-unique index);
+    # reject a payload that links the same profile twice rather than 500 on it.
+    linked = [m.profile_id for m in body.members if m.profile_id]
+    if len(linked) != len(set(linked)):
+        raise HTTPException(status_code=400, detail="duplicate_profile_link")
     try:
         supabase.table("asana_team_members").delete().neq("gid", "").execute()
         rows = [
@@ -100,6 +106,7 @@ async def replace_team_members(
                 "name": m.name,
                 "weekly_hours": m.weekly_hours,
                 "active": m.active,
+                "profile_id": m.profile_id or None,
                 "updated_at": "now()",
             }
             for m in body.members

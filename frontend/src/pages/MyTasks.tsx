@@ -39,10 +39,13 @@ export function MyTasks() {
     queryFn: () => api.get<TaskCategory[]>('/tasks/categories'),
   })
 
-  // Adopt the server's resolved member (first in the team list) on first load.
+  // On first load, adopt the logged-in user's own linked member (identity
+  // bridge) when there's one — so a linked person lands on THEIR tasks — else
+  // the server's resolved default (first member). A later manual pick is kept
+  // in localStorage and wins.
   useEffect(() => {
-    if (!gid && data?.gid) setGid(data.gid)
-  }, [gid, data?.gid])
+    if (!gid) setGid(data?.my_gid || data?.gid || '')
+  }, [gid, data?.my_gid, data?.gid])
 
   const completeMut = useMutation({
     mutationFn: (taskId: string) => api.post(`/tasks/${taskId}/complete`, {}),
@@ -109,7 +112,7 @@ export function MyTasks() {
           style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, background: '#fff', color: '#0f172a' }}
         >
           {members.map((m) => (
-            <option key={m.gid} value={m.gid}>{m.name}</option>
+            <option key={m.gid} value={m.gid}>{m.name}{m.gid === data?.my_gid ? ' (you)' : ''}</option>
           ))}
         </select>
         <span style={{ fontSize: 12, color: '#94a3b8' }}>{total} open task{total === 1 ? '' : 's'}</span>
