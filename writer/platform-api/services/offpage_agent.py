@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
+from config import settings
 from db.supabase_client import get_supabase
 from services import notifications
 
@@ -158,7 +159,11 @@ def analyze_client(client_id: str) -> dict:
             from services import backlink_explorer
 
             velocity = backlink_explorer.client_own_domain_change(client_id)
-            if velocity and velocity.get("lost_sample"):
+            # Only attach the sample if the tracked snapshot is recent — a months-
+            # old lost-domain list must not decorate a fresh RD-loss episode.
+            max_age = settings.backlink_tracking_interval_days * 3
+            if (velocity and velocity.get("lost_sample")
+                    and backlink_explorer.is_recent(velocity.get("captured_at"), max_age)):
                 details["lost_domains"] = velocity["lost_sample"]
         except Exception:
             logger.warning("offpage.lost_domain_enrich_failed", extra={"client_id": client_id})

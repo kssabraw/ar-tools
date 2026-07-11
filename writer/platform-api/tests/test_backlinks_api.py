@@ -1,6 +1,8 @@
 """Unit tests for the pure parse helpers in services/backlinks_api.py and the
 target-normalization helper in services/backlink_explorer.py — no network."""
 
+from datetime import datetime, timezone
+
 import pytest
 
 from services import backlinks_api
@@ -126,6 +128,8 @@ def test_link_modes_constant():
     ("https://shop.example.co.uk", ("shop.example.co.uk", "subdomain")),
     ("example.com/blog/post-1", ("example.com/blog/post-1", "url")),
     ("https://example.com/pricing", ("example.com/pricing", "url")),
+    ("https://example.com/pricing/", ("example.com/pricing", "url")),   # trailing slash stripped
+    ("example.com/a/b/", ("example.com/a/b", "url")),                    # deep path trailing slash stripped
 ])
 def test_normalize_target(raw, expected):
     assert backlink_explorer.normalize_target(raw) == expected
@@ -227,3 +231,61 @@ def test_match_own_domain_target_none_when_only_url_tracked():
 
 def test_match_own_domain_target_none_without_domain():
     assert backlink_explorer.match_own_domain_target([{"target": "x.com", "target_type": "domain"}], None) is None
+
+
+# ---------------------------------------------------------------------------
+# net_rd_change
+# ---------------------------------------------------------------------------
+def test_net_rd_change():
+    assert backlink_explorer.net_rd_change(100, 85) == -15
+    assert backlink_explorer.net_rd_change(50, 50) == 0
+    assert backlink_explorer.net_rd_change(None, 5) is None
+    assert backlink_explorer.net_rd_change(5, None) is None
+
+
+# ---------------------------------------------------------------------------
+# should_alert_gated — churn suppressed unless net total RD corroborates
+# ---------------------------------------------------------------------------
+def test_gated_suppresses_window_churn():
+    # 12 in + 12 out but the true total is flat → window churn, no alert.
+    assert backlink_explorer.should_alert_gated(12, 12, 0) is False
+
+
+def test_gated_real_loss_alerts():
+    assert backlink_explorer.should_alert_gated(0, 15, -15) is True
+
+
+def test_gated_real_gain_alerts():
+    assert backlink_explorer.should_alert_gated(15, 0, 5) is True
+
+
+def test_gated_loss_with_positive_net_suppressed():
+    # 12 lost from the window but the total went UP → not a real loss.
+    assert backlink_explorer.should_alert_gated(0, 12, 5) is False
+
+
+def test_gated_falls_back_when_no_prior_total():
+    assert backlink_explorer.should_alert_gated(0, 12, None) is True
+
+
+def test_gated_below_threshold_never_alerts():
+    assert backlink_explorer.should_alert_gated(3, 4, -50) is False
+
+
+# ---------------------------------------------------------------------------
+# is_recent (with explicit now for determinism)
+# ---------------------------------------------------------------------------
+def test_is_recent_fresh():
+    now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+    assert backlink_explorer.is_recent("2026-07-05T00:00:00Z", 21, now=now) is True
+
+
+def test_is_recent_stale():
+    now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+    assert backlink_explorer.is_recent("2026-01-01T00:00:00Z", 21, now=now) is False
+
+
+def test_is_recent_missing_or_bad():
+    now = datetime(2026, 7, 11, tzinfo=timezone.utc)
+    assert backlink_explorer.is_recent(None, 21, now=now) is False
+    assert backlink_explorer.is_recent("not-a-date", 21, now=now) is False
