@@ -65,6 +65,49 @@ def should_alert(new_count: int, lost_count: int) -> bool:
             or lost_count >= settings.backlink_alert_lost_domains_min)
 
 
+def net_rd_change(prev_total, cur_total):
+    """Net change in TOTAL referring domains between snapshots (cur − prev), or
+    None when either total is missing. Pure. The total is the unbounded summary
+    count — unlike the top-N window the new/lost diff is drawn from."""
+    if prev_total is None or cur_total is None:
+        return None
+    return cur_total - prev_total
+
+
+def should_alert_gated(new_count: int, lost_count: int, net_rd) -> bool:
+    """should_alert, but corroborated by the net TOTAL-RD movement so window
+    churn doesn't false-alarm. The new/lost diff comes from the top-N referring
+    domains by DR; a domain sliding across that boundary looks gained+lost while
+    the true total barely moves. Requiring the net total to move in the alert's
+    direction suppresses that. ``net_rd`` None (no prior total) → fall back to
+    the raw thresholds. Pure."""
+    if not should_alert(new_count, lost_count):
+        return False
+    if net_rd is None:
+        return True
+    if lost_count >= settings.backlink_alert_lost_domains_min and net_rd < 0:
+        return True
+    if new_count >= settings.backlink_alert_new_domains_min and net_rd > 0:
+        return True
+    return False
+
+
+def is_recent(captured_at, max_age_days: int, now: Optional[datetime] = None) -> bool:
+    """Whether a snapshot timestamp is within ``max_age_days`` of ``now`` (default
+    utcnow). Pure given ``now``. Guards temporally-stale enrichment (a lost-domain
+    sample from months ago must not be attached to a fresh drop alert)."""
+    if not captured_at:
+        return False
+    try:
+        cap = datetime.fromisoformat(str(captured_at).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if cap.tzinfo is None:
+        cap = cap.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return (now - cap) <= timedelta(days=max_age_days)
+
+
 def _diff_for_snapshot(prev_snapshot_id, rd_ok: bool, prev_domains, cur_domains) -> dict:
     """The gained/lost diff to record on a snapshot. Pure.
 
@@ -113,21 +156,24 @@ def budget_remaining() -> int:
 
 def _reserve_budget(n: int) -> None:
     """Reserve ``n`` paid calls against today's budget, or raise BudgetExceeded.
-    Best-effort accounting — a counter read/write failure never blocks work."""
+
+    Uses the atomic ``reserve_backlink_calls`` RPC (single check-and-increment
+    UPDATE) so concurrent reservations serialize on the row lock and can never
+    overshoot the cap — the old read-modify-write here could. An RPC failure is
+    fail-open (accounting must never block work)."""
     cap = settings.backlink_daily_call_budget
     if cap <= 0:
         return
-    sb = get_supabase()
     try:
-        rows = sb.table("backlink_usage").select("calls").eq("day", _today()).limit(1).execute().data
-        used = rows[0]["calls"] if rows else 0
-        if used + n > cap:
-            raise BudgetExceeded(f"backlink_budget_exceeded: {used}/{cap} used today")
-        sb.table("backlink_usage").upsert({"day": _today(), "calls": used + n}).execute()
-    except BudgetExceeded:
-        raise
+        res = get_supabase().rpc(
+            "reserve_backlink_calls", {"p_day": _today(), "p_n": n, "p_cap": cap}
+        ).execute()
+        fit = res.data
     except Exception as exc:
         logger.warning("backlink_budget_accounting_failed", extra={"error": str(exc)})
+        return
+    if fit is False:
+        raise BudgetExceeded(f"backlink_budget_exceeded: cap {cap} reached today")
 
 
 def normalize_target(raw: str) -> tuple[str, str]:
@@ -145,9 +191,10 @@ def normalize_target(raw: str) -> tuple[str, str]:
         host = host[4:]
     path = parsed.path or ""
     if path and path.strip("/"):
-        # Keep the full URL target (scheme-less), as DataForSEO expects.
-        cleaned = raw.split("//", 1)[-1]
-        return cleaned.rstrip("/") if cleaned.count("/") <= 1 else cleaned, "url"
+        # The full URL target (scheme-less), as DataForSEO expects. A trailing
+        # slash is always stripped so ".../a/" and ".../a" dedupe to one target.
+        cleaned = raw.split("//", 1)[-1].rstrip("/")
+        return cleaned, "url"
     if not host:
         raise ValueError("invalid_target")
     labels = host.split(".")
@@ -158,20 +205,34 @@ def _ttl() -> timedelta:
     return timedelta(hours=max(1, settings.backlink_cache_ttl_hours))
 
 
-def get_or_create_target(
-    target: str, target_type: str, client_id: Optional[str] = None, created_by: Optional[str] = None
-) -> dict:
+def _find_target(target: str, target_type: str, client_id: Optional[str]) -> Optional[dict]:
+    """The existing target row (read-only, no create), or None."""
     sb = get_supabase()
     q = sb.table("backlink_targets").select("*").eq("target", target).eq("target_type", target_type)
     q = q.is_("client_id", "null") if client_id is None else q.eq("client_id", client_id)
-    existing = q.limit(1).execute().data
-    if existing:
-        return existing[0]
-    return (
-        sb.table("backlink_targets")
-        .insert({"target": target, "target_type": target_type, "client_id": client_id, "created_by": created_by})
-        .execute()
-    ).data[0]
+    rows = q.limit(1).execute().data
+    return rows[0] if rows else None
+
+
+def get_or_create_target(
+    target: str, target_type: str, client_id: Optional[str] = None, created_by: Optional[str] = None
+) -> dict:
+    found = _find_target(target, target_type, client_id)
+    if found:
+        return found
+    try:
+        return (
+            get_supabase().table("backlink_targets")
+            .insert({"target": target, "target_type": target_type, "client_id": client_id, "created_by": created_by})
+            .execute()
+        ).data[0]
+    except Exception as exc:
+        # A concurrent create won the unique index — re-select the winner instead
+        # of surfacing a duplicate-key 500 to one of two simultaneous lookups.
+        again = _find_target(target, target_type, client_id)
+        if again:
+            return again
+        raise
 
 
 def _latest_snapshot(target_id: str) -> Optional[dict]:
@@ -309,10 +370,16 @@ async def lookup(
     """The Overview + Referring Domains + Anchors + History payload for a target,
     served from cache when a snapshot is within the TTL (unless ``force``)."""
     target, target_type = normalize_target(raw_target)
-    row = get_or_create_target(target, target_type, client_id=client_id, created_by=created_by)
-    snapshot = _latest_snapshot(row["id"])
+    row = _find_target(target, target_type, client_id)
+    snapshot = _latest_snapshot(row["id"]) if row else None
     cached = _is_fresh(snapshot) and not force
     if not cached:
+        # Fail fast on an exhausted budget BEFORE creating a target row, so a
+        # 429'd lookup doesn't leave an orphan target with no snapshot.
+        if budget_remaining() < _REFRESH_CALL_COST:
+            raise BudgetExceeded(f"backlink_budget_exceeded: cap {settings.backlink_daily_call_budget} reached today")
+        if row is None:
+            row = get_or_create_target(target, target_type, client_id=client_id, created_by=created_by)
         snapshot = await _refresh(target, target_type, row["id"])
     referring_domains, anchors = _read_children(snapshot["id"])
     raw = snapshot.get("raw") or {}
@@ -386,21 +453,46 @@ def untrack_target(client_id: str, target_id: str) -> None:
         .eq("id", target_id).eq("client_id", client_id).execute()
 
 
+_LATEST_FIELDS = ("referring_domains", "backlinks", "domain_rating", "new_domains", "lost_domains", "captured_at")
+
+
 def list_tracked(client_id: str) -> list[dict]:
-    """Tracked targets for a client + each one's latest snapshot summary."""
+    """Tracked targets for a client + each one's latest snapshot summary. One
+    batched snapshot read (was one query per target)."""
     sb = get_supabase()
     targets = (
         sb.table("backlink_targets").select("*")
         .eq("client_id", client_id).eq("tracked", True)
         .order("created_at", desc=True).execute()
     ).data or []
+    if not targets:
+        return []
+    target_ids = [t["id"] for t in targets]
+    snaps = (
+        sb.table("backlink_snapshots").select("target_id, " + ", ".join(_LATEST_FIELDS))
+        .in_("target_id", target_ids).order("captured_at", desc=True).execute()
+    ).data or []
+    latest_by_target: dict = {}
+    for s in snaps:
+        latest_by_target.setdefault(s["target_id"], s)  # first seen = latest (desc order)
     out = []
     for t in targets:
-        snap = _latest_snapshot(t["id"])
-        out.append({**t, "latest": ({k: snap.get(k) for k in
-                    ("referring_domains", "backlinks", "domain_rating", "new_domains",
-                     "lost_domains", "captured_at")} if snap else None)})
+        snap = latest_by_target.get(t["id"])
+        out.append({**t, "latest": ({k: snap.get(k) for k in _LATEST_FIELDS} if snap else None)})
     return out
+
+
+def _prior_total(target_id: str, exclude_snapshot_id: str) -> Optional[int]:
+    """The total referring_domains of the target's snapshot just before the given
+    one — the baseline for the net-RD alert gate."""
+    rows = (
+        get_supabase().table("backlink_snapshots").select("id, referring_domains")
+        .eq("target_id", target_id).order("captured_at", desc=True).limit(2).execute()
+    ).data or []
+    for r in rows:
+        if r["id"] != exclude_snapshot_id:
+            return r.get("referring_domains")
+    return None
 
 
 def client_own_domain_change(client_id: str) -> Optional[dict]:
@@ -484,7 +576,11 @@ async def run_backlink_snapshot_job(job: dict) -> None:
         snap = await _refresh(target_row["target"], target_row["target_type"], target_id)
         new_count = snap.get("new_domains") or 0
         lost_count = snap.get("lost_domains") or 0
-        if target_row.get("tracked") and should_alert(new_count, lost_count):
+        # Gate on the net total-RD movement so top-N window churn (a domain
+        # sliding across the diff boundary, looking gained+lost while the true
+        # total is flat) doesn't false-alarm.
+        net = net_rd_change(_prior_total(target_id, snap["id"]), snap.get("referring_domains"))
+        if target_row.get("tracked") and should_alert_gated(new_count, lost_count, net):
             _emit_backlink_alert(target_row, new_count, lost_count)
         sb.table("async_jobs").update({"status": "complete", "completed_at": "now()"}).eq("id", job_id).execute()
     except BudgetExceeded as exc:
