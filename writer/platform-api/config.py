@@ -728,6 +728,18 @@ class Settings(BaseSettings):
     # Flag a member whose open backlog exceeds this many weeks of their capacity.
     asana_workload_backlog_weeks: float = 2.0
 
+    # Native In-App Task Manager (docs/modules/in-app-task-manager-prd-v1_0.md).
+    # Master flag for the parallel-run: while False, the native scheduler hooks
+    # (monthly generation, due sweep, native workload alert) stay dormant and
+    # the Workload page keeps reading Asana — the team's execution surface is
+    # unchanged. Flip to true at cutover (or during the parallel-run cycle).
+    # On-demand endpoints (generate-month, native workload read) work
+    # regardless: they only touch the new task_* tables. The monthly cadence
+    # reuses asana_month_generate_day / asana_month_target_offset, and the
+    # workload thresholds reuse the asana_* defaults above — one knob set for
+    # both systems during the transition.
+    native_tasks_enabled: bool = False
+
     class Config:
         env_file = ".env"
 

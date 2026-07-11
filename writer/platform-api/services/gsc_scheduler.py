@@ -393,6 +393,9 @@ async def gsc_scheduler() -> None:
     from services.asana_monthly import enqueue_due_asana_monthly
     from services.asana_service import shift_months
     from services.asana_workload import run_workload_alert
+    from services.task_monthly import enqueue_due_task_months
+    from services.task_workload import enqueue_due_sweep
+    from services.task_workload import run_workload_alert as run_native_workload_alert
     from services.brand_schedule import enqueue_due_brand_scans
     from services.client_report_schedule import enqueue_due_report_schedules
     from services.content_batch import enqueue_due_content_items
@@ -457,6 +460,9 @@ async def gsc_scheduler() -> None:
                 # the paid pull draws from the daily backlink budget).
                 auto_track_client_domains()
                 enqueue_due_backlink_snapshots()
+                # Daily native-task due sweep (due-today/overdue digest).
+                # Self-gated: no-ops while native_tasks_enabled is false.
+                enqueue_due_sweep()
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,
@@ -502,12 +508,20 @@ async def gsc_scheduler() -> None:
             ):
                 target = shift_months(now.date(), settings.asana_month_target_offset)
                 enqueue_due_asana_monthly(target)
+                # Native monthly generation rides the same cadence (self-gated
+                # on native_tasks_enabled; per-task idempotent).
+                enqueue_due_task_months(target)
                 last_asana_month = (now.year, now.month)
             # Daily Team Workload overload alert (effort-weighted): once per day
             # after the target hour, emit one suite notification if anyone is
             # over capacity. run_workload_alert self-guards when unconfigured.
             if should_run(now, last_asana_workload_date, hour):
-                await run_workload_alert()
+                # Overload math is identical; the data source follows the
+                # parallel-run flag (native tasks vs Asana fetches).
+                if settings.native_tasks_enabled:
+                    await run_native_workload_alert()
+                else:
+                    await run_workload_alert()
                 last_asana_workload_date = now.date()
             # Advance any in-flight Maps scans every tick (non-blocking GETs).
             await poll_pending_maps_scans()
