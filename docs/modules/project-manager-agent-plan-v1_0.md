@@ -478,8 +478,9 @@ actionable. Conversational: one cheap call/question. Keeping PACE off Sonnet is 
 ## 8. Phasing (identity/permissions before actions)
 
 > **Phases 0–4 are BUILT + merged** (PR #335; live behind `pace_enabled`, enabled in
-> production 2026-07-12). Phases 5–7 below are the **v1.3 full-PM expansion** and are the
-> current build target (owner priority order: **spec → placement → reports → channel**).
+> production 2026-07-12). **Phase 5 (placement) is BUILT** (this PR — `task_member_skills` +
+> `pm_assign` + approval hook + `assign_task` + Workload-page competency editor). Phases 6–7
+> below remain (owner priority order: **spec → placement → reports → channel**).
 
 **Phase 0A — deterministic reads.** `pm_signals.py` (reopen-aware staleness, overdue,
 unassigned, missing-due-date, unacted-on producer tasks, dual-mode month-pace heuristic,

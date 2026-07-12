@@ -14,6 +14,7 @@ from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -131,6 +132,44 @@ async def replace_categories(
         logger.error("task_categories_replace_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
     return await list_categories(auth)
+
+
+# ---------------------------------------------------------------------------
+# Member competencies (role/skill matching for placement — PACE v1.3 §4.6)
+# ---------------------------------------------------------------------------
+class MemberSkillItem(BaseModel):
+    category_key: str
+    is_primary: bool = False
+
+
+class MemberSkillsReplaceRequest(BaseModel):
+    skills: list[MemberSkillItem]
+
+
+@router.get("/tasks/member-skills")
+async def list_member_skills(auth: dict = Depends(require_auth)) -> dict:
+    """All members' category competencies, grouped by member_gid. A member absent
+    from the map is a generalist (eligible for any category)."""
+    from services import pm_assign
+
+    return pm_assign.list_all_skills()
+
+
+@router.put("/tasks/member-skills/{member_gid}")
+async def set_member_skills(
+    member_gid: str,
+    body: MemberSkillsReplaceRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Replace one member's competency set (which task categories they can do)."""
+    from services import pm_assign
+
+    try:
+        saved = pm_assign.replace_member_skills(member_gid, [s.model_dump() for s in body.skills])
+    except Exception as exc:
+        logger.error("member_skills_replace_failed", extra={"member_gid": member_gid, "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return {"member_gid": member_gid, "skills": saved}
 
 
 # ---------------------------------------------------------------------------

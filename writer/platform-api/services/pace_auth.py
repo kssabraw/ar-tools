@@ -38,6 +38,7 @@ _MATRIX: dict[str, str] = {
     "set_task_due_own": "team_member",
     "nudge_other": "staff",
     "reassign_task": "staff",
+    "assign_task": "staff",           # v1.3 workload-aware auto-placement (§4.6)
     "set_task_due_other": "staff",
     "unblock_task": "staff",
     # "read_board" and "generate_client_month" are policy-driven (see below).

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { RefreshCw, AlertTriangle, Users, CheckCircle2, Plus, Trash2, Save, DownloadCloud } from 'lucide-react'
+import { RefreshCw, AlertTriangle, Users, CheckCircle2, Plus, Trash2, Save, DownloadCloud, Star } from 'lucide-react'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type { AsanaWorkloadReport, AsanaWorkloadMember, AsanaTeamMember, AsanaUser } from '../lib/types'
@@ -135,6 +135,8 @@ export function TeamWorkload() {
           queryClient.invalidateQueries({ queryKey: ['asana-workload'] })
         }}
       />
+      <div style={{ height: 16 }} />
+      <SkillsEditor />
       <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
     </div>
   )
@@ -340,6 +342,120 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
   )
 }
 
+// ── Skills / competencies editor (PACE v1.3 §4.6) ───────────────────────
+interface CategoryItem { key: string; label: string; color?: string | null; active: boolean }
+type SkillMap = Record<string, { category_key: string; is_primary: boolean }[]>
+
+function SkillsEditor() {
+  const qc = useQueryClient()
+  const { data: members } = useQuery<AsanaTeamMember[]>({
+    queryKey: ['asana-team-members'],
+    queryFn: () => api.get<AsanaTeamMember[]>('/asana/team-members'),
+  })
+  const { data: categories } = useQuery<CategoryItem[]>({
+    queryKey: ['task-categories'],
+    queryFn: () => api.get<CategoryItem[]>('/tasks/categories'),
+  })
+  const { data: loaded } = useQuery<SkillMap>({
+    queryKey: ['task-member-skills'],
+    queryFn: () => api.get<SkillMap>('/tasks/member-skills'),
+  })
+
+  const [map, setMap] = useState<SkillMap>({})
+  useEffect(() => { if (loaded) setMap(loaded) }, [loaded])
+
+  const activeCats = (categories ?? []).filter((c) => c.active)
+  const tracked = members ?? []
+
+  const has = (gid: string, key: string) => (map[gid] ?? []).some((s) => s.category_key === key)
+  const isPrimary = (gid: string, key: string) =>
+    (map[gid] ?? []).some((s) => s.category_key === key && s.is_primary)
+
+  const toggle = (gid: string, key: string) => setMap((m) => {
+    const cur = m[gid] ?? []
+    const next = cur.some((s) => s.category_key === key)
+      ? cur.filter((s) => s.category_key !== key)
+      : [...cur, { category_key: key, is_primary: false }]
+    return { ...m, [gid]: next }
+  })
+  const setPrimary = (gid: string, key: string) => setMap((m) => ({
+    ...m,
+    [gid]: (m[gid] ?? []).map((s) => ({ ...s, is_primary: s.category_key === key && !s.is_primary })),
+  }))
+
+  const norm = (list?: { category_key: string; is_primary: boolean }[]) =>
+    JSON.stringify([...(list ?? [])].sort((a, b) => a.category_key.localeCompare(b.category_key)))
+  const changed = tracked.filter((mem) => norm(map[mem.gid]) !== norm((loaded ?? {})[mem.gid]))
+
+  const save = useMutation({
+    mutationFn: async () => {
+      for (const mem of changed) {
+        await api.put(`/tasks/member-skills/${mem.gid}`, { skills: map[mem.gid] ?? [] })
+      }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['task-member-skills'] }),
+  })
+
+  if (tracked.length === 0) return null
+
+  return (
+    <section style={card}>
+      <h2 style={cardTitle}>Skills &amp; competencies</h2>
+      <p style={cardSub}>
+        Which service types each member can take. PACE places new + approved tasks on the
+        best-fit <strong>skilled, eligible, least-loaded</strong> member. A member with{' '}
+        <strong>no</strong> categories selected is a <strong>generalist</strong> (eligible for any).
+        The ★ marks a primary category (breaks ties).
+      </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        {tracked.map((mem) => (
+          <div key={mem.gid} style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 10, alignItems: 'center' }}>
+            <span style={{ fontSize: 13, color: '#0f172a', fontWeight: 600 }}>{mem.name ?? mem.gid}</span>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              {activeCats.map((c) => {
+                const on = has(mem.gid, c.key)
+                return (
+                  <span key={c.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                    <button
+                      onClick={() => toggle(mem.gid, c.key)}
+                      style={{
+                        ...skillChip,
+                        background: on ? (c.color ?? '#4f46e5') : '#f1f5f9',
+                        color: on ? '#fff' : '#64748b',
+                        borderColor: on ? (c.color ?? '#4f46e5') : '#e2e8f0',
+                      }}
+                    >
+                      {c.label}
+                    </button>
+                    {on && (
+                      <button
+                        title="Set as primary category"
+                        onClick={() => setPrimary(mem.gid, c.key)}
+                        style={{ ...iconBtn, padding: 3, border: 'none', color: isPrimary(mem.gid, c.key) ? '#f59e0b' : '#cbd5e1' }}
+                      >
+                        <Star size={13} fill={isPrimary(mem.gid, c.key) ? '#f59e0b' : 'none'} />
+                      </button>
+                    )}
+                  </span>
+                )
+              })}
+              {(map[mem.gid] ?? []).length === 0 && (
+                <span style={{ fontSize: 11.5, color: '#94a3b8' }}>generalist (any category)</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <button style={primaryBtn} disabled={changed.length === 0 || save.isPending} onClick={() => save.mutate()}>
+          <Save size={14} /> {save.isPending ? 'Saving…' : changed.length > 0 ? `Save competencies (${changed.length})` : 'Saved'}
+        </button>
+        {save.isError && <p style={errText}>{(save.error as Error).message}</p>}
+      </div>
+    </section>
+  )
+}
+
 // Manual add by GID — fallback when the picker can't reach Asana (e.g. unconfigured).
 function addMemberManual(
   setRows: React.Dispatch<React.SetStateAction<AsanaTeamMember[]>>,
@@ -384,6 +500,10 @@ const iconBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 6,
   color: '#64748b', background: 'transparent', border: '1px solid #e2e8f0',
   borderRadius: 6, cursor: 'pointer',
+}
+const skillChip: React.CSSProperties = {
+  fontSize: 12, fontWeight: 600, padding: '4px 10px', borderRadius: 999,
+  border: '1px solid #e2e8f0', cursor: 'pointer',
 }
 const errText: React.CSSProperties = { color: '#dc2626', fontSize: 12, margin: '8px 0 0' }
 const pill = (bg: string, color: string): React.CSSProperties => ({

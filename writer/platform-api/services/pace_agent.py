@@ -79,6 +79,9 @@ _TOOL_PARAMS = {
         "task_name": {"type": "string", "description": "The task to reassign (part of its name)."},
         "assignee": {"type": "string", "description": "The team member to assign it to."},
     },
+    "assign_task": {
+        "task_name": {"type": "string", "description": "The unassigned task to auto-place on the best-fit member."},
+    },
     "set_task_due": {
         "task_name": {"type": "string", "description": "The task to set a due date on."},
         "due_date": {"type": "string", "description": "Due date, YYYY-MM-DD."},
@@ -89,6 +92,7 @@ _TOOL_PARAMS = {
 }
 _TOOL_REQUIRED = {
     "reassign_task": ["task_name", "assignee"],
+    "assign_task": ["task_name"],
     "set_task_due": ["task_name", "due_date"],
     "unblock_task": ["task_name"],
     "generate_client_month": [],

@@ -785,6 +785,12 @@ class Settings(BaseSettings):
     # arg-filling, not strategy prose).
     pace_model: str = "claude-haiku-4-5-20251001"
     pace_max_tokens: int = 1200
+    # PACE v1.3 Phase 5 — role/skill placement (§4.6). Whether producer tasks
+    # (rank_drop/maps_alert/action_plan) are auto-placed on creation (default off
+    # — approved proposals always are). When the skilled+eligible pool is over
+    # capacity: "hold" (leave unassigned + flag) or "least_over" (assign anyway).
+    pace_autoplace_producers: bool = False
+    pace_placement_overload: str = "hold"
 
     # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
     # Read-only v1 serves the precomputed market_scanner.leadoff_board.
