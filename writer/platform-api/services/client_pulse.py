@@ -45,6 +45,17 @@ _CONTENT_TYPE_LABELS = {
 }
 _MAX_ITEMS_PER_SECTION = 8
 
+# The always-on work the suite runs for EVERY client, EVERY week (owner ruling
+# 2026-07-12). A light week is never "nothing done" — these modules genuinely
+# run continuously, so a quiet itemized list is still a floor of real service.
+# We never tell a client "no deliverables" / "nothing to report".
+_ALWAYS_ON = [
+    "Monitoring your Google search rankings and local map pack positions",
+    "Tracking your visibility across AI search (ChatGPT, Google AI, and others)",
+    "Keeping an eye on your competitors' rankings and new content",
+    "Running optimization tests to keep your campaign on the cutting edge",
+]
+
 
 # ---------------------------------------------------------------------------
 # Pure builders (unit-tested)
@@ -172,14 +183,16 @@ def render_pulse(client_name: str, week_start: date, done_items: list[str],
     if done_summaries:
         lines.extend(f"• {s} completed" for s in done_summaries)
     if not (published or done_items or done_summaries):
-        lines.append("• Groundwork and ongoing optimization (no itemized deliverables closed this week)")
+        # Never "no deliverables" — surface the always-on monitoring as the floor.
+        lines.extend(f"• {a}" for a in _ALWAYS_ON)
     lines.extend(["", "On tap this week:"])
     if upcoming_items:
         lines.extend(_bulleted(upcoming_items))
     if upcoming_summaries:
         lines.extend(f"• {s} planned" for s in upcoming_summaries)
     if not (upcoming_items or upcoming_summaries):
-        lines.append("• Continuing the monthly plan — details to follow")
+        lines.append("• Continuing your campaign: ongoing rankings & AI-visibility "
+                     "monitoring, competitor tracking, and optimization")
     lines.extend(["", f"— {agency_name}"])
     return "\n".join(lines)
 
@@ -192,8 +205,11 @@ _NARRATIVE_SYSTEM = (
     "small-business owner, not a marketer. Warm, plain-English, confident, zero jargon "
     "(explain work in terms of what it does for their business). STRICT GROUNDING: "
     "mention ONLY the work items provided; NEVER invent results, rankings, metrics, or "
-    "work that isn't listed. If a week is light, keep it brief and honest — steady "
-    "groundwork is fine to say. Format: plain text only (no markdown, no emojis, no "
+    "work that isn't listed. NEVER tell the client there are 'no deliverables', "
+    "'nothing to report', or that it was a 'quiet/slow week' — every week we are at "
+    "minimum monitoring their rankings and AI-search visibility, watching competitors, "
+    "and running optimization tests, so a light itemized week still leads with that "
+    "always-on work as real, valuable service. Format: plain text only (no markdown, no emojis, no "
     "subject line). Start with exactly 'Hi [First name],' on its own line (the account "
     "manager personalizes it). Structure: one short paragraph on what was done last "
     "week and why it helps; one on what's planned this week and why; close by inviting "
@@ -224,25 +240,52 @@ def narrative_facts(client_name: str, week_start: date, done_items: list[str],
         lines.extend(["", "BUSINESS CONTEXT:", business])
     lines.extend([
         "",
-        "WORK COMPLETED LAST WEEK:",
+        "ALWAYS-ON WORK (runs continuously every week — mention briefly, and LEAD "
+        "with it when the itemized list below is light; NEVER say 'nothing was "
+        "done', 'no deliverables', or 'quiet week'):",
+    ])
+    lines.extend(f"- {a}" for a in _ALWAYS_ON)
+    lines.extend([
+        "",
+        "ITEMIZED WORK COMPLETED LAST WEEK:",
     ])
     lines.extend(f"- Published: {p}" for p in published)
     lines.extend(f"- {d}" for d in done_items)
     lines.extend(f"- {s} (summarize as ongoing authority/technical work)" for s in done_summaries)
     if not (published or done_items or done_summaries):
-        lines.append("- (no itemized deliverables closed — ongoing groundwork week)")
+        lines.append("- (light week on itemized items — lead the recap with the "
+                     "always-on monitoring above; frame it as steady, active service)")
     lines.append("")
     lines.append("PLANNED THIS WEEK:")
     lines.extend(f"- {u}" for u in upcoming_items)
     lines.extend(f"- {s} (summarize as ongoing authority/technical work)" for s in upcoming_summaries)
     if not (upcoming_items or upcoming_summaries):
-        lines.append("- (continuing the monthly plan)")
+        lines.append("- (continuing the monthly plan — ongoing rankings & "
+                     "AI-visibility monitoring, competitor tracking, optimization)")
     return "\n".join(lines)
+
+
+# Owner ruling (absolute): a client never reads these. The prompt forbids them,
+# but prompts aren't guarantees — violates_never_say() enforces it in code: a
+# narrative containing any of these is discarded and the caller falls back to
+# the deterministic bullet body (which is clean by construction).
+_NEVER_SAY = (
+    "no deliverable", "nothing to report", "nothing was done",
+    "no major deliverables", "quiet week", "slow week",
+)
+
+
+def violates_never_say(text: str) -> bool:
+    """True when a narrative contains client-facing phrasing the owner has
+    banned ("no deliverables to report", "quiet week", …). Pure."""
+    low = (text or "").casefold()
+    return any(p in low for p in _NEVER_SAY)
 
 
 def narrate_pulse(facts: str) -> Optional[str]:
     """One small Claude call: facts → the client email. None on ANY failure
-    (missing key, API error, empty text) — the caller falls back to bullets."""
+    (missing key, API error, empty text, banned phrasing) — the caller falls
+    back to bullets."""
     if not (settings.pulse_narrative_enabled and settings.anthropic_api_key):
         return None
     try:
@@ -259,6 +302,10 @@ def narrate_pulse(facts: str) -> Optional[str]:
         text = "\n".join(
             b.text for b in resp.content if getattr(b, "type", None) == "text"
         ).strip()
+        if text and violates_never_say(text):
+            # The model ignored the never-say rule — discard; bullets are clean.
+            logger.warning("pulse_narrative_banned_phrase")
+            return None
         return text or None
     except Exception as exc:
         logger.warning("pulse_narrative_failed", extra={"error": str(exc)})

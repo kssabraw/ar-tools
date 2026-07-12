@@ -268,6 +268,12 @@ async def replace_task_templates(
     auth: dict = Depends(require_auth),
 ) -> list[AsanaTaskTemplateItem]:
     """Replace the client's whole template with the supplied ordered list."""
+    # Reject duplicate task names BEFORE the delete+insert: the DB's unique
+    # (client_id, lower(trim(name))) index would fail the insert after the
+    # delete already wiped the template — a clean 400 instead of data loss.
+    dupes = asana_service.duplicate_template_names([item.name for item in body.items])
+    if dupes:
+        raise HTTPException(status_code=400, detail=f"duplicate_task_name: {', '.join(dupes[:5])}")
     supabase = get_supabase()
     try:
         supabase.table("asana_client_task_templates").delete().eq(

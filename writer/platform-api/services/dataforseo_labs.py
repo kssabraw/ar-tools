@@ -258,9 +258,33 @@ async def _post(path: str, payload: list[dict]) -> dict:
         return resp.json()
 
 
+def labs_location_code(location_code: Optional[int]) -> int:
+    """Country-level location code for a Labs call. Pure.
+
+    Labs endpoints accept COUNTRY codes only (2000 + ISO-3166 numeric, e.g.
+    2840 = United States). Clients carry the rank tracker's CITY-level codes
+    (7-digit) in rank_tracking_location_code — passing one to Labs fails the
+    whole call with "Invalid Field: 'location_code'" (took out 60% of
+    keyword_gap runs the week of 2026-07-06). Anything outside the country
+    range is coerced to the default country; Labs data is country-grain anyway.
+    """
+    try:
+        code = int(location_code) if location_code is not None else 0
+    except (TypeError, ValueError):
+        code = 0
+    if 2000 <= code <= 2999:
+        return code
+    if code:
+        logger.info(
+            "labs_location_coerced",
+            extra={"from_code": code, "to_code": _DEFAULT_LOCATION_CODE},
+        )
+    return _DEFAULT_LOCATION_CODE
+
+
 def _loc(location_code: Optional[int], language_code: Optional[str]) -> dict:
     return {
-        "location_code": location_code or _DEFAULT_LOCATION_CODE,
+        "location_code": labs_location_code(location_code),
         "language_code": language_code or _DEFAULT_LANGUAGE_CODE,
     }
 

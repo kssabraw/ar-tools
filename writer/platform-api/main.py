@@ -96,8 +96,17 @@ async def lifespan(app: FastAPI):
         guide_store.seed_defaults()
     except Exception as exc:  # pragma: no cover - startup best-effort
         logger.warning("guides_seed_startup_failed", extra={"error": str(exc)})
-    # Start background job worker + GSC ingest scheduler
+    # Start background job workers + GSC ingest scheduler. Two worker lanes:
+    # main claims everything; the interactive lane only claims short,
+    # user-awaited job types so they don't queue behind long background work.
     worker_task = asyncio.create_task(job_worker())
+    interactive_worker_task = (
+        asyncio.create_task(
+            job_worker(job_types=list(settings.interactive_job_types), lane="interactive")
+        )
+        if settings.interactive_job_types
+        else None
+    )
     scheduler_task = asyncio.create_task(gsc_scheduler())
     # Start the Topic Fanout in-process content scheduler (its own asyncio loop;
     # claims due scheduled article runs). Driven explicitly here rather than via
@@ -106,7 +115,9 @@ async def lifespan(app: FastAPI):
     await fanout_scheduler.start()
     yield
     await fanout_scheduler.stop()
-    for task in (worker_task, scheduler_task):
+    for task in (worker_task, interactive_worker_task, scheduler_task):
+        if task is None:
+            continue
         task.cancel()
         try:
             await task
