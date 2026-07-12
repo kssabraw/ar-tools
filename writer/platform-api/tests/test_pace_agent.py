@@ -106,6 +106,27 @@ def test_personal_brief_anonymous():
 # ---------------------------------------------------------------------------
 # Web entry — routing, gating, actor-bound confirm
 # ---------------------------------------------------------------------------
+async def test_force_handles_non_pace_message(monkeypatch):
+    # In the dedicated PACE channel (force=True), even a non-delivery message is
+    # handled by PACE instead of falling through (is_pace_message gate skipped).
+    posted = {}
+
+    async def _post(channel, text, thread_ts):
+        posted.update(channel=channel, text=text)
+
+    monkeypatch.setattr("services.slack_assistant.post_message", _post)
+    monkeypatch.setattr("services.slack_assistant.strip_mention", lambda t: t)
+    monkeypatch.setattr("services.slack_assistant.is_affirmative", lambda t: False)
+    monkeypatch.setattr("services.slack_assistant.resolve_client", lambda q, cs: None)
+    monkeypatch.setattr(pace_agent, "_portfolio_pace_text", lambda: "portfolio delivery read")
+    monkeypatch.setattr(pace_agent, "get_supabase",
+                        lambda: type("SB", (), {"table": lambda *a, **k: type("Q", (), {
+                            "select": lambda *a, **k: type("Q2", (), {"execute": lambda *a, **k: type("R", (), {"data": []})()})()})()})())
+    event = {"channel": "Cpace", "ts": "1", "text": "how is the campaign going?"}
+    handled = await pace_agent.maybe_handle_slack(event, _staff(), force=True)
+    assert handled is True  # force → PACE answered (didn't fall through)
+
+
 async def test_web_ignores_non_pace_message():
     # Not a pending token, not PACE-shaped → None (falls through to SerMaStr).
     out = await pace_agent.maybe_handle_web(

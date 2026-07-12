@@ -51,7 +51,7 @@ def _month_section_id(client_id: str) -> Optional[str]:
 
 
 def _create(client_id: str, name: str, *, source: str, source_ref: str, description: str) -> None:
-    task_service.create_task(
+    row = task_service.create_task(
         name,
         client_id=client_id,
         section_id=_month_section_id(client_id),
@@ -59,6 +59,16 @@ def _create(client_id: str, name: str, *, source: str, source_ref: str, descript
         source=source,
         source_ref=source_ref,
     )
+    # PACE v1.3 (§4.6): optionally auto-place the producer task on the correct
+    # party (flag-gated, default off; place_task no-ops if already assigned, so a
+    # gap-fill re-run never churns). Best-effort — never fails the producer.
+    if settings.pace_autoplace_producers and row and row.get("id"):
+        try:
+            from services import pm_assign
+
+            pm_assign.place_task(row["id"])
+        except Exception as exc:
+            logger.warning("task_producer_autoplace_failed", extra={"source_ref": source_ref, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------

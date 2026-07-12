@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic_settings import BaseSettings
 
@@ -785,6 +785,23 @@ class Settings(BaseSettings):
     # arg-filling, not strategy prose).
     pace_model: str = "claude-haiku-4-5-20251001"
     pace_max_tokens: int = 1200
+    # PACE v1.3 Phase 5 — role/skill placement (§4.6). Whether producer tasks
+    # (rank_drop/maps_alert/action_plan) are auto-placed on creation (default off
+    # — approved proposals always are). When the skilled+eligible pool is over
+    # capacity: "hold" (leave unassigned + flag) or "least_over" (assign anyway).
+    pace_autoplace_producers: bool = False
+    pace_placement_overload: str = "hold"
+    # PACE v1.3 Phase 6 — delivery reports (§4.7). Default window + the weekday
+    # (0=Mon…6=Sun) for the optional weekly portfolio auto-digest. None ⇒ the
+    # weekly digest is off (on-demand + the Reports card still work).
+    pace_report_period_days: int = 7
+    pace_report_weekday: Optional[int] = None
+    # PACE v1.3 Phase 7 — dedicated channel (§10.2). A Slack channel id (C…): when
+    # set, PACE owns that channel (answers every message, defers strategy to
+    # SerMaStr) and SerMaStr is excluded there; PACE stays out of other channels.
+    # Empty ⇒ shared-channel shape-routing (backward-compatible). PACE's digest +
+    # weekly report also post here when set.
+    pace_slack_channel: str = ""
 
     # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
     # Read-only v1 serves the precomputed market_scanner.leadoff_board.

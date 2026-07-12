@@ -134,7 +134,8 @@ def run_daily_digest(today: Optional[date] = None) -> dict:
             title=f"PACE daily · {total} item{'s' if total != 1 else ''} need a human",
             summary=body,
             severity="info",
-            payload={"link": "/tasks", "digest_key": key},
+            payload={"link": "/tasks", "digest_key": key,
+                     "slack_channel": settings.pace_slack_channel or None},
             dedupe_key=key,
         )
         return {"emitted": nid is not None, "items": len(items), "total": total,
