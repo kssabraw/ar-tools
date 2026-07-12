@@ -147,6 +147,8 @@ def create_comment(task: dict, author_id: str, body: str) -> dict:
         .execute()
     ).data[0]
     task_service.record_activity(task["id"], "commented", actor_id=author_id)
+    # First human touch starts a Not Started task (stage auto-advance Rule A).
+    task_service.start_task_on_touch(task["id"], actor_id=author_id)
     add_watchers(task["id"], [author_id, *mentions])
 
     if mentions:
@@ -272,6 +274,8 @@ def add_attachment(
         .execute()
     ).data[0]
     task_service.record_activity(task["id"], "attached", actor_id=uploaded_by, detail={"file": file_name})
+    # First human touch starts a Not Started task (stage auto-advance Rule A).
+    task_service.start_task_on_touch(task["id"], actor_id=uploaded_by)
     add_watchers(task["id"], [uploaded_by])
     return row
 
