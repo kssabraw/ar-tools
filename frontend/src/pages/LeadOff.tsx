@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass } from 'lucide-react'
+import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 
@@ -27,6 +27,15 @@ interface MarketRow {
   city_id: number
   category_id: string
   population: number
+  // Prospect pipeline (context only — never a grade input). Present once
+  // the leadoff_permits job has populated city_permits.
+  permit_units_1yr?: number | null
+  permits_pc?: number | null
+  permit_sf_share?: number | null
+  permit_trend?: number | null
+  permit_flag?: string | null
+  permit_vintage?: number | null
+  permit_relevance?: 'high' | 'low'
 }
 interface BoardResponse {
   markets: MarketRow[]
@@ -269,6 +278,10 @@ export function LeadOff() {
                         {r.luck === 'HOT?' && <Flame size={14} color="#ea580c" aria-label="Demand ≥2× city norm — verify" />}
                         {r.luck === 'COLD?' && <Snowflake size={14} color="#38bdf8" aria-label="Demand ≤0.5× norm" />}
                         {r.conf === 'low' && <AlertTriangle size={12} color="#94a3b8" aria-label="Low-confidence demand" />}
+                        {r.permit_flag === 'HOT-pipeline' && (
+                          <Hammer size={13} color="#b45309"
+                            aria-label={`Housing pipeline hot: ${r.permits_pc}/1k residents, trend ${r.permit_trend}× — leading indicator, strongest for construction-adjacent categories`} />
+                        )}
                       </td>
                       <td style={{ ...tdStyle, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.city_name}, {r.state_code}</td>
                       <td style={tdStyle}>{r.category}</td>
@@ -318,6 +331,15 @@ export function LeadOff() {
               <KV k="Win likelihood" v={brief.rankab?.toFixed(2)} />
               <KV k="ROI ($/mo per review)" v={brief.roi?.toFixed(1)} />
               <KV k="Demand (regressed)" v={`${brief.xdem?.toLocaleString()}/mo`} />
+              {brief.permits_pc != null && (
+                <KV k={`Prospect pipeline${brief.permit_flag && brief.permit_flag !== '-' ? ` · ${brief.permit_flag}` : ''}`}
+                  v={`${brief.permit_units_1yr?.toLocaleString()} units/yr (${brief.permits_pc}/1k)`}
+                  hint={`${brief.permit_vintage} housing permits — leading indicator of home-services demand, 6–18mo horizon. `
+                    + `Trend ${brief.permit_trend ?? '—'}× vs 3-yr base · ${Math.round((brief.permit_sf_share ?? 0) * 100)}% single-family. `
+                    + (brief.permit_relevance === 'low'
+                      ? 'LOW relevance for this category (not construction-adjacent) — context only.'
+                      : 'Construction-adjacent category — pipeline is a meaningful tailwind. Context only, never in the grade.')} />
+              )}
 
               <SectionTitle>Field forensics</SectionTitle>
               <KV k="Reviews to beat #3" v={String(brief.rev_win)} strong />

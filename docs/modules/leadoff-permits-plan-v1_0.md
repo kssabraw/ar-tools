@@ -1,11 +1,20 @@
 # LeadOff — Building-Permits "Prospect Pipeline" Column (Plan v1.0)
 
-**Status:** SOURCE NAILED + DESIGN + ready-to-run scanner script
-(`docs/reference/leadoff-scanner/05b_pull_permits.py`). The pull itself runs
-on the desktop (scanner pipeline + Supabase loader live there; the cloud
-session's egress can't reach census.gov). **Validation gate:** run
-`05b --validate` on the two test markets and eyeball before the wide pull —
-which is free either way.
+**Status:** BUILT APP-SIDE (owner ruling 2026-07-12: "make every app side").
+The entire flow runs on the deployed worker — `services/leadoff_permits.py`,
+async `leadoff_permits` job (keyless BPS flat-file pull, $0), app-owned
+`public.city_permits` store, board/brief join at read time, frontend chip +
+brief line. No desktop scanner involvement (the earlier 05b reference
+script was superseded before ever running and removed). **Validation
+gate:** every job run's result carries the McKinney TX vs Cleveland OH
+side-by-side + the place-level match rate — eyeball the first run before
+trusting the column.
+
+**Architecture note (why app-owned storage):** `leadoff_board` is
+drop/recreated by the scanner loader, so permits columns written there
+would be wiped on reload. `city_permits` (public schema, keyed by the
+scanner's `city_id`) survives reloads and is merged onto reads by
+`leadoff.attach_permits` — the scanner toolchain needs no change at all.
 
 ## 1. Source of truth (corrects the task's premise)
 
@@ -81,7 +90,7 @@ category") for locksmith/appliance-repair-class markets. Numeric relevance
 weights would be invented numbers; display relevance is honest and costs
 nothing to change later.
 
-## 5. Pipeline integration (desktop side — the script ships with this doc)
+## 5. Pipeline integration (SUPERSEDED — kept for the record; §5b is what shipped)
 
 `05b_pull_permits.py` (reference copy in `docs/reference/leadoff-scanner/`;
 copy into the scanner project root):
@@ -103,6 +112,26 @@ copy into the scanner project root):
   UPDATE for an in-place backfill — script emits both variants).
   ⚠ Grants: table recreation strips `service_role` grants (2026-07-12
   lesson); default privileges now cover SELECT, but verify after reload.
+
+## 5b. What actually shipped (app-side)
+
+- `services/leadoff_permits.py`: pure parser (two-header combine, keyword
+  column matching with loud layout-drift failures, imputed-estimate columns
+  only), §3 metrics, p90/p10+trend flag assignment, category-relevance
+  classifier; async `run_permits_job` (4 regions × latest+3 prior years ≈ 16
+  free downloads, name-match join to `market_scanner.cities`, replace-all
+  upsert into `city_permits`, validation pair + match rate in the job
+  result); `enqueue_due_permits` on the daily scheduler
+  (`leadoff_permits_refresh_days`=30, `leadoff_permits_enabled`).
+- Migration `20260712170000`: `public.city_permits` + async_jobs CHECK.
+- Reads: `leadoff.attach_permits` merges the six fields + `permit_relevance`
+  onto board pages and briefs (best-effort — a missing store never breaks
+  the board).
+- Frontend: board Hammer chip on `HOT-pipeline` rows; brief "Prospect
+  pipeline" line with vintage, per-capita, SF share, trend, and the §4
+  relevance mute for non-construction-adjacent categories.
+- County fallback (`permit_source='county'`) remains a phase-2 follow-up
+  (needs a city→county-FIPS map).
 
 ## 6. App-side follow-up (this repo, after the columns exist)
 

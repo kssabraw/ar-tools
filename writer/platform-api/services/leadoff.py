@@ -222,6 +222,40 @@ def _percentile_breakpoints() -> list[float]:
     return [float(r["exp_val"]) for r in rows]
 
 
+def attach_permits(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge the app-owned prospect-pipeline columns (public.city_permits,
+    written by the leadoff_permits job) onto board/brief rows at read time —
+    the board table itself is scanner-owned and reload-wiped, so permits
+    live outside it. Adds permit_relevance per row (display prominence only,
+    plan §4). Best-effort: no permits store → rows unchanged."""
+    if not rows:
+        return rows
+    try:
+        from db.supabase_client import get_supabase
+        from services.leadoff_permits import permit_relevance
+
+        ids = sorted({r["city_id"] for r in rows if r.get("city_id") is not None})
+        permits = {p["city_id"]: p for p in (
+            get_supabase().table("city_permits")
+            .select("city_id,permit_units_1yr,permits_pc,permit_sf_share,"
+                    "permit_trend,permit_flag,permit_source,vintage")
+            .in_("city_id", ids).execute().data or [])}
+        for r in rows:
+            p = permits.get(r.get("city_id"))
+            if p and p.get("permit_source") == "place":
+                r.update({k: p.get(k) for k in (
+                    "permit_units_1yr", "permits_pc", "permit_sf_share",
+                    "permit_trend", "permit_flag")})
+                r["permit_vintage"] = p.get("vintage")
+            r["permit_relevance"] = permit_relevance(r.get("category") or "")
+    except Exception:
+        # the pipeline column is context — never break the board over it
+        import logging
+        logging.getLogger(__name__).warning("leadoff.attach_permits_failed",
+                                            exc_info=True)
+    return rows
+
+
 def list_board(*, city: str | None, state: str | None, category: str | None,
                min_demand: int | None, sort: str, capture: float, lead_tier: str,
                limit: int, prefetch: int) -> dict[str, Any]:
@@ -248,7 +282,7 @@ def list_board(*, city: str | None, state: str | None, category: str | None,
     rows.sort(key=lambda r: sort_value(r, sort) if not default_assumptions
               else float(r.get(prerank) or -1), reverse=True)
     as_of = rows[0].get("as_of") if rows else None
-    return {"markets": rows[:limit], "as_of": as_of,
+    return {"markets": attach_permits(rows[:limit]), "as_of": as_of,
             "assumptions": {"capture": capture, "lead_tier": lead_tier,
                             "approximate": not default_assumptions}}
 
@@ -300,10 +334,10 @@ def get_market_brief(city_id: int, category_id: str) -> dict[str, Any] | None:
              .select("growth_yoy,growth_yoy_ss,peak_months")
              .eq("trend_key", f"{city_id}|{_norm(row.get('category') or '')}")
              .limit(1).execute().data or [])
-    return {
+    return attach_permits([{
         **row,
         "competitors": comps,
         "enrichment": enrichment_from_caches(comps, rd_rows, review_rows,
                                              trend[0] if trend else None,
                                              city_id),
-    }
+    }])[0]
