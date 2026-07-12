@@ -18,7 +18,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import dataforseo_labs
+from services import backlinks_api, dataforseo_labs
 from services.keyword_market import estimate_monthly_value
 
 logger = logging.getLogger(__name__)
@@ -276,3 +276,192 @@ def reserve_budget(n: int) -> None:
         return
     if fit is False:
         raise BudgetExceeded(f"domain_intel_budget_exceeded: cap {cap} reached today")
+
+
+# ---------------------------------------------------------------------------
+# Orchestration (I/O) — Phase 1: Domain Overview + Ranked Keywords.
+# ---------------------------------------------------------------------------
+def _client_location_code(client_id: str) -> Optional[int]:
+    """The client's rank-tracking location (§10 open question #1 default), or None."""
+    try:
+        rows = (
+            get_supabase().table("clients").select("rank_tracking_location_code")
+            .eq("id", client_id).limit(1).execute()
+        ).data
+    except Exception:
+        return None
+    return (rows or [{}])[0].get("rank_tracking_location_code")
+
+
+async def run_domain_overview(
+    client_id: str,
+    target_domain: str,
+    role: str = "competitor",
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+    *,
+    force: bool = False,
+) -> dict:
+    """Fetch + persist a Domain Overview snapshot (rollups + ranked keywords).
+
+    A fresh snapshot within the cache window is re-served (no paid call) unless
+    ``force``. Otherwise reserves budget, calls the Labs overview + ranked
+    keywords + the backlink summary (DR/RD), and persists a snapshot with its
+    ranked-keyword child rows."""
+    domain = normalize_domain(target_domain)
+    if not domain:
+        raise ValueError("invalid_domain")
+    supabase = get_supabase()
+    if location_code is None:
+        location_code = _client_location_code(client_id)
+
+    if not force:
+        existing = (
+            supabase.table("domain_intel_snapshots").select("id, captured_at")
+            .eq("client_id", client_id).eq("target_domain", domain)
+            .order("captured_at", desc=True).limit(1).execute()
+        ).data
+        if existing and is_snapshot_fresh(existing[0]["captured_at"]):
+            return {"snapshot_id": existing[0]["id"], "target_domain": domain, "cached": True}
+
+    # Budget: overview + ranked_keywords + backlink summary (+ optional bulk).
+    reserve_budget(3)
+
+    overview_raw, c_overview = await dataforseo_labs.fetch_domain_rank_overview(
+        domain, location_code, language_code
+    )
+    ranked_raw, c_ranked = await dataforseo_labs.fetch_ranked_keywords(
+        domain, location_code, language_code,
+        limit=settings.domain_intel_ranked_keyword_cap, max_position=100,
+    )
+    try:
+        summary = await backlinks_api.fetch_summary(domain, "domain")
+    except Exception as exc:
+        logger.warning("domain_intel.backlink_summary_failed", extra={"domain": domain, "error": str(exc)})
+        summary = {}
+
+    bulk_traffic = None
+    if overview_raw.get("organic_traffic_est") is None:
+        try:
+            reserve_budget(1)
+            bulk_map, _c = await dataforseo_labs.fetch_bulk_traffic([domain], location_code, language_code)
+            bulk_traffic = bulk_map.get(domain)
+        except BudgetExceeded:
+            pass  # traffic estimate is best-effort; the snapshot still stands
+
+    overview = build_overview(
+        overview_raw, bulk_traffic,
+        {"dr": summary.get("domain_rating"), "rd": summary.get("referring_domains")},
+    )
+    ranked = enrich_est_value(ranked_raw)
+    cost = round((c_overview or 0.0) + (c_ranked or 0.0), 4)
+
+    snap = (
+        supabase.table("domain_intel_snapshots").insert({
+            "client_id": client_id, "target_domain": domain, "role": role,
+            "location_code": location_code, "language_code": language_code or "en",
+            "organic_traffic_est": overview["organic_traffic_est"],
+            "ranked_keyword_count": overview["ranked_keyword_count"] or len(ranked),
+            "dr": overview["dr"], "rd": overview["rd"],
+            "traffic_value_est": overview["traffic_value_est"],
+            "status": "complete", "cost_usd": cost,
+        }).execute()
+    ).data[0]
+
+    rows = [{
+        "snapshot_id": snap["id"], "keyword": r["keyword"], "position": r.get("position"),
+        "url": r.get("url"), "volume": r.get("volume"), "cpc_usd": r.get("cpc_usd"),
+        "keyword_difficulty": r.get("keyword_difficulty"), "search_intent": r.get("search_intent"),
+        "est_value": r.get("est_value"),
+    } for r in ranked]
+    for group in dataforseo_labs.chunk(rows, 500):
+        if group:
+            supabase.table("domain_ranked_keywords").insert(group).execute()
+
+    return {
+        "snapshot_id": snap["id"], "target_domain": domain, "cached": False,
+        "ranked_keyword_count": len(rows), "cost_usd": cost,
+    }
+
+
+def enqueue_domain_overview(
+    client_id: str,
+    target_domain: str,
+    role: str = "competitor",
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+    force: bool = False,
+) -> str:
+    """Enqueue a domain_overview async job. Returns the job id."""
+    row = (
+        get_supabase().table("async_jobs").insert({
+            "job_type": "domain_overview",
+            "entity_id": client_id,
+            "payload": {
+                "client_id": client_id, "target_domain": target_domain, "role": role,
+                "location_code": location_code, "language_code": language_code, "force": force,
+            },
+        }).execute()
+    ).data[0]
+    return row["id"]
+
+
+async def run_domain_overview_job(job: dict) -> None:
+    """async_jobs handler for domain_overview."""
+    payload = job.get("payload") or {}
+    supabase = get_supabase()
+    try:
+        result = await run_domain_overview(
+            payload.get("client_id") or job.get("entity_id"),
+            payload.get("target_domain"),
+            role=payload.get("role") or "competitor",
+            location_code=payload.get("location_code"),
+            language_code=payload.get("language_code"),
+            force=bool(payload.get("force")),
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": result, "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+    except BudgetExceeded:
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": "budget_exceeded", "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+    except Exception as exc:
+        logger.warning("domain_overview.job_failed", extra={"error": str(exc)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+
+
+# ---------------------------------------------------------------------------
+# Reads (for the router).
+# ---------------------------------------------------------------------------
+def get_latest_overview(client_id: str, target_domain: str) -> Optional[dict]:
+    """The most recent snapshot for (client, domain) + its ranked keywords, or None."""
+    domain = normalize_domain(target_domain)
+    if not domain:
+        return None
+    supabase = get_supabase()
+    snap = (
+        supabase.table("domain_intel_snapshots").select("*")
+        .eq("client_id", client_id).eq("target_domain", domain)
+        .order("captured_at", desc=True).limit(1).execute()
+    ).data
+    if not snap:
+        return None
+    kws = (
+        supabase.table("domain_ranked_keywords").select("*")
+        .eq("snapshot_id", snap[0]["id"])
+        .order("est_value", desc=True).limit(settings.domain_intel_ranked_keyword_cap).execute()
+    ).data or []
+    return {"snapshot": snap[0], "ranked_keywords": kws}
+
+
+def list_snapshots(client_id: str, limit: int = 50) -> list[dict]:
+    """Snapshot summary rows for a client (no child keywords), newest first."""
+    return (
+        get_supabase().table("domain_intel_snapshots")
+        .select("id, target_domain, role, organic_traffic_est, ranked_keyword_count, "
+                "dr, rd, traffic_value_est, cost_usd, captured_at")
+        .eq("client_id", client_id).order("captured_at", desc=True).limit(limit).execute()
+    ).data or []

@@ -1,0 +1,98 @@
+"""Domain Intelligence API — the per-client competitive-intelligence workspace
+(the "SEMrush clone"). Phase 1: Domain Overview + Ranked Keywords.
+
+Enter any domain (a competitor, a prospect, the client's own site) → an async
+Domain Overview snapshot (traffic/keyword-count/authority estimate + every
+keyword it ranks for). See docs/modules/domain-intelligence-module-prd-v1_0.md.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Optional
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
+from config import settings
+from db.supabase_client import get_supabase
+from middleware.auth import require_auth
+from services import domain_intel
+
+router = APIRouter(tags=["domain-intel"])
+logger = logging.getLogger(__name__)
+
+
+class OverviewRequest(BaseModel):
+    target_domain: str
+    role: str = "competitor"
+    location_code: Optional[int] = None
+    language_code: Optional[str] = None
+    force: bool = False
+
+
+@router.get("/clients/{client_id}/domain-intel")
+async def list_domain_snapshots(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """History of analyzed domains for the client (summary rows, newest first)."""
+    try:
+        return {
+            "enabled": settings.domain_intel_enabled,
+            "budget_remaining": domain_intel.budget_remaining(),
+            "snapshots": domain_intel.list_snapshots(str(client_id)),
+        }
+    except Exception as exc:
+        logger.error("domain_intel_list_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/clients/{client_id}/domain-intel/overview/{target_domain}")
+async def get_overview(
+    client_id: UUID, target_domain: str, auth: dict = Depends(require_auth)
+) -> dict:
+    """Latest snapshot + ranked keywords for a domain (null when never analyzed)."""
+    try:
+        result = domain_intel.get_latest_overview(str(client_id), target_domain)
+    except Exception as exc:
+        logger.error("domain_intel_get_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return result or {"snapshot": None, "ranked_keywords": []}
+
+
+@router.post("/clients/{client_id}/domain-intel/overview")
+async def start_overview(
+    client_id: UUID, body: OverviewRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    """Enqueue a Domain Overview analysis (poll the job, then GET the overview)."""
+    if not settings.domain_intel_enabled:
+        raise HTTPException(status_code=403, detail="domain_intel_disabled")
+    domain = domain_intel.normalize_domain(body.target_domain)
+    if not domain:
+        raise HTTPException(status_code=422, detail="invalid_domain")
+    if body.role not in ("competitor", "client", "prospect"):
+        raise HTTPException(status_code=422, detail="invalid_role")
+    if domain_intel.budget_remaining() <= 0:
+        raise HTTPException(status_code=429, detail="budget_exceeded")
+    try:
+        job_id = domain_intel.enqueue_domain_overview(
+            str(client_id), domain, role=body.role,
+            location_code=body.location_code, language_code=body.language_code,
+            force=body.force,
+        )
+    except Exception as exc:
+        logger.error("domain_intel_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return {"job_id": job_id, "target_domain": domain}
+
+
+@router.get("/clients/{client_id}/domain-intel/jobs/{job_id}")
+async def overview_status(
+    client_id: UUID, job_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    rows = (
+        get_supabase().table("async_jobs").select("id, status, result, error")
+        .eq("id", str(job_id)).limit(1).execute()
+    ).data
+    if not rows:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    return rows[0]
