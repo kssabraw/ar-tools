@@ -149,9 +149,19 @@ def main():
     vmap.update({k[0]: dict(v) for k, v in v_cache.items()})
 
     # ---------- trend (city+category cache; one keyword task per city) --------
+    # ⚠ COORDINATED CACHE CONTRACT (2026-07-12, matches the ar-tools app's
+    # services/leadoff_actions.py): pulls are now 24 months (date_from) so the
+    # ADDITIVE growth_yoy_ss field (same-month YoY — trailing 3 months vs the
+    # same calendar months a year earlier, the lesson-#8 seasonality fix) can
+    # be computed. growth_yoy keeps its legacy 12-month-window semantics
+    # UNCHANGED (the [:12] slices below take the most recent 12 of the 24).
+    # Do NOT redefine growth_yoy — both toolchains write this table.
     t_cache = load_cache(eng, "demand_trend", ["trend_key"])
     by_city = sl.groupby("_cityid")
     trend_rows = []
+    TREND_MONTHS = 24
+    date_from = f"{(now.year * 12 + now.month - 1 - TREND_MONTHS) // 12:04d}-" \
+                f"{(now.year * 12 + now.month - 1 - TREND_MONTHS) % 12 + 1:02d}-01"
     for cid, g in by_city:
         c = ckey[g._ck.iloc[0]]
         lc = str(c.location_code) if str(c.location_code) not in ("", "nan", "<NA>", "None") else None
@@ -161,7 +171,7 @@ def main():
         kws = list(want) + [w + " near me" for w in want]
         p = client.post("/keywords_data/google_ads/search_volume/task_post",
                         [{"location_code": int(float(lc)), "language_name": "English",
-                          "keywords": kws}])
+                          "keywords": kws, "date_from": date_from}])
         tid = (p.get("tasks") or [{}])[0].get("id")
         res = None
         for _ in range(40):
@@ -176,6 +186,19 @@ def main():
             ms = it.get("monthly_searches") or []
             if ms and (kw not in monthly or len(ms) > len(monthly[kw])):
                 monthly[kw] = ms
+        def same_month_growth(ms):
+            # same-month YoY: 3 most recent (year,month) vs the same months a
+            # year earlier; refuses on any missing prior-year month (a partial
+            # match would reintroduce the seasonal confound).
+            by_ym = {(m.get("year"), m.get("month")): (m.get("search_volume") or 0)
+                     for m in ms if m.get("year") is not None}
+            recent = sorted(by_ym, reverse=True)[:3]
+            if len(recent) < 3: return None
+            prior = [(y - 1, mo) for y, mo in recent]
+            if any(k not in by_ym for k in prior): return None
+            top, bot = sum(by_ym[k] for k in recent), sum(by_ym[k] for k in prior)
+            return round(top / bot, 2) if bot else None
+
         for cat in want:
             ms = monthly.get(cat.lower(), [])
             vals = [m.get("search_volume") or 0 for m in ms][:12]
@@ -187,6 +210,7 @@ def main():
             else:
                 growth, peak = None, None
             trend_rows.append({"trend_key": f"{cid}|{norm(cat)}", "growth_yoy": growth,
+                               "growth_yoy_ss": same_month_growth(ms),
                                "peak_months": peak, "pulled_at": now})
     save_cache(eng, "demand_trend", trend_rows)
     tmap = {r["trend_key"]: r for r in trend_rows}
@@ -212,7 +236,9 @@ def main():
             "rd_min": min(rds) if rds else None, "rd_med": int(pd.Series(rds).median()) if rds else None,
             "field_vel30": l30, "field_prior30": p30, "momentum": mom,
             "newest_review": max(newest) if newest else None,
-            "growth_yoy": t.get("growth_yoy"), "peak_months": t.get("peak_months")})
+            "growth_yoy": t.get("growth_yoy"),
+            "growth_yoy_ss": t.get("growth_yoy_ss"),
+            "peak_months": t.get("peak_months")})
     out = pd.concat([sl.drop(columns=["_ck", "_catid", "_cityid"]),
                      sl.apply(enrich, axis=1)], axis=1)
     dest = Path(a.shortlist).with_name(Path(a.shortlist).stem + "_enriched.csv")

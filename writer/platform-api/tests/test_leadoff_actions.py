@@ -9,8 +9,10 @@ from services.leadoff_actions import (
     field_stats,
     holder_label,
     pick_monthly,
+    same_month_growth,
     scout_estimate,
     spent_today,
+    trend_date_from,
     trend_row,
     tryout_rows,
     velocity_row,
@@ -175,6 +177,74 @@ class TestScoutContracts:
         ]
         m = pick_monthly(items)
         assert len(m["locksmith"]) == 2  # near-me stripped, longer series kept
+
+
+def _seasonal_24(growth=1.0):
+    """24 months of a roofing-shaped seasonal curve (summer peak, winter
+    trough), newest = FEBRUARY 2026 — the window position that produces the
+    lesson-#8 artifact (recent 3 = winter trough, window-oldest 3 = spring
+    ramp → legacy growth reads ~0.3 on a flat market, the roofing-0.21 shape).
+    `growth` multiplies the most recent 12 months (Mar 2025–Feb 2026)."""
+    base = {1: 200, 2: 220, 3: 400, 4: 700, 5: 950, 6: 1000, 7: 980, 8: 900,
+            9: 700, 10: 500, 11: 300, 12: 220}
+    out = []
+    for back in range(24):  # newest-first from 2026-02
+        total = 2026 * 12 + 1 - back  # month index of (2026, February)
+        y, m = total // 12, total % 12 + 1
+        recent_year = y == 2026 or (y == 2025 and m > 2)
+        out.append({"year": y, "month": m,
+                    "search_volume": round(base[m] * (growth if recent_year else 1.0))})
+    return out
+
+
+class TestSameMonthGrowth:
+    def test_pure_seasonality_collapses_to_one(self):
+        # The lesson-#8 artifact: identical seasonal years. The legacy 12-mo
+        # calc reads a big "trend" (Apr–Jun vs Jul–Sep of the window); the
+        # same-month calc reads exactly 1.0.
+        ms = _seasonal_24()
+        legacy = trend_row(ms, "k", NOW)["growth_yoy"]
+        assert legacy is not None and abs(legacy - 1.0) > 0.25  # confounded
+        assert same_month_growth(ms) == 1.0                     # cancelled
+
+    def test_real_trend_survives(self):
+        # A genuine +30% year multiplies every recent month; same-month reads it.
+        ms = _seasonal_24(growth=1.3)
+        assert same_month_growth(ms) == 1.3
+
+    def test_refuses_short_history(self):
+        # only 14 months — the 3rd prior-year month is missing → refuse, never
+        # partially match (that would reintroduce the confound)
+        ms = _seasonal_24()[:14]
+        assert same_month_growth(ms) is None
+
+    def test_refuses_missing_years(self):
+        ms = [{"month": m, "search_volume": 100} for m in range(1, 13)] * 2
+        assert same_month_growth(ms) is None
+
+    def test_zero_prior_year_refuses(self):
+        ms = _seasonal_24()
+        for row in ms[12:]:
+            row["search_volume"] = 0
+        assert same_month_growth(ms) is None
+
+    def test_trend_row_carries_both_fields(self):
+        ms = _seasonal_24()
+        row = trend_row(ms, "5814616|roofing contractor", NOW)
+        assert row["growth_yoy_ss"] == 1.0
+        assert row["growth_yoy"] is not None  # legacy semantics untouched
+        assert row["peak_months"]  # still from the recent 12
+
+    def test_trend_row_12mo_data_leaves_ss_null(self):
+        # a 12-month pull (old tool, old cadence) → ss stays null, legacy works
+        ms = _seasonal_24()[:12]
+        row = trend_row(ms, "k", NOW)
+        assert row["growth_yoy_ss"] is None and row["growth_yoy"] is not None
+
+    def test_trend_date_from_is_24_months_back(self):
+        from datetime import datetime, timezone
+        assert trend_date_from(datetime(2026, 7, 12, tzinfo=timezone.utc)) == "2024-07-01"
+        assert trend_date_from(datetime(2026, 1, 3, tzinfo=timezone.utc)) == "2024-01-01"
 
 
 class TestBudget:

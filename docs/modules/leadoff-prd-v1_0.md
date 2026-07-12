@@ -119,7 +119,11 @@ the new client workspace).
 - Estimates are planning numbers: volumes are Google-bucketed (`conf` flag),
   capture is an assumption, grades under non-default assumptions approximate.
 - `growth_yoy` is seasonal-confounded (12-month window) — read with
-  `peak_months`; 24-month fix pending.
+  `peak_months`. **Fixed (2026-07-12) via the additive `growth_yoy_ss`**
+  (same-month YoY from a 24-month pull; scout writes it, brief/UI prefer it);
+  `growth_yoy` itself keeps legacy semantics as a coordinated cache contract
+  with the PowerShell tools. Pre-fix cache rows carry `growth_yoy_ss = null`
+  until re-scouted.
 - Exact-category holder counts are only meaningful for verified-current GBP
   labels (Handyman rename / "Plumbing" not selectable already corrected).
 - HOT? luck flags need a trend pull to adjudicate; the SOP mandates a live

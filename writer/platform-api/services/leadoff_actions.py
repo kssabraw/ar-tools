@@ -168,12 +168,46 @@ def velocity_row(timestamps: list[datetime], biz_key: str, item_count: int,
     }
 
 
+# Trend pulls now request this much history so the same-month YoY can be
+# computed; the legacy fields keep slicing the most-recent 12, so their
+# semantics are unchanged by the longer window.
+TREND_MONTHS = 24
+
+
+def trend_date_from(now: datetime) -> str:
+    """First day of the month TREND_MONTHS back (Google Ads date_from)."""
+    total = now.year * 12 + (now.month - 1) - TREND_MONTHS
+    return f"{total // 12:04d}-{total % 12 + 1:02d}-01"
+
+
+def same_month_growth(monthly: list[dict[str, Any]]) -> float | None:
+    """Seasonality-cancelling growth (lesson #8's real fix): the 3 most recent
+    months vs the SAME calendar months one year earlier, matched by
+    (year, month). Refuses (None) when any of the 3 prior-year months is
+    missing or the prior-year sum is zero — a partial match would reintroduce
+    the seasonal confound this exists to remove. Pure."""
+    by_ym = {(m.get("year"), m.get("month")): (m.get("search_volume") or 0)
+             for m in monthly if m.get("year") is not None}
+    if not by_ym:
+        return None
+    recent_keys = sorted(by_ym, reverse=True)[:3]
+    if len(recent_keys) < 3:
+        return None
+    prior_keys = [(y - 1, mo) for y, mo in recent_keys]
+    if any(k not in by_ym for k in prior_keys):
+        return None
+    recent, prior = sum(by_ym[k] for k in recent_keys), sum(by_ym[k] for k in prior_keys)
+    return round(recent / prior, 2) if prior else None
+
+
 def trend_row(monthly: list[dict[str, Any]], trend_key: str,
               now: datetime) -> dict[str, Any]:
-    """The demand_trend cache row — EXACT contract of enrich_shortlist:
-    growth = recent-3-months avg / oldest-3 avg over the first 12 entries
-    (⚠ seasonal-confounded, lesson #8 — read with peak_months), peaks = the
-    top-2 volume months. Refuses (<None fields) under 6 months of history."""
+    """The demand_trend cache row — the legacy fields keep the EXACT contract
+    of enrich_shortlist (growth_yoy = recent-3 avg / oldest-3 avg over the
+    most recent 12 entries — ⚠ seasonal-confounded, lesson #8, read with
+    peak_months; peaks = top-2 volume months), and the COORDINATED ADDITIVE
+    field growth_yoy_ss carries the same-month YoY (needs the 24-month pull;
+    null on 12-month data — never a redefinition of growth_yoy)."""
     vals = [m.get("search_volume") or 0 for m in monthly][:12]
     if len(vals) >= 6:
         recent, old = sum(vals[:3]) / 3, sum(vals[-3:]) / 3
@@ -183,6 +217,7 @@ def trend_row(monthly: list[dict[str, Any]], trend_key: str,
     else:
         growth, peak = None, None
     return {"trend_key": trend_key, "growth_yoy": growth,
+            "growth_yoy_ss": same_month_growth(monthly),
             "peak_months": peak, "pulled_at": now.isoformat()}
 
 
@@ -584,7 +619,10 @@ async def run_scout_job(job: dict) -> None:
                 p = await _dfs_post(
                     client, "/keywords_data/google_ads/search_volume/task_post",
                     [{"location_code": lc, "language_name": "English",
-                      "keywords": [cat_name, cat_name + " near me"]}])
+                      "keywords": [cat_name, cat_name + " near me"],
+                      # 24 months so growth_yoy_ss (same-month YoY) computes;
+                      # legacy fields still slice the most recent 12.
+                      "date_from": trend_date_from(now)}])
                 t0 = _task0(p)
                 _check_money_limit(t0)
                 result = await _poll_task(
