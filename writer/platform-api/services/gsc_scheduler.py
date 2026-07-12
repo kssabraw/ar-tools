@@ -31,6 +31,63 @@ def should_run(now: datetime, last_run_date: Optional[date], hour_utc: int) -> b
     return last_run_date is None or last_run_date < now.date()
 
 
+# ---------------------------------------------------------------------------
+# Durable run markers (ops fix 2026-07-12)
+#
+# The loop's "already ran today/this week" markers were in-memory only, so
+# every deploy restarted the process and re-fired the daily block —
+# freeze_check ran up to 17×/client/day on heavy deploy days, burning GSC
+# URL-inspection quota + paid DataForSEO site: probes. Markers now load from
+# the `scheduler_state` table at loop start and persist after each block runs.
+# Best-effort on both sides: an unreadable table degrades to the old
+# in-memory behavior (markers start None), and a failed save just means the
+# marker is re-derived next deploy — never a crashed scheduler.
+# ---------------------------------------------------------------------------
+def parse_marker_date(value) -> Optional[date]:
+    """'YYYY-MM-DD' → date; None on missing/garbage. Pure."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_marker_month(value) -> Optional[tuple]:
+    """'YYYY-MM' → (year, month); None on missing/garbage. Pure."""
+    if not value:
+        return None
+    try:
+        y, m = str(value).split("-")[:2]
+        return (int(y), int(m))
+    except (ValueError, TypeError):
+        return None
+
+
+def load_scheduler_state() -> dict:
+    """All persisted markers as {key: value}. Best-effort — {} on any error."""
+    try:
+        rows = (
+            get_supabase().table("scheduler_state").select("key, value").execute()
+        ).data or []
+        return {r["key"]: r["value"] for r in rows if r.get("key")}
+    except Exception as exc:
+        logger.warning("gsc_scheduler.state_load_failed", extra={"error": str(exc)})
+        return {}
+
+
+def save_marker(key: str, value: str) -> None:
+    """Persist one marker. Best-effort — a failure never breaks the loop."""
+    try:
+        get_supabase().table("scheduler_state").upsert(
+            {"key": key, "value": value, "updated_at": "now()"}, on_conflict="key"
+        ).execute()
+    except Exception as exc:
+        logger.warning(
+            "gsc_scheduler.state_save_failed", extra={"key": key, "error": str(exc)}
+        )
+
+
 def _has_pending_ingest(supabase, property_id: str) -> bool:
     """Avoid stacking duplicate jobs for the same property."""
     existing = (
@@ -423,15 +480,22 @@ async def gsc_scheduler() -> None:
     maps_weekday = settings.maps_scan_weekday
     reopt_weekday = settings.reopt_plan_weekday
     rank_analysis_weekday = settings.rank_analysis_weekly_weekday
-    last_run_date: Optional[date] = None
-    last_df_date: Optional[date] = None
-    last_maps_date: Optional[date] = None
-    last_reopt_date: Optional[date] = None
-    last_strategist_date: Optional[date] = None
-    last_rank_analysis_date: Optional[date] = None
-    last_asana_month: Optional[tuple] = None
-    last_asana_workload_date: Optional[date] = None
-    logger.info("gsc_scheduler.started", extra={"poll_interval_s": interval, "hour_utc": hour})
+    # Durable markers: survive deploys so the daily/weekly blocks don't re-fire
+    # on every restart (see the ops-fix comment above).
+    state = load_scheduler_state()
+    last_run_date = parse_marker_date(state.get("daily"))
+    last_df_date = parse_marker_date(state.get("df_weekly"))
+    last_maps_date = parse_marker_date(state.get("maps_weekly"))
+    last_reopt_date = parse_marker_date(state.get("reopt_weekly"))
+    last_strategist_date = parse_marker_date(state.get("strategist_daily"))
+    last_rank_analysis_date = parse_marker_date(state.get("rank_analysis_weekly"))
+    last_asana_month = parse_marker_month(state.get("asana_month"))
+    last_asana_workload_date = parse_marker_date(state.get("workload_daily"))
+    logger.info(
+        "gsc_scheduler.started",
+        extra={"poll_interval_s": interval, "hour_utc": hour,
+               "restored_markers": sum(1 for v in state.values() if v)},
+    )
     while True:
         await asyncio.sleep(interval)
         try:
@@ -508,6 +572,7 @@ async def gsc_scheduler() -> None:
                 from services.client_pulse import run_weekly_pulses
                 await asyncio.to_thread(run_weekly_pulses, now.date())
                 last_run_date = now.date()
+                save_marker("daily", last_run_date.isoformat())
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,
             # not the per-client tracked rank).
@@ -519,14 +584,17 @@ async def gsc_scheduler() -> None:
                 if settings.serp_snapshot_auto_weekly:
                     enqueue_due_serp_snapshots()
                 last_df_date = now.date()
+                save_marker("df_weekly", last_df_date.isoformat())
             # Weekly Maps geo-grid scans (Module #5) on their own weekday.
             if now.weekday() == maps_weekday and should_run(now, last_maps_date, hour):
                 enqueue_due_maps_scans()
                 last_maps_date = now.date()
+                save_marker("maps_weekly", last_maps_date.isoformat())
             # Weekly reoptimization action-plan digest on its own weekday.
             if now.weekday() == reopt_weekday and should_run(now, last_reopt_date, hour):
                 enqueue_due_reopt_plans()
                 last_reopt_date = now.date()
+                save_marker("reopt_weekly", last_reopt_date.isoformat())
             # SerMaStr strategist reviews — now per-client staggered: each
             # client has its own review weekday (clients.strategist_weekday,
             # unset → the global default), so the due-check runs DAILY and the
@@ -536,12 +604,14 @@ async def gsc_scheduler() -> None:
             if should_run(now, last_strategist_date, hour):
                 enqueue_due_strategy_reviews(now.weekday())
                 last_strategist_date = now.date()
+                save_marker("strategist_daily", last_strategist_date.isoformat())
             # Weekly Organic Rank Analysis reports (per keyword with a snapshot),
             # the day after the weekly SERP-snapshot pass. No-ops entirely while
             # rank_analysis_auto_enabled is false.
             if now.weekday() == rank_analysis_weekday and should_run(now, last_rank_analysis_date, hour):
                 enqueue_due_keyword_reports()
                 last_rank_analysis_date = now.date()
+                save_marker("rank_analysis_weekly", last_rank_analysis_date.isoformat())
             # Monthly Asana section automation: once per month on the configured
             # day-of-month, enqueue an asana_monthly job per mapped client (the
             # job itself no-ops if the month's section already exists).
@@ -556,6 +626,7 @@ async def gsc_scheduler() -> None:
                 # on native_tasks_enabled; per-task idempotent).
                 enqueue_due_task_months(target)
                 last_asana_month = (now.year, now.month)
+                save_marker("asana_month", f"{now.year:04d}-{now.month:02d}")
             # Daily Team Workload overload alert (effort-weighted): once per day
             # after the target hour, emit one suite notification if anyone is
             # over capacity. run_workload_alert self-guards when unconfigured.
@@ -567,6 +638,7 @@ async def gsc_scheduler() -> None:
                 else:
                     await run_workload_alert()
                 last_asana_workload_date = now.date()
+                save_marker("workload_daily", last_asana_workload_date.isoformat())
             # Advance any in-flight Maps scans every tick (non-blocking GETs).
             await poll_pending_maps_scans()
             # AI Visibility scheduled scans are self-clocked via each schedule's

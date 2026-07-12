@@ -256,3 +256,22 @@ def test_is_snapshot_fresh(monkeypatch):
     assert di.is_snapshot_fresh(None, now=now) is False
     monkeypatch.setattr(di.settings, "domain_intel_cache_hours", 0)
     assert di.is_snapshot_fresh((now - timedelta(hours=1)).isoformat(), now=now) is False
+
+
+# ── Labs location-code coercion (ops fix 2026-07-12) ─────────────────────────
+def test_labs_location_code_coerces_city_codes():
+    from services import dataforseo_labs as labs
+
+    # Country codes (2000 + ISO-3166 numeric) pass through.
+    assert labs.labs_location_code(2840) == 2840   # US
+    assert labs.labs_location_code(2036) == 2036   # AU
+    # City-level codes (what clients carry in rank_tracking_location_code —
+    # these took out 60% of keyword_gap runs) coerce to the default country.
+    assert labs.labs_location_code(1000567) == 2840
+    assert labs.labs_location_code(1015027) == 2840
+    # Missing / garbage → default, never an invalid Labs call.
+    assert labs.labs_location_code(None) == 2840
+    assert labs.labs_location_code("not-a-code") == 2840
+    # _loc threads the coercion into every Labs payload.
+    assert labs._loc(1000567, None)["location_code"] == 2840
+    assert labs._loc(2840, "en")["location_code"] == 2840

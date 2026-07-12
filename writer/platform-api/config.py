@@ -40,6 +40,26 @@ class Settings(BaseSettings):
     # few minutes; maps_scan's 30-min poll lives on a separate table, not here).
     # Set to 0 to disable the reaper.
     job_stale_timeout_minutes: int = 30
+    # Per-job-type stale-timeout overrides (minutes) for legitimately long jobs.
+    # rank_keyword_report and gsc_page_ingest both grazed the 30-min default in
+    # production (reaped mid-run at ~1802s and re-run — doubling their cost).
+    job_stale_timeout_overrides: dict = {
+        "rank_keyword_report": 60,
+        "gsc_page_ingest": 60,
+        "task_import_asana": 60,
+    }
+    # Interactive worker lane: a second in-process claim loop dedicated to
+    # short, user-awaited job types so a just-clicked action never queues
+    # behind long background work (brand scans, DataForSEO rank pulls were
+    # producing 10–20 min waits). Same async_jobs table; the status='pending'
+    # claim guard makes the two lanes race-safe. Empty list disables the lane.
+    interactive_job_types: List[str] = [
+        "website_scrape", "brand_voice_scan", "icp_scan",
+        "page_structure_scrape", "gsc_research", "gsc_materialize",
+        "keyword_market", "maps_scan", "maps_analyze", "client_report",
+        "notification_dispatch", "local_seo_generate",
+        "local_seo_reoptimize_url", "local_seo_silo", "asana_push",
+    ]
     # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
     # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.
     freeze_check_enabled: bool = True

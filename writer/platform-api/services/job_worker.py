@@ -69,21 +69,17 @@ from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
 logger = logging.getLogger(__name__)
 
 
-async def _claim_next_job() -> dict | None:
-    """Claim the next pending job using SELECT FOR UPDATE SKIP LOCKED via RPC."""
+async def _claim_next_job(job_types: list[str] | None = None) -> dict | None:
+    """Claim the oldest pending job (optionally restricted to `job_types` — the
+    interactive lane's filter) and atomically mark it running."""
     supabase = get_supabase()
     try:
-        # Use a raw SQL claim via supabase rpc or direct table operations.
         # supabase-py doesn't support FOR UPDATE SKIP LOCKED directly, so we
         # fetch the oldest pending job and immediately mark it running.
-        result = (
-            supabase.table("async_jobs")
-            .select("*")
-            .eq("status", "pending")
-            .order("scheduled_at")
-            .limit(1)
-            .execute()
-        )
+        query = supabase.table("async_jobs").select("*").eq("status", "pending")
+        if job_types:
+            query = query.in_("job_type", job_types)
+        result = query.order("scheduled_at").limit(1).execute()
         jobs = result.data or []
         if not jobs:
             return None
@@ -93,7 +89,9 @@ async def _claim_next_job() -> dict | None:
         if job.get("attempts", 0) >= job.get("max_attempts", 2):
             return None
 
-        # Attempt to claim it (race condition acceptable in v1 with single instance)
+        # Atomic claim: the status='pending' guard means when the two in-process
+        # lanes race for the same row, exactly one PATCH matches — the loser gets
+        # an empty result and simply polls again.
         update_result = (
             supabase.table("async_jobs")
             .update(
@@ -113,6 +111,30 @@ async def _claim_next_job() -> dict | None:
     except Exception as exc:
         logger.error("job_worker.claim_failed", extra={"error": str(exc)})
         return None
+
+
+def stale_timeout_for(job_type: str | None) -> int:
+    """The stale timeout (minutes) for a job type — the per-type override when
+    one is configured (legitimately long jobs: rank_keyword_report and
+    gsc_page_ingest both grazed the 30-min default in prod and got reaped
+    mid-run), else the global default. Pure."""
+    overrides = settings.job_stale_timeout_overrides or {}
+    try:
+        return int(overrides.get(job_type or "", settings.job_stale_timeout_minutes))
+    except (TypeError, ValueError):
+        return settings.job_stale_timeout_minutes
+
+
+def _past_timeout(started_at, now: datetime, timeout_min: int) -> bool:
+    """Whether a job's started_at is older than timeout_min. Unparseable/missing
+    started_at counts as past (matches the reaper's historical behavior). Pure."""
+    try:
+        started = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return True
+    return started < now - timedelta(minutes=timeout_min)
 
 
 def _plan_reap(attempts: int, max_attempts: int) -> tuple[dict, str]:
@@ -137,12 +159,13 @@ async def _reap_stale_jobs() -> None:
     timeout_min = settings.job_stale_timeout_minutes
     if timeout_min <= 0:
         return
-    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=timeout_min)).isoformat()
+    now = datetime.now(timezone.utc)
+    cutoff = (now - timedelta(minutes=timeout_min)).isoformat()
     supabase = get_supabase()
     try:
         stale = (
             supabase.table("async_jobs")
-            .select("id, job_type, attempts, max_attempts")
+            .select("id, job_type, attempts, max_attempts, started_at")
             .eq("status", "running")
             .lt("started_at", cutoff)
             .execute()
@@ -152,6 +175,11 @@ async def _reap_stale_jobs() -> None:
         return
 
     for job in stale:
+        # The query cutoff uses the global default; a type with a LONGER
+        # override is only reaped once it's past its own timeout.
+        per_type = stale_timeout_for(job.get("job_type"))
+        if per_type > timeout_min and not _past_timeout(job.get("started_at"), now, per_type):
+            continue
         update, outcome = _plan_reap(job.get("attempts", 0), job.get("max_attempts", 2))
         try:
             result = (
@@ -443,20 +471,28 @@ async def _process_job(job: dict) -> None:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 
 
-async def job_worker() -> None:
-    """Background loop: poll async_jobs every N seconds and process one job per tick."""
+async def job_worker(job_types: list[str] | None = None, lane: str = "main") -> None:
+    """Background loop: poll async_jobs every N seconds and process one job per tick.
+
+    Two lanes run in-process (ops fix 2026-07-12): the MAIN lane claims
+    everything (and owns the stale-job reaper), while the INTERACTIVE lane is
+    restricted to short, user-awaited job types (`interactive_job_types`) so a
+    just-clicked action never waits 10–20 min behind a long background job.
+    The claim's status='pending' guard makes the lanes race-safe.
+    """
     interval = settings.job_worker_poll_interval_seconds
-    logger.info("job_worker.started", extra={"poll_interval_s": interval})
+    logger.info("job_worker.started", extra={"poll_interval_s": interval, "lane": lane})
     while True:
         await asyncio.sleep(interval)
         try:
-            await _reap_stale_jobs()
-            job = await _claim_next_job()
+            if lane == "main":
+                await _reap_stale_jobs()
+            job = await _claim_next_job(job_types)
             if job:
                 logger.info(
                     "async_job_claimed",
-                    extra={"job_id": job["id"], "job_type": job.get("job_type")},
+                    extra={"job_id": job["id"], "job_type": job.get("job_type"), "lane": lane},
                 )
                 await _process_job(job)
         except Exception as exc:
-            logger.error("job_worker.unhandled", extra={"error": str(exc)})
+            logger.error("job_worker.unhandled", extra={"error": str(exc), "lane": lane})

@@ -125,3 +125,101 @@ def test_reap_disabled_when_timeout_zero(monkeypatch):
     # Disabled → it never even queries, so no updates are attempted.
     assert sb._table.updates == []
     assert sb._table.queries == []
+
+
+# ── per-job-type timeout overrides (ops fix 2026-07-12) ───────────────────────
+def test_stale_timeout_for_prefers_override(monkeypatch):
+    monkeypatch.setattr(settings, "job_stale_timeout_minutes", 30, raising=False)
+    monkeypatch.setattr(
+        settings, "job_stale_timeout_overrides", {"gsc_page_ingest": 60}, raising=False
+    )
+    assert job_worker.stale_timeout_for("gsc_page_ingest") == 60
+    assert job_worker.stale_timeout_for("maps_scan") == 30
+    assert job_worker.stale_timeout_for(None) == 30
+
+
+def test_past_timeout_parsing():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime(2026, 7, 12, 12, 0, tzinfo=timezone.utc)
+    old = (now - timedelta(minutes=61)).isoformat()
+    recent = (now - timedelta(minutes=45)).isoformat()
+    assert job_worker._past_timeout(old, now, 60) is True
+    assert job_worker._past_timeout(recent, now, 60) is False
+    # Missing/garbage started_at counts as past (historical reaper behavior).
+    assert job_worker._past_timeout(None, now, 60) is True
+    assert job_worker._past_timeout("garbage", now, 60) is True
+
+
+def test_reap_honors_long_job_override(monkeypatch):
+    """A job type with a 60-min override, 45 min into its run, survives the
+    30-min sweep; the same-age default-type job is reaped."""
+    from datetime import datetime, timedelta, timezone
+
+    started_45m = (datetime.now(timezone.utc) - timedelta(minutes=45)).isoformat()
+    rows = [
+        {"id": "long", "job_type": "gsc_page_ingest", "attempts": 1, "max_attempts": 2,
+         "started_at": started_45m},
+        {"id": "norm", "job_type": "maps_scan", "attempts": 1, "max_attempts": 2,
+         "started_at": started_45m},
+    ]
+    sb = _FakeSupabase(rows)
+    _patch(monkeypatch, sb)
+    monkeypatch.setattr(
+        settings, "job_stale_timeout_overrides", {"gsc_page_ingest": 60}, raising=False
+    )
+    _run(job_worker._reap_stale_jobs())
+    # Only the default-timeout job was touched.
+    assert len(sb._table.updates) == 1
+    reaped_ids = [q.filters.get("id") for q in sb._table.queries if q.update_payload]
+    assert reaped_ids == ["norm"]
+
+
+def test_reap_override_past_its_own_timeout(monkeypatch):
+    """Past even the 60-min override → reaped like anything else."""
+    from datetime import datetime, timedelta, timezone
+
+    started_90m = (datetime.now(timezone.utc) - timedelta(minutes=90)).isoformat()
+    rows = [{"id": "long", "job_type": "gsc_page_ingest", "attempts": 1,
+             "max_attempts": 2, "started_at": started_90m}]
+    sb = _FakeSupabase(rows)
+    _patch(monkeypatch, sb)
+    monkeypatch.setattr(
+        settings, "job_stale_timeout_overrides", {"gsc_page_ingest": 60}, raising=False
+    )
+    _run(job_worker._reap_stale_jobs())
+    assert len(sb._table.updates) == 1
+
+
+# ── interactive-lane claim filter ─────────────────────────────────────────────
+class _ClaimQuery(_Query):
+    def in_(self, col, vals):
+        self.filters[(col, "in")] = list(vals)
+        return self
+
+    def order(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
+
+class _ClaimTable(_FakeTable):
+    def _q(self):
+        q = _ClaimQuery(self, self._rows)
+        self.queries.append(q)
+        return q
+
+
+def test_claim_filters_to_interactive_types(monkeypatch):
+    t = _ClaimTable([])  # no pending jobs — we only inspect the filter
+    sb = _FakeSupabase([])
+    sb._table = t
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+    _run(job_worker._claim_next_job(["icp_scan", "website_scrape"]))
+    q = t.queries[0]
+    assert q.filters[("job_type", "in")] == ["icp_scan", "website_scrape"]
+    assert q.filters["status"] == "pending"
+    # No filter → no job_type restriction.
+    _run(job_worker._claim_next_job())
+    assert ("job_type", "in") not in t.queries[1].filters
