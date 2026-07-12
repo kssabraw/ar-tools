@@ -36,6 +36,9 @@ STATUS_VARIANTS: dict[str, str] = {
     "ongoing": "in_progress",
     "blocked": "blocked",
     "on hold": "blocked",
+    "in qa": "in_qa",
+    "qa": "in_qa",
+    "quality assurance": "in_qa",
     "in review": "in_review",
     "sent for approval": "in_review",
     "for revision": "in_review",
@@ -47,6 +50,7 @@ STATUS_VARIANTS: dict[str, str] = {
     "approved": "client_approved",
     "waiting on url to go live": "client_approved",
     "complete": "complete",
+    "completed": "complete",
     "done": "complete",
 }
 
