@@ -237,6 +237,97 @@ def auto_tick_subtasks(task_id: str, stage: Optional[int], *, actor_id: Optional
 
 
 # ---------------------------------------------------------------------------
+# Stage auto-advance (owner ruling 2026-07-12 — "automate the drag")
+#
+# The status column moves ITSELF from the events the system already sees, so
+# the card drag becomes unnecessary (though a manual drag still works):
+#   * Rule A (start-on-touch): the first human touch on a Not Started task —
+#     a subtask tick, a comment, an attachment — moves it to In Progress.
+#   * Rule B (work-done): when the last REAL WORK item on the checklist ticks
+#     (process markers and the deliverables-sheet reminder don't count), the
+#     task advances to In QA. Checklists become the steering wheel.
+# Guards: never backward, never from an exception status (blocked/in_review —
+# a human parked it there), never on completed tasks, top-level tasks only,
+# best-effort. Later stages have their own drivers: In QA → Sent to Client is
+# the QA agent's job; Client Approved stays human until the inbox agent
+# (future build); publish/deliverable events already complete tasks.
+# ---------------------------------------------------------------------------
+_AUTO_ADVANCE_FROM = {"not_started", "in_progress"}  # the only auto-movable statuses
+
+
+def is_work_item(name: Optional[str]) -> bool:
+    """True for a REAL work subtask (page name, coordinates, topic…) — i.e. not
+    a process marker and not a deliverables-sheet reminder. Pure."""
+    low = " ".join((name or "").casefold().split())
+    if not low or "deliverable" in low:
+        return False
+    return marker_tick_stage(low) is None
+
+
+def parent_advance_target(status_key: Optional[str], completed: bool,
+                          subtasks: list[dict]) -> Optional[str]:
+    """The status a parent should auto-advance to after a subtask tick, or None.
+    Rule B first (all work items done → in_qa), else Rule A (any tick on a
+    not_started task → in_progress). Pure."""
+    if completed or status_key not in _AUTO_ADVANCE_FROM:
+        return None
+    live = [s for s in subtasks if not s.get("deleted_at")]
+    works = [s for s in live if is_work_item(s.get("name"))]
+    if works and all(s.get("completed") for s in works):
+        return "in_qa" if status_key != "in_qa" else None
+    if status_key == "not_started" and any(s.get("completed") for s in live):
+        return "in_progress"
+    return None
+
+
+def advance_parent_after_tick(parent_id: str, *, actor_id: Optional[str] = None) -> Optional[str]:
+    """Apply the auto-advance rules to a parent after one of its subtasks was
+    ticked. Routes through update_task so the move gets its activity row and
+    the auto-tick cascade. Best-effort; returns the new status key or None."""
+    try:
+        supabase = get_supabase()
+        rows = (
+            supabase.table("tasks").select("id, status_key, completed, parent_task_id")
+            .eq("id", parent_id).limit(1).execute()
+        ).data
+        if not rows or rows[0].get("parent_task_id"):
+            return None
+        parent = rows[0]
+        subs = (
+            supabase.table("tasks").select("name, completed, deleted_at")
+            .eq("parent_task_id", parent_id).execute()
+        ).data or []
+        target = parent_advance_target(parent.get("status_key"), bool(parent.get("completed")), subs)
+        if not target:
+            return None
+        update_task(parent_id, {"status_key": target}, actor_id=actor_id)
+        return target
+    except Exception as exc:
+        logger.warning("auto_advance_failed", extra={"task_id": parent_id, "error": str(exc)})
+        return None
+
+
+def start_task_on_touch(task_id: str, *, actor_id: Optional[str] = None) -> bool:
+    """Rule A for non-subtask touches (comment / attachment): a Not Started
+    top-level task moves to In Progress. Best-effort."""
+    try:
+        rows = (
+            get_supabase().table("tasks").select("status_key, completed, parent_task_id")
+            .eq("id", task_id).limit(1).execute()
+        ).data
+        if not rows:
+            return False
+        t = rows[0]
+        if t.get("completed") or t.get("parent_task_id") or t.get("status_key") != "not_started":
+            return False
+        update_task(task_id, {"status_key": "in_progress"}, actor_id=actor_id)
+        return True
+    except Exception as exc:
+        logger.warning("start_on_touch_failed", extra={"task_id": task_id, "error": str(exc)})
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Create / update / complete
 # ---------------------------------------------------------------------------
 def _now() -> str:
@@ -421,6 +512,9 @@ def complete_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
     # remaining process marker (deliverables-sheet reminders stay manual).
     if updated.get("parent_task_id") is None:
         auto_tick_subtasks(task_id, 5, actor_id=actor_id)
+    else:
+        # A subtask tick may advance its parent (start-on-touch / work-done).
+        advance_parent_after_tick(updated["parent_task_id"], actor_id=actor_id)
     return updated
 
 

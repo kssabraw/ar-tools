@@ -674,3 +674,65 @@ The Asana integration's services (`asana_service`, `asana_monthly`, `asana_workl
 (`routers/asana.py`), models (`models/asana.py`), and frontend (`AsanaTasks`, `TeamWorkload`,
 `TaskLibrary`) — the orchestration to repoint, and the REST client to reuse as the migration
 importer.
+
+---
+
+## 20. Stage automation + the Inbox Agent (added 2026-07-12)
+
+### 20.1 Built: the status column drives itself
+The owner's ruling: the status drag should be automated away wherever a real
+signal exists. Shipped, in order:
+
+- **Auto-tick sync** — a forward status change ticks the process-marker
+  subtasks the new stage implies (`task_service.marker_tick_stage` /
+  `auto_tick_subtasks`; late-never-early; the "Added to deliverables sheet"
+  reminder stays manual for the PM until the PACE sheet automation).
+- **Rule A — start-on-touch**: the first human touch on a Not Started task (a
+  subtask tick, comment, or attachment) moves it to In Progress
+  (`start_task_on_touch`, wired in `complete_task`/`task_collab`).
+- **Rule B — work-done**: when the last REAL work item on the checklist ticks
+  (process markers and deliverables reminders don't count —
+  `is_work_item`), the task auto-advances to **In QA**
+  (`parent_advance_target` / `advance_parent_after_tick`).
+- Publish/deliverable events already complete content tasks (the
+  `content_run` producer, enabled 2026-07-12).
+
+Guards everywhere: never backward, never from the exception statuses
+(Blocked / In Review), never on completed tasks, activity-logged, best-effort.
+Manual drags still work and still cascade auto-ticks.
+
+**Remaining human stages:** In QA → Sent to Client (the **QA agent** — next
+build: check registry over the nlp 8-engine scorer / structure eval /
+citation checks + an LLM review; comment-only first, then advance-on-pass)
+and Sent to Client → Client Approved (below).
+
+### 20.2 FUTURE BUILD — Inbox Agent (client-approval automation; deferred)
+**Status: deferred by owner ruling 2026-07-12 — do NOT build until the owner
+grants mailbox access** (Google Workspace domain-wide delegation, Gmail
+read-only scope on the inbox where client replies land — an admin-console
+step only the owner can do).
+
+The last manual stage transition (Sent to Client → Client Approved) encodes an
+external event: the client's reply. An inbox-watching agent closes it:
+
+- **Token loop (primary matching):** when a card enters Sent to Client, the
+  approval-request email carries a task reference; the reply's token gives a
+  deterministic task match. Sender-domain → client matching is the fallback.
+- **Intent classification** (one small LLM call — Haiku): approved /
+  revisions requested / question.
+- **Confidence ladder:** explicit approval → auto-advance to Client Approved
+  (reply text attached as a task comment); **revisions requested → park in
+  In Review with the feedback routed onto the task** and the assignee
+  notified; ambiguous → nothing moves, staged into PACE's daily chase plan
+  for a human reply-*yes* confirm. A false "client approved" is the costly
+  mistake — only unambiguous language auto-advances.
+- **Further consumers (same watcher, owner-requested):** route revision
+  feedback onto the task automatically; hand client *questions* to SerMaStr
+  to draft replies; sentiment dips → PACE escalation.
+- **Runs on the existing rails:** shared-scheduler poll (no new infra),
+  producer writes through `task_service`, PACE/SerMaStr integration via the
+  existing context-provider + action registries.
+
+Until then, Sent to Client → Client Approved stays the one human drag (an
+optional "silence = approval after N business days" policy was offered and
+not adopted).

@@ -508,3 +508,108 @@ def test_auto_tick_never_raises(monkeypatch):
 
     monkeypatch.setattr(task_service, "get_supabase", lambda: _Boom())
     assert task_service.auto_tick_subtasks("t1", 5) == 0  # swallowed, logged
+
+
+# ---------------------------------------------------------------------------
+# Stage auto-advance (owner ruling 2026-07-12): the status column drives
+# itself — start-on-touch (Rule A) + last-work-item → In QA (Rule B).
+# ---------------------------------------------------------------------------
+def test_is_work_item():
+    w = task_service.is_work_item
+    # Real work items — page names, coordinates, topics.
+    assert w("Roof Restoration In Melbourne")
+    assert w("parcel spend management sap integration")
+    assert w("Press Release syndicated")
+    # Process markers + deliverables reminders are NOT work items.
+    assert not w("Citations QA'd")
+    assert not w("Sent For Approval")
+    assert not w("Citations Started")
+    assert not w("Added to deliverables sheet")
+    assert not w("") and not w(None)
+
+
+def test_parent_advance_target_rules():
+    f = task_service.parent_advance_target
+    work_done = [
+        {"name": "Page A", "completed": True},
+        {"name": "Page B", "completed": True},
+        {"name": "Citations QA'd", "completed": False},           # marker — ignored
+        {"name": "Added to deliverables sheet", "completed": False},  # reminder — ignored
+    ]
+    # Rule B: every real work item done → In QA (markers can still be open).
+    assert f("in_progress", False, work_done) == "in_qa"
+    assert f("not_started", False, work_done) == "in_qa"
+    # Rule A: some tick on a Not Started task → In Progress.
+    some = [{"name": "Page A", "completed": True}, {"name": "Page B", "completed": False}]
+    assert f("not_started", False, some) == "in_progress"
+    # Still working → no move for an in-progress task.
+    assert f("in_progress", False, some) is None
+    # All-marker checklist (no work items) → Rule B can't judge; Rule A only.
+    markers = [{"name": "Blog Post QA'd", "completed": True}]
+    assert f("not_started", False, markers) == "in_progress"
+    assert f("in_progress", False, markers) is None
+    # Never backward / never from exceptions / never when completed.
+    assert f("sent_to_client", False, work_done) is None
+    assert f("blocked", False, work_done) is None
+    assert f("in_review", False, work_done) is None
+    assert f("in_qa", False, work_done) is None
+    assert f("in_progress", True, work_done) is None
+    # Trashed subtasks don't count.
+    trashed = [{"name": "Page A", "completed": False, "deleted_at": "2026-07-12"},
+               {"name": "Page B", "completed": True}]
+    assert f("in_progress", False, trashed) == "in_qa"
+
+
+def test_advance_parent_after_tick_orchestration(monkeypatch):
+    parent = {"id": "p1", "status_key": "in_progress", "completed": False, "parent_task_id": None}
+    subs = [{"name": "Page A", "completed": True, "deleted_at": None}]
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    class _SB:
+        def __init__(self): self.calls = 0
+        def table(self, name):
+            self.calls += 1
+            return _Q([parent]) if self.calls == 1 else _Q(subs)
+
+    monkeypatch.setattr(task_service, "get_supabase", lambda: _SB())
+    moved = {}
+    monkeypatch.setattr(task_service, "update_task",
+                        lambda tid, changes, actor_id=None: moved.update({tid: changes}))
+    assert task_service.advance_parent_after_tick("p1", actor_id="u1") == "in_qa"
+    assert moved == {"p1": {"status_key": "in_qa"}}
+    # Failure is swallowed (best-effort), never raises.
+    monkeypatch.setattr(task_service, "get_supabase",
+                        lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    assert task_service.advance_parent_after_tick("p1") is None
+
+
+def test_start_task_on_touch(monkeypatch):
+    rows = [{"status_key": "not_started", "completed": False, "parent_task_id": None}]
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    class _SB:
+        def table(self, name): return _Q(rows)
+
+    monkeypatch.setattr(task_service, "get_supabase", lambda: _SB())
+    moved = {}
+    monkeypatch.setattr(task_service, "update_task",
+                        lambda tid, changes, actor_id=None: moved.update({tid: changes}))
+    assert task_service.start_task_on_touch("t1", actor_id="u1") is True
+    assert moved == {"t1": {"status_key": "in_progress"}}
+    # Already moving / a subtask / completed → untouched.
+    rows[0] = {"status_key": "in_progress", "completed": False, "parent_task_id": None}
+    assert task_service.start_task_on_touch("t1") is False
+    rows[0] = {"status_key": "not_started", "completed": False, "parent_task_id": "p9"}
+    assert task_service.start_task_on_touch("t1") is False
