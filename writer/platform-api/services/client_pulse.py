@@ -54,19 +54,48 @@ def week_start_of(today: date) -> date:
     return today - timedelta(days=today.weekday())
 
 
+def _norm_phrase(text: str) -> str:
+    """Normalize for fuzzy blurb matching: casefold, drop parenthesized
+    placeholder tokens ("(Number)") and digits, collapse whitespace. Pure."""
+    import re
+
+    t = re.sub(r"\([^)]*\)", " ", (text or "").casefold())
+    t = re.sub(r"\d+", " ", t)
+    return " ".join(t.split())
+
+
+def match_blurb(task: dict, blurbs: dict) -> Optional[str]:
+    """The central-library blurb for a task: exact match on its recorded
+    library_task_name / name first, then a fuzzy pass — the library entry's
+    normalized phrase appearing inside the task's normalized name ("(Number)
+    Citations" → "150 Citations"; longest/most-specific entry wins, so
+    "HyperLocal GBP Blast" beats "GBP Blast"). Pure."""
+    for key in (task.get("library_task_name"), task.get("name")):
+        if key and (blurb := blurbs.get(key.strip().casefold())):
+            return blurb
+    task_norm = _norm_phrase(task.get("name") or "")
+    if not task_norm:
+        return None
+    best_key = None
+    for key in blurbs:
+        key_norm = _norm_phrase(key)
+        if len(key_norm) >= 4 and key_norm in task_norm:
+            if best_key is None or len(key_norm) > len(_norm_phrase(best_key)):
+                best_key = key
+    return blurbs.get(best_key) if best_key else None
+
+
 def describe_task(task: dict, blurbs: Optional[dict] = None) -> str:
     """One itemized task line, enriched with its client-facing context: the
-    task's own client_note wins (task-specific), else the Task Library blurb
-    for its type ("why it matters"), else just the name. Pure. The INTERNAL
-    description field is deliberately never used here."""
+    task's own client_note wins (task-specific), else the central Task Library
+    blurb for its type ("why it matters", exact or fuzzy match), else just the
+    name. Pure. The INTERNAL description field is deliberately never used here."""
     name = (task.get("name") or "").strip()
     note = (task.get("client_note") or "").strip()
     if note:
         return f"{name} — {note}"
-    if blurbs:
-        for key in (task.get("library_task_name"), name):
-            if key and (blurb := blurbs.get(key.strip().casefold())):
-                return f"{name} — why it matters: {blurb}"
+    if blurbs and (blurb := match_blurb(task, blurbs)):
+        return f"{name} — why it matters: {blurb}"
     return name
 
 

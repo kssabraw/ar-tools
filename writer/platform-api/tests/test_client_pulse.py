@@ -84,6 +84,24 @@ def test_describe_task_note_beats_blurb_beats_name():
     ) == "One-off fix"
 
 
+def test_match_blurb_fuzzy_central_library():
+    blurbs = {
+        "(number) citations": "Consistent listings so Google trusts your info.",
+        "gbp blast": "Activity that signals your business is engaged locally.",
+        "hyperlocal gbp blast": "Neighborhood-targeted GBP activity.",
+    }
+    # Placeholder library names match real task names ("(Number)" ↔ "150").
+    assert P.match_blurb({"name": "150 Citations"}, blurbs) == \
+        "Consistent listings so Google trusts your info."
+    # Most-specific entry wins.
+    assert P.match_blurb({"name": "HyperLocal GBP Blast — June"}, blurbs) == \
+        "Neighborhood-targeted GBP activity."
+    assert P.match_blurb({"name": "GBP Blast round 2"}, blurbs) == \
+        "Activity that signals your business is engaged locally."
+    # No relation → no blurb (never a wrong explanation).
+    assert P.match_blurb({"name": "Fix homepage hero"}, blurbs) is None
+
+
 def test_split_by_category_threads_blurbs():
     blurbs = {"blog post title": "Targets a question your customers actually search."}
     tasks = [{"name": "Blog Post Title", "category": "content", "library_task_name": "Blog Post Title"}]
