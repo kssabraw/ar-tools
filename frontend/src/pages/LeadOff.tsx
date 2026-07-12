@@ -49,6 +49,7 @@ interface Enrichment {
   momentum: string | null
   newest_review: string | null
   growth_yoy: number | null
+  growth_yoy_ss: number | null
   peak_months: string | null
 }
 interface MarketBrief extends MarketRow {
@@ -356,9 +357,14 @@ export function LeadOff() {
                       : undefined} />
                   <KV k="Newest field review" v={brief.enrichment.newest_review ?? '—'} />
                   <KV k="Demand growth (YoY)"
-                    v={brief.enrichment.growth_yoy != null ? `${brief.enrichment.growth_yoy}×` : '—'}
-                    hint={brief.enrichment.peak_months
-                      ? `peaks: months ${brief.enrichment.peak_months} (seasonal — read together)` : undefined} />
+                    v={brief.enrichment.growth_yoy_ss != null
+                      ? `${brief.enrichment.growth_yoy_ss}×`
+                      : brief.enrichment.growth_yoy != null ? `${brief.enrichment.growth_yoy}× ⚠` : '—'}
+                    hint={brief.enrichment.growth_yoy_ss != null
+                      ? `same-month YoY (seasonality-cancelled)${brief.enrichment.peak_months ? ` · peaks: months ${brief.enrichment.peak_months}` : ''}`
+                      : brief.enrichment.peak_months
+                        ? `12-mo window — seasonal categories confound this; read with peaks: months ${brief.enrichment.peak_months}`
+                        : '12-mo window — seasonal categories confound this'} />
                 </>
               ) : (
                 <div style={{ fontSize: 12, color: '#94a3b8' }}>

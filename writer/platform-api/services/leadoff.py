@@ -140,6 +140,8 @@ def enrichment_from_caches(competitors: list[dict[str, Any]],
         "momentum": momentum,
         "newest_review": max(newest) if newest else None,
         "growth_yoy": (trend_row or {}).get("growth_yoy"),
+        # same-month YoY (seasonality-cancelling; null on pre-24mo rows)
+        "growth_yoy_ss": (trend_row or {}).get("growth_yoy_ss"),
         "peak_months": (trend_row or {}).get("peak_months"),
     }
 
@@ -295,7 +297,7 @@ def get_market_brief(city_id: int, category_id: str) -> dict[str, Any] | None:
                     .select("biz_key,last30,prior30,newest").in_("biz_key", keys)
                     .execute().data or []) if keys else [])
     trend = (_client().table("demand_trend")
-             .select("growth_yoy,peak_months")
+             .select("growth_yoy,growth_yoy_ss,peak_months")
              .eq("trend_key", f"{city_id}|{_norm(row.get('category') or '')}")
              .limit(1).execute().data or [])
     return {

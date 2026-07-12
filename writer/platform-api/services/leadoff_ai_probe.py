@@ -243,18 +243,81 @@ async def _probe_volume(client: httpx.AsyncClient, tally: _Tally) -> dict[str, A
     return out
 
 
+# Adversarial validation for the 24-month same-month YoY (scanner lesson #8):
+# a known-confounded seasonal category in two markets + a genuinely aseasonal
+# one, old 12-mo growth vs new same-month growth side by side. READ-ONLY —
+# never writes the demand_trend cache.
+TREND_VALIDATION_MARKETS = [
+    ("roofing contractor", "Kansas City", "MO"),
+    ("roofing contractor", "Minneapolis", "MN"),
+    ("locksmith", "Kansas City", "MO"),
+]
+
+
+async def _probe_trend_validation(client: httpx.AsyncClient,
+                                  tally: _Tally) -> list[dict[str, Any]]:
+    from services.leadoff_actions import (
+        pick_monthly,
+        resolve_city,
+        same_month_growth,
+        trend_date_from,
+        trend_row,
+        _location_code,
+        _poll_task,
+    )
+    now = datetime.now(timezone.utc)
+    rows: list[dict[str, Any]] = []
+    for cat, city, state in TREND_VALIDATION_MARKETS:
+        city_row = resolve_city(city, state)
+        lc = _location_code(city_row or {})
+        if not lc:
+            rows.append({"market": f"{cat} @ {city}, {state}",
+                         "error": "no_location_code"})
+            continue
+        env = tally.pay(await _dfs_post(
+            client, "/keywords_data/google_ads/search_volume/task_post",
+            [{"location_code": lc, "language_name": "English",
+              "keywords": [cat, cat + " near me"],
+              "date_from": trend_date_from(now)}]),
+            f"trend 24mo {cat} @ {city}")
+        t = _task0(env)
+        if t.get("status_code") == _CODE_MONEY_LIMIT:
+            raise RuntimeError("dataforseo_daily_limit")
+        result = await _poll_task(
+            client, "/keywords_data/google_ads/search_volume/task_get",
+            t.get("id"), interval_s=10, attempts=40)
+        monthly = pick_monthly(result or []).get(cat.lower(), [])
+        legacy = trend_row(monthly, "validation", now)
+        rows.append({
+            "market": f"{cat} @ {city}, {state}",
+            "months_returned": len(monthly),
+            "growth_yoy_legacy_12mo": legacy["growth_yoy"],
+            "growth_yoy_same_month": same_month_growth(monthly),
+            "peak_months": legacy["peak_months"],
+            "monthly_series": [{"y": m.get("year"), "m": m.get("month"),
+                                "v": m.get("search_volume")} for m in monthly],
+        })
+    return rows
+
+
 async def run_ai_probe_job(job: dict) -> None:
     supabase = get_supabase()
     job_id = job["id"]
     payload = job.get("payload") or {}
     cap = min(float(payload.get("cap") or PROBE_HARD_CAP), PROBE_HARD_CAP)
+    sections = payload.get("sections")  # None → the full AI-lane probe
     tally = _Tally(cap)
     result: dict[str, Any] = {"started_at": datetime.now(timezone.utc).isoformat()}
     try:
         async with httpx.AsyncClient() as client:
-            result["aio_citations"] = await _probe_aio(client, tally)
-            result["llm_recommendations"] = await _probe_llm(client, tally)
-            result["ai_volume"] = await _probe_volume(client, tally)
+            if sections is None or "aio" in sections:
+                result["aio_citations"] = await _probe_aio(client, tally)
+            if sections is None or "llm" in sections:
+                result["llm_recommendations"] = await _probe_llm(client, tally)
+            if sections is None or "volume" in sections:
+                result["ai_volume"] = await _probe_volume(client, tally)
+            if sections is not None and "trend_validation" in sections:
+                result["trend_validation"] = await _probe_trend_validation(client, tally)
         status = "complete"
     except Exception as exc:
         result["aborted"] = str(exc)[:300]
