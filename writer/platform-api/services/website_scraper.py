@@ -47,26 +47,22 @@ async def scrapeowl_fetch(url: str, timeout: int = 45) -> str:
 
 
 async def llm_extract_website_data(html: str) -> dict[str, Any]:
-    """Call Claude to extract services/locations/contact_info from homepage HTML."""
-    import anthropic
+    """Call the LLM to extract services/locations/contact_info from homepage HTML.
+
+    Runs on Anthropic with automatic OpenAI→Gemini fallback on a transient
+    (429/5xx/connection) failure via the shared report_llm layer."""
+    from services import report_llm
 
     # Truncate HTML to avoid exceeding context limits
     truncated_html = html[:40_000] if len(html) > 40_000 else html
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    message = await client.messages.create(
+    raw = (await report_llm.generate_text(
+        system=_SYSTEM_PROMPT,
+        user=f"Extract business information from this homepage HTML:\n\n{truncated_html}",
         model="claude-sonnet-4-6",
         max_tokens=1024,
-        system=_SYSTEM_PROMPT,
-        messages=[
-            {
-                "role": "user",
-                "content": f"Extract business information from this homepage HTML:\n\n{truncated_html}",
-            }
-        ],
-    )
-
-    raw = message.content[0].text.strip()
+        log_tag="website_scraper",
+    )).strip()
     # Strip markdown code fences if present
     if raw.startswith("```"):
         raw = raw.split("```")[1]

@@ -1824,3 +1824,27 @@ export interface TaskTrashItem {
   deleted_at: string
   assignee_name: string | null
 }
+
+// QA Agent (docs/modules/qa-agent-plan-v1_0.md; grounding docs/sops/QA_Checklists.md)
+export interface QaCheck {
+  key: string
+  label: string
+  ok: boolean | null // null = could not verify (fail-open → needs_human)
+  blocking: boolean
+  note: string
+}
+
+export interface QaReview {
+  id: string
+  task_id: string
+  client_id: string | null
+  rubric: string
+  verdict: 'pass' | 'fail' | 'needs_human' | 'skipped'
+  composite: number | null
+  checks: QaCheck[]
+  issues: string[]
+  urls: string[]
+  narrative: string | null
+  trigger: string
+  created_at: string
+}

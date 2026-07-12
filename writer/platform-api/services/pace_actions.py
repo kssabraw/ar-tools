@@ -395,6 +395,39 @@ def run_generate_report(context: ActionContext, client_id: str, args: dict) -> s
 
 
 # ---------------------------------------------------------------------------
+# run_qa_review — trigger the QA Agent on a task (qa-agent-plan Phase 3).
+# PACE hosts QA's one operational action (kicking a review is board ops —
+# "PACE keeps it moving"); the judging stays entirely in qa_service, and the
+# verdict is never PACE's or the requester's to shape.
+# ---------------------------------------------------------------------------
+def stage_run_qa(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
+    ok, reason = pace_auth.require(context, "run_qa_review")
+    if not ok:
+        return "reply", reason
+    task, reply = _resolve_one_task(client_id, args.get("task_name", ""), "run QA on")
+    if reply:
+        return "reply", reply
+    return _staged(
+        {"task_id": task["id"], "task_name": task["name"]},
+        context,
+        f"run a QA review on *“{task['name']}”* (a failed review bounces it "
+        f"back with the rework list)",
+    )
+
+
+def run_run_qa(context: ActionContext, client_id: str, args: dict) -> str:
+    from services import qa_service
+
+    job_id = qa_service.enqueue_qa_review(args["task_id"], trigger="manual")
+    if not job_id:
+        return f"Couldn't start QA on “{args['task_name']}” — is it still an open top-level task?"
+    return (
+        f"🔍 QA review running on *“{args['task_name']}”*. The verdict lands in the "
+        f"task's QA panel; a fail or needs-human result also posts a notification."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Persona-scoped registry (Phase 3 mounts this under persona='pace')
 # ---------------------------------------------------------------------------
 PACE_ACTIONS: dict[str, dict] = {
@@ -406,4 +439,5 @@ PACE_ACTIONS: dict[str, dict] = {
     "nudge_assignee": {"label": "nudge an assignee", "stage": stage_nudge, "run": run_nudge},
     "generate_pace_report": {"label": "generate a delivery report", "stage": stage_generate_report, "run": run_generate_report},
     "triage_task": {"label": "triage a task (set missing due date / category / estimate)", "stage": stage_triage, "run": run_triage},
+    "run_qa_review": {"label": "run a QA review on a task's deliverable", "stage": stage_run_qa, "run": run_run_qa},
 }

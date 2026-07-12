@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer } from 'lucide-react'
@@ -36,6 +36,14 @@ interface MarketRow {
   permit_flag?: string | null
   permit_vintage?: number | null
   permit_relevance?: 'high' | 'low'
+  // score enrichment (context signals promoted to grade inputs, owner ruling
+  // 2026-07-12). base_* is the pre-enrichment grade, kept for inspection.
+  enriched?: boolean
+  base_grade?: string | null
+  base_exp_val?: number | null
+  base_rankab?: number | null
+  score_factors?: { winnability: number; demand: number
+    signals: Record<string, number | string> } | null
 }
 interface BoardResponse {
   markets: MarketRow[]
@@ -48,6 +56,12 @@ interface Competitor {
   rating: number | null
   review_count: number | null
   domain: string | null
+  // brand footprint (cached context, filled by tryout/scout pulls)
+  site_pages?: number | null
+  mentions?: number | null
+  unlinked_mentions?: number | null
+  nap_citations?: number | null
+  generic_name?: boolean | null
 }
 interface Enrichment {
   rd_min: number | null
@@ -81,6 +95,8 @@ interface Neighborhood {
 }
 interface TryoutRow {
   grade: string
+  field_pages_med?: number | null
+  field_mentions_med?: number | null
   natl_pct: number
   exp_val: number
   value_mo: number | null
@@ -109,6 +125,8 @@ interface ScoutEstimate {
   rd_misses: number
   velocity_misses: number
   trend_miss: boolean
+  site_misses?: number
+  mention_misses?: number
   fully_cached: boolean
 }
 
@@ -121,6 +139,11 @@ const GRADE_COLORS: Record<string, string> = {
 }
 const usd = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `$${Math.round(n).toLocaleString()}`
+// compact count for footprint columns (site pages / brand mentions)
+const compact = (n: number | null | undefined) =>
+  n === null || n === undefined ? '—'
+    : n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
+      : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k` : String(n)
 
 type View = 'board' | 'neighborhoods' | 'tryouts'
 
@@ -178,6 +201,12 @@ export function LeadOff() {
             <span style={{ ...pill, background: '#fef3c7', color: '#92400e' }}
               title="Grades under non-default assumptions are approximate (percentile reference is fixed at 10% / mid)">
               approx grades
+            </span>
+          )}
+          {(board?.markets ?? []).some(m => m.enriched) && (
+            <span style={{ ...pill, background: '#e3f2ef', color: '#0e7d6f' }}
+              title="Grades include the context-enrichment layer: winnability adjusted by proximity + incumbent size, demand by permits + seasonal trend (conservative, calibration-tunable). Board rows currently use the permit signal; the full four-signal grade runs on each market's brief.">
+              enriched grades
             </span>
           )}
         </div>
@@ -320,12 +349,27 @@ export function LeadOff() {
             <>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <GradeChip grade={brief.grade} />
+                {brief.enriched && brief.base_grade && brief.base_grade !== brief.grade && (
+                  <span style={{ fontSize: 12, color: '#64748b' }}
+                    title="Base grade before the context-signal enrichment layer">
+                    (base <b style={{ color: GRADE_COLORS[brief.base_grade] ?? '#475569' }}>{brief.base_grade}</b>)
+                  </span>
+                )}
                 {brief.luck === 'HOT?' && <span style={{ fontSize: 12, color: '#ea580c', fontWeight: 700 }}>🔥 HOT?</span>}
               </div>
               <h2 style={{ fontSize: 16, fontWeight: 700, margin: '6px 0 0', color: '#0f172a' }}>{brief.category}</h2>
               <div style={{ fontSize: 13, color: '#64748b' }}>{brief.city_name}, {brief.state_code}</div>
 
               <SectionTitle>Economics</SectionTitle>
+              {brief.enriched && brief.score_factors && (
+                <div style={{ fontSize: 11, color: '#0e7d6f', background: '#e3f2ef',
+                  borderRadius: 6, padding: '6px 8px', margin: '2px 0 6px', lineHeight: 1.5 }}
+                  title="Today's context signals promoted to grade inputs (conservative, config-weighted, calibration-tunable). Winnability ×proximity/site/brand; demand ×permits/seasonal.">
+                  Grade includes context enrichment — winnability ×{brief.score_factors.winnability.toFixed(2)},
+                  demand ×{brief.score_factors.demand.toFixed(2)}
+                  {brief.base_exp_val != null && <> · base {usd(brief.base_exp_val)} → {usd(brief.exp_val)}</>}
+                </div>
+              )}
               <KV k="Expected $/mo" v={usd(brief.exp_val)} strong />
               <KV k="$/mo if ranked" v={usd(brief.value_mo)} />
               <KV k="Win likelihood" v={brief.rankab?.toFixed(2)} />
@@ -348,13 +392,26 @@ export function LeadOff() {
               <KV k="Exact-category holders" v={String(brief.exact_open)} />
               <div style={{ marginTop: 8 }}>
                 {brief.competitors.map(c => (
-                  <div key={c.rank_position} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b', padding: '2px 0' }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>
-                      {c.rank_position}. {c.business_name}
-                    </span>
-                    <span style={{ whiteSpace: 'nowrap' }}>
-                      {(c.review_count ?? 0).toLocaleString()} rev{c.rating ? ` · ${c.rating}★` : ''}
-                    </span>
+                  <div key={c.rank_position} style={{ fontSize: 12, color: '#64748b', padding: '2px 0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>
+                        {c.rank_position}. {c.business_name}
+                      </span>
+                      <span style={{ whiteSpace: 'nowrap' }}>
+                        {(c.review_count ?? 0).toLocaleString()} rev{c.rating ? ` · ${c.rating}★` : ''}
+                      </span>
+                    </div>
+                    {(c.site_pages != null || c.mentions != null || c.nap_citations != null) && (
+                      <div style={{ fontSize: 11, color: '#94a3b8', paddingLeft: 14 }}
+                        title={'Site size = Google indexed-page estimate (site: query). Mentions = total web mentions incl. unlinked (Content Analysis index'
+                          + (c.generic_name ? '; generic name — count filtered to city/phone co-occurrence' : '')
+                          + '). Unlinked = mentioning domains that do not link. NAP = phone-number citations. Context only.'}>
+                        {compact(c.site_pages)} pages
+                        {c.mentions != null && <> · {compact(c.mentions)} mentions{c.generic_name ? '*' : ''}</>}
+                        {c.unlinked_mentions != null && <> ({compact(c.unlinked_mentions)} unlinked)</>}
+                        {c.nap_citations != null && <> · {compact(c.nap_citations)} NAP</>}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -394,6 +451,9 @@ export function LeadOff() {
                   after a scout pull.
                 </div>
               )}
+              <ProximityCard key={`px:${brief.city_id}:${brief.category_id}`}
+                cityId={brief.city_id} categoryId={brief.category_id} />
+
               <ScoutCard key={`${brief.city_id}:${brief.category_id}`}
                 cityId={brief.city_id} categoryId={brief.category_id} />
 
@@ -622,7 +682,7 @@ function TryoutsView() {
                 <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 780, fontSize: 13 }}>
                   <thead>
                     <tr>{['Grade', 'Category', 'Exp $/mo', 'ROI $/rev', 'Demand', 'Supply',
-                          'Rev to win', 'Field ★', 'Cat open'].map(h => (
+                          'Rev to win', 'Field ★', 'Cat open', 'Field pages', 'Field mentions'].map(h => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}</tr>
                   </thead>
@@ -638,6 +698,8 @@ function TryoutsView() {
                         <td style={tdStyle}>{r.rev_win}</td>
                         <td style={tdStyle}>{r.rating || '—'}</td>
                         <td style={tdStyle}>{r.exact_open}</td>
+                        <td style={tdStyle} title="median indexed pages across the category's top-5 (site: estimate)">{compact(r.field_pages_med)}</td>
+                        <td style={tdStyle} title="median web-mention count across the top-5 (generic names inflate — context only)">{compact(r.field_mentions_med)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -659,6 +721,95 @@ function TryoutsView() {
 
 // Scout (Pass 2, ~$0.10–1 cache-cheapened): fills the shared RD / velocity /
 // trend caches for one market; the brief re-reads them on completion.
+// The Distance-pillar octant read (proximity plan §2/§3): where the ranked
+// field is physically anchored and where it is not. Context only — never a
+// grade input. Loaded lazily so the brief itself stays fast.
+interface ProximityRead {
+  available: boolean
+  reason?: string
+  hint?: string
+  thin_data?: boolean
+  pins_used?: number
+  pins_out_of_radius?: number
+  radius_miles?: number
+  octants?: { octant: string; count: number; reviews: number; defense: number; bar_pct: number
+    anchors: { name: string | null; reviews: number; miles: number }[] }[]
+  underserved?: string[]
+  placement?: { octant: string; lat: number; lng: number; radius_mi: number
+    maps_url: string; locality?: string | null }[]
+  opportunity?: number
+  note?: string
+}
+
+function ProximityCard({ cityId, categoryId }: { cityId: number; categoryId: string }) {
+  const { data: px, isLoading } = useQuery<ProximityRead>({
+    queryKey: ['leadoff-proximity', cityId, categoryId],
+    queryFn: () => api.get(`/leadoff/proximity?city_id=${cityId}&category_id=${encodeURIComponent(categoryId)}`),
+  })
+  return (
+    <>
+      <SectionTitle>Proximity (where the field sits)</SectionTitle>
+      {isLoading && <div style={{ fontSize: 12, color: '#94a3b8' }}>Reading competitor pins…</div>}
+      {px && !px.available && (
+        <div style={{ fontSize: 12, color: '#94a3b8' }}>
+          {px.reason === 'no_geocoded_competitors'
+            ? (px.hint ?? 'No geocoded competitors for this market.')
+            : 'Proximity read unavailable for this market.'}
+        </div>
+      )}
+      {px?.available && (
+        <>
+          {px.thin_data && (
+            <div style={{ fontSize: 12, color: '#b45309', marginBottom: 6 }}>
+              Thin data — only {px.pins_used} pinned competitor{px.pins_used === 1 ? '' : 's'};
+              below the floor for an underserved-zone verdict.
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '28px 1fr 44px', gap: '3px 8px', alignItems: 'center' }}>
+            {(px.octants ?? []).map(o => (
+              <Fragment key={o.octant}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: px.underserved?.includes(o.octant) ? '#b45309' : '#475569' }}>
+                  {o.octant}
+                </span>
+                <div style={{ background: '#f1f5f9', borderRadius: 3, height: 10, overflow: 'hidden' }}
+                  title={o.anchors.map(a => `${a.name} (${a.reviews} rev @ ${a.miles}mi)`).join(', ') || 'no ranked competitor anchored here'}>
+                  <div style={{ width: `${o.bar_pct}%`, height: '100%', background: '#0e7d6f', opacity: 0.85 }} />
+                </div>
+                <span style={{ fontSize: 11, color: '#94a3b8', textAlign: 'right' }}>{o.count || '—'}</span>
+              </Fragment>
+            ))}
+          </div>
+          {!px.thin_data && (px.underserved?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <KV k="Underserved octants" v={px.underserved!.join(', ')} strong
+                hint="defense below ¼ of the median defended octant — no ranked competitor is anchored there (someone may still serve it)" />
+              {(px.placement ?? []).map(p => (
+                <div key={p.octant} style={{ fontSize: 12, padding: '2px 0' }}>
+                  <a href={p.maps_url} target="_blank" rel="noreferrer" style={{ color: '#0e7d6f', fontWeight: 600 }}>
+                    Suggested GBP zone: {p.octant}{p.locality ? ` — near ${p.locality}` : ''} ({p.radius_mi} mi out) ↗
+                  </a>
+                </div>
+              ))}
+              <KV k="Proximity opportunity" v={px.opportunity?.toFixed(2)}
+                hint="0–1 share of the demand-space weakly defended. Context only — never in the grade." />
+            </div>
+          )}
+          {!px.thin_data && (px.underserved?.length ?? 0) === 0 && (
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
+              Field is spread across all octants — no clearly undefended bearing.
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.4 }}>
+            {px.pins_used} pins within {px.radius_miles} mi (street-centroid resolution).
+            Empty octant = no <em>ranked</em> competitor anchored there — pre-client forecast;
+            the geo-grid verifies it post-client.
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
 function ScoutCard({ cityId, categoryId }: { cityId: number; categoryId: string }) {
   const qc = useQueryClient()
   const [jobId, setJobId] = useState<string | null>(null)
@@ -721,7 +872,10 @@ function ScoutCard({ cityId, categoryId }: { cityId: number; categoryId: string 
       {est && !jobId && (
         <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
           Paid pull: {est.rd_misses} domain RD, {est.velocity_misses} review-velocity,
-          {' '}{est.trend_miss ? 'demand trend' : 'trend cached'} — cached pieces are free.
+          {' '}{est.trend_miss ? 'demand trend' : 'trend cached'}
+          {(est.site_misses ?? 0) > 0 && `, ${est.site_misses} site-size`}
+          {(est.mention_misses ?? 0) > 0 && `, ${est.mention_misses} brand-mentions`}
+          {' '}— cached pieces are free.
         </div>
       )}
       {error && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>{error}</div>}

@@ -273,7 +273,10 @@ def test_import_map_status_variants():
     assert map_status("With Client", "not_started") == "sent_to_client"
     assert map_status("Waiting on URL to Go Live", "not_started") == "client_approved"
     assert map_status("Done", "not_started") == "complete"
+    assert map_status("Completed", "not_started") == "complete"
     assert map_status("On Hold", "not_started") == "blocked"
+    assert map_status("In QA", "not_started") == "in_qa"
+    assert map_status("QA", "not_started") == "in_qa"
     # Unknown / blank → the initial status.
     assert map_status("Some Custom State", "not_started") == "not_started"
     assert map_status(None, "not_started") == "not_started"
@@ -388,3 +391,274 @@ def test_generate_month_no_template(monkeypatch):
     result = task_monthly.generate_month_for_client("c1", date(2026, 7, 1))
     assert result["status"] == "skipped"
     assert result["reason"] == "no_template"
+
+
+# ---------------------------------------------------------------------------
+# Auto-tick sync (owner ruling 2026-07-12): status drags tick the process-
+# marker subtasks they imply — late-never-early, deliverables stay manual.
+# ---------------------------------------------------------------------------
+def test_marker_tick_stage_real_checklist_names():
+    m = task_service.marker_tick_stage
+    # Deliverables-sheet reminders: NEVER auto-ticked (the PM's reminder).
+    assert m("Added to deliverables sheet") is None
+    assert m("Citations QA'd") == 3 and m("Blog Post QA'd") == 3
+    assert m("GBP Blast QA") == 3
+    # Publish/terminal markers → completion only.
+    assert m("Approved pages posted to website") == 5
+    assert m("Website pages posted as noindex") == 5   # late, never early
+    assert m("GBP Posts scheduled") == 5
+    assert m("Added to website") == 5
+    # Client approval → client_approved stage.
+    assert m("Client Approved") == 4
+    assert m("Blog Post Approved by client") == 4
+    assert m("Client approves topic") == 4
+    # Sent for approval → sent_to_client stage.
+    assert m("Sent For Approval") == 3
+    assert m("Blog Post Sent to client for approval") == 3
+    assert m("Topic sent for approval") == 3
+    # "X Complete" = work done — certain by send-time, not start-time.
+    assert m("Citations Complete") == 3
+    assert m("Map Embeds Complete") == 3
+    # Start/creation markers → in_progress…
+    assert m("Citations Started") == 1
+    assert m("HyperLocal Coordinates Generated") == 1
+    assert m("Niche Edit Ordered") == 1
+    assert m("Guest Post Content Created") == 1
+    assert m("Quarterly topics received from SEO") == 1
+    # …but time-qualified ones can't all be true at start.
+    assert m("GBP Blast Started (week 1)") == 3
+    assert m("GBP Blast Started (week 2)") == 3
+    # Real work items never match — they stay human-ticked.
+    assert m("Roof Restoration In Melbourne") is None
+    assert m("parcel spend management sap integration") is None
+    assert m("Press Release syndicated") is None
+    assert m("") is None and m(None) is None
+
+
+def test_tick_stage_for_statuses():
+    statuses = [
+        {"key": "blocked", "category": "blocked"},
+        {"key": "in_review", "category": "in_progress"},
+        {"key": "custom_done", "category": "done"},
+        {"key": "custom_wip", "category": "in_progress"},
+    ]
+    f = task_service.tick_stage_for
+    assert f("not_started", statuses) == 0
+    assert f("in_progress", statuses) == 1
+    assert f("in_qa", statuses) == 2
+    assert f("sent_to_client", statuses) == 3
+    assert f("client_approved", statuses) == 4
+    assert f("complete", statuses) == 5
+    # Exception statuses + unknown customs never tick; custom done implies 5.
+    assert f("blocked", statuses) is None
+    assert f("in_review", statuses) is None
+    assert f("custom_wip", statuses) is None
+    assert f("custom_done", statuses) == 5
+    assert f("nonexistent", statuses) is None
+
+
+def test_auto_tick_subtasks_ticks_due_only(monkeypatch):
+    subs = [
+        {"id": "s1", "name": "Citations Started"},            # stage 1 → due
+        {"id": "s2", "name": "Citations QA'd"},               # stage 3 → due at 3
+        {"id": "s3", "name": "Client Approved"},              # stage 4 → NOT due at 3
+        {"id": "s4", "name": "Added to deliverables sheet"},  # never
+        {"id": "s5", "name": "150 real work item"},           # not a marker
+    ]
+    updates = {}
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def is_(self, *a, **k): return self
+        def order(self, *a, **k): return self
+        def update(self, payload):
+            updates["payload"] = payload
+            return self
+        def in_(self, col, ids):
+            updates["ids"] = ids
+            return self
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    class _SB:
+        def table(self, name):
+            if name == "task_statuses":
+                return _Q([{"key": "complete", "is_done": True, "active": True}])
+            return _Q(subs)
+
+    monkeypatch.setattr(task_service, "get_supabase", lambda: _SB())
+    logged = []
+    monkeypatch.setattr(task_service, "record_activity", lambda *a, **k: logged.append((a, k)))
+
+    n = task_service.auto_tick_subtasks("t1", 3)
+    assert n == 2
+    assert set(updates["ids"]) == {"s1", "s2"}
+    assert updates["payload"]["completed"] is True
+    assert logged and logged[0][0][1] == "auto_ticked"
+    # No stage / stage 0 → no reads, no ticks.
+    assert task_service.auto_tick_subtasks("t1", None) == 0
+    assert task_service.auto_tick_subtasks("t1", 0) == 0
+
+
+def test_auto_tick_never_raises(monkeypatch):
+    class _Boom:
+        def table(self, name):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(task_service, "get_supabase", lambda: _Boom())
+    assert task_service.auto_tick_subtasks("t1", 5) == 0  # swallowed, logged
+
+
+# ---------------------------------------------------------------------------
+# Stage auto-advance (owner ruling 2026-07-12): the status column drives
+# itself — start-on-touch (Rule A) + last-work-item → In QA (Rule B).
+# ---------------------------------------------------------------------------
+def test_is_work_item():
+    w = task_service.is_work_item
+    # Real work items — page names, coordinates, topics.
+    assert w("Roof Restoration In Melbourne")
+    assert w("parcel spend management sap integration")
+    assert w("Press Release syndicated")
+    # Process markers + deliverables reminders are NOT work items.
+    assert not w("Citations QA'd")
+    assert not w("Sent For Approval")
+    assert not w("Citations Started")
+    assert not w("Added to deliverables sheet")
+    assert not w("") and not w(None)
+
+
+def test_parent_advance_target_rules():
+    f = task_service.parent_advance_target
+    work_done = [
+        {"name": "Page A", "completed": True},
+        {"name": "Page B", "completed": True},
+        {"name": "Citations QA'd", "completed": False},           # marker — ignored
+        {"name": "Added to deliverables sheet", "completed": False},  # reminder — ignored
+    ]
+    # Rule B: every real work item done → In QA (markers can still be open).
+    assert f("in_progress", False, work_done) == "in_qa"
+    assert f("not_started", False, work_done) == "in_qa"
+    # Rule A: some tick on a Not Started task → In Progress.
+    some = [{"name": "Page A", "completed": True}, {"name": "Page B", "completed": False}]
+    assert f("not_started", False, some) == "in_progress"
+    # Still working → no move for an in-progress task.
+    assert f("in_progress", False, some) is None
+    # All-marker checklist (no work items) → Rule B can't judge; Rule A only.
+    markers = [{"name": "Blog Post QA'd", "completed": True}]
+    assert f("not_started", False, markers) == "in_progress"
+    assert f("in_progress", False, markers) is None
+    # Never backward / never from exceptions / never when completed.
+    assert f("sent_to_client", False, work_done) is None
+    assert f("blocked", False, work_done) is None
+    assert f("in_review", False, work_done) is None
+    assert f("in_qa", False, work_done) is None
+    assert f("in_progress", True, work_done) is None
+    # Trashed subtasks don't count.
+    trashed = [{"name": "Page A", "completed": False, "deleted_at": "2026-07-12"},
+               {"name": "Page B", "completed": True}]
+    assert f("in_progress", False, trashed) == "in_qa"
+
+
+def test_advance_parent_after_tick_orchestration(monkeypatch):
+    parent = {"id": "p1", "status_key": "in_progress", "completed": False, "parent_task_id": None}
+    subs = [{"name": "Page A", "completed": True, "deleted_at": None}]
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    class _SB:
+        def __init__(self): self.calls = 0
+        def table(self, name):
+            self.calls += 1
+            return _Q([parent]) if self.calls == 1 else _Q(subs)
+
+    monkeypatch.setattr(task_service, "get_supabase", lambda: _SB())
+    moved = {}
+    monkeypatch.setattr(task_service, "update_task",
+                        lambda tid, changes, actor_id=None: moved.update({tid: changes}))
+    assert task_service.advance_parent_after_tick("p1", actor_id="u1") == "in_qa"
+    assert moved == {"p1": {"status_key": "in_qa"}}
+    # Failure is swallowed (best-effort), never raises.
+    monkeypatch.setattr(task_service, "get_supabase",
+                        lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    assert task_service.advance_parent_after_tick("p1") is None
+
+
+def test_start_task_on_touch(monkeypatch):
+    rows = [{"status_key": "not_started", "completed": False, "parent_task_id": None}]
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    class _SB:
+        def table(self, name): return _Q(rows)
+
+    monkeypatch.setattr(task_service, "get_supabase", lambda: _SB())
+    moved = {}
+    monkeypatch.setattr(task_service, "update_task",
+                        lambda tid, changes, actor_id=None: moved.update({tid: changes}))
+    assert task_service.start_task_on_touch("t1", actor_id="u1") is True
+    assert moved == {"t1": {"status_key": "in_progress"}}
+    # Already moving / a subtask / completed → untouched.
+    rows[0] = {"status_key": "in_progress", "completed": False, "parent_task_id": None}
+    assert task_service.start_task_on_touch("t1") is False
+    rows[0] = {"status_key": "not_started", "completed": False, "parent_task_id": "p9"}
+    assert task_service.start_task_on_touch("t1") is False
+
+
+# ---------------------------------------------------------------------------
+# #2 fix (2026-07-12): a work-item NAME containing a marker keyword mid-phrase
+# ("Complete Guide", "Started Service") must NOT be misread as a process marker
+# and must keep gating In QA. Tightening is the safe direction (stricter gating,
+# never premature advance).
+# ---------------------------------------------------------------------------
+def test_marker_state_word_needs_phrase_boundary():
+    m = task_service.marker_tick_stage
+    # Mid-phrase state words in descriptive work-item names → NOT markers.
+    assert m("Roof Maintenance Complete Guide") is None
+    assert m("Emergency Plumber Started Service Page") is None
+    assert m("Created for Content Marketing landing page") is None
+    assert m("Posted Sign Installation service") is None
+    # …so they read as real work items and gate In QA.
+    assert task_service.is_work_item("Roof Maintenance Complete Guide") is True
+    assert task_service.is_work_item("Emergency Plumber Started Service Page") is True
+
+    # Genuine markers still classify exactly as before (boundary-terminated,
+    # parenthetical, or function-word tail) — the real library checklist names.
+    assert m("Citations Complete") == 3
+    assert m("Map Embeds Complete") == 3
+    assert m("Citations Started") == 1
+    assert m("Content Created") == 1
+    assert m("HyperLocal Coordinates Generated") == 1
+    assert m("Niche Edit Ordered") == 1
+    assert m("Quarterly topics received from SEO") == 1
+    assert m("Topics entered into Blog Post work flow") == 1
+    assert m("GBP Blast Started (week 1)") == 3
+    assert m("Website pages posted as noindex") == 5
+    assert m("Approved pages posted to website") == 5
+    assert m("GBP Posts scheduled") == 5
+    assert m("Website pages approved and published") == 5
+
+
+def test_advance_not_premature_with_marker_named_work_item():
+    # A checklist where one work item's NAME contains "complete": ticking the
+    # OTHER work item must NOT advance to In QA while the "Complete Guide" item
+    # is still open (the #2 bug would have advanced early).
+    subs = [
+        {"name": "How to Choose a Roofer", "completed": True},
+        {"name": "Roof Maintenance Complete Guide", "completed": False},  # real work, contains "complete"
+        {"name": "Sent For Approval", "completed": False},                 # genuine marker
+    ]
+    assert task_service.parent_advance_target("in_progress", False, subs) is None
+    # Once the real "Complete Guide" work item is actually done → In QA.
+    subs[1]["completed"] = True
+    assert task_service.parent_advance_target("in_progress", False, subs) == "in_qa"

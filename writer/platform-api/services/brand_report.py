@@ -295,10 +295,8 @@ def render_markdown(client_name: str, date_str: str, snapshot: dict, narrative: 
 
 # ── narrative (best-effort) ──────────────────────────────────────────────────
 async def _narrative(client_name: str, snapshot: dict) -> str:
-    if not settings.anthropic_api_key:
+    if not (settings.anthropic_api_key or settings.openai_api_key or settings.gemini_api_key):
         return ""
-    import anthropic
-
     engine_lines = "\n".join(
         f"- {ENGINE_LABELS[e]}: {snapshot['engines'][e]['pct']}%" for e in ENGINE_ORDER
     )
@@ -342,13 +340,15 @@ async def _narrative(client_name: str, snapshot: dict) -> str:
         f"recommendations grounded in the findings above. Plain prose, no headings."
     )
     try:
-        client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        resp = await client.messages.create(
+        from services import report_llm
+
+        # Runs on Anthropic with automatic OpenAI→Gemini fallback on a transient failure.
+        return await report_llm.generate_text(
+            user=prompt,
             model=settings.brand_report_model,
             max_tokens=500,
-            messages=[{"role": "user", "content": prompt}],
+            log_tag="brand_report",
         )
-        return "".join(b.get("text", "") for b in resp.model_dump().get("content") or []).strip()
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("brand_report.narrative_failed", extra={"error": str(exc)})
         return ""

@@ -286,22 +286,20 @@ def narrate_pulse(facts: str) -> Optional[str]:
     """One small Claude call: facts → the client email. None on ANY failure
     (missing key, API error, empty text, banned phrasing) — the caller falls
     back to bullets."""
-    if not (settings.pulse_narrative_enabled and settings.anthropic_api_key):
+    if not (settings.pulse_narrative_enabled
+            and (settings.anthropic_api_key or settings.openai_api_key or settings.gemini_api_key)):
         return None
     try:
-        import anthropic
+        from services import report_llm
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key,
-                                     timeout=45.0, max_retries=1)
-        resp = client.messages.create(
+        # Runs on Anthropic with automatic OpenAI→Gemini fallback on a transient failure.
+        text = report_llm.generate_text_sync(
+            system=_NARRATIVE_SYSTEM,
+            user=facts,
             model=settings.pulse_model,
             max_tokens=settings.pulse_max_tokens,
-            system=_NARRATIVE_SYSTEM,
-            messages=[{"role": "user", "content": facts}],
+            log_tag="client_pulse",
         )
-        text = "\n".join(
-            b.text for b in resp.content if getattr(b, "type", None) == "text"
-        ).strip()
         if text and violates_never_say(text):
             # The model ignored the never-say rule — discard; bullets are clean.
             logger.warning("pulse_narrative_banned_phrase")

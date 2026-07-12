@@ -96,6 +96,9 @@ _TOOL_PARAMS = {
         "category": {"type": "string", "description": "Category key to set if missing."},
         "est_hours": {"type": "number", "description": "Estimated hours to set if missing."},
     },
+    "run_qa_review": {
+        "task_name": {"type": "string", "description": "The task whose deliverable to QA (part of its name)."},
+    },
 }
 _TOOL_REQUIRED = {
     "reassign_task": ["task_name", "assignee"],
@@ -106,6 +109,7 @@ _TOOL_REQUIRED = {
     "generate_pace_report": [],
     "triage_task": ["task_name"],
     "nudge_assignee": ["task_name"],
+    "run_qa_review": ["task_name"],
 }
 
 
@@ -128,7 +132,8 @@ _PACE_SYSTEM = (
     "You are PACE, the delivery project manager for an SEO agency. You keep client "
     "work moving: you surface what's stuck, overdue, unassigned or behind pace, and "
     "you take small operational actions (reassign, set a due date, unblock, generate "
-    "the month, nudge an assignee) — always via the provided tools, never by "
+    "the month, nudge an assignee, run a QA review on a finished deliverable) — "
+    "always via the provided tools, never by "
     "pretending. You are NOT the strategist (SerMaStr decides what work to do and "
     "why); if asked a strategy/priority/'what should we change' question, say that's "
     "SerMaStr's call and offer to hand off. Answer delivery questions concisely from "

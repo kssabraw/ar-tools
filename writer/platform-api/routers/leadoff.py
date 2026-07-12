@@ -57,6 +57,25 @@ async def get_market_brief(
     return brief
 
 
+@router.get("/leadoff/proximity")
+async def get_proximity(
+    city_id: int,
+    category_id: str,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """The Distance-pillar octant read for one market (proximity plan §2/§3):
+    octant coverage bars, underserved octants, suggested GBP placement pins.
+    Loaded lazily by the brief panel; degrades to {available: false} instead
+    of 404 so a pin-less market renders an explanation, not an error."""
+    from services.leadoff_proximity import market_proximity
+
+    try:
+        return await market_proximity(city_id, category_id)
+    except Exception:
+        logger.warning("leadoff.proximity_failed", exc_info=True)
+        return {"available": False, "reason": "proximity_error"}
+
+
 @router.get("/leadoff/neighborhoods")
 async def get_neighborhoods(
     metro: str | None = None,
@@ -231,6 +250,8 @@ async def scout_estimate(
         "rd_misses": len(state["rd_misses"]),
         "velocity_misses": len(state["vel_misses"]),
         "trend_miss": state["trend_miss"],
+        "site_misses": len(state.get("site_misses") or []),
+        "mention_misses": len(state.get("mention_misses") or {}),
         "fully_cached": state["est_cost"] == 0,
     }
 

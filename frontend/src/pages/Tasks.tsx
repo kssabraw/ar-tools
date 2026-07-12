@@ -259,8 +259,15 @@ export function Tasks() {
     if (!task || task.status_key === status.key) return
     if (status.is_done && !task.completed) {
       completeMut.mutate(taskId)
+    } else if (task.completed && !status.is_done) {
+      // Reopening (clears `completed`, resets to the initial status) must land
+      // BEFORE the target-status write — otherwise a late reopen overwrites the
+      // status and the card snaps back to Not Started. Sequence, don't race.
+      reopenMut
+        .mutateAsync(taskId)
+        .then(() => patchMut.mutate({ taskId, changes: { status_key: status.key } }))
+        .catch(() => {})
     } else {
-      if (task.completed && !status.is_done) reopenMut.mutate(taskId)
       patchMut.mutate({ taskId, changes: { status_key: status.key } })
     }
   }

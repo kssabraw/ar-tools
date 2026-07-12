@@ -282,9 +282,45 @@ def list_board(*, city: str | None, state: str | None, category: str | None,
     rows.sort(key=lambda r: sort_value(r, sort) if not default_assumptions
               else float(r.get(prerank) or -1), reverse=True)
     as_of = rows[0].get("as_of") if rows else None
-    return {"markets": attach_permits(rows[:limit]), "as_of": as_of,
+    markets = attach_permits(rows[:limit])
+    markets = _enrich_board_grades(markets, capture, lead_tier, sort)
+    return {"markets": markets, "as_of": as_of,
             "assumptions": {"capture": capture, "lead_tier": lead_tier,
                             "approximate": not default_assumptions}}
+
+
+def _enrich_board_grades(markets: list[dict[str, Any]], capture: float,
+                         lead_tier: str, sort: str) -> list[dict[str, Any]]:
+    """Board-wide grade enrichment (owner ruling 2026-07-12). Increment 1 uses
+    the demand-side **permit** signal only — the board-wide signal we can read
+    for $0 (attach_permits already joined it). Winnability signals (proximity,
+    footprint) join the board grade in increment 2 behind a per-market signal
+    cache (computing octant math + footprint for every board row on each load
+    would be too heavy); the full four-signal grade already runs on the deep
+    market brief. Re-sorts the displayed set on the enriched score so ordering
+    stays consistent with the shown grades."""
+    from config import settings
+    if not settings.leadoff_scoring_enabled or not markets:
+        return markets
+    try:
+        from services import leadoff_scoring
+        lv = _lead_values(lead_tier)
+        bp = _percentile_breakpoints()
+        w = leadoff_scoring.default_weights()
+        out = []
+        for r in markets:
+            signals = {"permit": (leadoff_scoring.permit_signal(r.get("permit_flag"))
+                                  if r.get("permit_flag") else None)}
+            out.append(leadoff_scoring.enrich_grade(
+                r, signals, capture=capture, lead_value=lv.get(r.get("category")),
+                breakpoints=bp, w=w))
+        out.sort(key=lambda r: sort_value(r, sort), reverse=True)
+        return out
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("leadoff.board_enrich_failed",
+                                            exc_info=True)
+        return markets
 
 
 NEIGHBORHOOD_SORTS = {
@@ -334,10 +370,58 @@ def get_market_brief(city_id: int, category_id: str) -> dict[str, Any] | None:
              .select("growth_yoy,growth_yoy_ss,peak_months")
              .eq("trend_key", f"{city_id}|{_norm(row.get('category') or '')}")
              .limit(1).execute().data or [])
-    return attach_permits([{
+    # brand footprint (site size + the three mention signals) — cached
+    # context per competitor; best-effort, the brief never breaks over it
+    try:
+        from services.leadoff_brand import brand_key, footprint_lookups
+        site_lookup, mention_rows = footprint_lookups(comps)
+        for c in comps:
+            c["site_pages"] = site_lookup.get((c.get("domain") or "").strip())
+            m = mention_rows.get(brand_key(c.get("business_name") or "")) or {}
+            c["mentions"] = m.get("citations")
+            c["unlinked_mentions"] = m.get("unlinked_mentions")
+            c["nap_citations"] = m.get("nap_citations")
+            c["generic_name"] = m.get("generic_name")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("leadoff.footprint_lookup_failed",
+                                            exc_info=True)
+    brief = attach_permits([{
         **row,
         "competitors": comps,
         "enrichment": enrichment_from_caches(comps, rd_rows, review_rows,
                                              trend[0] if trend else None,
                                              city_id),
     }])[0]
+    return _enrich_brief_grade(brief, comps, city_id, category_id,
+                              trend[0] if trend else None)
+
+
+def _enrich_brief_grade(brief: dict[str, Any], comps: list[dict[str, Any]],
+                        city_id: int, category_id: str,
+                        trend_row: dict[str, Any] | None) -> dict[str, Any]:
+    """Promote today's context signals into the brief's grade (owner ruling
+    2026-07-12), full four-signal — everything is already loaded here. Proximity
+    is computed inline (single market, $0). Best-effort: any failure leaves the
+    base grade untouched."""
+    from config import settings
+    if not settings.leadoff_scoring_enabled:
+        return brief
+    try:
+        from services import leadoff_scoring
+        from services.leadoff_proximity import market_proximity_score
+
+        # sync score (no pin naming) — safe to call from the sync brief path
+        prox_opp = market_proximity_score(city_id, category_id)
+        signals = leadoff_scoring.brief_signals(
+            brief, comps, prox_opp,
+            (trend_row or {}).get("growth_yoy_ss"))
+        lv = _lead_values(DEFAULT_TIER).get(brief.get("category"))
+        return leadoff_scoring.enrich_grade(
+            brief, signals, capture=DEFAULT_CAPTURE, lead_value=lv,
+            breakpoints=_percentile_breakpoints())
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("leadoff.brief_enrich_failed",
+                                            exc_info=True)
+        return brief

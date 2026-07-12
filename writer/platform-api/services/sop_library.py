@@ -64,6 +64,9 @@ _RELEVANCE: dict[str, list[str]] = {
     # question): the SOP carries the ×10 RD conversion + how to read the
     # entry-decision effort targets against live campaign data.
     "leadoff": ["LeadOff_Market_Intelligence_SOP.md"],
+    # QA Agent grounding (qa-agent-plan §3b): the deliverable acceptance
+    # checklists + the shared on-page verdict definition its narratives cite.
+    "qa": ["QA_Checklists.md", "On_Page_Criteria_and_Coverage.md"],
 }
 # Per-doc character caps: the big SOPs would eat the whole budget otherwise.
 _DOC_CAP_CHARS = {
@@ -145,12 +148,30 @@ def _truncate(text: str, limit: int) -> str:
 def relevant_docs(active_domains: set[str]) -> list[str]:
     """Ordered doc list for a set of active signal domains. Pure."""
     ordered: list[str] = list(_ALWAYS)
-    for domain in ("organic_drop", "maps", "offpage", "budget", "ai_visibility", "content", "leadoff"):
+    for domain in ("organic_drop", "maps", "offpage", "budget", "ai_visibility", "content", "leadoff", "qa"):
         if domain in active_domains:
             for doc in _RELEVANCE[domain]:
                 if doc not in ordered:
                     ordered.append(doc)
     return ordered
+
+
+def qa_sops_text(budget_chars: int = 8_000) -> str:
+    """The budgeted SOP block for a QA-review narrative: just the QA grounding
+    docs (QA_Checklists + On-Page Criteria), WITHOUT the _ORCHESTRATOR — a QA
+    narrative cites the acceptance standard, not the agency router."""
+    docs = load_sop_docs()
+    parts: list[str] = []
+    remaining = budget_chars
+    for name in _RELEVANCE["qa"]:
+        text = docs.get(name)
+        if not text or remaining <= 500:
+            continue
+        cap = min(_DOC_CAP_CHARS.get(name, _DEFAULT_DOC_CAP), remaining)
+        block = f"### SOP DOC: {name}\n{_truncate(text.strip(), cap)}"
+        parts.append(block)
+        remaining -= len(block)
+    return "\n\n".join(parts)
 
 
 def select_sops_text(active_domains: set[str], budget_chars: int = 40_000) -> str:

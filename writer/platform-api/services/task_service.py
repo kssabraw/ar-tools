@@ -17,6 +17,7 @@ Pure helpers (no I/O) are unit-tested; DB calls are mocked in tests.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -125,6 +126,224 @@ def record_activity(
         ).execute()
     except Exception as exc:
         logger.warning("task_activity_write_failed", extra={"task_id": task_id, "error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Auto-tick sync (owner ruling 2026-07-12)
+#
+# The team's checklists carry process-marker subtasks ("Citations QA'd",
+# "Sent to client for approval", …) — their at-a-glance process x-ray. Rather
+# than hand-ticking them AND dragging the status column, a status change now
+# ticks every marker the new pipeline stage implies. Invariants:
+#   * late-never-early: a marker only ticks once its stage has certainly
+#     happened (e.g. "…QA'd" ticks at Sent to Client — moving past QA implies
+#     it passed — not on entering In QA);
+#   * "Added to deliverables sheet" markers are NEVER auto-ticked — that's the
+#     human PM's reminder until the PACE sheet automation lands;
+#   * never un-ticks (reopen/backward moves leave the trail intact);
+#   * real work items (page names, coordinates, topics) never match — only
+#     recognizable process phrasing does.
+# ---------------------------------------------------------------------------
+# Pipeline stage ladder for the seeded workflow keys. Statuses outside this set
+# don't imply stages (the two exception statuses — blocked / in_review — and
+# any future custom key), except a done-category status, which implies 5.
+_TICK_STAGES = {
+    "not_started": 0,
+    "in_progress": 1,
+    "in_qa": 2,
+    "sent_to_client": 3,
+    "client_approved": 4,
+    "complete": 5,
+}
+
+
+def tick_stage_for(status_key: Optional[str], statuses: list[dict]) -> Optional[int]:
+    """The pipeline stage a status implies for auto-ticking, or None (exception
+    statuses / unknown keys never tick). A custom done-category status implies
+    the terminal stage. Pure."""
+    if status_key in _TICK_STAGES:
+        return _TICK_STAGES[status_key]
+    for s in statuses:
+        if s.get("key") == status_key:
+            return 5 if (s.get("category") == "done" or s.get("is_done")) else None
+    return None
+
+
+# A "state of work" keyword (started/complete/posted/…) only reads as a process
+# MARKER when it sits at a phrase boundary — end of string, a parenthetical,
+# punctuation, or a function-word tail ("posted AS noindex", "received FROM
+# SEO"). Mid-phrase, before a content noun ("Complete Guide", "Started
+# Service"), the same word is part of a real work-item NAME, not a marker.
+# Requiring the boundary can only move a borderline subtask from marker → work
+# item, which makes stage-advance gating STRICTER (never premature) — the safe
+# direction. Distinctive workflow phrases ("qa'd", "sent for approval", "client
+# approved", "added to website") don't collide with work-item nouns and stay
+# unconstrained.
+# Tail = only the function words that genuinely follow a state word in real
+# markers ("posted AS noindex", "received FROM SEO", "entered INTO workflow",
+# "approved AND published", "posted TO website"). Deliberately excludes common
+# work-item-name words like "for"/"in"/"on" ("Created for the launch",
+# "Restoration in Melbourne") so those stay work items.
+_STATE_TAIL = r"(?=\s*(?:$|[(.,;:!?\-—]|(?:as|from|into|onto|by|and|to)\b))"
+
+
+def marker_tick_stage(name: Optional[str]) -> Optional[int]:
+    """The stage at which a process-marker subtask may auto-tick; None = not a
+    marker (real work items and deliverables-sheet reminders stay manual). Pure.
+
+    Check order matters: a name matching several patterns takes the LATEST
+    stage mentioned ("Approved pages posted to website" → posted → 5), keeping
+    the late-never-early invariant."""
+    low = " ".join((name or "").casefold().split())
+    if not low:
+        return None
+    if "deliverable" in low:
+        return None  # the PM's reminder — manual until PACE writes the sheet
+    if re.search(r"\b(?:posted|posting|publish\w*|scheduled)" + _STATE_TAIL, low) \
+            or re.search(r"added to (?:the )?website|went live", low):
+        return 5
+    if re.search(r"client approv\w*|approved by (?:the )?client|\bapproved\b$", low):
+        return 4
+    if re.search(r"sent (?:(?:to|for) )?(?:the )?(?:client|approval)", low):
+        return 3
+    if re.search(r"\bqa\b|qa'd|qa’d", low):
+        return 3  # moving past the QA column implies QA passed
+    if re.search(r"\bcompleted?" + _STATE_TAIL, low):
+        return 3  # "X Complete" = the work is done, certain by send-time
+    if re.search(r"\b(?:started|generated|created|ordered|received|entered)" + _STATE_TAIL, low):
+        # Time-qualified markers ("Started (week 2)") can't all be true the
+        # moment work begins — they tick once the task has moved past QA.
+        if re.search(r"\(?\s*week\s*\d|round\s*\d|part\s*\d", low):
+            return 3
+        return 1
+    return None
+
+
+def auto_tick_subtasks(task_id: str, stage: Optional[int], *, actor_id: Optional[str] = None) -> int:
+    """Tick every open process-marker subtask the parent's new ``stage`` implies.
+    Best-effort — a failure never breaks the status change. Returns ticks made."""
+    if not stage or stage < 1:
+        return 0
+    try:
+        subs = (
+            get_supabase()
+            .table("tasks")
+            .select("id, name")
+            .eq("parent_task_id", task_id)
+            .eq("completed", False)
+            .is_("deleted_at", "null")
+            .execute()
+        ).data or []
+        due = [
+            s for s in subs
+            if (ms := marker_tick_stage(s.get("name"))) is not None and ms <= stage
+        ]
+        if not due:
+            return 0
+        payload: dict[str, Any] = {"completed": True, "completed_at": _now(), "updated_at": _now()}
+        done_key = done_status_key(get_statuses())
+        if done_key:
+            payload["status_key"] = done_key
+        get_supabase().table("tasks").update(payload).in_("id", [s["id"] for s in due]).execute()
+        record_activity(
+            task_id, "auto_ticked", actor_id=actor_id,
+            detail={"count": len(due), "subtasks": [s.get("name") for s in due][:10]},
+        )
+        return len(due)
+    except Exception as exc:
+        logger.warning("auto_tick_failed", extra={"task_id": task_id, "error": str(exc)})
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# Stage auto-advance (owner ruling 2026-07-12 — "automate the drag")
+#
+# The status column moves ITSELF from the events the system already sees, so
+# the card drag becomes unnecessary (though a manual drag still works):
+#   * Rule A (start-on-touch): the first human touch on a Not Started task —
+#     a subtask tick, a comment, an attachment — moves it to In Progress.
+#   * Rule B (work-done): when the last REAL WORK item on the checklist ticks
+#     (process markers and the deliverables-sheet reminder don't count), the
+#     task advances to In QA. Checklists become the steering wheel.
+# Guards: never backward, never from an exception status (blocked/in_review —
+# a human parked it there), never on completed tasks, top-level tasks only,
+# best-effort. Later stages have their own drivers: In QA → Sent to Client is
+# the QA agent's job; Client Approved stays human until the inbox agent
+# (future build); publish/deliverable events already complete tasks.
+# ---------------------------------------------------------------------------
+_AUTO_ADVANCE_FROM = {"not_started", "in_progress"}  # the only auto-movable statuses
+
+
+def is_work_item(name: Optional[str]) -> bool:
+    """True for a REAL work subtask (page name, coordinates, topic…) — i.e. not
+    a process marker and not a deliverables-sheet reminder. Pure."""
+    low = " ".join((name or "").casefold().split())
+    if not low or "deliverable" in low:
+        return False
+    return marker_tick_stage(low) is None
+
+
+def parent_advance_target(status_key: Optional[str], completed: bool,
+                          subtasks: list[dict]) -> Optional[str]:
+    """The status a parent should auto-advance to after a subtask tick, or None.
+    Rule B first (all work items done → in_qa), else Rule A (any tick on a
+    not_started task → in_progress). Pure."""
+    if completed or status_key not in _AUTO_ADVANCE_FROM:
+        return None
+    live = [s for s in subtasks if not s.get("deleted_at")]
+    works = [s for s in live if is_work_item(s.get("name"))]
+    if works and all(s.get("completed") for s in works):
+        return "in_qa" if status_key != "in_qa" else None
+    if status_key == "not_started" and any(s.get("completed") for s in live):
+        return "in_progress"
+    return None
+
+
+def advance_parent_after_tick(parent_id: str, *, actor_id: Optional[str] = None) -> Optional[str]:
+    """Apply the auto-advance rules to a parent after one of its subtasks was
+    ticked. Routes through update_task so the move gets its activity row and
+    the auto-tick cascade. Best-effort; returns the new status key or None."""
+    try:
+        supabase = get_supabase()
+        rows = (
+            supabase.table("tasks").select("id, status_key, completed, parent_task_id")
+            .eq("id", parent_id).limit(1).execute()
+        ).data
+        if not rows or rows[0].get("parent_task_id"):
+            return None
+        parent = rows[0]
+        subs = (
+            supabase.table("tasks").select("name, completed, deleted_at")
+            .eq("parent_task_id", parent_id).execute()
+        ).data or []
+        target = parent_advance_target(parent.get("status_key"), bool(parent.get("completed")), subs)
+        if not target:
+            return None
+        update_task(parent_id, {"status_key": target}, actor_id=actor_id)
+        return target
+    except Exception as exc:
+        logger.warning("auto_advance_failed", extra={"task_id": parent_id, "error": str(exc)})
+        return None
+
+
+def start_task_on_touch(task_id: str, *, actor_id: Optional[str] = None) -> bool:
+    """Rule A for non-subtask touches (comment / attachment): a Not Started
+    top-level task moves to In Progress. Best-effort."""
+    try:
+        rows = (
+            get_supabase().table("tasks").select("status_key, completed, parent_task_id")
+            .eq("id", task_id).limit(1).execute()
+        ).data
+        if not rows:
+            return False
+        t = rows[0]
+        if t.get("completed") or t.get("parent_task_id") or t.get("status_key") != "not_started":
+            return False
+        update_task(task_id, {"status_key": "in_progress"}, actor_id=actor_id)
+        return True
+    except Exception as exc:
+        logger.warning("start_on_touch_failed", extra={"task_id": task_id, "error": str(exc)})
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -286,6 +505,26 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
         and changes["assignee_gid"] != before.get("assignee_gid")
     ):
         _notify_assignment(updated)
+    # A forward status drag ticks the process-marker subtasks it implies
+    # (top-level tasks only — subtasks have no children to tick).
+    if (
+        "status_key" in changes
+        and changes.get("status_key") != before.get("status_key")
+        and before.get("parent_task_id") is None
+    ):
+        auto_tick_subtasks(
+            task_id, tick_stage_for(changes.get("status_key"), get_statuses()),
+            actor_id=actor_id,
+        )
+        # QA Agent trigger: entering In QA enqueues a deliverable review
+        # (gated on qa_enabled inside the hook; best-effort — QA must never
+        # break the board write that hosts it).
+        try:
+            from services import qa_service
+
+            qa_service.on_task_status_change(before, updated, actor_id=actor_id)
+        except Exception as exc:
+            logger.warning("qa_hook_failed", extra={"task_id": task_id, "error": str(exc)})
     return updated
 
 
@@ -297,6 +536,13 @@ def complete_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
         payload["status_key"] = done_key
     updated = get_supabase().table("tasks").update(payload).eq("id", task_id).execute().data[0]
     record_activity(task_id, "completed", actor_id=actor_id)
+    # Completing a top-level task implies the whole pipeline ran — tick every
+    # remaining process marker (deliverables-sheet reminders stay manual).
+    if updated.get("parent_task_id") is None:
+        auto_tick_subtasks(task_id, 5, actor_id=actor_id)
+    else:
+        # A subtask tick may advance its parent (start-on-touch / work-done).
+        advance_parent_after_tick(updated["parent_task_id"], actor_id=actor_id)
     # Deliverables Sheet Sync: every completion path funnels here (interactive,
     # board drag-to-done, producer auto-close), so this is THE write hook —
     # cheap DB work + a job enqueue; self-gated and never raises (lazy import

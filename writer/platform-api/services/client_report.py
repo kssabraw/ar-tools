@@ -1050,14 +1050,13 @@ def _gather_exec_inputs(supabase, client_id: str) -> dict:
 
 
 def generate_exec_summary(client_name: Optional[str], period: dict, data: dict, signals: dict) -> Optional[dict]:
-    """Claude → {headline, highlights, focus_next} (positive, owner-friendly).
+    """LLM → {headline, highlights, focus_next} (positive, owner-friendly).
 
-    Best-effort: returns None when the Anthropic key is unset or the call fails, so
-    the report still renders without the summary."""
-    if not settings.anthropic_api_key:
+    Best-effort: returns None when no LLM key is set or the call fails, so the
+    report still renders without the summary. Runs on Anthropic with automatic
+    OpenAI→Gemini fallback on a transient failure."""
+    if not (settings.anthropic_api_key or settings.openai_api_key or settings.gemini_api_key):
         return None
-    import anthropic  # noqa: PLC0415
-
     context = {
         "client": client_name,
         "period": period,
@@ -1077,18 +1076,20 @@ def generate_exec_summary(client_name: Optional[str], period: dict, data: dict, 
         **signals,
     }
     try:
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key, timeout=_LLM_TIMEOUT)
-        resp = client.messages.create(
+        from services import report_llm
+
+        # Runs on Anthropic with automatic OpenAI→Gemini fallback on a transient failure.
+        return report_llm.run_forced_tool_sync(
+            provider="anthropic",
             model=settings.client_report_health_model,
             max_tokens=settings.client_report_health_max_tokens,
             system=_EXEC_SYSTEM,
-            tools=[_EXEC_TOOL],
-            tool_choice={"type": "tool", "name": "emit_summary"},
-            messages=[{"role": "user", "content": json.dumps(context, default=str, ensure_ascii=False)}],
-        )
-        for b in resp.content:
-            if getattr(b, "type", None) == "tool_use" and b.name == "emit_summary":
-                return b.input or None
+            user=json.dumps(context, default=str, ensure_ascii=False),
+            tool_name=_EXEC_TOOL["name"],
+            tool_description=_EXEC_TOOL["description"],
+            input_schema=_EXEC_TOOL["input_schema"],
+            log_tag="report_exec_summary",
+        ) or None
     except Exception as exc:
         logger.warning("report_exec_summary_failed", extra={"client_name": client_name, "error": str(exc)})
     return None

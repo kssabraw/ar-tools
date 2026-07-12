@@ -31,6 +31,28 @@ class Settings(BaseSettings):
     # above, google_ai_* via DataForSEO) keep working.
     perplexity_api_key: str = ""
     gemini_api_key: str = ""
+    # ── Cross-provider LLM fallback ──────────────────────────────────────────
+    # When a primary-provider call (usually Anthropic) hits a *transient* failure
+    # that outlasts its per-provider retry budget — a 429 rate/concurrency limit,
+    # a 5xx overload, or a connection drop — the same call is retried on the next
+    # provider in the chain instead of failing. Applies to the non-agentic call
+    # sites (plain text + single forced-tool-use); the agentic tool-use loops
+    # (Slack assistant, strategist, PACE) rely on Anthropic-specific server tools
+    # and stay Anthropic-retry-only. Non-transient errors (bad request, auth) do
+    # NOT fall back — they surface immediately so real bugs aren't masked.
+    llm_fallback_enabled: bool = True
+    # Providers tried, in order, AFTER the call's primary provider. A provider
+    # with no configured API key is skipped. Comma-separated: openai | gemini.
+    llm_fallback_providers: str = "openai,gemini"
+    # Default models used when a call falls back to a given provider (each call
+    # site keeps its own primary/Anthropic model). Tunable per env.
+    llm_fallback_anthropic_model: str = "claude-sonnet-4-6"
+    llm_fallback_openai_model: str = "gpt-5.4"
+    llm_fallback_gemini_model: str = "gemini-3.5-flash"
+    # Backoff attempts on ONE provider before advancing to the next. Kept low so
+    # the chain reaches an alternate provider quickly rather than exhausting a
+    # long backoff on a saturated primary (2 → ~2s + 4s, then advance).
+    llm_fallback_max_retries_per_provider: int = 2
     job_worker_poll_interval_seconds: int = 10
     # Stale-job reaper. In-process jobs (asyncio.to_thread) aren't resumable, so a
     # redeploy or crash mid-run orphans them as status='running' forever. Each
@@ -829,6 +851,63 @@ class Settings(BaseSettings):
     deliverables_template_sheet_id: str = ""
     deliverables_drive_folder_id: str = ""           # Shared-Drive folder the copies land in
 
+    # QA Agent (docs/modules/qa-agent-plan-v1_0.md; grounding standard
+    # docs/sops/QA_Checklists.md). Deterministic-first reviewer of task
+    # deliverables, triggered on entry into the In QA status (the plan's
+    # 'for_qa' was superseded — in_qa already existed in the live workflow).
+    # qa_enabled gates the AUTOMATIC status trigger only; the on-demand
+    # POST /tasks/{id}/qa endpoint works regardless.
+    qa_enabled: bool = False                     # QA_ENABLED — master gate
+    qa_trigger_status: str = "in_qa"             # status key that enqueues a review
+    # Where a passing task goes. Empty = stay in In QA (verdict on the activity
+    # feed; the human sends + drags — moving to sent_to_client ourselves would
+    # claim a send that hasn't happened). Set to 'sent_to_client' to auto-advance.
+    qa_pass_status: str = ""
+    qa_fail_status: str = "in_progress"          # bounce target on a failed review
+    qa_fail_creates_subtasks: bool = True        # rework checklist from failed checks
+    qa_notify_on_pass: bool = False              # silent clean passes
+    qa_citation_sample: int = 3                  # QA_Checklists §Citations sample size
+    qa_fetch_timeout_seconds: float = 20.0
+    qa_max_urls_per_review: int = 5              # cap external fetches per review
+    # Map-embed assertion sentence judge (the one LLM call in QA; owner ruling:
+    # plain-English + grammatically correct → an LLM read, kept on cheap Haiku).
+    qa_assertion_model: str = "claude-haiku-4-5-20251001"
+    # Structural design-fit floor for posted pages (page_structure_eval
+    # composite). Below it the check reads needs_human — page-type attribution
+    # is heuristic, so QA flags rather than auto-bounces on structure alone.
+    qa_structural_threshold: float = 70.0
+    # Flap guard: an automatic re-trigger within this window of a PASSED
+    # review is skipped (drag-out-drag-back must not re-pay the review).
+    # Pass-only — fail re-entry is the rework loop, needs_human re-entry is
+    # the recovery path. Manual Run QA always bypasses. 0 disables.
+    qa_recheck_cooldown_minutes: int = 30
+    # Phase 3: SOP-grounded narrative for FAIL / NEEDS_HUMAN reviews — one
+    # cheap Haiku call that phrases the deterministic findings with
+    # QA_Checklists / On-Page-Criteria citations. NEVER changes the verdict;
+    # any failure falls back to the deterministic narrative. Pass reviews
+    # skip it (nothing to explain).
+    qa_narrative_enabled: bool = True
+    qa_narrative_model: str = "claude-haiku-4-5-20251001"
+    qa_narrative_max_tokens: int = 500
+    # Must fit BOTH grounding docs whole (QA_Checklists ~9.4k + On-Page
+    # Criteria ~5.8k + headers): an 8k budget served only a truncated
+    # QA_Checklists and never On-Page (adversarial review 2026-07-12).
+    qa_sop_budget_chars: int = 16000
+    # Phase 4: producer auto-queue — a completed content run's "Review &
+    # publish" task is moved straight to In QA so generated content is QA'd
+    # before a human touches it. Rides the content_run producer (both its
+    # gates apply) AND qa_enabled.
+    qa_autoqueue_producers: bool = False
+    # Visual design-fit for posted pages (the checklist's "later phase", now
+    # built): DataForSEO page_screenshot (fractions of a cent; no Chromium in
+    # the image) + a Claude vision judge. Only HIGH-confidence breakage
+    # bounces; low confidence / capture failure is fail-open needs_human.
+    # The free asset-integrity layer (404'd CSS/images) always runs.
+    qa_visual_enabled: bool = True
+    qa_visual_model: str = "claude-haiku-4-5-20251001"
+    qa_visual_max_tokens: int = 400
+    qa_asset_check_cap: int = 12                 # HEAD checks per page review
+
     # PACE — Project Assignment, Coordination & Execution agent
     # (docs/modules/project-manager-agent-plan-v1_0.md). Phase 0A ships only the
     # deterministic pm_signals layer (pure reads, no LLM, no writes, wired to
@@ -941,6 +1020,25 @@ class Settings(BaseSettings):
     # service-area businesses (blank address) is PAID, so off by default —
     # flip only after the free ~88% version validates the signal.
     leadoff_geocode_sab_outscraper: bool = False
+    # Proximity octant read (plan §2) over the geocoded pins: analysis radius
+    # around the city centre (strays beyond it are geocode noise), the
+    # thin-data floor (no verdict off a handful of pins — same discipline as
+    # the field-momentum floor), and the underserved cut (defense below this
+    # fraction of the market median = weak octant).
+    leadoff_proximity_radius_miles: float = 10.0
+    leadoff_proximity_min_pins: int = 5
+    leadoff_proximity_weak_frac: float = 0.25
+    # Score enrichment (owner ruling 2026-07-12): today's context signals are
+    # promoted to grade inputs as bounded, config-weighted multipliers on the
+    # winnability (rankability) and demand pillars. Deliberately conservative
+    # priors — no single signal flips a grade; the calibration loop tunes these
+    # from real outcomes. Absent signals contribute 0. See leadoff_scoring.py.
+    leadoff_scoring_enabled: bool = True
+    leadoff_score_w_proximity: float = 0.10   # undefended zones → easier
+    leadoff_score_w_site: float = 0.08        # big incumbent sites → harder
+    leadoff_score_w_brand: float = 0.08       # strong incumbent brands → harder
+    leadoff_score_w_permit: float = 0.06      # housing pipeline → more demand
+    leadoff_score_w_seasonal: float = 0.05    # same-month YoY demand direction
 
     class Config:
         env_file = ".env"
