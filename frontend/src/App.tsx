@@ -34,6 +34,7 @@ import { TeamWorkload } from './pages/TeamWorkload'
 import { TaskLibrary } from './pages/TaskLibrary'
 import { ClientReports } from './pages/ClientReports'
 import { GscResearch } from './pages/GscResearch'
+import { LeadOff } from './pages/LeadOff'
 import { Syndication } from './pages/Syndication'
 import { Citations } from './pages/Citations'
 import { TaskPlan } from './pages/TaskPlan'
@@ -74,6 +75,7 @@ export default function App() {
                           subtree that renders inside the suite Layout, so it
                           shares the suite sidebar. */}
                       <Route path="/fanout/*" element={<FanoutApp />} />
+                      <Route path="/leadoff" element={<LeadOff />} />
                       <Route path="/runs" element={<Runs />} />
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />

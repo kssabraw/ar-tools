@@ -786,6 +786,12 @@ class Settings(BaseSettings):
     pace_model: str = "claude-haiku-4-5-20251001"
     pace_max_tokens: int = 1200
 
+    # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
+    # Read-only v1 serves the precomputed market_scanner.leadoff_board.
+    # Board queries pre-rank on the stored sort column and fetch this many rows
+    # before exact re-sorting under non-default capture/lead-tier assumptions.
+    leadoff_prefetch_rows: int = 1500
+
     class Config:
         env_file = ".env"
 

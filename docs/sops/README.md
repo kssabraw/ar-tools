@@ -14,6 +14,7 @@ The agency's agent-operable SOP library. **Start with `_ORCHESTRATOR.md`** — i
 | `On_Page_Criteria_and_Coverage.md` | The 8-engine on-page verdict schema, thresholds, routing (mirrors `writer/nlp-api` scoring) |
 | `AIO_AEO_SOP.md` | AI Overview / LLM-answer visibility, offense + click-absorption defense (LABS = the AI Visibility module) |
 | `Seed_Keyword_SOP.md` | Seed keyword selection at onboarding (feeds the Site Planning Algorithm + Topic Fanout) |
+| `LeadOff_Market_Intelligence_SOP.md` | Market selection & expansion targeting; market-difficulty quantification (review targets, link budgets, category/location-page choice inputs) — consumes the LeadOff module (`docs/modules/leadoff-prd-v1_0.md`) |
 | `AR_Team_Capacity_Workbook.xlsx` | Task build times, team capacity math, monthly allocation |
 
 Not yet written: **Agency Assassin SOP** (deferred — tool is not agent-accessible; see `_ORCHESTRATOR.md` §1).
