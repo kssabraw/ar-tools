@@ -475,10 +475,15 @@ async def gsc_scheduler() -> None:
                 # pace_enabled + a configured pace_report_weekday (off by default).
                 from services.pace_report import maybe_emit_weekly as run_pace_report
                 run_pace_report(now.date())
-                # Daily PACE Chase Plan (v1.4 initiative) — self-gated on
-                # pace_enabled + pace_initiative_enabled (off by default); the
-                # notification dedupe_key makes it once-per-day across restarts.
+                # Daily PACE follow-through episode sync (v1.4 §4.9) — open/
+                # resolve/clock/escalate — then the Chase Plan built from it.
+                # Both self-gated on pace_enabled + pace_initiative_enabled;
+                # the plan's notification dedupe_key makes it once-per-day
+                # across restarts. (Importing pace_episodes also registers its
+                # chase generator with the proposal engine.)
+                from services.pace_episodes import run_episode_sync as run_pace_episode_sync
                 from services.pace_proposals import run_daily_chase_plan
+                run_pace_episode_sync(now.date())
                 await run_daily_chase_plan(now.date())
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
