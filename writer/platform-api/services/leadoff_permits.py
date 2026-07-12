@@ -238,10 +238,21 @@ async def _fetch_year(client: httpx.AsyncClient, year: int, regions: set[str],
 
 
 def _cities() -> list[dict[str, Any]]:
+    """All scanner cities — paginated past PostgREST's 1000-row default cap
+    (the board has ~1,491; a single .execute() silently truncated the tail)."""
     from services.leadoff_db import get_leadoff_client
-    return (get_leadoff_client().table("cities")
-            .select("city_id, name, state_code, population")
-            .execute().data or [])
+
+    client = get_leadoff_client()
+    out: list[dict[str, Any]] = []
+    page = 0
+    while True:
+        chunk = (client.table("cities")
+                 .select("city_id, name, state_code, population")
+                 .range(page * 1000, page * 1000 + 999).execute().data or [])
+        out.extend(chunk)
+        if len(chunk) < 1000:
+            return out
+        page += 1
 
 
 async def run_permits_job(job: dict) -> None:
