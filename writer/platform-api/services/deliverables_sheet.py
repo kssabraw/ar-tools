@@ -113,16 +113,30 @@ def extract_url(text: Optional[str]) -> Optional[str]:
     return m.group(0).rstrip(".,;:!?")
 
 
+def safe_cell(text: Optional[str]) -> str:
+    """Neutralize formula injection for a plain text cell written USER_ENTERED:
+    a value starting with = + or @ would execute as a formula in the client's
+    sheet — prefix the standard apostrophe escape (renders as the bare text)."""
+    clean = (text or "").strip()
+    if clean and clean[0] in "=+@":
+        return "'" + clean
+    return clean
+
+
 def hyperlink_formula(url: Optional[str], title: Optional[str]) -> str:
     """Column C: a titled hyperlink matching the VA's style. =HYPERLINK formula
-    (written USER_ENTERED); bare URL when there's no title; "" when no link."""
+    (written USER_ENTERED); bare URL when there's no title; "" when no link.
+    Both arguments are quote-escaped so neither can break out of the formula
+    string (titles come from task names / file names; URLs from descriptions)."""
     if not url:
         return ""
-    clean_title = (title or "").strip()
+    # A single line only — a newline inside a formula literal breaks it.
+    clean_title = " ".join((title or "").split())
     if not clean_title or clean_title == url:
         return url
-    escaped = clean_title.replace('"', '""')
-    return f'=HYPERLINK("{url}", "{escaped}")'
+    esc_url = url.replace('"', '""')
+    esc_title = clean_title.replace('"', '""')
+    return f'=HYPERLINK("{esc_url}", "{esc_title}")'
 
 
 def format_sheet_date(d: date) -> str:
@@ -182,7 +196,10 @@ def pick_tab(task: dict) -> Optional[str]:
     """
     if (task.get("source") or "") == "content_run":
         return "content"
-    category = (task.get("category") or "").strip().lower()
+    # tasks.category is normally a task_categories KEY, but resolve_category_key
+    # passes unmatched labels through as-is (imported/legacy tasks can carry
+    # "Link Building") — normalize spaces so both spellings route.
+    category = (task.get("category") or "").strip().lower().replace(" ", "_")
     name = (task.get("name") or "").lower()
     if category == "content":
         return "content"
@@ -219,8 +236,8 @@ def build_row(type_value: str, keyword: Optional[str], url: Optional[str],
               title: Optional[str], when: date) -> list[str]:
     """The appended row, columns A..D only (Status/Notes stay client-owned)."""
     return [
-        type_value,
-        (keyword or "").strip(),
+        safe_cell(type_value),
+        safe_cell(keyword),
         hyperlink_formula(url, title),
         format_sheet_date(when),
     ]
@@ -277,7 +294,11 @@ def on_task_completed(task: dict) -> None:
         if not sheet_id:
             return  # per-client enablement is implicit (PRD §11)
         # UNIQUE task_id = the reopen→re-complete guard: only the first insert
-        # enqueues; a duplicate is a clean no-op (PRD §8).
+        # enqueues; a duplicate is a no-op — EXCEPT a previously FAILED row,
+        # which re-completing retries (otherwise a transient Sheets error would
+        # be a permanent dead end: failed jobs are terminal and the conflict
+        # would swallow every later attempt). The failed→pending flip is
+        # conditional, so concurrent completions race to exactly one enqueue.
         inserted = (
             supabase.table("deliverables_sync_log")
             .upsert(
@@ -288,7 +309,14 @@ def on_task_completed(task: dict) -> None:
             .execute().data
         )
         if not inserted:
-            return
+            retried = (
+                supabase.table("deliverables_sync_log")
+                .update({"status": "pending", "error": None})
+                .eq("task_id", task["id"]).eq("status", "failed")
+                .execute().data
+            )
+            if not retried:
+                return  # already written / pending — the true no-op
         supabase.table("async_jobs").insert(
             {"job_type": "deliverables_log", "entity_id": task["id"],
              "payload": {"task_id": task["id"], "client_id": client_id}}
@@ -300,33 +328,39 @@ def on_task_completed(task: dict) -> None:
         )
 
 
-def _resolve_link(task: dict) -> tuple[Optional[str], Optional[str], Optional[str]]:
+def _linked_run(task: dict) -> Optional[dict]:
+    """The published run a content_run producer task points at, or None."""
+    if (task.get("source") or "") != "content_run" or not task.get("source_ref"):
+        return None
+    try:
+        rows = (
+            get_supabase().table("runs")
+            .select("keyword, content_type, published_doc_url, published_url")
+            .eq("id", task["source_ref"]).limit(1).execute().data
+        )
+        return rows[0] if rows else None
+    except Exception as exc:
+        logger.warning("deliverables_run_lookup_failed",
+                       extra={"task_id": task.get("id"), "error": str(exc)})
+        return None
+
+
+def _resolve_link(task: dict, run: Optional[dict]) -> tuple[Optional[str], Optional[str], Optional[str]]:
     """(url, title, keyword) for a completed task, best source first:
     linked published run → description URL → first attachment (long signed
     URL). Any leg failing falls through to the next."""
-    supabase = get_supabase()
     # 1) Suite-published content the task is linked to.
-    if (task.get("source") or "") == "content_run" and task.get("source_ref"):
-        try:
-            rows = (
-                supabase.table("runs")
-                .select("keyword, content_type, published_doc_url, published_url")
-                .eq("id", task["source_ref"]).limit(1).execute().data
-            )
-            if rows:
-                run = rows[0]
-                url = run.get("published_doc_url") or run.get("published_url")
-                if url:
-                    return url, run.get("keyword"), run.get("keyword")
-        except Exception as exc:
-            logger.warning("deliverables_run_lookup_failed",
-                           extra={"task_id": task.get("id"), "error": str(exc)})
+    if run:
+        url = run.get("published_doc_url") or run.get("published_url")
+        if url:
+            return url, run.get("keyword"), run.get("keyword")
     # 2) First URL in the task description (the VA's paste-on-the-task flow).
     url = extract_url(task.get("description"))
     if url:
         return url, task.get("name"), None
     # 3) First attachment (private bucket → long-lived signed URL).
     try:
+        supabase = get_supabase()
         atts = (
             supabase.table("task_attachments")
             .select("file_name, storage_path")
@@ -355,7 +389,7 @@ def _sheet_tabs_and_options(sheet_id: str) -> tuple[dict[str, str], dict[str, li
     titles = google_sheets.list_tabs(sheet_id)
     headers_by_tab: dict[str, list[str]] = {}
     for t in titles[:5]:  # the template has 3 tabs; cap the reads
-        rows = google_sheets.read_values(sheet_id, f"'{t}'!A1:H1")
+        rows = google_sheets.read_values(sheet_id, f"{google_sheets.a1_tab(t)}!A1:H1")
         headers_by_tab[t] = rows[0] if rows else []
     logical = classify_tabs(headers_by_tab)
     options: dict[str, list[str]] = {}
@@ -413,14 +447,9 @@ async def run_log_job(job: dict) -> None:
             ).eq("id", job_id).execute()
             return
 
-        url, title, keyword = _resolve_link(task)
-        run_content_type = None
-        if (task.get("source") or "") == "content_run" and task.get("source_ref"):
-            rows = (
-                supabase.table("runs").select("content_type")
-                .eq("id", task["source_ref"]).limit(1).execute().data
-            )
-            run_content_type = rows[0].get("content_type") if rows else None
+        run = _linked_run(task)
+        url, title, keyword = _resolve_link(task, run)
+        run_content_type = run.get("content_type") if run else None
 
         logical, options = await asyncio.to_thread(_sheet_tabs_and_options, sheet_id)
         tab = logical.get(kind)
@@ -546,7 +575,7 @@ def _read_notes_cells(sheet_id: str) -> dict[str, str]:
     titles = google_sheets.list_tabs(sheet_id)
     cells: dict[str, str] = {}
     for t in titles[:5]:
-        rows = google_sheets.read_values(sheet_id, f"'{t}'!A1:H500")
+        rows = google_sheets.read_values(sheet_id, f"{google_sheets.a1_tab(t)}!A1:H500")
         if not rows:
             continue
         headers = rows[0]
@@ -569,7 +598,9 @@ def _row_context(sheet_id: str, key: str) -> str:
         from services import google_sheets
 
         tab, row_num = key.rsplit("!", 1)
-        vals = google_sheets.read_values(sheet_id, f"'{tab}'!A{row_num}:D{row_num}")
+        vals = google_sheets.read_values(
+            sheet_id, f"{google_sheets.a1_tab(tab)}!A{row_num}:D{row_num}"
+        )
         if vals and vals[0]:
             return " · ".join(v for v in vals[0][:4] if (v or "").strip())
     except Exception:
@@ -599,10 +630,20 @@ async def run_notes_scan_job(job: dict) -> None:
             supabase.table("deliverables_notes_state").select("snapshot")
             .eq("client_id", client_id).limit(1).execute().data
         )
+        # First scan of a sheet is a BASELINE (suite precedent: competitor
+        # content watch's is_baseline): pre-existing notes are snapshotted, not
+        # alerted — enabling the watcher on a lived-in sheet must not flood
+        # Slack with months-old notes. The state row is deleted when a client's
+        # sheet is switched (routers/deliverables PUT), re-baselining cleanly.
+        is_baseline = not state
         old_snapshot = (state[0].get("snapshot") if state else None) or {}
 
         cells = await asyncio.to_thread(_read_notes_cells, sheet_id)
         alerts, new_snapshot = diff_notes(old_snapshot, cells)
+        if is_baseline and alerts:
+            logger.info("deliverable_notes_baseline",
+                        extra={"client_id": client_id, "existing_notes": len(alerts)})
+            alerts = []
 
         for a in alerts:
             context = await asyncio.to_thread(_row_context, sheet_id, a["key"])
@@ -717,9 +758,21 @@ async def run_provision_job(job: dict) -> None:
             client.get("name") or "Client deliverables",
             settings.deliverables_drive_folder_id,
         )
-        supabase.table("clients").update(
-            {"deliverables_sheet_id": copied["id"]}
-        ).eq("id", client_id).execute()
+        # Conditional write: only the first provisioner lands (a concurrent
+        # create-hook + admin-backfill race must not flip the stored id under
+        # a sheet that's already in use). The loser's copy is orphaned in
+        # Drive — logged so it can be deleted by hand.
+        claimed = (
+            supabase.table("clients")
+            .update({"deliverables_sheet_id": copied["id"]})
+            .eq("id", client_id).is_("deliverables_sheet_id", "null")
+            .execute().data
+        )
+        if not claimed:
+            logger.warning(
+                "deliverables_provision_lost_race",
+                extra={"client_id": client_id, "orphan_sheet_id": copied["id"]},
+            )
         supabase.table("async_jobs").update(
             {"status": "complete",
              "result": {"sheet_id": copied["id"], "url": copied.get("webViewLink")},

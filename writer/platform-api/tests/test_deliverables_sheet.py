@@ -50,6 +50,19 @@ def test_hyperlink_formula_empty_when_no_url():
     assert D.hyperlink_formula(None, "title") == ""
 
 
+def test_hyperlink_formula_escapes_url_quotes_and_collapses_title_newlines():
+    got = D.hyperlink_formula('https://x.com/?q="a"', "line1\nline2")
+    assert got == '=HYPERLINK("https://x.com/?q=""a""", "line1 line2")'
+
+
+def test_safe_cell_neutralizes_formula_injection():
+    assert D.safe_cell("=IMPORTRANGE(...)") == "'=IMPORTRANGE(...)"
+    assert D.safe_cell("+1234") == "'+1234"
+    assert D.safe_cell("@mention") == "'@mention"
+    assert D.safe_cell("plain keyword") == "plain keyword"
+    assert D.safe_cell(None) == ""
+
+
 def test_format_sheet_date_matches_va_style():
     assert D.format_sheet_date(date(2026, 7, 9)) == "July 9, 2026"
     assert D.format_sheet_date(date(2026, 5, 14)) == "May 14, 2026"
@@ -109,6 +122,14 @@ def test_pick_tab_content_category():
 
 def test_pick_tab_link_building_category():
     assert D.pick_tab({"category": "link_building", "name": "SEO NEO — DAS v2"}) == "links"
+
+
+def test_pick_tab_accepts_raw_category_labels():
+    # resolve_category_key passes unmatched labels through as-is, so imported
+    # tasks can carry "Link Building" / "Content" instead of the keys.
+    assert D.pick_tab({"category": "Link Building", "name": "Niche edits"}) == "links"
+    assert D.pick_tab({"category": "Content", "name": "Write blog"}) == "content"
+    assert D.pick_tab({"category": "GBP Authority", "name": "GBP Post — promo"}) == "content"
 
 
 def test_pick_tab_content_run_producer_task_is_content():

@@ -130,7 +130,7 @@ On a task reaching **Complete**:
 
 1. On the shared scheduler (default every ~15 min, configurable), for each client with a configured sheet and the watcher enabled:
 2. Read the Notes column of each watched tab.
-3. Diff against the stored per-row snapshot of Notes values for that sheet.
+3. Diff against the stored per-row snapshot of Notes values for that sheet. **The first scan of a sheet is a baseline** (suite precedent: the competitor content watch's `is_baseline`): pre-existing notes are snapshotted, not alerted — enabling the watcher on a lived-in sheet must not flood Slack with months-old notes. Switching a client's sheet (admin PUT) resets the snapshot, so the new sheet re-baselines cleanly.
 4. For each cell that newly gained (or changed to) non-empty text, emit a Slack alert via `notifications.emit(client_id, kind="deliverable_note", …)` naming the client, the deliverable row (its type + keyword + link), and the note text. Use a `dedupe_key` per (sheet, row, note-hash) so a transient re-read cannot double-alert.
 5. Update the stored snapshot.
 
@@ -203,7 +203,7 @@ The suite authenticates to Google as its **service account**. The identity makin
 ## 8. Edge cases & decisions
 
 - **Missing link on completion (default: append-and-flag).** If a task completes with no resolvable link, append the row with a blank Column C and emit a warning notification ("delivered, link missing") so staff can fill it in. (Alternative, if preferred later: block completion until a link is present. v1 uses append-and-flag to avoid interfering with the task workflow.)
-- **Idempotency / reopen.** A task that is completed, reopened, and completed again must not append twice. A per-task synced marker (keyed by the task's stable ID, analogous to producers' `(source, source_ref)`) guards this. Re-completing an already-synced task is a no-op.
+- **Idempotency / reopen.** A task that is completed, reopened, and completed again must not append twice. A per-task synced marker (keyed by the task's stable ID, analogous to producers' `(source, source_ref)`) guards this. Re-completing an already-synced task is a no-op — **except** a task whose previous sync **failed** (e.g. a transient Sheets error): re-completing it retries the write (conditional failed→pending flip, so concurrent completions still yield exactly one enqueue). Without this, a transient failure would be a permanent dead end.
 - **Titled hyperlinks.** To match the VA's style, Column C is written as a hyperlink (display text + target URL), not a bare URL, using a Sheets `batchUpdate` rich-text/hyperlink write. A bare URL is an acceptable degraded fallback if rich write fails.
 - **Live dropdown read + fallback.** The mapper reads each sheet's real data-validation list and matches against it; unmatched → the sheet's own "Other"/"Other Links". Every fallback is logged.
 - **Date formatting.** Match the sheet's human-readable style ("July 12, 2026"). Not a machine date.

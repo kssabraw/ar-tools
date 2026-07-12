@@ -33,6 +33,12 @@ class SheetsError(RuntimeError):
     """Raised when the Sheets/Drive API is unconfigured or a call fails."""
 
 
+def a1_tab(title: str) -> str:
+    """Quote a worksheet title for A1 notation ('' doubles embedded quotes, so
+    a tab named e.g. Kyle's notes can't break the range)."""
+    return "'" + title.replace("'", "''") + "'"
+
+
 def _credentials():
     from google.oauth2 import service_account  # noqa: PLC0415
 
@@ -89,7 +95,7 @@ def read_dropdown_values(sheet_id: str, tab: str, cell: str = "A2") -> list[str]
         .spreadsheets()
         .get(
             spreadsheetId=sheet_id,
-            ranges=[f"'{tab}'!{cell}"],
+            ranges=[f"{a1_tab(tab)}!{cell}"],
             includeGridData=True,
             fields="sheets(data(rowData(values(dataValidation))))",
         )
@@ -119,7 +125,7 @@ def append_row(sheet_id: str, tab: str, row: list[str]) -> dict:
         .values()
         .append(
             spreadsheetId=sheet_id,
-            range=f"'{tab}'!A:D",
+            range=f"{a1_tab(tab)}!A:D",
             valueInputOption="USER_ENTERED",
             insertDataOption="INSERT_ROWS",
             body={"values": [row]},

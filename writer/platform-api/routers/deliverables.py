@@ -82,9 +82,15 @@ async def set_deliverables_sheet(
         raise HTTPException(status_code=422, detail="sheet_unreachable") from exc
     if not found.get("content_tab") and not found.get("links_tab"):
         raise HTTPException(status_code=422, detail="sheet_tabs_not_recognized")
-    get_supabase().table("clients").update(
+    supabase = get_supabase()
+    supabase.table("clients").update(
         {"deliverables_sheet_id": sheet_id}
     ).eq("id", str(client_id)).execute()
+    # Reset the notes snapshot: the next scan of the (possibly different) sheet
+    # runs as a clean baseline instead of alerting on every pre-existing note.
+    supabase.table("deliverables_notes_state").delete().eq(
+        "client_id", str(client_id)
+    ).execute()
     return {"sheet_id": sheet_id, **found}
 
 
