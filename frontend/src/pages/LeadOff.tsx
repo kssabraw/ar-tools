@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer } from 'lucide-react'
@@ -394,6 +394,9 @@ export function LeadOff() {
                   after a scout pull.
                 </div>
               )}
+              <ProximityCard key={`px:${brief.city_id}:${brief.category_id}`}
+                cityId={brief.city_id} categoryId={brief.category_id} />
+
               <ScoutCard key={`${brief.city_id}:${brief.category_id}`}
                 cityId={brief.city_id} categoryId={brief.category_id} />
 
@@ -659,6 +662,95 @@ function TryoutsView() {
 
 // Scout (Pass 2, ~$0.10–1 cache-cheapened): fills the shared RD / velocity /
 // trend caches for one market; the brief re-reads them on completion.
+// The Distance-pillar octant read (proximity plan §2/§3): where the ranked
+// field is physically anchored and where it is not. Context only — never a
+// grade input. Loaded lazily so the brief itself stays fast.
+interface ProximityRead {
+  available: boolean
+  reason?: string
+  hint?: string
+  thin_data?: boolean
+  pins_used?: number
+  pins_out_of_radius?: number
+  radius_miles?: number
+  octants?: { octant: string; count: number; reviews: number; defense: number; bar_pct: number
+    anchors: { name: string | null; reviews: number; miles: number }[] }[]
+  underserved?: string[]
+  placement?: { octant: string; lat: number; lng: number; radius_mi: number
+    maps_url: string; locality?: string | null }[]
+  opportunity?: number
+  note?: string
+}
+
+function ProximityCard({ cityId, categoryId }: { cityId: number; categoryId: string }) {
+  const { data: px, isLoading } = useQuery<ProximityRead>({
+    queryKey: ['leadoff-proximity', cityId, categoryId],
+    queryFn: () => api.get(`/leadoff/proximity?city_id=${cityId}&category_id=${encodeURIComponent(categoryId)}`),
+  })
+  return (
+    <>
+      <SectionTitle>Proximity (where the field sits)</SectionTitle>
+      {isLoading && <div style={{ fontSize: 12, color: '#94a3b8' }}>Reading competitor pins…</div>}
+      {px && !px.available && (
+        <div style={{ fontSize: 12, color: '#94a3b8' }}>
+          {px.reason === 'no_geocoded_competitors'
+            ? (px.hint ?? 'No geocoded competitors for this market.')
+            : 'Proximity read unavailable for this market.'}
+        </div>
+      )}
+      {px?.available && (
+        <>
+          {px.thin_data && (
+            <div style={{ fontSize: 12, color: '#b45309', marginBottom: 6 }}>
+              Thin data — only {px.pins_used} pinned competitor{px.pins_used === 1 ? '' : 's'};
+              below the floor for an underserved-zone verdict.
+            </div>
+          )}
+          <div style={{ display: 'grid', gridTemplateColumns: '28px 1fr 44px', gap: '3px 8px', alignItems: 'center' }}>
+            {(px.octants ?? []).map(o => (
+              <Fragment key={o.octant}>
+                <span style={{ fontSize: 11, fontWeight: 600, color: px.underserved?.includes(o.octant) ? '#b45309' : '#475569' }}>
+                  {o.octant}
+                </span>
+                <div style={{ background: '#f1f5f9', borderRadius: 3, height: 10, overflow: 'hidden' }}
+                  title={o.anchors.map(a => `${a.name} (${a.reviews} rev @ ${a.miles}mi)`).join(', ') || 'no ranked competitor anchored here'}>
+                  <div style={{ width: `${o.bar_pct}%`, height: '100%', background: '#0e7d6f', opacity: 0.85 }} />
+                </div>
+                <span style={{ fontSize: 11, color: '#94a3b8', textAlign: 'right' }}>{o.count || '—'}</span>
+              </Fragment>
+            ))}
+          </div>
+          {!px.thin_data && (px.underserved?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <KV k="Underserved octants" v={px.underserved!.join(', ')} strong
+                hint="defense below ¼ of the median defended octant — no ranked competitor is anchored there (someone may still serve it)" />
+              {(px.placement ?? []).map(p => (
+                <div key={p.octant} style={{ fontSize: 12, padding: '2px 0' }}>
+                  <a href={p.maps_url} target="_blank" rel="noreferrer" style={{ color: '#0e7d6f', fontWeight: 600 }}>
+                    Suggested GBP zone: {p.octant}{p.locality ? ` — near ${p.locality}` : ''} ({p.radius_mi} mi out) ↗
+                  </a>
+                </div>
+              ))}
+              <KV k="Proximity opportunity" v={px.opportunity?.toFixed(2)}
+                hint="0–1 share of the demand-space weakly defended. Context only — never in the grade." />
+            </div>
+          )}
+          {!px.thin_data && (px.underserved?.length ?? 0) === 0 && (
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
+              Field is spread across all octants — no clearly undefended bearing.
+            </div>
+          )}
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6, lineHeight: 1.4 }}>
+            {px.pins_used} pins within {px.radius_miles} mi (street-centroid resolution).
+            Empty octant = no <em>ranked</em> competitor anchored there — pre-client forecast;
+            the geo-grid verifies it post-client.
+          </div>
+        </>
+      )}
+    </>
+  )
+}
+
 function ScoutCard({ cityId, categoryId }: { cityId: number; categoryId: string }) {
   const qc = useQueryClient()
   const [jobId, setJobId] = useState<string | null>(null)

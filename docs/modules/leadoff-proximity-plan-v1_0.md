@@ -1,7 +1,9 @@
 # LeadOff — Proximity Signal (Plan v1.0): the unmodeled Distance pillar
 
-**Status:** FEASIBILITY VALIDATED (partial) + DESIGN — no wide pull run, no
-scoring change made. Owner decision gates everything past the free tier.
+**Status:** BUILT (2026-07-12) — coordinates recovered app-side for $0
+(§5c: 115k Census-geocoded pins), octant read + brief surfacing live
+(§5c step 3). No scoring change made — context signal only. The Outscraper
+SAB fill and the $137 exact-pin re-pull remain owner-gated options.
 **Relationship:** the pre-client sibling of the app's post-client geo-grid
 stack (`services/maps_octants.py`, `services/maps_geocode.py`,
 `services/maps_analytics.py`) — shared method + vocabulary (octants, weak
@@ -181,11 +183,37 @@ is a **single one-time upload** of the addresses it alone holds.
    `geo_source`, and reports coverage + the La Jolla/KC validation on every
    run. The worker reaching `geocoding.geo.census.gov` is the same egress the
    permits BPS pull proved.
-3. **Next phase (gated on these coordinates validating):** the proximity
-   computation itself — `services/leadoff_proximity.py` reusing
-   `maps_octants` for octant clustering / underserved zones, then the brief
-   surfacing (§2/§3). Not built until the imported coordinates prove the
-   signal real on the test markets (working agreement: validate before build).
+3. **Proximity computation — BUILT (2026-07-12, gate cleared).** The geocode
+   backfill completed: **115,255 / 149,363 addressed rows geocoded (77%;
+   68% of all 169,991 competitors)**, $0, all via Census; the ~23% no-match
+   tail is TIGER-unresolvable addresses (PO boxes, suites, new construction);
+   the 20,628 SABs stay pending behind the Outscraper flag. Validation:
+   **KC 147 pins** landing in real KC geography; **Vancouver WA** locksmiths
+   in central Vancouver. (La Jolla could NOT validate — it was a tryout
+   market, never in the main scan, so it has no imported competitors;
+   Vancouver substituted.) `services/leadoff_proximity.py` implements §2:
+   pure octant coverage (`build_octant_coverage` — the §1.2 review-weighted
+   1/(1+d/2mi) defense), `underserved_octants` (below `weak_frac`=0.25 × the
+   median **defended** octant — the yardstick is nonzero octants, since a raw
+   all-8 median goes blind exactly when the field concentrates),
+   `proximity_opportunity` (§2.4 mean normalized weakness),
+   `placement_pins` (`maps_octants.dest_point` at ⅔ radius along the ≤2
+   weakest bearings, Google Maps deep links), all behind a `min_pins`=5
+   thin-data floor (the momentum-floor discipline). Impure
+   `market_proximity` reads the city centre (`market_scanner.cities`
+   lat/lng) + pins, and best-effort names each suggested pin's locality via
+   the geo-grid's cached `reverse_geocode_points` (skips cleanly without
+   `GOOGLE_MAPS_API_KEY`). API `GET /leadoff/proximity` (degrades to
+   `{available:false}` — a pin-less market renders an explanation, not a
+   404); frontend `ProximityCard` in the brief panel (octant bars with
+   anchor tooltips, underserved chips, suggested-zone links, opportunity
+   value). Tunables `leadoff_proximity_radius_miles`/`_min_pins`/`_weak_frac`.
+   Unit tests `tests/test_leadoff_proximity.py`. Still context-only — no
+   grade input, no scoring change (§2.4 stands). **v1 follow-ups:** thread
+   the placement read into the create-client handoff goal notes (§3) and
+   into calibration Phase 0 predictions; drop-unpopulated-zone check (§2.2's
+   reverse-geocode land-use filter) if empty-octant pins over water/industry
+   show up in practice.
 
 `public.competitor_locations` is app-owned (not `market_scanner`, which the
 scanner loader drop/recreates + grant-strips). No DataForSEO spend anywhere;
