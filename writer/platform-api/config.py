@@ -863,6 +863,20 @@ class Settings(BaseSettings):
     # Pass-only — fail re-entry is the rework loop, needs_human re-entry is
     # the recovery path. Manual Run QA always bypasses. 0 disables.
     qa_recheck_cooldown_minutes: int = 30
+    # Phase 3: SOP-grounded narrative for FAIL / NEEDS_HUMAN reviews — one
+    # cheap Haiku call that phrases the deterministic findings with
+    # QA_Checklists / On-Page-Criteria citations. NEVER changes the verdict;
+    # any failure falls back to the deterministic narrative. Pass reviews
+    # skip it (nothing to explain).
+    qa_narrative_enabled: bool = True
+    qa_narrative_model: str = "claude-haiku-4-5-20251001"
+    qa_narrative_max_tokens: int = 500
+    qa_sop_budget_chars: int = 8000
+    # Phase 4: producer auto-queue — a completed content run's "Review &
+    # publish" task is moved straight to In QA so generated content is QA'd
+    # before a human touches it. Rides the content_run producer (both its
+    # gates apply) AND qa_enabled.
+    qa_autoqueue_producers: bool = False
 
     # PACE — Project Assignment, Coordination & Execution agent
     # (docs/modules/project-manager-agent-plan-v1_0.md). Phase 0A ships only the

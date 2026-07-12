@@ -252,6 +252,55 @@ async def _judge_assertion(page_text: str, business_name: str, service: str) -> 
         return None, f"assertion judge unavailable ({type(exc).__name__})"
 
 
+async def _synthesize_narrative(
+    task_name: str, rubric: str, verdict: dict, checks: list[dict]
+) -> Optional[str]:
+    """SOP-grounded phrasing of a fail/needs_human review (Phase 3): one cheap
+    call that explains what failed and what to do, citing the QA_Checklists /
+    On-Page-Criteria section it's grounded in. The verdict and the check
+    results are inputs it must restate, never recompute. Best-effort → None."""
+    try:
+        import anthropic
+
+        from services.sop_library import qa_sops_text
+
+        sops = qa_sops_text(settings.qa_sop_budget_chars)
+        if not sops:
+            return None
+        check_lines = "\n".join(
+            f"- [{'OK' if c.get('ok') else 'UNVERIFIED' if c.get('ok') is None else 'FAILED'}"
+            f"{'' if c.get('blocking') else ', advisory'}] {c.get('label')}"
+            + (f" — {c['note']}" if c.get("note") else "")
+            for c in checks
+        )
+        api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0)
+        msg = await api.messages.create(
+            model=settings.qa_narrative_model,
+            max_tokens=settings.qa_narrative_max_tokens,
+            system=(
+                "You are the QA reviewer's writer. Given a deliverable's verdict and its "
+                "deterministic check results, write a 2–4 sentence summary for the team: "
+                "what failed (or couldn't be verified), what to do about it, and cite the "
+                "SOP doc + section the standard comes from (e.g. 'QA_Checklists §GBP Posts'). "
+                "NEVER change, soften, or second-guess the verdict or any check result — "
+                "they are computed deterministically. No preamble, no markdown headings."
+            ),
+            messages=[{
+                "role": "user",
+                "content": (
+                    f"TASK: {task_name}\nRUBRIC: {rubric}\n"
+                    f"VERDICT: {verdict['verdict']}\nCHECKS:\n{check_lines}\n\n"
+                    f"GROUNDING SOPS:\n{sops}"
+                ),
+            }],
+        )
+        text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
+        return text or None
+    except Exception as exc:
+        logger.warning("qa_narrative_failed", extra={"error": str(exc)})
+        return None
+
+
 def _blog_markdown(run_id: str) -> Optional[str]:
     """The finished article markdown for a content run (sources_cited output —
     same source the publish path reads)."""
@@ -337,6 +386,14 @@ async def run_qa_review_job(job: dict) -> None:
         checks, urls, composite = await _run_rubric(rubric, task, fields, client)
         verdict = sig.build_verdict(checks)
         narrative = sig.narrative_of(rubric, verdict, urls)
+        # Phase 3: SOP-grounded phrasing for fail/needs_human — cites the
+        # QA_Checklists / On-Page-Criteria standard so the rework guidance
+        # names its source. Best-effort; the deterministic narrative stands
+        # on any failure, and the verdict is NEVER the LLM's to change.
+        if settings.qa_narrative_enabled and checks and verdict["verdict"] in (sig.FAIL, sig.NEEDS_HUMAN):
+            llm_text = await _synthesize_narrative(task.get("name") or "", rubric, verdict, checks)
+            if llm_text:
+                narrative = llm_text
 
     review = (
         supabase.table("qa_reviews")

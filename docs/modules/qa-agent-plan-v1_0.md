@@ -28,11 +28,23 @@ False — see the build note below). **Sibling to:** SerMaStr
 > 4. **Structural design-fit is needs_human, not auto-fail**, below
 >    `qa_structural_threshold` — page-type attribution to a stored reference is
 >    heuristic, and a wrong-reference comparison must not bounce good work.
-> 5. **The LLM synthesis/persona (Phase 3) is not built yet** — verdicts are
->    deterministic end to end; the one LLM call is the map-embed assertion-sentence
->    judge (owner ruling, `qa_assertion_model` = Haiku). SOP-grounded narrative,
->    drawer UI, `PERSONA_ACTIONS` scope, and the producer auto-queue (Phase 4)
->    are the remaining phases.
+> 5. **Phases 3–4 are now BUILT** (follow-up builds, 2026-07-12): the **drawer UI**
+>    (`components/tasks/QaPanel.tsx` — verdict card, per-check breakdown, history,
+>    Run QA with bounded polling); the **SOP-grounded narrative** — fail/needs_human
+>    reviews get one Haiku call (`qa_narrative_*` config) that phrases the
+>    deterministic findings with QA_Checklists / On-Page-Criteria citations via the
+>    new `sop_library` `qa` domain + `qa_sops_text()` (no _ORCHESTRATOR in the
+>    budget) — the verdict is never the LLM's to change, and any failure falls back
+>    to the deterministic narrative; the **conversational surface** — §5's "qa
+>    PERSONA_ACTIONS scope" was **amended**: rather than a full third persona, QA's
+>    one operational action `run_qa_review` lives in **PACE's** scope
+>    (kicking a review is board ops — "PACE keeps it moving"; judging stays in
+>    qa_service; `_MATRIX` min-role team_member, actor-bound confirm like every PACE
+>    write), and a read-only **`qa` context provider** (`_ctx_qa`) feeds recent
+>    verdicts into the SerMaStr assistant context; and the **producer auto-queue**
+>    (Phase 4) — `qa_autoqueue_producers` (default off) moves a completed content
+>    run's "Review & publish" task straight to In QA. Still later: the visual
+>    page-rendering check, per the checklist's phased design-fit ruling.
 >
 > **What shipped:** migration `20260712233000` (`qa_reviews` + `qa_review` job
 > type), `services/qa_signals.py` (pure rubric layer, unit-tested —

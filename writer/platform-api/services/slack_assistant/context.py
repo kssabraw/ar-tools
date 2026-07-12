@@ -689,6 +689,47 @@ def _ctx_task_plan(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+def _ctx_qa(supabase, client_id: str, today: date) -> Optional[dict]:
+    """QA Agent — recent deliverable-review verdicts (last 30 days, latest per
+    task): counts by verdict plus the failing / needs-human tasks with their
+    open issues, so 'how did QA go on X' answers from real reviews."""
+    rows = (
+        supabase.table("qa_reviews")
+        .select("task_id, rubric, verdict, issues, narrative, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(60)
+        .execute()
+    ).data or []
+    if not rows:
+        return None
+    latest: dict[str, dict] = {}
+    for r in rows:  # newest-first → first seen per task wins
+        latest.setdefault(r["task_id"], r)
+    by_verdict: dict[str, int] = {}
+    for r in latest.values():
+        by_verdict[r.get("verdict") or "unknown"] = by_verdict.get(r.get("verdict") or "unknown", 0) + 1
+    out: dict = {"reviewed_tasks": len(latest), "by_verdict": by_verdict}
+    attention = [r for r in latest.values() if r.get("verdict") in ("fail", "needs_human")]
+    if attention:
+        ids = [r["task_id"] for r in attention[:6]]
+        names = {
+            t["id"]: t.get("name")
+            for t in (
+                supabase.table("tasks").select("id, name").in_("id", ids).execute()
+            ).data or []
+        }
+        out["needs_attention"] = [
+            {
+                "task": names.get(r["task_id"]) or r["task_id"],
+                "verdict": r.get("verdict"),
+                "issues": (r.get("issues") or [])[:4],
+            }
+            for r in attention[:6]
+        ]
+    return out
+
+
 def _ctx_citations(supabase, client_id: str, today: date) -> Optional[dict]:
     """Citation liveness — status counts plus the currently-dead URLs."""
     rows = (
@@ -978,6 +1019,7 @@ _CONTEXT_PROVIDERS = [
     ("content", _ctx_content),
     ("keyword_research", _ctx_keyword_research),
     ("task_plan", _ctx_task_plan),
+    ("qa", _ctx_qa),
     ("citations", _ctx_citations),
     ("syndication", _ctx_syndication),
     ("reports", _ctx_reports),

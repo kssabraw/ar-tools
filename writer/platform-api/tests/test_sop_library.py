@@ -107,6 +107,23 @@ def test_relevant_docs_leadoff_domain():
     assert docs[0] == "_ORCHESTRATOR.md"
 
 
+def test_relevant_docs_qa_domain():
+    docs = sop_library.relevant_docs({"qa"})
+    assert "QA_Checklists.md" in docs
+    assert "On_Page_Criteria_and_Coverage.md" in docs
+    assert docs[0] == "_ORCHESTRATOR.md"
+
+
+def test_qa_sops_text_serves_qa_docs_without_orchestrator():
+    text = sop_library.qa_sops_text()
+    assert text.startswith("### SOP DOC: QA_Checklists.md")
+    assert "On_Page_Criteria_and_Coverage.md" in text
+    assert "_ORCHESTRATOR.md" not in text
+    # Budget bounded (one-doc-cap overshoot max, same contract as select_sops_text).
+    small = sop_library.qa_sops_text(budget_chars=2_000)
+    assert len(small) < len(text)
+
+
 def test_select_sops_text_respects_budget():
     full = sop_library.select_sops_text({"organic_drop", "maps", "offpage", "content"}, budget_chars=200_000)
     small = sop_library.select_sops_text({"organic_drop", "maps", "offpage", "content"}, budget_chars=12_000)

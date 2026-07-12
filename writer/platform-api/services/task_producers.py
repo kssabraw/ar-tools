@@ -221,6 +221,13 @@ def on_run_completed(run_id: str) -> None:
             source_ref=str(run_id),
             description=f"The article finished generating — review it and publish.\n\nRun: /runs/{run_id}",
         )
+        # QA auto-queue (qa-agent-plan Phase 4, opt-in): move the fresh review
+        # task straight to In QA so generated content is QA'd before a human
+        # touches it — the status change fires the qa_service trigger.
+        if settings.qa_autoqueue_producers and settings.qa_enabled:
+            task = task_service.find_by_source("content_run", str(run_id))
+            if task and not task.get("completed"):
+                task_service.update_task(task["id"], {"status_key": settings.qa_trigger_status})
     except Exception as exc:
         logger.warning("task_producer_content_run_failed", extra={"run_id": run_id, "error": str(exc)})
 
