@@ -465,3 +465,163 @@ def list_snapshots(client_id: str, limit: int = 50) -> list[dict]:
                 "dr, rd, traffic_value_est, cost_usd, captured_at")
         .eq("client_id", client_id).order("captured_at", desc=True).limit(limit).execute()
     ).data or []
+
+
+# ---------------------------------------------------------------------------
+# Orchestration (I/O) — Phase 2: Keyword Gap.
+# ---------------------------------------------------------------------------
+def _client_domain(client_id: str) -> Optional[str]:
+    try:
+        rows = (
+            get_supabase().table("clients").select("website_url")
+            .eq("id", client_id).limit(1).execute()
+        ).data
+    except Exception:
+        return None
+    return normalize_domain((rows or [{}])[0].get("website_url"))
+
+
+def resolve_competitor_domains(client_id: str, explicit: Optional[list[str]] = None) -> list[str]:
+    """The competitor domain set for a gap run: an explicit list if given, else
+    the client's registered competitors (active, with a domain), capped."""
+    if explicit:
+        seen: list[str] = []
+        for d in explicit:
+            nd = normalize_domain(d)
+            if nd and nd not in seen:
+                seen.append(nd)
+        return seen[: settings.domain_intel_gap_max_competitors]
+    try:
+        rows = (
+            get_supabase().table("client_competitors").select("domain, active")
+            .eq("client_id", client_id).eq("active", True).execute()
+        ).data or []
+    except Exception:
+        rows = []
+    out: list[str] = []
+    for r in rows:
+        nd = normalize_domain(r.get("domain"))
+        if nd and nd not in out:
+            out.append(nd)
+    return out[: settings.domain_intel_gap_max_competitors]
+
+
+async def run_keyword_gap(
+    client_id: str,
+    competitor_domains: Optional[list[str]] = None,
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+) -> dict:
+    """Compute + persist the client's keyword gaps vs a competitor set.
+
+    Fetches the client's ranked keywords once + each competitor's, computes the
+    per-competitor gaps (pure), merges to one best-per-keyword list, and replaces
+    the client's stored gap rows with it. Returns a summary."""
+    client_domain = _client_domain(client_id)
+    if not client_domain:
+        raise ValueError("client_domain_unknown")
+    competitors = resolve_competitor_domains(client_id, competitor_domains)
+    if not competitors:
+        return {"gap_count": 0, "competitors": [], "client_domain": client_domain, "note": "no_competitors"}
+    if location_code is None:
+        location_code = _client_location_code(client_id)
+
+    reserve_budget(1 + len(competitors))
+    supabase = get_supabase()
+
+    client_rows, _c = await dataforseo_labs.fetch_ranked_keywords(
+        client_domain, location_code, language_code,
+        limit=settings.domain_intel_ranked_keyword_cap, max_position=100,
+    )
+    gap_lists: list[list[dict]] = []
+    used: list[str] = []
+    for comp in competitors:
+        try:
+            comp_rows, _cc = await dataforseo_labs.fetch_ranked_keywords(
+                comp, location_code, language_code,
+                limit=settings.domain_intel_ranked_keyword_cap, max_position=100,
+            )
+        except Exception as exc:
+            logger.warning("keyword_gap.competitor_fetch_failed", extra={"domain": comp, "error": str(exc)})
+            continue
+        gap_lists.append(compute_keyword_gap(comp_rows, client_rows, comp))
+        used.append(comp)
+
+    merged = merge_keyword_gaps(gap_lists)[: settings.domain_intel_ranked_keyword_cap]
+
+    # Replace the client's stored gap set with this run's.
+    try:
+        supabase.table("domain_keyword_gaps").delete().eq("client_id", client_id).execute()
+    except Exception as exc:
+        logger.warning("keyword_gap.clear_failed", extra={"client_id": client_id, "error": str(exc)})
+    rows = [{
+        "client_id": client_id, "keyword": g["keyword"],
+        "competitor_domain": g.get("competitor_domain"),
+        "competitor_position": g.get("competitor_position"),
+        "client_position": g.get("client_position"),
+        "volume": g.get("volume"), "cpc_usd": g.get("cpc_usd"),
+        "keyword_difficulty": g.get("keyword_difficulty"),
+        "gap_type": g.get("gap_type"), "opportunity_score": g.get("opportunity_score"),
+    } for g in merged]
+    for group in dataforseo_labs.chunk(rows, 500):
+        if group:
+            supabase.table("domain_keyword_gaps").insert(group).execute()
+
+    return {"gap_count": len(rows), "competitors": used, "client_domain": client_domain}
+
+
+def enqueue_keyword_gap(
+    client_id: str,
+    competitor_domains: Optional[list[str]] = None,
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+) -> str:
+    """Enqueue a keyword_gap async job. Returns the job id."""
+    row = (
+        get_supabase().table("async_jobs").insert({
+            "job_type": "keyword_gap",
+            "entity_id": client_id,
+            "payload": {
+                "client_id": client_id, "competitor_domains": competitor_domains,
+                "location_code": location_code, "language_code": language_code,
+            },
+        }).execute()
+    ).data[0]
+    return row["id"]
+
+
+async def run_keyword_gap_job(job: dict) -> None:
+    """async_jobs handler for keyword_gap."""
+    payload = job.get("payload") or {}
+    supabase = get_supabase()
+    try:
+        result = await run_keyword_gap(
+            payload.get("client_id") or job.get("entity_id"),
+            competitor_domains=payload.get("competitor_domains"),
+            location_code=payload.get("location_code"),
+            language_code=payload.get("language_code"),
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": result, "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+    except BudgetExceeded:
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": "budget_exceeded", "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+    except Exception as exc:
+        logger.warning("keyword_gap.job_failed", extra={"error": str(exc)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+
+
+def get_keyword_gaps(client_id: str, limit: Optional[int] = None) -> dict:
+    """The client's current keyword-gap set (latest run), ordered by opportunity."""
+    cap = limit or settings.domain_intel_ranked_keyword_cap
+    rows = (
+        get_supabase().table("domain_keyword_gaps").select("*")
+        .eq("client_id", client_id)
+        .order("opportunity_score", desc=True).limit(cap).execute()
+    ).data or []
+    captured_at = max((r.get("captured_at") for r in rows if r.get("captured_at")), default=None)
+    return {"gaps": rows, "captured_at": captured_at, "count": len(rows)}
