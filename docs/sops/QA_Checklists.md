@@ -1,8 +1,8 @@
 # QA Checklists — Deliverable Acceptance Criteria
 
 **Current as of:** 12 July 2026
-**Status:** 🚧 DRAFT — worksheet awaiting the owner's brain dump. Blocking/advisory
-checks under each **Group B** task are placeholders to be filled in.
+**Status:** 🚧 DRAFT — first-pass criteria captured from the owner's brain dump.
+A few items flagged **⟨OPEN⟩** need one more answer before they're final.
 **Purpose:** The human-authored acceptance bar the **QA Agent** grades each task
 deliverable against — the "layer 2" standard (what a verdict *means* + what blocks),
 distinct from the executable scorers that measure on-page content.
@@ -12,8 +12,9 @@ scorer does **not** cover. On-page content (pages/blogs) is already governed by
 
 > **Cross-references:** module plan → `docs/modules/qa-agent-plan-v1_0.md` §3b
 > (grounding & QA SOPs) · executable rubric → `On_Page_Criteria_and_Coverage.md`
-> (bands, `<80` blocking-deficiency rule, verdict→action routing) · task types →
-> the live `asana_task_library`.
+> (bands, `<80` blocking-deficiency rule, verdict→action routing) · structural
+> fidelity → `services/page_structure_eval.py` · task types → the live
+> `asana_task_library`.
 
 ---
 
@@ -26,143 +27,148 @@ A QA verdict stacks two layers:
    scorer. The QA Agent reads the relevant section, grades the deliverable against it,
    and cites the section in its finding.
 
-Each task below carries two lists:
-- **✅ Must-haves (blocking)** — any fail ⇒ verdict `fail`; the task bounces to
-  In Progress with the failed item as a rework subtask.
-- **🚫 Send-it-back (advisory unless marked blocking)** — the mistakes that actually
-  come up; noted in findings, and promoted to blocking where marked.
-
-Keep the blocking set **small and objectively checkable**; push taste/judgment items
-to advisory so QA stays a first-pass filter, not a gatekeeper on style.
+Each task carries **✅ Must-haves (blocking)** — any fail ⇒ verdict `fail`, bounce to
+In Progress with the failed item as a rework subtask — and, where useful, advisory
+notes. Blocking checks are kept small and **objectively checkable**.
 
 ---
 
-## Group A — On-page content (already machine-graded; brain-dump only the extras)
+## Cross-cutting requirements & open questions
 
-These run through `/score-page` + R1–R7 + `On_Page_Criteria_and_Coverage.md`, which
-own the SEO + structure verdict. QA only *adds* the checks the scorer can't see. Leave
-blank to accept the scorer verdict as-is.
+These apply across the checks below and must be settled for the link-building / GBP
+items to work at all:
+
+1. **⟨OPEN⟩ Deliverable URL location.** Guest posts, niche edits, citations, press
+   releases, and map embeds live on **external pages** — QA can only check a URL it can
+   fetch, and there is **no deliverable-URL field on tasks today** (only `description`
+   + attachments). **Decision needed:** where does the VA put the placement URL(s)
+   before moving a task to For QA? Recommended: paste them into the task `description`
+   (QA extracts URLs), or a dedicated "Deliverable link(s)" subtask. Until this is
+   fixed, these checks return *needs-human*.
+2. **⟨OPEN⟩ Target keyword source.** GBP Posts and Press Release check "the keyword."
+   QA needs to know what that is per task — is it reliably the task **title**, or a
+   separate field?
+3. **Fail-open policy (decided).** Any external page that's blocked, unreachable, or
+   unparseable ⇒ verdict *needs-human*, **never** an auto-bounce. Mirrors
+   `citation_check`'s philosophy — don't fail good work because a site blocked the
+   scraper.
+4. **NAP matching is normalized, not exact (decided).** Compare against the client
+   card's `business_name` / `address` / `phone` with normalization (abbreviations,
+   phone formats, whitespace) so "St" vs "Street" or "+61" vs "0…" doesn't false-bounce.
+
+---
+
+## Group A — On-page content (already machine-graded; QA adds the extras)
+
+Pages/blogs run through `/score-page` + R1–R7 + `On_Page_Criteria_and_Coverage.md`
+(SEO + structure verdict). QA adds the checks the scorer can't see.
 
 ### Website Pages Posted — service / local landing / location pages
-*(category: Content · SEO+structure already graded — add only the extras)*
+*(category: Content)*
 
-- **✅ Must-haves (beyond the SEO score):**
-  - _[e.g. internal links to the correct money/service page present]_
-  - _[e.g. meta title + description filled in]_
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[e.g. wrong city / stale client details]_
-  - _[…]_
+- **✅ Must-haves (blocking):**
+  - Internal link(s) to the correct money/service page present.
+  - Meta title + meta description filled in.
+  - Correct client info (name, contact, service area) — no stale/placeholder data.
+  - Images present with alt text.
+  - **Design fit for the page type** (owner: "both" — phased):
+    - *Now — structural fit (blocking):* matches the expected layout for its page type
+      (sections, heading order, block composition) vs the client's stored reference
+      page structure, via `page_structure_eval`. A broken/wrong structure ⇒ bounce.
+    - *Later phase — visual rendering (blocking when built):* the rendered page isn't
+      visually broken (overlapping elements, broken CSS, images not loading). Requires
+      a headless-browser screenshot + vision pass; deferred to a later QA phase.
+- **🚫 Advisory:** brand-voice fit (noted, not blocking unless egregious).
 
-### Blog Post (Title + body) — Blog Post Title
-*(category: Content · SEO+structure already graded — add only the extras)*
+### Blog Post (Title + body)
+*(category: Content)*
 
-- **✅ Must-haves (beyond the SEO score):**
-  - _[e.g. title matches the assigned keyword/brief]_
-  - _[e.g. brand voice matches the client]_
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+- **✅ Must-haves (blocking):**
+  - Title matches the assigned keyword / brief.
+  - CTA present, pointing to the correct page.
+- **🚫 Advisory:** brand-voice fit.
 
 ---
 
-## Group B — Needs your brain dump (no scorer exists — the real authoring)
-
-> Fill in ✅ and 🚫 for each. Free-type plain English; format/precision doesn't
-> matter — I'll normalize it. Do the ones where bad work slips through today first.
+## Group B — Non-page deliverables (QA-graded from this doc)
 
 ### GBP Posts
-*(category: GBP Authority)*
+*(category: GBP Authority)* — **status: final**
 
 - **✅ Must-haves (blocking):**
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+  - Target keyword present in the body.
+  - A CTA is present.
+  - At least one emoji.
+- Bounce if any are missing.
 
 ### GBP Blast
-*(category: GBP Authority)*
-
-- **✅ Must-haves (blocking):**
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+*(category: GBP Authority)* — **QA: DO NOT CHECK** (owner ruling).
 
 ### HyperLocal GBP Blast
-*(category: GBP Authority)*
-
-- **✅ Must-haves (blocking):**
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+*(category: GBP Authority)* — **QA: DO NOT CHECK** (owner ruling).
 
 ### Citations — "(Number) Citations"
-*(category: Link Building · note: liveness is auto-checked by `citation_check`; brain-dump the **quality** bar — NAP consistency, directory relevance/authority)*
+*(category: Link Building)* — **status: final (pending the URL-location decision)**
 
 - **✅ Must-haves (blocking):**
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+  - **NAP correctness:** sample **3** citations from the list; extract each page's NAP
+    and compare (normalized) to the client card. If a sampled citation's NAP does not
+    match the client's card ⇒ bounce.
+- Liveness is already auto-checked by `citation_check` — not repeated here.
+- Fail-open: a sampled page that can't be fetched/parsed ⇒ *needs-human*, not a bounce.
 
 ### Guest Posts
-*(category: Link Building)*
+*(category: Link Building)* — **status: final (pending the URL-location decision)**
 
 - **✅ Must-haves (blocking):**
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+  - The body content contains a link back to the client's site. If absent ⇒ bounce.
 
 ### Niche Edits
-*(category: Link Building)*
+*(category: Link Building)* — **status: final (pending the URL-location decision)**
 
 - **✅ Must-haves (blocking):**
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+  - The body content contains a link back to the client's site. If absent ⇒ bounce.
 
 ### Press Release
-*(category: Link Building · note: nlp-api has a press-release generator — some structure may be checkable automatically; brain-dump the editorial bar)*
+*(category: Link Building)* — **⟨OPEN⟩ confirm the corrected logic below**
 
-- **✅ Must-haves (blocking):**
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+- **✅ Must-haves (blocking) — bounce if ANY fail:**
+  - Target keyword in the **title**.
+  - Target keyword at least once in the **body**.
+  - At least one link whose anchor is **not** the exact-match keyword (anti-over-optimization).
+  - **NAP included.**
+- *Note: the brain dump's "send-it-back" line repeated the must-have condition and
+  dropped NAP — the above is the corrected negation. **Confirm this reads right.***
 
 ### Map Embeds
-*(category: Link Building)*
+*(category: Link Building)* — **⟨OPEN⟩ clarify "RDF triple"**
 
-- **✅ Must-haves (blocking):**
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+- **✅ Must-haves (blocking) — bounce if ANY missing:**
+  - The **"RDF triple"** — the assertion that *client X does service Y*.
+    **⟨OPEN⟩:** does this mean literal structured data (JSON-LD / schema.org markup),
+    or a plain-English sentence stating it? Checkability differs a lot.
+  - **NAP included.**
+  - **Map embed included** (a maps iframe/embed is present).
 
 ### Service Silo (the plan)
-*(category: Content · the silo plan itself — right services, sensible groupings, commercial intent)*
-
-- **✅ Must-haves (blocking):**
-  - _[…]_
-- **🚫 Send-it-back:**
-  - _[…]_
+*(category: Content)* — **QA: DO NOT CHECK — hand off to SerMaStr** (owner ruling).
+The silo plan's quality (right services, groupings, commercial intent) is a strategy
+judgment, not a presence check. QA marks it out-of-scope and defers to the strategist.
 
 ---
 
-## Group C — Process / ops tasks (proposed: NOT QA targets — confirm)
+## Group C — Process / ops tasks
 
-These are "did you do it," not "is it good" — the board already tracks completion, so
-there is nothing for QA to *grade*. Listed here only for a decision: leave out of QA,
-or (if a quality dimension exists) promote to Group B with criteria.
-
-- **Blog Post Scheduling** — _decision: out of QA? [yes / promote — criteria]_
-- **Blog Post Title** *(if handled purely as a naming step)* — folded into Blog Post above
-- **Service Silo** *(if handled purely as an ops step)* — see Group B
-- **SEO NEO Task** (catch-all) — _decision: out of QA? [yes / promote]_
+- **Blog Post Scheduling** — **out of QA** (completion-only; the board tracks it).
+- **SEO NEO Task** (catch-all) — **route to human review** (verdict `needs-human`;
+  never auto-passed or auto-bounced).
 
 ---
 
 ## Per-client overrides
 
-Agency-wide criteria live in this file. A single client's special requirement
-("this client insists on X") does **not** go here — it goes in the in-app
-**SOP store** (per-client layer), which the QA Agent layers on top of this doc at
-grade time. Note such overrides here only as a pointer, not the full text.
+Agency-wide criteria live in this file. A single client's special requirement goes in
+the in-app **SOP store** (per-client layer), which the QA Agent layers on top of this
+doc at grade time. Note such overrides here only as a pointer.
 
 - _[client → override summary → lives in SOP store]_
