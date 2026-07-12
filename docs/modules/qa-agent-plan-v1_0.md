@@ -169,6 +169,104 @@ other people's board work (that's PACE, §5).
 
 ---
 
+## 3b. Grounding & QA SOPs — what QA judges against
+
+The most common question about this design is *"don't I need to write QA SOPs?"* The answer
+is **yes, but only for one of two layers** — and the biggest one is already written.
+
+### Two layers: the executable rubric vs the SOP that interprets it
+
+A QA verdict stacks two distinct things, and **SOPs own only the second**:
+
+| Layer | *What it is* | *Who owns it* | *Author effort* |
+|---|---|---|---|
+| **1. Executable rubric** | *How* quality is measured — the actual scoring | nlp `/score-page` (8-engine), `page_structure_eval`, R1–R7 — **code, already built** | none (exists) |
+| **2. The SOP** | What the scores *mean* + the pass bar + which deficiencies block + verdict→action routing | human-authored SOP text | some — but see below |
+
+The LLM never grades in layer 1 (the engine does) and never *invents* the standard in layer
+2 (it cites the SOP). This is the same discipline the rest of the suite uses — deterministic
+measurement, SOP-grounded interpretation.
+
+### The content-QA SOP already exists
+
+For all on-page content — **blog posts, local landing, service, and location pages** — layer
+2 is already written: **`docs/sops/On_Page_Criteria_and_Coverage.md`**, described in its own
+header as *"the shared definition of what an on-page verdict is and means, so every consumer
+interprets it identically."* It already fixes everything QA needs to route a page:
+
+- **Bands:** `excellent ≥90 · good ≥80 · needs_improvement ≥70 · below_standard ≥60 · fail <60`.
+- **Blocking-deficiency rule:** an engine scoring **`<80`** is a deficiency to fix.
+- **Verdict → action routing:** what a failing verdict triggers.
+- **Coverage boundaries:** which page types are QA targets at all (About/bio/contact are not).
+
+So for content, QA authors **no new SOP** — it runs `/score-page`, then interprets the result
+through this SOP, cited. A happy consequence: QA and SerMaStr grade against the *same* verdict
+definition (the strategist already consumes this doc), so a QA fail and a strategist finding
+can never disagree about what "good" is. QA's per-artifact `qa_pass_thresholds` (§6) must be
+kept **consistent with this SOP's bands** — the SOP is the source of truth; the config is its
+machine-readable mirror, not a competing standard.
+
+### What you *would* author (the real, scoped SOP work)
+
+Only the gaps `On_Page_Criteria_and_Coverage.md` doesn't cover:
+
+1. **Non-page deliverable types** — the `generic` artifact (a GBP post, a citation batch, a
+   one-off asset). No scorer grades these, so if you want QA to judge them you author a
+   **per-category acceptance-checklist SOP** (template below). This is the genuine new authoring.
+2. **"Soft" standards beyond the SEO score** — brand-voice fit, "did it actually fulfill the
+   brief," agency formatting conventions. The scorer measures SEO/structure, not "does this
+   read like *this* client." Encode these only if you want QA to enforce them; otherwise they
+   stay a human's call at In Review.
+3. **Per-client special requirements** — these do **not** go in a repo SOP. They go in the
+   existing **`sop_store`** per-client override layer, which already takes precedence over the
+   repo corpus (the same precedence SerMaStr uses). "This client insists on X" tunes that
+   client's QA bar with zero change to the shared standard.
+
+### The wiring (reuse SerMaStr's grounding, add nothing)
+
+SOP retrieval already exists: `services/sop_library.py`'s `_RELEVANCE` map selects which SOP
+docs are loaded (token-budgeted, citable) for a signal domain. QA plugs in by **adding a `qa`
+domain** mapped to the relevant docs:
+
+```python
+# services/sop_library.py — _RELEVANCE (illustrative)
+"qa": ["On_Page_Criteria_and_Coverage.md", "AIO_AEO_SOP.md"],   # + any new checklist SOPs
+```
+
+The `qa_review` job resolves the task's `category_key` → the domain(s) → `select_sops_text(...)`
+→ the budgeted SOP block handed to the `qa_agent` synthesis call, which must cite doc + section
+in its findings (same rule as the strategist). Per-client `sop_store` overrides are layered on
+top exactly as they are for SerMaStr. **No new retrieval mechanism, no new infra.**
+
+### Template for a new per-category QA-checklist SOP
+
+For each non-page deliverable category you want QA to judge, a short doc keyed to the task
+`category_key` (`content` / `link_building` / `gbp_authority` / `strategy`):
+
+```
+# QA Checklist — <Category>
+Purpose: the acceptance bar QA grades a <category> deliverable against.
+Applies to: tasks with category_key='<category>' and no automated on-page scorer.
+
+## Blocking checks (any fail ⇒ verdict=fail, bounce with the failed item as rework)
+- [ ] <objectively checkable requirement>
+- [ ] <…>
+
+## Advisory checks (fail ⇒ noted in findings, not blocking)
+- [ ] <…>
+
+## Routing
+- pass  → advance to <status>       # defaults to qa_pass_status
+- fail  → bounce to <status> + attach failed blocking checks as subtasks
+```
+
+The LLM reads the deliverable against the checklist and returns a pass/fail per line — it
+grades against *your* written bar, never an invented one. Keep the blocking set small and
+objective; push judgment-heavy items to advisory so QA stays a first-pass filter, not a
+gatekeeper that blocks on taste.
+
+---
+
 ## 4. The QA lifecycle
 
 ### 4.1 Data model (small, additive)
@@ -285,11 +383,13 @@ pure threshold logic unit-tested incl. the blocking-issue and unresolvable-artif
 passing page advances to `in_review`; an unresolvable artifact stays For QA as
 `needs_human`; every move is actor-audited.
 
-**Phase 3 — QA persona + conversational surface.** `qa_agent.py` synthesis call, the QA
-drawer panel + board glyph, `run_qa` on-demand action + the `"qa"` `PERSONA_ACTIONS` scope,
-`generic` rubric (the one LLM-scored type). *Acceptance:* "QA the X page" enqueues and
-answers in a QA voice; the drawer shows the verdict + rework list; QA never exposes PACE
-or strategist actions.
+**Phase 3 — QA persona + SOP grounding + conversational surface.** `qa_agent.py` synthesis
+call grounded via `sop_library` (add the `qa` domain → `On_Page_Criteria_and_Coverage.md`
++ per-client `sop_store` overrides; findings cite doc + section, §3b); the QA drawer panel +
+board glyph; `run_qa` on-demand action + the `"qa"` `PERSONA_ACTIONS` scope; `generic` rubric
+(the one LLM-scored type) graded against a per-category checklist SOP. *Acceptance:* "QA the
+X page" enqueues and answers in a QA voice citing the on-page SOP; the drawer shows the
+verdict + rework list; QA never exposes PACE or strategist actions.
 
 **Phase 4 (opt-in) — producer auto-queue.** `qa_autoqueue_producers` moves freshly
 generated content to For QA so it's reviewed before a human sees it. *Acceptance:* a
@@ -322,6 +422,11 @@ today's behavior.
   7 LLM + 1 deterministic SERP-signal) and the 5-engine service-page variant;
   `services/page_structure_eval.py` (deterministic structural fidelity); the content-quality
   **R1–R7** acceptance checks in the Blog Writer pipeline.
+- **The content-QA SOP + grounding (already built, §3b):** `docs/sops/On_Page_Criteria_and_Coverage.md`
+  (bands, the `<80` blocking-deficiency rule, verdict→action routing — the layer-2 standard for
+  all on-page content); `services/sop_library.py` (`_RELEVANCE` domain retrieval — add a `qa`
+  domain) + the per-client `sop_store` override layer. New authoring is scoped to per-category
+  checklist SOPs for non-page deliverables.
 - **Rails:** `services/slack_assistant/` (`PERSONA_ACTIONS` scoping, `interpret()`
   persona dimension — extend, don't fork), `notifications.emit`, the `async_jobs` worker,
   the strategy-digest **provider-registry** pattern (mirror it for the rubric registry).
@@ -344,3 +449,9 @@ today's behavior.
    flow is trusted.
 6. **Generic-artifact QA — chosen:** LLM checklist, `needs_human`-leaning. Keep low-stakes
    until a real acceptance-criteria field exists on tasks.
+7. **QA-SOP authoring scope — chosen (§3b):** content reuses the existing
+   `On_Page_Criteria_and_Coverage.md` (no new SOP); new authoring is limited to per-category
+   checklist SOPs for non-page deliverables + any per-client `sop_store` overrides. Open
+   input for you: **which non-page categories (GBP posts, citations, reports) do you actually
+   want QA to grade in v1** — each is one short checklist SOP, and any you skip simply stay a
+   human call at In Review.
