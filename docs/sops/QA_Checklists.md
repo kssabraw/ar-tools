@@ -60,11 +60,15 @@ Blocking checks are kept small and **objectively checkable**.
    > `Live URL` / `Citation URL` header) so QA reads the right cells instead of guessing
    > at layout. A private sheet (no public link) would fall back to *needs-human*.
 
-2. **Target keyword source (decided).** The task's **target keyword is on the task** —
-   QA reads it from the task for the GBP Posts and Press Release keyword checks.
-   **Built convention:** a `Keyword: <term>` line in the task description (blog
-   articles fall back to the run's keyword automatically). No keyword line ⇒ the
-   keyword checks read "could not verify" ⇒ *needs-human*, never a guess.
+2. **Target keyword source (decided; refined 2026-07-12).** The keyword is **entered
+   into the task name** (owner confirmation). QA reads it as the name minus the
+   template name — both shapes work: `GBP Posts — emergency roof repair` and a task
+   fully renamed to the keyword (the library link identifies the type). A
+   `Keyword: <term>` line in the description remains an explicit override, and blog
+   articles fall back to the run's keyword automatically. A bare template name
+   ("GBP Posts") ⇒ the keyword checks read "could not verify" ⇒ *needs-human*, never
+   a guess. The QA panel's check notes show which keyword was used, so a wrong pick
+   is visible at a glance.
 
 3. **Fail-open policy (decided).** Any external page/sheet that's blocked, unreachable,
    or unparseable ⇒ verdict *needs-human*, **never** an auto-bounce. Mirrors

@@ -353,7 +353,7 @@ def check_gbp_post(text: Optional[str], keyword: Optional[str]) -> list[dict]:
     return [
         _check("keyword_in_body", "Target keyword present in the body",
                keyword_present(text, keyword),
-               note="" if keyword else "no target keyword found on the task"),
+               note=f'keyword: “{keyword}”' if keyword else "no target keyword found on the task"),
         _check("cta", "A CTA is present", has_cta(text) if text else None),
         _check("emoji", "At least one emoji", has_emoji(text) if text else None),
     ]
@@ -395,7 +395,7 @@ def check_press_release(
     return [
         _check("keyword_in_title", "Target keyword in the title",
                keyword_present(title, keyword),
-               note="" if keyword else "no target keyword found on the task"),
+               note=f'keyword: “{keyword}”' if keyword else "no target keyword found on the task"),
         _check("keyword_in_body", "Target keyword in the body", keyword_present(text, keyword)),
         _check("non_exact_anchor", "At least one non-exact-match anchor", anchor_ok),
         _check("nap", "NAP included", nap["matched"],
@@ -541,15 +541,45 @@ def build_verdict(checks: list[dict]) -> dict[str, Any]:
 # Task-side conventions (keyword + deliverable-links extraction)
 # ---------------------------------------------------------------------------
 _KEYWORD_LINE_RE = re.compile(r"\bkeywords?\s*[:\-]\s*(.+)", re.IGNORECASE)
+_NAME_SEPS = ("—", "–", ":", "|", " - ")
+_SEP_STRIP = " \t-—–:|·,"
 
 
 def keyword_from_task(task: dict[str, Any]) -> Optional[str]:
-    """The target keyword 'on the task' (owner convention): a 'Keyword: …' line
-    in the description wins; else None (checks read 'could not verify'). Pure."""
+    """The target keyword 'on the task' (owner convention 2026-07-12: the
+    keyword is entered into the TASK NAME). Resolution order, pure:
+
+    1. An explicit 'Keyword: …' line in the description (unambiguous override).
+    2. The task name minus its template name — handles both shapes:
+       'GBP Posts — emergency roof repair' (template + separator + keyword)
+       and a fully renamed task ('emergency roof repair' whose
+       library_task_name still says which template it is).
+    3. A bare 'Template — keyword' name split when no library link exists.
+
+    A bare template name ('GBP Posts') yields None → the keyword checks read
+    'could not verify' → needs_human, never a guess."""
     m = _KEYWORD_LINE_RE.search(task.get("description") or "")
     if m:
         kw = normalize_ws(m.group(1).split("\n")[0])
-        return kw or None
+        if kw:
+            return kw
+    name = normalize_ws(task.get("name"))
+    lib = normalize_ws(task.get("library_task_name"))
+    if not name:
+        return None
+    if lib:
+        if lib.casefold() in name.casefold():
+            remainder = re.sub(re.escape(lib), "", name, count=1, flags=re.IGNORECASE)
+            remainder = normalize_ws(remainder.strip(_SEP_STRIP))
+            return remainder or None
+        return name  # fully renamed: the whole name IS the keyword
+    # No library link: the name must carry a recognizable template prefix for
+    # the rubric to have matched at all — take what follows the separator.
+    for sep in _NAME_SEPS:
+        if sep in name:
+            tail = normalize_ws(name.split(sep, 1)[1].strip(_SEP_STRIP))
+            if tail:
+                return tail
     return None
 
 

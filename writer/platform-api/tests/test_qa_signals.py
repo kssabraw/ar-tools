@@ -297,11 +297,34 @@ def test_extract_urls_dedup_and_trailing_punct():
     assert sig.extract_urls(text) == ["https://a.com/x", "https://b.com"]
 
 
-def test_keyword_from_task_convention():
-    assert sig.keyword_from_task({"description": "Keyword: roof repair\nNotes: x"}) == "roof repair"
-    assert sig.keyword_from_task({"description": "keywords - emergency plumber"}) == "emergency plumber"
-    assert sig.keyword_from_task({"description": "no convention here"}) is None
+def test_keyword_from_task_name_convention():
+    # Owner convention: the keyword is entered into the task NAME.
+    assert sig.keyword_from_task(
+        {"name": "GBP Posts — emergency roof repair", "library_task_name": "GBP Posts"}
+    ) == "emergency roof repair"
+    assert sig.keyword_from_task(
+        {"name": "Press Release: new location launch", "library_task_name": "Press Release"}
+    ) == "new location launch"
+    # Fully renamed task — the library link says the type, the name IS the keyword.
+    assert sig.keyword_from_task(
+        {"name": "emergency roof repair", "library_task_name": "GBP Posts"}
+    ) == "emergency roof repair"
+    # Bare template name → no keyword (checks read "could not verify").
+    assert sig.keyword_from_task(
+        {"name": "GBP Posts", "library_task_name": "GBP Posts"}
+    ) is None
+    # No library link: separator split still works (e.g. producer task names).
+    assert sig.keyword_from_task({"name": "Review & publish: roof repair"}) == "roof repair"
+    assert sig.keyword_from_task({"name": "GBP Posts"}) is None
     assert sig.keyword_from_task({}) is None
+
+
+def test_keyword_from_task_description_override_still_wins():
+    assert sig.keyword_from_task(
+        {"name": "GBP Posts — wrong thing", "library_task_name": "GBP Posts",
+         "description": "Keyword: roof repair\nNotes: x"}
+    ) == "roof repair"
+    assert sig.keyword_from_task({"description": "keywords - emergency plumber"}) == "emergency plumber"
 
 
 def test_deliverable_subtask_name_matches_and_is_not_work_item():
