@@ -27,6 +27,7 @@ import asyncio
 import csv
 import io
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -43,7 +44,12 @@ _CENSUS_BENCHMARK = "Public_AR_Current"
 # sizes — 1k batches are the reliable sweet spot (and each commits before the
 # next, so a mid-run blip loses at most one batch of progress).
 _CENSUS_CHUNK = 1000
-_CENSUS_RETRY_WAITS = [5, 15, 30, 60]   # transient-502/timeout backoff (seconds)
+_CENSUS_RETRY_WAITS = [15, 45, 120]     # transient-502/timeout backoff (seconds)
+# The endpoint throttles rapid back-to-back batches (observed: a clean run
+# stops at exactly ~10 batches, then 502s), so pace batches politely. Each
+# batch still commits before the next; when the 502 wall is finally hit after
+# real progress, the job re-enqueues a continuation instead of failing (below).
+_CENSUS_BATCH_PAUSE = 2.0
 # The two known test markets — every run reports them so the coordinate
 # quality can be eyeballed before proximity is built on top (working agreement).
 VALIDATE = [("La Jolla", "CA"), ("Kansas City", "MO")]
@@ -179,6 +185,23 @@ def _count(supabase, **filters) -> int:
     return q.limit(1).execute().count or 0
 
 
+def _count_pending(supabase) -> int:
+    """Addressed rows still awaiting a geocode attempt (the census work queue)."""
+    return (supabase.table("competitor_locations").select("id", count="exact")
+            .is_("lat", "null").not_.is_("address", "null").is_("geo_source", "null")
+            .limit(1).execute().count or 0)
+
+
+def _enqueue_continuation(supabase) -> None:
+    """Re-enqueue a fresh geocode job so a Census-throttled run resumes from the
+    remaining queue on the next tick (idempotent — geocoded rows have left the
+    queue). Only called after real progress, so it can't hot-loop."""
+    supabase.table("async_jobs").insert({
+        "job_type": "leadoff_geocode", "entity_id": str(uuid.uuid4()),
+        "payload": {}, "max_attempts": 15,
+    }).execute()
+
+
 # ── Census geocode (free, addressed rows) ─────────────────────────────────────
 
 async def _census_post(client: httpx.AsyncClient,
@@ -258,6 +281,7 @@ async def run_geocode_job(job: dict) -> None:
         cities = _city_index()
         now = datetime.now(timezone.utc).isoformat()
         matched = missed = sab_filled = 0
+        census_walled = False   # hit the 502 throttle wall before draining the queue
 
         async with httpx.AsyncClient(follow_redirects=True) as client:
             # 1) addressed rows → free Census batch, chunk-and-commit so each
@@ -272,7 +296,18 @@ async def run_geocode_job(job: dict) -> None:
                     ol = one_line_address(r.get("address"), city, state)
                     if ol:
                         inputs.append((r["id"], ol))
-                coords = await _census_geocode(client, inputs) if inputs else {}
+                try:
+                    coords = await _census_geocode(client, inputs) if inputs else {}
+                except (httpx.HTTPStatusError, httpx.TransportError,
+                        httpx.TimeoutException) as exc:
+                    # The endpoint is walling us (throttle / outage) even after
+                    # retries. Stop the census pass with progress preserved; a
+                    # continuation job resumes the remaining queue (below).
+                    logger.warning("leadoff_geocode.census_walled",
+                                   extra={"error": str(exc)[:200],
+                                          "matched_this_run": matched})
+                    census_walled = True
+                    break
                 writes = []
                 for r in batch:
                     base = {k: r[k] for k in ("id", "city_id", "category_id",
@@ -288,10 +323,13 @@ async def run_geocode_job(job: dict) -> None:
                         writes.append({**base, "geo_source": "none"})
                         missed += 1
                 _bulk_write(supabase, writes)
+                await asyncio.sleep(_CENSUS_BATCH_PAUSE)   # pace, don't trip the throttle
 
             # 2) SAB fill via Outscraper (paid — off by default; per-business
-            #    lookups, so update-by-id, also chunk-committed)
-            if settings.leadoff_geocode_sab_outscraper:
+            #    lookups, so update-by-id, also chunk-committed). Only once the
+            #    census queue is fully drained — no point paying for SABs while
+            #    the free census pass still has a walled continuation pending.
+            if not census_walled and settings.leadoff_geocode_sab_outscraper:
                 while True:
                     sab = _pending_sab(supabase, 200)
                     if not sab:
@@ -309,6 +347,22 @@ async def run_geocode_job(job: dict) -> None:
                         if ll:
                             sab_filled += 1
 
+        # If the census pass walled (throttle/outage) with queue remaining,
+        # self-continue: re-enqueue when this run made progress (chains to
+        # completion on later ticks), else fail cleanly so we don't hot-loop
+        # against a fully-down endpoint.
+        progressed = matched + missed > 0
+        pending = _count_pending(supabase) if census_walled else 0
+        continued = False
+        if census_walled and pending > 0:
+            if progressed:
+                _enqueue_continuation(supabase)
+                continued = True
+            else:
+                raise RuntimeError(
+                    "census endpoint unavailable — 0 progress this run; "
+                    "not re-enqueuing (re-run manually once census.gov recovers)")
+
         # coverage via count queries (no 200k-row fetch)
         total = _count(supabase)
         geocoded = total - _count(supabase, lat=None)
@@ -320,6 +374,8 @@ async def run_geocode_job(job: dict) -> None:
                           for s in ("census", "outscraper")},
             "this_run": {"census_matched": matched, "census_missed": missed,
                          "sab_filled": sab_filled},
+            "census_pending": pending,
+            "continuation_enqueued": continued,
         }
         validation: dict[str, Any] = {}
         for name, state in VALIDATE:
@@ -333,12 +389,17 @@ async def run_geocode_job(job: dict) -> None:
                 validation[f"{name}, {state}"] = {"geocoded_pins": len(pins),
                                                   "sample": pins[:8]}
 
+        note = ("Census = street-centroid (feasibility grade); proximity "
+                "computation is the next phase, gated on these coordinates "
+                "validating on the test markets.")
+        if continued:
+            note = (f"Partial run — census throttled with {pending} rows still "
+                    f"pending; a continuation job was enqueued to finish them. "
+                    ) + note
         result = {**summary,
                   "sab_outscraper_enabled": settings.leadoff_geocode_sab_outscraper,
                   "validation": validation,
-                  "note": ("Census = street-centroid (feasibility grade); "
-                           "proximity computation is the next phase, gated on "
-                           "these coordinates validating on the test markets.")}
+                  "note": note}
         supabase.table("async_jobs").update({
             "status": "complete", "result": result, "completed_at": "now()",
         }).eq("id", job_id).execute()
