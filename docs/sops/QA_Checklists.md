@@ -37,9 +37,10 @@ Blocking checks are kept small and **objectively checkable**.
 ## Cross-cutting requirements
 
 1. **Deliverable links — a "Deliverable links" subtask (decided).** The VA records the
-   placement location(s) on a **`Deliverable links` subtask** before moving the task to
-   For QA. The *format* varies by deliverable, and QA opens the container to get the
-   URLs to check:
+   placement location(s) on a **`Deliverable links` subtask** before the task reaches
+   **In QA** (the trigger status — the plan's "For QA" was superseded by the existing
+   `in_qa` workflow status; see the plan's build note). The *format* varies by
+   deliverable, and QA opens the container to get the URLs to check:
 
    | Deliverable | Where the links live | What QA does |
    |---|---|---|
@@ -61,6 +62,9 @@ Blocking checks are kept small and **objectively checkable**.
 
 2. **Target keyword source (decided).** The task's **target keyword is on the task** —
    QA reads it from the task for the GBP Posts and Press Release keyword checks.
+   **Built convention:** a `Keyword: <term>` line in the task description (blog
+   articles fall back to the run's keyword automatically). No keyword line ⇒ the
+   keyword checks read "could not verify" ⇒ *needs-human*, never a guess.
 
 3. **Fail-open policy (decided).** Any external page/sheet that's blocked, unreachable,
    or unparseable ⇒ verdict *needs-human*, **never** an auto-bounce. Mirrors

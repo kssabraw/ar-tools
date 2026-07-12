@@ -42,6 +42,7 @@ from services.asana_push import run_asana_push_job
 from services.task_import import run_import_job as run_task_import_job
 from services.task_monthly import run_task_month_job
 from services.task_workload import run_due_sweep_job
+from services.qa_service import run_qa_review_job
 from services.serp_snapshot import run_serp_snapshot_job
 from services.local_dominator import run_maps_scan_job
 from services.maps_report import run_maps_image_backfill_job, run_maps_report_job
@@ -470,6 +471,8 @@ async def _process_job(job: dict) -> None:
         await run_keyword_gap_job(job)
     elif job_type == "link_gap":
         await run_link_gap_job(job)
+    elif job_type == "qa_review":
+        await run_qa_review_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 

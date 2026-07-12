@@ -823,6 +823,39 @@ async def unwatch_task(task_id: UUID, auth: dict = Depends(require_auth)) -> dic
     return {"watching": False}
 
 
+@router.post("/tasks/{task_id}/qa", status_code=202)
+async def run_task_qa(task_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """On-demand QA review (qa-agent-plan; grounding: docs/sops/QA_Checklists.md).
+    Works regardless of qa_enabled — the flag gates only the automatic In QA
+    status trigger. Idempotent: an in-flight review for the task is reused."""
+    task = _load_task_or_404(task_id)
+    if task.get("parent_task_id"):
+        raise HTTPException(status_code=400, detail="qa_top_level_only")
+    try:
+        from services import qa_service
+
+        job_id = qa_service.enqueue_qa_review(str(task_id), trigger="manual")
+    except Exception as exc:
+        logger.error("task_qa_enqueue_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    if not job_id:
+        raise HTTPException(status_code=404, detail="task_not_found")
+    return {"job_id": job_id}
+
+
+@router.get("/tasks/{task_id}/qa-reviews")
+async def get_task_qa_reviews(task_id: UUID, auth: dict = Depends(require_auth)) -> list[dict]:
+    """QA review history for a task, latest first."""
+    _load_task_or_404(task_id)
+    try:
+        from services import qa_service
+
+        return qa_service.list_reviews(str(task_id))
+    except Exception as exc:
+        logger.error("task_qa_reviews_failed", extra={"task_id": str(task_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
 @router.post("/tasks/{task_id}/duplicate")
 async def duplicate_task(
     task_id: UUID, body: TaskDuplicateRequest, auth: dict = Depends(require_auth)
