@@ -2,11 +2,18 @@
 from services.leadoff_brand import (
     attach_footprint,
     brand_key,
-    footprint_estimate,
+    digits,
+    filter_rows_by_locale,
+    is_generic_name,
     median,
+    mention_cost,
+    mention_domains_from_rows,
     parse_mentions_summary,
+    parse_referring_domains,
+    parse_search_rows,
     parse_site_count,
     top5_from_items,
+    unlinked_count,
 )
 
 
@@ -16,16 +23,63 @@ class TestKeysAndCosts:
         assert brand_key("Roto-Rooter Plumbing") == brand_key("ROTO-ROOTER Plumbing ")
         assert "|" not in brand_key("Bill Howe Plumbing")
 
-    def test_estimate(self):
-        # 5 site queries + 5 mention summaries ≈ $0.16
-        assert footprint_estimate(5, 5) == 0.16
-        assert footprint_estimate(0, 0) == 0.0
+    def test_mention_cost_tiers(self):
+        assert mention_cost(generic=False, deep=False, has_phone=True) == 0.03
+        # generic light = search + NAP
+        assert mention_cost(generic=True, deep=False, has_phone=True) == 0.09
+        # generic light without a phone = search only
+        assert mention_cost(generic=True, deep=False, has_phone=False) == 0.06
+        # deep = search + unlinked list + NAP
+        assert mention_cost(generic=False, deep=True, has_phone=True) == 0.14
+        assert mention_cost(generic=True, deep=True, has_phone=False) == 0.11
+
+
+class TestGenericNames:
+    def test_category_city_stopword_names_are_generic(self):
+        assert is_generic_name("Pest Control KC", "pest control service",
+                               "Kansas City")
+        assert is_generic_name("Kansas City Locksmith", "locksmith",
+                               "Kansas City")
+        assert is_generic_name("Best Pest Control Services",
+                               "pest control service", "Kansas City")
+
+    def test_distinctive_brands_are_not(self):
+        assert not is_generic_name("Saela Pest Control",
+                                   "pest control service", "Kansas City")
+        assert not is_generic_name("Roto-Rooter", "plumber", "Kansas City")
+        assert not is_generic_name("Blue Beetle Pest Control",
+                                   "pest control service", "Kansas City")
+
+    def test_locale_filter_keeps_city_or_phone_rows(self):
+        rows = [
+            {"content_info": {"snippet": "Great pest control in Kansas City"}},
+            {"content_info": {"snippet": "pest control tips for your garden"}},
+            {"title": "Call (816) 555-1234 today"},
+        ]
+        kept = filter_rows_by_locale(rows, "Kansas City", "816-555-1234")
+        assert len(kept) == 2  # city match + phone match; the tips page drops
+
+    def test_digits(self):
+        assert digits("(816) 555-1234") == "8165551234"
+        assert digits(None) == ""
+
+
+class TestUnlinked:
+    def test_mention_minus_referring_minus_own(self):
+        mentions = {"yelp.com", "kctoday.com", "acmepest.com", "linkedpr.com"}
+        referring = {"www.linkedpr.com"}
+        # own site + the linking domain drop → yelp + kctoday remain
+        assert unlinked_count(mentions, referring, "www.acmepest.com") == 2
+
+    def test_domains_from_rows(self):
+        rows = [{"domain": "Yelp.com"}, {"url": "https://www.kctoday.com/x"},
+                {"domain": None}]
+        assert mention_domains_from_rows(rows) == {"yelp.com", "kctoday.com"}
 
 
 class TestParsing:
     def test_site_count_from_se_results_count(self):
-        task = {"result": [{"se_results_count": 1240}]}
-        assert parse_site_count(task) == 1240
+        assert parse_site_count({"result": [{"se_results_count": 1240}]}) == 1240
         assert parse_site_count({"result": [{}]}) is None
         assert parse_site_count({"result": None}) is None
 
@@ -36,25 +90,32 @@ class TestParsing:
                                                   "neutral": 3370}}]}
         out = parse_mentions_summary(task)
         assert out == {"citations": 4310, "positive": 900, "negative": 40}
-
-    def test_mentions_summary_defensive(self):
         assert parse_mentions_summary({"result": None}) is None
-        out = parse_mentions_summary({"result": [{"total_count": 7}]})
-        assert out["citations"] == 7 and out["positive"] is None
+
+    def test_search_rows(self):
+        total, rows = parse_search_rows(
+            {"result": [{"total_count": 77, "items": [{"domain": "a.com"}]}]})
+        assert total == 77 and rows == [{"domain": "a.com"}]
+        assert parse_search_rows({"result": None}) == (None, [])
+
+    def test_referring_domains(self):
+        task = {"result": [{"items": [{"domain": "x.com"}, {"domain": None}]}]}
+        assert parse_referring_domains(task) == {"x.com"}
 
 
 class TestTop5:
-    def test_top5_from_maps_items(self):
+    def test_top5_from_maps_items_with_phone(self):
         items = [
-            {"rank_group": 1, "title": "Acme Pest", "domain": "acmepest.com"},
+            {"rank_group": 1, "title": "Acme Pest", "domain": "acmepest.com",
+             "phone": "(816) 555-1234"},
             {"rank_group": 2, "title": "Beta Bugs", "domain": None},
             {"rank_group": 6, "title": "Too Deep", "domain": "toodeep.com"},
             {"rank_group": 3, "title": "", "domain": "noname.com"},
         ]
         out = top5_from_items(items)
         assert [o["business_name"] for o in out] == ["Acme Pest", "Beta Bugs"]
-        assert out[0]["domain"] == "acmepest.com"
-        assert out[1]["domain"] is None
+        assert out[0]["phone"] == "(816) 555-1234"
+        assert out[1]["domain"] is None and out[1]["phone"] is None
 
 
 class TestAttach:

@@ -484,19 +484,27 @@ async def run_tryout_job(job: dict) -> None:
             field = {cat: stats for cat, stats, _ in results if stats is not None}
             top5_by_cat = {cat: top5 for cat, _, top5 in results}
 
-            # brand footprint for the field (first-pass context): distinct
-            # businesses across all gated categories, cache-missed pieces only
+            # brand footprint for the field (first-pass LIGHT tier): distinct
+            # businesses across all gated categories, cache-missed pieces
+            # only. Generic-named businesses get the search+locale-filter +
+            # phone-NAP treatment (their bare-name count is untrustworthy);
+            # the unlinked split is scout's deep tier, not paid here.
             from services.leadoff_brand import (
                 attach_footprint, fetch_footprint, footprint_lookups,
                 footprint_state,
             )
-            all_biz = [b for top5 in top5_by_cat.values() for b in top5]
+            all_biz = [{**b, "category_name": cat}
+                       for cat, top5 in top5_by_cat.items() for b in top5]
             try:
-                fp = footprint_state(all_biz, datetime.now(timezone.utc))
+                fp = footprint_state(all_biz, datetime.now(timezone.utc),
+                                     city_name=city.get("name") or "",
+                                     deep=False)
                 if fp["site_misses"] or fp["mention_misses"]:
                     await fetch_footprint(client, fp["site_misses"],
                                           fp["mention_misses"],
-                                          datetime.now(timezone.utc))
+                                          datetime.now(timezone.utc),
+                                          city_name=city.get("name") or "",
+                                          deep=False)
             except RuntimeError:
                 raise
             except Exception as exc:
@@ -507,8 +515,10 @@ async def run_tryout_job(job: dict) -> None:
         rows = tryout_rows(demand, field, _lead_values(lead_tier),
                            _breakpoints(), capture)
         try:
-            site_lookup, mention_lookup = footprint_lookups(all_biz)
-            rows = attach_footprint(rows, top5_by_cat, site_lookup, mention_lookup)
+            site_lookup, mention_rows = footprint_lookups(all_biz)
+            rows = attach_footprint(
+                rows, top5_by_cat, site_lookup,
+                {k: r.get("citations") for k, r in mention_rows.items()})
         except Exception:
             logger.warning("leadoff_tryout.footprint_attach_failed", exc_info=True)
         supabase.table("leadoff_tryouts").update({
@@ -557,9 +567,12 @@ def scout_market_state(city_id: int, category_id: str) -> dict[str, Any] | None:
     fresh_trend = (_ms("demand_trend").select("trend_key")
                    .eq("trend_key", trend_key).gte("pulled_at", cutoff)
                    .execute().data or [])
-    # brand footprint (site size + mentions) — first-pass context signals
+    # brand footprint (site size + the three mention signals) — deep tier:
+    # scout is Pass-2, so every brand gets the search/unlinked/NAP treatment
     from services.leadoff_brand import footprint_state
-    footprint = footprint_state(comps, now)
+    footprint = footprint_state(
+        [{**c, "category_name": board[0].get("category") or ""} for c in comps],
+        now, city_name=board[0].get("city_name") or "", deep=True)
     return {
         "market": board[0], "competitors": comps,
         "rd_misses": rd_misses, "vel_misses": vel_misses,
@@ -653,13 +666,21 @@ async def run_scout_job(job: dict) -> None:
                     _ms("business_reviews").insert(vel_rows).execute()
                     summary["velocity_pulled"] = len(vel_rows)
 
-            # brand footprint — site: indexed counts + mention summaries for
-            # the top-5 (cache-missed pieces only; batched single POSTs)
-            from services.leadoff_brand import fetch_footprint
-            if state.get("site_misses") or state.get("mention_misses"):
+            # brand footprint (deep tier) — site: indexed counts + mentions/
+            # unlinked/NAP for the top-5. serp_top5 never stored phones, so
+            # one Maps SERP recovers them for the NAP queries (~$0.004).
+            from services.leadoff_brand import fetch_footprint, fetch_top5_phones
+            misses = state.get("mention_misses") or {}
+            if state.get("site_misses") or misses:
+                if misses and city and not any(v.get("phone")
+                                               for v in misses.values()):
+                    phones = await fetch_top5_phones(
+                        client, state["market"].get("category") or "", city)
+                    for k, v in misses.items():
+                        v["phone"] = v.get("phone") or phones.get(k)
                 pulled = await fetch_footprint(
-                    client, state.get("site_misses") or [],
-                    state.get("mention_misses") or {}, now)
+                    client, state.get("site_misses") or [], misses, now,
+                    city_name=state["market"].get("city_name") or "", deep=True)
                 summary["site_pulled"] = pulled["sites"]
                 summary["mentions_pulled"] = pulled["mentions"]
 

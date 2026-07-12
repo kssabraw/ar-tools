@@ -51,6 +51,9 @@ interface Competitor {
   // brand footprint (cached context, filled by tryout/scout pulls)
   site_pages?: number | null
   mentions?: number | null
+  unlinked_mentions?: number | null
+  nap_citations?: number | null
+  generic_name?: boolean | null
 }
 interface Enrichment {
   rd_min: number | null
@@ -369,10 +372,15 @@ export function LeadOff() {
                         {(c.review_count ?? 0).toLocaleString()} rev{c.rating ? ` · ${c.rating}★` : ''}
                       </span>
                     </div>
-                    {(c.site_pages != null || c.mentions != null) && (
+                    {(c.site_pages != null || c.mentions != null || c.nap_citations != null) && (
                       <div style={{ fontSize: 11, color: '#94a3b8', paddingLeft: 14 }}
-                        title="Site size = Google's indexed-page estimate (site: query). Mentions = web citation count (Content Analysis index; generic names inflate this). Context only.">
-                        {compact(c.site_pages)} pages indexed · {compact(c.mentions)} web mentions
+                        title={'Site size = Google indexed-page estimate (site: query). Mentions = total web mentions incl. unlinked (Content Analysis index'
+                          + (c.generic_name ? '; generic name — count filtered to city/phone co-occurrence' : '')
+                          + '). Unlinked = mentioning domains that do not link. NAP = phone-number citations. Context only.'}>
+                        {compact(c.site_pages)} pages
+                        {c.mentions != null && <> · {compact(c.mentions)} mentions{c.generic_name ? '*' : ''}</>}
+                        {c.unlinked_mentions != null && <> ({compact(c.unlinked_mentions)} unlinked)</>}
+                        {c.nap_citations != null && <> · {compact(c.nap_citations)} NAP</>}
                       </div>
                     )}
                   </div>
