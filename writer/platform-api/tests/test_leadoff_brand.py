@@ -2,6 +2,7 @@
 from services.leadoff_brand import (
     attach_footprint,
     brand_key,
+    dashed_phone,
     digits,
     filter_rows_by_locale,
     is_generic_name,
@@ -62,6 +63,15 @@ class TestGenericNames:
     def test_digits(self):
         assert digits("(816) 555-1234") == "8165551234"
         assert digits(None) == ""
+
+    def test_dashed_phone_matches_ca_index_format(self):
+        # probe 2026-07-12: the CA index matches "913-423-3457", not the
+        # stored Maps "+1913-423-3457" nor bare "9134233457"
+        assert dashed_phone("+1913-423-3457") == "913-423-3457"
+        assert dashed_phone("(816) 555-1234") == "816-555-1234"
+        assert dashed_phone("9134233457") == "913-423-3457"
+        assert dashed_phone("123") is None
+        assert dashed_phone(None) is None
 
 
 class TestUnlinked:
