@@ -162,7 +162,7 @@ def maybe_emit_weekly(today: Optional[date] = None) -> dict:
                   f"{report.get('overdue', 0)} overdue",
             summary=render_text(report, scope_name="all clients"),
             severity="info",
-            payload={"link": "/workload"},
+            payload={"link": "/workload", "slack_channel": settings.pace_slack_channel or None},
             dedupe_key=f"pace_report:{today.isoformat()}:portfolio",
         )
         return {"emitted": True}

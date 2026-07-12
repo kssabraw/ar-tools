@@ -1,7 +1,7 @@
 # PACE — Project Assignment, Coordination & Execution Agent — Module Plan v1.3
 
 **Status:** Phases 0–4 **built + live** (behind `pace_enabled`, enabled in
-production 2026-07-12) · Phases 5–7 **proposed** (v1.3 full-PM scope) · **Sibling
+production 2026-07-12) · Phases 5–7 **built** (v1.3 full-PM scope, PR #340) · **Sibling
 to:** SerMaStr (`seo-strategist-agent-plan-v1_0.md`) · **Rides:** the native task
 manager (`in-app-task-manager-prd-v1_0.md`) + the SerMaStr assistant
 (`services/slack_assistant/`) · **Authored:** 2026-07-11 · **Revised:** 2026-07-11
@@ -481,8 +481,9 @@ actionable. Conversational: one cheap call/question. Keeping PACE off Sonnet is 
 > production 2026-07-12). **Phase 5 (placement) is BUILT** (this PR — `task_member_skills` +
 > `pm_assign` + approval hook + `assign_task` + Workload-page competency editor). **Phase 6
 > (delivery reports) is BUILT** (this PR — `pace_report` + `generate_pace_report` action +
-> `GET .../pace-report` + Workload Reports card + optional weekly digest). Phase 7 (dedicated
-> channel) remains.
+> `GET .../pace-report` + Workload Reports card + optional weekly digest). **Phase 7
+> (dedicated channel) is BUILT** (this PR — `pace_slack_channel` + channel-scoped inbound
+> routing + digest/report channel targeting). **All v1.3 phases are now built.**
 
 **Phase 0A — deterministic reads.** `pm_signals.py` (reopen-aware staleness, overdue,
 unassigned, missing-due-date, unacted-on producer tasks, dual-mode month-pace heuristic,

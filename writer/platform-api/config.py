@@ -796,6 +796,12 @@ class Settings(BaseSettings):
     # weekly digest is off (on-demand + the Reports card still work).
     pace_report_period_days: int = 7
     pace_report_weekday: Optional[int] = None
+    # PACE v1.3 Phase 7 — dedicated channel (§10.2). A Slack channel id (C…): when
+    # set, PACE owns that channel (answers every message, defers strategy to
+    # SerMaStr) and SerMaStr is excluded there; PACE stays out of other channels.
+    # Empty ⇒ shared-channel shape-routing (backward-compatible). PACE's digest +
+    # weekly report also post here when set.
+    pace_slack_channel: str = ""
 
     # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
     # Read-only v1 serves the precomputed market_scanner.leadoff_board.
