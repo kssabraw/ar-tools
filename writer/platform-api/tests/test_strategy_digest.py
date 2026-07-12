@@ -171,6 +171,20 @@ def test_quiet_client_has_no_active_signals():
     assert sd.active_signal_domains(digest) == set()
 
 
+def test_leadoff_seeded_client_pulls_leadoff_domain():
+    # the create-from-market handoff writes a "LeadOff targets — …" goal
+    digest = {
+        "open_alerts": {}, "episodes": [], "task_plan": {},
+        "campaign_goals": {"goals": [
+            {"label": "LeadOff targets — Locksmith in Vancouver, WA",
+             "goal_type": "custom"}]},
+    }
+    assert sd.active_signal_domains(digest) == {"leadoff"}
+    # ...but a LeadOff goal alone does NOT make the client "active" for the
+    # weekly scheduler gate (it's context, not a problem signal)
+    assert sd.has_active_signals(digest) is False
+
+
 def test_open_alert_makes_client_active():
     assert sd.has_active_signals({"open_alerts": {"maps": [{"keyword": "k"}]}}) is True
     assert sd.has_active_signals({"episodes": [{"keyword": "k"}]}) is True

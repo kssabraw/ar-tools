@@ -101,6 +101,12 @@ def test_relevant_docs_dedupes_overlapping_domains():
     assert docs.count("Link_Building_Recipe_Engine.md") == 1
 
 
+def test_relevant_docs_leadoff_domain():
+    docs = sop_library.relevant_docs({"leadoff"})
+    assert "LeadOff_Market_Intelligence_SOP.md" in docs
+    assert docs[0] == "_ORCHESTRATOR.md"
+
+
 def test_select_sops_text_respects_budget():
     full = sop_library.select_sops_text({"organic_drop", "maps", "offpage", "content"}, budget_chars=200_000)
     small = sop_library.select_sops_text({"organic_drop", "maps", "offpage", "content"}, budget_chars=12_000)

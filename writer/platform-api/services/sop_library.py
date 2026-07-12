@@ -60,6 +60,10 @@ _RELEVANCE: dict[str, list[str]] = {
     "budget": ["Link_Building_Recipe_Engine.md"],
     "ai_visibility": ["AIO_AEO_SOP.md"],
     "content": ["On_Page_Criteria_and_Coverage.md", "Site_Architecture_and_Internal_Linking_SOP.md"],
+    # A client seeded from a LeadOff market pick (or a market-selection
+    # question): the SOP carries the ×10 RD conversion + how to read the
+    # entry-decision effort targets against live campaign data.
+    "leadoff": ["LeadOff_Market_Intelligence_SOP.md"],
 }
 # Per-doc character caps: the big SOPs would eat the whole budget otherwise.
 _DOC_CAP_CHARS = {
@@ -141,7 +145,7 @@ def _truncate(text: str, limit: int) -> str:
 def relevant_docs(active_domains: set[str]) -> list[str]:
     """Ordered doc list for a set of active signal domains. Pure."""
     ordered: list[str] = list(_ALWAYS)
-    for domain in ("organic_drop", "maps", "offpage", "budget", "ai_visibility", "content"):
+    for domain in ("organic_drop", "maps", "offpage", "budget", "ai_visibility", "content", "leadoff"):
         if domain in active_domains:
             for doc in _RELEVANCE[domain]:
                 if doc not in ordered:

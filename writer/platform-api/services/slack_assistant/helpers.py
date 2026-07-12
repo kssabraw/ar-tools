@@ -193,7 +193,8 @@ _SOP_HINT_RE = re.compile(
     r"drop|decline|recover|penalt|deindex|"
     r"link.?build|backlink|citation|review|gbp|"
     r"reoptimi|optimi[sz]e|on.?page|"
-    r"ai visibility|ai overview|aio\b|aeo\b",
+    r"ai visibility|ai overview|aio\b|aeo\b|"
+    r"leadoff|market intel|market selection|market opportunit",
     re.IGNORECASE,
 )
 
@@ -206,6 +207,7 @@ _SOP_DOMAIN_HINTS: list[tuple[str, str]] = [
     (r"budget|retainer|allocat|spend|task plan|recipe", "budget"),
     (r"content|blog|page|on.?page|silo|internal link|schema", "content"),
     (r"drop|decline|fell|lost rank|penalt|deindex|cannibal", "organic_drop"),
+    (r"leadoff|market intel|market opportunit|market selection|effort target|which (?:city|market)", "leadoff"),
 ]
 
 

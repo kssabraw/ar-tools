@@ -236,6 +236,13 @@ def active_signal_domains(digest: dict) -> set[str]:
     task_plan = digest.get("task_plan") or {}
     if task_plan.get("flags") or (digest.get("client") or {}).get("retainer_monthly"):
         domains.add("budget")
+    # A LeadOff-seeded client (the create-from-market handoff writes a
+    # "LeadOff targets — …" goal) pulls the LeadOff SOP so the strategist
+    # reads the entry-decision numbers correctly (×10 RD rule, capture
+    # assumptions, re-verify-against-live-scan guidance).
+    goals = (digest.get("campaign_goals") or {}).get("goals") or []
+    if any(str(g.get("label") or "").startswith("LeadOff targets") for g in goals):
+        domains.add("leadoff")
     return domains
 
 

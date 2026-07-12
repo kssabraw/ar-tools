@@ -1,6 +1,35 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-07-11 · **LeadOff market-intelligence module (v1 read-only) BUILT** (latest)
+## ⏩ Update — 2026-07-12 · **LeadOff v2 BUILT: paid tryout/scout, neighborhoods tab, SOP routing + the grants repair** (latest)
+
+PRD §5 items 1/3/4 shipped (item 2, the create-client handoff, shipped earlier
+the same day in #339). Detail in the CLAUDE.md LeadOff paragraph.
+
+- **Paid actions**: `POST /leadoff/tryout` (~$0.20/city, async job →
+  `leadoff_tryouts` + a Tryouts tab) and `POST /leadoff/scout` (~$0.10–1,
+  cache-cheapened; free `GET /leadoff/scout/estimate` preflight) — ported from
+  `docs/reference/leadoff-scanner/check_city.py` / `enrich_shortlist.py`
+  (committed reference copies; the cache contracts MUST NOT drift — the
+  PowerShell tools write the same `market_scanner` cache rows).
+- **Budget guard**: `leadoff_spend` ledger + `leadoff_daily_budget_usd`
+  (config, default **$5/user/day**) — raise it on PLATFORM if the team needs
+  more headroom. Migration `20260712120000` applied live.
+- **⚠ Grants gotcha (bit us in prod)**: the scanner's loader drop/recreates
+  `market_scanner` tables on reload, which STRIPS `service_role` grants — the
+  deployed board was permission-broken until 2026-07-12. Fixed live:
+  `grant usage on schema market_scanner to service_role;`
+  `grant select on all tables in schema market_scanner to service_role;`
+  `grant insert on market_scanner.domain_backlinks, market_scanner.business_reviews, market_scanner.demand_trend to service_role;`
+  and — so future reloads keep them —
+  `grant market_scanner_loader to postgres;`
+  `alter default privileges for role market_scanner_loader in schema market_scanner grant select on tables to service_role;`
+  (Default privileges cover SELECT only; if the loader ever recreates the three
+  cache tables, re-grant INSERT.)
+- No new env vars (reuses `DATAFORSEO_LOGIN/PASSWORD`). DataForSEO 40203
+  (daily money limit) aborts a job without recording; balance context lives
+  in `docs/reference/leadoff-scanner/scanner-CLAUDE.md`.
+
+## ⏩ Update — 2026-07-11 · **LeadOff market-intelligence module (v1 read-only) BUILT**
 
 The suite's pre-client "which market do we enter" tool — the LeadOff scanner's
 graded board (34,352 US city×category markets + neighborhood combos), served

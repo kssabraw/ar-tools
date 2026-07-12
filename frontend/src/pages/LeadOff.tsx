@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 
@@ -55,6 +55,52 @@ interface MarketBrief extends MarketRow {
   competitors: Competitor[]
   enrichment: Enrichment | null
 }
+interface Neighborhood {
+  neighborhood: string
+  state: string
+  metro: string
+  service: string
+  demand_vol: number | null
+  cpc: number | null
+  exact_cat_holders: number | null
+  avg_top5_reviews: number | null
+  opportunity_score_v3: number | null
+  lead_value_mid: number | null
+  est_leads_mo: number | null
+  est_value_mo: number | null
+}
+interface TryoutRow {
+  grade: string
+  natl_pct: number
+  exp_val: number
+  value_mo: number | null
+  roi: number
+  rankab: number
+  category: string
+  vol: number | null
+  supply: number
+  rev_win: number
+  rating: number
+  namekw: number
+  exact_open: number
+}
+interface Tryout {
+  id: string
+  city_name: string
+  state_code: string
+  status: 'pending' | 'running' | 'complete' | 'failed'
+  results: TryoutRow[] | null
+  error: string | null
+  est_cost: number | null
+  created_at: string
+}
+interface ScoutEstimate {
+  est_cost: number
+  rd_misses: number
+  velocity_misses: number
+  trend_miss: boolean
+  fully_cached: boolean
+}
 
 type Sort = 'build' | 'roi' | 'expected' | 'value' | 'leads' | 'demand'
 type Tier = 'low' | 'mid' | 'high'
@@ -66,7 +112,10 @@ const GRADE_COLORS: Record<string, string> = {
 const usd = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `$${Math.round(n).toLocaleString()}`
 
+type View = 'board' | 'neighborhoods' | 'tryouts'
+
 export function LeadOff() {
+  const [view, setView] = useState<View>('board')
   const [filters, setFilters] = useState({ city: '', state: '', category: '', minDemand: '' })
   const [applied, setApplied] = useState(filters)
   const [sort, setSort] = useState<Sort>('build')
@@ -122,11 +171,28 @@ export function LeadOff() {
             </span>
           )}
         </div>
-        <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 16px' }}>
+        <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 12px' }}>
           Market intelligence — every scanned US market graded for lead-gen buildability.
           Sort by <b>ROI</b> to win cheapest. Estimates are planning numbers, not promises.
         </p>
 
+        {/* View tabs */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
+          <TabButton active={view === 'board'} onClick={() => setView('board')}>
+            <Radar size={13} /> Board
+          </TabButton>
+          <TabButton active={view === 'neighborhoods'} onClick={() => setView('neighborhoods')}>
+            <Compass size={13} /> Neighborhoods
+          </TabButton>
+          <TabButton active={view === 'tryouts'} onClick={() => setView('tryouts')}>
+            <FlaskConical size={13} /> Tryouts
+          </TabButton>
+        </div>
+
+        {view === 'neighborhoods' && <NeighborhoodsView />}
+        {view === 'tryouts' && <TryoutsView />}
+
+        {view === 'board' && <>
         {/* Filter / assumption bar */}
         <div style={barStyle}>
           <Field label="City">
@@ -228,10 +294,11 @@ export function LeadOff() {
             </table>
           </div>
         </div>
+        </>}
       </div>
 
       {/* Drill-in brief */}
-      {selected && (
+      {view === 'board' && selected && (
         <div style={panelStyle}>
           <button style={closeBtn} onClick={() => setSelected(null)} aria-label="Close"><X size={16} /></button>
           {briefLoading && <div style={{ textAlign: 'center', padding: 40 }}><Loader2 size={20} className="spin" /></div>}
@@ -295,10 +362,12 @@ export function LeadOff() {
                 </>
               ) : (
                 <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                  Not scouted yet — RD, review velocity, and trend land here once this market
-                  is enriched (paid pull; coming in v2).
+                  Not scouted yet — RD, review velocity, and demand trend land here
+                  after a scout pull.
                 </div>
               )}
+              <ScoutCard key={`${brief.city_id}:${brief.category_id}`}
+                cityId={brief.city_id} categoryId={brief.category_id} />
 
               <CreateClientCard key={`${brief.city_id}:${brief.category_id}`} brief={brief} />
 
@@ -310,6 +379,324 @@ export function LeadOff() {
           )}
         </div>
       )}
+    </div>
+  )
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────────────
+function TabButton({ active, onClick, children }: {
+  active: boolean; onClick: () => void; children: React.ReactNode
+}) {
+  return (
+    <button onClick={onClick} style={{
+      display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 13,
+      fontWeight: 600, padding: '7px 13px', borderRadius: 8, cursor: 'pointer',
+      border: '1px solid ' + (active ? '#0e7d6f' : '#cbd5e1'),
+      background: active ? '#e3f2ef' : '#fff', color: active ? '#0e7d6f' : '#475569',
+    }}>{children}</button>
+  )
+}
+
+// The nameable-neighborhood board (955 combos, precomputed). Scored on
+// demand/economics — neighborhood supply ≈ the parent metro's at 13z, so
+// competition columns are context, not signal (scanner lesson #5).
+function NeighborhoodsView() {
+  const [filters, setFilters] = useState({ metro: '', state: '', service: '' })
+  const [applied, setApplied] = useState(filters)
+  const [sort, setSort] = useState('demand')
+  const params = new URLSearchParams()
+  if (applied.metro) params.set('metro', applied.metro)
+  if (applied.state) params.set('state', applied.state)
+  if (applied.service) params.set('service', applied.service)
+  params.set('sort', sort)
+  params.set('limit', '100')
+  const { data, isLoading } = useQuery<{ neighborhoods: Neighborhood[] }>({
+    queryKey: ['leadoff-neighborhoods', applied, sort],
+    queryFn: () => api.get(`/leadoff/neighborhoods?${params.toString()}`),
+  })
+  const rows = data?.neighborhoods ?? []
+  return (
+    <>
+      <div style={barStyle}>
+        <Field label="Metro">
+          <input style={inputStyle} value={filters.metro} placeholder="any"
+            onChange={e => setFilters({ ...filters, metro: e.target.value })} />
+        </Field>
+        <Field label="State">
+          <input style={{ ...inputStyle, width: 52 }} value={filters.state} placeholder="any" maxLength={2}
+            onChange={e => setFilters({ ...filters, state: e.target.value.toUpperCase() })} />
+        </Field>
+        <Field label="Service">
+          <input style={inputStyle} value={filters.service} placeholder="any"
+            onChange={e => setFilters({ ...filters, service: e.target.value })} />
+        </Field>
+        <Field label="Sort">
+          <select style={inputStyle} value={sort} onChange={e => setSort(e.target.value)}>
+            <option value="demand">Demand</option>
+            <option value="value">$/mo if ranked</option>
+            <option value="leads">Est leads/mo</option>
+            <option value="v3">v3 (within-category)</option>
+          </select>
+        </Field>
+        <button style={primaryBtn} onClick={() => setApplied(filters)}>
+          <Search size={14} /> Apply
+        </button>
+      </div>
+      <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 860, fontSize: 13 }}>
+            <thead>
+              <tr>
+                {['Neighborhood', 'Metro', 'Service', 'Demand', 'Est leads/mo', '$/mo if ranked',
+                  'v3', 'CPC', 'Exact holders', 'Top-5 ★ reviews'].map(h => (
+                  <th key={h} style={thStyle}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((n, i) => (
+                <tr key={i}>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{n.neighborhood}</td>
+                  <td style={tdStyle}>{n.metro}, {n.state}</td>
+                  <td style={tdStyle}>{n.service}</td>
+                  <td style={tdStyle}>{n.demand_vol?.toLocaleString() ?? '—'}</td>
+                  <td style={tdStyle}>{n.est_leads_mo ?? '—'}</td>
+                  <td style={{ ...tdStyle, fontWeight: 600 }}>{usd(n.est_value_mo)}</td>
+                  <td style={tdStyle}>{n.opportunity_score_v3?.toFixed(1) ?? '—'}</td>
+                  <td style={tdStyle}>{n.cpc != null ? `$${n.cpc.toFixed(2)}` : '—'}</td>
+                  <td style={tdStyle}>{n.exact_cat_holders ?? '—'}</td>
+                  <td style={tdStyle}>{n.avg_top5_reviews != null ? Math.round(n.avg_top5_reviews) : '—'}</td>
+                </tr>
+              ))}
+              {isLoading && (
+                <tr><td colSpan={10} style={{ ...tdStyle, textAlign: 'center', padding: 32 }}>
+                  <Loader2 size={18} className="spin" style={{ verticalAlign: -4 }} /> Loading…
+                </td></tr>
+              )}
+              {!isLoading && !rows.length && (
+                <tr><td colSpan={10} style={{ ...tdStyle, textAlign: 'center', padding: 32, color: '#64748b' }}>
+                  No neighborhoods match.
+                </td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 10, lineHeight: 1.5 }}>
+        Neighborhood supply ≈ the parent metro's — pick on demand and economics, not the
+        competition columns. GBP-nameability is already filtered in (all rows are nameable).
+      </div>
+    </>
+  )
+}
+
+// Tryouts: score ANY off-list city (~$0.20, ~3 min) — the check_city port.
+function TryoutsView() {
+  const qc = useQueryClient()
+  const [city, setCity] = useState('')
+  const [state, setState] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [openId, setOpenId] = useState<string | null>(null)
+  const { data } = useQuery<{ tryouts: Tryout[] }>({
+    queryKey: ['leadoff-tryouts'],
+    queryFn: () => api.get('/leadoff/tryouts?limit=20'),
+    refetchInterval: q =>
+      (q.state.data?.tryouts ?? []).some(t => t.status === 'pending' || t.status === 'running')
+        ? 5000 : false,
+  })
+  const tryouts = data?.tryouts ?? []
+  const open = tryouts.find(t => t.id === openId)
+
+  const submit = async () => {
+    if (!city.trim() || state.trim().length !== 2 || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await api.post<{ tryout_id: string }>('/leadoff/tryout', {
+        city: city.trim(), state: state.trim().toUpperCase(),
+      })
+      setOpenId(res.tryout_id)
+      setCity('')
+      qc.invalidateQueries({ queryKey: ['leadoff-tryouts'] })
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'tryout_failed'
+      setError(msg === 'city_not_found'
+        ? 'City not found (covers US places ≥10k population — check spelling/state).'
+        : msg === 'budget_exceeded' ? 'Daily LeadOff budget reached — try tomorrow or raise the budget.'
+        : msg)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <div style={barStyle}>
+        <Field label="City">
+          <input style={inputStyle} value={city} placeholder="Moses Lake"
+            onChange={e => setCity(e.target.value)} />
+        </Field>
+        <Field label="State">
+          <input style={{ ...inputStyle, width: 52 }} value={state} placeholder="WA" maxLength={2}
+            onChange={e => setState(e.target.value.toUpperCase())} />
+        </Field>
+        <button style={primaryBtn} disabled={busy || !city.trim() || state.length !== 2} onClick={submit}>
+          {busy ? <Loader2 size={14} className="spin" /> : <FlaskConical size={14} />} Run tryout
+        </button>
+        <span style={{ fontSize: 11, color: '#92400e', background: '#fef3c7', borderRadius: 99, padding: '3px 10px', fontWeight: 600 }}>
+          paid pull · ~$0.20 · ~3 min
+        </span>
+      </div>
+      {error && <div style={errorBox}>{error}</div>}
+
+      <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+        <div style={{ width: 300, flexShrink: 0, border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
+          {tryouts.map(t => (
+            <button key={t.id} onClick={() => setOpenId(t.id)} style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%',
+              padding: '9px 12px', fontSize: 13, cursor: 'pointer', textAlign: 'left',
+              border: 'none', borderBottom: '1px solid #e2e8f0',
+              background: openId === t.id ? '#e3f2ef' : '#fff',
+            }}>
+              <span style={{ fontWeight: 600, color: '#0f172a' }}>{t.city_name}, {t.state_code}</span>
+              <span style={{ fontSize: 11, color: t.status === 'failed' ? '#b91c1c' : '#64748b' }}>
+                {(t.status === 'pending' || t.status === 'running')
+                  ? <Loader2 size={12} className="spin" style={{ verticalAlign: -2 }} />
+                  : t.status === 'failed' ? 'failed' : new Date(t.created_at).toLocaleDateString()}
+              </span>
+            </button>
+          ))}
+          {!tryouts.length && (
+            <div style={{ padding: 20, fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
+              No tryouts yet. Score any US city ≥10k population — the board only covers ≥30k.
+            </div>
+          )}
+        </div>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {open?.status === 'failed' && (
+            <div style={errorBox}>
+              {open.error === 'dataforseo_daily_limit'
+                ? 'DataForSEO daily money limit hit — nothing was recorded; retry after midnight UTC.'
+                : `Tryout failed: ${open.error}`}
+            </div>
+          )}
+          {(open?.status === 'pending' || open?.status === 'running') && (
+            <div style={{ padding: 40, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+              <Loader2 size={18} className="spin" style={{ verticalAlign: -4 }} /> Scoring {open.city_name},
+              {' '}{open.state_code} — demand pull, then the Maps field at 13z (~3 min)…
+            </div>
+          )}
+          {open?.status === 'complete' && (
+            <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 780, fontSize: 13 }}>
+                  <thead>
+                    <tr>{['Grade', 'Category', 'Exp $/mo', 'ROI $/rev', 'Demand', 'Supply',
+                          'Rev to win', 'Field ★', 'Cat open'].map(h => (
+                      <th key={h} style={thStyle}>{h}</th>
+                    ))}</tr>
+                  </thead>
+                  <tbody>
+                    {(open.results ?? []).map((r, i) => (
+                      <tr key={i}>
+                        <td style={tdStyle}><GradeChip grade={r.grade} /></td>
+                        <td style={{ ...tdStyle, fontWeight: 600 }}>{r.category}</td>
+                        <td style={{ ...tdStyle, fontWeight: 600 }}>{usd(r.exp_val)}</td>
+                        <td style={tdStyle}>{r.roi?.toFixed(1)}</td>
+                        <td style={tdStyle}>{r.vol?.toLocaleString() ?? '—'}</td>
+                        <td style={tdStyle}>{r.supply}</td>
+                        <td style={tdStyle}>{r.rev_win}</td>
+                        <td style={tdStyle}>{r.rating || '—'}</td>
+                        <td style={tdStyle}>{r.exact_open}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {!open && (
+            <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
+              Run a tryout or pick one from the list. Grades are vs the same national
+              reference as the board (raw demand, not regressed — outlier cities read hot).
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  )
+}
+
+// Scout (Pass 2, ~$0.10–1 cache-cheapened): fills the shared RD / velocity /
+// trend caches for one market; the brief re-reads them on completion.
+function ScoutCard({ cityId, categoryId }: { cityId: number; categoryId: string }) {
+  const qc = useQueryClient()
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const { data: est } = useQuery<ScoutEstimate>({
+    queryKey: ['leadoff-scout-est', cityId, categoryId],
+    queryFn: () => api.get(`/leadoff/scout/estimate?city_id=${cityId}&category_id=${encodeURIComponent(categoryId)}`),
+  })
+  useQuery<{ status: string; error: string | null }>({
+    queryKey: ['leadoff-scout-job', jobId],
+    queryFn: async () => {
+      const job = await api.get<{ status: string; error: string | null }>(`/leadoff/jobs/${jobId}`)
+      if (job.status === 'complete' || job.status === 'failed') {
+        setJobId(null)
+        if (job.status === 'failed') setError(job.error ?? 'scout_failed')
+        qc.invalidateQueries({ queryKey: ['leadoff-brief'] })
+        qc.invalidateQueries({ queryKey: ['leadoff-scout-est', cityId, categoryId] })
+      }
+      return job
+    },
+    enabled: Boolean(jobId),
+    refetchInterval: jobId ? 5000 : false,
+  })
+
+  const start = async () => {
+    if (busy || !est) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await api.post<{ job_id: string | null }>('/leadoff/scout', {
+        city_id: cityId, category_id: categoryId,
+      })
+      if (res.job_id) setJobId(res.job_id)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'scout_failed'
+      setError(msg === 'budget_exceeded'
+        ? 'Daily LeadOff budget reached — try tomorrow or raise the budget.' : msg)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (est?.fully_cached) {
+    return <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>Scouting data is fresh (≤90 days).</div>
+  }
+  return (
+    <div style={{ marginTop: 8 }}>
+      {jobId ? (
+        <div style={{ fontSize: 12, color: '#64748b' }}>
+          <Loader2 size={13} className="spin" style={{ verticalAlign: -2 }} /> Scouting — RD, review
+          velocity, trend (a few minutes)…
+        </div>
+      ) : (
+        <button style={{ ...secondaryBtn, width: '100%', justifyContent: 'center' }} disabled={busy || !est} onClick={start}>
+          {busy ? <Loader2 size={14} className="spin" /> : <Binoculars size={14} />}
+          Scout this market{est ? ` (~$${est.est_cost.toFixed(2)})` : ''}
+        </button>
+      )}
+      {est && !jobId && (
+        <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+          Paid pull: {est.rd_misses} domain RD, {est.velocity_misses} review-velocity,
+          {' '}{est.trend_miss ? 'demand trend' : 'trend cached'} — cached pieces are free.
+        </div>
+      )}
+      {error && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>{error}</div>}
     </div>
   )
 }
