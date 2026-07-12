@@ -171,33 +171,70 @@ def permit_relevance(category: str) -> str:
     return "high" if any(k in c for k in _CONSTRUCTION_ADJACENT) else "low"
 
 
-# ── Fetch + job ───────────────────────────────────────────────────────────────
+# ── Fetch + scheme discovery ──────────────────────────────────────────────────
+# The exact BPS Place URL layout can't be verified from the build sandbox
+# (census.gov egress is blocked), and it has drifted over the years — the
+# region subdirectory may be "West Region/" (with a space), "West/", or the
+# files may sit flat in Place/, and the year may be 4- or 2-digit. Rather than
+# hardcode one guess, the worker (which CAN reach census.gov) probes candidate
+# schemes with GET (census rejects HEAD) and locks the first that returns a
+# parseable file — reporting the tried URLs on total failure so a diagnosis is
+# never blind.
 
-async def _fetch_year(client: httpx.AsyncClient, year: int,
-                      regions: set[str]) -> dict[str, dict[str, float]]:
+_SUBDIR_PATTERNS = [
+    lambda word: f"{word}%20Region",   # "West Region/"
+    lambda word: word,                  # "West/"
+    lambda word: "",                    # flat, files directly in Place/
+]
+_NAME_PATTERNS = [
+    lambda reg, year: f"{reg}{year}a.txt",           # we2024a.txt
+    lambda reg, year: f"{reg}{year % 100:02d}a.txt",  # we24a.txt
+]
+
+
+def _build_url(si: int, ni: int, reg: str, year: int) -> str:
+    sub = _SUBDIR_PATTERNS[si](REGIONS[reg])
+    name = _NAME_PATTERNS[ni](reg, year)
+    return f"{BASE}/{sub}/{name}" if sub else f"{BASE}/{name}"
+
+
+def _looks_like_bps(text: str) -> bool:
+    head = "\n".join(text.splitlines()[:3]).lower()
+    return "," in head and ("unit" in head or "place" in head or "survey" in head)
+
+
+async def _discover_scheme(client: httpx.AsyncClient,
+                           probe_reg: str) -> tuple[int, int, int]:
+    """Return (vintage_year, subdir_idx, name_idx) for the newest parseable
+    annual file. Raises with the tried URLs+statuses on total failure."""
+    tried: list[str] = []
+    this_year = datetime.now(timezone.utc).year
+    for year in range(this_year, this_year - 5, -1):
+        for si in range(len(_SUBDIR_PATTERNS)):
+            for ni in range(len(_NAME_PATTERNS)):
+                url = _build_url(si, ni, probe_reg, year)
+                try:
+                    resp = await client.get(url, timeout=60.0)
+                except httpx.HTTPError as exc:
+                    tried.append(f"{url} -> {type(exc).__name__}")
+                    continue
+                if resp.status_code == 200 and _looks_like_bps(resp.text):
+                    return year, si, ni
+                tried.append(f"{url} -> {resp.status_code}")
+    raise RuntimeError("bps_scheme_not_found: tried " + " | ".join(tried[:24]))
+
+
+async def _fetch_year(client: httpx.AsyncClient, year: int, regions: set[str],
+                      si: int, ni: int) -> dict[str, dict[str, float]]:
     merged: dict[str, dict[str, float]] = {}
     for reg in sorted(regions):
-        url = f"{BASE}/{REGIONS[reg]}/{reg}{year}a.txt"
-        resp = await client.get(url, timeout=120.0)
+        resp = await client.get(_build_url(si, ni, reg, year), timeout=120.0)
         resp.raise_for_status()
         for k, v in parse_bps(resp.text).items():
             prev = merged.get(k)
             if prev is None or v["units_total"] > prev["units_total"]:
                 merged[k] = v
     return merged
-
-
-async def _latest_vintage(client: httpx.AsyncClient) -> int:
-    year = datetime.now(timezone.utc).year
-    for y in range(year, year - 4, -1):
-        try:
-            resp = await client.head(f"{BASE}/{REGIONS['we']}/we{y}a.txt",
-                                     timeout=30.0)
-            if resp.status_code == 200:
-                return y
-        except httpx.HTTPError:
-            continue
-    raise RuntimeError("bps_no_recent_vintage")
 
 
 def _cities() -> list[dict[str, Any]]:
@@ -215,9 +252,12 @@ async def run_permits_job(job: dict) -> None:
         regions = {STATE_REGION[c["state_code"]] for c in cities
                    if c.get("state_code") in STATE_REGION}
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            vintage = await _latest_vintage(client)
-            latest = await _fetch_year(client, vintage, regions)
-            priors = [await _fetch_year(client, vintage - i, regions)
+            # probe with a region we always have (West covers CA etc.); if the
+            # board somehow has no western cities, fall back to any region.
+            probe_reg = "we" if "we" in regions else sorted(regions)[0]
+            vintage, si, ni = await _discover_scheme(client, probe_reg)
+            latest = await _fetch_year(client, vintage, regions, si, ni)
+            priors = [await _fetch_year(client, vintage - i, regions, si, ni)
                       for i in range(1, TREND_BASE_YEARS + 1)]
 
         now = datetime.now(timezone.utc).isoformat()
