@@ -1,9 +1,29 @@
-# PACE — Project Assignment, Coordination & Execution Agent — Module Plan v1.2
+# PACE — Project Assignment, Coordination & Execution Agent — Module Plan v1.3
 
-**Status:** Proposed · **Sibling to:** SerMaStr (`seo-strategist-agent-plan-v1_0.md`)
-· **Rides:** the native task manager (`in-app-task-manager-prd-v1_0.md`) + the
-SerMaStr assistant (`services/slack_assistant/`) · **Authored:** 2026-07-11 ·
-**Revised:** 2026-07-11 (v1.1 after review #1, v1.2 after review #2)
+**Status:** Phases 0–4 **built + live** (behind `pace_enabled`, enabled in
+production 2026-07-12) · Phases 5–7 **proposed** (v1.3 full-PM scope) · **Sibling
+to:** SerMaStr (`seo-strategist-agent-plan-v1_0.md`) · **Rides:** the native task
+manager (`in-app-task-manager-prd-v1_0.md`) + the SerMaStr assistant
+(`services/slack_assistant/`) · **Authored:** 2026-07-11 · **Revised:** 2026-07-11
+(v1.1 after review #1, v1.2 after review #2), 2026-07-12 (v1.3 full-PM scope)
+
+> **Revision note (v1.3 — full-PM scope).** Owner direction (2026-07-12): PACE must
+> act as a full delivery **project manager** — assign work to the *correct* party
+> (role/skill matching, not just capacity), watch hours + overdue (**built**), set up
+> monthly boards (**built**), and **write PM reports**. This revision adds:
+> **(a)** a role/skill **competency model** + a deterministic **workload-aware
+> placement engine** (§4.6) that auto-assigns one-off + approved tasks to the best-fit
+> **skilled, eligible, least-loaded** member — with an **overload fallback** (hold +
+> flag when the skilled pool is at capacity);
+> **(b)** the **approval → PACE placement hook** (an approved SerMaStr proposal is
+> auto-placed, §5);
+> **(c)** **PACE delivery reports** (§4.7 — throughput / overdue / capacity-utilization
+> / month-completion; internal-facing; deterministic + optional narrative);
+> **(d)** **dedicated-channel routing** (§10.2 resolved — PACE gets its own channel).
+> Phases 0–4 are **built + merged** (PR #335); the above are **new Phases 5–7** (§8).
+> **Design guardrail:** deterministic *system* placement (the same class as the
+> already-shipping monthly `distribute_tasks`) is distinct from LLM-*initiated* writes,
+> which stay authorized + actor-bound + reply-*yes* gated (§9).
 
 > **Name (resolved).** **PACE — Project Assignment, Coordination & Execution.**
 > (Was the working name "PMaStr"; open naming decision now closed.) Positioning:
@@ -243,8 +263,9 @@ registry" would include them, breaking the boundary:
 PERSONA_ACTIONS = {
     "strategist": { *existing analysis/report/approved-proposal actions* },   # NO PACE writes
     "pace": {
-        "reassign_task", "set_task_due", "bump_task_due", "nudge_assignee",
-        "generate_client_month", "unblock_task",
+        "reassign_task", "assign_task", "set_task_due", "bump_task_due",   # assign_task (v1.3, §4.6)
+        "nudge_assignee", "generate_client_month", "unblock_task",
+        "generate_pace_report",  # v1.3 (§4.7)
         "run_strategy_review",   # the ONE handoff exception (resolves §4.1↔§5)
     },
 }
@@ -275,6 +296,8 @@ Each: permission-checked at stage (§3.2), target-resolved before the confirm
 | action | does | min role |
 |---|---|---|
 | `reassign_task` | move a task to another member (from a capacity+eligibility candidate list) | staff |
+| `assign_task` (v1.3) | auto-place an unassigned task on the correct **skilled, eligible, least-loaded** member (§4.6); holds + flags if that pool is over capacity | staff |
+| `generate_pace_report` (v1.3) | build a PACE delivery report (per-client or portfolio, §4.7) | staff |
 | `set_task_due` / `bump_task_due` | set/shift a due date | staff (own task: team_member) |
 | `nudge_assignee` | remind an assignee (delivery below) | staff (self: team_member) |
 | `generate_client_month` | run `task_monthly` now (actor-threaded, §3.2) | admin (policy: staff) |
@@ -312,6 +335,69 @@ routing bypass (§4.1 step 4), so it's never restricted to a sticky/named client
 Add `_ctx_delivery(supabase, client_id, today)` to `_CONTEXT_PROVIDERS` — the per-client
 board digest — so SerMaStr *sees* delivery health. Read-only; the one safe shared seam.
 
+### 4.6 Workload-aware assignment with role/skill matching (the "correct party") — v1.3
+The gap today: monthly *template* tasks auto-distribute by `distribute_tasks`, but
+**one-off and approved tasks land unassigned**, and distribution is **capacity-only**
+(round-1 review #10) — it doesn't know *who can do what*. v1.3 adds a competency layer +
+a deterministic placement engine.
+
+**Competency model (additive schema).** Each task carries a `category_key` (seeded:
+`content`, `link_building`, `gbp_authority`, `strategy`). Add a per-member competency map:
+```
+task_member_skills(member_gid → asana_team_members, category_key → task_categories,
+                   weight int default 1, is_primary bool default false)
+```
+A normalized table, editable on the **Workload/Team page** beside capacity + the
+suite-user link. A member with **no** skill rows is treated as a **generalist** (eligible
+for any category) so the feature degrades safely on day one (no roster setup required).
+
+**Placement algorithm (`services/pm_assign.pick_assignee(task, …)` — pure, unit-tested):**
+1. `category = task.category_key` (missing ⇒ any).
+2. **Candidate pool** = active members ∩ **client-eligible** (existing
+   `asana_client_projects.auto_assignee_gids`; empty ⇒ all active) ∩ **skilled**
+   (a `task_member_skills` row for `category`, **or** generalist).
+3. **Rank** by remaining weekly capacity (`build_team_workload`: `weekly_hours −
+   committed est. hours`), then `is_primary` for the category, then fewest open tasks,
+   then stable gid order.
+4. **Pick the top** ⇒ the correct party.
+5. **Overload fallback:** if every candidate is **over** capacity (remaining < the task's
+   est. hours, or already negative), do **not** force it — leave unassigned, set the
+   task's placement flag, and PACE surfaces it ("*Acme* — approved work couldn't be
+   placed; the content team is at capacity this week → reassign or defer"). Config
+   `pace_placement_overload = hold | least_over` (default `hold`).
+6. **No skilled candidate** ⇒ widen to eligible-ignoring-skill with a note; still none ⇒
+   unassigned + flag.
+
+**Where placement runs:**
+- **Approval hook** (§5) — `asana_push.push_proposal` calls `pick_assignee` after creating
+  the (previously unassigned) task.
+- **Producer tasks** — optionally auto-place `rank_drop` / `maps_alert` / `action_plan`
+  tasks (`pace_autoplace_producers`, default **off** first).
+- **Conversational** — a new `assign_task` action ("PACE, assign the GBP task") auto-picks,
+  vs `reassign_task` where a human names the person. The auto-pick still shows the choice
+  behind the actor-bound reply-*yes*.
+
+**Safety framing.** Deterministic placement is **distribution, not an LLM decision** — the
+same class as `distribute_tasks`, which already assigns without a per-task confirm. The LLM
+never picks the person; it only *invokes* placement. Every placement writes `task_activity`
+(actor = system or the requester) and is freely re-assignable. LLM-*initiated* one-off
+writes stay confirm-gated (§9).
+
+### 4.7 PACE delivery reports (`services/pace_report.py`) — v1.3
+PACE's internal **PM status report** — distinct from the client-facing Client Reporting
+module (that one is owner-friendly + external). Audience: leads/owners. Deterministic core
+over `pm_signals` + `task_workload` + `task_service`, with an optional Haiku narrative:
+- **Month completion** — done vs planned per client (the pace read, as a number).
+- **Throughput** — tasks completed this period, by category and by person.
+- **Overdue & stuck** — overdue count, the oldest, blocked-N-days.
+- **Capacity utilization** — per member: committed vs `weekly_hours`, over/under.
+- **Backlog health** — unassigned + unacted-on producer tasks.
+
+Scope: per-client **or** portfolio. Delivery: in-app + Slack now; **PDF via the shared
+`client_report.render_pdf`** later (reuse, not new infra). Cadence: on-demand
+(`generate_pace_report`, PACE-scoped action) + optional weekly on the scheduler
+(`pace_report_weekday`, default off). Pure builders unit-tested.
+
 ---
 
 ## 5. Boundaries & handoff with SerMaStr
@@ -322,8 +408,13 @@ board digest — so SerMaStr *sees* delivery health. Read-only; the one safe sha
 - **PACE → strategist:** a delivery problem that's really a *strategy* problem → PACE
   surfaces it and offers `run_strategy_review` (the one strategist action in PACE's
   scope, §4.1); it does not decide.
-- **Strategist → PACE:** an **approved** proposal already becomes a task
-  (`asana_push.push_proposal`); PACE owns it as board work thereafter.
+- **Strategist → PACE (v1.3 — the closest thing to the owner's loop):** an **approved**
+  proposal becomes a task *and is auto-placed* by PACE's engine (§4.6) — the correct
+  **skilled, eligible, least-loaded** party — or **held + flagged** if that pool is at
+  capacity. PACE owns it as board work thereafter. This realizes "SerMaStr sends the
+  request → PACE assigns it out, or holds if the team's overloaded" **with the human
+  approval preserved in the middle** (SerMaStr still proposes-never-executes; the approval
+  is the gate, placement is deterministic).
 - **Router rule (pure, testable):** PACE-shape vs strategy-shape gates the persona (§4.1).
 
 ---
@@ -337,6 +428,9 @@ board digest — so SerMaStr *sees* delivery health. Read-only; the one safe sha
   duplicate insert (e.g. rolling-deploy overlap) hits the unique constraint and is a no-op.
   Chosen over the v1.1 query-guard, which has a TOCTOU race. Existing notifications keep a
   null key (unique ignores nulls).
+- `task_member_skills(member_gid, category_key, weight, is_primary)` (v1.3) — the role/skill
+  competency map (§4.6), editable on the Workload page. **No rows for a member ⇒ generalist**
+  (eligible for any category), so day-one placement works before anyone fills it in.
 - Optional (later) `pace_snooze` (client_id, task_id, kind, until) — deferred.
 
 **Config (`config.py`) — build-ready (types/defaults/env):**
@@ -353,6 +447,12 @@ pace_stale_thresholds: dict = {                # by status KEY; category fallbac
     "blocked": 3, "in_review": 5, "sent_to_client": 5, "in_progress": 10,
 }
 pace_stale_category_fallback: dict = {"blocked": 3, "in_progress": 10}
+# --- v1.3 full-PM scope ---
+pace_slack_channel: str = ""                   # PACE_SLACK_CHANNEL — dedicated PACE channel (empty ⇒ shared, routed by shape)
+pace_autoplace_producers: bool = False         # auto-place rank_drop/maps_alert/action_plan tasks (§4.6)
+pace_placement_overload: str = "hold"          # hold | least_over — when the skilled pool is at capacity (§4.6)
+pace_report_weekday: int | None = None         # weekly PACE report DOW (None ⇒ on-demand only, §4.7)
+pace_report_model: str = "claude-haiku-4-5-20251001"  # optional report narrative
 ```
 The digest runs on the **existing scheduler tick at `gsc_ingest_hour_utc`** (no new hour
 setting). **Timezone: UTC**, matching every other suite sweep; a team-timezone digest hour
@@ -376,6 +476,10 @@ actionable. Conversational: one cheap call/question. Keeping PACE off Sonnet is 
 ---
 
 ## 8. Phasing (identity/permissions before actions)
+
+> **Phases 0–4 are BUILT + merged** (PR #335; live behind `pace_enabled`, enabled in
+> production 2026-07-12). Phases 5–7 below are the **v1.3 full-PM expansion** and are the
+> current build target (owner priority order: **spec → placement → reports → channel**).
 
 **Phase 0A — deterministic reads.** `pm_signals.py` (reopen-aware staleness, overdue,
 unassigned, missing-due-date, unacted-on producer tasks, dual-mode month-pace heuristic,
@@ -411,19 +515,53 @@ unmapped Slack user is told to link.
 
 ---
 
+### v1.3 full-PM phases (proposed)
+
+**Phase 5 — role/skill placement engine.** `task_member_skills` migration + a Workload-page
+competency editor; the pure `pm_assign.pick_assignee` (skilled ∩ eligible, least-loaded,
+overload fallback); the **approval hook** (`push_proposal` auto-places its task); the
+`assign_task` conversational action; optional producer auto-placement (flag-gated).
+*Acceptance:* an approved proposal lands on the correct skilled/eligible/least-loaded
+member; when that pool is over capacity the task is held + flagged (not force-assigned); a
+generalist-only roster (no skill rows) still places; pure `pick_assignee` unit-tested incl.
+the overload + no-skilled-candidate edges.
+
+**Phase 6 — PACE delivery reports.** `services/pace_report.py` deterministic builders
+(completion / throughput / overdue-&-stuck / capacity-utilization / backlog) + optional
+Haiku narrative; the `generate_pace_report` PACE action + optional weekly scheduler hook.
+*Acceptance:* a per-client report reflects live board data; portfolio rolls up; builders
+unit-tested; delivery best-effort per channel.
+
+**Phase 7 — dedicated PACE channel.** `pace_slack_channel` + channel-scoped routing: in the
+PACE channel PACE answers **every** message (delivers on delivery asks, defers strategy to
+SerMaStr) and **SerMaStr is excluded there**; in every other channel PACE stays out. The
+daily digest + any report deliveries route to that channel when set. *Acceptance:* a message
+in the PACE channel is answered by PACE regardless of shape; the same message in the SerMaStr
+channel is untouched by PACE; empty `pace_slack_channel` ⇒ today's shared-channel shape
+routing (backward-compatible).
+
+---
+
 ## 9. Non-goals (v1)
-Time tracking; Gantt/dependencies; **auto-executing without authorization or confirmation**
-(every write is authorized, actor-bound, and reply-*yes* gated); owning strategy/
-escalations; a second notification channel or per-user inbox (shared follow-up); Block Kit
-interactive buttons (Option C, later); holiday-aware business days; cross-client capacity
-planning from the workbook.
+Time tracking; Gantt/dependencies; **auto-executing LLM-*initiated* writes without
+authorization or confirmation** — every *conversational* write is authorized, actor-bound,
+and reply-*yes* gated; **deterministic system placement** (monthly `distribute_tasks` + the
+v1.3 approval-hook placement, §4.6) assigns without a per-task confirm — the same class as
+the already-shipping monthly distribution — and is fully audited + freely re-assignable, so
+it is **not** an "agent auto-executing" hole. Also out: owning strategy/escalations; a
+per-user notification inbox (shared follow-up with the strategist); Block Kit interactive
+buttons (Option C, later); holiday-aware business days; cross-client capacity planning from
+the workbook; **skill/role auto-detection** (competencies are human-curated on the Workload
+page, §4.6).
 
 ---
 
 ## 10. Open decisions (defaults chosen; flag to change)
 1. **Name — resolved: PACE.**
-2. **One channel or two** — v1 shares the SerMaStr channel + `/assistant`, routed by shape;
-   split to a dedicated PACE channel if the voices blur.
+2. **One channel or two — resolved (v1.3): two.** PACE gets a **dedicated channel**
+   (`pace_slack_channel`, Phase 7) — it owns that channel and defers strategy, and SerMaStr
+   is excluded there (VA-facing PACE vs owner-facing SerMaStr). Shared-channel shape-routing
+   remains the fallback when `pace_slack_channel` is empty.
 3. **Digest frequency — resolved:** one agency-level deterministic digest per workday,
    grouped by client, capped at 8, no per-client/per-VA push.
 4. **Model tier** — Haiku-tier; bump only if ranking quality disappoints.
