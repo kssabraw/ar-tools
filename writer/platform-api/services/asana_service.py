@@ -104,6 +104,26 @@ def section_name_exists(sections: list[dict], name: str) -> bool:
     return any((s.get("name") or "").strip().casefold() == target for s in sections)
 
 
+def duplicate_template_names(names: list[str]) -> list[str]:
+    """Names appearing more than once (case/whitespace-insensitive), in first-seen
+    form. The template editor's replace-style PUT rejects these BEFORE its
+    delete+insert — the DB's unique (client_id, lower(trim(name))) index would
+    otherwise fail the insert AFTER the delete wiped the client's template. Pure."""
+    seen: dict[str, str] = {}
+    dupes: list[str] = []
+    for raw in names:
+        name = (raw or "").strip()
+        if not name:
+            continue
+        key = name.casefold()
+        if key in seen:
+            if seen[key] not in dupes:
+                dupes.append(seen[key])
+        else:
+            seen[key] = name
+    return dupes
+
+
 def month_insert_anchor_gid(sections: list[dict]) -> Optional[str]:
     """The section GID to insert a new month *before* (None → append at end).
 

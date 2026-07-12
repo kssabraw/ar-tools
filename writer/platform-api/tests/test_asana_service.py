@@ -313,3 +313,17 @@ def test_build_workload_report_sorts_by_hours_and_default_capacity():
     assert [m["name"] for m in report["members"]] == ["Minda", "Ivy"]
     assert [m["name"] for m in report["overloaded"]] == ["Minda"]
     assert report["thresholds"]["default_weekly_hours"] == 30
+
+
+# ── duplicate_template_names (unique-template guard, 2026-07-12) ─────────────
+def test_duplicate_template_names_case_and_whitespace_insensitive():
+    from services.asana_service import duplicate_template_names
+
+    # Case/whitespace variants of one name are duplicates (matches the DB's
+    # unique (client_id, lower(trim(name))) index).
+    assert duplicate_template_names(["GBP Blast", "gbp blast ", "Map Embeds"]) == ["GBP Blast"]
+    # Clean list → no dupes; blanks/Nones ignored.
+    assert duplicate_template_names(["A", "B", "", None, "C"]) == []
+    # Each duplicated name reported once, first-seen form, order preserved.
+    assert duplicate_template_names(["A", "a", "A", "B", "b"]) == ["A", "B"]
+    assert duplicate_template_names([]) == []
