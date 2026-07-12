@@ -858,6 +858,11 @@ class Settings(BaseSettings):
     # composite). Below it the check reads needs_human — page-type attribution
     # is heuristic, so QA flags rather than auto-bounces on structure alone.
     qa_structural_threshold: float = 70.0
+    # Flap guard: an automatic re-trigger within this window of a PASSED
+    # review is skipped (drag-out-drag-back must not re-pay the review).
+    # Pass-only — fail re-entry is the rework loop, needs_human re-entry is
+    # the recovery path. Manual Run QA always bypasses. 0 disables.
+    qa_recheck_cooldown_minutes: int = 30
 
     # PACE — Project Assignment, Coordination & Execution agent
     # (docs/modules/project-manager-agent-plan-v1_0.md). Phase 0A ships only the
