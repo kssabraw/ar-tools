@@ -57,6 +57,7 @@ from services.leadoff_actions import (
 )
 from services.leadoff_ai_probe import run_ai_probe_job as run_leadoff_ai_probe_job
 from services.leadoff_permits import run_permits_job as run_leadoff_permits_job
+from services.leadoff_geocode import run_geocode_job as run_leadoff_geocode_job
 from services.local_relevance import run_local_relevance_job
 from services.page_structure_scraper import analyze_page_structure
 from services.silo_dedup import process_silo_dedup_job
@@ -433,6 +434,8 @@ async def _process_job(job: dict) -> None:
         await run_leadoff_ai_probe_job(job)
     elif job_type == "leadoff_permits":
         await run_leadoff_permits_job(job)
+    elif job_type == "leadoff_geocode":
+        await run_leadoff_geocode_job(job)
     elif job_type == "domain_overview":
         await run_domain_overview_job(job)
     elif job_type == "keyword_gap":
