@@ -54,8 +54,12 @@ def test_render_pulse_full():
 
 def test_render_pulse_quiet_week_stays_positive():
     body = P.render_pulse("Acme", date(2026, 7, 13), [], [], [], [], [], "Agency")
-    assert "Groundwork and ongoing optimization" in body
-    assert "Continuing the monthly plan" in body
+    # A light week leads with the always-on work — never "no deliverables".
+    assert "no deliverable" not in body.lower() and "nothing" not in body.lower()
+    assert "Monitoring your Google search rankings" in body
+    assert "Tracking your visibility across AI search" in body
+    assert "competitors" in body.lower()
+    assert "Continuing your campaign" in body
 
 
 def test_render_pulse_caps_long_sections():
@@ -149,7 +153,12 @@ def test_narrative_facts_carry_only_filtered_data():
 
 def test_narrative_facts_quiet_week():
     facts = P.narrative_facts("Acme", date(2026, 7, 13), [], [], [], [], [], "Agency")
-    assert "ongoing groundwork week" in facts and "continuing the monthly plan" in facts
+    # The always-on block is present as real work the model can lead with, and
+    # the model is explicitly forbidden from saying "no deliverables".
+    assert "ALWAYS-ON WORK" in facts
+    assert "Monitoring your Google search rankings" in facts
+    assert "NEVER say" in facts and "no deliverables" in facts
+    assert "continuing the monthly plan" in facts
 
 
 def test_narrate_pulse_disabled_returns_none(monkeypatch):
