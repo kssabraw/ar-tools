@@ -13,6 +13,7 @@ def _configured(monkeypatch):
     monkeypatch.setattr(settings, "asana_token", "tok")
     monkeypatch.setattr(settings, "asana_workspace_gid", "ws1")
     monkeypatch.setattr(settings, "asana_workload_enabled", True)
+    monkeypatch.setattr(settings, "workload_overload_alert_enabled", True)
     monkeypatch.setattr(settings, "asana_effort_field_gid", "f_hrs")
     monkeypatch.setattr(settings, "asana_default_task_hours", 1.0)
     monkeypatch.setattr(settings, "asana_default_weekly_hours", 30.0)
@@ -119,6 +120,26 @@ async def test_alert_emits_when_overloaded(monkeypatch):
     assert emitted["severity"] == "warning"
     assert "Minda" in emitted["title"]
     assert emitted["payload"]["link"] == "/workload"
+
+
+async def test_alert_silent_when_overload_alert_disabled(monkeypatch):
+    monkeypatch.setattr(settings, "workload_overload_alert_enabled", False)
+    calls = []
+
+    async def _report():
+        return {
+            "configured": True,
+            "members": [],
+            "overloaded": [{"gid": "minda", "name": "Minda", "flags": ["9.0h"]}],
+            "thresholds": {},
+        }
+
+    monkeypatch.setattr(asana_workload, "build_team_workload", _report)
+    monkeypatch.setattr(notifications, "emit", lambda *a, **k: calls.append(1))
+
+    result = await asana_workload.run_workload_alert()
+    assert result == {"emitted": False, "reason": "alert_disabled"}
+    assert calls == []
 
 
 async def test_alert_silent_when_none_overloaded(monkeypatch):

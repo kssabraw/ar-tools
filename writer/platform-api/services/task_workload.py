@@ -126,6 +126,8 @@ async def run_workload_alert() -> dict:
     """Daily overload alert from native tasks (the scheduler calls this instead
     of the Asana one once native_tasks_enabled). Same digest shape/kind flow as
     asana_workload.run_workload_alert."""
+    if not settings.workload_overload_alert_enabled:
+        return {"emitted": False, "reason": "alert_disabled"}
     report = build_team_workload()
     overloaded = report.get("overloaded") or []
     if not overloaded:
