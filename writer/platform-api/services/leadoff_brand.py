@@ -61,6 +61,16 @@ def digits(phone: Optional[str]) -> str:
     return re.sub(r"\D", "", phone or "")
 
 
+def dashed_phone(phone: Optional[str]) -> Optional[str]:
+    """US phone in the punctuated form the Content Analysis index actually
+    matches (probe 2026-07-12: '913-423-3457' hits, the stored Maps
+    '+1913-423-3457' and bare '9134233457' both miss). None when not a
+    10-digit US number."""
+    d = digits(phone)
+    d = d[1:] if len(d) == 11 and d.startswith("1") else d
+    return f"{d[:3]}-{d[3:6]}-{d[6:]}" if len(d) == 10 else None
+
+
 def is_generic_name(name: str, category_name: str, city_name: str) -> bool:
     """True when every word of the business name is a category word, a city
     word, the city's initials ("KC"), or a field-generic stopword — i.e. the
@@ -400,13 +410,17 @@ async def fetch_footprint(client, site_misses: list[str],
                        extra={"error": str(exc)})
 
     # NAP citations — phone-number mention count (deep: everyone with a
-    # phone; light: generic brands only, where the bare name can't be trusted)
-    nap_keys = [k for k in keys if mention_misses[k]["phone"]
+    # phone; light: generic brands only, where the bare name can't be trusted).
+    # The phone MUST be dashed-normalized — the raw Maps '+1913-…' matches
+    # nothing in the CA index (probe 2026-07-12). Skip un-normalizable phones.
+    nap_keys = [k for k in keys
+                if dashed_phone(mention_misses[k]["phone"])
                 and (deep or mention_misses[k]["generic"])]
     try:
         tasks = await _batched_tasks(
             client, "/content_analysis/summary/live",
-            [{"keyword": f'"{mention_misses[k]["phone"]}"'} for k in nap_keys])
+            [{"keyword": f'"{dashed_phone(mention_misses[k]["phone"])}"'}
+             for k in nap_keys])
         for i, t in enumerate(tasks):
             summary = parse_mentions_summary(t)
             if summary:
