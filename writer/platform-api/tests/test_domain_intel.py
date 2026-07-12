@@ -200,6 +200,46 @@ def test_build_overview_merges_and_falls_back():
     assert out["rd"] == 240
 
 
+def test_gap_alert_digest(monkeypatch):
+    monkeypatch.setattr(di.settings, "domain_intel_gap_alert_min", 3)
+    gaps = [
+        {"keyword": "roof repair", "volume": 2000},
+        {"keyword": "roof restoration", "volume": 800},
+        {"keyword": "gutter cleaning", "volume": 300},
+        {"keyword": "old one", "volume": 100},
+    ]
+    # 3 newly-opened (prev has "old one") → clears threshold of 3
+    d = di.gap_alert_digest({"old one"}, gaps)
+    assert d is not None
+    assert d["count"] == 3
+    assert "roof repair" in d["summary"] and "new competitor keyword gaps" in d["title"]
+    # only 2 newly-opened → below threshold → None
+    assert di.gap_alert_digest({"roof restoration", "gutter cleaning", "old one"}, gaps) is None
+    # empty prev, all new, clears threshold
+    assert di.gap_alert_digest(set(), gaps)["count"] == 4
+
+
+def test_build_domain_intel_actions():
+    from services import reopt_planner as rp
+    gaps = [
+        {"keyword": "roof repair", "competitor_domain": "rival.com", "competitor_position": 3,
+         "client_position": None, "volume": 2000, "opportunity_score": 500},
+        {"keyword": "roof restoration", "competitor_domain": "rival.com", "competitor_position": 5,
+         "client_position": 34, "volume": 800, "opportunity_score": 200},
+    ]
+    actions = rp.build_domain_intel_actions("c1", gaps)
+    assert len(actions) == 2
+    a = actions[0]
+    assert a["kind"] == "keyword_gap" and a["source"] == "organic"
+    assert a["keyword"] == "roof repair"
+    assert "rival.com" in a["diagnosis"] and "you don't rank" in a["diagnosis"]
+    assert a["cta_path"] == "clients/c1/domain-intel"
+    # the deeper-position gap names the client's current rank
+    assert "you rank #34" in actions[1]["diagnosis"]
+    # empty → no actions (additive: unchanged plan behavior)
+    assert rp.build_domain_intel_actions("c1", []) == []
+
+
 def test_is_snapshot_fresh(monkeypatch):
     now = datetime(2026, 7, 12, 12, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(di.settings, "domain_intel_cache_hours", 24)
