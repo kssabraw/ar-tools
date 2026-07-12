@@ -475,6 +475,11 @@ async def gsc_scheduler() -> None:
                 # pace_enabled + a configured pace_report_weekday (off by default).
                 from services.pace_report import maybe_emit_weekly as run_pace_report
                 run_pace_report(now.date())
+                # Daily PACE Chase Plan (v1.4 initiative) — self-gated on
+                # pace_enabled + pace_initiative_enabled (off by default); the
+                # notification dedupe_key makes it once-per-day across restarts.
+                from services.pace_proposals import run_daily_chase_plan
+                await run_daily_chase_plan(now.date())
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,

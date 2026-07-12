@@ -835,6 +835,22 @@ class Settings(BaseSettings):
     # Empty ⇒ shared-channel shape-routing (backward-compatible). PACE's digest +
     # weekly report also post here when set.
     pace_slack_channel: str = ""
+    # PACE v1.4 — initiative (§4.8–§4.13). Master gate for the Chase Plan engine,
+    # follow-through episodes, triage, rebalancing, slip forecasting, DM briefs.
+    pace_initiative_enabled: bool = False
+    # Per-action-kind autonomy: "propose" (default — every actionable write rides
+    # the confirm-gated Chase Plan) | "auto" (execute at plan build, reported as
+    # done). All-propose in v1.4 by owner ruling; graduating a kind is a config
+    # flip, not a rebuild.
+    pace_autonomy: dict = {}
+    # Chase Plan cap (overflow summarized, priority-ranked first).
+    pace_chase_max_items: int = 10
+    # Aggressive cadence (owner ruling): re-propose daily while stuck; escalate
+    # publicly after N business days without movement.
+    pace_chase_renudge_days: int = 1
+    pace_chase_escalate_business_days: int = 3
+    # Slip-forecast look-ahead window (§4.12).
+    pace_slip_horizon_days: int = 5
 
     # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
     # Read-only v1 serves the precomputed market_scanner.leadoff_board.

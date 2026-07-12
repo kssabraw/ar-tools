@@ -571,8 +571,10 @@ async def _run_action(name: str, client_id: str, args: Optional[dict]) -> str:
     return out
 
 
-async def post_message(channel: str, text: str, thread_ts: Optional[str] = None) -> None:
-    """Post a message to a channel (optionally threaded) via chat.postMessage."""
+async def post_message(channel: str, text: str, thread_ts: Optional[str] = None) -> Optional[str]:
+    """Post a message to a channel (optionally threaded) via chat.postMessage.
+    Returns the posted message's ``ts`` (so a caller can key a thread on it —
+    the Chase Plan's batch confirm); existing callers ignore the return."""
     body: dict = {"channel": channel, "text": text, "mrkdwn": True}
     if thread_ts:
         body["thread_ts"] = thread_ts
@@ -586,6 +588,7 @@ async def post_message(channel: str, text: str, thread_ts: Optional[str] = None)
         data = resp.json()
     if not data.get("ok"):
         raise RuntimeError(f"slack_error: {data.get('error')}")
+    return data.get("ts")
 
 
 async def fetch_thread_history(channel: str, thread_ts: str, skip_ts: Optional[str]) -> list[dict]:
