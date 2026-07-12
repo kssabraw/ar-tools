@@ -490,6 +490,11 @@ async def gsc_scheduler() -> None:
                 # pace_daily_brief_push (off until the im:write scope lands).
                 from services.pace_briefs import run_morning_briefs
                 await run_morning_briefs(now.date())
+                # Weekly Pulse — the copy-paste client update block on each
+                # workspace (staff-delivered; self-gated on pulse_weekday +
+                # pulse_enabled; idempotent upsert + 2-week retention purge).
+                from services.client_pulse import run_weekly_pulses
+                run_weekly_pulses(now.date())
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,

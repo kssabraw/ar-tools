@@ -854,6 +854,15 @@ class Settings(BaseSettings):
     # Per-person morning DM briefs (§4.13) — off until the Slack app has the
     # im:write scope (grant + reinstall, then flip this on).
     pace_daily_brief_push: bool = False
+    # Weekly Pulse — the copy-paste client update block on each client
+    # workspace ("done last week / on tap this week"). Deterministic, free,
+    # staff-delivered (never auto-sent). Categories in the itemize list appear
+    # as individual task names; everything else is summarized as counts (the
+    # owner's category-filter ruling — link-building detail stays internal).
+    pulse_enabled: bool = True
+    pulse_weekday: int = 0                # Monday: last week closed, this week ahead
+    pulse_itemize_categories: List[str] = ["content", "gbp_authority"]
+    pulse_retention_days: int = 14        # owner ruling: deleted after 2 weeks
 
     # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
     # Read-only v1 serves the precomputed market_scanner.leadoff_board.

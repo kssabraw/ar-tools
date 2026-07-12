@@ -41,6 +41,7 @@ from routers.local_seo import router as local_seo_router
 from routers.maps import router as maps_router
 from routers.notifications import router as notifications_router
 from routers.publish import router as publish_router
+from routers.pulse import router as pulse_router
 from routers.rank import router as rank_router
 from routers.recipe import router as recipe_router
 from routers.reopt import router as reopt_router
@@ -211,6 +212,7 @@ app.include_router(syndication_router)
 app.include_router(tasks_router)
 app.include_router(users_router)
 app.include_router(publish_router)
+app.include_router(pulse_router)
 
 # Topic Fanout Tool routers, namespaced under /fanout (e.g. /fanout/sessions,
 # /fanout/projects, /fanout/healthz). The vendored routers use absolute paths,
