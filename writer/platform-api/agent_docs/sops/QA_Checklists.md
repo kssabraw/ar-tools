@@ -1,8 +1,9 @@
 # QA Checklists — Deliverable Acceptance Criteria
 
 **Current as of:** 12 July 2026
-**Status:** ✅ Criteria finalized from the owner's brain dump. One **build
-dependency** remains (reading Google-Sheet deliverable lists — see cross-cutting #1).
+**Status:** ✅ Criteria finalized from the owner's brain dump. Google-Sheet reading
+resolved (public link-share → CSV export, no credentials; cross-cutting #1). Ready as
+QA-agent grounding; remaining work is the module build itself.
 **Purpose:** The human-authored acceptance bar the **QA Agent** grades each task
 deliverable against — the "layer 2" standard (what a verdict *means* + what blocks),
 distinct from the executable scorers that measure on-page content.
@@ -36,9 +37,10 @@ Blocking checks are kept small and **objectively checkable**.
 ## Cross-cutting requirements
 
 1. **Deliverable links — a "Deliverable links" subtask (decided).** The VA records the
-   placement location(s) on a **`Deliverable links` subtask** before moving the task to
-   For QA. The *format* varies by deliverable, and QA opens the container to get the
-   URLs to check:
+   placement location(s) on a **`Deliverable links` subtask** before the task reaches
+   **In QA** (the trigger status — the plan's "For QA" was superseded by the existing
+   `in_qa` workflow status; see the plan's build note). The *format* varies by
+   deliverable, and QA opens the container to get the URLs to check:
 
    | Deliverable | Where the links live | What QA does |
    |---|---|---|
@@ -48,15 +50,25 @@ Blocking checks are kept small and **objectively checkable**.
    | **Guest Posts** | a single URL in the subtask | fetch that URL |
    | **Niche Edits** | a single URL in the subtask | fetch that URL |
 
-   > **⟨BUILD DEPENDENCY⟩ Reading Google Sheets.** Citations + PR point at a Google
-   > Sheet, so QA needs to *read* it — a new capability beyond fetching a web page. Two
-   > things make this reliable: (a) the sheet is **shared to the suite's Google service
-   > account** (or "anyone with the link → Viewer"), and (b) a **known column** holds the
-   > live URL (e.g. a `Live URL` / `Citation URL` header) so QA reads the right cells
-   > instead of guessing. This is a small integration to add when the module is built.
+   > **Reading Google Sheets (resolved).** Citations + PR point at a Google Sheet, so QA
+   > reads it — but **no credentials / no service account are needed**: these sheets are
+   > already shared **"anyone with the link → Viewer"** (required so the *client* can see
+   > them too), so QA reads them via the **public CSV export**
+   > (`https://docs.google.com/spreadsheets/d/<id>/export?format=csv`). The same sharing
+   > setting serves both the client-visibility need and QA's read access.
+   > **The one reliability requirement:** a **known column** holds the live URL (e.g. a
+   > `Live URL` / `Citation URL` header) so QA reads the right cells instead of guessing
+   > at layout. A private sheet (no public link) would fall back to *needs-human*.
 
-2. **Target keyword source (decided).** The task's **target keyword is on the task** —
-   QA reads it from the task for the GBP Posts and Press Release keyword checks.
+2. **Target keyword source (decided; refined 2026-07-12).** The keyword is **entered
+   into the task name** (owner confirmation). QA reads it as the name minus the
+   template name — both shapes work: `GBP Posts — emergency roof repair` and a task
+   fully renamed to the keyword (the library link identifies the type). A
+   `Keyword: <term>` line in the description remains an explicit override, and blog
+   articles fall back to the run's keyword automatically. A bare template name
+   ("GBP Posts") ⇒ the keyword checks read "could not verify" ⇒ *needs-human*, never
+   a guess. The QA panel's check notes show which keyword was used, so a wrong pick
+   is visible at a glance.
 
 3. **Fail-open policy (decided).** Any external page/sheet that's blocked, unreachable,
    or unparseable ⇒ verdict *needs-human*, **never** an auto-bounce. Mirrors

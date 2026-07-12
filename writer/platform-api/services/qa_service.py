@@ -12,10 +12,12 @@ when its last work item is ticked, so QA runs automatically as work
 completes) + on-demand via ``POST /tasks/{id}/qa``.
 
 Outcomes (QA_Checklists.md is the grounding standard):
-- ``fail``        → bounce to ``qa_fail_status`` + "QA fix: …" rework subtasks.
-                    Those subtasks ARE work items, so ticking them all
-                    auto-advances the task back to In QA — the rework loop
-                    re-QAs itself with no human dispatch.
+- ``fail``        → bounce to ``qa_fail_status`` + "Rework: …" rework subtasks.
+                    The "Rework:" prefix is deliberate — "QA fix:" would trip
+                    task_service's marker classifier (the "qa" token) and make
+                    these NOT work items. As "Rework:" they ARE work items, so
+                    ticking them ALL auto-advances the task back to In QA — the
+                    rework loop re-QAs itself with no human dispatch.
 - ``pass``        → stay in In QA by default (``qa_pass_status`` can advance);
                     verdict recorded on the activity feed (+ optional notify).
 - ``needs_human`` → stay put + a warning notification; QA never guesses.
@@ -522,8 +524,8 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
     try:
         if v == sig.FAIL:
             if settings.qa_fail_creates_subtasks and verdict.get("failed"):
-                # Dedupe vs OPEN subtasks so repeated fails on the same check
-                # never stack duplicate "QA fix" rows (hardening #1).
+                # "Rework:" subtasks (new_rework_names), deduped vs still-open
+                # ones so repeated fails don't stack duplicates (hardening #1).
                 open_names = [
                     s.get("name") or ""
                     for s in (

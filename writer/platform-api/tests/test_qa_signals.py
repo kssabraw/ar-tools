@@ -361,18 +361,64 @@ def test_build_verdict_advisory_failures_still_pass():
 
 
 # ---------------------------------------------------------------------------
-# Rework-subtask dedupe (hardening #1)
+# Rework-subtask dedupe (hardening #1) + "Rework:" prefix (review fix B)
 # ---------------------------------------------------------------------------
 def test_new_rework_names_dedupes_open_fixes():
     failed = ["NAP included", "A CTA is present"]
-    existing_open = ["QA fix: NAP included", "Write the page"]
-    assert sig.new_rework_names(failed, existing_open) == ["QA fix: A CTA is present"]
+    existing_open = ["Rework: NAP included", "Write the page"]
+    assert sig.new_rework_names(failed, existing_open) == ["Rework: A CTA is present"]
 
 
 def test_new_rework_names_case_and_whitespace_insensitive():
-    assert sig.new_rework_names(["NAP included"], ["qa FIX:   nap  included"]) == []
+    assert sig.new_rework_names(["NAP included"], ["rEWORK:   nap  included"]) == []
 
 
 def test_new_rework_names_completed_fix_recreated():
     # A ticked fix is NOT in the open list, so a regression re-creates it.
-    assert sig.new_rework_names(["NAP included"], []) == ["QA fix: NAP included"]
+    assert sig.new_rework_names(["NAP included"], []) == ["Rework: NAP included"]
+
+
+# ---------------------------------------------------------------------------
+# Adversarial-review fixes (2026-07-12)
+# ---------------------------------------------------------------------------
+def test_rework_subtasks_are_work_items():
+    """Fix B: the QA-fail rework prefix must be 'Rework:' (a work item), NOT
+    'QA fix:' — 'qa' trips the marker classifier and breaks the re-QA loop."""
+    from services.task_service import is_work_item
+
+    for label in ("NAP included", "Link back to the client's site", "Meta title present"):
+        assert is_work_item(f"Rework: {label}") is True
+        # The old buggy prefix would have been a marker (not a work item):
+        assert is_work_item(f"QA fix: {label}") is False
+
+
+def test_links_to_domain_www_prefix_only():
+    """Fix C: strip a 'www.' prefix, not a {w,.} character set — a domain
+    starting with 'w' must survive."""
+    anchors = [{"href": "https://westroofing.com/roof", "text": "x"},
+               {"href": "https://other.com", "text": "y"}]
+    assert sig.links_to_domain(anchors, "westroofing.com") == [anchors[0]]
+    assert sig.links_to_domain(anchors, "www.westroofing.com") == [anchors[0]]
+    # No spurious match against an unrelated domain.
+    assert sig.links_to_domain([{"href": "https://estroofing.com", "text": "z"}], "westroofing.com") == []
+
+
+def test_has_map_embed_precedence():
+    """Fix D: a bare 'maps.google' mention without an iframe is NOT an embed."""
+    assert sig.has_map_embed('<iframe src="https://www.google.com/maps/embed?pb=1"></iframe>')
+    # "maps.google" + an iframe anywhere → embed (the second, and-guarded clause).
+    assert sig.has_map_embed('see maps.google.com <iframe src="x"></iframe>') is True
+    # A plain text mention of maps.google with NO iframe → not an embed (this is
+    # what the operator-precedence fix guarantees).
+    assert sig.has_map_embed("visit us on maps.google.com/place/x") is False
+
+
+def test_urls_from_sheet_csv_headerless_keeps_row0():
+    """Fix E: a headerless sheet whose first row already holds a URL must not
+    lose that first URL."""
+    csv_text = "https://a.com/1\nhttps://a.com/2\nhttps://a.com/3"
+    urls = sig.urls_from_sheet_csv(csv_text)
+    assert urls == ["https://a.com/1", "https://a.com/2", "https://a.com/3"]
+    # A real header row (labels, no URLs) is still skipped.
+    csv2 = "Live URL,Notes\nhttps://a.com/1,ok\nhttps://a.com/2,ok"
+    assert sig.urls_from_sheet_csv(csv2) == ["https://a.com/1", "https://a.com/2"]

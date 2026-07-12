@@ -262,7 +262,10 @@ def domain_of(url: Optional[str]) -> str:
 
 
 def links_to_domain(anchors: list[dict[str, str]], domain: str) -> list[dict[str, str]]:
-    d = (domain or "").casefold().lstrip("www.")
+    # Strip a leading "www." PREFIX (re.sub) — not lstrip("www."), which is a
+    # character-set strip that would eat leading w/. chars from a domain like
+    # "westroofing.com".
+    d = re.sub(r"^www\.", "", (domain or "").casefold())
     if not d:
         return []
     return [a for a in anchors if d in (a.get("href") or "").casefold()]
@@ -270,7 +273,7 @@ def links_to_domain(anchors: list[dict[str, str]], domain: str) -> list[dict[str
 
 def has_map_embed(html: str) -> bool:
     low = (html or "").casefold()
-    if "google.com/maps/embed" in low or "maps.google" in low and "<iframe" in low:
+    if "google.com/maps/embed" in low or ("maps.google" in low and "<iframe" in low):
         return True
     soup = BeautifulSoup(html or "", "html.parser")
     for iframe in soup.find_all("iframe"):
@@ -312,7 +315,11 @@ def urls_from_sheet_csv(csv_text: str) -> list[str]:
         if name in header:
             col = header.index(name)
             break
-    body = rows[1:] if col is not None or any(header) else rows
+    # Treat row 0 as a header (skip it) when a URL-header matched, or when it's
+    # label-like (has content but no URL). A row 0 that already carries a URL is
+    # DATA — keep every row (a headerless sheet must not lose its first URL).
+    row0_has_url = any(_URL_RE.search(c or "") for c in rows[0])
+    body = rows[1:] if (col is not None or (any(header) and not row0_has_url)) else rows
     if col is None:
         # Column with the most URL-looking cells wins (≥1 hit required).
         width = max((len(r) for r in body), default=0)
@@ -591,16 +598,22 @@ def is_deliverable_subtask(name: Optional[str]) -> bool:
 
 
 def new_rework_names(failed_labels: list[str], open_subtask_names: list[str]) -> list[str]:
-    """The 'QA fix: …' subtasks a failed review should CREATE: one per failed
+    """The 'Rework: …' subtasks a failed review should CREATE: one per failed
     blocking check, minus any that already exist as an OPEN subtask (repeated
     fails on the same check must not stack duplicates — hardening #1). A
     previously-ticked fix that fails again IS re-created: the completed row
     stops blocking auto-advance, so the regression needs a fresh work item.
-    Case/whitespace-insensitive match. Pure."""
+    Case/whitespace-insensitive match. Pure.
+
+    The 'Rework:' prefix is deliberate — 'QA fix:' contains 'qa', which
+    task_service's marker classifier reads as a process marker, so those
+    subtasks would NOT be work items. As work items, 'Rework:' rows gate
+    auto-advance correctly: ticking them ALL re-enters In QA (the self-re-QA
+    loop), instead of re-QA'ing on the first tick."""
     existing = {normalize_ws(n).casefold() for n in open_subtask_names}
     out: list[str] = []
     for lbl in failed_labels:
-        name = f"QA fix: {lbl}"
+        name = f"Rework: {lbl}"
         if normalize_ws(name).casefold() not in existing:
             out.append(name)
     return out
