@@ -136,6 +136,12 @@ async def create_client_from_market(
         logger.warning("leadoff_goal_seed_failed", extra={
             "client_id": client_id, "error": str(exc)})
 
+    # Calibration Phase 0: freeze the full prediction vector (lossless,
+    # immutable — the machine copy of the prose goal above). Best-effort.
+    from services import leadoff_calibration
+    prediction_id = leadoff_calibration.capture_prediction(
+        client_id, brief, DEFAULT_CAPTURE, DEFAULT_TIER, auth.get("user_id"))
+
     logger.info("leadoff_client_created", extra={
         "client_id": client_id, "city_id": body.city_id,
         "category_id": body.category_id,
@@ -144,6 +150,7 @@ async def create_client_from_market(
         "client_id": client_id,
         "competitors_seeded": competitors_seeded,
         "goal_created": goal_created,
+        "prediction_id": prediction_id,
     }
 
 
@@ -267,3 +274,54 @@ async def get_leadoff_job(job_id: str, auth: dict = Depends(require_auth)) -> di
     if not rows:
         raise HTTPException(status_code=404, detail="not_found")
     return rows[0]
+
+
+# ── Calibration surface (Phase 0 — read-only; leadoff-calibration-plan) ───────
+
+@router.get("/leadoff/calibration")
+async def get_calibration(auth: dict = Depends(require_auth)) -> dict:
+    """The read-only prediction↔outcome error report. Nothing here feeds back
+    into scoring (Phase 1 is gated on per-metric N≥15, ≥6-month tenure)."""
+    from services import leadoff_calibration
+    try:
+        return leadoff_calibration.calibration_report()
+    except Exception as exc:
+        logger.error("leadoff_calibration_report_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/clients/{client_id}/leadoff-prediction")
+async def get_client_prediction(client_id: str, auth: dict = Depends(require_auth)) -> dict:
+    """The client's frozen LeadOff prediction (drives the Campaign Goals
+    page's manual-leads entry card). 404 when the client wasn't created
+    through the market handoff."""
+    rows = (get_supabase().table("leadoff_predictions").select("*")
+            .eq("client_id", client_id).order("created_at", desc=True)
+            .limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="not_found")
+    return rows[0]
+
+
+class ManualLeadsRequest(BaseModel):
+    actual_leads_mo: float = Field(..., ge=0)
+
+
+@router.post("/leadoff/predictions/{prediction_id}/leads")
+async def post_manual_leads(
+    prediction_id: str,
+    body: ManualLeadsRequest,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Operator-entered monthly lead count — the plan §3.3 manual path
+    (surfaced on the Campaign Goals page per the owner ruling)."""
+    from services import leadoff_calibration
+    try:
+        return leadoff_calibration.record_manual_leads(
+            prediction_id, body.actual_leads_mo)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="not_found") from exc
+    except Exception as exc:
+        logger.error("leadoff_manual_leads_failed", extra={
+            "prediction_id": prediction_id, "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc

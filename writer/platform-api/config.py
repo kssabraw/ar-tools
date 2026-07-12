@@ -845,6 +845,10 @@ class Settings(BaseSettings):
     # (~$0.20/run) + scout (~$0.10–1/market, cache-cheapened). Every enqueue
     # records its estimate to leadoff_spend; the guard sums today's UTC rows.
     leadoff_daily_budget_usd: float = 5.0
+    # Calibration surface Phase 0 (leadoff-calibration-plan-v1_0.md):
+    # prediction capture at create-client + the monthly outcome-check sweep
+    # (DB reads only, $0). Read-only instrumentation — never touches scoring.
+    leadoff_calibration_enabled: bool = True
 
     class Config:
         env_file = ".env"

@@ -115,13 +115,14 @@ report is honest about what it cannot yet see.
 - **Organic (secondary):** `rank_status.compute_keyword_summary` for
   "&lt;category&gt; &lt;city&gt;" among `tracked_keywords` → position ≤10 at the same
   horizons.
-- **The gap:** the handoff doesn't auto-track the market keyword today, so
-  the join can only use keywords someone happened to add. **Phase 0 closes
-  this at the seam** (§4.1): the handoff seeds "&lt;category&gt; &lt;city&gt;" as a
-  tracked keyword (one keyword — negligible tracker cost) so every future
-  engagement is measurable from day one. Maps scans remain whatever cadence
-  the team runs; the join uses what exists, and reports "no maps scan yet" as
-  a coverage reason rather than silently skipping.
+- **The gap (OWNER RULING 2026-07-12: keyword tracking stays manual):** the
+  handoff does NOT auto-track the market keyword — the team adds tracked
+  keywords deliberately, and rankability outcomes exist only where they did.
+  The join matches any tracked keyword containing the category (and the city
+  when present), uses whatever maps scans exist, and reports "no tracked
+  keyword" / "no maps scan yet" as explicit coverage reasons rather than
+  silently skipping — the calibration report shows how much of the surface
+  is actually measurable.
 - **Outcome fields:** `maps_top3_share`, `maps_avg_rank`, `organic_position`,
   `ranked_maps` / `ranked_organic` (bools per horizon).
 
@@ -164,8 +165,7 @@ extra to capture.
 
 - `leadoff_predictions` insert inside `/leadoff/create-client` (best-effort,
   same policy as competitor/goal seeding: never fails the client).
-- Seed "&lt;category&gt; &lt;city&gt;" into `tracked_keywords` (the §3.2 gap-closer;
-  rides the existing add-keyword path so materialize + market fill fire).
+- No keyword auto-tracking (owner ruling — see §3.2).
 - Migration: `leadoff_predictions` + `leadoff_outcome_checks` (below). Both
   **public schema** — nothing added to `market_scanner` (the scanner's
   toolchain is unaffected; coordination note §6).
@@ -254,15 +254,13 @@ a Phase 1 decision, not Phase 0 scope.
   ar-tools docs/modules/leadoff-calibration-plan-v1_0.md §5.3." (Written
   here because the cloud session cannot edit the desktop memory file.)
 
-## 7. Open questions for the owner (before Phase 0 code)
+## 7. Owner rulings (2026-07-12 — design approved, Phase 0 unblocked)
 
-1. **Auto-track the market keyword at handoff** (§4.1) — accept the one
-   tracked keyword per engagement? (Recommended: it's the difference between
-   `rankab` being measurable or not.)
-2. **Manual lead entry surface** — Campaign Goals page acceptable, or would
-   you rather it live on the client workspace / be asked by SerMaStr
-   monthly? (Phase 0 ships the API field either way; the surface can follow.)
-3. **"Ranked" threshold for maps** — ≥25% top-3 pin share reasonable, or
-   anchor to the geo-grid module's own contender definition?
-4. Horizons 3/6/12 months — match your expectations for how long a build
-   takes to prove out?
+1. **Keyword tracking stays MANUAL** — no auto-track at handoff. Rankability
+   outcomes exist only where the team tracked the keyword; the report shows
+   that coverage explicitly (§3.2 updated).
+2. **Manual lead entry lives on the Campaign Goals page**, next to the
+   LeadOff-targets goal the handoff writes.
+3. **Maps "ranked" bar = ≥50% top-3 pin share** — count it only when the
+   pack is substantially won.
+4. **Horizons: 3 / 6 / 12 months.**
