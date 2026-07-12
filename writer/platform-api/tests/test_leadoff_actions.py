@@ -247,6 +247,13 @@ class TestSameMonthGrowth:
         assert trend_date_from(datetime(2026, 1, 3, tzinfo=timezone.utc)) == "2024-01-01"
 
 
+def test_base_url_carries_api_version():
+    # The scanner scripts' endpoint paths are relative to a client that
+    # prefixes /v3 — the port must too (a bare host 404s on the first call).
+    from services.leadoff_actions import _BASE_URL
+    assert _BASE_URL.endswith("/v3")
+
+
 class TestBudget:
     def test_scout_estimate_math(self):
         assert scout_estimate(5, 5, True) == round(5 * 0.005 + 5 * 0.0023 + 0.05, 2)

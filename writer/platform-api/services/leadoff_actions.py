@@ -43,7 +43,10 @@ from services.leadoff import grade_for, percentile_of
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://api.dataforseo.com"
+# NOTE the /v3: the scanner scripts' paths ("/serp/…") are relative to their
+# common.py client, which prefixes the API version — a verbatim path port
+# without this 404s on the first call (caught live 2026-07-12, $0 spent).
+_BASE_URL = "https://api.dataforseo.com/v3"
 FRESH_DAYS = 90          # cache freshness window (scout miss detection)
 MIN_VOL = 20             # tryout demand gate (max of both keyword forms)
 
