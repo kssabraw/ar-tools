@@ -79,6 +79,7 @@ SOLV_DROP_MIN_PCT = 10.0        # min Top-3 local-pack share lost (points) to fl
 _SORT_BRAND = 1 * _TIER         # hidden-win tier; bumped to the top of it via within
 _BRAND_WITHIN = 9_500
 _BACKLINK_WITHIN = 9_000        # link-authority gap, just under brand in the hidden tier
+_DOMAIN_GAP_WITHIN = 7_000      # competitor keyword-gap opportunities, below backlink in the hidden tier
 BRAND_DECLINE_MIN_PCT = 25.0    # min relative % fall in branded impressions to flag
 
 # Full compass-octant labels for human-readable sector text.
@@ -630,6 +631,45 @@ def build_brand_action(client_id: str, brand_decline: "dict | None") -> list[dic
     ]
 
 
+def build_domain_intel_actions(client_id: str, gaps: list[dict]) -> list[dict]:
+    """Top competitor keyword-gap opportunities (Domain Intelligence) as Action
+    Plan items — keywords a competitor ranks for that the client doesn't. Pure.
+
+    ``gaps`` is opportunity-sorted domain_keyword_gaps rows; the top N surface as
+    'create/strengthen a page' actions deep-linking into Domain Intelligence."""
+    from config import settings
+
+    actions: list[dict] = []
+    for i, g in enumerate(gaps[: settings.domain_intel_action_max]):
+        kw = g.get("keyword")
+        if not kw:
+            continue
+        comp = g.get("competitor_domain") or "a competitor"
+        comp_pos = g.get("competitor_position")
+        cli_pos = g.get("client_position")
+        where = "you don't rank" if cli_pos is None else f"you rank #{cli_pos}"
+        vol = g.get("volume")
+        vol_txt = f" ~{vol}/mo searches." if vol else ""
+        actions.append(
+            {
+                "kind": "keyword_gap",
+                "source": "organic",
+                "keyword": kw,
+                "diagnosis": f"{comp} ranks"
+                + (f" #{comp_pos}" if comp_pos else "")
+                + f" for this; {where}.{vol_txt}",
+                "recommendation": "Competitive keyword gap — create or strengthen a page targeting this "
+                "term. Review the full ranked gap list (with backlink gaps and competitor discovery) "
+                "in Domain Intelligence.",
+                "cta_label": "Domain Intelligence",
+                "cta_path": f"clients/{client_id}/domain-intel",
+                "severity": "info",
+                "sort": _SORT_HIDDEN + _within(_DOMAIN_GAP_WITHIN - i),
+            }
+        )
+    return actions
+
+
 def summarize_plan(actions: list[dict]) -> dict:
     """{summary, severity} for the plan + its notification. Pure."""
     by_kind: dict[str, int] = {}
@@ -962,6 +1002,20 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
         organic += build_offpage_actions(client_id, open_offpage_alerts(client_id))
     except Exception as exc:
         logger.warning("reopt_plan_offpage_failed", extra={"client_id": client_id, "error": str(exc)})
+    # Competitive keyword-gap opportunities (Domain Intelligence). Additive:
+    # no stored gaps → no actions → unchanged behavior.
+    try:
+        gap_rows = (
+            supabase.table("domain_keyword_gaps")
+            .select("keyword, competitor_domain, competitor_position, client_position, volume, opportunity_score")
+            .eq("client_id", client_id)
+            .order("opportunity_score", desc=True)
+            .limit(settings.domain_intel_action_max)
+            .execute()
+        ).data or []
+        organic += build_domain_intel_actions(client_id, gap_rows)
+    except Exception as exc:
+        logger.warning("reopt_plan_domain_intel_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop)
     maps_actions += build_relevance_action(client_id, relevance_gap)
     maps_actions += build_gbp_action(client_id, gbp_audit_result)
