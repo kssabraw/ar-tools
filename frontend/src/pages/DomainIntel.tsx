@@ -56,6 +56,30 @@ interface KeywordGapResponse {
   captured_at: string | null
   count: number
 }
+interface LinkGap {
+  referring_domain: string
+  linking_to: string[]
+  referring_domain_rank: number | null
+  backlink_count: number | null
+}
+interface LinkGapResponse {
+  gaps: LinkGap[]
+  captured_at: string | null
+  count: number
+}
+interface CompetitorSuggestion {
+  domain: string
+  avg_position: number | null
+  intersections: number | null
+  organic_keywords: number | null
+  organic_etv: number | null
+  registered: boolean
+}
+interface DiscoverResponse {
+  client_domain: string | null
+  suggestions: CompetitorSuggestion[]
+  note?: string
+}
 
 const num = (n: number | null | undefined, digits = 0) =>
   n === null || n === undefined ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: digits })
@@ -77,13 +101,16 @@ export function DomainIntel() {
     enabled: Boolean(id),
   })
 
-  const [mode, setMode] = useState<'lookup' | 'gap'>('lookup')
+  const [mode, setMode] = useState<'lookup' | 'gap' | 'links' | 'discover'>('lookup')
   const [input, setInput] = useState('')
   const [role, setRole] = useState('competitor')
   const [selected, setSelected] = useState<string | null>(null)
   const [job, setJob] = useState<string | null>(null)
   const [tab, setTab] = useState<'overview' | 'keywords'>('overview')
   const [gapJob, setGapJob] = useState<string | null>(null)
+  const [linkJob, setLinkJob] = useState<string | null>(null)
+  const [discovered, setDiscovered] = useState<DiscoverResponse | null>(null)
+  const [added, setAdded] = useState<Record<string, boolean>>({})
 
   // Prefill with the client's own domain, once.
   useEffect(() => {
@@ -165,6 +192,43 @@ export function DomainIntel() {
     URL.revokeObjectURL(url)
   }
 
+  // --- Backlink Gap (referring domains competitors have, client lacks) ---
+  const { data: linkData } = useQuery<LinkGapResponse>({
+    queryKey: ['domain-intel-links', id],
+    queryFn: () => api.get<LinkGapResponse>(`/clients/${id}/domain-intel/link-gap`),
+    enabled: Boolean(id && mode === 'links'),
+  })
+  const runLinks = useMutation({
+    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/domain-intel/link-gap`, {}),
+    onSuccess: (r) => setLinkJob(r.job_id),
+  })
+  const { data: linkJobStatus } = useQuery<{ status: string; error?: string; result?: { note?: string } }>({
+    queryKey: ['domain-intel-links-job', id, linkJob],
+    queryFn: () => api.get(`/clients/${id}/domain-intel/jobs/${linkJob}`),
+    enabled: Boolean(linkJob),
+    refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500),
+  })
+  useEffect(() => {
+    if (linkJobStatus?.status === 'complete') {
+      queryClient.invalidateQueries({ queryKey: ['domain-intel-links', id] })
+      setLinkJob(null)
+    } else if (linkJobStatus?.status === 'failed') {
+      setLinkJob(null)
+    }
+  }, [linkJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
+  const linksRunning = Boolean(linkJob) && linkJobStatus?.status !== 'failed'
+  const linkGaps = linkData?.gaps ?? []
+
+  // --- Discover competitors (SERP overlap) ---
+  const discover = useMutation({
+    mutationFn: () => api.get<DiscoverResponse>(`/clients/${id}/domain-intel/discover`),
+    onSuccess: (d) => setDiscovered(d),
+  })
+  const addCompetitor = useMutation({
+    mutationFn: (domain: string) => api.post(`/clients/${id}/competitors`, { name: domain, domain }),
+    onSuccess: (_r, domain) => setAdded((m) => ({ ...m, [domain]: true })),
+  })
+
   const running = Boolean(job) && jobStatus?.status !== 'failed'
   const snap = overview?.snapshot
   const keywords = overview?.ranked_keywords ?? []
@@ -214,6 +278,8 @@ export function DomainIntel() {
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', padding: 3, borderRadius: 8, marginBottom: 20 }}>
         <button style={mode === 'lookup' ? segActive : segBtn} onClick={() => setMode('lookup')}>Domain lookup</button>
         <button style={mode === 'gap' ? segActive : segBtn} onClick={() => setMode('gap')}>Keyword gap</button>
+        <button style={mode === 'links' ? segActive : segBtn} onClick={() => setMode('links')}>Backlink gap</button>
+        <button style={mode === 'discover' ? segActive : segBtn} onClick={() => setMode('discover')}>Discover</button>
       </div>
 
       {mode === 'gap' && (
@@ -263,6 +329,92 @@ export function DomainIntel() {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {mode === 'links' && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <p style={{ color: '#64748b', fontSize: 13, margin: 0, maxWidth: 620 }}>
+              Referring domains linking to your registered competitors but not to {client?.name ?? 'this client'} — link-building targets.
+              {linkData?.captured_at ? ` Last run ${new Date(linkData.captured_at).toLocaleString()}.` : ''}
+            </p>
+            <button style={primaryBtn} disabled={linksRunning || runLinks.isPending || budget <= 0} onClick={() => runLinks.mutate()}>
+              <RefreshCw size={14} style={linksRunning ? { animation: 'spin 1s linear infinite' } : undefined} />
+              {linksRunning ? 'Analyzing…' : 'Run backlink gap'}
+            </button>
+          </div>
+          {linkJobStatus?.status === 'failed' && <div style={errBox}>Backlink gap failed{linkJobStatus.error ? `: ${linkJobStatus.error}` : ''}.</div>}
+          {linkJobStatus?.result?.note === 'no_competitors' && <div style={errBox}>No competitors registered — add some in Competitive Intel, then re-run.</div>}
+          {!linkGaps.length && !linksRunning ? (
+            <div style={emptyBox}>No backlink gaps yet — click Run backlink gap.</div>
+          ) : (
+            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr>{['Referring domain', 'DR', 'Backlinks', 'Links to'].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {linkGaps.map((g, i) => (
+                    <tr key={`${g.referring_domain}-${i}`} style={{ borderTop: '1px solid #f1f5f9' }}>
+                      <td style={{ ...td, fontWeight: 500, color: '#0f172a' }}>
+                        <a href={`https://${g.referring_domain}`} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{g.referring_domain}</a>
+                      </td>
+                      <td style={td}>{g.referring_domain_rank === null ? '—' : num(g.referring_domain_rank, 1)}</td>
+                      <td style={td}>{num(g.backlink_count)}</td>
+                      <td style={{ ...td, color: '#64748b' }}>{(g.linking_to ?? []).join(', ') || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {mode === 'discover' && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <p style={{ color: '#64748b', fontSize: 13, margin: 0, maxWidth: 620 }}>
+              Domains that share the most search results with {client?.name ?? 'this client'} — candidate competitors. Add the relevant ones to the registry.
+            </p>
+            <button style={primaryBtn} disabled={discover.isPending || budget <= 0} onClick={() => discover.mutate()}>
+              <RefreshCw size={14} style={discover.isPending ? { animation: 'spin 1s linear infinite' } : undefined} />
+              {discover.isPending ? 'Finding…' : 'Find competitors'}
+            </button>
+          </div>
+          {discover.isError && <div style={errBox}>{(discover.error as Error)?.message ?? 'Discovery failed.'}</div>}
+          {discovered?.note && <div style={errBox}>Client website unknown — set it on the client first.</div>}
+          {discovered && !discovered.note && (
+            discovered.suggestions.length ? (
+              <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr>{['Domain', 'Shared keywords', 'Avg pos', 'Organic keywords', ''].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {discovered.suggestions.map((s) => {
+                      const isAdded = s.registered || added[s.domain]
+                      return (
+                        <tr key={s.domain} style={{ borderTop: '1px solid #f1f5f9' }}>
+                          <td style={{ ...td, fontWeight: 500, color: '#0f172a' }}>{s.domain}</td>
+                          <td style={td}>{num(s.intersections)}</td>
+                          <td style={td}>{s.avg_position === null ? '—' : num(s.avg_position, 1)}</td>
+                          <td style={td}>{num(s.organic_keywords)}</td>
+                          <td style={td}>
+                            {isAdded
+                              ? <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 600 }}>Registered</span>
+                              : <button style={ghostBtn} disabled={addCompetitor.isPending} onClick={() => addCompetitor.mutate(s.domain)}>Add</button>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : <div style={emptyBox}>No competitor suggestions returned.</div>
+          )}
+          {!discovered && <div style={emptyBox}>Click Find competitors to discover domains that overlap in search.</div>}
         </div>
       )}
 
