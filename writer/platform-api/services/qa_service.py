@@ -146,6 +146,33 @@ async def _fetch(url: str) -> Optional[str]:
         return None
 
 
+async def _broken_assets(asset_urls: list[str]) -> list[str]:
+    """The subset of asset URLs that are HARD-dead (404/410) — the free half
+    of the visual design-fit check. Mirrors citation_check's fail-open
+    philosophy: bot-blocks/timeouts/5xx are NOT counted as broken (a CDN
+    that dislikes our UA must not bounce a fine page); HEAD falls back to GET
+    for servers that reject HEAD."""
+    broken: list[str] = []
+    try:
+        async with httpx.AsyncClient(
+            timeout=settings.qa_fetch_timeout_seconds,
+            follow_redirects=True,
+            headers={"User-Agent": _UA},
+        ) as client:
+            for url in asset_urls:
+                try:
+                    resp = await client.head(url)
+                    if resp.status_code in (405, 501):
+                        resp = await client.get(url)
+                    if resp.status_code in (404, 410):
+                        broken.append(url)
+                except Exception:
+                    continue  # unreachable ≠ dead — fail-open
+    except Exception:
+        return []
+    return broken
+
+
 def _client_fields(client: Optional[dict]) -> dict[str, Any]:
     gbp = (client or {}).get("gbp") or {}
     return {
@@ -572,6 +599,26 @@ async def _run_rubric(
                 "structural_fit", "Design fit (structural) vs reference page", ok,
                 note=f"fidelity {composite:.0f}/100 — {note}",
             ))
+        # Design fit — VISUAL (QA_Checklists §Website Pages Posted, the "later
+        # phase" now built). Two layers:
+        # 1. Asset integrity (free, deterministic): a 404'd stylesheet or
+        #    image breaks the render without needing a screenshot to prove it.
+        assets = sig.asset_urls_of(html, url, cap=settings.qa_asset_check_cap)
+        asset_list = assets["stylesheets"] + assets["images"]
+        if asset_list:
+            dead = await _broken_assets(asset_list)
+            checks.append(sig._check(
+                "asset_integrity", "Page assets load (CSS + images)", not dead,
+                note=("dead: " + ", ".join(dead[:3]) + (" …" if len(dead) > 3 else ""))
+                if dead else f"{len(asset_list)} asset(s) OK",
+            ))
+        # 2. Rendered screenshot judged by vision (DataForSEO capture — no
+        #    Chromium in the image; only HIGH-confidence breakage bounces,
+        #    everything uncertain is fail-open needs_human).
+        if settings.qa_visual_enabled:
+            from services import qa_visual
+
+            checks.append(await qa_visual.visual_check(url))
         return (checks, examined, composite)
 
     return ([], [], None)

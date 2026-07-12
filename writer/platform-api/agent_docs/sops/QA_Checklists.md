@@ -93,13 +93,19 @@ Pages/blogs run through `/score-page` + R1–R7 + `On_Page_Criteria_and_Coverage
   - Meta title + meta description filled in.
   - Correct client info (name, contact, service area) — no stale/placeholder data.
   - Images present with alt text.
-  - **Design fit for the page type** (owner: "both" — phased):
-    - *Now — structural fit (blocking):* matches the expected layout for its page type
+  - **Design fit for the page type** (owner: "both" — BOTH NOW BUILT):
+    - *Structural fit (blocking):* matches the expected layout for its page type
       (sections, heading order, block composition) vs the client's stored reference
       page structure, via `page_structure_eval`. A broken/wrong structure ⇒ bounce.
-    - *Later phase — visual rendering (blocking when built):* the rendered page isn't
-      visually broken (overlapping elements, broken CSS, images not loading). Requires
-      a headless-browser screenshot + vision pass; deferred to a later QA phase.
+    - *Visual rendering (blocking — built 2026-07-12):* the rendered page isn't
+      visually broken (overlapping elements, broken/unloaded CSS, collapsed layout,
+      images not loading). Two layers: a **free asset-integrity check** (every
+      stylesheet + image on the page must not 404/410 — hard-dead assets ⇒ bounce;
+      bot-blocks/timeouts are fail-open, mirroring `citation_check`), and a
+      **rendered screenshot** (DataForSEO `page_screenshot` — no headless browser in
+      the suite image) judged by a Claude vision call. Only **high-confidence**
+      breakage bounces; low-confidence or capture failure ⇒ *needs-human*, never an
+      auto-bounce. `qa_visual_enabled` gates the paid screenshot layer.
 - **🚫 Advisory:** brand-voice fit (noted, not blocking unless egregious).
 
 ### Blog Post (Title + body)

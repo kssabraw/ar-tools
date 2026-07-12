@@ -880,6 +880,15 @@ class Settings(BaseSettings):
     # before a human touches it. Rides the content_run producer (both its
     # gates apply) AND qa_enabled.
     qa_autoqueue_producers: bool = False
+    # Visual design-fit for posted pages (the checklist's "later phase", now
+    # built): DataForSEO page_screenshot (fractions of a cent; no Chromium in
+    # the image) + a Claude vision judge. Only HIGH-confidence breakage
+    # bounces; low confidence / capture failure is fail-open needs_human.
+    # The free asset-integrity layer (404'd CSS/images) always runs.
+    qa_visual_enabled: bool = True
+    qa_visual_model: str = "claude-haiku-4-5-20251001"
+    qa_visual_max_tokens: int = 400
+    qa_asset_check_cap: int = 12                 # HEAD checks per page review
 
     # PACE — Project Assignment, Coordination & Execution agent
     # (docs/modules/project-manager-agent-plan-v1_0.md). Phase 0A ships only the
