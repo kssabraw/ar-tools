@@ -1,8 +1,9 @@
 # PACE — Project Assignment, Coordination & Execution Agent — Module Plan v1.4
 
 **Status:** Phases 0–7 **built** (0–4 live behind `pace_enabled` since 2026-07-12;
-5–7 merged PR #340, review fixes #342) · Phases 8–13 **proposed** (v1.4 initiative
-scope) · **Sibling to:** SerMaStr (`seo-strategist-agent-plan-v1_0.md`) · **Rides:**
+5–7 merged PR #340, review fixes #342) · Phases 8–13 **built** (v1.4 initiative
+scope, PR #345 — dormant behind `pace_initiative_enabled`; §4.13 additionally
+behind `pace_daily_brief_push` + the Slack `im:write` scope) · **Sibling to:** SerMaStr (`seo-strategist-agent-plan-v1_0.md`) · **Rides:**
 the native task manager (`in-app-task-manager-prd-v1_0.md`) + the SerMaStr assistant
 (`services/slack_assistant/`) · **Authored:** 2026-07-11 · **Revised:** 2026-07-11
 (v1.1 review #1, v1.2 review #2), 2026-07-12 (v1.3 full-PM scope; v1.4 initiative)
@@ -679,7 +680,7 @@ routing (backward-compatible).
 
 ---
 
-### v1.4 initiative phases (proposed; all behind `pace_initiative_enabled`, default off)
+### v1.4 initiative phases (BUILT — PR #345; all behind `pace_initiative_enabled`, default off)
 
 **Phase 8 — proposal engine + Chase Plan.** `pace_proposals.py`: collect staged actions
 from registered generators, batch into one daily Chase Plan (Tier-0 notification copy +

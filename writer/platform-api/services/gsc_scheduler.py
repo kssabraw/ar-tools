@@ -486,6 +486,10 @@ async def gsc_scheduler() -> None:
                 from services.pace_proposals import run_daily_chase_plan
                 run_pace_episode_sync(now.date())
                 await run_daily_chase_plan(now.date())
+                # Per-person morning DM briefs (§4.13) — additionally gated on
+                # pace_daily_brief_push (off until the im:write scope lands).
+                from services.pace_briefs import run_morning_briefs
+                await run_morning_briefs(now.date())
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,

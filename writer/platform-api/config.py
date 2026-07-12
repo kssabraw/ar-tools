@@ -851,6 +851,9 @@ class Settings(BaseSettings):
     pace_chase_escalate_business_days: int = 3
     # Slip-forecast look-ahead window (§4.12).
     pace_slip_horizon_days: int = 5
+    # Per-person morning DM briefs (§4.13) — off until the Slack app has the
+    # im:write scope (grant + reinstall, then flip this on).
+    pace_daily_brief_push: bool = False
 
     # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
     # Read-only v1 serves the precomputed market_scanner.leadoff_board.
