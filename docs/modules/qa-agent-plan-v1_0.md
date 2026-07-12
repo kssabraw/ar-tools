@@ -43,8 +43,23 @@ False — see the build note below). **Sibling to:** SerMaStr
 >    write), and a read-only **`qa` context provider** (`_ctx_qa`) feeds recent
 >    verdicts into the SerMaStr assistant context; and the **producer auto-queue**
 >    (Phase 4) — `qa_autoqueue_producers` (default off) moves a completed content
->    run's "Review & publish" task straight to In QA. Still later: the visual
->    page-rendering check, per the checklist's phased design-fit ruling.
+>    run's "Review & publish" task straight to In QA.
+> 6. **The visual page-rendering check is BUILT** (final phase, 2026-07-12 —
+>    `services/qa_visual.py`): the checklist's "design fit — visual" for posted
+>    pages, WITHOUT bundling Chromium into the Railway image. Two layers on the
+>    `website_page` rubric: a **free asset-integrity check** (`asset_urls_of` +
+>    `_broken_assets` — every stylesheet/image HEAD-checked, hard 404/410 ⇒
+>    blocking fail, bot-blocks/timeouts fail-open per the citation_check
+>    philosophy) and a **rendered screenshot** via DataForSEO `page_screenshot`
+>    (existing creds, fractions of a cent) judged by a Claude vision call
+>    (`qa_visual_model`, Haiku). Verdict discipline preserved: the vision judge
+>    returns {broken, confidence, issues}; only **high-confidence** breakage maps
+>    to a blocking fail — low confidence, unparsable output, oversized captures,
+>    or any infra failure read needs_human (fail-open). Pillow downscales
+>    captures that exceed vision-input limits. Config: `qa_visual_enabled`
+>    (default on) / `qa_visual_model` / `qa_visual_max_tokens` /
+>    `qa_asset_check_cap`. Pure helpers unit-tested (`tests/test_qa_visual.py`).
+>    **The QA Agent module is now feature-complete against this plan.**
 >
 > **What shipped:** migration `20260712233000` (`qa_reviews` + `qa_review` job
 > type), `services/qa_signals.py` (pure rubric layer, unit-tested —

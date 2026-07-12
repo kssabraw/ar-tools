@@ -498,6 +498,46 @@ def check_blog_markdown(md: Optional[str], keyword: Optional[str] = None) -> lis
     return checks
 
 
+def asset_urls_of(html: str, base_url: str, cap: int = 12) -> dict[str, list[str]]:
+    """The page's image srcs + stylesheet hrefs, absolutized against the page
+    URL, deduped, capped — the free asset-integrity layer of the visual
+    design-fit check (a 404'd stylesheet or hero image breaks the render
+    without needing a screenshot to prove it). data:/blob: URIs and inline
+    styles are skipped. Pure."""
+    from urllib.parse import urljoin
+
+    soup = BeautifulSoup(html or "", "html.parser")
+    images: list[str] = []
+    stylesheets: list[str] = []
+
+    def _absolutize(raw: Optional[str]) -> Optional[str]:
+        src = (raw or "").strip()
+        if not src or src.startswith(("data:", "blob:", "#", "javascript:")):
+            return None
+        absolute = urljoin(base_url or "", src)
+        return absolute if absolute.startswith("http") else None
+
+    for img in soup.find_all("img"):
+        u = _absolutize(img.get("src"))
+        if u and u not in images:
+            images.append(u)
+    for link in soup.find_all("link"):
+        rels = [r.casefold() for r in (link.get("rel") or [])]
+        if "stylesheet" not in rels:
+            continue
+        u = _absolutize(link.get("href"))
+        if u and u not in stylesheets:
+            stylesheets.append(u)
+    # Stylesheets first under the cap — one dead CSS file breaks the whole
+    # render; one dead image breaks one slot.
+    total = stylesheets + images
+    kept = total[: max(0, cap)]
+    return {
+        "stylesheets": [u for u in kept if u in stylesheets],
+        "images": [u for u in kept if u in images],
+    }
+
+
 # --- Website page checks (the extras the 8-engine scorer can't see) ---------
 def check_website_page(html: str, client_domain: str,
                        business_name: Optional[str]) -> list[dict]:
