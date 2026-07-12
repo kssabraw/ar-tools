@@ -99,23 +99,32 @@ def enqueue_qa_review(task_id: str, *, trigger: str = "manual") -> Optional[str]
                     return None
             except (ValueError, KeyError):
                 pass  # unparsable timestamp → don't block the review
-    open_jobs = (
-        supabase.table("async_jobs").select("id, payload")
-        .eq("job_type", "qa_review").in_("status", ["pending", "running"]).execute()
-    ).data or []
-    for j in open_jobs:
-        if (j.get("payload") or {}).get("task_id") == str(task_id):
-            return j["id"]
-    job = (
-        supabase.table("async_jobs")
-        .insert({
-            "job_type": "qa_review",
-            "entity_id": str(task_id),
-            "payload": {"task_id": str(task_id), "trigger": trigger},
-        })
-        .execute()
-    ).data[0]
-    return job["id"]
+    def _live_job_id() -> Optional[str]:
+        jobs = (
+            supabase.table("async_jobs").select("id")
+            .eq("job_type", "qa_review").eq("entity_id", str(task_id))
+            .in_("status", ["pending", "running"]).limit(1).execute()
+        ).data or []
+        return jobs[0]["id"] if jobs else None
+
+    existing = _live_job_id()
+    if existing:
+        return existing
+    try:
+        job = (
+            supabase.table("async_jobs")
+            .insert({
+                "job_type": "qa_review",
+                "entity_id": str(task_id),
+                "payload": {"task_id": str(task_id), "trigger": trigger},
+            })
+            .execute()
+        ).data[0]
+        return job["id"]
+    except Exception:
+        # The partial unique index (one LIVE qa_review per entity_id) is the
+        # race arbiter — a concurrent enqueue won; return its job.
+        return _live_job_id()
 
 
 # ---------------------------------------------------------------------------
@@ -191,6 +200,12 @@ async def _resolve_sheet_urls(urls: list[str]) -> tuple[list[str], list[str]]:
     pages: list[str] = []
     blocked: list[str] = []
     for url in urls:
+        # A Google Doc/Slides/Forms link is a draft container, not a live
+        # placement — grading its JS-shell HTML would false-fail legit work,
+        # so it routes to needs-human instead of the page checks.
+        if sig.is_google_doc_url(url):
+            blocked.append(url)
+            continue
         sheet_id = sig.sheet_id_of(url)
         if not sheet_id:
             pages.append(url)
@@ -217,6 +232,8 @@ async def _judge_assertion(page_text: str, business_name: str, service: str) -> 
     """The one LLM judgement in QA (owner ruling, QA_Checklists §Map Embeds):
     does the page contain a grammatically-correct plain-English sentence
     asserting the client provides the service? Best-effort → (None, note)."""
+    if not (business_name or "").strip():
+        return None, "no business name on file to assert against"
     try:
         import anthropic
 
@@ -357,6 +374,13 @@ async def run_qa_review_job(job: dict) -> None:
         logger.warning("qa_review_task_gone", extra={"task_id": task_id})
         return
     task = rows[0]
+    # The enqueue guard ran at transition time; the task may have been
+    # completed or trashed while the job sat in the queue. Reviewing it then
+    # would bounce a completed task's status (completed=true + In Progress on
+    # the board) or grow subtasks under a trashed one — skip instead.
+    if task.get("completed") or task.get("deleted_at"):
+        logger.info("qa_review_task_closed_before_run", extra={"task_id": task_id})
+        return
     client = None
     if task.get("client_id"):
         crows = (
@@ -390,7 +414,15 @@ async def run_qa_review_job(job: dict) -> None:
         # QA_Checklists / On-Page-Criteria standard so the rework guidance
         # names its source. Best-effort; the deterministic narrative stands
         # on any failure, and the verdict is NEVER the LLM's to change.
-        if settings.qa_narrative_enabled and checks and verdict["verdict"] in (sig.FAIL, sig.NEEDS_HUMAN):
+        # Gathering-only outcomes (no deliverable links / unreachable page)
+        # skip the call — "add the links" needs no phrasing help, and that's
+        # the most common result until the conventions stick.
+        if (
+            settings.qa_narrative_enabled
+            and checks
+            and verdict["verdict"] in (sig.FAIL, sig.NEEDS_HUMAN)
+            and not sig.gathering_only(checks)
+        ):
             llm_text = await _synthesize_narrative(task.get("name") or "", rubric, verdict, checks)
             if llm_text:
                 narrative = llm_text
@@ -455,7 +487,10 @@ async def _run_rubric(
         note = ("no deliverable URLs on the task — add a 'Deliverable links' subtask "
                 "(QA_Checklists cross-cutting #1)")
         if blocked:
-            note = f"deliverable sheet unreachable ({blocked[0]})"
+            note = (
+                f"deliverable link can't be graded automatically ({blocked[0]}) — "
+                "a Google Doc draft or an unreachable sheet; link the LIVE placement"
+            )
         return ([sig._check("deliverable", "Deliverable link(s) located", None, note=note)],
                 raw_urls, None)
 

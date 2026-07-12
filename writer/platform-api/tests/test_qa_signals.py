@@ -422,3 +422,38 @@ def test_urls_from_sheet_csv_headerless_keeps_row0():
     # A real header row (labels, no URLs) is still skipped.
     csv2 = "Live URL,Notes\nhttps://a.com/1,ok\nhttps://a.com/2,ok"
     assert sig.urls_from_sheet_csv(csv2) == ["https://a.com/1", "https://a.com/2"]
+
+
+# ---------------------------------------------------------------------------
+# Gathering-only detection (skips the narrative LLM call)
+# ---------------------------------------------------------------------------
+def test_gathering_only_true_for_missing_deliverable():
+    checks = [sig._check("deliverable", "Deliverable link(s) located", None,
+                         note="no deliverable URLs on the task")]
+    assert sig.gathering_only(checks) is True
+
+
+def test_gathering_only_false_for_real_quality_findings():
+    # A genuine failed check → the narrative SHOULD run.
+    assert sig.gathering_only([sig._check("nap", "NAP included", False)]) is False
+    # A quality check that couldn't be verified (not a locator) → still narrate.
+    assert sig.gathering_only([sig._check("nap", "NAP included", None)]) is False
+    # Mixed: locator unverified + a real failure → narrate.
+    checks = [
+        sig._check("page", "Page reachable", None),
+        sig._check("cta", "A CTA is present", False),
+    ]
+    assert sig.gathering_only(checks) is False
+    assert sig.gathering_only([]) is False
+
+
+# ---------------------------------------------------------------------------
+# Google Doc (draft container) detection
+# ---------------------------------------------------------------------------
+def test_is_google_doc_url():
+    assert sig.is_google_doc_url("https://docs.google.com/document/d/abc123/edit")
+    assert sig.is_google_doc_url("https://docs.google.com/presentation/d/x/edit")
+    # Sheets are the deliverable-LIST container — handled separately, not a doc.
+    assert not sig.is_google_doc_url("https://docs.google.com/spreadsheets/d/abc/edit")
+    assert not sig.is_google_doc_url("https://example.com/press-release")
+    assert not sig.is_google_doc_url(None)

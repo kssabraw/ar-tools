@@ -287,7 +287,17 @@ def has_map_embed(html: str) -> bool:
 # Google-Sheet CSV parsing (cross-cutting #1: public link → CSV export)
 # ---------------------------------------------------------------------------
 _SHEET_URL_RE = re.compile(r"docs\.google\.com/spreadsheets/d/([\w\-]+)", re.IGNORECASE)
+_GDOC_URL_RE = re.compile(r"docs\.google\.com/(document|presentation|forms)/", re.IGNORECASE)
 _URL_HEADERS = ("live url", "citation url", "url", "link", "live link", "placement url")
+
+
+def is_google_doc_url(url: Optional[str]) -> bool:
+    """A Google Docs/Slides/Forms link — a DRAFT container, not a live
+    placement. Fetching one returns a JS shell whose HTML would false-fail
+    NAP/link checks on legit work, so these route to needs-human instead of
+    being graded as pages. (Sheets are handled separately — they're the
+    deliverable-LIST container, expanded via CSV export.) Pure."""
+    return bool(_GDOC_URL_RE.search(url or ""))
 
 
 def sheet_id_of(url: Optional[str]) -> Optional[str]:
@@ -595,6 +605,23 @@ def is_deliverable_subtask(name: Optional[str]) -> bool:
     #1). task_service.is_work_item already excludes 'deliverable*' names from
     the work-item set, so this can't collide with auto-advance. Pure."""
     return "deliverable" in " ".join((name or "").casefold().split())
+
+
+_GATHERING_KEYS = {"deliverable", "article", "page"}
+
+
+def gathering_only(checks: list[dict]) -> bool:
+    """True when the review never reached quality checks — nothing FAILED and
+    every unverified blocking check is a locator/fetch check (missing
+    deliverable links, unreadable article, unreachable page). Used to skip the
+    SOP-narrative LLM call: 'add the links' needs no phrasing help, and this is
+    the most common outcome until the deliverable-links convention sticks. Pure."""
+    if not checks:
+        return False
+    if any(c.get("blocking") and c.get("ok") is False for c in checks):
+        return False
+    unverified = [c for c in checks if c.get("blocking") and c.get("ok") is None]
+    return bool(unverified) and all(c.get("key") in _GATHERING_KEYS for c in unverified)
 
 
 def new_rework_names(failed_labels: list[str], open_subtask_names: list[str]) -> list[str]:

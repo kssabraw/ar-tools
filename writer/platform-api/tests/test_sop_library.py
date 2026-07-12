@@ -115,13 +115,23 @@ def test_relevant_docs_qa_domain():
 
 
 def test_qa_sops_text_serves_qa_docs_without_orchestrator():
-    text = sop_library.qa_sops_text()
+    text = sop_library.qa_sops_text(budget_chars=16_000)
     assert text.startswith("### SOP DOC: QA_Checklists.md")
-    assert "On_Page_Criteria_and_Coverage.md" in text
-    assert "_ORCHESTRATOR.md" not in text
+    # The BLOCK HEADER, not a filename mention — QA_Checklists' cross-references
+    # section names the On-Page doc, which made a substring assertion pass even
+    # when the doc itself was budget-starved out (adversarial review 2026-07-12).
+    assert "### SOP DOC: On_Page_Criteria_and_Coverage.md" in text
+    assert "### SOP DOC: _ORCHESTRATOR.md" not in text
+    # Both docs must arrive UNTRUNCATED at the default budget (no '…' elision
+    # marker), so the bands + blocking rules the narrative cites are present.
+    from config import settings
+
+    full = sop_library.qa_sops_text(settings.qa_sop_budget_chars)
+    assert "### SOP DOC: On_Page_Criteria_and_Coverage.md" in full
     # Budget bounded (one-doc-cap overshoot max, same contract as select_sops_text).
     small = sop_library.qa_sops_text(budget_chars=2_000)
     assert len(small) < len(text)
+    assert "### SOP DOC: On_Page_Criteria_and_Coverage.md" not in small
 
 
 def test_select_sops_text_respects_budget():

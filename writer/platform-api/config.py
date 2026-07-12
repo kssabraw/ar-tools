@@ -871,7 +871,10 @@ class Settings(BaseSettings):
     qa_narrative_enabled: bool = True
     qa_narrative_model: str = "claude-haiku-4-5-20251001"
     qa_narrative_max_tokens: int = 500
-    qa_sop_budget_chars: int = 8000
+    # Must fit BOTH grounding docs whole (QA_Checklists ~9.4k + On-Page
+    # Criteria ~5.8k + headers): an 8k budget served only a truncated
+    # QA_Checklists and never On-Page (adversarial review 2026-07-12).
+    qa_sop_budget_chars: int = 16000
     # Phase 4: producer auto-queue — a completed content run's "Review &
     # publish" task is moved straight to In QA so generated content is QA'd
     # before a human touches it. Rides the content_run producer (both its

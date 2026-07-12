@@ -10,7 +10,7 @@ full picture."""
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from config import settings
@@ -693,10 +693,12 @@ def _ctx_qa(supabase, client_id: str, today: date) -> Optional[dict]:
     """QA Agent — recent deliverable-review verdicts (last 30 days, latest per
     task): counts by verdict plus the failing / needs-human tasks with their
     open issues, so 'how did QA go on X' answers from real reviews."""
+    since = (today - timedelta(days=30)).isoformat()
     rows = (
         supabase.table("qa_reviews")
         .select("task_id, rubric, verdict, issues, narrative, created_at")
         .eq("client_id", client_id)
+        .gte("created_at", since)
         .order("created_at", desc=True)
         .limit(60)
         .execute()
