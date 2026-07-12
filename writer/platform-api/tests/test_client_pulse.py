@@ -161,6 +161,44 @@ def test_narrative_facts_quiet_week():
     assert "continuing the monthly plan" in facts
 
 
+def test_violates_never_say():
+    # The owner-banned client-facing phrases are caught case-insensitively…
+    assert P.violates_never_say("Sadly there were no major deliverables to report.")
+    assert P.violates_never_say("It was a Quiet Week on our end.")
+    assert P.violates_never_say("Nothing was done last week beyond monitoring.")
+    # …and normal upbeat copy passes (incl. words that merely resemble them).
+    assert not P.violates_never_say(
+        "We kept monitoring your rankings and there's nothing to worry about — "
+        "we published two pages this week."
+    )
+    assert not P.violates_never_say("")
+
+
+def test_narrate_pulse_discards_banned_narrative(monkeypatch):
+    # A model response that ignores the never-say rule is discarded → None →
+    # the caller falls back to the deterministic (clean) bullet body.
+    class _Block:
+        type = "text"
+        text = "Hi [First name],\n\nNo major deliverables to report this week.\n\n— Agency"
+
+    class _Messages:
+        def create(self, **kwargs):
+            return type("R", (), {"content": [_Block()]})()
+
+    class _Client:
+        def __init__(self, **kwargs): self.messages = _Messages()
+
+    import anthropic
+    from config import settings
+    monkeypatch.setattr(anthropic, "Anthropic", _Client)
+    monkeypatch.setattr(settings, "pulse_narrative_enabled", True)
+    monkeypatch.setattr(settings, "anthropic_api_key", "k")
+    assert P.narrate_pulse("facts") is None
+    # A clean narrative from the same plumbing passes through untouched.
+    _Block.text = "Hi [First name],\n\nGreat progress this week…\n\n— Agency"
+    assert P.narrate_pulse("facts").startswith("Hi [First name],")
+
+
 def test_narrate_pulse_disabled_returns_none(monkeypatch):
     from config import settings
     monkeypatch.setattr(settings, "pulse_narrative_enabled", False)

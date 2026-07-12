@@ -265,9 +265,27 @@ def narrative_facts(client_name: str, week_start: date, done_items: list[str],
     return "\n".join(lines)
 
 
+# Owner ruling (absolute): a client never reads these. The prompt forbids them,
+# but prompts aren't guarantees — violates_never_say() enforces it in code: a
+# narrative containing any of these is discarded and the caller falls back to
+# the deterministic bullet body (which is clean by construction).
+_NEVER_SAY = (
+    "no deliverable", "nothing to report", "nothing was done",
+    "no major deliverables", "quiet week", "slow week",
+)
+
+
+def violates_never_say(text: str) -> bool:
+    """True when a narrative contains client-facing phrasing the owner has
+    banned ("no deliverables to report", "quiet week", …). Pure."""
+    low = (text or "").casefold()
+    return any(p in low for p in _NEVER_SAY)
+
+
 def narrate_pulse(facts: str) -> Optional[str]:
     """One small Claude call: facts → the client email. None on ANY failure
-    (missing key, API error, empty text) — the caller falls back to bullets."""
+    (missing key, API error, empty text, banned phrasing) — the caller falls
+    back to bullets."""
     if not (settings.pulse_narrative_enabled and settings.anthropic_api_key):
         return None
     try:
@@ -284,6 +302,10 @@ def narrate_pulse(facts: str) -> Optional[str]:
         text = "\n".join(
             b.text for b in resp.content if getattr(b, "type", None) == "text"
         ).strip()
+        if text and violates_never_say(text):
+            # The model ignored the never-say rule — discard; bullets are clean.
+            logger.warning("pulse_narrative_banned_phrase")
+            return None
         return text or None
     except Exception as exc:
         logger.warning("pulse_narrative_failed", extra={"error": str(exc)})
