@@ -139,18 +139,39 @@ def _city_index() -> dict[int, tuple[str, str]]:
         page += 1
 
 
-def _ungeocoded_rows(supabase) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    page = 0
-    while True:
-        chunk = (supabase.table("competitor_locations")
-                 .select("id, city_id, category_id, business_name, address")
-                 .is_("lat", "null")
-                 .range(page * 1000, page * 1000 + 999).execute().data or [])
-        out.extend(chunk)
-        if len(chunk) < 1000:
-            return out
-        page += 1
+# A competitor is "pending" until it has a coordinate OR a geo_source stamp —
+# the stamp is how a no-match leaves the work queue (so the job terminates
+# instead of re-selecting the same unmatched rows forever).
+def _pending_addressed(supabase, limit: int) -> list[dict[str, Any]]:
+    """Next batch of addressed rows not yet attempted (the NOT NULL columns
+    come along so the bulk upsert's insert-arm is satisfied)."""
+    return (supabase.table("competitor_locations")
+            .select("id, city_id, category_id, rank_position, business_name, address")
+            .is_("lat", "null").not_.is_("address", "null").is_("geo_source", "null")
+            .limit(limit).execute().data or [])
+
+
+def _pending_sab(supabase, limit: int) -> list[dict[str, Any]]:
+    """Service-area rows (no address) not yet attempted — Outscraper path."""
+    return (supabase.table("competitor_locations")
+            .select("id, city_id, business_name")
+            .is_("address", "null").is_("lat", "null").is_("geo_source", "null")
+            .limit(limit).execute().data or [])
+
+
+def _bulk_write(supabase, rows: list[dict[str, Any]]) -> None:
+    """Upsert coordinate results in chunks (on the id PK) — 500/call instead of
+    one call per row, so a full-board geocode commits in ~hundreds of calls,
+    not ~130k, and each chunk persists before the next (reaper-safe)."""
+    for i in range(0, len(rows), 500):
+        supabase.table("competitor_locations").upsert(rows[i:i + 500]).execute()
+
+
+def _count(supabase, **filters) -> int:
+    q = supabase.table("competitor_locations").select("id", count="exact")
+    for col, val in filters.items():
+        q = q.is_(col, "null") if val is None else q.eq(col, val)
+    return q.limit(1).execute().count or 0
 
 
 # ── Census geocode (free, addressed rows) ─────────────────────────────────────
@@ -204,50 +225,71 @@ async def run_geocode_job(job: dict) -> None:
     job_id = job["id"]
     try:
         cities = _city_index()
-        pending = _ungeocoded_rows(supabase)
         now = datetime.now(timezone.utc).isoformat()
+        matched = missed = sab_filled = 0
 
-        # 1) addressed rows → Census batch (free)
-        census_inputs: list[tuple[str, str]] = []
-        sab_rows: list[dict[str, Any]] = []
-        for r in pending:
-            city, state = cities.get(r["city_id"], (None, None))
-            one_line = one_line_address(r.get("address"), city, state)
-            if one_line:
-                census_inputs.append((r["id"], one_line))
-            elif city:
-                sab_rows.append({**r, "_city": city, "_state": state})
-
-        updates: dict[str, dict[str, Any]] = {}
         async with httpx.AsyncClient(follow_redirects=True) as client:
-            if census_inputs:
-                coords = await _census_geocode(client, census_inputs)
-                for rid, (lat, lng) in coords.items():
-                    updates[rid] = {"lat": lat, "lng": lng,
-                                    "geo_source": "census", "geocoded_at": now}
-
-            # 2) SAB fill via Outscraper (paid — off by default)
-            sab_filled = 0
-            if settings.leadoff_geocode_sab_outscraper and sab_rows:
-                for r in sab_rows:
-                    ll = await _outscraper_coord(client, r["business_name"],
-                                                 r["_city"], r["_state"] or "")
+            # 1) addressed rows → free Census batch, chunk-and-commit so each
+            #    batch's coordinates persist before the next (reaper-safe).
+            while True:
+                batch = _pending_addressed(supabase, _CENSUS_CHUNK)
+                if not batch:
+                    break
+                inputs = []
+                for r in batch:
+                    city, state = cities.get(r["city_id"], (None, None))
+                    ol = one_line_address(r.get("address"), city, state)
+                    if ol:
+                        inputs.append((r["id"], ol))
+                coords = await _census_geocode(client, inputs) if inputs else {}
+                writes = []
+                for r in batch:
+                    base = {k: r[k] for k in ("id", "city_id", "category_id",
+                                              "rank_position", "business_name")}
+                    ll = coords.get(r["id"])
                     if ll:
-                        updates[r["id"]] = {"lat": ll[0], "lng": ll[1],
-                                            "geo_source": "outscraper",
-                                            "geocoded_at": now}
-                        sab_filled += 1
+                        writes.append({**base, "lat": ll[0], "lng": ll[1],
+                                       "geo_source": "census", "geocoded_at": now})
+                        matched += 1
+                    else:
+                        # stamp 'none' so an unmatched/city-less row leaves the
+                        # queue instead of being re-selected forever
+                        writes.append({**base, "geo_source": "none"})
+                        missed += 1
+                _bulk_write(supabase, writes)
 
-        for rid, patch in updates.items():
-            supabase.table("competitor_locations").update(patch) \
-                .eq("id", rid).execute()
+            # 2) SAB fill via Outscraper (paid — off by default; per-business
+            #    lookups, so update-by-id, also chunk-committed)
+            if settings.leadoff_geocode_sab_outscraper:
+                while True:
+                    sab = _pending_sab(supabase, 200)
+                    if not sab:
+                        break
+                    for r in sab:
+                        city, state = cities.get(r["city_id"], (None, None))
+                        ll = (await _outscraper_coord(client, r["business_name"],
+                                                      city, state or "")
+                              if city else None)
+                        patch = ({"lat": ll[0], "lng": ll[1],
+                                  "geo_source": "outscraper", "geocoded_at": now}
+                                 if ll else {"geo_source": "none"})
+                        supabase.table("competitor_locations").update(patch) \
+                            .eq("id", r["id"]).execute()
+                        if ll:
+                            sab_filled += 1
 
-        # coverage report + the test-market validation
-        sample_ids = list(cities.keys())
-        all_rows = (supabase.table("competitor_locations")
-                    .select("address, lat, geo_source").limit(200000)
-                    .execute().data or [])
-        summary = coverage_summary(all_rows)
+        # coverage via count queries (no 200k-row fetch)
+        total = _count(supabase)
+        geocoded = total - _count(supabase, lat=None)
+        summary = {
+            "competitors": total,
+            "geocoded": geocoded,
+            "geocoded_pct": round(geocoded / total, 3) if total else 0,
+            "by_source": {s: _count(supabase, geo_source=s)
+                          for s in ("census", "outscraper")},
+            "this_run": {"census_matched": matched, "census_missed": missed,
+                         "sab_filled": sab_filled},
+        }
         validation: dict[str, Any] = {}
         for name, state in VALIDATE:
             cid = next((k for k, (n, s) in cities.items()
@@ -260,7 +302,7 @@ async def run_geocode_job(job: dict) -> None:
                 validation[f"{name}, {state}"] = {"geocoded_pins": len(pins),
                                                   "sample": pins[:8]}
 
-        result = {**summary, "newly_geocoded": len(updates),
+        result = {**summary,
                   "sab_outscraper_enabled": settings.leadoff_geocode_sab_outscraper,
                   "validation": validation,
                   "note": ("Census = street-centroid (feasibility grade); "
@@ -270,7 +312,7 @@ async def run_geocode_job(job: dict) -> None:
             "status": "complete", "result": result, "completed_at": "now()",
         }).eq("id", job_id).execute()
         logger.info("leadoff_geocode.complete", extra={
-            "newly_geocoded": len(updates), "geocoded_pct": summary["geocoded_pct"]})
+            "geocoded": geocoded, "geocoded_pct": summary["geocoded_pct"]})
     except Exception as exc:
         logger.error("leadoff_geocode.failed", extra={"job_id": job_id, "error": str(exc)})
         supabase.table("async_jobs").update(
