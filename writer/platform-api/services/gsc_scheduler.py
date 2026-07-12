@@ -475,6 +475,28 @@ async def gsc_scheduler() -> None:
                 # pace_enabled + a configured pace_report_weekday (off by default).
                 from services.pace_report import maybe_emit_weekly as run_pace_report
                 run_pace_report(now.date())
+                # Daily PACE follow-through episode sync (v1.4 §4.9) — open/
+                # resolve/clock/escalate — then the Chase Plan built from it.
+                # Both self-gated on pace_enabled + pace_initiative_enabled;
+                # the plan's notification dedupe_key makes it once-per-day
+                # across restarts. (Importing pace_episodes also registers its
+                # chase generator with the proposal engine.)
+                from services import pace_rebalance, pace_slips, pace_triage  # noqa: F401 — register generators
+                from services.pace_episodes import run_episode_sync as run_pace_episode_sync
+                from services.pace_proposals import run_daily_chase_plan
+                run_pace_episode_sync(now.date())
+                await run_daily_chase_plan(now.date())
+                # Per-person morning DM briefs (§4.13) — additionally gated on
+                # pace_daily_brief_push (off until the im:write scope lands).
+                from services.pace_briefs import run_morning_briefs
+                await run_morning_briefs(now.date())
+                # Weekly Pulse — the copy-paste client update block on each
+                # workspace (staff-delivered; self-gated on pulse_weekday +
+                # pulse_enabled; idempotent upsert + 2-week retention purge).
+                # Threaded: the narrative pass makes one small sync LLM call
+                # per client, which must not block the scheduler's event loop.
+                from services.client_pulse import run_weekly_pulses
+                await asyncio.to_thread(run_weekly_pulses, now.date())
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,

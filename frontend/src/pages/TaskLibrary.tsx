@@ -44,7 +44,7 @@ export function TaskLibrary() {
   const update = (i: number, patch: Partial<AsanaLibraryTaskItem>) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)))
   const addRow = () =>
-    setRows((rs) => [...rs, { name: '', default_hours: null, default_category_name: null, active: true }])
+    setRows((rs) => [...rs, { name: '', default_hours: null, default_category_name: null, active: true, client_blurb: null }])
   const removeRow = (i: number) => setRows((rs) => rs.filter((_, j) => j !== i))
 
   const toggleExpand = (name: string) =>
@@ -76,7 +76,7 @@ export function TaskLibrary() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'grid', gridTemplateColumns: grid, gap: 8, fontSize: 11, color: '#94a3b8', fontWeight: 600, paddingLeft: 4 }}>
-              <span>Task name</span><span>Default hrs</span><span>Default category</span><span>Active</span><span></span>
+              <span>Task name</span><span>Default hrs</span><span>Default category</span><span>Client blurb (used in the Weekly Pulse — why this work matters, in plain client language)</span><span>Active</span><span></span>
             </div>
             {rows.map((r, i) => {
               const key = r.name.trim().toLowerCase()
@@ -93,6 +93,10 @@ export function TaskLibrary() {
                       onChange={(e) => update(i, { default_hours: e.target.value === '' ? null : Number(e.target.value) })} />
                     <input style={input} placeholder="e.g. Link Building" value={r.default_category_name ?? ''}
                       onChange={(e) => update(i, { default_category_name: e.target.value || null })} />
+                    <input style={input}
+                      placeholder="e.g. Keeps your business info consistent everywhere Google looks"
+                      value={r.client_blurb ?? ''}
+                      onChange={(e) => update(i, { client_blurb: e.target.value || null })} />
                     <input type="checkbox" checked={r.active} style={{ justifySelf: 'center' }}
                       onChange={(e) => update(i, { active: e.target.checked })} />
                     <button style={{ ...iconBtn, color: '#dc2626' }} title="Remove" onClick={() => removeRow(i)}>
@@ -220,7 +224,7 @@ function ChecklistEditor({ libraryName, initial }: { libraryName: string; initia
   )
 }
 
-const grid = '1fr 110px 1fr 60px 40px'
+const grid = '1fr 100px 150px 1.6fr 54px 36px'
 const backLinkStyle: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13,
   color: '#64748b', textDecoration: 'none', marginBottom: 16,

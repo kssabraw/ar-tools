@@ -835,6 +835,42 @@ class Settings(BaseSettings):
     # Empty ⇒ shared-channel shape-routing (backward-compatible). PACE's digest +
     # weekly report also post here when set.
     pace_slack_channel: str = ""
+    # PACE v1.4 — initiative (§4.8–§4.13). Master gate for the Chase Plan engine,
+    # follow-through episodes, triage, rebalancing, slip forecasting, DM briefs.
+    pace_initiative_enabled: bool = False
+    # Per-action-kind autonomy: "propose" (default — every actionable write rides
+    # the confirm-gated Chase Plan) | "auto" (execute at plan build, reported as
+    # done). All-propose in v1.4 by owner ruling; graduating a kind is a config
+    # flip, not a rebuild.
+    pace_autonomy: dict = {}
+    # Chase Plan cap (overflow summarized, priority-ranked first).
+    pace_chase_max_items: int = 10
+    # Aggressive cadence (owner ruling): re-propose daily while stuck; escalate
+    # publicly after N business days without movement.
+    pace_chase_renudge_days: int = 1
+    pace_chase_escalate_business_days: int = 3
+    # Slip-forecast look-ahead window (§4.12).
+    pace_slip_horizon_days: int = 5
+    # Per-person morning DM briefs (§4.13) — off until the Slack app has the
+    # im:write scope (grant + reinstall, then flip this on).
+    pace_daily_brief_push: bool = False
+    # Weekly Pulse — the copy-paste client update block on each client
+    # workspace ("done last week / on tap this week"). Deterministic, free,
+    # staff-delivered (never auto-sent). Categories in the itemize list appear
+    # as individual task names; everything else is summarized as counts (the
+    # owner's category-filter ruling — link-building detail stays internal).
+    pulse_enabled: bool = True
+    pulse_weekday: int = 0                # Monday: last week closed, this week ahead
+    pulse_itemize_categories: List[str] = ["content", "gbp_authority"]
+    pulse_retention_days: int = 14        # owner ruling: deleted after 2 weeks
+    # Narrative mode (owner request): a short LLM pass turns the deterministic,
+    # category-filtered facts into a warm client email — what we did AND WHY,
+    # what's next and why, closing with a questions invitation. Grounded: the
+    # model only sees the already-filtered items, so it can't leak internal
+    # detail or invent results. Falls back to the bullet format on any failure.
+    pulse_narrative_enabled: bool = True
+    pulse_model: str = "claude-sonnet-4-6"
+    pulse_max_tokens: int = 700
 
     # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
     # Read-only v1 serves the precomputed market_scanner.leadoff_board.

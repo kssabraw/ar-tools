@@ -279,7 +279,12 @@ async def run_notification_dispatch_job(job: dict) -> None:
     else:
         channels["email"] = "skipped"
 
-    if slack_configured():
+    skip = set((n.get("payload") or {}).get("skip_channels") or [])
+    if "slack" in skip:
+        # The producer delivers its own Slack copy (e.g. the Chase Plan posts
+        # directly so its ts can key the batch confirm) — don't double-post.
+        channels["slack"] = "skipped"
+    elif slack_configured():
         try:
             # A notification may target a specific channel (e.g. PACE's own
             # channel via payload.slack_channel); default channel otherwise.

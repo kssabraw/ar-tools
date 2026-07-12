@@ -62,6 +62,7 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
   const [editingComment, setEditingComment] = useState<{ id: string; body: string } | null>(null)
   const [nameDraft, setNameDraft] = useState<string | null>(null)
   const [descDraft, setDescDraft] = useState<string | null>(null)
+  const [clientNoteDraft, setClientNoteDraft] = useState<string | null>(null)
 
   const { data: task, isLoading } = useQuery<TaskDetailResponse>({
     queryKey: ['task-detail', taskId],
@@ -308,6 +309,23 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
               }}
               rows={4}
               placeholder="Notes, links, acceptance criteria…"
+              style={{ ...input, resize: 'vertical' }}
+            />
+          </div>
+
+          {/* Client note — CLIENT-FACING (Weekly Pulse); the description above
+              stays internal and never reaches a client email. */}
+          <div style={{ marginTop: 12 }}>
+            <div style={label}>Client note <span style={{ fontWeight: 400, color: '#94a3b8' }}>(client-facing — appears in the Weekly Pulse)</span></div>
+            <textarea
+              value={clientNoteDraft ?? task.client_note ?? ''}
+              onChange={(e) => setClientNoteDraft(e.target.value)}
+              onBlur={() => {
+                if (clientNoteDraft !== null && clientNoteDraft !== (task.client_note ?? '')) patchField('client_note', clientNoteDraft || null)
+                setClientNoteDraft(null)
+              }}
+              rows={2}
+              placeholder="Plain-English outcome/explanation for the client, e.g. “Rewrote the homepage intro to target ‘roof repair Miami’”"
               style={{ ...input, resize: 'vertical' }}
             />
           </div>

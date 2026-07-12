@@ -91,6 +91,9 @@ class AsanaLibraryTaskItem(BaseModel):
     default_hours: Optional[float] = None
     default_category_name: Optional[str] = None
     active: bool = True
+    # Client-facing one-liner ("why this work matters") used by the Weekly
+    # Pulse narrative for any task derived from this library entry.
+    client_blurb: Optional[str] = None
 
 
 class AsanaLibraryReplaceRequest(BaseModel):

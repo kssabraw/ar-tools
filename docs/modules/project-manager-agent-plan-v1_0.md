@@ -1,11 +1,41 @@
-# PACE — Project Assignment, Coordination & Execution Agent — Module Plan v1.3
+# PACE — Project Assignment, Coordination & Execution Agent — Module Plan v1.4
 
-**Status:** Phases 0–4 **built + live** (behind `pace_enabled`, enabled in
-production 2026-07-12) · Phases 5–7 **built** (v1.3 full-PM scope, PR #340) · **Sibling
-to:** SerMaStr (`seo-strategist-agent-plan-v1_0.md`) · **Rides:** the native task
-manager (`in-app-task-manager-prd-v1_0.md`) + the SerMaStr assistant
+**Status:** Phases 0–7 **built** (0–4 live behind `pace_enabled` since 2026-07-12;
+5–7 merged PR #340, review fixes #342) · Phases 8–13 **built** (v1.4 initiative
+scope, PR #345 — dormant behind `pace_initiative_enabled`; §4.13 additionally
+behind `pace_daily_brief_push` + the Slack `im:write` scope) · **Sibling to:** SerMaStr (`seo-strategist-agent-plan-v1_0.md`) · **Rides:**
+the native task manager (`in-app-task-manager-prd-v1_0.md`) + the SerMaStr assistant
 (`services/slack_assistant/`) · **Authored:** 2026-07-11 · **Revised:** 2026-07-11
-(v1.1 after review #1, v1.2 after review #2), 2026-07-12 (v1.3 full-PM scope)
+(v1.1 review #1, v1.2 review #2), 2026-07-12 (v1.3 full-PM scope; v1.4 initiative)
+
+> **Revision note (v1.4 — initiative: from coordinator to manager).** Owner target
+> (2026-07-12): PACE should cover **90–95% of the internal delivery-PM job**. The gap
+> analysis: v1.3 PACE *answers and flags* but doesn't *act and chase* — every write
+> waits for a human to ask. What's missing is **initiative**: follow-through on its own
+> flags, triage of new work, rebalancing overloads, preventing (not reporting) misses,
+> and a daily per-person cadence. Three owner decisions shape the design:
+> 1. **Autonomy — "initiate only, confirm everything."** PACE gains the right to
+>    *propose unprompted*, but **every actionable write stays actor-bound confirm-gated**
+>    (the §9 rule is re-affirmed, not relaxed). Tier-1 auto-execution was explicitly
+>    declined; the per-action `pace_autonomy` config ships anyway (all `"propose"`) so
+>    graduating an action later is a config flip, not a rebuild. To make this livable,
+>    proposals are **batched**: one daily **Chase Plan** message (reply *yes* to approve
+>    all, or `yes 1,3` selectively) instead of N confirm threads (§4.8).
+>    **Informational posts (Tier 0) need no confirm** — digests, reports, escalations,
+>    slip warnings are statements, not writes (unchanged from the v1 digest model).
+> 2. **Chase cadence — aggressive.** Re-propose daily while a task stays stuck;
+>    escalate after **3 business days** without movement (§4.9).
+> 3. **Escalation — public.** An exhausted chase posts to the (PACE/shared) channel
+>    naming the task, assignee, and days stuck — social accountability, not a DM to a
+>    boss. An unconfirmed Chase Plan does NOT stop the clock: 3 days of nobody acting
+>    (including nobody confirming) is itself escalated.
+> New: §4.8 proposal engine + Chase Plan, §4.9 follow-through episodes + status
+> hygiene, §4.10 autonomous triage, §4.11 rebalancing engine, §4.12 slip forecasting,
+> §4.13 per-person morning briefs. Phases 8–13 in §8. **Honest bound:** the remaining
+> 5–10% (scope/priority calls, client communication, deadline negotiation, performance
+> judgment) is deliberately human — Tier 3, §9. **Preconditions:** full effect requires
+> the native cutover (`native_tasks_enabled`); DM delivery (§4.13) needs the Slack
+> `im:write` scope.
 
 > **Revision note (v1.3 — full-PM scope).** Owner direction (2026-07-12): PACE must
 > act as a full delivery **project manager** — assign work to the *correct* party
@@ -398,6 +428,99 @@ Scope: per-client **or** portfolio. Delivery: in-app + Slack now; **PDF via the 
 (`generate_pace_report`, PACE-scoped action) + optional weekly on the scheduler
 (`pace_report_weekday`, default off). Pure builders unit-tested.
 
+### 4.8 Proposal engine + the daily Chase Plan (`services/pace_proposals.py`) — v1.4
+The structural shift: today a human must *ask* before PACE stages anything; v1.4 lets
+PACE **initiate**. The engine collects every action PACE wants to take (from §4.9–§4.12
+below), and posts them as **one batched Chase Plan** per day:
+
+> *PACE chase plan — 6 proposed actions (reply `yes` for all, or `yes 1,3`)*
+> 1. Nudge Ivy — "GBP categories" (IHBS) stuck In Review 6 days
+> 2. Place "Location page — Inner West" (Acme) → Minda (content, 60% loaded)
+> 3. Due-date "Citation cleanup" (ZDSCS) → 2026-07-31 (library default)
+> …
+
+Mechanics:
+- **Every item is a standard staged action** — built by the existing `PACE_ACTIONS`
+  stage functions, so permission checks, target resolution, and the `_requester`
+  descriptor are identical to the conversational path. The pending store gains a
+  **batch entry** (list of staged actions + an index map); the confirm reply
+  (`yes` / `yes 1,3`) is **actor-bound** via the existing `confirm_actor_ok` —
+  the confirmer must hold the *highest* role any selected item requires.
+- **Autonomy config, shipped now, all-propose:** `pace_autonomy` maps action kind →
+  `"propose" | "auto"`. v1.4 sets every kind to `"propose"` (the owner's call);
+  graduating e.g. nudges to `"auto"` later is a config flip — the engine already
+  forks on it (auto items execute + are *reported* in the plan as done, not asked).
+- **Tier 0 unchanged:** informational posts (digest, reports, escalations, slip
+  warnings) are statements, not writes — no confirm, exactly like today's digest.
+- Cap `pace_chase_max_items` (default 10) — overflow is summarized, highest-priority
+  first (same ranking family as `pace_digest.rank_digest_items`).
+- Posted through the notifications service (`kind="pace_chase_plan"`, PACE-channel
+  targeted when set); the *confirmable* copy lives in the assistant (Slack thread /
+  web), where the pending stores exist. Unconfirmed plans expire at the next day's
+  plan (superseded — never silently executed late).
+
+### 4.9 Follow-through episodes — the chase loop (`services/pace_episodes.py`) — v1.4
+The single most PM-like missing piece: PACE currently flags and forgets. v1.4 gives
+every flag a **clock**, exactly the `response_episodes` pattern:
+- **`task_episodes`** table: (task_id, kind ∈ stale|overdue|unassigned|unacted|
+  status_hygiene, opened_at, last_movement_at, nudge_count, escalated_at,
+  status ∈ open|resolved|escalated). One OPEN episode per (task, kind).
+- **Daily sync** (rides the scheduler tick): open episodes for newly-detected
+  `pm_signals` items; **close** when the signal clears (status moved, assignee set,
+  task completed/trashed — resolution is the tracker's call, not a heuristic);
+  detect **movement** via `task_activity` (any status/assignee/due change or comment
+  since the episode opened resets the escalation clock).
+- **Aggressive cadence (owner ruling):** while open, contribute a nudge proposal to
+  **every** daily Chase Plan (`pace_chase_renudge_days=1`); after
+  `pace_chase_escalate_business_days=3` business days with **no movement** — including
+  the case where nobody confirmed any plan — **escalate once, publicly**: a Tier-0
+  channel post naming task, assignee, client, and days stuck
+  (`kind="pace_escalation"`). Never re-escalates; the episode stays visible in the
+  digest until resolved.
+- **Status hygiene:** a task In Progress ≥ its stale threshold gets a *hygiene ask*
+  proposal — "confirm this is actually in progress" — nudging the assignee to update
+  the board. This attacks the garbage-in problem: signals are only as good as the
+  statuses, and a PM fixes that by asking.
+
+### 4.10 Autonomous triage of new work — v1.4
+Nothing sits untriaged. A daily sweep finds tasks past `pace_untriaged_grace_days`
+missing assignee / due date / category and generates Chase-Plan proposals:
+- **Assignee** → `pm_assign.pick_assignee` (built; §4.6). Held-at-capacity stays held.
+- **Due date** → the task's library default duration when its `library_task_name`
+  matches, else end of its month section, else flag-only.
+- **Category** → exact/casefold match against the Task Library's category; no match →
+  flag-only (**no LLM guessing** — miscategorized beats hallucinated).
+- **Estimate** → library `default_hours` when matched; unestimated tasks are listed in
+  the digest (they distort workload math at the default value).
+
+### 4.11 Rebalancing engine (`pm_assign.build_rebalance`) — v1.4
+When the workload report flags someone overloaded, PACE proposes the **fix**, not just
+the fact. Pure planner: for each overloaded member, select **movable** tasks (open,
+still in an initial-category status — never yank in-flight work), smallest-first, and
+re-place each via the §4.6 pool (skilled ∩ eligible ∩ least-loaded, excluding the
+overloaded member) until they're back under capacity or candidates run out. Emits
+reassignment proposals into the Chase Plan ("move *X* from Ivy (127%) → Minda (58%)").
+Partial relief is stated honestly ("frees 4h of 9h over").
+
+### 4.12 Slip forecasting — v1.4
+A PM prevents misses; v1.3 PACE reports them afterward. Deterministic look-ahead
+(`pace_slip_horizon_days=5`): a task due within the horizon **will slip** when it's
+still in an initial-category status AND its assignee's remaining capacity before the
+due date (daily-capacity model from the workload engine) is below its estimate.
+Output: a Tier-0 warning line in the digest + a Chase-Plan fix proposal per slip
+(reassign via §4.6, or a due-date move to the earliest feasible day — whichever the
+planner scores cheaper). Pure + unit-tested against fixed fixtures.
+
+### 4.13 Per-person morning briefs (push) — v1.4
+The §4.4 personal brief, **pushed**: each linked member gets their overdue/today/
+this-week list as a Slack **DM** every workday morning (`pace_daily_brief_push` flips
+the existing config on). Tier 0 — a read, no confirm. Routing: member →
+`asana_team_members.profile_id` → `profiles.slack_user_id`; unlinked members are
+skipped and counted in the digest ("2 members unreachable — link them on the Team
+page"). **Requires the Slack app's `im:write` scope** (one-time dashboard step +
+reinstall; documented in HANDOFF). Falls back to nothing (not channel spam) when the
+scope is missing — the send error is logged once, not daily.
+
 ---
 
 ## 5. Boundaries & handoff with SerMaStr
@@ -431,6 +554,9 @@ Scope: per-client **or** portfolio. Delivery: in-app + Slack now; **PDF via the 
 - `task_member_skills(member_gid, category_key, weight, is_primary)` (v1.3) — the role/skill
   competency map (§4.6), editable on the Workload page. **No rows for a member ⇒ generalist**
   (eligible for any category), so day-one placement works before anyone fills it in.
+- `task_episodes(task_id, kind, opened_at, last_movement_at, nudge_count, escalated_at,
+  status)` (v1.4) — the follow-through clock (§4.9); partial-unique on (task_id, kind)
+  where status='open'.
 - Optional (later) `pace_snooze` (client_id, task_id, kind, until) — deferred.
 
 **Config (`config.py`) — build-ready (types/defaults/env):**
@@ -453,6 +579,14 @@ pace_autoplace_producers: bool = False         # auto-place rank_drop/maps_alert
 pace_placement_overload: str = "hold"          # hold | least_over — when the skilled pool is at capacity (§4.6)
 pace_report_weekday: int | None = None         # weekly PACE report DOW (None ⇒ on-demand only, §4.7)
 pace_report_model: str = "claude-haiku-4-5-20251001"  # optional report narrative
+# --- v1.4 initiative scope ---
+pace_initiative_enabled: bool = False          # PACE_INITIATIVE_ENABLED — master gate for §4.8–§4.13
+pace_autonomy: dict = {}                       # action kind → "propose" (default) | "auto"; all-propose in v1.4
+pace_chase_max_items: int = 10                 # Chase Plan cap (overflow summarized, priority-ranked)
+pace_chase_renudge_days: int = 1               # aggressive: re-propose daily while stuck (owner ruling)
+pace_chase_escalate_business_days: int = 3     # public escalation after N business days without movement
+pace_slip_horizon_days: int = 5                # slip-forecast look-ahead (§4.12)
+# pace_daily_brief_push (exists, False) flips §4.13 on once im:write is granted
 ```
 The digest runs on the **existing scheduler tick at `gsc_ingest_hour_utc`** (no new hour
 setting). **Timezone: UTC**, matching every other suite sweep; a team-timezone digest hour
@@ -546,17 +680,69 @@ routing (backward-compatible).
 
 ---
 
+### v1.4 initiative phases (BUILT — PR #345; all behind `pace_initiative_enabled`, default off)
+
+**Phase 8 — proposal engine + Chase Plan.** `pace_proposals.py`: collect staged actions
+from registered generators, batch into one daily Chase Plan (Tier-0 notification copy +
+a confirmable assistant copy), batch pending entry + selective `yes 1,3` confirm
+(actor-bound, highest-required-role rule), `pace_autonomy` fork (all-propose),
+supersede-on-next-plan expiry. *Acceptance:* a plan with 3 staged items executes exactly
+the selected subset on one confirm; a VA's confirm of a staff-gated item is refused; an
+unconfirmed plan is superseded, never late-executed; with `pace_autonomy={"nudge":"auto"}`
+(test-only) the nudge executes and is reported as done.
+
+**Phase 9 — follow-through episodes.** `task_episodes` migration + `pace_episodes.py`:
+open/close/movement detection from `pm_signals` + `task_activity`; daily nudge proposals
+while open; single public escalation after 3 business days without movement; status-hygiene
+asks. *Acceptance:* a stuck task yields a nudge proposal in each daily plan; movement
+(status change/comment) resets the clock; day-4 (business) produces exactly one public
+escalation post naming task/assignee/days; resolution closes the episode; a second
+escalation never fires.
+
+**Phase 10 — autonomous triage.** Sweep untriaged tasks past grace → placement
+(§4.6) / library-default due dates / exact-match categories / library estimates as
+Chase-Plan proposals; no-LLM rule (no guessed categories). *Acceptance:* a new
+unassigned+undated library task yields place+due proposals; a non-library oddball yields
+flag-only; nothing is written without the plan confirm.
+
+**Phase 11 — rebalancing engine.** Pure `build_rebalance` (movable = initial-category
+status only; smallest-first; §4.6 pool excluding the overloaded member; honest partial
+relief) feeding reassignment proposals. *Acceptance:* a 127%-loaded member with two
+movable tasks yields ≤2 move proposals landing on skilled+eligible under-loaded members;
+in-flight tasks are never proposed; full-team overload yields a flag, not a shuffle.
+
+**Phase 12 — slip forecasting.** Deterministic horizon check (initial status + assignee
+capacity-before-due < estimate ⇒ will slip) → Tier-0 warning + a fix proposal (reassign
+or due-move, cheaper wins). *Acceptance:* fixture with a Friday-due unstarted task on an
+over-booked assignee flags exactly that task and proposes a valid fix; a started task or
+free assignee does not flag.
+
+**Phase 13 — per-person morning briefs.** Workday DM push of each linked member's
+overdue/today/this-week (via `pace_daily_brief_push`); unlinked members skipped +
+counted; missing `im:write` degrades to logged-once silence. *Acceptance:* linked member
+receives their own list; unlinked never causes channel spam; scope-missing environments
+stay quiet.
+
+---
+
 ## 9. Non-goals (v1)
 Time tracking; Gantt/dependencies; **auto-executing LLM-*initiated* writes without
 authorization or confirmation** — every *conversational* write is authorized, actor-bound,
 and reply-*yes* gated; **deterministic system placement** (monthly `distribute_tasks` + the
 v1.3 approval-hook placement, §4.6) assigns without a per-task confirm — the same class as
 the already-shipping monthly distribution — and is fully audited + freely re-assignable, so
-it is **not** an "agent auto-executing" hole. Also out: owning strategy/escalations; a
-per-user notification inbox (shared follow-up with the strategist); Block Kit interactive
-buttons (Option C, later); holiday-aware business days; cross-client capacity planning from
-the workbook; **skill/role auto-detection** (competencies are human-curated on the Workload
-page, §4.6).
+it is **not** an "agent auto-executing" hole. **Re-affirmed by the owner for v1.4
+(2026-07-12):** initiative does NOT relax this — PACE *proposes* unprompted (§4.8) but
+every actionable write still lands behind an actor-bound confirm; Tier-1 auto-execution
+was offered and declined (the `pace_autonomy` config exists for a future graduation).
+**Tier 3 — permanently human (the honest 5–10%):** scope/priority trade-offs, client
+communication, deadline negotiation with clients, quality judgment of the work itself,
+performance management. Also out: owning strategy/escalations; a per-user notification
+inbox (shared follow-up with the strategist — §4.13's DM push routes via slack ids, not
+the inbox); Block Kit interactive buttons (Option C, later); holiday-aware business days;
+cross-client capacity planning from the workbook; **skill/role auto-detection**
+(competencies are human-curated on the Workload page, §4.6); **LLM-guessed triage values**
+(§4.10 — exact library matches or flag-only).
 
 ---
 
@@ -571,7 +757,14 @@ page, §4.6).
 4. **Model tier** — Haiku-tier; bump only if ranking quality disappoints.
 5. **Slack linking UX** — admin Team-page field first; self-serve `/pace link` later.
 6. **`unblock` default** — restore pre-blocked status when unambiguous, else ask.
-7. **Snooze table** — wait for the first "stop nagging me" (v1.1+).
+7. **Snooze table** — wait for the first "stop nagging me" (v1.1+; the aggressive v1.4
+   chase cadence makes this likelier — build it the first time someone asks).
+8. **v1.4 autonomy — resolved (owner, 2026-07-12): initiate-only.** PACE proposes
+   unprompted; every actionable write stays confirm-gated. `pace_autonomy` all-"propose".
+9. **v1.4 chase cadence — resolved: aggressive.** Daily re-proposals while stuck;
+   escalate after 3 business days without movement.
+10. **v1.4 escalation target — resolved: the channel, publicly.** Social accountability
+    over a specific person's DM; an unconfirmed Chase Plan doesn't stop the clock.
 
 ---
 

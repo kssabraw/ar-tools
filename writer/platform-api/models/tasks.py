@@ -74,6 +74,8 @@ class TaskUpdateRequest(BaseModel):
     start_date: Optional[str] = None
     est_hours: Optional[float] = None
     sort_order: Optional[int] = None
+    # Client-facing note (Weekly Pulse) — NOT the internal description.
+    client_note: Optional[str] = None
 
 
 class TaskSectionCreateRequest(BaseModel):

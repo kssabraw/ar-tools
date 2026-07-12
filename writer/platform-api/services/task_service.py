@@ -86,6 +86,7 @@ def resolve_category_key(name: Optional[str], categories: list[dict]) -> Optiona
 _ACTIVITY_FIELDS = {
     "name": "renamed",
     "description": "edited",
+    "client_note": "edited",
     "assignee_gid": "assigned",
     "status_key": "status_changed",
     "category": "category_changed",

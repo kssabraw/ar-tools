@@ -90,6 +90,12 @@ _TOOL_PARAMS = {
     "generate_client_month": {},
     "generate_pace_report": {},
     "nudge_assignee": {"task_name": {"type": "string", "description": "The task whose assignee to nudge."}},
+    "triage_task": {
+        "task_name": {"type": "string", "description": "The task to triage (part of its name)."},
+        "due_date": {"type": "string", "description": "Due date to set if missing, YYYY-MM-DD."},
+        "category": {"type": "string", "description": "Category key to set if missing."},
+        "est_hours": {"type": "number", "description": "Estimated hours to set if missing."},
+    },
 }
 _TOOL_REQUIRED = {
     "reassign_task": ["task_name", "assignee"],
@@ -98,6 +104,7 @@ _TOOL_REQUIRED = {
     "unblock_task": ["task_name"],
     "generate_client_month": [],
     "generate_pace_report": [],
+    "triage_task": ["task_name"],
     "nudge_assignee": ["task_name"],
 }
 
@@ -268,6 +275,19 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
 
     # 1) Actor-bound confirmation of a staged PACE action.
     pending = _pace_pending.get(pend_key)
+    if pending and pending.get("batch"):
+        # A Chase Plan thread (§4.8): selective confirm ("yes" / "yes 1,3").
+        # Non-approval replies leave the plan pending (it expires only when the
+        # next day's plan supersedes it) and fall through to normal handling.
+        from services import pace_proposals
+
+        selection = pace_proposals.parse_plan_reply(question, len(pending["items"]))
+        if selection is not None:
+            _pace_pending.pop(pend_key, None)
+            reply = await pace_proposals.execute_plan_selection(pending["items"], selection, context)
+            await post_message(channel, reply, thread_ts)
+            return True
+        pending = None  # not an approval — treat as an ordinary message below
     if pending:
         if is_affirmative(question):
             _pace_pending.pop(pend_key, None)

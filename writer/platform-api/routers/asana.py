@@ -128,7 +128,7 @@ async def list_task_library(auth: dict = Depends(require_auth)) -> list[AsanaLib
     rows = (
         get_supabase()
         .table("asana_task_library")
-        .select("name, default_hours, default_category_name, active")
+        .select("name, default_hours, default_category_name, active, client_blurb")
         .order("sort_order")
         .execute()
     ).data or []
@@ -151,6 +151,7 @@ async def replace_task_library(
             "default_hours": item.default_hours,
             "default_category_name": item.default_category_name,
             "active": item.active,
+            "client_blurb": (item.client_blurb or "").strip() or None,
             "sort_order": idx,
         }
     try:

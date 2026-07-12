@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
+import { WeeklyPulse } from '../components/WeeklyPulse'
 import { StrategistReview } from '../components/StrategistReview'
 
 export function ClientWorkspace() {
@@ -87,6 +88,8 @@ export function ClientWorkspace() {
           clean). */}
       {id && <StrategistReview clientId={id} />}
       {id && <ClientNotifications clientId={id} />}
+      {/* Weekly Pulse — the copy-paste client update staff deliver by hand. */}
+      {id && <WeeklyPulse clientId={id} />}
 
       {/* ── Client setup ─────────────────────────────────────────────── */}
       <Section

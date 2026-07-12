@@ -1552,6 +1552,8 @@ export interface AsanaLibraryTaskItem {
   default_hours: number | null
   default_category_name: string | null
   active: boolean
+  // Client-facing "why this work matters" one-liner used by the Weekly Pulse.
+  client_blurb?: string | null
 }
 
 // Native task manager: a library task's default subtask checklist (keyed by
@@ -1755,6 +1757,8 @@ export interface TaskItem {
   sort_order: number
   source: string
   library_task_name: string | null
+  // Client-facing note (Weekly Pulse) — distinct from the internal description.
+  client_note?: string | null
   created_at: string
   // Board rollup (top-level tasks only)
   subtask_total?: number

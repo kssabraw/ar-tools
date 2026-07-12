@@ -20,7 +20,11 @@ def test_referenced_config_keys_exist():
     only once pace_enabled is flipped — invisible to the default-off suite)."""
     from config import settings
 
-    for key in ("pace_enabled", "pace_model", "pace_max_tokens", "pace_digest_weekday_only"):
+    for key in ("pace_enabled", "pace_model", "pace_max_tokens", "pace_digest_weekday_only",
+                # v1.4 initiative keys — every one the engine/generators read.
+                "pace_initiative_enabled", "pace_autonomy", "pace_chase_max_items",
+                "pace_chase_renudge_days", "pace_chase_escalate_business_days",
+                "pace_slip_horizon_days", "pace_daily_brief_push"):
         assert hasattr(settings, key), f"settings.{key} is not defined"
     assert isinstance(settings.pace_model, str) and settings.pace_model
     assert isinstance(settings.pace_max_tokens, int)

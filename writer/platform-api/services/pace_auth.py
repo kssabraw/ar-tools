@@ -40,6 +40,7 @@ _MATRIX: dict[str, str] = {
     "reassign_task": "staff",
     "assign_task": "staff",           # v1.3 workload-aware auto-placement (§4.6)
     "generate_pace_report": "staff",  # v1.3 delivery report (§4.7) — read-only
+    "triage_task": "staff",           # v1.4 gap-fill triage (§4.10)
     "set_task_due_other": "staff",
     "unblock_task": "staff",
     # "read_board" and "generate_client_month" are policy-driven (see below).
