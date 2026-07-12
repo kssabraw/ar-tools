@@ -194,6 +194,26 @@ def _market_pins(city_id: int, category_id: str) -> list[dict[str, Any]]:
             .not_.is_("lat", "null").execute().data or [])
 
 
+def market_proximity_score(city_id: int, category_id: str) -> Optional[float]:
+    """Just the `proximity_opportunity` for a market — fully synchronous (no
+    pin naming / reverse-geocode), so the grade layer can call it from the sync
+    brief path. None when unavailable or below the thin-data floor."""
+    from config import settings
+
+    center = _city_center(city_id)
+    if center is None:
+        return None
+    pins = _market_pins(city_id, category_id)
+    if not pins:
+        return None
+    result = build_proximity(
+        center[0], center[1], pins,
+        radius_miles=settings.leadoff_proximity_radius_miles,
+        min_pins=settings.leadoff_proximity_min_pins,
+        weak_frac=settings.leadoff_proximity_weak_frac)
+    return None if result.get("thin_data") else result.get("opportunity")
+
+
 async def market_proximity(city_id: int, category_id: str) -> dict[str, Any]:
     """The proximity read for one market. Degrades explicitly, never raises
     to the caller: no city coords / no geocoded pins → {available: False}."""

@@ -36,6 +36,14 @@ interface MarketRow {
   permit_flag?: string | null
   permit_vintage?: number | null
   permit_relevance?: 'high' | 'low'
+  // score enrichment (context signals promoted to grade inputs, owner ruling
+  // 2026-07-12). base_* is the pre-enrichment grade, kept for inspection.
+  enriched?: boolean
+  base_grade?: string | null
+  base_exp_val?: number | null
+  base_rankab?: number | null
+  score_factors?: { winnability: number; demand: number
+    signals: Record<string, number | string> } | null
 }
 interface BoardResponse {
   markets: MarketRow[]
@@ -195,6 +203,12 @@ export function LeadOff() {
               approx grades
             </span>
           )}
+          {(board?.markets ?? []).some(m => m.enriched) && (
+            <span style={{ ...pill, background: '#e3f2ef', color: '#0e7d6f' }}
+              title="Grades include the context-enrichment layer: winnability adjusted by proximity + incumbent size, demand by permits + seasonal trend (conservative, calibration-tunable). Board rows currently use the permit signal; the full four-signal grade runs on each market's brief.">
+              enriched grades
+            </span>
+          )}
         </div>
         <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 12px' }}>
           Market intelligence — every scanned US market graded for lead-gen buildability.
@@ -335,12 +349,27 @@ export function LeadOff() {
             <>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <GradeChip grade={brief.grade} />
+                {brief.enriched && brief.base_grade && brief.base_grade !== brief.grade && (
+                  <span style={{ fontSize: 12, color: '#64748b' }}
+                    title="Base grade before the context-signal enrichment layer">
+                    (base <b style={{ color: GRADE_COLORS[brief.base_grade] ?? '#475569' }}>{brief.base_grade}</b>)
+                  </span>
+                )}
                 {brief.luck === 'HOT?' && <span style={{ fontSize: 12, color: '#ea580c', fontWeight: 700 }}>🔥 HOT?</span>}
               </div>
               <h2 style={{ fontSize: 16, fontWeight: 700, margin: '6px 0 0', color: '#0f172a' }}>{brief.category}</h2>
               <div style={{ fontSize: 13, color: '#64748b' }}>{brief.city_name}, {brief.state_code}</div>
 
               <SectionTitle>Economics</SectionTitle>
+              {brief.enriched && brief.score_factors && (
+                <div style={{ fontSize: 11, color: '#0e7d6f', background: '#e3f2ef',
+                  borderRadius: 6, padding: '6px 8px', margin: '2px 0 6px', lineHeight: 1.5 }}
+                  title="Today's context signals promoted to grade inputs (conservative, config-weighted, calibration-tunable). Winnability ×proximity/site/brand; demand ×permits/seasonal.">
+                  Grade includes context enrichment — winnability ×{brief.score_factors.winnability.toFixed(2)},
+                  demand ×{brief.score_factors.demand.toFixed(2)}
+                  {brief.base_exp_val != null && <> · base {usd(brief.base_exp_val)} → {usd(brief.exp_val)}</>}
+                </div>
+              )}
               <KV k="Expected $/mo" v={usd(brief.exp_val)} strong />
               <KV k="$/mo if ranked" v={usd(brief.value_mo)} />
               <KV k="Win likelihood" v={brief.rankab?.toFixed(2)} />

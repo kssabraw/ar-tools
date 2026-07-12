@@ -1010,6 +1010,17 @@ class Settings(BaseSettings):
     leadoff_proximity_radius_miles: float = 10.0
     leadoff_proximity_min_pins: int = 5
     leadoff_proximity_weak_frac: float = 0.25
+    # Score enrichment (owner ruling 2026-07-12): today's context signals are
+    # promoted to grade inputs as bounded, config-weighted multipliers on the
+    # winnability (rankability) and demand pillars. Deliberately conservative
+    # priors — no single signal flips a grade; the calibration loop tunes these
+    # from real outcomes. Absent signals contribute 0. See leadoff_scoring.py.
+    leadoff_scoring_enabled: bool = True
+    leadoff_score_w_proximity: float = 0.10   # undefended zones → easier
+    leadoff_score_w_site: float = 0.08        # big incumbent sites → harder
+    leadoff_score_w_brand: float = 0.08       # strong incumbent brands → harder
+    leadoff_score_w_permit: float = 0.06      # housing pipeline → more demand
+    leadoff_score_w_seasonal: float = 0.05    # same-month YoY demand direction
 
     class Config:
         env_file = ".env"
