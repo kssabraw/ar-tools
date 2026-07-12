@@ -481,7 +481,7 @@ async def gsc_scheduler() -> None:
                 # the plan's notification dedupe_key makes it once-per-day
                 # across restarts. (Importing pace_episodes also registers its
                 # chase generator with the proposal engine.)
-                from services import pace_triage  # noqa: F401 — registers the triage generator
+                from services import pace_rebalance, pace_triage  # noqa: F401 — register generators
                 from services.pace_episodes import run_episode_sync as run_pace_episode_sync
                 from services.pace_proposals import run_daily_chase_plan
                 run_pace_episode_sync(now.date())

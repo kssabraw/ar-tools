@@ -135,6 +135,53 @@ def test_place_task_missing_task(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# build_rebalance (§4.11) — pure move planning
+# ---------------------------------------------------------------------------
+def _task(tid, name, est, client="c1", category=None):
+    return {"id": tid, "name": name, "est_hours": est, "client_id": client, "category": category}
+
+
+def test_rebalance_smallest_first_until_under():
+    # Ivy is 5h over; movable 2h + 4h + 6h → 2h then 4h (6 freed ≥ 5), 6h stays.
+    plan = pm_assign.build_rebalance(
+        "ivy", 5.0,
+        [_task("t3", "big", 6), _task("t1", "small", 2), _task("t2", "mid", 4)],
+        [_m("ivy"), _m("bo", cap=30)], {}, {}, {"ivy": 35, "bo": 5}, **DEFAULTS,
+    )
+    assert [m["task_id"] for m in plan["moves"]] == ["t1", "t2"]
+    assert plan["freed"] == 6.0 and plan["remaining_over"] == 0.0
+    assert all(m["to_gid"] == "bo" for m in plan["moves"])
+
+
+def test_rebalance_never_targets_the_overloaded_member():
+    plan = pm_assign.build_rebalance(
+        "ivy", 3.0, [_task("t1", "x", 2)], [_m("ivy")], {}, {}, {"ivy": 35}, **DEFAULTS,
+    )
+    assert plan["moves"] == [] and plan["remaining_over"] == 3.0
+
+
+def test_rebalance_simulated_load_prevents_tipping_targets():
+    # Bo has 2h headroom: absorbs the 2h task; the next 2h would tip him → skipped.
+    plan = pm_assign.build_rebalance(
+        "ivy", 10.0, [_task("t1", "a", 2), _task("t2", "b", 2)],
+        [_m("ivy"), _m("bo", cap=10)], {}, {}, {"ivy": 40, "bo": 8}, **DEFAULTS,
+    )
+    assert len(plan["moves"]) == 1 and plan["moves"][0]["task_id"] == "t1"
+    assert plan["remaining_over"] == 8.0  # honest partial relief
+
+
+def test_rebalance_respects_skills_and_eligibility():
+    skills = {"bo": [{"category_key": "link_building"}], "cat": []}  # cat = generalist
+    plan = pm_assign.build_rebalance(
+        "ivy", 4.0, [_task("t1", "content piece", 3, category="content")],
+        [_m("ivy"), _m("bo"), _m("cat")], skills,
+        {"c1": ["ivy", "bo", "cat"]}, {"ivy": 35, "bo": 0, "cat": 10}, **DEFAULTS,
+    )
+    # Bo is least-loaded but skilled elsewhere → the generalist cat takes it.
+    assert plan["moves"][0]["to_gid"] == "cat"
+
+
+# ---------------------------------------------------------------------------
 # replace_member_skills — validate BEFORE the destructive delete
 # ---------------------------------------------------------------------------
 class _FakeQuery:

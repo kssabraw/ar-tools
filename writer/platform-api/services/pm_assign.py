@@ -111,6 +111,57 @@ def pick_assignee(
             "remaining": remaining(top)}
 
 
+def build_rebalance(
+    overloaded_gid: str,
+    over_hours: float,
+    movable: list[dict],
+    members: list[dict],
+    skills_by_gid: dict,
+    eligible_by_client: dict,
+    load_by_gid: dict,
+    *,
+    default_hours: float,
+    default_weekly_hours: float,
+) -> dict:
+    """Pure (§4.11). Plan the moves that bring an overloaded member back under
+    capacity: movable tasks (the caller supplies ONLY initial-status work —
+    in-flight tasks are never yanked) smallest-first, each re-placed via the
+    §4.6 pool excluding the overloaded member, with the simulated load updated
+    after every move so targets never tip over. Stops when the overage is
+    covered or candidates run out — partial relief is reported honestly.
+
+    Returns {"moves": [{task_id, task_name, client_id, to_gid, to_name, est}],
+             "freed": h, "remaining_over": h}.
+    """
+    pool = [m for m in members if m.get("gid") != overloaded_gid]
+    sim_load = dict(load_by_gid)
+
+    def _est(t: dict) -> float:
+        raw = t.get("est_hours")
+        return float(raw) if raw is not None else float(default_hours)
+
+    moves: list[dict] = []
+    freed = 0.0
+    for task in sorted(movable, key=_est):
+        if freed >= over_hours:
+            break
+        result = pick_assignee(
+            task, pool, skills_by_gid, eligible_by_client.get(task.get("client_id")),
+            sim_load, default_hours=default_hours,
+            default_weekly_hours=default_weekly_hours, overload="hold",
+        )
+        if not result.get("gid"):
+            continue  # nobody can absorb this one — try the next task
+        est = _est(task)
+        sim_load[result["gid"]] = float(sim_load.get(result["gid"], 0.0)) + est
+        freed += est
+        moves.append({"task_id": task.get("id"), "task_name": task.get("name"),
+                      "client_id": task.get("client_id"),
+                      "to_gid": result["gid"], "to_name": result.get("name"), "est": est})
+    return {"moves": moves, "freed": freed,
+            "remaining_over": max(0.0, over_hours - freed)}
+
+
 # ---------------------------------------------------------------------------
 # Impure state-gather + write
 # ---------------------------------------------------------------------------
