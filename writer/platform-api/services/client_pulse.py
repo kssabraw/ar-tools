@@ -13,8 +13,13 @@ Content rules (owner rulings):
   ("4 Link Building actions") — internal line-item detail stays internal.
 - **Published content** (blog runs + Local SEO pages) is always itemized — it's
   the client-visible deliverable.
-- Deterministic, no LLM, no paid calls — the text is predictable and staff can
-  edit it after pasting.
+- **Narrative mode** (owner request 2026-07-12): the gathered facts are handed
+  to one small LLM pass that writes a warm client email — what we did AND WHY
+  it matters, what's next and why, a questions invitation to close. Hard
+  grounding: the model only receives the already-filtered facts (so it cannot
+  leak what it never sees) and is forbidden to invent results/metrics. Any
+  failure (no key, API error, empty output) falls back to the deterministic
+  bullet format — the pulse always exists.
 - Completed-task reads use the import-stamp filter (`pace_report`) so Asana
   import artifacts never read as "done last week". Pre-cutover honesty: task
   completions live in Asana until `native_tasks_enabled`, so the task portions
@@ -109,6 +114,78 @@ def render_pulse(client_name: str, week_start: date, done_items: list[str],
 
 
 # ---------------------------------------------------------------------------
+# Narrative pass (LLM over the filtered facts; best-effort)
+# ---------------------------------------------------------------------------
+_NARRATIVE_SYSTEM = (
+    "You write short weekly update emails from an SEO agency to its client — a busy "
+    "small-business owner, not a marketer. Warm, plain-English, confident, zero jargon "
+    "(explain work in terms of what it does for their business). STRICT GROUNDING: "
+    "mention ONLY the work items provided; NEVER invent results, rankings, metrics, or "
+    "work that isn't listed. If a week is light, keep it brief and honest — steady "
+    "groundwork is fine to say. Format: plain text only (no markdown, no emojis, no "
+    "subject line). Start with exactly 'Hi [First name],' on its own line (the account "
+    "manager personalizes it). Structure: one short paragraph on what was done last "
+    "week and why it helps; one on what's planned this week and why; close by inviting "
+    "questions (e.g. 'If you have any questions about any of this, just reply — happy "
+    "to walk you through it.'). Sign off with the agency name provided. 120–190 words."
+)
+
+
+def narrative_facts(client_name: str, week_start: date, done_items: list[str],
+                    done_summaries: list[str], published: list[str],
+                    upcoming_items: list[str], upcoming_summaries: list[str],
+                    agency_name: str) -> str:
+    """The grounded fact sheet the narrative model may draw from — nothing else
+    ever reaches it, so the category filter holds by construction. Pure."""
+    prev = week_start - timedelta(days=7)
+    lines = [
+        f"Client: {client_name}",
+        f"Last week: {prev.isoformat()} to {(week_start - timedelta(days=1)).isoformat()}",
+        f"This week starts: {week_start.isoformat()}",
+        f"Agency signature: {agency_name}",
+        "",
+        "WORK COMPLETED LAST WEEK:",
+    ]
+    lines.extend(f"- Published: {p}" for p in published)
+    lines.extend(f"- {d}" for d in done_items)
+    lines.extend(f"- {s} (summarize as ongoing authority/technical work)" for s in done_summaries)
+    if not (published or done_items or done_summaries):
+        lines.append("- (no itemized deliverables closed — ongoing groundwork week)")
+    lines.append("")
+    lines.append("PLANNED THIS WEEK:")
+    lines.extend(f"- {u}" for u in upcoming_items)
+    lines.extend(f"- {s} (summarize as ongoing authority/technical work)" for s in upcoming_summaries)
+    if not (upcoming_items or upcoming_summaries):
+        lines.append("- (continuing the monthly plan)")
+    return "\n".join(lines)
+
+
+def narrate_pulse(facts: str) -> Optional[str]:
+    """One small Claude call: facts → the client email. None on ANY failure
+    (missing key, API error, empty text) — the caller falls back to bullets."""
+    if not (settings.pulse_narrative_enabled and settings.anthropic_api_key):
+        return None
+    try:
+        import anthropic
+
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key,
+                                     timeout=45.0, max_retries=1)
+        resp = client.messages.create(
+            model=settings.pulse_model,
+            max_tokens=settings.pulse_max_tokens,
+            system=_NARRATIVE_SYSTEM,
+            messages=[{"role": "user", "content": facts}],
+        )
+        text = "\n".join(
+            b.text for b in resp.content if getattr(b, "type", None) == "text"
+        ).strip()
+        return text or None
+    except Exception as exc:
+        logger.warning("pulse_narrative_failed", extra={"error": str(exc)})
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Impure gather + store
 # ---------------------------------------------------------------------------
 def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
@@ -200,9 +277,14 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
     except Exception as exc:
         logger.warning("pulse_upcoming_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
-    body = render_pulse(client_name, ws, done_items, done_summaries, published,
-                        upcoming_items, upcoming_summaries,
-                        settings.client_report_agency_name)
+    # Narrative first (owner request — what we did AND WHY, questions close);
+    # the deterministic bullet render is the always-works fallback.
+    agency = settings.client_report_agency_name
+    body = narrate_pulse(narrative_facts(
+        client_name, ws, done_items, done_summaries, published,
+        upcoming_items, upcoming_summaries, agency,
+    )) or render_pulse(client_name, ws, done_items, done_summaries, published,
+                       upcoming_items, upcoming_summaries, agency)
     try:
         sb.table("client_pulses").upsert(
             {"client_id": client_id, "week_start": ws.isoformat(), "body": body,

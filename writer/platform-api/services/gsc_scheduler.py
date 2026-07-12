@@ -493,8 +493,10 @@ async def gsc_scheduler() -> None:
                 # Weekly Pulse — the copy-paste client update block on each
                 # workspace (staff-delivered; self-gated on pulse_weekday +
                 # pulse_enabled; idempotent upsert + 2-week retention purge).
+                # Threaded: the narrative pass makes one small sync LLM call
+                # per client, which must not block the scheduler's event loop.
                 from services.client_pulse import run_weekly_pulses
-                run_weekly_pulses(now.date())
+                await asyncio.to_thread(run_weekly_pulses, now.date())
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,

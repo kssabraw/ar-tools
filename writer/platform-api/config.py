@@ -863,6 +863,14 @@ class Settings(BaseSettings):
     pulse_weekday: int = 0                # Monday: last week closed, this week ahead
     pulse_itemize_categories: List[str] = ["content", "gbp_authority"]
     pulse_retention_days: int = 14        # owner ruling: deleted after 2 weeks
+    # Narrative mode (owner request): a short LLM pass turns the deterministic,
+    # category-filtered facts into a warm client email — what we did AND WHY,
+    # what's next and why, closing with a questions invitation. Grounded: the
+    # model only sees the already-filtered items, so it can't leak internal
+    # detail or invent results. Falls back to the bullet format on any failure.
+    pulse_narrative_enabled: bool = True
+    pulse_model: str = "claude-sonnet-4-6"
+    pulse_max_tokens: int = 700
 
     # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
     # Read-only v1 serves the precomputed market_scanner.leadoff_board.
