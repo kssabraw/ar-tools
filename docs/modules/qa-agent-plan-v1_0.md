@@ -1,7 +1,11 @@
 # QA Agent — Quality Assurance for Task Deliverables — Module Plan v1.0
 
-**Status:** **Phases 0–2 BUILT** (2026-07-12, dormant behind `qa_enabled` default
-False — see the build note below). **Sibling to:** SerMaStr
+> **📖 Looking for how it works today?** This is the **design/plan** doc (plan-as-written
+> + build-note corrections). For the **as-built operator & capability reference** — every
+> rubric, every check, config, cost, conventions, ops — read **`qa-agent-manual-v1_0.md`**.
+
+**Status:** **ALL PHASES BUILT** (2026-07-12, feature-complete; dormant behind `qa_enabled`
+default False except the on-demand Run QA button — see the build notes below). **Sibling to:** SerMaStr
 (`seo-strategist-agent-plan-v1_0.md`) and PACE (`project-manager-agent-plan-v1_0.md`).
 **Rides:** the native task manager (`in-app-task-manager-prd-v1_0.md`), the nlp-api
 8-engine scorer + content-quality R1–R7, the SerMaStr assistant rails
