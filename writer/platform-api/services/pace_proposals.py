@@ -138,6 +138,11 @@ async def build_chase_plan(today: Optional[date] = None) -> dict:
     autonomy = settings.pace_autonomy or {}
     for p in proposals:
         action = p.get("action")
+        if not action:
+            # A warning-only proposal (e.g. a slip with no feasible fix, §4.12)
+            # — informational flag line, nothing to stage.
+            flags.append(p.get("reason") or "")
+            continue
         meta = PACE_ACTIONS.get(action)
         if not meta:
             continue
