@@ -98,6 +98,12 @@ def test_overload_least_over_assigns_anyway():
     assert r["gid"] == "b"
 
 
+def test_overload_unknown_value_fails_closed():
+    # A config typo ("holdd") must behave as hold, never silently over-assign.
+    r = _pick({}, [_m("a", cap=10)], load={"a": 20}, overload="holdd")
+    assert r["gid"] is None and r["held"] and r["reason"] == "team_at_capacity"
+
+
 def test_est_hours_respected_in_overload():
     # a has 3h remaining but the task needs 5h → held under "hold".
     r = _pick({"est_hours": 5}, [_m("a", cap=10)], load={"a": 7})
@@ -126,3 +132,64 @@ def test_place_task_missing_task(monkeypatch):
     monkeypatch.setattr(pm_assign, "_get_task", lambda tid: None)
     r = pm_assign.place_task("gone")
     assert r["held"] and r["reason"] == "task_not_found"
+
+
+# ---------------------------------------------------------------------------
+# replace_member_skills — validate BEFORE the destructive delete
+# ---------------------------------------------------------------------------
+class _FakeQuery:
+    def __init__(self, sb, table):
+        self._sb, self._table, self._op = sb, table, "select"
+
+    def select(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+    def limit(self, *a, **k): return self
+
+    def delete(self, *a, **k):
+        self._op = "delete"
+        return self
+
+    def insert(self, rows):
+        self._op = "insert"
+        return self
+
+    def execute(self):
+        self._sb.calls.append((self._op, self._table))
+        data = self._sb.data.get(self._table, []) if self._op == "select" else []
+        return type("R", (), {"data": data})()
+
+
+class _FakeSB:
+    def __init__(self, data):
+        self.data, self.calls = data, []
+
+    def table(self, name):
+        return _FakeQuery(self, name)
+
+
+def test_replace_skills_rejects_unknown_category_before_delete(monkeypatch):
+    sb = _FakeSB({"asana_team_members": [{"gid": "g1"}], "task_categories": [{"key": "content"}]})
+    monkeypatch.setattr(pm_assign, "get_supabase", lambda: sb)
+    import pytest
+    with pytest.raises(ValueError, match="unknown_category_key"):
+        pm_assign.replace_member_skills("g1", [{"category_key": "bogus"}])
+    # The critical property: NO delete ran — the member's skills are intact.
+    assert ("delete", "task_member_skills") not in sb.calls
+
+
+def test_replace_skills_rejects_unknown_member(monkeypatch):
+    sb = _FakeSB({"asana_team_members": [], "task_categories": [{"key": "content"}]})
+    monkeypatch.setattr(pm_assign, "get_supabase", lambda: sb)
+    import pytest
+    with pytest.raises(ValueError, match="unknown_member"):
+        pm_assign.replace_member_skills("ghost", [{"category_key": "content"}])
+    assert ("delete", "task_member_skills") not in sb.calls
+
+
+def test_replace_skills_happy_path_deletes_then_inserts(monkeypatch):
+    sb = _FakeSB({"asana_team_members": [{"gid": "g1"}], "task_categories": [{"key": "content"}]})
+    monkeypatch.setattr(pm_assign, "get_supabase", lambda: sb)
+    saved = pm_assign.replace_member_skills("g1", [{"category_key": "content", "is_primary": True}])
+    assert saved == [{"category_key": "content", "is_primary": True}]
+    ops = [c for c in sb.calls if c[1] == "task_member_skills"]
+    assert ops == [("delete", "task_member_skills"), ("insert", "task_member_skills")]

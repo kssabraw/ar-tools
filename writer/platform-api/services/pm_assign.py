@@ -101,7 +101,9 @@ def pick_assignee(
         ),
     )
     top = ranked[0]
-    if remaining(top) < est and overload == "hold":
+    # Fail closed: any overload value other than the explicit "least_over"
+    # opt-in behaves as "hold" (a config typo must not silently over-assign).
+    if remaining(top) < est and overload != "least_over":
         return {"gid": None, "held": True, "reason": "team_at_capacity",
                 "category": category, "candidates": [m.get("gid") for m in ranked]}
     return {"gid": top.get("gid"), "name": top.get("name"),
@@ -171,9 +173,13 @@ def list_all_skills() -> dict:
 
 
 def replace_member_skills(member_gid: str, items: list[dict]) -> list[dict]:
-    """Whole-set replace of one member's competencies (deduped by category)."""
+    """Whole-set replace of one member's competencies (deduped by category).
+
+    Validates the member + every category key BEFORE the delete — the replace is
+    delete-then-insert (PostgREST has no transaction), so a bad payload must be
+    rejected up front rather than wiping the member's skills and then failing
+    the insert on an FK violation. Raises ValueError on an unknown member/key."""
     sb = get_supabase()
-    sb.table("task_member_skills").delete().eq("member_gid", member_gid).execute()
     rows, seen = [], set()
     for it in items:
         key = (it.get("category_key") or "").strip()
@@ -182,6 +188,20 @@ def replace_member_skills(member_gid: str, items: list[dict]) -> list[dict]:
         seen.add(key)
         rows.append({"member_gid": member_gid, "category_key": key,
                      "is_primary": bool(it.get("is_primary"))})
+    member = (
+        sb.table("asana_team_members").select("gid").eq("gid", member_gid).limit(1).execute()
+    ).data
+    if not member:
+        raise ValueError("unknown_member")
+    if seen:
+        valid = {
+            c["key"] for c in
+            (sb.table("task_categories").select("key").execute()).data or []
+        }
+        unknown = seen - valid
+        if unknown:
+            raise ValueError(f"unknown_category_key:{sorted(unknown)[0]}")
+    sb.table("task_member_skills").delete().eq("member_gid", member_gid).execute()
     if rows:
         sb.table("task_member_skills").insert(rows).execute()
     return [{"category_key": r["category_key"], "is_primary": r["is_primary"]} for r in rows]

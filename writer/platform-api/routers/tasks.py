@@ -166,6 +166,8 @@ async def set_member_skills(
 
     try:
         saved = pm_assign.replace_member_skills(member_gid, [s.model_dump() for s in body.skills])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.error("member_skills_replace_failed", extra={"member_gid": member_gid, "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
