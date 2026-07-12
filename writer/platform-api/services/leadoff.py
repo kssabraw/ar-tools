@@ -334,6 +334,18 @@ def get_market_brief(city_id: int, category_id: str) -> dict[str, Any] | None:
              .select("growth_yoy,growth_yoy_ss,peak_months")
              .eq("trend_key", f"{city_id}|{_norm(row.get('category') or '')}")
              .limit(1).execute().data or [])
+    # brand footprint (site size + mentions) — cached context per competitor;
+    # best-effort, the brief never breaks over it
+    try:
+        from services.leadoff_brand import brand_key, footprint_lookups
+        site_lookup, mention_lookup = footprint_lookups(comps)
+        for c in comps:
+            c["site_pages"] = site_lookup.get((c.get("domain") or "").strip())
+            c["mentions"] = mention_lookup.get(brand_key(c.get("business_name") or ""))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("leadoff.footprint_lookup_failed",
+                                            exc_info=True)
     return attach_permits([{
         **row,
         "competitors": comps,
