@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -310,6 +310,13 @@ export function ClientWorkspace() {
           label="Backlink Explorer"
           description="This client's backlink profile — domain rating, referring domains, anchor mix, gained/lost/broken links and history — pulled on demand. Look up any competitor's domain too."
           to={id ? `/clients/${id}/backlinks` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Radar size={22} />}
+          label="Domain Intelligence"
+          description="Point at any domain — a competitor, a prospect, the client's own site — and see its estimated organic traffic, authority, and every keyword it ranks for with volume, position & value. The SEMrush-style research view."
+          to={id ? `/clients/${id}/domain-intel` : undefined}
           cta="Open"
         />
         <ActionCard
