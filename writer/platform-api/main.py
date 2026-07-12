@@ -26,6 +26,7 @@ from routers.competitors import router as competitors_router
 from routers.domain_intel import router as domain_intel_router
 from routers.content_schedule import router as content_schedule_router
 from routers.dashboard import router as dashboard_router
+from routers.deliverables import router as deliverables_router
 from routers.files import router as files_router
 from routers.forecast import router as forecast_router
 from routers.freeze import router as freeze_router
@@ -195,6 +196,7 @@ app.include_router(clients_router)
 app.include_router(competitors_router)
 app.include_router(content_schedule_router)
 app.include_router(dashboard_router)
+app.include_router(deliverables_router)
 app.include_router(domain_intel_router)
 app.include_router(files_router)
 app.include_router(forecast_router)

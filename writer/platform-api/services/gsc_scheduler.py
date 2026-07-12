@@ -461,6 +461,7 @@ async def gsc_scheduler() -> None:
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
     from services.citation_check import enqueue_due_citation_checks
     from services.competitor_intel import enqueue_due_competitor_intel
+    from services.deliverables_sheet import enqueue_due_notes_scans as enqueue_due_deliverable_notes
     from services.domain_intel import enqueue_due_domain_intel
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
@@ -651,5 +652,10 @@ async def gsc_scheduler() -> None:
             # come due (per-item scheduled_at; evaluated every tick so drip/weekly
             # slots fire near their local time-of-day).
             enqueue_due_content_items()
+            # Deliverables Sheet Sync — the client-Notes poller (~15-min per-
+            # client interval, self-gated via deliverables_notes_state.scanned_at
+            # + in-flight job guard; no-ops while deliverables_sheet_enabled is
+            # false or no client has a sheet configured).
+            enqueue_due_deliverable_notes()
         except Exception as exc:
             logger.error("gsc_scheduler.unhandled", extra={"error": str(exc)})

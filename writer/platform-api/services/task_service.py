@@ -297,6 +297,16 @@ def complete_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
         payload["status_key"] = done_key
     updated = get_supabase().table("tasks").update(payload).eq("id", task_id).execute().data[0]
     record_activity(task_id, "completed", actor_id=actor_id)
+    # Deliverables Sheet Sync: every completion path funnels here (interactive,
+    # board drag-to-done, producer auto-close), so this is THE write hook —
+    # cheap DB work + a job enqueue; self-gated and never raises (lazy import
+    # keeps task_service free of the module's google deps).
+    try:
+        from services import deliverables_sheet
+
+        deliverables_sheet.on_task_completed(updated)
+    except Exception as exc:
+        logger.warning("deliverables_hook_error", extra={"task_id": task_id, "error": str(exc)})
     return updated
 
 
