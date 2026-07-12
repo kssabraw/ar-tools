@@ -43,6 +43,11 @@ _MATRIX: dict[str, str] = {
     "triage_task": "staff",           # v1.4 gap-fill triage (§4.10)
     "set_task_due_other": "staff",
     "unblock_task": "staff",
+    # QA Agent trigger (qa-agent-plan Phase 3): enqueues a deliverable review.
+    # team_member — a VA QA-ing their own finished work is the intended flow,
+    # and the review's board effects (bounce + rework subtasks) are QA's
+    # deterministic call, not the requester's write.
+    "run_qa_review": "team_member",
     # "read_board" and "generate_client_month" are policy-driven (see below).
 }
 
