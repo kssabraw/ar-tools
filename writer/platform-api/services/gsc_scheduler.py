@@ -404,6 +404,7 @@ async def gsc_scheduler() -> None:
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
     from services.citation_check import enqueue_due_citation_checks
     from services.competitor_intel import enqueue_due_competitor_intel
+    from services.domain_intel import enqueue_due_domain_intel
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
     from services.page_backlink_intel import enqueue_due_page_backlinks
@@ -454,6 +455,9 @@ async def gsc_scheduler() -> None:
                 # monthly page-level RD-imbalance captures.
                 enqueue_due_citation_checks()
                 enqueue_due_competitor_intel()
+                # Weekly Domain Intelligence keyword-gap refresh (per-client
+                # interval-gated; notifies on newly-opened gaps).
+                enqueue_due_domain_intel()
                 run_trend_sweep()
                 enqueue_due_page_backlinks()
                 # Auto-track each client's own domain (idempotent), then run the

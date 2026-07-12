@@ -1,6 +1,6 @@
 # Domain Intelligence — Module PRD / Build Plan (v1.0)
 
-**Authored:** 2026-07-11 · **Status:** **Phases 0–1 built** — Phase 0 foundations (Labs client, tables, config, pure core) + Phase 1 Domain Overview + Ranked Keywords (async `domain_overview` job, `routers/domain_intel.py`, `pages/DomainIntel.tsx` workspace module with CSV export; migrations applied live). Phases 2–5 ahead · Competitive-intelligence module (the "SEMrush clone")
+**Authored:** 2026-07-11 · **Status:** **Phases 0–4 built** — foundations + Domain Overview/Ranked Keywords + Keyword Gap + Backlink Gap + Discover + Phase 4 signals (weekly scheduled keyword-gap refresh on the shared scheduler, a "new competitor keyword gaps" notification on newly-opened gaps, and top gaps surfaced as deep-linked Action Plan items). Phase 5 (strategist / SerMaStr context) ahead · Competitive-intelligence module (the "SEMrush clone")
 
 > Read alongside **`docs/suite-architecture-and-roadmap-v1_0.md`** (suite decision log), **`CLAUDE.md`** (stack, conventions, RLS/service-role rule), and the two competitive-intel-adjacent module docs already in the suite: **`docs/modules/organic-rank-tracker-prd-v1_0.md`** and **`docs/modules/seo-strategist-agent-plan-v1_0.md`**. Where this doc and older framing disagree on *how it's built in this repo*, this doc wins.
 

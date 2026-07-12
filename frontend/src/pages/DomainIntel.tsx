@@ -40,6 +40,46 @@ interface OverviewResponse {
   snapshot: Snapshot | null
   ranked_keywords: RankedKeyword[]
 }
+interface KeywordGap {
+  keyword: string
+  competitor_domain: string | null
+  competitor_position: number | null
+  client_position: number | null
+  volume: number | null
+  cpc_usd: number | null
+  keyword_difficulty: number | null
+  gap_type: string | null
+  opportunity_score: number | null
+}
+interface KeywordGapResponse {
+  gaps: KeywordGap[]
+  captured_at: string | null
+  count: number
+}
+interface LinkGap {
+  referring_domain: string
+  linking_to: string[]
+  referring_domain_rank: number | null
+  backlink_count: number | null
+}
+interface LinkGapResponse {
+  gaps: LinkGap[]
+  captured_at: string | null
+  count: number
+}
+interface CompetitorSuggestion {
+  domain: string
+  avg_position: number | null
+  intersections: number | null
+  organic_keywords: number | null
+  organic_etv: number | null
+  registered: boolean
+}
+interface DiscoverResponse {
+  client_domain: string | null
+  suggestions: CompetitorSuggestion[]
+  note?: string
+}
 
 const num = (n: number | null | undefined, digits = 0) =>
   n === null || n === undefined ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: digits })
@@ -61,11 +101,16 @@ export function DomainIntel() {
     enabled: Boolean(id),
   })
 
+  const [mode, setMode] = useState<'lookup' | 'gap' | 'links' | 'discover'>('lookup')
   const [input, setInput] = useState('')
   const [role, setRole] = useState('competitor')
   const [selected, setSelected] = useState<string | null>(null)
   const [job, setJob] = useState<string | null>(null)
   const [tab, setTab] = useState<'overview' | 'keywords'>('overview')
+  const [gapJob, setGapJob] = useState<string | null>(null)
+  const [linkJob, setLinkJob] = useState<string | null>(null)
+  const [discovered, setDiscovered] = useState<DiscoverResponse | null>(null)
+  const [added, setAdded] = useState<Record<string, boolean>>({})
 
   // Prefill with the client's own domain, once.
   useEffect(() => {
@@ -105,6 +150,84 @@ export function DomainIntel() {
       setJob(null)
     }
   }, [jobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // --- Keyword Gap (client vs registered competitors) ---
+  const { data: gapData } = useQuery<KeywordGapResponse>({
+    queryKey: ['domain-intel-gap', id],
+    queryFn: () => api.get<KeywordGapResponse>(`/clients/${id}/domain-intel/keyword-gap`),
+    enabled: Boolean(id && mode === 'gap'),
+  })
+  const runGap = useMutation({
+    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/domain-intel/keyword-gap`, {}),
+    onSuccess: (r) => setGapJob(r.job_id),
+  })
+  const { data: gapJobStatus } = useQuery<{ status: string; error?: string; result?: { note?: string } }>({
+    queryKey: ['domain-intel-gap-job', id, gapJob],
+    queryFn: () => api.get(`/clients/${id}/domain-intel/jobs/${gapJob}`),
+    enabled: Boolean(gapJob),
+    refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500),
+  })
+  useEffect(() => {
+    if (gapJobStatus?.status === 'complete') {
+      queryClient.invalidateQueries({ queryKey: ['domain-intel-gap', id] })
+      setGapJob(null)
+    } else if (gapJobStatus?.status === 'failed') {
+      setGapJob(null)
+    }
+  }, [gapJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
+  const gapRunning = Boolean(gapJob) && gapJobStatus?.status !== 'failed'
+  const gaps = gapData?.gaps ?? []
+
+  const exportGapCsv = () => {
+    if (!gaps.length) return
+    const header = ['keyword', 'gap_type', 'competitor_domain', 'competitor_position', 'client_position', 'volume', 'cpc_usd', 'keyword_difficulty', 'opportunity_score']
+    const rows = gaps.map((g) => [
+      g.keyword, g.gap_type ?? '', g.competitor_domain ?? '', g.competitor_position ?? '',
+      g.client_position ?? '', g.volume ?? '', g.cpc_usd ?? '', g.keyword_difficulty ?? '', g.opportunity_score ?? '',
+    ])
+    const csv = [header, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = `keyword-gap.csv`; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  // --- Backlink Gap (referring domains competitors have, client lacks) ---
+  const { data: linkData } = useQuery<LinkGapResponse>({
+    queryKey: ['domain-intel-links', id],
+    queryFn: () => api.get<LinkGapResponse>(`/clients/${id}/domain-intel/link-gap`),
+    enabled: Boolean(id && mode === 'links'),
+  })
+  const runLinks = useMutation({
+    mutationFn: () => api.post<{ job_id: string }>(`/clients/${id}/domain-intel/link-gap`, {}),
+    onSuccess: (r) => setLinkJob(r.job_id),
+  })
+  const { data: linkJobStatus } = useQuery<{ status: string; error?: string; result?: { note?: string } }>({
+    queryKey: ['domain-intel-links-job', id, linkJob],
+    queryFn: () => api.get(`/clients/${id}/domain-intel/jobs/${linkJob}`),
+    enabled: Boolean(linkJob),
+    refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500),
+  })
+  useEffect(() => {
+    if (linkJobStatus?.status === 'complete') {
+      queryClient.invalidateQueries({ queryKey: ['domain-intel-links', id] })
+      setLinkJob(null)
+    } else if (linkJobStatus?.status === 'failed') {
+      setLinkJob(null)
+    }
+  }, [linkJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
+  const linksRunning = Boolean(linkJob) && linkJobStatus?.status !== 'failed'
+  const linkGaps = linkData?.gaps ?? []
+
+  // --- Discover competitors (SERP overlap) ---
+  const discover = useMutation({
+    mutationFn: () => api.get<DiscoverResponse>(`/clients/${id}/domain-intel/discover`),
+    onSuccess: (d) => setDiscovered(d),
+  })
+  const addCompetitor = useMutation({
+    mutationFn: (domain: string) => api.post(`/clients/${id}/competitors`, { name: domain, domain }),
+    onSuccess: (_r, domain) => setAdded((m) => ({ ...m, [domain]: true })),
+  })
 
   const running = Boolean(job) && jobStatus?.status !== 'failed'
   const snap = overview?.snapshot
@@ -151,6 +274,151 @@ export function DomainIntel() {
         {' '}<span style={{ color: budget > 0 ? '#64748b' : '#dc2626' }}>Budget left today: {num(budget)} calls.</span>
       </p>
 
+      {/* Mode toggle */}
+      <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', padding: 3, borderRadius: 8, marginBottom: 20 }}>
+        <button style={mode === 'lookup' ? segActive : segBtn} onClick={() => setMode('lookup')}>Domain lookup</button>
+        <button style={mode === 'gap' ? segActive : segBtn} onClick={() => setMode('gap')}>Keyword gap</button>
+        <button style={mode === 'links' ? segActive : segBtn} onClick={() => setMode('links')}>Backlink gap</button>
+        <button style={mode === 'discover' ? segActive : segBtn} onClick={() => setMode('discover')}>Discover</button>
+      </div>
+
+      {mode === 'gap' && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <p style={{ color: '#64748b', fontSize: 13, margin: 0, maxWidth: 620 }}>
+              Keywords your registered competitors rank for that {client?.name ?? 'this client'} doesn't — or ranks poorly for. Add competitors in Competitive Intel first.
+              {gapData?.captured_at ? ` Last run ${new Date(gapData.captured_at).toLocaleString()}.` : ''}
+            </p>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={ghostBtn} onClick={exportGapCsv} disabled={!gaps.length}><Download size={14} /> Export CSV</button>
+              <button style={primaryBtn} disabled={gapRunning || runGap.isPending || budget <= 0} onClick={() => runGap.mutate()}>
+                <RefreshCw size={14} style={gapRunning ? { animation: 'spin 1s linear infinite' } : undefined} />
+                {gapRunning ? 'Analyzing…' : 'Run gap analysis'}
+              </button>
+            </div>
+          </div>
+          {gapJobStatus?.status === 'failed' && <div style={errBox}>Gap analysis failed{gapJobStatus.error ? `: ${gapJobStatus.error}` : ''}.</div>}
+          {gapJobStatus?.result?.note === 'no_competitors' && <div style={errBox}>No competitors registered — add some in Competitive Intel, then re-run.</div>}
+          {!gaps.length && !gapRunning ? (
+            <div style={emptyBox}>No keyword gaps yet — click Run gap analysis.</div>
+          ) : (
+            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr>
+                    {['Keyword', 'Gap', 'Competitor', 'Comp pos', 'Your pos', 'Volume', 'CPC', 'KD', 'Opportunity'].map((h) => (
+                      <th key={h} style={th}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {gaps.map((g, i) => (
+                    <tr key={`${g.keyword}-${i}`} style={{ borderTop: '1px solid #f1f5f9' }}>
+                      <td style={{ ...td, fontWeight: 500, color: '#0f172a' }}>{g.keyword}</td>
+                      <td style={td}><span style={g.gap_type === 'missing' ? badgeMissing : badgeWeak}>{g.gap_type ?? '—'}</span></td>
+                      <td style={{ ...td, color: '#64748b' }}>{g.competitor_domain ?? '—'}</td>
+                      <td style={td}>{g.competitor_position ?? '—'}</td>
+                      <td style={td}>{g.client_position ?? '—'}</td>
+                      <td style={td}>{num(g.volume)}</td>
+                      <td style={td}>{g.cpc_usd === null ? '—' : `$${g.cpc_usd.toFixed(2)}`}</td>
+                      <td style={td}>{g.keyword_difficulty === null ? '—' : num(g.keyword_difficulty)}</td>
+                      <td style={{ ...td, fontWeight: 600, color: '#0f172a' }}>{num(g.opportunity_score, 0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {mode === 'links' && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <p style={{ color: '#64748b', fontSize: 13, margin: 0, maxWidth: 620 }}>
+              Referring domains linking to your registered competitors but not to {client?.name ?? 'this client'} — link-building targets.
+              {linkData?.captured_at ? ` Last run ${new Date(linkData.captured_at).toLocaleString()}.` : ''}
+            </p>
+            <button style={primaryBtn} disabled={linksRunning || runLinks.isPending || budget <= 0} onClick={() => runLinks.mutate()}>
+              <RefreshCw size={14} style={linksRunning ? { animation: 'spin 1s linear infinite' } : undefined} />
+              {linksRunning ? 'Analyzing…' : 'Run backlink gap'}
+            </button>
+          </div>
+          {linkJobStatus?.status === 'failed' && <div style={errBox}>Backlink gap failed{linkJobStatus.error ? `: ${linkJobStatus.error}` : ''}.</div>}
+          {linkJobStatus?.result?.note === 'no_competitors' && <div style={errBox}>No competitors registered — add some in Competitive Intel, then re-run.</div>}
+          {!linkGaps.length && !linksRunning ? (
+            <div style={emptyBox}>No backlink gaps yet — click Run backlink gap.</div>
+          ) : (
+            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr>{['Referring domain', 'DR', 'Backlinks', 'Links to'].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
+                </thead>
+                <tbody>
+                  {linkGaps.map((g, i) => (
+                    <tr key={`${g.referring_domain}-${i}`} style={{ borderTop: '1px solid #f1f5f9' }}>
+                      <td style={{ ...td, fontWeight: 500, color: '#0f172a' }}>
+                        <a href={`https://${g.referring_domain}`} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{g.referring_domain}</a>
+                      </td>
+                      <td style={td}>{g.referring_domain_rank === null ? '—' : num(g.referring_domain_rank, 1)}</td>
+                      <td style={td}>{num(g.backlink_count)}</td>
+                      <td style={{ ...td, color: '#64748b' }}>{(g.linking_to ?? []).join(', ') || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {mode === 'discover' && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+            <p style={{ color: '#64748b', fontSize: 13, margin: 0, maxWidth: 620 }}>
+              Domains that share the most search results with {client?.name ?? 'this client'} — candidate competitors. Add the relevant ones to the registry.
+            </p>
+            <button style={primaryBtn} disabled={discover.isPending || budget <= 0} onClick={() => discover.mutate()}>
+              <RefreshCw size={14} style={discover.isPending ? { animation: 'spin 1s linear infinite' } : undefined} />
+              {discover.isPending ? 'Finding…' : 'Find competitors'}
+            </button>
+          </div>
+          {discover.isError && <div style={errBox}>{(discover.error as Error)?.message ?? 'Discovery failed.'}</div>}
+          {discovered?.note && <div style={errBox}>Client website unknown — set it on the client first.</div>}
+          {discovered && !discovered.note && (
+            discovered.suggestions.length ? (
+              <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr>{['Domain', 'Shared keywords', 'Avg pos', 'Organic keywords', ''].map((h) => <th key={h} style={th}>{h}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {discovered.suggestions.map((s) => {
+                      const isAdded = s.registered || added[s.domain]
+                      return (
+                        <tr key={s.domain} style={{ borderTop: '1px solid #f1f5f9' }}>
+                          <td style={{ ...td, fontWeight: 500, color: '#0f172a' }}>{s.domain}</td>
+                          <td style={td}>{num(s.intersections)}</td>
+                          <td style={td}>{s.avg_position === null ? '—' : num(s.avg_position, 1)}</td>
+                          <td style={td}>{num(s.organic_keywords)}</td>
+                          <td style={td}>
+                            {isAdded
+                              ? <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 600 }}>Registered</span>
+                              : <button style={ghostBtn} disabled={addCompetitor.isPending} onClick={() => addCompetitor.mutate(s.domain)}>Add</button>}
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : <div style={emptyBox}>No competitor suggestions returned.</div>
+          )}
+          {!discovered && <div style={emptyBox}>Click Find competitors to discover domains that overlap in search.</div>}
+        </div>
+      )}
+
+      {mode === 'lookup' && (<>
       {/* Analyze bar */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: 1, minWidth: 260 }}>
@@ -269,6 +537,7 @@ export function DomainIntel() {
           )}
         </>
       ))}
+      </>)}
     </div>
   )
 }
@@ -293,4 +562,8 @@ const tabActive: React.CSSProperties = { ...tabBtn, color: '#2563eb', borderBott
 const th: React.CSSProperties = { textAlign: 'left', padding: '9px 12px', background: '#f8fafc', color: '#475569', fontWeight: 600, fontSize: 12, whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 12px', color: '#334155' }
 const emptyBox: React.CSSProperties = { padding: 40, textAlign: 'center', color: '#94a3b8', border: '1px dashed #e2e8f0', borderRadius: 8 }
+const segBtn: React.CSSProperties = { padding: '6px 14px', background: 'transparent', color: '#64748b', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 500, cursor: 'pointer' }
+const segActive: React.CSSProperties = { ...segBtn, background: '#fff', color: '#0f172a', boxShadow: '0 1px 2px rgba(0,0,0,0.06)' }
+const badgeMissing: React.CSSProperties = { padding: '2px 8px', borderRadius: 999, background: '#fef2f2', color: '#b91c1c', fontSize: 11, fontWeight: 600 }
+const badgeWeak: React.CSSProperties = { padding: '2px 8px', borderRadius: 999, background: '#fffbeb', color: '#b45309', fontSize: 11, fontWeight: 600 }
 const errBox: React.CSSProperties = { padding: '10px 14px', background: '#fef2f2', color: '#b91c1c', borderRadius: 8, fontSize: 13, marginBottom: 16 }

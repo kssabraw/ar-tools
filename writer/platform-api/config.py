@@ -460,6 +460,17 @@ class Settings(BaseSettings):
     domain_intel_gap_competitor_max_position: int = 10
     domain_intel_gap_client_min_position: int = 20
     domain_intel_gap_min_volume: int = 10
+    # Keyword-gap run: how many registered competitors to compare against when
+    # the request doesn't name an explicit set (one paid ranked-keywords call
+    # per competitor + one for the client). Bounds spend per gap run.
+    domain_intel_gap_max_competitors: int = 5
+    # Weekly scheduled keyword-gap refresh per eligible client (registered
+    # competitors + a website). A scheduled run whose newly-opened gap count
+    # clears domain_intel_gap_alert_min emits a "new competitor keyword gaps"
+    # notification. Off by disabling domain_intel_enabled.
+    domain_intel_gap_alert_min: int = 5
+    # How many top keyword-gap opportunities surface as Action Plan items.
+    domain_intel_action_max: int = 3
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
