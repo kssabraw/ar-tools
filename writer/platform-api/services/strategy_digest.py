@@ -793,6 +793,37 @@ def _prov_competitors(supabase, client_id: str, today: date, now: datetime) -> O
     }
 
 
+def _prov_domain_intel(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """Competitor keyword + backlink gaps (Domain Intelligence) — keywords and
+    referring domains competitors have that the client lacks. Concrete targets
+    the strategist can turn into content/link proposals."""
+    kw = (
+        supabase.table("domain_keyword_gaps")
+        .select("keyword, competitor_domain, competitor_position, client_position, volume, gap_type, opportunity_score, captured_at")
+        .eq("client_id", client_id).order("opportunity_score", desc=True).limit(50).execute()
+    ).data or []
+    links = (
+        supabase.table("domain_link_gaps")
+        .select("referring_domain, linking_to, referring_domain_rank, backlink_count, captured_at")
+        .eq("client_id", client_id).order("referring_domain_rank", desc=True).limit(30).execute()
+    ).data or []
+    if not kw and not links:
+        return None
+    return {
+        "note": (
+            "competitor gaps from Domain Intelligence — keywords/referring domains a competitor has "
+            "that the client lacks. opportunity_score = winnability × value (higher = pursue first); "
+            "gap_type missing = client absent, weak = client ranks poorly. Link-gap DR is a tool read (÷10 scale). "
+            "Turn keyword gaps into content proposals, link gaps into outreach targets."
+        ),
+        "keyword_gaps": kw[:10],
+        "keyword_gap_count": len(kw),
+        "link_gaps": links[:8],
+        "link_gap_count": len(links),
+        "as_of": (kw[0].get("captured_at") if kw else (links[0].get("captured_at") if links else None)),
+    }
+
+
 def _prov_forecast(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
     """Deterministic trajectory/value projections — the strategist cites these
     numbers, never derives its own."""
@@ -1038,6 +1069,7 @@ _PROVIDERS: list[tuple[str, object]] = [
     ("content", _prov_content),
     ("campaign_goals", _prov_campaign_goals),
     ("competitors", _prov_competitors),
+    ("domain_intel", _prov_domain_intel),
     ("forecast", _prov_forecast),
     ("trends", _prov_trends),
     ("organic_rank", _prov_organic),

@@ -585,6 +585,29 @@ def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
     }
 
 
+def _ctx_domain_intel(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Competitor keyword + backlink gaps (Domain Intelligence) so competitive
+    'what should we target' questions get concrete, data-grounded answers."""
+    kw = (
+        supabase.table("domain_keyword_gaps")
+        .select("keyword, competitor_domain, competitor_position, client_position, volume, gap_type, opportunity_score")
+        .eq("client_id", client_id).order("opportunity_score", desc=True).limit(10).execute()
+    ).data or []
+    links = (
+        supabase.table("domain_link_gaps")
+        .select("referring_domain, linking_to, referring_domain_rank")
+        .eq("client_id", client_id).order("referring_domain_rank", desc=True).limit(8).execute()
+    ).data or []
+    if not kw and not links:
+        return None
+    return {
+        "keyword_gaps": kw,
+        "link_gaps": links,
+        "note": ("keywords/referring domains competitors have that the client lacks; opportunity_score "
+                 "higher = pursue first. gap_type missing = client absent, weak = ranks poorly."),
+    }
+
+
 def _ctx_forecast(supabase, client_id: str, today: date) -> Optional[dict]:
     """Deterministic projections so 'where is this heading / what's it worth'
     questions get computed numbers, never invented ones."""
@@ -944,6 +967,7 @@ _CONTEXT_PROVIDERS = [
     ("campaign_goals", _ctx_campaign_goals),
     ("memories", _ctx_memories),
     ("competitors", _ctx_competitors),
+    ("domain_intel", _ctx_domain_intel),
     ("backlinks", _ctx_backlinks),
     ("forecast", _ctx_forecast),
     ("trends", _ctx_trends),
