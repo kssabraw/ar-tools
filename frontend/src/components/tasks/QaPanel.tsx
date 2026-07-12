@@ -1,0 +1,180 @@
+import { useEffect, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, HelpCircle, MinusCircle, ShieldCheck, XCircle } from 'lucide-react'
+import { api } from '../../lib/api'
+import type { QaCheck, QaReview } from '../../lib/types'
+
+// QA panel for the task drawer (qa-agent-plan Phase 3 surface): latest verdict
+// + per-check breakdown, review history, and an on-demand "Run QA" button.
+// Reviews are produced by the async qa_review job, so after enqueueing we poll
+// the history until a review newer than the enqueue moment lands (bounded).
+
+const POLL_MS = 4000
+const POLL_MAX_MS = 3 * 60 * 1000
+
+const VERDICT_META: Record<QaReview['verdict'], { label: string; color: string; bg: string; Icon: typeof CheckCircle2 }> = {
+  pass: { label: 'Passed', color: '#15803d', bg: '#f0fdf4', Icon: CheckCircle2 },
+  fail: { label: 'Failed', color: '#b91c1c', bg: '#fef2f2', Icon: XCircle },
+  needs_human: { label: 'Needs a human', color: '#b45309', bg: '#fffbeb', Icon: AlertTriangle },
+  skipped: { label: 'Not QA-checked', color: '#64748b', bg: '#f8fafc', Icon: MinusCircle },
+}
+
+const RUBRIC_LABELS: Record<string, string> = {
+  blog_article: 'Blog article',
+  website_page: 'Website page',
+  gbp_posts: 'GBP post',
+  citations: 'Citations',
+  guest_posts: 'Guest post',
+  niche_edits: 'Niche edit',
+  press_release: 'Press release',
+  map_embeds: 'Map embeds',
+  skip: 'Not checked (owner ruling)',
+  handoff_sermastr: 'SerMaStr territory',
+  generic: 'No checklist for this type',
+}
+
+const label: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }
+
+function CheckRow({ c }: { c: QaCheck }) {
+  const icon =
+    c.ok === true ? <CheckCircle2 size={14} color="#22c55e" /> :
+    c.ok === false ? <XCircle size={14} color={c.blocking ? '#ef4444' : '#f59e0b'} /> :
+    <HelpCircle size={14} color="#f59e0b" />
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, padding: '4px 0' }}>
+      <span style={{ marginTop: 1, flexShrink: 0 }}>{icon}</span>
+      <span style={{ fontSize: 12.5, color: c.ok === false && c.blocking ? '#b91c1c' : '#334155', overflowWrap: 'anywhere' }}>
+        {c.label}
+        {!c.blocking && <span style={{ color: '#94a3b8' }}> (advisory)</span>}
+        {c.note && <span style={{ color: '#94a3b8' }}> — {c.note}</span>}
+      </span>
+    </div>
+  )
+}
+
+function ReviewCard({ review }: { review: QaReview }) {
+  const meta = VERDICT_META[review.verdict] ?? VERDICT_META.needs_human
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', background: meta.bg }}>
+        <meta.Icon size={16} color={meta.color} />
+        <span style={{ fontSize: 13, fontWeight: 700, color: meta.color }}>{meta.label}</span>
+        {review.composite != null && (
+          <span style={{ fontSize: 12, fontWeight: 600, color: meta.color }}>· {Math.round(review.composite)}/100</span>
+        )}
+        <span style={{ marginLeft: 'auto', fontSize: 11, color: '#94a3b8' }}>
+          {RUBRIC_LABELS[review.rubric] ?? review.rubric} · {new Date(review.created_at).toLocaleString()}
+        </span>
+      </div>
+      <div style={{ padding: '8px 12px' }}>
+        {review.narrative && (
+          <div style={{ fontSize: 12.5, color: '#475569', marginBottom: review.checks.length ? 8 : 0 }}>
+            {review.narrative}
+          </div>
+        )}
+        {review.checks.map((c, i) => <CheckRow key={`${c.key}-${i}`} c={c} />)}
+        {review.urls.length > 0 && (
+          <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {review.urls.map((u) => (
+              <a key={u} href={u} target="_blank" rel="noreferrer"
+                 style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: '#4f46e5', textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <ExternalLink size={11} style={{ flexShrink: 0 }} /> {u}
+              </a>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export function QaPanel({ taskId }: { taskId: string }) {
+  const queryClient = useQueryClient()
+  // Set when a run was enqueued; polling stops once a newer review lands
+  // (or after POLL_MAX_MS so a stuck job can't poll forever).
+  const [pendingSince, setPendingSince] = useState<number | null>(null)
+  const [showHistory, setShowHistory] = useState(false)
+
+  const { data: reviews = [], isLoading } = useQuery<QaReview[]>({
+    queryKey: ['task-qa', taskId],
+    queryFn: () => api.get<QaReview[]>(`/tasks/${taskId}/qa-reviews`),
+    refetchInterval: pendingSince ? POLL_MS : false,
+  })
+
+  const latest = reviews[0]
+  const history = reviews.slice(1)
+
+  useEffect(() => {
+    setPendingSince(null)
+    setShowHistory(false)
+  }, [taskId])
+
+  // A review newer than the enqueue moment (or a timeout) ends the run state.
+  useEffect(() => {
+    if (!pendingSince) return
+    if (latest && new Date(latest.created_at).getTime() >= pendingSince) setPendingSince(null)
+    else if (Date.now() - pendingSince > POLL_MAX_MS) setPendingSince(null)
+  }, [pendingSince, latest])
+
+  const runMut = useMutation({
+    mutationFn: () => api.post(`/tasks/${taskId}/qa`, {}),
+    onSuccess: () => {
+      setPendingSince(Date.now())
+      queryClient.invalidateQueries({ queryKey: ['task-qa', taskId] })
+    },
+  })
+
+  const running = pendingSince !== null
+
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ ...label, marginBottom: 0, flex: 1 }}>QA</div>
+        <button
+          onClick={() => runMut.mutate()}
+          disabled={running || runMut.isPending}
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff', color: '#334155', fontSize: 12, fontWeight: 600, cursor: running ? 'default' : 'pointer', opacity: running ? 0.6 : 1 }}
+        >
+          <ShieldCheck size={13} /> {running ? 'Reviewing…' : 'Run QA'}
+        </button>
+      </div>
+      {runMut.isError && (
+        <div style={{ fontSize: 12, color: '#dc2626', marginTop: 6 }}>
+          Could not start QA — {String((runMut.error as Error)?.message ?? 'try again')}
+        </div>
+      )}
+      <div style={{ marginTop: 8 }}>
+        {isLoading ? (
+          <div style={{ fontSize: 12, color: '#cbd5e1' }}>Loading…</div>
+        ) : !latest ? (
+          <div style={{ fontSize: 12, color: '#cbd5e1' }}>
+            {running ? 'Review in progress…' : 'No QA reviews yet — move the task to In QA or hit Run QA.'}
+          </div>
+        ) : (
+          <>
+            {running && (
+              <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 6 }}>Review in progress — showing the last result…</div>
+            )}
+            <ReviewCard review={latest} />
+            {history.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                <button
+                  onClick={() => setShowHistory((v) => !v)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: 'none', background: 'none', color: '#94a3b8', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                >
+                  {showHistory ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  {history.length} earlier review{history.length === 1 ? '' : 's'}
+                </button>
+                {showHistory && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+                    {history.map((r) => <ReviewCard key={r.id} review={r} />)}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
