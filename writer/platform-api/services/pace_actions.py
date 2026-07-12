@@ -331,6 +331,28 @@ def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# generate_pace_report (v1.3) — delivery report (§4.7), read-only (no confirm)
+# ---------------------------------------------------------------------------
+def stage_generate_report(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
+    ok, reason = pace_auth.require(context, "generate_pace_report")
+    if not ok:
+        return "reply", reason
+    from services import pace_report
+
+    # A read: build + render immediately and return as the reply (no confirm).
+    report = pace_report.build_report(client_id)
+    return "reply", pace_report.render_text(report, scope_name="this client")
+
+
+def run_generate_report(context: ActionContext, client_id: str, args: dict) -> str:
+    # Reads resolve at stage (reply); run is never reached but kept for the
+    # registry's stage/run contract.
+    from services import pace_report
+
+    return pace_report.render_text(pace_report.build_report(client_id), scope_name="this client")
+
+
+# ---------------------------------------------------------------------------
 # Persona-scoped registry (Phase 3 mounts this under persona='pace')
 # ---------------------------------------------------------------------------
 PACE_ACTIONS: dict[str, dict] = {
@@ -340,4 +362,5 @@ PACE_ACTIONS: dict[str, dict] = {
     "unblock_task": {"label": "unblock a task", "stage": stage_unblock, "run": run_unblock},
     "generate_client_month": {"label": "generate this month's tasks", "stage": stage_generate_month, "run": run_generate_month},
     "nudge_assignee": {"label": "nudge an assignee", "stage": stage_nudge, "run": run_nudge},
+    "generate_pace_report": {"label": "generate a delivery report", "stage": stage_generate_report, "run": run_generate_report},
 }

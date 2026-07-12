@@ -88,6 +88,7 @@ _TOOL_PARAMS = {
     },
     "unblock_task": {"task_name": {"type": "string", "description": "The blocked task to unblock."}},
     "generate_client_month": {},
+    "generate_pace_report": {},
     "nudge_assignee": {"task_name": {"type": "string", "description": "The task whose assignee to nudge."}},
 }
 _TOOL_REQUIRED = {
@@ -96,6 +97,7 @@ _TOOL_REQUIRED = {
     "set_task_due": ["task_name", "due_date"],
     "unblock_task": ["task_name"],
     "generate_client_month": [],
+    "generate_pace_report": [],
     "nudge_assignee": ["task_name"],
 }
 

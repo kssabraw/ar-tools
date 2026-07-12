@@ -115,6 +115,8 @@ export function TeamWorkload() {
         </div>
       )}
 
+      <PaceReportCard />
+
       {isLoading ? (
         <div style={emptyBox}>Loading…</div>
       ) : report && report.members.length > 0 ? (
@@ -338,6 +340,64 @@ function TeamEditor({ configured, defaultWeekly, onSaved }: {
         </button>
       </div>
       {save.isError && <p style={errText}>{(save.error as Error).message}</p>}
+    </section>
+  )
+}
+
+// ── PACE delivery report card (PACE v1.3 §4.7) ──────────────────────────
+interface PaceReport {
+  as_of: string; period_days: number; clients_covered: number; completed_count: number
+  overdue: number; stuck: number; unassigned: number; unacted: number; behind_pace: number
+  throughput_by_person: Record<string, number>
+  throughput_by_category: Record<string, number>
+  utilization: { name: string; pct: number | null; over: boolean; committed: number; capacity: number }[]
+}
+
+function PaceReportCard() {
+  const { data } = useQuery<PaceReport>({
+    queryKey: ['pace-report'],
+    queryFn: () => api.get<PaceReport>('/pace-report?days=7'),
+  })
+  if (!data) return null
+  const kpis = [
+    { label: 'Completed (7d)', value: data.completed_count },
+    { label: 'Overdue', value: data.overdue },
+    { label: 'Stuck', value: data.stuck },
+    { label: 'Unassigned', value: data.unassigned },
+    { label: 'Behind pace', value: data.behind_pace },
+  ]
+  const people = Object.entries(data.throughput_by_person || {})
+  const over = (data.utilization || []).filter((u) => u.over)
+  return (
+    <section style={{ ...card, marginBottom: 16 }}>
+      <h2 style={cardTitle}>
+        Delivery report{' '}
+        <span style={{ fontWeight: 400, color: '#94a3b8', fontSize: 12 }}>
+          · last {data.period_days}d · {data.clients_covered} client{data.clients_covered === 1 ? '' : 's'}
+        </span>
+      </h2>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '12px 0' }}>
+        {kpis.map((k) => (
+          <div key={k.label} style={{ flex: '1 1 100px', minWidth: 100, padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10 }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#0f172a' }}>{k.value}</div>
+            <div style={{ fontSize: 11.5, color: '#64748b' }}>{k.label}</div>
+          </div>
+        ))}
+      </div>
+      {people.length > 0 && (
+        <div style={{ marginBottom: over.length > 0 ? 8 : 0 }}>
+          <span style={{ fontSize: 12, color: '#64748b', fontWeight: 600, marginRight: 6 }}>Completed by person:</span>
+          {people.map(([name, n]) => (
+            <span key={name} style={{ ...chip('#eef2ff', '#4338ca', '#c7d2fe'), marginRight: 6, display: 'inline-block' }}>{name} · {n}</span>
+          ))}
+        </div>
+      )}
+      {over.length > 0 && (
+        <div style={{ fontSize: 12.5, color: '#b45309' }}>
+          <AlertTriangle size={13} style={{ verticalAlign: -2, marginRight: 4 }} />
+          Over capacity: {over.map((u) => `${u.name}${u.pct != null ? ` (${u.pct}%)` : ''}`).join(', ')}
+        </div>
+      )}
     </section>
   )
 }

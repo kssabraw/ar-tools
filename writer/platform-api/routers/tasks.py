@@ -173,6 +173,27 @@ async def set_member_skills(
 
 
 # ---------------------------------------------------------------------------
+# PACE delivery reports (PACE v1.3 §4.7)
+# ---------------------------------------------------------------------------
+@router.get("/pace-report")
+async def portfolio_pace_report(days: int = 7, auth: dict = Depends(require_auth)) -> dict:
+    """Portfolio delivery report — throughput / overdue / utilization / backlog."""
+    from services import pace_report
+
+    return pace_report.build_report(None, period_days=max(1, min(days, 90)))
+
+
+@router.get("/clients/{client_id}/pace-report")
+async def client_pace_report(
+    client_id: UUID, days: int = 7, auth: dict = Depends(require_auth)
+) -> dict:
+    """Single-client delivery report."""
+    from services import pace_report
+
+    return pace_report.build_report(str(client_id), period_days=max(1, min(days, 90)))
+
+
+# ---------------------------------------------------------------------------
 # Task Library subtask checklists (PRD §6.9)
 # ---------------------------------------------------------------------------
 @router.get("/tasks/library-checklists", response_model=list[LibraryChecklist])
