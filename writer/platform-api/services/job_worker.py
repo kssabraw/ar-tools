@@ -54,6 +54,7 @@ from services.leadoff_actions import (
     run_scout_job as run_leadoff_scout_job,
     run_tryout_job as run_leadoff_tryout_job,
 )
+from services.leadoff_ai_probe import run_ai_probe_job as run_leadoff_ai_probe_job
 from services.local_relevance import run_local_relevance_job
 from services.page_structure_scraper import analyze_page_structure
 from services.silo_dedup import process_silo_dedup_job
@@ -426,6 +427,8 @@ async def _process_job(job: dict) -> None:
         await run_leadoff_tryout_job(job)
     elif job_type == "leadoff_scout":
         await run_leadoff_scout_job(job)
+    elif job_type == "leadoff_ai_probe":
+        await run_leadoff_ai_probe_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 
