@@ -44,6 +44,7 @@ interface Enrichment {
   rd_med: number | null
   field_vel30: number | null
   field_prior30: number | null
+  vel_matched: number | null
   momentum: string | null
   newest_review: string | null
   growth_yoy: number | null
@@ -275,8 +276,16 @@ export function LeadOff() {
                     hint="tool read ×10 per orchestrator rule" />
                   <KV k="Field reviews 30d (vs prior)"
                     v={brief.enrichment.field_vel30 != null
-                      ? `${brief.enrichment.field_vel30} vs ${brief.enrichment.field_prior30 ?? 0}` : '—'} />
-                  <KV k="Momentum" v={brief.enrichment.momentum ?? '—'} />
+                      ? `${brief.enrichment.field_vel30} vs ${brief.enrichment.field_prior30 ?? 0}` : '—'}
+                    hint={brief.enrichment.vel_matched != null
+                      ? `summed over ${brief.enrichment.vel_matched} of ${brief.competitors.length} top-5 competitors found in the review cache`
+                      : undefined} />
+                  <KV k="Momentum"
+                    v={brief.enrichment.momentum
+                      ?? (brief.enrichment.vel_matched ? 'thin data' : '—')}
+                    hint={brief.enrichment.momentum == null && brief.enrichment.vel_matched
+                      ? `only ${brief.enrichment.vel_matched} of ${brief.competitors.length} competitors matched the review cache — below the 2-competitor floor for a momentum verdict`
+                      : undefined} />
                   <KV k="Newest field review" v={brief.enrichment.newest_review ?? '—'} />
                   <KV k="Demand growth (YoY)"
                     v={brief.enrichment.growth_yoy != null ? `${brief.enrichment.growth_yoy}×` : '—'}

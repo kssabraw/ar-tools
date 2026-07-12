@@ -98,18 +98,32 @@ class TestEnrichment:
         rd = [{"domain": "vlk.com", "referring_domains": 12},
               {"domain": "qel.com", "referring_domains": 4}]
         reviews = [{"biz_key": "vancouver lock key|1", "last30": 3,
-                    "prior30": 1, "newest": "2026-06-10"}]
+                    "prior30": 1, "newest": "2026-06-10"},
+                   {"biz_key": "quickentry locksmith|1", "last30": 1,
+                    "prior30": 1, "newest": "2026-05-02"}]
         out = enrichment_from_caches(self.COMPS, rd, reviews, None, city_id=1)
         assert out["rd_min"] == 4 and out["rd_med"] == 12
-        assert out["field_vel30"] == 3 and out["field_prior30"] == 1
+        assert out["field_vel30"] == 4 and out["field_prior30"] == 2
+        assert out["vel_matched"] == 2
         assert out["momentum"] == "accel"
         assert out["newest_review"] == "2026-06-10"
 
     def test_dead_field_momentum(self):
         reviews = [{"biz_key": "vancouver lock key|1", "last30": 0,
+                    "prior30": 0, "newest": None},
+                   {"biz_key": "quickentry locksmith|1", "last30": 0,
                     "prior30": 0, "newest": None}]
         out = enrichment_from_caches(self.COMPS, [], reviews, None, city_id=1)
         assert out["momentum"] == "dead"
+
+    def test_single_match_suppresses_momentum(self):
+        # One matched competitor is too thin for a field-momentum verdict:
+        # the raw velocity numbers still surface, the verdict does not.
+        reviews = [{"biz_key": "vancouver lock key|1", "last30": 3,
+                    "prior30": 0, "newest": "2026-06-10"}]
+        out = enrichment_from_caches(self.COMPS, [], reviews, None, city_id=1)
+        assert out["field_vel30"] == 3 and out["vel_matched"] == 1
+        assert out["momentum"] is None
 
     def test_trend_only_still_returns_block(self):
         out = enrichment_from_caches(self.COMPS, [], [],

@@ -28,6 +28,10 @@ _PRERANK_COLUMN = {
     "leads": "xdem", "demand": "xdem", "v3": "v3",
 }
 _GRADE_BANDS = [(99, "A+"), (97, "A"), (94, "B+"), (90, "B"), (75, "C"), (50, "D")]
+# The shared review cache is cross-category, so a market's top-5 often only
+# partly matches it. A momentum verdict from a single business over-reads —
+# require at least this many matched competitors before calling one.
+MOMENTUM_MIN_MATCHED = 2
 
 
 def _norm(s: str) -> str:
@@ -111,11 +115,11 @@ def enrichment_from_caches(competitors: list[dict[str, Any]],
     vel_by_key = {r["biz_key"]: r for r in review_rows}
     last30 = prior30 = 0
     newest: list[str] = []
-    matched = False
+    matched = 0
     for c in competitors:
         v = vel_by_key.get(f"{_norm(c.get('business_name') or '')}|{city_id}")
         if v:
-            matched = True
+            matched += 1
             last30 += int(v.get("last30") or 0)
             prior30 += int(v.get("prior30") or 0)
             if v.get("newest"):
@@ -123,7 +127,7 @@ def enrichment_from_caches(competitors: list[dict[str, Any]],
     if not rds and not matched and not trend_row:
         return None
     momentum = None
-    if matched:
+    if matched >= MOMENTUM_MIN_MATCHED:
         momentum = ("accel" if last30 > prior30 * 1.3
                     else "cooling" if last30 < prior30 * 0.7 else "steady") \
             if (last30 or prior30) else "dead"
@@ -132,6 +136,7 @@ def enrichment_from_caches(competitors: list[dict[str, Any]],
         "rd_med": sorted(rds)[len(rds) // 2] if rds else None,
         "field_vel30": last30 if matched else None,
         "field_prior30": prior30 if matched else None,
+        "vel_matched": matched if matched else None,
         "momentum": momentum,
         "newest_review": max(newest) if newest else None,
         "growth_yoy": (trend_row or {}).get("growth_yoy"),

@@ -52,7 +52,7 @@ platform Module 6 — see `LEADOFF_PRD.md`):
 | `exact_open` | competitors holding the exact primary category | low ⇒ category lever open (verify per §6) |
 | `luck` = HOT?/COLD? | demand runs ≥2×/≤0.5× the city's own norm | HOT? ⇒ verify with trend before committing |
 | `conf` | demand-estimate confidence (Google volume bucketing) | low ⇒ treat leads estimate as ±wide |
-| `field_vel30` / `momentum` | field reviews gained last 30d vs prior 30d | accel ⇒ window closing; dead ⇒ sitting ducks |
+| `field_vel30` / `momentum` | field reviews gained last 30d vs prior 30d, summed over the `vel_matched` top-5 competitors found in the review cache | accel ⇒ window closing; dead ⇒ sitting ducks; <2 matched ⇒ no verdict (thin data) — read the raw velocity, don't call momentum |
 | `rd_min` / `rd_med` | referring domains of top-5 sites — **tool reads** | see §5 conversion before using |
 | `growth_yoy` / `peak_months` | 12-mo demand trend | ⚠ seasonal categories confound growth_yoy; read with peak_months |
 
