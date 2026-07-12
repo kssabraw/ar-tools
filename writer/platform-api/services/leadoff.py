@@ -251,6 +251,30 @@ def list_board(*, city: str | None, state: str | None, category: str | None,
                             "approximate": not default_assumptions}}
 
 
+NEIGHBORHOOD_SORTS = {
+    "demand": "demand_vol", "value": "est_value_mo",
+    "leads": "est_leads_mo", "v3": "opportunity_score_v3",
+}
+
+
+def list_neighborhoods(*, metro: str | None, state: str | None,
+                       service: str | None, sort: str, limit: int) -> dict[str, Any]:
+    """The nameable-neighborhood board (PRD §5 item 3): 955 combos precomputed
+    by the scanner. Scored on demand/economics, NOT competition — neighborhood
+    supply ≈ the parent metro's at 13z (scanner lesson #5), so competition
+    columns are context, not signal."""
+    q = _client().table("neighborhood_opportunities").select("*")
+    if metro:
+        q = q.ilike("metro", f"%{metro}%")
+    if state:
+        q = q.eq("state", state.upper())
+    if service:
+        q = q.ilike("service", f"%{service}%")
+    rows = (q.order(NEIGHBORHOOD_SORTS[sort], desc=True, nullsfirst=False)
+            .limit(limit).execute().data or [])
+    return {"neighborhoods": rows}
+
+
 def get_market_brief(city_id: int, category_id: str) -> dict[str, Any] | None:
     board = (_client().table("leadoff_board").select("*")
              .eq("city_id", city_id).eq("category_id", category_id)

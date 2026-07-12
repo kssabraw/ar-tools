@@ -79,21 +79,38 @@ competitor list · scouting report, with RD displayed **×10 as true RD** per
 required, website optional — that runs the §5-item-2 handoff and routes to
 the new client workspace).
 
-## 5. Not in v1 (build order)
+## 5. Build order (items 1–4 now built)
 
-1. **Paid actions**: `POST /leadoff/tryout` (score any off-list city, ~$0.20)
-   and `POST /leadoff/scout` (RD + review velocity + trend enrichment,
-   ~$0.10–1/market, cache-cheapening) — need `DATAFORSEO_LOGIN/PASSWORD` on
-   PLATFORM + a per-user daily budget guard. The external PowerShell tools
-   (`check_city.ps1`, `enrich_shortlist.ps1`) do both today and write to the
-   same tables, so app users see their results.
+1. **Paid actions — ✅ built**: `POST /leadoff/tryout` (score any off-list
+   city, ~$0.20) and `POST /leadoff/scout` (RD + review velocity + trend,
+   ~$0.10–1/market, cache-cheapened) — ported faithfully from the scanner's
+   `check_city.py` / `enrich_shortlist.py` (reference copies at
+   `docs/reference/leadoff-scanner/`, the methodology authority).
+   `services/leadoff_actions.py` (pure stats/economics/cache-contract
+   builders unit-tested in `tests/test_leadoff_actions.py`) + async jobs
+   `leadoff_tryout` / `leadoff_scout`. Tryout: keyword task with both forms →
+   vol≥20 gate → Maps SERP at **13z** → rankability (category aliases) →
+   grade vs `exp_val_percentiles`; results persist to `leadoff_tryouts`
+   (public schema; migration `20260712120000`). Scout: fills the shared
+   `market_scanner` caches with the EXACT PowerShell contracts (`biz_key`,
+   `trend_key`, raw-RD, `pulled_at` 90-day freshness) so the two tools stay
+   interoperable; the brief picks enrichment up on its next read. **Budget
+   guard:** per-user daily ledger `leadoff_spend` + `leadoff_daily_budget_usd`
+   (default $5); every enqueue records its estimate; scout exposes a free
+   `GET /leadoff/scout/estimate` preflight; DataForSEO 40203 (money limit)
+   aborts without recording; 40102 records a valid zero (scanner lesson #2).
 2. **Create Client from market** — ✅ **built** (see §3/§4): a "Create client
    from this market" button on the brief creates the client card pre-loaded
    with the market's location, competitor set, and effort targets.
-3. Neighborhood board tab (`neighborhood_opportunities` is already loaded).
-4. SerMaStr routing: add a domain mapping for the LeadOff SOP in
-   `services/sop_library.py` so strategist runs pull it automatically
-   (today it's reachable via `read_sop` + the corpus).
+3. **Neighborhood board tab — ✅ built**: `GET /leadoff/neighborhoods` over
+   `neighborhood_opportunities` (955 nameable combos) + a Neighborhoods tab
+   (filters metro/state/service, sorts demand/value/leads/v3; UI notes that
+   supply ≈ parent metro — pick on demand, per scanner lesson #5).
+4. **SerMaStr routing — ✅ built**: `sop_library._RELEVANCE["leadoff"]` →
+   the LeadOff SOP; the strategy digest emits the `leadoff` domain for
+   clients carrying a "LeadOff targets — …" goal (the handoff's marker, and
+   deliberately NOT an active-signal for the weekly gate), and the assistant's
+   `sop_domains` gains leadoff/market-selection keyword hints.
 5. Data refresh cadence: quarterly re-scan / AIO probe / category-rename sweep
    run from the external scanner; `leadoff_board.as_of` carries the vintage.
 

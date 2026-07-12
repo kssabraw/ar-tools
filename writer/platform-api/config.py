@@ -791,6 +791,10 @@ class Settings(BaseSettings):
     # Board queries pre-rank on the stored sort column and fetch this many rows
     # before exact re-sorting under non-default capture/lead-tier assumptions.
     leadoff_prefetch_rows: int = 1500
+    # Paid actions (PRD §5 item 1): per-user daily budget across tryout
+    # (~$0.20/run) + scout (~$0.10–1/market, cache-cheapened). Every enqueue
+    # records its estimate to leadoff_spend; the guard sums today's UTC rows.
+    leadoff_daily_budget_usd: float = 5.0
 
     class Config:
         env_file = ".env"

@@ -14,6 +14,7 @@ from db.supabase_client import get_supabase
 from middleware.auth import require_auth, require_staff
 from services import campaign_goals
 from services import leadoff as leadoff_service
+from services import leadoff_actions
 from services.leadoff import BOARD_SORTS, DEFAULT_CAPTURE, DEFAULT_TIER, LEAD_TIERS
 from config import settings
 
@@ -54,6 +55,21 @@ async def get_market_brief(
     if brief is None:
         raise HTTPException(status_code=404, detail="not_found")
     return brief
+
+
+@router.get("/leadoff/neighborhoods")
+async def get_neighborhoods(
+    metro: str | None = None,
+    state: str | None = None,
+    service: str | None = None,
+    sort: str = "demand",
+    limit: int = Query(default=100, ge=1, le=955),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    if sort not in leadoff_service.NEIGHBORHOOD_SORTS:
+        raise HTTPException(status_code=422, detail="invalid_sort")
+    return leadoff_service.list_neighborhoods(
+        metro=metro, state=state, service=service, sort=sort, limit=limit)
 
 
 class CreateClientFromMarketRequest(BaseModel):
@@ -129,3 +145,125 @@ async def create_client_from_market(
         "competitors_seeded": competitors_seeded,
         "goal_created": goal_created,
     }
+
+
+# ── Paid actions (PRD §5 item 1) — budget-guarded, cost surfaced up front ─────
+
+class TryoutRequest(BaseModel):
+    city: str = Field(..., min_length=1)
+    state: str = Field(..., min_length=2, max_length=2)
+    capture: float = Field(default=DEFAULT_CAPTURE, ge=0.01, le=0.5)
+    lead_tier: str = DEFAULT_TIER
+
+
+@router.post("/leadoff/tryout", status_code=202)
+async def start_tryout(
+    body: TryoutRequest,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Score ANY off-list city (~$0.20, ~3 min) — the check_city port. Runs as
+    an async job; poll GET /leadoff/tryouts/{id}."""
+    if body.lead_tier not in LEAD_TIERS:
+        raise HTTPException(status_code=422, detail="invalid_lead_tier")
+    city_row = leadoff_actions.resolve_city(body.city, body.state)
+    if city_row is None:
+        # cities covers US places >=10k pop; smaller towns need a geocode step
+        raise HTTPException(status_code=404, detail="city_not_found")
+    try:
+        leadoff_actions.check_budget(auth["user_id"], leadoff_actions.COST_TRYOUT)
+    except leadoff_actions.BudgetExceeded as exc:
+        raise HTTPException(status_code=422, detail="budget_exceeded") from exc
+    out = leadoff_actions.enqueue_tryout(
+        auth["user_id"], city_row, body.capture, body.lead_tier)
+    leadoff_actions.record_spend(
+        auth["user_id"], "tryout", leadoff_actions.COST_TRYOUT,
+        city_id=city_row.get("city_id"), city_name=city_row.get("name"),
+        state_code=city_row.get("state_code"))
+    return {"tryout_id": out["tryout"]["id"], "job_id": out["job_id"],
+            "city_name": city_row.get("name"), "state_code": city_row.get("state_code"),
+            "est_cost": leadoff_actions.COST_TRYOUT}
+
+
+@router.get("/leadoff/tryouts")
+async def list_tryouts(
+    limit: int = Query(default=20, ge=1, le=100),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    rows = (get_supabase().table("leadoff_tryouts").select("*")
+            .order("created_at", desc=True).limit(limit).execute().data or [])
+    return {"tryouts": rows}
+
+
+@router.get("/leadoff/tryouts/{tryout_id}")
+async def get_tryout(tryout_id: str, auth: dict = Depends(require_auth)) -> dict:
+    rows = (get_supabase().table("leadoff_tryouts").select("*")
+            .eq("id", tryout_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="not_found")
+    return rows[0]
+
+
+class ScoutRequest(BaseModel):
+    city_id: int
+    category_id: str
+
+
+@router.get("/leadoff/scout/estimate")
+async def scout_estimate(
+    city_id: int,
+    category_id: str,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Free preflight: what a scout of this market would pull vs what's
+    already cache-fresh, and the dollar estimate."""
+    state = leadoff_actions.scout_market_state(city_id, category_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {
+        "est_cost": state["est_cost"],
+        "rd_misses": len(state["rd_misses"]),
+        "velocity_misses": len(state["vel_misses"]),
+        "trend_miss": state["trend_miss"],
+        "fully_cached": state["est_cost"] == 0,
+    }
+
+
+@router.post("/leadoff/scout", status_code=202)
+async def start_scout(
+    body: ScoutRequest,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Pass-2 scouting report for one market (RD + review velocity + demand
+    trend, cache-cheapened) — the enrich_shortlist port. Writes the shared
+    market_scanner caches; the market brief picks the enrichment up on its
+    next read. Poll GET /leadoff/jobs/{job_id}."""
+    state = leadoff_actions.scout_market_state(body.city_id, body.category_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    if state["est_cost"] == 0 and not state["rd_misses"] \
+            and not state["vel_misses"] and not state["trend_miss"]:
+        return {"job_id": None, "est_cost": 0.0, "fully_cached": True}
+    try:
+        leadoff_actions.check_budget(auth["user_id"], state["est_cost"])
+    except leadoff_actions.BudgetExceeded as exc:
+        raise HTTPException(status_code=422, detail="budget_exceeded") from exc
+    out = leadoff_actions.enqueue_scout(
+        auth["user_id"], body.city_id, body.category_id, state["est_cost"])
+    leadoff_actions.record_spend(
+        auth["user_id"], "scout", state["est_cost"],
+        city_id=body.city_id, category_id=body.category_id,
+        city_name=state["market"].get("city_name"),
+        state_code=state["market"].get("state_code"))
+    return {"job_id": out["job_id"], "est_cost": state["est_cost"],
+            "fully_cached": False}
+
+
+@router.get("/leadoff/jobs/{job_id}")
+async def get_leadoff_job(job_id: str, auth: dict = Depends(require_auth)) -> dict:
+    rows = (get_supabase().table("async_jobs")
+            .select("id,job_type,status,error,result,created_at,completed_at")
+            .eq("id", job_id).in_("job_type", ["leadoff_tryout", "leadoff_scout"])
+            .limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="not_found")
+    return rows[0]

@@ -50,6 +50,10 @@ from services.review_analytics import run_review_intel_job
 from services.backlink_intel import run_backlink_intel_job
 from services.backlink_explorer import run_backlink_snapshot_job
 from services.content_intel import run_content_intel_job
+from services.leadoff_actions import (
+    run_scout_job as run_leadoff_scout_job,
+    run_tryout_job as run_leadoff_tryout_job,
+)
 from services.local_relevance import run_local_relevance_job
 from services.page_structure_scraper import analyze_page_structure
 from services.silo_dedup import process_silo_dedup_job
@@ -418,6 +422,10 @@ async def _process_job(job: dict) -> None:
         await run_internal_link_apply_job(job)
     elif job_type == "content_batch_item":
         await run_content_batch_item_job(job)
+    elif job_type == "leadoff_tryout":
+        await run_leadoff_tryout_job(job)
+    elif job_type == "leadoff_scout":
+        await run_leadoff_scout_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 
