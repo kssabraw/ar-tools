@@ -242,8 +242,10 @@ async def classify_topical_focus(keyword: str, organic: list[dict], client: dict
 
     Best-effort: any failure returns an empty dict so the snapshot still completes
     (topical focus simply stays unknown, and rankability degrades gracefully).
+
+    Runs on Anthropic with automatic OpenAI→Gemini fallback on a transient failure.
     """
-    import anthropic  # lazy — keep the pure helpers import-free
+    from services import report_llm  # lazy — keep the pure helpers import-free
 
     sites = [
         {"domain": o.get("domain"), "title": o.get("title"), "snippet": o.get("description")}
@@ -262,19 +264,20 @@ async def classify_topical_focus(keyword: str, organic: list[dict], client: dict
             f"- {s['domain']} | {s.get('title') or ''} | {s.get('snippet') or ''}" for s in sites
         )
     )
-    api_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    response = await api_client.messages.create(
-        model=settings.serp_topic_model,
-        max_tokens=settings.serp_topic_max_tokens,
-        system=_TOPIC_SYSTEM,
-        tools=[_TOPIC_TOOL],
-        tool_choice={"type": "tool", "name": "emit_classification"},
-        messages=[{"role": "user", "content": user}],
-    )
-    for block in response.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == "emit_classification":
-            return block.input or {}
-    return {}
+    try:
+        return await report_llm.run_forced_tool(
+            provider="anthropic",
+            model=settings.serp_topic_model,
+            max_tokens=settings.serp_topic_max_tokens,
+            system=_TOPIC_SYSTEM,
+            user=user,
+            tool_name=_TOPIC_TOOL["name"],
+            tool_description=_TOPIC_TOOL["description"],
+            input_schema=_TOPIC_TOOL["input_schema"],
+            log_tag="serp_topic",
+        )
+    except Exception:  # noqa: BLE001 — best-effort; topical focus stays unknown
+        return {}
 
 
 def collect_snapshot_domains(result_rows: list[dict], client_domain: str) -> list[dict]:

@@ -31,6 +31,28 @@ class Settings(BaseSettings):
     # above, google_ai_* via DataForSEO) keep working.
     perplexity_api_key: str = ""
     gemini_api_key: str = ""
+    # ── Cross-provider LLM fallback ──────────────────────────────────────────
+    # When a primary-provider call (usually Anthropic) hits a *transient* failure
+    # that outlasts its per-provider retry budget — a 429 rate/concurrency limit,
+    # a 5xx overload, or a connection drop — the same call is retried on the next
+    # provider in the chain instead of failing. Applies to the non-agentic call
+    # sites (plain text + single forced-tool-use); the agentic tool-use loops
+    # (Slack assistant, strategist, PACE) rely on Anthropic-specific server tools
+    # and stay Anthropic-retry-only. Non-transient errors (bad request, auth) do
+    # NOT fall back — they surface immediately so real bugs aren't masked.
+    llm_fallback_enabled: bool = True
+    # Providers tried, in order, AFTER the call's primary provider. A provider
+    # with no configured API key is skipped. Comma-separated: openai | gemini.
+    llm_fallback_providers: str = "openai,gemini"
+    # Default models used when a call falls back to a given provider (each call
+    # site keeps its own primary/Anthropic model). Tunable per env.
+    llm_fallback_anthropic_model: str = "claude-sonnet-4-6"
+    llm_fallback_openai_model: str = "gpt-5.4"
+    llm_fallback_gemini_model: str = "gemini-3.5-flash"
+    # Backoff attempts on ONE provider before advancing to the next. Kept low so
+    # the chain reaches an alternate provider quickly rather than exhausting a
+    # long backoff on a saturated primary (2 → ~2s + 4s, then advance).
+    llm_fallback_max_retries_per_provider: int = 2
     job_worker_poll_interval_seconds: int = 10
     # Stale-job reaper. In-process jobs (asyncio.to_thread) aren't resumable, so a
     # redeploy or crash mid-run orphans them as status='running' forever. Each

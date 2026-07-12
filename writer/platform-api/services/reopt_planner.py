@@ -1237,27 +1237,23 @@ def _build_enrich_prompt(client_ctx: str, sops_text: str, actions: list[dict]) -
 
 
 async def _call_enrich_llm(client_ctx: str, sops_text: str, actions: list[dict]) -> dict:
-    """One forced-tool Claude call → {index: {why, steps, sop_refs}}."""
-    import anthropic
-
+    """One forced-tool LLM call → {index: {why, steps, sop_refs}}. Runs on
+    Anthropic with automatic OpenAI→Gemini fallback on a transient failure."""
     from config import settings
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    response = await client.messages.create(
+    from services import report_llm
+
+    out = await report_llm.run_forced_tool(
+        provider="anthropic",
         model=settings.reopt_enrich_model,
         max_tokens=settings.reopt_enrich_max_tokens,
         system=_ENRICH_SYSTEM,
-        tools=[_ENRICH_TOOL],
-        tool_choice={"type": "tool", "name": "emit_details"},
-        messages=[{"role": "user", "content": _build_enrich_prompt(client_ctx, sops_text, actions)}],
+        user=_build_enrich_prompt(client_ctx, sops_text, actions),
+        tool_name=_ENRICH_TOOL["name"],
+        tool_description=_ENRICH_TOOL["description"],
+        input_schema=_ENRICH_TOOL["input_schema"],
+        log_tag="reopt_enrich",
     )
-    out = None
-    for block in response.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == "emit_details":
-            out = block.input or {}
-            break
-    if out is None:
-        raise RuntimeError(f"reopt_enrich_no_tool_use (stop={response.stop_reason})")
     by_index: dict[int, dict] = {}
     for d in out.get("details") or []:
         idx = d.get("index")

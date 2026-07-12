@@ -185,41 +185,28 @@ async def llm_annotate_structure(
     heading, opening pattern, structure summary) on top of the deterministic
     outline. Returns {"sections": [...], "structure_summary": str,
     "intro_pattern": str}; degrades to empty on any failure."""
-    import anthropic
-
-    from config import settings
-
     if not outline:
         return {"sections": [], "structure_summary": "", "intro_pattern": ""}
 
     truncated_html = html[:60_000] if len(html) > 60_000 else html
 
-    from services.report_llm import retry_transient
+    from services import report_llm
 
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    # Transient failures (429/5xx/connection) retry with backoff — one 429
-    # previously failed the whole page_structure_scrape job.
-    message = await retry_transient(
-        lambda: client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=2048,
-            system=_SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Reference page type: {page_type}\n\n"
-                        f"Parsed sections (index, level, heading, size, blocks):\n"
-                        f"{_outline_digest(outline)}\n\n"
-                        f"Main-content HTML for context:\n\n{truncated_html}"
-                    ),
-                }
-            ],
+    # Runs on Anthropic; a transient (429/5xx/connection) failure falls back to
+    # OpenAI→Gemini automatically — one 429 previously failed the whole
+    # page_structure_scrape job.
+    raw = (await report_llm.generate_text(
+        system=_SYSTEM_PROMPT,
+        user=(
+            f"Reference page type: {page_type}\n\n"
+            f"Parsed sections (index, level, heading, size, blocks):\n"
+            f"{_outline_digest(outline)}\n\n"
+            f"Main-content HTML for context:\n\n{truncated_html}"
         ),
+        model="claude-sonnet-4-6",
+        max_tokens=2048,
         log_tag="page_structure",
-    )
-
-    raw = message.content[0].text.strip()
+    )).strip()
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
