@@ -1,10 +1,46 @@
 # QA Agent — Quality Assurance for Task Deliverables — Module Plan v1.0
 
-**Status:** Proposed (not built). **Sibling to:** SerMaStr
+**Status:** **Phases 0–2 BUILT** (2026-07-12, dormant behind `qa_enabled` default
+False — see the build note below). **Sibling to:** SerMaStr
 (`seo-strategist-agent-plan-v1_0.md`) and PACE (`project-manager-agent-plan-v1_0.md`).
 **Rides:** the native task manager (`in-app-task-manager-prd-v1_0.md`), the nlp-api
 8-engine scorer + content-quality R1–R7, the SerMaStr assistant rails
 (`services/slack_assistant/`), notifications, the shared scheduler. **Authored:** 2026-07-12.
+
+> **BUILD NOTE (2026-07-12) — deviations from the plan as written, all recorded
+> in code comments too:**
+> 1. **`in_qa` replaces `for_qa` (§2 superseded).** Between authoring and build,
+>    migration `20260712220000` added an **"In QA"** status (`in_qa`) to the live
+>    workflow (Not Started → In Progress → **In QA** → Sent to Client → …), and
+>    `task_service`'s auto-advance Rule B already moves a task there when its last
+>    work item is ticked — with a code comment reserving "In QA → Sent to Client"
+>    for this agent. So QA triggers on the EXISTING `in_qa` status
+>    (`qa_trigger_status`); no new status row was added. The auto-pipeline this
+>    buys: work items done → auto-advance to In QA → QA runs unprompted.
+> 2. **Pass default = stay in In QA** (`qa_pass_status=""`), verdict on the
+>    activity feed + optional notification — NOT the plan's "advance to In Review":
+>    the reshaped workflow makes In Review a client-rejected-rework *exception*
+>    status, and auto-moving to Sent to Client would claim a send that hasn't
+>    happened. Config can advance passes (`qa_pass_status="sent_to_client"`).
+> 3. **Fail bounces to In Progress with "QA fix: …" rework subtasks** — and since
+>    those subtasks ARE work items, ticking them all auto-advances the task back
+>    to In QA, which re-runs QA: the rework loop closes itself.
+> 4. **Structural design-fit is needs_human, not auto-fail**, below
+>    `qa_structural_threshold` — page-type attribution to a stored reference is
+>    heuristic, and a wrong-reference comparison must not bounce good work.
+> 5. **The LLM synthesis/persona (Phase 3) is not built yet** — verdicts are
+>    deterministic end to end; the one LLM call is the map-embed assertion-sentence
+>    judge (owner ruling, `qa_assertion_model` = Haiku). SOP-grounded narrative,
+>    drawer UI, `PERSONA_ACTIONS` scope, and the producer auto-queue (Phase 4)
+>    are the remaining phases.
+>
+> **What shipped:** migration `20260712233000` (`qa_reviews` + `qa_review` job
+> type), `services/qa_signals.py` (pure rubric layer, unit-tested —
+> `tests/test_qa_signals.py`), `services/qa_service.py` (trigger, gathering —
+> pages / link-shared-sheet CSV / .txt attachments —, the review job, outcome
+> application), the `update_task` hook, `POST /tasks/{id}/qa` +
+> `GET /tasks/{id}/qa-reviews`, and the `qa_*` config block. On-demand QA works
+> with the flag off; `qa_enabled` gates only the automatic status trigger.
 
 > **Positioning (the three-agent picture).**
 > **SerMaStr** determines *what should be done*. **PACE** keeps it *moving*.

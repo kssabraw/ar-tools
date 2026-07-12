@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, BellOff, CheckCircle2, Circle, Copy, Paperclip, Plus, RotateCcw, Send, Trash2, X } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
+import { QaPanel } from './QaPanel'
 import type { TaskCategory, TaskDetailResponse, TaskStatus } from '../../lib/types'
 
 // Right-side drawer for one task: edit fields, work the subtask checklist,
@@ -44,6 +45,8 @@ const ACTIVITY_LABELS: Record<string, string> = {
   auto_closed: 'auto-closed (signal resolved)',
   trashed: 'moved to trash',
   restored: 'restored from trash',
+  auto_ticked: 'auto-ticked checklist items',
+  qa_result: 'QA reviewed the deliverable',
 }
 
 function formatBytes(n: number | null): string {
@@ -372,6 +375,9 @@ export function TaskDetail({ taskId, statuses, categories, members, onClose, inv
               </button>
             </div>
           </div>
+
+          {/* QA (top-level tasks only — subtasks aren't deliverables) */}
+          {!task.parent_task_id && <QaPanel taskId={taskId} />}
 
           {/* Attachments */}
           <div style={{ marginTop: 18 }}>

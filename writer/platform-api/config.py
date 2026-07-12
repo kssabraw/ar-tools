@@ -833,6 +833,32 @@ class Settings(BaseSettings):
     task_producer_action_plan_max: int = 10
     task_producer_content_run_enabled: bool = False
 
+    # QA Agent (docs/modules/qa-agent-plan-v1_0.md; grounding standard
+    # docs/sops/QA_Checklists.md). Deterministic-first reviewer of task
+    # deliverables, triggered on entry into the In QA status (the plan's
+    # 'for_qa' was superseded — in_qa already existed in the live workflow).
+    # qa_enabled gates the AUTOMATIC status trigger only; the on-demand
+    # POST /tasks/{id}/qa endpoint works regardless.
+    qa_enabled: bool = False                     # QA_ENABLED — master gate
+    qa_trigger_status: str = "in_qa"             # status key that enqueues a review
+    # Where a passing task goes. Empty = stay in In QA (verdict on the activity
+    # feed; the human sends + drags — moving to sent_to_client ourselves would
+    # claim a send that hasn't happened). Set to 'sent_to_client' to auto-advance.
+    qa_pass_status: str = ""
+    qa_fail_status: str = "in_progress"          # bounce target on a failed review
+    qa_fail_creates_subtasks: bool = True        # rework checklist from failed checks
+    qa_notify_on_pass: bool = False              # silent clean passes
+    qa_citation_sample: int = 3                  # QA_Checklists §Citations sample size
+    qa_fetch_timeout_seconds: float = 20.0
+    qa_max_urls_per_review: int = 5              # cap external fetches per review
+    # Map-embed assertion sentence judge (the one LLM call in QA; owner ruling:
+    # plain-English + grammatically correct → an LLM read, kept on cheap Haiku).
+    qa_assertion_model: str = "claude-haiku-4-5-20251001"
+    # Structural design-fit floor for posted pages (page_structure_eval
+    # composite). Below it the check reads needs_human — page-type attribution
+    # is heuristic, so QA flags rather than auto-bounces on structure alone.
+    qa_structural_threshold: float = 70.0
+
     # PACE — Project Assignment, Coordination & Execution agent
     # (docs/modules/project-manager-agent-plan-v1_0.md). Phase 0A ships only the
     # deterministic pm_signals layer (pure reads, no LLM, no writes, wired to

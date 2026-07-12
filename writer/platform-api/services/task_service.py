@@ -516,6 +516,15 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
             task_id, tick_stage_for(changes.get("status_key"), get_statuses()),
             actor_id=actor_id,
         )
+        # QA Agent trigger: entering In QA enqueues a deliverable review
+        # (gated on qa_enabled inside the hook; best-effort — QA must never
+        # break the board write that hosts it).
+        try:
+            from services import qa_service
+
+            qa_service.on_task_status_change(before, updated, actor_id=actor_id)
+        except Exception as exc:
+            logger.warning("qa_hook_failed", extra={"task_id": task_id, "error": str(exc)})
     return updated
 
 
