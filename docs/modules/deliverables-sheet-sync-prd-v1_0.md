@@ -147,7 +147,7 @@ Rather than a human copying the template, converting it to a native Sheet, and r
 - **When it runs.** Enqueued **at client creation** (alongside the existing `brand_voice_scan` / `icp_scan` auto-jobs in `routers/clients.create_client`), gated on `deliverables_sheet_enabled`. Idempotent: never creates a second sheet for a client that already has an ID. For existing clients, a one-time backfill enqueues the job for any client missing a sheet.
 - **PACE's role.** PACE does not perform the copy. It can **surface** a "client has no deliverables sheet" signal (a `pm_signal`) and offer to trigger provisioning for an existing client — i.e. PACE nudges/triggers, the deterministic job creates.
 - **Access falls out for free.** Because the service account creates the copy inside the agency **Shared Drive** (where it is a member), it inherently has edit access — so there is **no per-client sharing step**. This is a further argument for the Shared Drive access model (§7).
-- **Client-facing sharing** (who can view/leave notes) is handled separately — see §13 open questions.
+- **Client-facing sharing** stays **manual in v1** (owner decision): provisioning creates the sheet and stores its ID, but does **not** set client access — the VA shares each client's sheet once (as they do today). Note that a client must have **editor** access to type into the Notes cell (commenter-only can't edit cells). Auto-sharing is a deferred follow-up (§12); when built, it can reuse `client_report_settings.recipients` as the client email list.
 
 ## 6. Dropdown mapping (task → column A)
 
@@ -169,10 +169,14 @@ The mapper reads the tab's **actual** dropdown values and matches case-insensiti
 
 ### Links tab — Links Type
 
-| Task signal | → dropdown value |
+The Links-tab value is derived from the **task name / library-task name** (this is how link tasks are actually named — "SEO NEO — DAS v2", "Niche Edit", "Citations", etc.). Matching is case-insensitive keyword matching; unmatched → the sheet's "Other Links" value, logged.
+
+> **Note on "SEO NEO":** SEO NEO is an automated link-building *tool*, **not** a person/assignee (SEO NEO work is assigned to Minda → Ivy). SEO NEO tasks are named `SEO NEO — <diagram>` (e.g. "SEO NEO — DAS v2", "SEO NEO — RD100", "SEO NEO — Elias Cloud"), so the detection signal is the task name containing "SEO NEO". The GBP-oriented SEO-NEO tools (GBP Blast / GBP Sniper / Hyper Local GBP Blast) are categorized as GBP/maps work, not Link Building, so they don't land on the Links tab and won't be mislabeled.
+
+| Task signal (task name) | → dropdown value |
 |---|---|
-| **Task is an SEO NEO task (assignee/role)** | **Tiered Link Pyramid** (explicit rule — overrides all others) |
-| task name contains "niche edit" | Niche Edit |
+| **contains "SEO NEO"** | **Tiered Link Pyramid** (explicit rule — overrides all others) |
+| contains "niche edit" | Niche Edit |
 | "guest post" | Guest Post |
 | "cloud stack" | Cloud Stack |
 | "google stack" | Google Stack |
@@ -245,17 +249,21 @@ No changes to the `tasks` schema beyond the optional synced marker.
 
 - The third "Other" tab.
 - Historical backfill.
+- **Auto-sharing the auto-created sheet with the client** (v1 keeps sharing manual). A later version can share as editor with `client_report_settings.recipients`.
 - Per-client Slack routing / per-recipient notification prefs (waits on the profiles-unification work noted in the task manager PRD).
 - Blocking task completion on a missing link (v1 flags instead).
 - Auto-setting the Status column or any client-owned field.
 
 ## 13. Open questions
 
+**Resolved (owner):**
+- **SEO NEO detection** → match on **task name** ("SEO NEO — …" → Tiered Link Pyramid); the whole Links-tab value derives from the task name (§6).
+- **Client-facing sharing** → **manual in v1** — provisioning creates the sheet, the VA shares it (§5.5, §12).
+
+**Remaining:**
 1. **Access model** — confirm Shared Drive (recommended) vs per-sheet share vs delegation vs webhook.
 2. **Synced marker shape** — column on `tasks` vs a dedicated sync-log table (leaning log table).
-3. **SEO NEO detection** — is "SEO NEO" identified by assignee, by a role/team mapping, or by task-name convention? Needs the exact signal to implement the override rule reliably.
-4. **Real client note format** — the sample sheet's Notes column was empty; if notes are ever multi-line or dated entries, confirm we alert on any change to the cell (current assumption) vs only on net-new lines.
-5. **Client-facing sharing of auto-provisioned sheets** — the client must be able to view/leave notes. Today the VA shares the sheet manually. For auto-created sheets, decide how the client gets access: share with a stored client email, "anyone with the link can comment/edit", or leave sharing manual. (Provisioning can set this once the rule is chosen.)
+3. **Real client note format** — the sample sheet's Notes column was empty; if notes are ever multi-line or dated entries, confirm we alert on any change to the cell (current assumption) vs only on net-new lines.
 
 ## Appendix A — Real sheet sample (UMH Properties, abridged)
 
