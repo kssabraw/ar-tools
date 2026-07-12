@@ -309,6 +309,15 @@ async def create_client(
     # Auto-derive the rank-tracking location from the GBP (best-effort, async).
     if body.gbp is not None:
         rank_location.enqueue_location_derive(client["id"])
+    # Auto-provision the client's deliverables sheet (Drive copy of the master
+    # template — PRD §5.5). Self-gated + best-effort; no-ops until the module
+    # flag + template/folder ids are configured.
+    try:
+        from services import deliverables_sheet
+
+        deliverables_sheet.enqueue_provision(client["id"])
+    except Exception as exc:
+        logger.warning("client_deliverables_provision_failed", extra={"client_id": client["id"], "error": str(exc)})
     logger.info("client_created", extra={"client_id": client["id"], "user_id": auth["user_id"]})
 
     return _to_client_detail(client)

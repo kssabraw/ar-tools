@@ -833,6 +833,24 @@ class Settings(BaseSettings):
     task_producer_action_plan_max: int = 10
     task_producer_content_run_enabled: bool = False
 
+    # Deliverables Sheet Sync (docs/modules/deliverables-sheet-sync-prd-v1_0.md)
+    # — auto-maintain each client's Google deliverables sheet: append a row on
+    # task Complete, watch the client-facing Notes column. Master gate default
+    # OFF; per-client enablement is implicit (a client with no
+    # deliverables_sheet_id is skipped). Uses the shared service-account key
+    # with the Sheets/Drive scopes (additive — the GSC credential is unchanged).
+    deliverables_sheet_enabled: bool = False
+    deliverables_write_enabled: bool = True          # the task-Complete append hook
+    deliverables_notes_watch_enabled: bool = True    # the Notes-column poller
+    deliverables_notes_scan_interval_minutes: int = 15
+    # Auto-provisioning (PRD §5.5): Drive files.copy of the master template at
+    # client creation. Needs both ids set; the template must be a NATIVE Google
+    # Sheet living in the agency Shared Drive (where the service account is a
+    # member, so copies are instantly writable — no per-client sharing).
+    deliverables_provision_enabled: bool = True
+    deliverables_template_sheet_id: str = ""
+    deliverables_drive_folder_id: str = ""           # Shared-Drive folder the copies land in
+
     # QA Agent (docs/modules/qa-agent-plan-v1_0.md; grounding standard
     # docs/sops/QA_Checklists.md). Deterministic-first reviewer of task
     # deliverables, triggered on entry into the In QA status (the plan's

@@ -91,11 +91,20 @@ def _line(item: dict, names: dict) -> str:
     return f"*{name}* — {cat}"
 
 
-def format_digest(items: list[dict], total: int, client_names: dict) -> str:
-    """The digest body (mrkdwn). Pure — unit-tested."""
+def format_digest(items: list[dict], total: int, client_names: dict,
+                  note_stats: tuple[int, int] = (0, 0)) -> str:
+    """The digest body (mrkdwn). Pure — unit-tested. `note_stats` is the
+    Deliverables Sheet Sync (notes, clients) 24h count — PACE narrates the
+    module's activity, it doesn't run it (PRD §5.4)."""
     lines = [f"• {_line(i, client_names)}" for i in items]
     if total > len(items):
         lines.append(f"… +{total - len(items)} more")
+    notes, note_clients = note_stats
+    if notes:
+        lines.append(
+            f"• {notes} new client note{'s' if notes != 1 else ''} on deliverables "
+            f"sheets across {note_clients} client{'s' if note_clients != 1 else ''} (24h)"
+        )
     return "\n".join(lines)
 
 
@@ -123,15 +132,23 @@ def run_daily_digest(today: Optional[date] = None) -> dict:
     try:
         board = pm_signals.build_board_digest(None, today)
         items, total = rank_digest_items(board.get("clients", []), settings.pace_digest_max_items)
-        if not items:
+        # Deliverables-sheet client notes (best-effort): a notes-only day still
+        # emits — a client note is exactly the "needs a human" signal.
+        note_stats = (0, 0)
+        if settings.deliverables_sheet_enabled:
+            from services.deliverables_sheet import recent_note_stats
+
+            note_stats = recent_note_stats()
+        if not items and not note_stats[0]:
             return {"emitted": False, "reason": "all_clear"}
         names = _client_names([i.get("client_id") for i in items])
-        body = format_digest(items, total, names)
+        body = format_digest(items, total, names, note_stats)
         key = dedupe_key(today)
+        combined = total + note_stats[0]
         nid = notifications.emit(
             client_id=None,
             kind="pace_digest",
-            title=f"PACE daily · {total} item{'s' if total != 1 else ''} need a human",
+            title=f"PACE daily · {combined} item{'s' if combined != 1 else ''} need a human",
             summary=body,
             severity="info",
             payload={"link": "/tasks", "digest_key": key,
