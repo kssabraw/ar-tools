@@ -90,6 +90,12 @@ _TOOL_PARAMS = {
     "generate_client_month": {},
     "generate_pace_report": {},
     "nudge_assignee": {"task_name": {"type": "string", "description": "The task whose assignee to nudge."}},
+    "triage_task": {
+        "task_name": {"type": "string", "description": "The task to triage (part of its name)."},
+        "due_date": {"type": "string", "description": "Due date to set if missing, YYYY-MM-DD."},
+        "category": {"type": "string", "description": "Category key to set if missing."},
+        "est_hours": {"type": "number", "description": "Estimated hours to set if missing."},
+    },
 }
 _TOOL_REQUIRED = {
     "reassign_task": ["task_name", "assignee"],
@@ -98,6 +104,7 @@ _TOOL_REQUIRED = {
     "unblock_task": ["task_name"],
     "generate_client_month": [],
     "generate_pace_report": [],
+    "triage_task": ["task_name"],
     "nudge_assignee": ["task_name"],
 }
 

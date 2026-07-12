@@ -71,7 +71,7 @@ def build_nudge_mention(slack_user_id: Optional[str]) -> Optional[str]:
 def _open_tasks(client_id: str) -> list[dict]:
     return (
         get_supabase().table("tasks")
-        .select("id, name, status_key, assignee_gid, assignee_name, due_date, completed")
+        .select("id, name, status_key, assignee_gid, assignee_name, due_date, category, est_hours, completed")
         .eq("client_id", client_id).eq("completed", False)
         .is_("deleted_at", "null").is_("parent_task_id", "null")
         .execute()
@@ -331,6 +331,48 @@ def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# triage_task (v1.4) — set missing due date / category / estimate in one write
+# ---------------------------------------------------------------------------
+_TRIAGE_FIELDS = ("due_date", "category", "est_hours")
+
+
+def stage_triage(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
+    ok, reason = pace_auth.require(context, "triage_task")
+    if not ok:
+        return "reply", reason
+    task, reply = _resolve_one_task(client_id, args.get("task_name", ""), "triage")
+    if reply:
+        return "reply", reply
+    updates = {k: args[k] for k in _TRIAGE_FIELDS if args.get(k) not in (None, "")}
+    if "due_date" in updates:
+        try:
+            date.fromisoformat(str(updates["due_date"]))
+        except ValueError:
+            return "reply", "The due date must be YYYY-MM-DD."
+    # Triage fills GAPS only — never overwrite a value a human already set.
+    updates = {k: v for k, v in updates.items() if not task.get(k)}
+    if not updates:
+        return "reply", f"“{task['name']}” is already triaged — nothing to set."
+    parts = []
+    if "due_date" in updates:
+        parts.append(f"due {updates['due_date']}")
+    if "category" in updates:
+        parts.append(f"category *{updates['category']}*")
+    if "est_hours" in updates:
+        parts.append(f"est {updates['est_hours']}h")
+    return _staged(
+        {"task_id": task["id"], "task_name": task["name"], "updates": updates},
+        context, f"triage *“{task['name']}”* — set {', '.join(parts)}",
+    )
+
+
+def run_triage(context: ActionContext, client_id: str, args: dict) -> str:
+    task_service.update_task(args["task_id"], args["updates"], actor_id=context.profile_id)
+    fields = ", ".join(args["updates"].keys())
+    return f"✅ Triaged *“{args['task_name']}”* ({fields})."
+
+
+# ---------------------------------------------------------------------------
 # generate_pace_report (v1.3) — delivery report (§4.7), read-only (no confirm)
 # ---------------------------------------------------------------------------
 def stage_generate_report(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
@@ -363,4 +405,5 @@ PACE_ACTIONS: dict[str, dict] = {
     "generate_client_month": {"label": "generate this month's tasks", "stage": stage_generate_month, "run": run_generate_month},
     "nudge_assignee": {"label": "nudge an assignee", "stage": stage_nudge, "run": run_nudge},
     "generate_pace_report": {"label": "generate a delivery report", "stage": stage_generate_report, "run": run_generate_report},
+    "triage_task": {"label": "triage a task (set missing due date / category / estimate)", "stage": stage_triage, "run": run_triage},
 }
