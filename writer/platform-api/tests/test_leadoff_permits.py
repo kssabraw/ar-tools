@@ -5,6 +5,8 @@ header rows combined, imputed-estimate Units columns plus a forbidden
 import pytest
 
 from services.leadoff_permits import (
+    _build_url,
+    _looks_like_bps,
     assign_flags,
     combine_headers,
     compute_metrics,
@@ -102,6 +104,25 @@ class TestFlags:
         rows = self._rows() + [{"permits_pc": None, "permit_trend": 9.9}]
         assign_flags(rows)
         assert rows[-1]["permit_flag"] == "-"
+
+
+class TestUrlDiscovery:
+    def test_build_url_covers_the_known_shapes(self):
+        # the three subdir patterns × two year formats the worker probes
+        assert _build_url(0, 0, "we", 2024) == \
+            "https://www2.census.gov/econ/bps/Place/West%20Region/we2024a.txt"
+        assert _build_url(1, 0, "we", 2024) == \
+            "https://www2.census.gov/econ/bps/Place/West/we2024a.txt"
+        assert _build_url(2, 0, "so", 2024) == \
+            "https://www2.census.gov/econ/bps/Place/so2024a.txt"
+        assert _build_url(0, 1, "mw", 2024) == \
+            "https://www2.census.gov/econ/bps/Place/Midwest%20Region/mw24a.txt"
+
+    def test_looks_like_bps_accepts_real_header(self):
+        assert _looks_like_bps(BPS_FIXTURE) is True
+
+    def test_looks_like_bps_rejects_404_page(self):
+        assert _looks_like_bps("<html><body>404 Not Found</body></html>") is False
 
 
 class TestRelevance:
