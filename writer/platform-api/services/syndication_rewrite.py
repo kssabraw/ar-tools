@@ -89,34 +89,28 @@ async def rewrite_unique(title: str, markdown: str) -> tuple[str, str]:
 
     Raises RewriteError on an API failure or empty output so the item lands
     'failed' with a clear error rather than publishing the original verbatim."""
-    import anthropic
+    from services import report_llm
 
-    if not settings.anthropic_api_key:
-        raise RewriteError("anthropic_not_configured")
+    if not (settings.anthropic_api_key or settings.openai_api_key or settings.gemini_api_key):
+        raise RewriteError("llm_not_configured")
 
     source = markdown if len(markdown) <= 24_000 else markdown[:24_000]
     user = f"Source title: {title or '(none)'}\n\nSource article (Markdown):\n\n{source}"
 
-    from services.report_llm import retry_transient
-
-    client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
     try:
-        # Transient failures (429/5xx/connection) retry with backoff — one 429
-        # previously failed the item outright.
-        message = await retry_transient(
-            lambda: client.messages.create(
-                model=settings.syndication_rewrite_model,
-                max_tokens=settings.syndication_rewrite_max_tokens,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user}],
-            ),
+        # Runs on Anthropic; a transient (429/5xx/connection) failure falls back
+        # to OpenAI→Gemini automatically — one 429 previously failed the item.
+        out = (await report_llm.generate_text(
+            system=_SYSTEM_PROMPT,
+            user=user,
+            model=settings.syndication_rewrite_model,
+            max_tokens=settings.syndication_rewrite_max_tokens,
             log_tag="syndication_rewrite",
-        )
+        )).strip()
     except Exception as exc:  # noqa: BLE001 — map provider errors to our envelope
         logger.warning("syndication_rewrite_failed", extra={"error": str(exc)})
         raise RewriteError(f"rewrite_call_failed: {exc}") from exc
 
-    out = "".join(block.text for block in message.content if getattr(block, "type", None) == "text").strip()
     if not out:
         raise RewriteError("rewrite_empty")
 
