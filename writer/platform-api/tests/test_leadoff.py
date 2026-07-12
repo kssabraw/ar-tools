@@ -3,6 +3,8 @@ no Supabase / network; data access is exercised in production, not here)."""
 from services.leadoff import (
     enrichment_from_caches,
     grade_for,
+    handoff_competitors,
+    handoff_goal,
     percentile_of,
     recompute_economics,
     sort_value,
@@ -124,6 +126,45 @@ class TestEnrichment:
         out = enrichment_from_caches(self.COMPS, [], reviews, None, city_id=1)
         assert out["field_vel30"] == 3 and out["vel_matched"] == 1
         assert out["momentum"] is None
+
+
+class TestHandoff:
+    COMPS = [
+        {"rank_position": 1, "business_name": "Vancouver Lock & Key",
+         "domain": "vlk.com", "rating": 4.9, "review_count": 46},
+        {"rank_position": 2, "business_name": "QuickEntry Locksmith",
+         "domain": "VLK.com", "rating": 4.7, "review_count": 201},  # dup domain
+        {"rank_position": 3, "business_name": "Maps-Only Mobile Locksmith",
+         "domain": None, "rating": None, "review_count": None},
+        {"rank_position": 4, "business_name": "  ", "domain": "blank.com"},
+    ]
+
+    def test_competitor_rows_dedupe_and_notes(self):
+        rows = handoff_competitors(self.COMPS)
+        # dup domain dropped, blank name dropped, name-only competitor kept
+        assert [r["name"] for r in rows] == [
+            "Vancouver Lock & Key", "Maps-Only Mobile Locksmith"]
+        assert rows[0]["domain"] == "vlk.com"
+        assert rows[0]["sources"] == ["leadoff"]
+        assert "46 reviews" in rows[0]["notes"] and "#1" in rows[0]["notes"]
+        assert rows[1]["domain"] is None
+        assert rows[1]["notes"] == "LeadOff top-5 #3"
+
+    def test_goal_carries_effort_targets(self):
+        row = _row(as_of="2026-07", grade="B", exp_val=529)
+        enrichment = {"rd_min": 2, "momentum": "accel",
+                      "field_vel30": 4, "field_prior30": 1}
+        goal = handoff_goal(row, enrichment)
+        assert goal["goal_type"] == "custom" and goal["target_value"] is None
+        assert goal["label"] == "LeadOff targets — Locksmith in Vancouver, WA"
+        assert "~36 reviews" in goal["notes"]
+        assert "~20 true RD" in goal["notes"]  # rd_min 2 ×10 per the SOP rule
+        assert "accel" in goal["notes"]
+
+    def test_goal_without_enrichment_stays_lean(self):
+        goal = handoff_goal(_row(as_of="2026-07", grade="B", exp_val=529), None)
+        assert "Review target" in goal["notes"]
+        assert "true RD" not in goal["notes"] and "momentum" not in goal["notes"]
 
     def test_trend_only_still_returns_block(self):
         out = enrichment_from_caches(self.COMPS, [], [],

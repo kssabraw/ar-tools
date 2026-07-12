@@ -54,6 +54,15 @@ PostgREST **Exposed schemas** (dashboard → API settings) — see HANDOFF.md.
     `assumptions.approximate`.
   - `GET /leadoff/market-brief?city_id=&category_id=` — board row + top-5
     competitors + best-effort cached enrichment.
+  - `POST /leadoff/create-client` (built post-v1 — §5 item 2) — the handoff:
+    creates a client through the normal clients path (staff-gated; website
+    optional — LeadOff is research-first, `ClientCreateRequest.website_url`
+    relaxed to allow empty with every consumer truthiness-guarded), with
+    `business_location` from the market's city, the top-5 seeded into
+    `client_competitors` (`sources: ["leadoff"]`, best-effort per row), and
+    the effort targets (reviews to beat #3, RD link budget ×10, momentum at
+    scan) recorded as a `custom` campaign goal
+    (`services/leadoff.handoff_competitors`/`handoff_goal`, unit-tested).
 - Config: `leadoff_prefetch_rows` (pre-rank fetch bound for non-default
   assumption re-sorts).
 - Tests: `tests/test_leadoff.py` (15 pure-logic tests).
@@ -66,7 +75,9 @@ HOT?/COLD? luck badges, low-confidence markers), filter/assumption bar
 (capture slider, lead-tier, sorts incl. **ROI — win cheapest**), CSV export,
 and a drill-in brief panel (economics · field forensics with the top-5
 competitor list · scouting report, with RD displayed **×10 as true RD** per
-`_ORCHESTRATOR.md` §2).
+`_ORCHESTRATOR.md` §2, and a **Create client from this market** card — name
+required, website optional — that runs the §5-item-2 handoff and routes to
+the new client workspace).
 
 ## 5. Not in v1 (build order)
 
@@ -76,8 +87,9 @@ competitor list · scouting report, with RD displayed **×10 as true RD** per
    PLATFORM + a per-user daily budget guard. The external PowerShell tools
    (`check_city.ps1`, `enrich_shortlist.ps1`) do both today and write to the
    same tables, so app users see their results.
-2. **Create Client from market** — the handoff: pre-fill a `clients` record
-   (category, city, competitor set, effort targets) from a chosen market.
+2. **Create Client from market** — ✅ **built** (see §3/§4): a "Create client
+   from this market" button on the brief creates the client card pre-loaded
+   with the market's location, competitor set, and effort targets.
 3. Neighborhood board tab (`neighborhood_opportunities` is already loaded).
 4. SerMaStr routing: add a domain mapping for the LeadOff SOP in
    `services/sop_library.py` so strategist runs pull it automatically

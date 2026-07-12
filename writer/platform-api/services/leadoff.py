@@ -144,6 +144,62 @@ def enrichment_from_caches(competitors: list[dict[str, Any]],
     }
 
 
+def handoff_competitors(competitors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """client_competitors seed rows from a market's top-5. serp_top5 carries no
+    place_id, so identity is the (scanner-normalized) domain — or name-only for
+    competitors without sites. Deduped by domain to respect the registry's
+    partial-unique index."""
+    rows: list[dict[str, Any]] = []
+    seen_domains: set[str] = set()
+    for c in competitors:
+        name = str(c.get("business_name") or "").strip()
+        if not name:
+            continue
+        domain = (str(c.get("domain") or "")).strip().lower() or None
+        if domain:
+            if domain in seen_domains:
+                continue
+            seen_domains.add(domain)
+        bits = [f"LeadOff top-5 #{c.get('rank_position')}"]
+        if c.get("review_count") is not None:
+            bits.append(f"{c['review_count']} reviews")
+        if c.get("rating") is not None:
+            bits.append(f"{c['rating']}★")
+        rows.append({"name": name, "domain": domain,
+                     "sources": ["leadoff"], "notes": " · ".join(bits)})
+    return rows
+
+
+def handoff_goal(row: dict[str, Any],
+                 enrichment: dict[str, Any] | None) -> dict[str, Any]:
+    """Custom campaign-goal fields carrying the market's effort targets, so the
+    strategist judges the campaign against what LeadOff said it would take.
+    Manual goal (no auto-measurement): the targets are entry-decision numbers,
+    re-verified against live scans once the campaign runs."""
+    city = f"{row.get('city_name')}, {row.get('state_code')}"
+    lines = [
+        (f"LeadOff {row.get('as_of')} · grade {row.get('grade')} · expected "
+         f"${row.get('exp_val')}/mo (capture 10%, mid lead value)."),
+        (f"Review target: ~{row.get('rev_win')} reviews to beat the #3 "
+         f"incumbent (add margin; recheck against a live scan)."),
+    ]
+    if enrichment:
+        if enrichment.get("rd_min") is not None:
+            lines.append(
+                f"Link budget: ~{int(enrichment['rd_min']) * 10} true RD to "
+                f"match the weakest top-5 site (tool read ×10 per the LeadOff SOP §5).")
+        if enrichment.get("momentum"):
+            lines.append(
+                f"Field momentum at scan: {enrichment['momentum']} (field reviews "
+                f"30d {enrichment.get('field_vel30')} vs {enrichment.get('field_prior30')}).")
+    return {
+        "goal_type": "custom",
+        "label": f"LeadOff targets — {row.get('category')} in {city}",
+        "target_value": None,
+        "notes": "\n".join(lines),
+    }
+
+
 # ── Data access (market_scanner via the scoped client) ────────────────────────
 
 def _client():
