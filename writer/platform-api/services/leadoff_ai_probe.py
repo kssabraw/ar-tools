@@ -300,6 +300,61 @@ async def _probe_trend_validation(client: httpx.AsyncClient,
     return rows
 
 
+def phone_variants(raw: str) -> dict[str, str]:
+    """Format variants of a phone for the NAP-match probe. The stored form is
+    the malformed Maps '+1913-423-3457' (country code jammed on the area code);
+    citation pages use the human formats below."""
+    import re
+    d = re.sub(r"\D", "", raw or "")
+    d = d[1:] if len(d) == 11 and d.startswith("1") else d  # strip leading 1
+    if len(d) != 10:
+        return {"raw": raw}
+    a, b, c = d[:3], d[3:6], d[6:]
+    return {
+        "stored_raw": raw,             # what we queried before (expect ~0)
+        "dashed": f"{a}-{b}-{c}",       # 913-423-3457
+        "paren": f"({a}) {b}-{c}",      # (913) 423-3457
+        "dotted": f"{a}.{b}.{c}",       # 913.423.3457
+        "bare": d,                       # 9134233457
+    }
+
+
+async def _probe_nap(client: httpx.AsyncClient, tally: _Tally,
+                     phones: list[dict[str, str]]) -> dict[str, Any]:
+    """For each business phone, query Content Analysis summary for every
+    format variant + one content_analysis/search — so we learn which format
+    (if any) the index actually matches. Cheap: ~5 summary calls/business."""
+    # the human formats worth paying to test (stored_raw is known-0, dotted is
+    # rare) — keeps the probe near the ~$0.09 budget on one business
+    TEST_LABELS = ("dashed", "paren", "bare")
+    rows = []
+    for biz in phones:
+        variants = phone_variants(biz["phone"])
+        counts: dict[str, Any] = {}
+        for label in TEST_LABELS:
+            formatted = variants.get(label)
+            if not formatted:
+                continue
+            env = tally.pay(await _dfs_post(
+                client, "/content_analysis/summary/live",
+                [{"keyword": f'"{formatted}"'}]), f"nap {label} {biz['name']}")
+            t0 = _task0(env)
+            res = (t0.get("result") or [{}])[0] or {}
+            counts[label] = {"query": formatted,
+                             "total_count": res.get("total_count")}
+        # one search call on the most promising human format (dashed)
+        env = tally.pay(await _dfs_post(
+            client, "/content_analysis/search/live",
+            [{"keyword": f'"{variants.get("dashed", biz["phone"])}"',
+              "limit": 20}]), f"nap search {biz['name']}")
+        t0 = _task0(env)
+        res = (t0.get("result") or [{}])[0] or {}
+        counts["search_dashed"] = {"total_count": res.get("total_count"),
+                                   "rows_returned": len(res.get("items") or [])}
+        rows.append({"business": biz["name"], "counts": counts})
+    return {"rows": rows}
+
+
 async def run_ai_probe_job(job: dict) -> None:
     supabase = get_supabase()
     job_id = job["id"]
@@ -318,6 +373,9 @@ async def run_ai_probe_job(job: dict) -> None:
                 result["ai_volume"] = await _probe_volume(client, tally)
             if sections is not None and "trend_validation" in sections:
                 result["trend_validation"] = await _probe_trend_validation(client, tally)
+            if sections is not None and "nap" in sections:
+                result["nap"] = await _probe_nap(
+                    client, tally, payload.get("phones") or [])
         status = "complete"
     except Exception as exc:
         result["aborted"] = str(exc)[:300]
