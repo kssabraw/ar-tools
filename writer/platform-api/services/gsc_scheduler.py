@@ -407,6 +407,10 @@ async def gsc_scheduler() -> None:
     from services.domain_intel import enqueue_due_domain_intel
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
+    from services.leadoff_calibration import (
+        run_calibration_sweep as run_leadoff_calibration_sweep,
+    )
+    from services.leadoff_permits import enqueue_due_permits as enqueue_due_leadoff_permits
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.backlink_explorer import auto_track_client_domains, enqueue_due_backlink_snapshots
     from services.response_episodes import run_episode_sync
@@ -451,6 +455,12 @@ async def gsc_scheduler() -> None:
                 run_episode_sync()
                 # Daily offpage sweep (RD loss / unnatural spike — SOP §A.5).
                 run_offpage_sweep()
+                # LeadOff calibration outcome checks (Phase 0 — read-only,
+                # $0; at most one check per prediction per ~28 days).
+                run_leadoff_calibration_sweep()
+                # BPS prospect-pipeline refresh (free flat files; the job
+                # only actually runs when the store is empty or stale).
+                enqueue_due_leadoff_permits()
                 # Weekly citation liveness (per-client interval-gated) +
                 # monthly page-level RD-imbalance captures.
                 enqueue_due_citation_checks()

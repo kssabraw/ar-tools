@@ -147,6 +147,8 @@ export function CampaignGoals() {
         weekly digest against these — status is recomputed from live data on every view.
       </p>
 
+      {id && <LeadoffActualsCard clientId={id} />}
+
       {showForm && (
         <section style={card}>
           <h2 style={cardTitle}>New goal</h2>
@@ -349,4 +351,69 @@ const chip: React.CSSProperties = {
 }
 const emptyBox: React.CSSProperties = {
   border: '1px dashed #cbd5e1', borderRadius: 10, padding: 24, fontSize: 13, color: '#94a3b8', textAlign: 'center',
+}
+
+// LeadOff calibration Phase 0 (leadoff-calibration-plan-v1_0.md §3.3, owner
+// ruling: manual lead entry lives here). Renders only for clients created
+// through the market handoff; entered counts become append-only outcome
+// checks — the model's actuals, never conflated with automatic sources.
+interface LeadoffPrediction {
+  id: string
+  category: string
+  city_name: string
+  state_code: string
+  as_of: string | null
+  predicted: { exp_leads_mo?: number | null; exp_val?: number | null }
+}
+
+function LeadoffActualsCard({ clientId }: { clientId: string }) {
+  const [leads, setLeads] = useState('')
+  const [saved, setSaved] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const { data: prediction } = useQuery<LeadoffPrediction>({
+    queryKey: ['leadoff-prediction', clientId],
+    queryFn: () => api.get<LeadoffPrediction>(`/clients/${clientId}/leadoff-prediction`),
+    retry: false, // 404 = not a handoff client; card simply doesn't render
+  })
+  if (!prediction) return null
+
+  const submit = async () => {
+    const n = Number(leads)
+    if (!leads.trim() || Number.isNaN(n) || n < 0 || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api.post(`/leadoff/predictions/${prediction.id}/leads`, { actual_leads_mo: n })
+      setSaved(`Recorded ${n} leads/mo — thanks, the model learns from this.`)
+      setLeads('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'save_failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section style={{ ...card, marginBottom: 16, background: '#f8fafc' }}>
+      <h2 style={cardTitle}>
+        LeadOff actuals — {prediction.category}, {prediction.city_name}, {prediction.state_code}
+      </h2>
+      <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 10px' }}>
+        LeadOff predicted <b>{prediction.predicted?.exp_leads_mo ?? '—'} leads/mo</b>
+        {prediction.predicted?.exp_val != null && <> (~${Math.round(prediction.predicted.exp_val).toLocaleString()}/mo expected)</>}
+        {prediction.as_of && <> from the {prediction.as_of} scan</>}. Enter last month's actual
+        lead count — it's the one outcome the app can't observe on its own.
+      </p>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <input style={{ ...input, width: 140 }} type="number" min={0} placeholder="leads last month"
+          value={leads} onChange={(e) => { setLeads(e.target.value); setSaved(null) }} />
+        <button style={primaryBtn} disabled={busy || !leads.trim()} onClick={submit}>
+          Record
+        </button>
+        {saved && <span style={{ fontSize: 12, color: '#177245' }}>{saved}</span>}
+        {error && <span style={{ fontSize: 12, color: '#b91c1c' }}>{error}</span>}
+      </div>
+    </section>
+  )
 }

@@ -881,6 +881,16 @@ class Settings(BaseSettings):
     # (~$0.20/run) + scout (~$0.10–1/market, cache-cheapened). Every enqueue
     # records its estimate to leadoff_spend; the guard sums today's UTC rows.
     leadoff_daily_budget_usd: float = 5.0
+    # Calibration surface Phase 0 (leadoff-calibration-plan-v1_0.md):
+    # prediction capture at create-client + the monthly outcome-check sweep
+    # (DB reads only, $0). Read-only instrumentation — never touches scoring.
+    leadoff_calibration_enabled: bool = True
+    # Building-permits prospect pipeline (leadoff-permits-plan-v1_0.md):
+    # app-side BPS flat-file pull (keyless, $0) into public.city_permits,
+    # joined onto board/brief reads. Context column only — never a grade
+    # input. Refresh check is cheap; the vintage only changes ~annually.
+    leadoff_permits_enabled: bool = True
+    leadoff_permits_refresh_days: int = 30
 
     class Config:
         env_file = ".env"
