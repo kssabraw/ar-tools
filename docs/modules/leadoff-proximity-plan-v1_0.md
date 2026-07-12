@@ -15,7 +15,7 @@ zones, `dest_point` pins) by design.
 |---|---|---|
 | `market_scanner.serp_top5` (Supabase, serves the board/brief) | **NO** — 7 columns, no lat/lng, no address_info | live schema read |
 | DataForSEO Maps SERP response (what every pull returns) | **YES** — per-business GPS lat/lng + structured `address_info` | current API docs |
-| Desktop `serp_results.csv` / raw 02_pull_serp output | **UNKNOWN from the cloud side** — the raw JSON had `address_info` (the neighborhood work keyed on `address_info.city`); whether the CSV writer kept lat/lng columns only the desktop can answer | ⚠ one `head -1` on the desktop settles it |
+| Desktop `serp_results.csv` | **RESOLVED (2026-07-12):** no lat/lng, and the `02_serp.json` checkpoint is only a progress ledger — coords are gone. BUT a populated text **`address`** column survived (~88.5% of rows) → free geocode path, see §5 option 0 | `head -1` done |
 
 So: the *loaded* data cannot support proximity analysis; the *API* always
 could; the *already-paid historical* data might. If the desktop CSV kept
@@ -110,18 +110,86 @@ truth; pre-client proximity is the forecast the geo-grid later verifies.
 
 ## 5. Cost/benefit — the owner's decision menu
 
+**Option A resolved (desktop `head -1`, 2026-07-12):** `serp_results.csv`
+kept **no lat/lng**, and the `02_serp.json` checkpoint is only a progress
+ledger of completed keys — so coordinates are genuinely gone, nothing to
+re-parse. **BUT** the CSV *did* retain a populated **text `address`** column:
+150,478 / 169,991 rows (~88.5%) carry a street address ("177 Broadway",
+"154 Grand St #103"); the ~11.5% blanks are service-area businesses with no
+address. That opens a door the original menu missed:
+
 | Option | What | Cost | Verdict |
 |---|---|---|---|
-| **A. Desktop CSV check** | `head -1` of `serp_results.csv` — did 02_pull_serp keep lat/lng? | $0, 1 min | **Do first, either way** |
-| **B. Historical backfill** (if A = yes) | Load coordinates from already-paid CSVs → new `market_scanner.serp_geo` cache; coarse full-board proximity | $0 API; a loader script | High value if available |
-| **C. Pass-2 proximity** (recommended regardless of A) | Scout/tryout retain full-SERP coordinates for the markets we actually consider; brief renders §2 | ~$0.004/market incremental | **Recommended v1** |
-| **D. Wide fresh pull** | Depth-100 SERP w/ coords for all 34,352 markets | ~34,352 × $0.004 ≈ **$137** (+ optionally covered by the next quarterly re-scan retaining coords for free) | Not now — defer to the next scheduled re-scan, which should simply STOP DISCARDING coordinates |
+| **0. Census-geocode existing addresses** (the head -1 finding) | Reconstruct "`<address>, <city>, <state>`" and batch through the **free US Census Geocoder** (keyless, no DataForSEO spend) → coordinates for ~88% of the field | **$0** | **BUILT — the chosen path** |
+| **0b. Outscraper SAB fill** (NEW) | The ~12% service-area businesses have no address, so Census can't place them — but Outscraper returns Google's **pin lat/lng even when the address is hidden** (our `gbp_service` already reads it). Query by name+city to recover them | ~**$20–40** board-wide (pennies for test markets) | built, **flag-gated off** — enable only if the SAB gap visibly hurts the signal |
+| ~~A. Desktop CSV check~~ | done → no coords, but addresses present (drove option 0) | — | resolved |
+| ~~B. Historical coord backfill~~ | not possible — no coords on disk (option 0 replaces it) | — | n/a |
+| ~~C. Pass-2 proximity~~ | exact pins for considered markets | ~$0.004/mkt | superseded by 0/0b for the initial build |
+| ~~**D. Wide fresh pull ($137)**~~ | Depth-100 SERP w/ exact coords, all markets | ~$137 | **DECLINED by owner (2026-07-12)** — recover from owned data instead; revisit only if 0+0b prove insufficient |
 
-The sharpest observation from the feasibility work: **option D is eventually
+**On the SAB gap (option 0b):** the ~12% missing are service-area
+businesses — mobile trades with no storefront. They may be the *least*
+relevant competitors for an address-placement signal (nothing fixed to
+cluster against), so the free 88% might be the *right* population, not a
+compromise. 0b exists as the cheap, already-integrated, app-side fix **if
+the gap turns out to matter** — decided on evidence, not bought blind.
+
+**Option 0 tradeoffs (be honest):**
+- **~88% coverage** — misses the 11.5% SAB rows (which have no address at all,
+  so no pull recovers them cheaply either).
+- **Street-centroid, not the GBP pin** — the geocoder resolves to the street
+  segment centroid, not the business's exact map marker. For a **dense
+  downtown** (many competitors on the same few blocks) this coarseness can
+  blur the very clustering the signal measures — so option 0 is a
+  **feasibility test**, not necessarily the final data. If the sub-zone
+  signal is real but noisy on dense markets, *that* is the earned argument
+  for the $137 exact-pin pull (option D) — decided on evidence, not guessed.
+- **$0 and already-owned data** — the whole point: prove the signal cheap
+  before paying to sharpen it.
+
+The sharpest structural observation still holds: **option D is eventually
 free** — the quarterly re-scan already makes these exact calls; the fix is
-retaining lat/lng at write time (scanner-side change to 02_pull_serp's
-output schema + the Supabase loader). Proximity then arrives board-wide with
-the next data vintage at zero marginal cost.
+retaining lat/lng at write time (02_pull_serp output schema + the loader).
+
+### 5a. Prototype (runs desktop-side — that's where the addresses are)
+
+The loaded Supabase `serp_top5` did **not** retain the address column (7
+cols: city_id/category_id/rank_position/business_name/rating/review_count/
+domain), so the addresses live only in the desktop `serp_results.csv`. The
+$0 prototype therefore runs **desktop-side** (CSV + `CENSUS_API_KEY` +
+census.gov reachable there): geocode the La Jolla plumber/locksmith/
+landscape-architect + KC locksmith rows, compute the §2 octant clustering +
+underserved zone, and eyeball whether the sub-zone read matches known
+geography (La Jolla's field should lean toward central San Diego). Reference
+script: `docs/reference/leadoff-scanner/proximity_prototype.py`.
+
+### 5c. The import mechanism — BUILT (app-side, "off the desktop")
+
+The whole coordinate recovery now lives in the app; the desktop's only role
+is a **single one-time upload** of the addresses it alone holds.
+
+1. **Desktop (once):** `docs/reference/leadoff-scanner/upload_competitor_addresses.py`
+   reads `serp_results.csv` and upserts (city_id, category_id,
+   rank_position, business_name, domain, review_count, address) into the new
+   app-owned **`public.competitor_locations`** via `SUPABASE_DB_URL`
+   (~170k rows, one pass, seconds; idempotent; a changed address nulls the
+   stale coordinate). After this the desktop never touches proximity again.
+2. **App (worker):** the `leadoff_geocode` job (`services/leadoff_geocode.py`,
+   migration `20260712180000`, applied live) geocodes the addressed rows via
+   the free Census batch geocoder, optionally fills SABs via Outscraper
+   (`leadoff_geocode_sab_outscraper`, default off), writes lat/lng +
+   `geo_source`, and reports coverage + the La Jolla/KC validation on every
+   run. The worker reaching `geocoding.geo.census.gov` is the same egress the
+   permits BPS pull proved.
+3. **Next phase (gated on these coordinates validating):** the proximity
+   computation itself — `services/leadoff_proximity.py` reusing
+   `maps_octants` for octant clustering / underserved zones, then the brief
+   surfacing (§2/§3). Not built until the imported coordinates prove the
+   signal real on the test markets (working agreement: validate before build).
+
+`public.competitor_locations` is app-owned (not `market_scanner`, which the
+scanner loader drop/recreates + grant-strips). No DataForSEO spend anywhere;
+Census is free, Outscraper (if enabled) is the only paid step.
 
 ## 6. Coordination (cross-repo / cross-session)
 

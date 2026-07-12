@@ -891,6 +891,12 @@ class Settings(BaseSettings):
     # input. Refresh check is cheap; the vintage only changes ~annually.
     leadoff_permits_enabled: bool = True
     leadoff_permits_refresh_days: int = 30
+    # Proximity signal (leadoff-proximity-plan-v1_0.md): the leadoff_geocode
+    # job turns imported competitor addresses into coordinates. Census
+    # geocoding of addressed rows is free; the Outscraper fill for
+    # service-area businesses (blank address) is PAID, so off by default —
+    # flip only after the free ~88% version validates the signal.
+    leadoff_geocode_sab_outscraper: bool = False
 
     class Config:
         env_file = ".env"
