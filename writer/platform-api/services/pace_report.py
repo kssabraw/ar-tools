@@ -16,7 +16,7 @@ default).
 from __future__ import annotations
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from config import settings
@@ -26,6 +26,33 @@ from services import notifications, pm_signals, task_workload
 logger = logging.getLogger(__name__)
 
 DEFAULT_PERIOD_DAYS = 7
+
+# The Asana importer completes historical tasks via complete_task(), which
+# stamps completed_at = IMPORT time — so a fresh import dumps months of old
+# completions into "this week". An import-stamped completion is created and
+# completed in nearly the same instant; a task imported OPEN and finished
+# natively later has completed_at ≫ created_at, so it still counts.
+_IMPORT_STAMP_WINDOW_SECONDS = 600
+
+
+def _ts(value) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def is_import_stamped(row: dict) -> bool:
+    """True when a completed task's completed_at is an import artifact (source
+    'asana_import' + completed within minutes of its own creation). Pure."""
+    if row.get("source") != "asana_import":
+        return False
+    created, completed = _ts(row.get("created_at")), _ts(row.get("completed_at"))
+    if not created or not completed:
+        return True  # unparseable import row — safer to exclude than inflate
+    return (completed - created).total_seconds() < _IMPORT_STAMP_WINDOW_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -75,13 +102,14 @@ def summarize(clients: list[dict]) -> dict:
 def _completed_since(client_id: Optional[str], since: date) -> list[dict]:
     q = (
         get_supabase().table("tasks")
-        .select("category, assignee_name, completed_at")
+        .select("category, assignee_name, completed_at, created_at, source")
         .eq("completed", True).is_("deleted_at", "null").is_("parent_task_id", "null")
         .gte("completed_at", since.isoformat())
     )
     if client_id:
         q = q.eq("client_id", client_id)
-    return q.execute().data or []
+    rows = q.execute().data or []
+    return [r for r in rows if not is_import_stamped(r)]
 
 
 def build_report(client_id: Optional[str] = None, *, today: Optional[date] = None,

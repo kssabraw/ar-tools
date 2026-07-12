@@ -636,23 +636,32 @@ async def handle_message(event: dict) -> None:
     #  - No dedicated channel: shared-channel shape-routing — PACE handles only
     #    project-management-shaped messages + its own confirms, else falls through.
     if settings.pace_enabled:
-        try:
-            from services import pace_agent, pace_auth
+        pace_channel = settings.pace_slack_channel
+        if pace_channel and channel == pace_channel:
+            # Dedicated PACE channel: PACE owns every message here and SerMaStr
+            # is excluded — the return sits OUTSIDE the try so the exclusion
+            # holds even when the delegate errors (it best-effort-replies itself;
+            # a failure must not leak the strategist into the PACE channel).
+            try:
+                from services import pace_agent, pace_auth
 
-            pace_channel = settings.pace_slack_channel
-            if pace_channel:
-                if channel == pace_channel:
-                    actor = pace_auth.resolve_slack_actor(event.get("user"), channel)
-                    await pace_agent.maybe_handle_slack(event, actor, force=True)
-                    return  # PACE owns its channel; SerMaStr never runs here
-                # else: a non-PACE channel while a dedicated channel is set → skip
-                # PACE; SerMaStr handles below.
-            else:
+                actor = pace_auth.resolve_slack_actor(event.get("user"), channel)
+                await pace_agent.maybe_handle_slack(event, actor, force=True)
+            except Exception as exc:
+                logger.warning("pace_slack_delegate_failed", extra={"channel": channel, "error": str(exc)})
+            return
+        if not pace_channel:
+            # Shared channel: shape-routing — PACE takes only PM-shaped messages
+            # + its own confirms; anything else (or a PACE error) falls through
+            # to the SerMaStr flow below.
+            try:
+                from services import pace_agent, pace_auth
+
                 actor = pace_auth.resolve_slack_actor(event.get("user"), channel)
                 if await pace_agent.maybe_handle_slack(event, actor):
                     return
-        except Exception as exc:  # PACE must never break the SerMaStr path
-            logger.warning("pace_slack_delegate_failed", extra={"channel": channel, "error": str(exc)})
+            except Exception as exc:  # PACE must never break the SerMaStr path
+                logger.warning("pace_slack_delegate_failed", extra={"channel": channel, "error": str(exc)})
 
     try:
         # 1) Confirmation of a pending paid action ("yes") — runs the stored action

@@ -11,6 +11,31 @@ from datetime import date
 from services import pace_report
 
 
+def test_is_import_stamped():
+    # Importer artifact: created + completed within the same import run → excluded.
+    assert pace_report.is_import_stamped({
+        "source": "asana_import",
+        "created_at": "2026-07-11T16:50:00+00:00",
+        "completed_at": "2026-07-11T16:50:03+00:00",
+    }) is True
+    # Imported OPEN, finished natively days later → a real completion, counted.
+    assert pace_report.is_import_stamped({
+        "source": "asana_import",
+        "created_at": "2026-07-11T16:50:00+00:00",
+        "completed_at": "2026-07-14T09:00:00Z",   # Z-suffix parses too
+    }) is False
+    # Non-import sources are never filtered, even when timestamps are close.
+    assert pace_report.is_import_stamped({
+        "source": "manual",
+        "created_at": "2026-07-11T16:50:00+00:00",
+        "completed_at": "2026-07-11T16:50:03+00:00",
+    }) is False
+    # Unparseable import row → excluded (never inflate).
+    assert pace_report.is_import_stamped({
+        "source": "asana_import", "created_at": None, "completed_at": "bogus",
+    }) is True
+
+
 def test_throughput_by_category():
     rows = [
         {"category": "content"}, {"category": "content"},
