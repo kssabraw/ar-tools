@@ -625,3 +625,146 @@ def get_keyword_gaps(client_id: str, limit: Optional[int] = None) -> dict:
     ).data or []
     captured_at = max((r.get("captured_at") for r in rows if r.get("captured_at")), default=None)
     return {"gaps": rows, "captured_at": captured_at, "count": len(rows)}
+
+
+# ---------------------------------------------------------------------------
+# Orchestration (I/O) — Phase 3: Backlink Gap + competitor discovery.
+# ---------------------------------------------------------------------------
+def _rd_rows_for_gap(referring_rows: list[dict]) -> list[dict]:
+    """Map backlinks_api.parse_referring_domains rows to compute_link_gap's shape
+    ({domain, rank, backlinks}). The suite's DR proxy is `domain_rating` (0–100)."""
+    return [
+        {"domain": r.get("domain"), "rank": r.get("domain_rating"), "backlinks": r.get("backlinks")}
+        for r in referring_rows if r.get("domain")
+    ]
+
+
+async def run_link_gap(
+    client_id: str,
+    competitor_domains: Optional[list[str]] = None,
+) -> dict:
+    """Compute + persist referring domains linking to the client's competitors but
+    not the client. Fetches each domain's referring-domain list (backlinks_api),
+    runs the pure compute_link_gap, and replaces the client's stored link-gap set."""
+    client_domain = _client_domain(client_id)
+    if not client_domain:
+        raise ValueError("client_domain_unknown")
+    competitors = resolve_competitor_domains(client_id, competitor_domains)
+    if not competitors:
+        return {"gap_count": 0, "competitors": [], "client_domain": client_domain, "note": "no_competitors"}
+
+    reserve_budget(1 + len(competitors))
+    supabase = get_supabase()
+    limit = settings.backlink_referring_domains_limit
+
+    client_rd = await backlinks_api.fetch_referring_domains(client_domain, "domain", limit=limit)
+    client_domains = [r.get("domain") for r in client_rd if r.get("domain")]
+
+    competitor_referring: dict[str, list[dict]] = {}
+    used: list[str] = []
+    for comp in competitors:
+        try:
+            rd = await backlinks_api.fetch_referring_domains(comp, "domain", limit=limit)
+        except Exception as exc:
+            logger.warning("link_gap.competitor_fetch_failed", extra={"domain": comp, "error": str(exc)})
+            continue
+        competitor_referring[comp] = _rd_rows_for_gap(rd)
+        used.append(comp)
+
+    gaps = compute_link_gap(competitor_referring, client_domains)[: settings.domain_intel_ranked_keyword_cap]
+
+    try:
+        supabase.table("domain_link_gaps").delete().eq("client_id", client_id).execute()
+    except Exception as exc:
+        logger.warning("link_gap.clear_failed", extra={"client_id": client_id, "error": str(exc)})
+    rows = [{
+        "client_id": client_id, "referring_domain": g["referring_domain"],
+        "linking_to": g.get("linking_to") or [],
+        "referring_domain_rank": g.get("referring_domain_rank"),
+        "backlink_count": g.get("backlink_count"),
+    } for g in gaps]
+    for group in dataforseo_labs.chunk(rows, 500):
+        if group:
+            supabase.table("domain_link_gaps").insert(group).execute()
+
+    return {"gap_count": len(rows), "competitors": used, "client_domain": client_domain}
+
+
+def enqueue_link_gap(client_id: str, competitor_domains: Optional[list[str]] = None) -> str:
+    """Enqueue a link_gap async job. Returns the job id."""
+    row = (
+        get_supabase().table("async_jobs").insert({
+            "job_type": "link_gap",
+            "entity_id": client_id,
+            "payload": {"client_id": client_id, "competitor_domains": competitor_domains},
+        }).execute()
+    ).data[0]
+    return row["id"]
+
+
+async def run_link_gap_job(job: dict) -> None:
+    """async_jobs handler for link_gap."""
+    payload = job.get("payload") or {}
+    supabase = get_supabase()
+    try:
+        result = await run_link_gap(
+            payload.get("client_id") or job.get("entity_id"),
+            competitor_domains=payload.get("competitor_domains"),
+        )
+        supabase.table("async_jobs").update(
+            {"status": "complete", "result": result, "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+    except BudgetExceeded:
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": "budget_exceeded", "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+    except Exception as exc:
+        logger.warning("link_gap.job_failed", extra={"error": str(exc)})
+        supabase.table("async_jobs").update(
+            {"status": "failed", "error": str(exc)[:500], "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
+
+
+def get_link_gaps(client_id: str, limit: Optional[int] = None) -> dict:
+    """The client's current backlink-gap set (latest run), strongest first."""
+    cap = limit or settings.domain_intel_ranked_keyword_cap
+    rows = (
+        get_supabase().table("domain_link_gaps").select("*")
+        .eq("client_id", client_id)
+        .order("referring_domain_rank", desc=True).limit(cap).execute()
+    ).data or []
+    captured_at = max((r.get("captured_at") for r in rows if r.get("captured_at")), default=None)
+    return {"gaps": rows, "captured_at": captured_at, "count": len(rows)}
+
+
+async def discover_competitors(
+    client_id: str, location_code: Optional[int] = None, language_code: Optional[str] = None
+) -> dict:
+    """SERP-overlap competitor suggestions for the client's own domain (Labs
+    competitors_domain). Marks which are already in the registry. One paid call."""
+    client_domain = _client_domain(client_id)
+    if not client_domain:
+        return {"client_domain": None, "suggestions": [], "note": "client_domain_unknown"}
+    if location_code is None:
+        location_code = _client_location_code(client_id)
+    reserve_budget(1)
+    rows, _cost = await dataforseo_labs.fetch_competitors_domain(client_domain, location_code, language_code)
+
+    try:
+        existing = {
+            normalize_domain(r.get("domain"))
+            for r in (
+                get_supabase().table("client_competitors").select("domain")
+                .eq("client_id", client_id).execute()
+            ).data or []
+        }
+    except Exception:
+        existing = set()
+
+    suggestions = []
+    for r in rows:
+        dom = r.get("domain")
+        if not dom or dom == client_domain:
+            continue
+        suggestions.append({**r, "registered": dom in existing})
+    return {"client_domain": client_domain, "suggestions": suggestions}

@@ -31,7 +31,7 @@ from services.rank_report import run_rank_report_job
 from services.rank_materialize import run_gsc_materialize_job
 from services.citation_check import run_citation_check_job
 from services.competitor_intel import run_competitor_intel_job
-from services.domain_intel import run_domain_overview_job, run_keyword_gap_job
+from services.domain_intel import run_domain_overview_job, run_keyword_gap_job, run_link_gap_job
 from services.freeze import FREEZE_GATED_JOB_TYPES, is_frozen, job_client_id, run_freeze_check_job
 from services.page_backlink_intel import run_page_backlink_job
 from services.notifications import run_notification_dispatch_job
@@ -434,6 +434,8 @@ async def _process_job(job: dict) -> None:
         await run_domain_overview_job(job)
     elif job_type == "keyword_gap":
         await run_keyword_gap_job(job)
+    elif job_type == "link_gap":
+        await run_link_gap_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 
