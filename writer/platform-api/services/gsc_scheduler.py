@@ -467,6 +467,10 @@ async def gsc_scheduler() -> None:
                 # Daily PACE delivery digest (deterministic; atomic dedupe_key).
                 # Self-gated: no-ops while pace_enabled is false.
                 run_pace_digest()
+                # Weekly PACE delivery report (portfolio) — self-gated on
+                # pace_enabled + a configured pace_report_weekday (off by default).
+                from services.pace_report import maybe_emit_weekly as run_pace_report
+                run_pace_report(now.date())
                 last_run_date = now.date()
             # Weekly query×page ingest + competitive SERP snapshots still
             # piggyback the global DataForSEO weekday (diagnostic/GSC-side data,

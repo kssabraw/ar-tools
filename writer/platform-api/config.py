@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic_settings import BaseSettings
 
@@ -439,6 +439,28 @@ class Settings(BaseSettings):
     # respects a manual untrack; the daily budget caps the added spend.
     backlink_auto_track_client_domain: bool = True
 
+    # Domain Intelligence module (the "SEMrush clone") — per-client competitive
+    # intelligence over the DataForSEO Labs family. See
+    # docs/modules/domain-intelligence-module-prd-v1_0.md.
+    domain_intel_enabled: bool = True
+    # A daily ceiling on paid DataForSEO Labs calls for this module, SEPARATE
+    # from the backlink budget (own meter: domain_intel_usage). This is the
+    # §10 open question #4 — start conservative; raise once real spend is known.
+    # 0 disables the guard.
+    domain_intel_daily_call_budget: int = 200
+    # A fresh snapshot within this window is re-served, not re-fetched (cost).
+    domain_intel_cache_hours: int = 24
+    # Scheduled re-snapshot cadence for a client's registered competitors.
+    domain_intel_interval_days: int = 7
+    # Cap on ranked-keyword rows fetched/stored per domain snapshot.
+    domain_intel_ranked_keyword_cap: int = 1000
+    # Keyword-gap thresholds (§10 open questions #3): a gap keyword requires a
+    # competitor ranking at or above _gap_competitor_max_position, the client
+    # absent or ranking worse than _gap_client_min_position, and this much volume.
+    domain_intel_gap_competitor_max_position: int = 10
+    domain_intel_gap_client_min_position: int = 20
+    domain_intel_gap_min_volume: int = 10
+
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
     # than the competitor median; distinct topics competitors cover the client lacks).
@@ -785,6 +807,23 @@ class Settings(BaseSettings):
     # arg-filling, not strategy prose).
     pace_model: str = "claude-haiku-4-5-20251001"
     pace_max_tokens: int = 1200
+    # PACE v1.3 Phase 5 — role/skill placement (§4.6). Whether producer tasks
+    # (rank_drop/maps_alert/action_plan) are auto-placed on creation (default off
+    # — approved proposals always are). When the skilled+eligible pool is over
+    # capacity: "hold" (leave unassigned + flag) or "least_over" (assign anyway).
+    pace_autoplace_producers: bool = False
+    pace_placement_overload: str = "hold"
+    # PACE v1.3 Phase 6 — delivery reports (§4.7). Default window + the weekday
+    # (0=Mon…6=Sun) for the optional weekly portfolio auto-digest. None ⇒ the
+    # weekly digest is off (on-demand + the Reports card still work).
+    pace_report_period_days: int = 7
+    pace_report_weekday: Optional[int] = None
+    # PACE v1.3 Phase 7 — dedicated channel (§10.2). A Slack channel id (C…): when
+    # set, PACE owns that channel (answers every message, defers strategy to
+    # SerMaStr) and SerMaStr is excluded there; PACE stays out of other channels.
+    # Empty ⇒ shared-channel shape-routing (backward-compatible). PACE's digest +
+    # weekly report also post here when set.
+    pace_slack_channel: str = ""
 
     # --- LeadOff (market intelligence; docs/modules/leadoff-prd-v1_0.md) ---
     # Read-only v1 serves the precomputed market_scanner.leadoff_board.

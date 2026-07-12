@@ -206,16 +206,17 @@ _SLACK_MAX_RETRIES = 2
 _SLACK_RETRY_AFTER_CAP_SECONDS = 30.0
 
 
-async def _send_slack(text: str) -> None:
+async def _send_slack(text: str, channel: Optional[str] = None) -> None:
     import asyncio
 
+    target = channel or settings.slack_default_channel
     body: dict = {}
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         for attempt in range(_SLACK_MAX_RETRIES + 1):
             resp = await client.post(
                 _SLACK_POST_URL,
                 headers={"Authorization": f"Bearer {settings.slack_bot_token}"},
-                json={"channel": settings.slack_default_channel, "text": text, "mrkdwn": True},
+                json={"channel": target, "text": text, "mrkdwn": True},
             )
             if resp.status_code == 429 and attempt < _SLACK_MAX_RETRIES:
                 try:
@@ -280,7 +281,13 @@ async def run_notification_dispatch_job(job: dict) -> None:
 
     if slack_configured():
         try:
-            await _send_slack(format_slack(n["title"], n.get("summary"), client_name, link, n["severity"]))
+            # A notification may target a specific channel (e.g. PACE's own
+            # channel via payload.slack_channel); default channel otherwise.
+            override = (n.get("payload") or {}).get("slack_channel")
+            await _send_slack(
+                format_slack(n["title"], n.get("summary"), client_name, link, n["severity"]),
+                channel=override or None,
+            )
             channels["slack"] = "ok"
         except Exception as exc:
             channels["slack"] = "failed"

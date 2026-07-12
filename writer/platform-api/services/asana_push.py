@@ -395,6 +395,18 @@ async def push_proposal(client_id: str, review_id: str, proposal: dict) -> Optio
                 source="strategy_proposal",
                 source_ref=f"{review_id}:{proposal_task_name(proposal)[:100].casefold()}",
             )
+            # PACE v1.3 (§4.6/§5): auto-place the approved task on the correct
+            # skilled, eligible, least-loaded party (or hold + flag if the pool is
+            # at capacity). Best-effort — approval never fails over placement.
+            try:
+                from services import pm_assign
+
+                pm_assign.place_task(row["id"])
+            except Exception as exc:
+                logger.warning(
+                    "asana_push.proposal_autoplace_failed",
+                    extra={"client_id": client_id, "task_id": row["id"], "error": str(exc)},
+                )
             return {"gid": row["id"], "url": f"/clients/{client_id}/tasks?task={row['id']}"}
         if not asana_service.is_configured():
             return None

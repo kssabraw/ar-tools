@@ -159,6 +159,45 @@ def run_reassign(context: ActionContext, client_id: str, args: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# assign_task (v1.3) — workload-aware auto-placement (§4.6)
+# ---------------------------------------------------------------------------
+def stage_assign(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
+    ok, reason = pace_auth.require(context, "assign_task")
+    if not ok:
+        return "reply", reason
+    task, reply = _resolve_one_task(client_id, args.get("task_name", ""), "assign")
+    if reply:
+        return "reply", reply
+    from services import pm_assign
+
+    result = pm_assign.preview_placement(task["id"]) or {}
+    if not result.get("gid"):
+        if result.get("reason") == "team_at_capacity":
+            return "reply", (
+                f"“{task['name']}” can't be placed right now — everyone eligible for its work "
+                f"is over capacity this week. I've left it unassigned; reassign manually or free "
+                f"up someone's load."
+            )
+        return "reply", f"I couldn't find an eligible member to take “{task['name']}”."
+    note = " — no exact skill match, widened to the eligible team" if result.get("reason") == "placed_widened" else ""
+    return _staged(
+        {"task_id": task["id"], "task_name": task["name"],
+         "assignee_gid": result["gid"], "assignee_name": result.get("name")},
+        context,
+        f"assign *“{task['name']}”* to *{result.get('name')}* (least-loaded eligible member{note})",
+    )
+
+
+def run_assign(context: ActionContext, client_id: str, args: dict) -> str:
+    task_service.update_task(
+        args["task_id"],
+        {"assignee_gid": args["assignee_gid"], "assignee_name": args.get("assignee_name")},
+        actor_id=context.profile_id,
+    )
+    return f"✅ Assigned *“{args['task_name']}”* to {args.get('assignee_name')}."
+
+
+# ---------------------------------------------------------------------------
 # set_task_due
 # ---------------------------------------------------------------------------
 def stage_set_due(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
@@ -292,12 +331,36 @@ def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# generate_pace_report (v1.3) — delivery report (§4.7), read-only (no confirm)
+# ---------------------------------------------------------------------------
+def stage_generate_report(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
+    ok, reason = pace_auth.require(context, "generate_pace_report")
+    if not ok:
+        return "reply", reason
+    from services import pace_report
+
+    # A read: build + render immediately and return as the reply (no confirm).
+    report = pace_report.build_report(client_id)
+    return "reply", pace_report.render_text(report, scope_name="this client")
+
+
+def run_generate_report(context: ActionContext, client_id: str, args: dict) -> str:
+    # Reads resolve at stage (reply); run is never reached but kept for the
+    # registry's stage/run contract.
+    from services import pace_report
+
+    return pace_report.render_text(pace_report.build_report(client_id), scope_name="this client")
+
+
+# ---------------------------------------------------------------------------
 # Persona-scoped registry (Phase 3 mounts this under persona='pace')
 # ---------------------------------------------------------------------------
 PACE_ACTIONS: dict[str, dict] = {
     "reassign_task": {"label": "reassign a task", "stage": stage_reassign, "run": run_reassign},
+    "assign_task": {"label": "auto-assign a task to the best-fit member", "stage": stage_assign, "run": run_assign},
     "set_task_due": {"label": "set a task's due date", "stage": stage_set_due, "run": run_set_due},
     "unblock_task": {"label": "unblock a task", "stage": stage_unblock, "run": run_unblock},
     "generate_client_month": {"label": "generate this month's tasks", "stage": stage_generate_month, "run": run_generate_month},
     "nudge_assignee": {"label": "nudge an assignee", "stage": stage_nudge, "run": run_nudge},
+    "generate_pace_report": {"label": "generate a delivery report", "stage": stage_generate_report, "run": run_generate_report},
 }

@@ -79,19 +79,25 @@ _TOOL_PARAMS = {
         "task_name": {"type": "string", "description": "The task to reassign (part of its name)."},
         "assignee": {"type": "string", "description": "The team member to assign it to."},
     },
+    "assign_task": {
+        "task_name": {"type": "string", "description": "The unassigned task to auto-place on the best-fit member."},
+    },
     "set_task_due": {
         "task_name": {"type": "string", "description": "The task to set a due date on."},
         "due_date": {"type": "string", "description": "Due date, YYYY-MM-DD."},
     },
     "unblock_task": {"task_name": {"type": "string", "description": "The blocked task to unblock."}},
     "generate_client_month": {},
+    "generate_pace_report": {},
     "nudge_assignee": {"task_name": {"type": "string", "description": "The task whose assignee to nudge."}},
 }
 _TOOL_REQUIRED = {
     "reassign_task": ["task_name", "assignee"],
+    "assign_task": ["task_name"],
     "set_task_due": ["task_name", "due_date"],
     "unblock_task": ["task_name"],
     "generate_client_month": [],
+    "generate_pace_report": [],
     "nudge_assignee": ["task_name"],
 }
 
@@ -242,10 +248,14 @@ async def _run_pace_action(name: str, client_id: str, args: dict, context: Actio
 # ---------------------------------------------------------------------------
 # Slack entry (delegated from handle_message, gated on pace_enabled)
 # ---------------------------------------------------------------------------
-async def maybe_handle_slack(event: dict, context: ActionContext) -> bool:
+async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool = False) -> bool:
     """Handle a Slack message if it's PACE's (a pending PACE confirm, or a
     PACE-shaped message). Returns True when handled → the caller stops; False →
-    fall through to SerMaStr. Best-effort."""
+    fall through to SerMaStr. Best-effort.
+
+    ``force=True`` (the dedicated PACE channel, §10.2): PACE owns every message —
+    the ``is_pace_message`` gate is skipped, so even a non-delivery ask is
+    answered by PACE (its prompt defers strategy to SerMaStr)."""
     from services.slack_assistant import (is_affirmative, post_message,
                                            resolve_client, strip_mention)
 
@@ -273,7 +283,7 @@ async def maybe_handle_slack(event: dict, context: ActionContext) -> bool:
             return True
         _pace_pending.pop(pend_key, None)  # superseded
 
-    if not is_pace_message(question):
+    if not force and not is_pace_message(question):
         return False
 
     try:
