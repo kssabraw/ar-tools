@@ -413,7 +413,9 @@ def run_weekly_pulses(today: Optional[date] = None) -> dict:
         sb.table("client_pulses").delete().lt("week_start", cutoff).execute()
     except Exception as exc:
         logger.warning("pulse_purge_failed", extra={"error": str(exc)})
-    clients = (sb.table("clients").select("id").execute()).data or []
+    clients = (
+        sb.table("clients").select("id").eq("archived", False).execute()
+    ).data or []
     generated = 0
     for c in clients:
         try:
