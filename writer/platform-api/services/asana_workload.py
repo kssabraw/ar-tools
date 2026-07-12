@@ -135,6 +135,8 @@ async def run_workload_alert() -> dict:
     per day by the scheduler. Returns a small summary for logging."""
     if not asana_service.is_configured() or not settings.asana_workload_enabled:
         return {"emitted": False, "reason": "not_configured"}
+    if not settings.workload_overload_alert_enabled:
+        return {"emitted": False, "reason": "alert_disabled"}
     report = await build_team_workload()
     overloaded = report.get("overloaded") or []
     if not overloaded:

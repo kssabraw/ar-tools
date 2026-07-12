@@ -781,6 +781,12 @@ class Settings(BaseSettings):
     asana_workload_daily_workdays: int = 5
     # Flag a member whose open backlog exceeds this many weeks of their capacity.
     asana_workload_backlog_weeks: float = 2.0
+    # Proactive "staff hours overloaded" daily alert. When False, the scheduler
+    # never emits the suite-wide overload notification (Slack/in-app) for either
+    # the Asana or native-tasks path — the Workload page's on-demand read is
+    # unaffected. Owner turned this off (2026-07-12): overload reporting was
+    # noise, not signal.
+    workload_overload_alert_enabled: bool = False
 
     # Native In-App Task Manager (docs/modules/in-app-task-manager-prd-v1_0.md).
     # Master flag for the parallel-run: while False, the native scheduler hooks

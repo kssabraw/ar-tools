@@ -128,6 +128,23 @@ def test_adapt_task_row_and_aggregate():
     assert summary["overloaded"] is True          # 5h due same day > 10/5=2h/day
 
 
+async def test_native_workload_alert_silent_when_disabled(monkeypatch):
+    from config import settings
+    from services import notifications
+
+    monkeypatch.setattr(settings, "workload_overload_alert_enabled", False)
+    calls = []
+    monkeypatch.setattr(
+        task_workload, "build_team_workload",
+        lambda: {"overloaded": [{"gid": "g1", "name": "Ivy", "flags": ["9h"]}]},
+    )
+    monkeypatch.setattr(notifications, "emit", lambda *a, **k: calls.append(1))
+
+    result = await task_workload.run_workload_alert()
+    assert result == {"emitted": False, "reason": "alert_disabled"}
+    assert calls == []
+
+
 def test_select_due_tasks_buckets():
     today = date(2026, 7, 11)
     rows = [
