@@ -439,6 +439,28 @@ class Settings(BaseSettings):
     # respects a manual untrack; the daily budget caps the added spend.
     backlink_auto_track_client_domain: bool = True
 
+    # Domain Intelligence module (the "SEMrush clone") — per-client competitive
+    # intelligence over the DataForSEO Labs family. See
+    # docs/modules/domain-intelligence-module-prd-v1_0.md.
+    domain_intel_enabled: bool = True
+    # A daily ceiling on paid DataForSEO Labs calls for this module, SEPARATE
+    # from the backlink budget (own meter: domain_intel_usage). This is the
+    # §10 open question #4 — start conservative; raise once real spend is known.
+    # 0 disables the guard.
+    domain_intel_daily_call_budget: int = 200
+    # A fresh snapshot within this window is re-served, not re-fetched (cost).
+    domain_intel_cache_hours: int = 24
+    # Scheduled re-snapshot cadence for a client's registered competitors.
+    domain_intel_interval_days: int = 7
+    # Cap on ranked-keyword rows fetched/stored per domain snapshot.
+    domain_intel_ranked_keyword_cap: int = 1000
+    # Keyword-gap thresholds (§10 open questions #3): a gap keyword requires a
+    # competitor ranking at or above _gap_competitor_max_position, the client
+    # absent or ranking worse than _gap_client_min_position, and this much volume.
+    domain_intel_gap_competitor_max_position: int = 10
+    domain_intel_gap_client_min_position: int = 20
+    domain_intel_gap_min_volume: int = 10
+
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
     # than the competitor median; distinct topics competitors cover the client lacks).
