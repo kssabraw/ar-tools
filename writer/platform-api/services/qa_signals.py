@@ -560,6 +560,22 @@ def is_deliverable_subtask(name: Optional[str]) -> bool:
     return "deliverable" in " ".join((name or "").casefold().split())
 
 
+def new_rework_names(failed_labels: list[str], open_subtask_names: list[str]) -> list[str]:
+    """The 'QA fix: …' subtasks a failed review should CREATE: one per failed
+    blocking check, minus any that already exist as an OPEN subtask (repeated
+    fails on the same check must not stack duplicates — hardening #1). A
+    previously-ticked fix that fails again IS re-created: the completed row
+    stops blocking auto-advance, so the regression needs a fresh work item.
+    Case/whitespace-insensitive match. Pure."""
+    existing = {normalize_ws(n).casefold() for n in open_subtask_names}
+    out: list[str] = []
+    for lbl in failed_labels:
+        name = f"QA fix: {lbl}"
+        if normalize_ws(name).casefold() not in existing:
+            out.append(name)
+    return out
+
+
 def narrative_of(rubric: str, verdict: dict[str, Any], urls: list[str]) -> str:
     """A short deterministic summary for the qa_reviews row + notification."""
     v = verdict["verdict"]

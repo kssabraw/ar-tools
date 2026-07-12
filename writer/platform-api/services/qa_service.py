@@ -64,7 +64,14 @@ def on_task_status_change(before: dict, after: dict, *, actor_id: Optional[str] 
 
 def enqueue_qa_review(task_id: str, *, trigger: str = "manual") -> Optional[str]:
     """Enqueue one qa_review job for a task; a pending/running review for the
-    same task is reused (idempotent — a double drag doesn't double-review)."""
+    same task is reused (idempotent — a double drag doesn't double-review).
+
+    Flap guard (hardening #3): an AUTOMATIC re-trigger within
+    ``qa_recheck_cooldown_minutes`` of a PASSED review is skipped — a passed
+    task stays in In QA, so dragging it out and back must not re-pay the
+    review. Scoped to pass only: re-entry after a fail is the designed rework
+    loop and a needs_human re-entry is the documented recovery path — both
+    must re-run. The manual Run QA button always bypasses (trigger='manual')."""
     supabase = get_supabase()
     rows = (
         supabase.table("tasks").select("id, parent_task_id, completed")
@@ -72,6 +79,24 @@ def enqueue_qa_review(task_id: str, *, trigger: str = "manual") -> Optional[str]
     ).data
     if not rows or rows[0].get("parent_task_id"):
         return None
+    if trigger == "status" and settings.qa_recheck_cooldown_minutes > 0:
+        latest = (
+            supabase.table("qa_reviews").select("verdict, created_at")
+            .eq("task_id", str(task_id)).order("created_at", desc=True).limit(1).execute()
+        ).data
+        if latest and latest[0].get("verdict") == sig.PASS:
+            from datetime import datetime, timedelta, timezone
+
+            try:
+                ts = datetime.fromisoformat(latest[0]["created_at"].replace("Z", "+00:00"))
+                cutoff = datetime.now(timezone.utc) - timedelta(
+                    minutes=settings.qa_recheck_cooldown_minutes
+                )
+                if ts >= cutoff:
+                    logger.info("qa_recheck_cooldown_skip", extra={"task_id": task_id})
+                    return None
+            except (ValueError, KeyError):
+                pass  # unparsable timestamp → don't block the review
     open_jobs = (
         supabase.table("async_jobs").select("id, payload")
         .eq("job_type", "qa_review").in_("status", ["pending", "running"]).execute()
@@ -497,9 +522,19 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
     try:
         if v == sig.FAIL:
             if settings.qa_fail_creates_subtasks and verdict.get("failed"):
-                task_service.create_subtasks(
-                    task, [f"QA fix: {label}" for label in verdict["failed"]],
-                )
+                # Dedupe vs OPEN subtasks so repeated fails on the same check
+                # never stack duplicate "QA fix" rows (hardening #1).
+                open_names = [
+                    s.get("name") or ""
+                    for s in (
+                        get_supabase().table("tasks").select("name, completed")
+                        .eq("parent_task_id", task_id).is_("deleted_at", "null").execute()
+                    ).data or []
+                    if not s.get("completed")
+                ]
+                names = sig.new_rework_names(verdict["failed"], open_names)
+                if names:
+                    task_service.create_subtasks(task, names)
             if settings.qa_fail_status:
                 task_service.update_task(task_id, {"status_key": settings.qa_fail_status})
         elif v == sig.PASS and settings.qa_pass_status:
@@ -526,6 +561,12 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
             sig.NEEDS_HUMAN: f"QA needs a human: '{task.get('name')}'",
             sig.PASS: f"QA passed: '{task.get('name')}'",
         }
+        # One notification per task+verdict+day (hardening #2): a task failing
+        # three times in an afternoon is one Slack ping, not three. The unique
+        # notifications.dedupe_key makes the duplicate insert a clean no-op.
+        from datetime import datetime, timezone
+
+        day = datetime.now(timezone.utc).date().isoformat()
         notifications.emit(
             client_id=task.get("client_id"),
             kind="qa_result",
@@ -533,6 +574,7 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
             summary=review.get("narrative"),
             severity="warning" if v in (sig.FAIL, sig.NEEDS_HUMAN) else "info",
             payload={"link": link, "task_id": task_id, "review_id": review["id"]},
+            dedupe_key=f"qa:{task_id}:{v}:{day}",
         )
     except Exception as exc:
         logger.warning("qa_notify_failed", extra={"task_id": task_id, "error": str(exc)})

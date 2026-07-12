@@ -335,3 +335,21 @@ def test_build_verdict_advisory_failures_still_pass():
     checks = [sig._check("a", "A", True), sig._check("b", "B", False, blocking=False)]
     v = sig.build_verdict(checks)
     assert v["verdict"] == sig.PASS and v["advisories"]
+
+
+# ---------------------------------------------------------------------------
+# Rework-subtask dedupe (hardening #1)
+# ---------------------------------------------------------------------------
+def test_new_rework_names_dedupes_open_fixes():
+    failed = ["NAP included", "A CTA is present"]
+    existing_open = ["QA fix: NAP included", "Write the page"]
+    assert sig.new_rework_names(failed, existing_open) == ["QA fix: A CTA is present"]
+
+
+def test_new_rework_names_case_and_whitespace_insensitive():
+    assert sig.new_rework_names(["NAP included"], ["qa FIX:   nap  included"]) == []
+
+
+def test_new_rework_names_completed_fix_recreated():
+    # A ticked fix is NOT in the open list, so a regression re-creates it.
+    assert sig.new_rework_names(["NAP included"], []) == ["QA fix: NAP included"]
