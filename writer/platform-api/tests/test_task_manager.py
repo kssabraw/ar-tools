@@ -273,7 +273,10 @@ def test_import_map_status_variants():
     assert map_status("With Client", "not_started") == "sent_to_client"
     assert map_status("Waiting on URL to Go Live", "not_started") == "client_approved"
     assert map_status("Done", "not_started") == "complete"
+    assert map_status("Completed", "not_started") == "complete"
     assert map_status("On Hold", "not_started") == "blocked"
+    assert map_status("In QA", "not_started") == "in_qa"
+    assert map_status("QA", "not_started") == "in_qa"
     # Unknown / blank → the initial status.
     assert map_status("Some Custom State", "not_started") == "not_started"
     assert map_status(None, "not_started") == "not_started"
