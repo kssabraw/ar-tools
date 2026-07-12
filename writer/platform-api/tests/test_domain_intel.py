@@ -68,7 +68,7 @@ def test_parse_domain_rank_overview_reads_organic_metrics():
     out = labs.parse_domain_rank_overview(body)
     assert out["organic_traffic_est"] == 5123.4
     assert out["ranked_keyword_count"] == 812
-    assert out["organic_pos_1_3"] == 40
+    assert out["organic_pos_1"] == 40
 
 
 def test_parse_competitors_domain_normalizes_and_reads_metrics():
@@ -238,6 +238,14 @@ def test_build_domain_intel_actions():
     assert "you rank #34" in actions[1]["diagnosis"]
     # empty → no actions (additive: unchanged plan behavior)
     assert rp.build_domain_intel_actions("c1", []) == []
+
+
+def test_summarize_plan_counts_keyword_gap():
+    from services import reopt_planner as rp
+    actions = [{"kind": "keyword_gap", "severity": "info"}]
+    out = rp.summarize_plan(actions)
+    assert "1 other opportunity" in out["summary"]
+    assert out["severity"] == "info"
 
 
 def test_is_snapshot_fresh(monkeypatch):

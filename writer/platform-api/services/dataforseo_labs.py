@@ -149,7 +149,7 @@ def parse_ranked_keywords(body: dict) -> list[dict]:
 
 def parse_domain_rank_overview(body: dict) -> dict:
     """Rollup metrics for a domain: {organic_traffic_est, ranked_keyword_count,
-    organic_pos_1_3, dr}. Labs returns these under metrics.organic."""
+    organic_pos_1, traffic_value_est}. Labs returns these under metrics.organic."""
     result = _first_result(body, "labs_domain_rank_overview_error")
     items = result.get("items") or []
     metrics = (items[0].get("metrics") if items and isinstance(items[0], dict) else {}) or {}
@@ -157,7 +157,7 @@ def parse_domain_rank_overview(body: dict) -> dict:
     return {
         "organic_traffic_est": _coerce_float(organic.get("etv")),
         "ranked_keyword_count": _coerce_int(organic.get("count")),
-        "organic_pos_1_3": _coerce_int(organic.get("pos_1")),
+        "organic_pos_1": _coerce_int(organic.get("pos_1")),  # #1 positions only
         "traffic_value_est": _coerce_float(organic.get("estimated_paid_traffic_cost")),
     }
 
@@ -277,6 +277,9 @@ async def fetch_ranked_keywords(
     payload = [{
         "target": target_domain, **_loc(location_code, language_code),
         "limit": limit,
+        # Pin to organic explicitly — relying on the API default risks paid /
+        # featured-snippet placements polluting the organic-position data.
+        "item_types": ["organic"],
         "order_by": ["ranked_serp_element.serp_item.rank_absolute,asc"],
         "filters": [["ranked_serp_element.serp_item.rank_absolute", "<=", max_position]],
     }]

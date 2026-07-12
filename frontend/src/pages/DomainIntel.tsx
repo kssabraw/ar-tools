@@ -112,14 +112,17 @@ export function DomainIntel() {
   const [discovered, setDiscovered] = useState<DiscoverResponse | null>(null)
   const [added, setAdded] = useState<Record<string, boolean>>({})
 
-  // Prefill with the client's own domain, once.
-  useEffect(() => {
-    if (!input && client?.website_url) {
+  // Prefill with the client's own domain, once (adjust-during-render — the
+  // client record arrives async, so useState initializers can't see it).
+  const [prefilled, setPrefilled] = useState(false)
+  if (!prefilled && client?.website_url) {
+    setPrefilled(true)
+    if (!input) {
       try {
         setInput(new URL(client.website_url).hostname.replace(/^www\./, ''))
       } catch { /* ignore */ }
     }
-  }, [client?.website_url]) // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   const { data: overview, isFetching: loadingOverview } = useQuery<OverviewResponse>({
     queryKey: ['domain-intel-overview', id, selected],
@@ -141,13 +144,14 @@ export function DomainIntel() {
     enabled: Boolean(job),
     refetchInterval: (q) => (['complete', 'failed'].includes(q.state.data?.status ?? '') ? false : 2500),
   })
+  // On completion, refetch the views. The job id is deliberately NOT cleared on
+  // a terminal status: clearing it changes the status-query key, which blanks
+  // `jobStatus` and made failure banners vanish within one render. Polling
+  // already stops via refetchInterval; a new run replaces the id.
   useEffect(() => {
     if (jobStatus?.status === 'complete') {
       queryClient.invalidateQueries({ queryKey: ['domain-intel', id] })
       queryClient.invalidateQueries({ queryKey: ['domain-intel-overview', id, selected] })
-      setJob(null)
-    } else if (jobStatus?.status === 'failed') {
-      setJob(null)
     }
   }, [jobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -170,12 +174,9 @@ export function DomainIntel() {
   useEffect(() => {
     if (gapJobStatus?.status === 'complete') {
       queryClient.invalidateQueries({ queryKey: ['domain-intel-gap', id] })
-      setGapJob(null)
-    } else if (gapJobStatus?.status === 'failed') {
-      setGapJob(null)
     }
   }, [gapJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
-  const gapRunning = Boolean(gapJob) && gapJobStatus?.status !== 'failed'
+  const gapRunning = Boolean(gapJob) && !['complete', 'failed'].includes(gapJobStatus?.status ?? '')
   const gaps = gapData?.gaps ?? []
 
   const exportGapCsv = () => {
@@ -211,17 +212,15 @@ export function DomainIntel() {
   useEffect(() => {
     if (linkJobStatus?.status === 'complete') {
       queryClient.invalidateQueries({ queryKey: ['domain-intel-links', id] })
-      setLinkJob(null)
-    } else if (linkJobStatus?.status === 'failed') {
-      setLinkJob(null)
     }
   }, [linkJobStatus?.status]) // eslint-disable-line react-hooks/exhaustive-deps
-  const linksRunning = Boolean(linkJob) && linkJobStatus?.status !== 'failed'
+  const linksRunning = Boolean(linkJob) && !['complete', 'failed'].includes(linkJobStatus?.status ?? '')
   const linkGaps = linkData?.gaps ?? []
 
   // --- Discover competitors (SERP overlap) ---
   const discover = useMutation({
-    mutationFn: () => api.get<DiscoverResponse>(`/clients/${id}/domain-intel/discover`),
+    // POST — it's a paid call with side effects (budget), not an idempotent read.
+    mutationFn: () => api.post<DiscoverResponse>(`/clients/${id}/domain-intel/discover`, {}),
     onSuccess: (d) => setDiscovered(d),
   })
   const addCompetitor = useMutation({
@@ -229,10 +228,14 @@ export function DomainIntel() {
     onSuccess: (_r, domain) => setAdded((m) => ({ ...m, [domain]: true })),
   })
 
-  const running = Boolean(job) && jobStatus?.status !== 'failed'
+  const running = Boolean(job) && !['complete', 'failed'].includes(jobStatus?.status ?? '')
   const snap = overview?.snapshot
-  const keywords = overview?.ranked_keywords ?? []
+  const keywords = useMemo(() => overview?.ranked_keywords ?? [], [overview])
   const budget = history?.budget_remaining ?? 0
+  const analyzedDomains = useMemo(
+    () => [...new Set((history?.snapshots ?? []).map((s) => s.target_domain))],
+    [history],
+  )
 
   const submit = () => {
     const v = input.trim()
@@ -448,16 +451,17 @@ export function DomainIntel() {
         <div style={errBox}>Analysis failed{jobStatus.error ? `: ${jobStatus.error}` : ''}.</div>
       )}
 
-      {/* History chips */}
-      {(history?.snapshots.length ?? 0) > 0 && (
+      {/* History chips — snapshots are newest-first and retained per domain,
+          so dedupe by domain to one chip each. */}
+      {analyzedDomains.length > 0 && (
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 20 }}>
-          {history!.snapshots.map((s) => (
+          {analyzedDomains.map((d) => (
             <button
-              key={s.id}
-              onClick={() => { setSelected(s.target_domain); setInput(s.target_domain) }}
-              style={{ ...chip, ...(selected === s.target_domain ? chipActive : {}) }}
+              key={d}
+              onClick={() => { setSelected(d); setInput(d) }}
+              style={{ ...chip, ...(selected === d ? chipActive : {}) }}
             >
-              {s.target_domain}
+              {d}
             </button>
           ))}
         </div>
