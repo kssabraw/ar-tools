@@ -114,7 +114,7 @@ Content production is a **mix**: some content flows through the suite (Blog Writ
 
 On a task reaching **Complete**:
 
-1. **Resolve the sheet.** `task → client_id → clients.deliverables_sheet_id`. If the client has no sheet configured, skip silently.
+1. **Resolve the sheet.** `task → client_id → clients.deliverables_sheet_id`. Clients are normally **auto-provisioned** with a sheet (§5.5), so this is populated; if a client still has no sheet, skip silently (and, optionally, let PACE surface a "no deliverables sheet" signal).
 2. **Choose the tab.** By task **category**: `Content` → Content tab; `Link Building` → Links tab. `GBP Authority` with a GBP-post-shaped task → Content tab ("GBP Post"). `Strategy` and anything else → skip (not a client deliverable).
 3. **Choose the column-A value.** Read the tab's live dropdown values; map from the task (§6) with fallback to the sheet's "Other" / "Other Links".
 4. **Assemble the row:**
@@ -137,6 +137,17 @@ On a task reaching **Complete**:
 ### 5.4 PACE surfacing
 
 PACE's daily digest (`services/pace_digest.py`) gains a line: "N new client notes across M clients (last 24h)", derived from the `deliverable_note` notifications. PACE does not perform the sync or the watch — it only reports.
+
+### 5.5 Sheet provisioning (auto-create per client)
+
+Rather than a human copying the template, converting it to a native Sheet, and recording the ID per client, the suite **auto-creates each client's deliverables sheet from a master template** via the Drive API.
+
+- **Master template.** A single canonical **native Google Sheet** (the `.xlsx` "MAKE A COPY!" template converted once to a native Sheet, so copies preserve the dropdowns / tabs / formatting), stored in the agency Shared Drive; its file ID lives in config (`deliverables_template_sheet_id`).
+- **Provision job.** A `deliverables_sheet_provision` async job does `drive.files.copy(template_id, parents=[Shared Drive / client folder], name="<client name>")`, then writes the new sheet's ID to `clients.deliverables_sheet_id`. Best-effort; failure logs and leaves the client unprovisioned (deliverable logging simply skips until it succeeds).
+- **When it runs.** Enqueued **at client creation** (alongside the existing `brand_voice_scan` / `icp_scan` auto-jobs in `routers/clients.create_client`), gated on `deliverables_sheet_enabled`. Idempotent: never creates a second sheet for a client that already has an ID. For existing clients, a one-time backfill enqueues the job for any client missing a sheet.
+- **PACE's role.** PACE does not perform the copy. It can **surface** a "client has no deliverables sheet" signal (a `pm_signal`) and offer to trigger provisioning for an existing client — i.e. PACE nudges/triggers, the deterministic job creates.
+- **Access falls out for free.** Because the service account creates the copy inside the agency **Shared Drive** (where it is a member), it inherently has edit access — so there is **no per-client sharing step**. This is a further argument for the Shared Drive access model (§7).
+- **Client-facing sharing** (who can view/leave notes) is handled separately — see §13 open questions.
 
 ## 6. Dropdown mapping (task → column A)
 
@@ -181,7 +192,9 @@ The suite authenticates to Google as its **service account**. The identity makin
 
 **Scopes.** The service account key is already provisioned, but its current credential is built with the read-only Search Console scope. This module builds a **separate credential from the same key** with `https://www.googleapis.com/auth/spreadsheets` (write) and, for the Shared-Drive/native-Sheet handling, `https://www.googleapis.com/auth/drive` as needed. This is additive; the existing GSC path is unchanged.
 
-**Native Sheets requirement.** The Sheets API operates on native Google Sheets, not uploaded `.xlsx` files. Each client's deliverables copy must be a native Google Sheet (a one-time "Save as Google Sheets" for any `.xlsx` copy). The stored `deliverables_sheet_id` is that native sheet's ID.
+**Native Sheets requirement.** The Sheets API operates on native Google Sheets, not uploaded `.xlsx` files. The stored `deliverables_sheet_id` must be a native sheet's ID. With auto-provisioning (§5.5) this is guaranteed: the **master template** is converted to a native Sheet once, and every client copy is native. (Only manually-attached existing sheets need a one-time "Save as Google Sheets".)
+
+**Drive scope for provisioning.** Auto-creating sheets uses `drive.files.copy`, so the provisioning credential needs the Drive scope (`https://www.googleapis.com/auth/drive`) in addition to `spreadsheets`. Creating the copy inside the Shared Drive is what gives the service account edit access with no per-client sharing.
 
 ## 8. Edge cases & decisions
 
@@ -203,6 +216,8 @@ Migration under `writer/supabase/migrations/`:
 
 No changes to the `tasks` schema beyond the optional synced marker.
 
+**Config (not schema):** `deliverables_template_sheet_id` — the native master-template sheet ID that provisioning copies from (§5.5).
+
 ## 10. Integration points (where the code lands)
 
 - **New service** `services/deliverables_sheet.py` — pure mapping helpers (tab + dropdown resolution, row assembly) that are unit-tested, plus the impure Sheets read/append and the notes-diff. Pure/impure split mirrors the suite's convention.
@@ -210,7 +225,8 @@ No changes to the `tasks` schema beyond the optional synced marker.
 - **Write hook** — invoked when a task reaches Complete. The native task manager already has completion paths (`task_service` complete/reopen, and `task_producers` close-on-resolve hooks); the append fires from there, double-gated (see §11).
 - **Poller** — `gsc_scheduler.enqueue_due_deliverable_note_scans()` (interval-gated), enqueuing a `deliverable_notes_scan` async job per due client; the job reads Notes and emits alerts.
 - **PACE digest** — one added section in `services/pace_digest.py`.
-- **Admin action** — a small endpoint to set/validate a client's `deliverables_sheet_id` (verifies the service account can open the sheet and reports the tabs/dropdowns found).
+- **Provisioning** — a `deliverables_sheet_provision` async job (`drive.files.copy` from the master template → store `deliverables_sheet_id`), enqueued at client creation (§5.5) and available on-demand for backfill / PACE-triggered creation.
+- **Admin action** — a small endpoint to (a) trigger/re-run provisioning for a client, and (b) set/validate an existing `deliverables_sheet_id` (verifies the service account can open the sheet and reports the tabs/dropdowns found).
 - **Tests** — mapper (each content/link case + SEO NEO rule + fallback), append idempotency (reopen→re-complete), notes-diff (new note fires once, unchanged note silent).
 
 ## 11. Feature flags & rollout
@@ -220,9 +236,10 @@ No changes to the `tasks` schema beyond the optional synced marker.
 - `deliverables_notes_scan_interval_minutes` (default ~15).
 - Per-client enablement is implicit: a client with no `deliverables_sheet_id` is skipped, so we roll out by setting the sheet ID one client at a time even with the master flag on.
 
-**Setup steps (owner side, done at rollout, not blockers to building):**
-1. Create the agency Shared Drive (or choose the access model in §7) and add the service-account email.
-2. For each client, ensure the deliverables sheet is a **native Google Sheet** and record its ID via the admin action.
+**Setup steps (owner side, one-time — auto-provisioning removes the per-client work):**
+1. Create the agency Shared Drive (or choose the access model in §7) and add the service-account email as a member.
+2. Convert the `.xlsx` deliverables template to a **native Google Sheet** in that Drive and set its ID as `deliverables_template_sheet_id`.
+3. That's it for new clients — they're auto-provisioned (§5.5). For existing clients, run the one-time backfill (or PACE-trigger per client) to create their sheets. Any pre-existing client sheet can instead be attached by recording its ID via the admin action.
 
 ## 12. Out of scope / future
 
@@ -238,6 +255,7 @@ No changes to the `tasks` schema beyond the optional synced marker.
 2. **Synced marker shape** — column on `tasks` vs a dedicated sync-log table (leaning log table).
 3. **SEO NEO detection** — is "SEO NEO" identified by assignee, by a role/team mapping, or by task-name convention? Needs the exact signal to implement the override rule reliably.
 4. **Real client note format** — the sample sheet's Notes column was empty; if notes are ever multi-line or dated entries, confirm we alert on any change to the cell (current assumption) vs only on net-new lines.
+5. **Client-facing sharing of auto-provisioned sheets** — the client must be able to view/leave notes. Today the VA shares the sheet manually. For auto-created sheets, decide how the client gets access: share with a stored client email, "anyone with the link can comment/edit", or leave sharing manual. (Provisioning can set this once the rule is chosen.)
 
 ## Appendix A — Real sheet sample (UMH Properties, abridged)
 
