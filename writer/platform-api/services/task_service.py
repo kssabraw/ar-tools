@@ -169,6 +169,24 @@ def tick_stage_for(status_key: Optional[str], statuses: list[dict]) -> Optional[
     return None
 
 
+# A "state of work" keyword (started/complete/posted/…) only reads as a process
+# MARKER when it sits at a phrase boundary — end of string, a parenthetical,
+# punctuation, or a function-word tail ("posted AS noindex", "received FROM
+# SEO"). Mid-phrase, before a content noun ("Complete Guide", "Started
+# Service"), the same word is part of a real work-item NAME, not a marker.
+# Requiring the boundary can only move a borderline subtask from marker → work
+# item, which makes stage-advance gating STRICTER (never premature) — the safe
+# direction. Distinctive workflow phrases ("qa'd", "sent for approval", "client
+# approved", "added to website") don't collide with work-item nouns and stay
+# unconstrained.
+# Tail = only the function words that genuinely follow a state word in real
+# markers ("posted AS noindex", "received FROM SEO", "entered INTO workflow",
+# "approved AND published", "posted TO website"). Deliberately excludes common
+# work-item-name words like "for"/"in"/"on" ("Created for the launch",
+# "Restoration in Melbourne") so those stay work items.
+_STATE_TAIL = r"(?=\s*(?:$|[(.,;:!?\-—]|(?:as|from|into|onto|by|and|to)\b))"
+
+
 def marker_tick_stage(name: Optional[str]) -> Optional[int]:
     """The stage at which a process-marker subtask may auto-tick; None = not a
     marker (real work items and deliverables-sheet reminders stay manual). Pure.
@@ -181,17 +199,18 @@ def marker_tick_stage(name: Optional[str]) -> Optional[int]:
         return None
     if "deliverable" in low:
         return None  # the PM's reminder — manual until PACE writes the sheet
-    if re.search(r"\b(posted|posting|publish\w*|scheduled|added to (the )?website|went live)\b", low):
+    if re.search(r"\b(?:posted|posting|publish\w*|scheduled)" + _STATE_TAIL, low) \
+            or re.search(r"added to (?:the )?website|went live", low):
         return 5
-    if re.search(r"client approv\w*|approved by (the )?client|\bapproved\b$", low):
+    if re.search(r"client approv\w*|approved by (?:the )?client|\bapproved\b$", low):
         return 4
-    if re.search(r"sent ((to|for) )?(the )?(client|approval)", low):
+    if re.search(r"sent (?:(?:to|for) )?(?:the )?(?:client|approval)", low):
         return 3
     if re.search(r"\bqa\b|qa'd|qa’d", low):
         return 3  # moving past the QA column implies QA passed
-    if re.search(r"\bcompleted?\b", low):
+    if re.search(r"\bcompleted?" + _STATE_TAIL, low):
         return 3  # "X Complete" = the work is done, certain by send-time
-    if re.search(r"\b(started|generated|created|ordered|received|entered)\b", low):
+    if re.search(r"\b(?:started|generated|created|ordered|received|entered)" + _STATE_TAIL, low):
         # Time-qualified markers ("Started (week 2)") can't all be true the
         # moment work begins — they tick once the task has moved past QA.
         if re.search(r"\(?\s*week\s*\d|round\s*\d|part\s*\d", low):
