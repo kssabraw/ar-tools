@@ -58,7 +58,11 @@ STOP = {"service", "services", "company", "contractor", "shop", "store",
 
 # Cost estimates (recorded to the ledger; derived from the scanner's own
 # printed estimates + per-task billing). These are planning numbers.
-COST_TRYOUT = 0.20                # whole tryout run (script header: ~$0.15-0.20)
+# Tryout now includes the brand-footprint pass (site: indexed counts +
+# Content Analysis mention summaries for each gated category's top-5,
+# deduped + cache-cheapened): base ~$0.20 + footprint worst-case ~$0.80
+# (≈25 distinct fresh businesses × ~$0.032). Franchises/repeat pulls cost less.
+COST_TRYOUT = 1.00                # whole tryout run incl. footprint (planning)
 COST_RD_PER_DOMAIN = 0.005        # bulk_referring_domains, per miss
 COST_VELOCITY_PER_BIZ = 0.0023    # reviews task depth 30, per miss
 COST_TREND_TASK = 0.05            # one Google Ads keyword task (per-task billing)
@@ -453,7 +457,9 @@ async def run_tryout_job(job: dict) -> None:
             sem = asyncio.Semaphore(10)
             coord = f"{city['latitude']},{city['longitude']},13z"
 
-            async def pull(cat: str) -> tuple[str, dict | None]:
+            from services.leadoff_brand import top5_from_items
+
+            async def pull(cat: str) -> tuple[str, dict | None, list[dict]]:
                 async with sem:
                     try:
                         d = await _dfs_post(
@@ -464,22 +470,57 @@ async def run_tryout_job(job: dict) -> None:
                         t0 = _task0(d)
                         _check_money_limit(t0)
                         if t0.get("status_code") == _CODE_NO_RESULTS:
-                            return cat, field_stats([], cat)  # a VALID zero
+                            return cat, field_stats([], cat), []  # a VALID zero
                         items = ((t0.get("result") or [{}])[0] or {}).get("items") or []
-                        return cat, field_stats(items, cat)
+                        return cat, field_stats(items, cat), top5_from_items(items)
                     except RuntimeError:
                         raise
                     except Exception as exc:
                         logger.warning("leadoff_tryout.serp_failed",
                                        extra={"category": cat, "error": str(exc)})
-                        return cat, None
+                        return cat, None, []
 
             results = await asyncio.gather(*(pull(c) for c in gated))
-            field = {cat: stats for cat, stats in results if stats is not None}
+            field = {cat: stats for cat, stats, _ in results if stats is not None}
+            top5_by_cat = {cat: top5 for cat, _, top5 in results}
+
+            # brand footprint for the field (first-pass LIGHT tier): distinct
+            # businesses across all gated categories, cache-missed pieces
+            # only. Generic-named businesses get the search+locale-filter +
+            # phone-NAP treatment (their bare-name count is untrustworthy);
+            # the unlinked split is scout's deep tier, not paid here.
+            from services.leadoff_brand import (
+                attach_footprint, fetch_footprint, footprint_lookups,
+                footprint_state,
+            )
+            all_biz = [{**b, "category_name": cat}
+                       for cat, top5 in top5_by_cat.items() for b in top5]
+            try:
+                fp = footprint_state(all_biz, datetime.now(timezone.utc),
+                                     city_name=city.get("name") or "",
+                                     deep=False)
+                if fp["site_misses"] or fp["mention_misses"]:
+                    await fetch_footprint(client, fp["site_misses"],
+                                          fp["mention_misses"],
+                                          datetime.now(timezone.utc),
+                                          city_name=city.get("name") or "",
+                                          deep=False)
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                logger.warning("leadoff_tryout.footprint_failed",
+                               extra={"error": str(exc)})
 
         # 3) economics + grade vs the national reference
         rows = tryout_rows(demand, field, _lead_values(lead_tier),
                            _breakpoints(), capture)
+        try:
+            site_lookup, mention_rows = footprint_lookups(all_biz)
+            rows = attach_footprint(
+                rows, top5_by_cat, site_lookup,
+                {k: r.get("citations") for k, r in mention_rows.items()})
+        except Exception:
+            logger.warning("leadoff_tryout.footprint_attach_failed", exc_info=True)
         supabase.table("leadoff_tryouts").update({
             "status": "complete", "results": rows, "completed_at": "now()",
         }).eq("id", tryout_id).execute()
@@ -526,11 +567,21 @@ def scout_market_state(city_id: int, category_id: str) -> dict[str, Any] | None:
     fresh_trend = (_ms("demand_trend").select("trend_key")
                    .eq("trend_key", trend_key).gte("pulled_at", cutoff)
                    .execute().data or [])
+    # brand footprint (site size + the three mention signals) — deep tier:
+    # scout is Pass-2, so every brand gets the search/unlinked/NAP treatment
+    from services.leadoff_brand import footprint_state
+    footprint = footprint_state(
+        [{**c, "category_name": board[0].get("category") or ""} for c in comps],
+        now, city_name=board[0].get("city_name") or "", deep=True)
     return {
         "market": board[0], "competitors": comps,
         "rd_misses": rd_misses, "vel_misses": vel_misses,
         "trend_key": trend_key, "trend_miss": not fresh_trend,
-        "est_cost": scout_estimate(len(rd_misses), len(vel_misses), not fresh_trend),
+        "site_misses": footprint["site_misses"],
+        "mention_misses": footprint["mention_misses"],
+        "est_cost": round(scout_estimate(len(rd_misses), len(vel_misses),
+                                         not fresh_trend)
+                          + footprint["est_cost"], 2),
     }
 
 
@@ -614,6 +665,24 @@ async def run_scout_job(job: dict) -> None:
                 if vel_rows:
                     _ms("business_reviews").insert(vel_rows).execute()
                     summary["velocity_pulled"] = len(vel_rows)
+
+            # brand footprint (deep tier) — site: indexed counts + mentions/
+            # unlinked/NAP for the top-5. serp_top5 never stored phones, so
+            # one Maps SERP recovers them for the NAP queries (~$0.004).
+            from services.leadoff_brand import fetch_footprint, fetch_top5_phones
+            misses = state.get("mention_misses") or {}
+            if state.get("site_misses") or misses:
+                if misses and city and not any(v.get("phone")
+                                               for v in misses.values()):
+                    phones = await fetch_top5_phones(
+                        client, state["market"].get("category") or "", city)
+                    for k, v in misses.items():
+                        v["phone"] = v.get("phone") or phones.get(k)
+                pulled = await fetch_footprint(
+                    client, state.get("site_misses") or [], misses, now,
+                    city_name=state["market"].get("city_name") or "", deep=True)
+                summary["site_pulled"] = pulled["sites"]
+                summary["mentions_pulled"] = pulled["mentions"]
 
             # trend — one keyword task (both forms) for this category
             lc = _location_code(city or {})

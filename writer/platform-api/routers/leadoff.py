@@ -250,6 +250,8 @@ async def scout_estimate(
         "rd_misses": len(state["rd_misses"]),
         "velocity_misses": len(state["vel_misses"]),
         "trend_miss": state["trend_miss"],
+        "site_misses": len(state.get("site_misses") or []),
+        "mention_misses": len(state.get("mention_misses") or {}),
         "fully_cached": state["est_cost"] == 0,
     }
 

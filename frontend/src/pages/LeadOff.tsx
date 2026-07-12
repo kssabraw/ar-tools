@@ -48,6 +48,12 @@ interface Competitor {
   rating: number | null
   review_count: number | null
   domain: string | null
+  // brand footprint (cached context, filled by tryout/scout pulls)
+  site_pages?: number | null
+  mentions?: number | null
+  unlinked_mentions?: number | null
+  nap_citations?: number | null
+  generic_name?: boolean | null
 }
 interface Enrichment {
   rd_min: number | null
@@ -81,6 +87,8 @@ interface Neighborhood {
 }
 interface TryoutRow {
   grade: string
+  field_pages_med?: number | null
+  field_mentions_med?: number | null
   natl_pct: number
   exp_val: number
   value_mo: number | null
@@ -109,6 +117,8 @@ interface ScoutEstimate {
   rd_misses: number
   velocity_misses: number
   trend_miss: boolean
+  site_misses?: number
+  mention_misses?: number
   fully_cached: boolean
 }
 
@@ -121,6 +131,11 @@ const GRADE_COLORS: Record<string, string> = {
 }
 const usd = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `$${Math.round(n).toLocaleString()}`
+// compact count for footprint columns (site pages / brand mentions)
+const compact = (n: number | null | undefined) =>
+  n === null || n === undefined ? '—'
+    : n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
+      : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k` : String(n)
 
 type View = 'board' | 'neighborhoods' | 'tryouts'
 
@@ -348,13 +363,26 @@ export function LeadOff() {
               <KV k="Exact-category holders" v={String(brief.exact_open)} />
               <div style={{ marginTop: 8 }}>
                 {brief.competitors.map(c => (
-                  <div key={c.rank_position} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b', padding: '2px 0' }}>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>
-                      {c.rank_position}. {c.business_name}
-                    </span>
-                    <span style={{ whiteSpace: 'nowrap' }}>
-                      {(c.review_count ?? 0).toLocaleString()} rev{c.rating ? ` · ${c.rating}★` : ''}
-                    </span>
+                  <div key={c.rank_position} style={{ fontSize: 12, color: '#64748b', padding: '2px 0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: 8 }}>
+                        {c.rank_position}. {c.business_name}
+                      </span>
+                      <span style={{ whiteSpace: 'nowrap' }}>
+                        {(c.review_count ?? 0).toLocaleString()} rev{c.rating ? ` · ${c.rating}★` : ''}
+                      </span>
+                    </div>
+                    {(c.site_pages != null || c.mentions != null || c.nap_citations != null) && (
+                      <div style={{ fontSize: 11, color: '#94a3b8', paddingLeft: 14 }}
+                        title={'Site size = Google indexed-page estimate (site: query). Mentions = total web mentions incl. unlinked (Content Analysis index'
+                          + (c.generic_name ? '; generic name — count filtered to city/phone co-occurrence' : '')
+                          + '). Unlinked = mentioning domains that do not link. NAP = phone-number citations. Context only.'}>
+                        {compact(c.site_pages)} pages
+                        {c.mentions != null && <> · {compact(c.mentions)} mentions{c.generic_name ? '*' : ''}</>}
+                        {c.unlinked_mentions != null && <> ({compact(c.unlinked_mentions)} unlinked)</>}
+                        {c.nap_citations != null && <> · {compact(c.nap_citations)} NAP</>}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -625,7 +653,7 @@ function TryoutsView() {
                 <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 780, fontSize: 13 }}>
                   <thead>
                     <tr>{['Grade', 'Category', 'Exp $/mo', 'ROI $/rev', 'Demand', 'Supply',
-                          'Rev to win', 'Field ★', 'Cat open'].map(h => (
+                          'Rev to win', 'Field ★', 'Cat open', 'Field pages', 'Field mentions'].map(h => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}</tr>
                   </thead>
@@ -641,6 +669,8 @@ function TryoutsView() {
                         <td style={tdStyle}>{r.rev_win}</td>
                         <td style={tdStyle}>{r.rating || '—'}</td>
                         <td style={tdStyle}>{r.exact_open}</td>
+                        <td style={tdStyle} title="median indexed pages across the category's top-5 (site: estimate)">{compact(r.field_pages_med)}</td>
+                        <td style={tdStyle} title="median web-mention count across the top-5 (generic names inflate — context only)">{compact(r.field_mentions_med)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -813,7 +843,10 @@ function ScoutCard({ cityId, categoryId }: { cityId: number; categoryId: string 
       {est && !jobId && (
         <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
           Paid pull: {est.rd_misses} domain RD, {est.velocity_misses} review-velocity,
-          {' '}{est.trend_miss ? 'demand trend' : 'trend cached'} — cached pieces are free.
+          {' '}{est.trend_miss ? 'demand trend' : 'trend cached'}
+          {(est.site_misses ?? 0) > 0 && `, ${est.site_misses} site-size`}
+          {(est.mention_misses ?? 0) > 0 && `, ${est.mention_misses} brand-mentions`}
+          {' '}— cached pieces are free.
         </div>
       )}
       {error && <div style={{ fontSize: 12, color: '#b91c1c', marginTop: 4 }}>{error}</div>}
