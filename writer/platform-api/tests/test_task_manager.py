@@ -391,3 +391,120 @@ def test_generate_month_no_template(monkeypatch):
     result = task_monthly.generate_month_for_client("c1", date(2026, 7, 1))
     assert result["status"] == "skipped"
     assert result["reason"] == "no_template"
+
+
+# ---------------------------------------------------------------------------
+# Auto-tick sync (owner ruling 2026-07-12): status drags tick the process-
+# marker subtasks they imply — late-never-early, deliverables stay manual.
+# ---------------------------------------------------------------------------
+def test_marker_tick_stage_real_checklist_names():
+    m = task_service.marker_tick_stage
+    # Deliverables-sheet reminders: NEVER auto-ticked (the PM's reminder).
+    assert m("Added to deliverables sheet") is None
+    assert m("Citations QA'd") == 3 and m("Blog Post QA'd") == 3
+    assert m("GBP Blast QA") == 3
+    # Publish/terminal markers → completion only.
+    assert m("Approved pages posted to website") == 5
+    assert m("Website pages posted as noindex") == 5   # late, never early
+    assert m("GBP Posts scheduled") == 5
+    assert m("Added to website") == 5
+    # Client approval → client_approved stage.
+    assert m("Client Approved") == 4
+    assert m("Blog Post Approved by client") == 4
+    assert m("Client approves topic") == 4
+    # Sent for approval → sent_to_client stage.
+    assert m("Sent For Approval") == 3
+    assert m("Blog Post Sent to client for approval") == 3
+    assert m("Topic sent for approval") == 3
+    # "X Complete" = work done — certain by send-time, not start-time.
+    assert m("Citations Complete") == 3
+    assert m("Map Embeds Complete") == 3
+    # Start/creation markers → in_progress…
+    assert m("Citations Started") == 1
+    assert m("HyperLocal Coordinates Generated") == 1
+    assert m("Niche Edit Ordered") == 1
+    assert m("Guest Post Content Created") == 1
+    assert m("Quarterly topics received from SEO") == 1
+    # …but time-qualified ones can't all be true at start.
+    assert m("GBP Blast Started (week 1)") == 3
+    assert m("GBP Blast Started (week 2)") == 3
+    # Real work items never match — they stay human-ticked.
+    assert m("Roof Restoration In Melbourne") is None
+    assert m("parcel spend management sap integration") is None
+    assert m("Press Release syndicated") is None
+    assert m("") is None and m(None) is None
+
+
+def test_tick_stage_for_statuses():
+    statuses = [
+        {"key": "blocked", "category": "blocked"},
+        {"key": "in_review", "category": "in_progress"},
+        {"key": "custom_done", "category": "done"},
+        {"key": "custom_wip", "category": "in_progress"},
+    ]
+    f = task_service.tick_stage_for
+    assert f("not_started", statuses) == 0
+    assert f("in_progress", statuses) == 1
+    assert f("in_qa", statuses) == 2
+    assert f("sent_to_client", statuses) == 3
+    assert f("client_approved", statuses) == 4
+    assert f("complete", statuses) == 5
+    # Exception statuses + unknown customs never tick; custom done implies 5.
+    assert f("blocked", statuses) is None
+    assert f("in_review", statuses) is None
+    assert f("custom_wip", statuses) is None
+    assert f("custom_done", statuses) == 5
+    assert f("nonexistent", statuses) is None
+
+
+def test_auto_tick_subtasks_ticks_due_only(monkeypatch):
+    subs = [
+        {"id": "s1", "name": "Citations Started"},            # stage 1 → due
+        {"id": "s2", "name": "Citations QA'd"},               # stage 3 → due at 3
+        {"id": "s3", "name": "Client Approved"},              # stage 4 → NOT due at 3
+        {"id": "s4", "name": "Added to deliverables sheet"},  # never
+        {"id": "s5", "name": "150 real work item"},           # not a marker
+    ]
+    updates = {}
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def is_(self, *a, **k): return self
+        def order(self, *a, **k): return self
+        def update(self, payload):
+            updates["payload"] = payload
+            return self
+        def in_(self, col, ids):
+            updates["ids"] = ids
+            return self
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    class _SB:
+        def table(self, name):
+            if name == "task_statuses":
+                return _Q([{"key": "complete", "is_done": True, "active": True}])
+            return _Q(subs)
+
+    monkeypatch.setattr(task_service, "get_supabase", lambda: _SB())
+    logged = []
+    monkeypatch.setattr(task_service, "record_activity", lambda *a, **k: logged.append((a, k)))
+
+    n = task_service.auto_tick_subtasks("t1", 3)
+    assert n == 2
+    assert set(updates["ids"]) == {"s1", "s2"}
+    assert updates["payload"]["completed"] is True
+    assert logged and logged[0][0][1] == "auto_ticked"
+    # No stage / stage 0 → no reads, no ticks.
+    assert task_service.auto_tick_subtasks("t1", None) == 0
+    assert task_service.auto_tick_subtasks("t1", 0) == 0
+
+
+def test_auto_tick_never_raises(monkeypatch):
+    class _Boom:
+        def table(self, name):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(task_service, "get_supabase", lambda: _Boom())
+    assert task_service.auto_tick_subtasks("t1", 5) == 0  # swallowed, logged
