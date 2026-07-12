@@ -923,6 +923,14 @@ class Settings(BaseSettings):
     # service-area businesses (blank address) is PAID, so off by default —
     # flip only after the free ~88% version validates the signal.
     leadoff_geocode_sab_outscraper: bool = False
+    # Proximity octant read (plan §2) over the geocoded pins: analysis radius
+    # around the city centre (strays beyond it are geocode noise), the
+    # thin-data floor (no verdict off a handful of pins — same discipline as
+    # the field-momentum floor), and the underserved cut (defense below this
+    # fraction of the market median = weak octant).
+    leadoff_proximity_radius_miles: float = 10.0
+    leadoff_proximity_min_pins: int = 5
+    leadoff_proximity_weak_frac: float = 0.25
 
     class Config:
         env_file = ".env"
