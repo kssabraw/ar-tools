@@ -292,7 +292,8 @@ async def create_client(
     result = supabase.table("clients").insert(row).execute()
     client = result.data[0]
 
-    _enqueue_website_scrape(client["id"], body.website_url)
+    if body.website_url:
+        _enqueue_website_scrape(client["id"], body.website_url)
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(client["id"], page_type, url)
     # Auto-generate the brand voice + ICP so they exist without a manual scan.

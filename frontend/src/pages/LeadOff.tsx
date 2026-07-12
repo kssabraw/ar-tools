@@ -1,6 +1,7 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2 } from 'lucide-react'
+import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 
@@ -299,6 +300,8 @@ export function LeadOff() {
                 </div>
               )}
 
+              <CreateClientCard key={`${brief.city_id}:${brief.category_id}`} brief={brief} />
+
               <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 14, lineHeight: 1.5 }}>
                 Before committing: eyeball the live Maps SERP. HOT? needs a trend pull; category
                 picks need label verification (LeadOff SOP §6).
@@ -312,6 +315,77 @@ export function LeadOff() {
 }
 
 // ── Bits ─────────────────────────────────────────────────────────────────────
+// The handoff (PRD §5 item 2): create a client card pre-loaded with this
+// market — location, top-5 competitors into Competitive Intel, effort targets
+// as a campaign goal. Website is optional: LeadOff is research-first, the
+// site can be added on the client form later.
+function CreateClientCard({ brief }: { brief: MarketBrief }) {
+  const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [website, setWebsite] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const submit = async () => {
+    if (!name.trim() || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      const res = await api.post<{ client_id: string }>('/leadoff/create-client', {
+        city_id: brief.city_id,
+        category_id: brief.category_id,
+        name: name.trim(),
+        website_url: website.trim(),
+      })
+      navigate(`/clients/${res.client_id}`)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'create_failed'
+      setError(msg === 'client_name_taken' ? 'A client with that name already exists.' : msg)
+      setBusy(false)
+    }
+  }
+
+  if (!open) {
+    return (
+      <button
+        style={{ ...primaryBtn, width: '100%', justifyContent: 'center', marginTop: 14 }}
+        onClick={() => setOpen(true)}
+      >
+        <UserPlus size={14} /> Create client from this market
+      </button>
+    )
+  }
+  const fullInput: React.CSSProperties = { ...inputStyle, width: '100%', boxSizing: 'border-box' }
+  return (
+    <div style={{
+      marginTop: 14, border: '1px solid #e2e8f0', borderRadius: 8, padding: 10,
+      display: 'flex', flexDirection: 'column', gap: 8, background: '#f8fafc',
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a' }}>
+        New client — {brief.category}, {brief.city_name}, {brief.state_code}
+      </div>
+      <input style={fullInput} placeholder="Client name (required)" value={name}
+        onChange={e => setName(e.target.value)} autoFocus />
+      <input style={fullInput} placeholder="Website (optional — add later)" value={website}
+        onChange={e => setWebsite(e.target.value)} />
+      <div style={{ fontSize: 11, color: '#94a3b8', lineHeight: 1.4 }}>
+        Seeds the top-5 into Competitive Intel and records the effort targets
+        (reviews to beat #3, link budget) as a campaign goal.
+      </div>
+      {error && <div style={{ fontSize: 12, color: '#b91c1c' }}>{error}</div>}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button style={primaryBtn} disabled={busy || !name.trim()} onClick={submit}>
+          {busy ? <Loader2 size={14} className="spin" /> : <UserPlus size={14} />} Create
+        </button>
+        <button style={secondaryBtn} onClick={() => setOpen(false)} disabled={busy}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function GradeChip({ grade }: { grade: string }) {
   return (
     <span style={{

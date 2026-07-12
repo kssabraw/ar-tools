@@ -139,7 +139,10 @@ class ClientDetail(BaseModel):
 
 class ClientCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
-    website_url: str = Field(..., min_length=1)
+    # Empty = no website yet (a pre-client market pick from LeadOff). Every
+    # website consumer already truthiness-guards, and setting a real URL later
+    # via update re-enqueues the scrape.
+    website_url: str = ""
     brand_guide_source_type: Literal["text", "file"]
     brand_guide_text: str = ""
     brand_guide_file_id: Optional[UUID] = None
