@@ -596,7 +596,8 @@ def _ctx_domain_intel(supabase, client_id: str, today: date) -> Optional[dict]:
     links = (
         supabase.table("domain_link_gaps")
         .select("referring_domain, linking_to, referring_domain_rank")
-        .eq("client_id", client_id).order("referring_domain_rank", desc=True).limit(8).execute()
+        .eq("client_id", client_id)
+        .order("referring_domain_rank", desc=True, nullsfirst=False).limit(8).execute()
     ).data or []
     if not kw and not links:
         return None

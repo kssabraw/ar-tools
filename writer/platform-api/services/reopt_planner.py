@@ -699,6 +699,7 @@ def summarize_plan(actions: list[dict]) -> dict:
         + by_kind.get("opportunity", 0)
         + by_kind.get("brand_search_decline", 0)
         + by_kind.get("backlink_gap", 0)
+        + by_kind.get("keyword_gap", 0)
     )
     if other:
         parts.append(f"{other} other opportunit{'ies' if other != 1 else 'y'}")

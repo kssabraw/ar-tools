@@ -30,6 +30,8 @@ class BudgetExceeded(Exception):
 
 normalize_domain = dataforseo_labs.domain_of  # single source of truth
 
+_SNAPSHOT_KEEP = 4  # snapshots retained per (client, target_domain) — see prune in run_domain_overview
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers (no I/O) — independently unit-tested.
@@ -399,6 +401,20 @@ async def run_domain_overview(
         if group:
             supabase.table("domain_ranked_keywords").insert(group).execute()
 
+    # Retention: keep the newest few snapshots per (client, domain) — repeated
+    # re-analyses must not accumulate 1000-row child sets forever. Best-effort.
+    try:
+        old = (
+            supabase.table("domain_intel_snapshots").select("id")
+            .eq("client_id", client_id).eq("target_domain", domain)
+            .order("captured_at", desc=True).execute()
+        ).data or []
+        stale_ids = [r["id"] for r in old[_SNAPSHOT_KEEP:]]
+        if stale_ids:
+            supabase.table("domain_intel_snapshots").delete().in_("id", stale_ids).execute()
+    except Exception as exc:
+        logger.warning("domain_intel.prune_failed", extra={"domain": domain, "error": str(exc)})
+
     return {
         "snapshot_id": snap["id"], "target_domain": domain, "cached": False,
         "ranked_keyword_count": len(rows), "cost_usd": cost,
@@ -569,6 +585,12 @@ async def run_keyword_gap(
         gap_lists.append(compute_keyword_gap(comp_rows, client_rows, comp))
         used.append(comp)
 
+    # Every competitor fetch failed (an API outage, not a real result): fail the
+    # run rather than replacing the standing gap set with emptiness — a wipe here
+    # would also vanish the Action Plan / strategist gap data downstream.
+    if competitors and not used:
+        raise RuntimeError("keyword_gap_all_competitor_fetches_failed")
+
     merged = merge_keyword_gaps(gap_lists)[: settings.domain_intel_ranked_keyword_cap]
 
     # Capture the prior gap keywords BEFORE replacing them, so a scheduled run
@@ -586,11 +608,11 @@ async def run_keyword_gap(
         except Exception:
             prev_keywords = set()
 
-    # Replace the client's stored gap set with this run's.
-    try:
-        supabase.table("domain_keyword_gaps").delete().eq("client_id", client_id).execute()
-    except Exception as exc:
-        logger.warning("keyword_gap.clear_failed", extra={"client_id": client_id, "error": str(exc)})
+    # Replace the client's stored gap set with this run's — insert the new rows
+    # (stamped with one run timestamp) FIRST, then delete everything older, so a
+    # mid-insert failure leaves the old set intact (transient dupes until the
+    # next successful run clean up) instead of a wiped one.
+    run_ts = datetime.now(timezone.utc).isoformat()
     rows = [{
         "client_id": client_id, "keyword": g["keyword"],
         "competitor_domain": g.get("competitor_domain"),
@@ -599,12 +621,19 @@ async def run_keyword_gap(
         "volume": g.get("volume"), "cpc_usd": g.get("cpc_usd"),
         "keyword_difficulty": g.get("keyword_difficulty"),
         "gap_type": g.get("gap_type"), "opportunity_score": g.get("opportunity_score"),
+        "captured_at": run_ts,
     } for g in merged]
     for group in dataforseo_labs.chunk(rows, 500):
         if group:
             supabase.table("domain_keyword_gaps").insert(group).execute()
+    try:
+        supabase.table("domain_keyword_gaps").delete().eq("client_id", client_id).lt("captured_at", run_ts).execute()
+    except Exception as exc:
+        logger.warning("keyword_gap.clear_failed", extra={"client_id": client_id, "error": str(exc)})
 
-    if notify:
+    # Baseline convention (matches competitor_intel): a first-ever run has no
+    # prior set to diff against — never alert the whole standing landscape.
+    if notify and prev_keywords:
         digest = gap_alert_digest(prev_keywords, merged)
         if digest:
             try:
@@ -724,21 +753,30 @@ async def run_link_gap(
         competitor_referring[comp] = _rd_rows_for_gap(rd)
         used.append(comp)
 
+    # Same wipe guard as run_keyword_gap: an all-competitor API outage must not
+    # replace the standing link-gap set with emptiness.
+    if competitors and not used:
+        raise RuntimeError("link_gap_all_competitor_fetches_failed")
+
     gaps = compute_link_gap(competitor_referring, client_domains)[: settings.domain_intel_ranked_keyword_cap]
 
-    try:
-        supabase.table("domain_link_gaps").delete().eq("client_id", client_id).execute()
-    except Exception as exc:
-        logger.warning("link_gap.clear_failed", extra={"client_id": client_id, "error": str(exc)})
+    # Insert-new-then-delete-old (one run timestamp) — mid-insert failure keeps
+    # the old set instead of wiping it.
+    run_ts = datetime.now(timezone.utc).isoformat()
     rows = [{
         "client_id": client_id, "referring_domain": g["referring_domain"],
         "linking_to": g.get("linking_to") or [],
         "referring_domain_rank": g.get("referring_domain_rank"),
         "backlink_count": g.get("backlink_count"),
+        "captured_at": run_ts,
     } for g in gaps]
     for group in dataforseo_labs.chunk(rows, 500):
         if group:
             supabase.table("domain_link_gaps").insert(group).execute()
+    try:
+        supabase.table("domain_link_gaps").delete().eq("client_id", client_id).lt("captured_at", run_ts).execute()
+    except Exception as exc:
+        logger.warning("link_gap.clear_failed", extra={"client_id": client_id, "error": str(exc)})
 
     return {"gap_count": len(rows), "competitors": used, "client_domain": client_domain}
 
@@ -784,7 +822,9 @@ def get_link_gaps(client_id: str, limit: Optional[int] = None) -> dict:
     rows = (
         get_supabase().table("domain_link_gaps").select("*")
         .eq("client_id", client_id)
-        .order("referring_domain_rank", desc=True).limit(cap).execute()
+        # Postgres DESC defaults to NULLS FIRST — force null-rank rows to the
+        # bottom so they can't crowd out real targets under the limit.
+        .order("referring_domain_rank", desc=True, nullsfirst=False).limit(cap).execute()
     ).data or []
     captured_at = max((r.get("captured_at") for r in rows if r.get("captured_at")), default=None)
     return {"gaps": rows, "captured_at": captured_at, "count": len(rows)}
@@ -828,48 +868,67 @@ async def discover_competitors(
 # ---------------------------------------------------------------------------
 def enqueue_due_domain_intel() -> int:
     """Enqueue a weekly keyword-gap refresh (notify=True) for each client that
-    has registered competitors + a website and whose last gap run is older than
-    domain_intel_interval_days. Daily due-check; gated on config + DataForSEO
-    creds. Deduped against pending keyword_gap jobs. Returns the enqueued count."""
+    has registered competitors + a website and whose last COMPLETED gap run is
+    older than domain_intel_interval_days. Daily due-check; gated on config +
+    DataForSEO creds. Deduped against pending keyword_gap jobs.
+
+    The last-run signal is the async_jobs history (latest completed keyword_gap
+    job per client), NOT the gap rows themselves — a run that legitimately finds
+    zero gaps leaves no rows, and an unfiltered gap-row read is subject to the
+    PostgREST row cap; either would make clients read as perpetually due and
+    burn paid calls daily. Fully exception-guarded: this runs inside the shared
+    scheduler's single daily try-block, so raising here would starve every hook
+    after it. Returns the enqueued count."""
+    try:
+        return _enqueue_due_domain_intel()
+    except Exception as exc:
+        logger.error("domain_intel.due_check_failed", extra={"error": str(exc)})
+        return 0
+
+
+def _enqueue_due_domain_intel() -> int:
     if not settings.domain_intel_enabled:
         return 0
     if not (settings.dataforseo_login and settings.dataforseo_password):
         return 0
     supabase = get_supabase()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=settings.domain_intel_interval_days)
+    cutoff_iso = (
+        datetime.now(timezone.utc) - timedelta(days=settings.domain_intel_interval_days)
+    ).isoformat()
 
-    # Clients with at least one active competitor carrying a domain.
-    try:
-        comp_rows = (
-            supabase.table("client_competitors").select("client_id, domain, active")
-            .eq("active", True).execute()
-        ).data or []
-    except Exception as exc:
-        logger.error("domain_intel.due_check_failed", extra={"error": str(exc)})
+    # Clients with at least one active competitor carrying a domain...
+    comp_rows = (
+        supabase.table("client_competitors").select("client_id, domain, active")
+        .eq("active", True).execute()
+    ).data or []
+    with_competitors = {r["client_id"] for r in comp_rows if r.get("domain")}
+    if not with_competitors:
         return 0
-    eligible = {r["client_id"] for r in comp_rows if r.get("domain")}
+
+    # ...AND a website (run_keyword_gap needs the client's own domain; without
+    # it the job can only fail — e.g. research-first LeadOff clients).
+    client_rows = (
+        supabase.table("clients").select("id, website_url")
+        .in_("id", sorted(with_competitors)).execute()
+    ).data or []
+    eligible = {r["id"] for r in client_rows if (r.get("website_url") or "").strip()}
     if not eligible:
         return 0
 
-    # Latest gap run per client (captured_at).
-    latest: dict[str, Optional[str]] = {}
+    # Clients whose latest completed keyword_gap job is within the interval —
+    # a bounded, server-filtered read (no client-side timestamp parsing).
+    recent: set[str] = set()
     try:
-        for r in (
-            supabase.table("domain_keyword_gaps").select("client_id, captured_at").execute()
-        ).data or []:
-            cid, ts = r["client_id"], r.get("captured_at")
-            if cid not in latest or (ts or "") > (latest[cid] or ""):
-                latest[cid] = ts
+        recent = {
+            r["entity_id"] for r in (
+                supabase.table("async_jobs").select("entity_id")
+                .eq("job_type", "keyword_gap").eq("status", "complete")
+                .gte("completed_at", cutoff_iso).execute()
+            ).data or []
+            if r.get("entity_id")
+        }
     except Exception:
-        latest = {}
-
-    due: set[str] = set()
-    for cid in eligible:
-        ts = latest.get(cid)
-        if ts is None or datetime.fromisoformat(ts.replace("Z", "+00:00")) <= cutoff:
-            due.add(cid)
-    if not due:
-        return 0
+        recent = set()
 
     try:
         pending = {
@@ -882,7 +941,7 @@ def enqueue_due_domain_intel() -> int:
         pending = set()
 
     count = 0
-    for cid in due - pending:
+    for cid in eligible - recent - pending:
         try:
             enqueue_keyword_gap(cid, notify=True)
             count += 1

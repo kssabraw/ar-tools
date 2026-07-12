@@ -805,7 +805,8 @@ def _prov_domain_intel(supabase, client_id: str, today: date, now: datetime) -> 
     links = (
         supabase.table("domain_link_gaps")
         .select("referring_domain, linking_to, referring_domain_rank, backlink_count, captured_at")
-        .eq("client_id", client_id).order("referring_domain_rank", desc=True).limit(30).execute()
+        .eq("client_id", client_id)
+        .order("referring_domain_rank", desc=True, nullsfirst=False).limit(30).execute()
     ).data or []
     if not kw and not links:
         return None

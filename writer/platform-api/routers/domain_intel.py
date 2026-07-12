@@ -154,9 +154,11 @@ async def start_link_gap(
     return {"job_id": job_id}
 
 
-@router.get("/clients/{client_id}/domain-intel/discover")
+@router.post("/clients/{client_id}/domain-intel/discover")
 async def discover(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
-    """SERP-overlap competitor suggestions for the client's own domain (1 paid call)."""
+    """SERP-overlap competitor suggestions for the client's own domain (1 paid
+    call). POST, not GET: it spends budget/money, and idempotent-looking GETs
+    get silently retried by proxies and prefetchers — double-billing."""
     if not settings.domain_intel_enabled:
         raise HTTPException(status_code=403, detail="domain_intel_disabled")
     if domain_intel.budget_remaining() <= 0:
