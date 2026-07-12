@@ -613,3 +613,52 @@ def test_start_task_on_touch(monkeypatch):
     assert task_service.start_task_on_touch("t1") is False
     rows[0] = {"status_key": "not_started", "completed": False, "parent_task_id": "p9"}
     assert task_service.start_task_on_touch("t1") is False
+
+
+# ---------------------------------------------------------------------------
+# #2 fix (2026-07-12): a work-item NAME containing a marker keyword mid-phrase
+# ("Complete Guide", "Started Service") must NOT be misread as a process marker
+# and must keep gating In QA. Tightening is the safe direction (stricter gating,
+# never premature advance).
+# ---------------------------------------------------------------------------
+def test_marker_state_word_needs_phrase_boundary():
+    m = task_service.marker_tick_stage
+    # Mid-phrase state words in descriptive work-item names → NOT markers.
+    assert m("Roof Maintenance Complete Guide") is None
+    assert m("Emergency Plumber Started Service Page") is None
+    assert m("Created for Content Marketing landing page") is None
+    assert m("Posted Sign Installation service") is None
+    # …so they read as real work items and gate In QA.
+    assert task_service.is_work_item("Roof Maintenance Complete Guide") is True
+    assert task_service.is_work_item("Emergency Plumber Started Service Page") is True
+
+    # Genuine markers still classify exactly as before (boundary-terminated,
+    # parenthetical, or function-word tail) — the real library checklist names.
+    assert m("Citations Complete") == 3
+    assert m("Map Embeds Complete") == 3
+    assert m("Citations Started") == 1
+    assert m("Content Created") == 1
+    assert m("HyperLocal Coordinates Generated") == 1
+    assert m("Niche Edit Ordered") == 1
+    assert m("Quarterly topics received from SEO") == 1
+    assert m("Topics entered into Blog Post work flow") == 1
+    assert m("GBP Blast Started (week 1)") == 3
+    assert m("Website pages posted as noindex") == 5
+    assert m("Approved pages posted to website") == 5
+    assert m("GBP Posts scheduled") == 5
+    assert m("Website pages approved and published") == 5
+
+
+def test_advance_not_premature_with_marker_named_work_item():
+    # A checklist where one work item's NAME contains "complete": ticking the
+    # OTHER work item must NOT advance to In QA while the "Complete Guide" item
+    # is still open (the #2 bug would have advanced early).
+    subs = [
+        {"name": "How to Choose a Roofer", "completed": True},
+        {"name": "Roof Maintenance Complete Guide", "completed": False},  # real work, contains "complete"
+        {"name": "Sent For Approval", "completed": False},                 # genuine marker
+    ]
+    assert task_service.parent_advance_target("in_progress", False, subs) is None
+    # Once the real "Complete Guide" work item is actually done → In QA.
+    subs[1]["completed"] = True
+    assert task_service.parent_advance_target("in_progress", False, subs) == "in_qa"
