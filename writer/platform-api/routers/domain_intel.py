@@ -32,6 +32,14 @@ class OverviewRequest(BaseModel):
     force: bool = False
 
 
+class KeywordGapRequest(BaseModel):
+    # Optional explicit competitor domains; when omitted the client's registered
+    # competitors are used.
+    competitor_domains: Optional[list[str]] = None
+    location_code: Optional[int] = None
+    language_code: Optional[str] = None
+
+
 @router.get("/clients/{client_id}/domain-intel")
 async def list_domain_snapshots(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
     """History of analyzed domains for the client (summary rows, newest first)."""
@@ -83,6 +91,36 @@ async def start_overview(
         logger.error("domain_intel_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
     return {"job_id": job_id, "target_domain": domain}
+
+
+@router.get("/clients/{client_id}/domain-intel/keyword-gap")
+async def get_keyword_gap(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The client's current keyword-gap set (latest run), ordered by opportunity."""
+    try:
+        return domain_intel.get_keyword_gaps(str(client_id))
+    except Exception as exc:
+        logger.error("keyword_gap_get_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.post("/clients/{client_id}/domain-intel/keyword-gap")
+async def start_keyword_gap(
+    client_id: UUID, body: KeywordGapRequest, auth: dict = Depends(require_auth)
+) -> dict:
+    """Enqueue a Keyword Gap analysis (client vs competitors). Poll the job."""
+    if not settings.domain_intel_enabled:
+        raise HTTPException(status_code=403, detail="domain_intel_disabled")
+    if domain_intel.budget_remaining() <= 0:
+        raise HTTPException(status_code=429, detail="budget_exceeded")
+    try:
+        job_id = domain_intel.enqueue_keyword_gap(
+            str(client_id), competitor_domains=body.competitor_domains,
+            location_code=body.location_code, language_code=body.language_code,
+        )
+    except Exception as exc:
+        logger.error("keyword_gap_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+    return {"job_id": job_id}
 
 
 @router.get("/clients/{client_id}/domain-intel/jobs/{job_id}")
