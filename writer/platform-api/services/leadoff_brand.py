@@ -287,16 +287,29 @@ def footprint_state(rows: list[dict[str, Any]], now: datetime, *,
 
 
 async def _batched_tasks(client, path: str, payloads: list[dict]) -> list[dict]:
-    """One POST, N billed tasks; returns the task list (money-limit checked)."""
-    from services.leadoff_actions import _check_money_limit, _dfs_post
+    """One POST *per task*, bounded concurrency, results in payload order.
+
+    Originally one POST with N task objects — but the live endpoints only
+    honored the FIRST task per request (KC validation 2026-07-12: in every
+    batch exactly the first item returned data, the rest came back empty),
+    so each payload now gets its own request. Billing is per task either
+    way; money-limit checked per response (scanner lesson #2)."""
+    import asyncio
+
+    from services.leadoff_actions import _check_money_limit, _dfs_post, _task0
 
     if not payloads:
         return []
-    env = await _dfs_post(client, path, payloads)
-    tasks = list(env.get("tasks") or [])
-    for t in tasks:
-        _check_money_limit(t)
-    return tasks
+    sem = asyncio.Semaphore(4)
+
+    async def one(p: dict) -> dict:
+        async with sem:
+            env = await _dfs_post(client, path, [p])
+            t = _task0(env)
+            _check_money_limit(t)
+            return t
+
+    return list(await asyncio.gather(*(one(p) for p in payloads)))
 
 
 async def fetch_footprint(client, site_misses: list[str],

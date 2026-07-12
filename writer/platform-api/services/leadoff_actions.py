@@ -31,6 +31,7 @@ import asyncio
 import base64
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -587,9 +588,12 @@ def scout_market_state(city_id: int, category_id: str) -> dict[str, Any] | None:
 
 def enqueue_scout(user_id: str, city_id: int, category_id: str,
                   est_cost: float) -> dict[str, Any]:
+    # entity_id is a uuid column — the market identity lives in the payload.
+    # (The original f"{city_id}:{category_id}" here failed the insert, so no
+    # scout had ever actually enqueued; caught in the first live validation.)
     job = get_supabase().table("async_jobs").insert({
         "job_type": "leadoff_scout",
-        "entity_id": f"{city_id}:{category_id}",
+        "entity_id": str(uuid.uuid4()),
         "payload": {"city_id": city_id, "category_id": category_id,
                     "user_id": user_id, "est_cost": est_cost},
     }).execute().data[0]
