@@ -23,6 +23,7 @@ markets.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import logging
@@ -38,7 +39,11 @@ logger = logging.getLogger(__name__)
 
 _CENSUS_BATCH_URL = "https://geocoding.geo.census.gov/geocoder/locations/addressbatch"
 _CENSUS_BENCHMARK = "Public_AR_Current"
-_CENSUS_CHUNK = 5000            # census batch cap is 10k/request; stay conservative
+# The batch cap is 10k/request, but the endpoint 502s under load at large
+# sizes — 1k batches are the reliable sweet spot (and each commits before the
+# next, so a mid-run blip loses at most one batch of progress).
+_CENSUS_CHUNK = 1000
+_CENSUS_RETRY_WAITS = [5, 15, 30, 60]   # transient-502/timeout backoff (seconds)
 # The two known test markets — every run reports them so the coordinate
 # quality can be eyeballed before proximity is built on top (working agreement).
 VALIDATE = [("La Jolla", "CA"), ("Kansas City", "MO")]
@@ -176,17 +181,43 @@ def _count(supabase, **filters) -> int:
 
 # ── Census geocode (free, addressed rows) ─────────────────────────────────────
 
+async def _census_post(client: httpx.AsyncClient,
+                       chunk: list[tuple[str, str]]) -> str:
+    """POST one batch, retrying transient failures (502/503/504, timeouts,
+    transport errors) with backoff. The Census batch endpoint is load-flaky;
+    a single blip should not fail a 149k-row job."""
+    payload, boundary = build_census_payload(chunk)
+    headers = {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    last_exc: Exception | None = None
+    for attempt in range(len(_CENSUS_RETRY_WAITS) + 1):
+        try:
+            resp = await client.post(_CENSUS_BATCH_URL, content=payload,
+                                     headers=headers, timeout=300.0)
+            if resp.status_code in (502, 503, 504):
+                resp.raise_for_status()
+            resp.raise_for_status()
+            return resp.text
+        except (httpx.HTTPStatusError, httpx.TransportError,
+                httpx.TimeoutException) as exc:
+            # 4xx (other than the retryable 5xx above) is not transient — abort
+            if isinstance(exc, httpx.HTTPStatusError) and \
+                    exc.response.status_code not in (502, 503, 504):
+                raise
+            last_exc = exc
+            if attempt < len(_CENSUS_RETRY_WAITS):
+                wait = _CENSUS_RETRY_WAITS[attempt]
+                logger.warning("leadoff_geocode.census_retry",
+                               extra={"attempt": attempt + 1, "wait": wait,
+                                      "error": str(exc)[:200]})
+                await asyncio.sleep(wait)
+    raise last_exc  # type: ignore[misc]
+
+
 async def _census_geocode(client: httpx.AsyncClient,
                           rows: list[tuple[str, str]]) -> dict[str, tuple[float, float]]:
     coords: dict[str, tuple[float, float]] = {}
     for chunk in chunked(rows, _CENSUS_CHUNK):
-        payload, boundary = build_census_payload(chunk)
-        resp = await client.post(
-            _CENSUS_BATCH_URL, content=payload,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-            timeout=300.0)
-        resp.raise_for_status()
-        coords.update(parse_census_response(resp.text))
+        coords.update(parse_census_response(await _census_post(client, chunk)))
     return coords
 
 
