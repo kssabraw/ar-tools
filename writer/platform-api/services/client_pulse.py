@@ -370,18 +370,20 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
     except Exception as exc:
         logger.warning("pulse_upcoming_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
-    # Narrative first (owner request — what we did AND WHY, questions close);
-    # the deterministic bullet render is the always-works fallback.
+    # Both renders every time (owner request — a toggleable view): the bullet
+    # LIST is the at-a-glance scan + the always-works fallback; the NARRATIVE
+    # is the client-ready email (LLM over the same filtered facts).
     agency = settings.client_report_agency_name
+    body_list = render_pulse(client_name, ws, done_items, done_summaries, published,
+                             upcoming_items, upcoming_summaries, agency)
     body = narrate_pulse(narrative_facts(
         client_name, ws, done_items, done_summaries, published,
         upcoming_items, upcoming_summaries, agency, business=business,
-    )) or render_pulse(client_name, ws, done_items, done_summaries, published,
-                       upcoming_items, upcoming_summaries, agency)
+    )) or body_list
     try:
         sb.table("client_pulses").upsert(
             {"client_id": client_id, "week_start": ws.isoformat(), "body": body,
-             "created_at": "now()"},
+             "body_list": body_list, "created_at": "now()"},
             on_conflict="client_id,week_start",
         ).execute()
     except Exception as exc:
@@ -392,7 +394,7 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
 def latest_pulse(client_id: str) -> Optional[dict]:
     rows = (
         get_supabase().table("client_pulses")
-        .select("body, week_start, created_at")
+        .select("body, body_list, week_start, created_at")
         .eq("client_id", client_id).order("week_start", desc=True).limit(1).execute()
     ).data
     return rows[0] if rows else None

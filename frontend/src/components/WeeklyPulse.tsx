@@ -10,6 +10,9 @@ import { api } from '../lib/api'
 
 interface Pulse {
   body: string
+  // At-a-glance bullet version (null on rows generated before the list view
+  // shipped — the toggle falls back to the narrative until a regenerate).
+  body_list?: string | null
   week_start?: string
   created_at?: string
 }
@@ -18,6 +21,7 @@ export function WeeklyPulse({ clientId }: { clientId: string }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [view, setView] = useState<'email' | 'list'>('email')
   const { data, isLoading } = useQuery<Pulse>({
     queryKey: ['client-pulse', clientId],
     queryFn: () => api.get<Pulse>(`/clients/${clientId}/pulse`),
@@ -29,10 +33,14 @@ export function WeeklyPulse({ clientId }: { clientId: string }) {
     onSuccess: (fresh) => qc.setQueryData(['client-pulse', clientId], fresh),
   })
 
+  // The active view's text: List falls back to the narrative for pre-upgrade
+  // rows (regenerate fills body_list). Copy follows whichever view is shown.
+  const activeText = view === 'list' ? (data?.body_list || data?.body || '') : (data?.body || '')
+
   const copy = async () => {
-    if (!data?.body) return
+    if (!activeText) return
     try {
-      await navigator.clipboard.writeText(data.body)
+      await navigator.clipboard.writeText(activeText)
       setCopied(true)
       setTimeout(() => setCopied(false), 1800)
     } catch {
@@ -58,7 +66,20 @@ export function WeeklyPulse({ clientId }: { clientId: string }) {
             <div style={{ fontSize: 13, color: '#94a3b8', padding: '8px 0' }}>Building…</div>
           ) : data?.body ? (
             <>
-              <pre style={bodyBox}>{data.body}</pre>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+                <button style={view === 'email' ? viewChipOn : viewChip} onClick={() => setView('email')}>
+                  Email
+                </button>
+                <button style={view === 'list' ? viewChipOn : viewChip} onClick={() => setView('list')}>
+                  List
+                </button>
+                {view === 'list' && !data.body_list && (
+                  <span style={{ fontSize: 11, color: '#94a3b8', alignSelf: 'center' }}>
+                    (list version generates on the next Regenerate)
+                  </span>
+                )}
+              </div>
+              <pre style={bodyBox}>{activeText}</pre>
               <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
                 <button style={primaryBtn} onClick={copy}>
                   {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy to clipboard'}
@@ -104,4 +125,11 @@ const ghostBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px',
   fontSize: 12.5, fontWeight: 600, color: '#4f46e5', background: '#eef2ff',
   border: 'none', borderRadius: 8, cursor: 'pointer',
+}
+const viewChip: React.CSSProperties = {
+  padding: '4px 12px', fontSize: 12, fontWeight: 600, color: '#64748b',
+  background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 999, cursor: 'pointer',
+}
+const viewChipOn: React.CSSProperties = {
+  ...viewChip, color: '#fff', background: '#4f46e5', borderColor: '#4f46e5',
 }
