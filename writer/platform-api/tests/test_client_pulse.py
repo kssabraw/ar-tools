@@ -65,6 +65,52 @@ def test_render_pulse_caps_long_sections():
 
 
 # ---------------------------------------------------------------------------
+# Context enrichment: describe_task + business_context
+# ---------------------------------------------------------------------------
+def test_describe_task_note_beats_blurb_beats_name():
+    blurbs = {"gbp posts": "Keeps your listing active and gives searchers a reason to choose you."}
+    # A task-specific client note wins.
+    assert P.describe_task(
+        {"name": "GBP Posts", "client_note": "Posted your July storm-damage special",
+         "library_task_name": "GBP Posts"}, blurbs,
+    ) == "GBP Posts — Posted your July storm-damage special"
+    # No note → the library blurb (matched via library_task_name).
+    assert P.describe_task(
+        {"name": "GBP Posts (June)", "client_note": None, "library_task_name": "GBP Posts"}, blurbs,
+    ) == "GBP Posts (June) — why it matters: Keeps your listing active and gives searchers a reason to choose you."
+    # No note, no blurb match → just the name. The INTERNAL description never appears.
+    assert P.describe_task(
+        {"name": "One-off fix", "description": "internal diagnosis, deep link"}, blurbs,
+    ) == "One-off fix"
+
+
+def test_split_by_category_threads_blurbs():
+    blurbs = {"blog post title": "Targets a question your customers actually search."}
+    tasks = [{"name": "Blog Post Title", "category": "content", "library_task_name": "Blog Post Title"}]
+    itemized, _ = P.split_by_category(tasks, ITEMIZE, CATS, blurbs)
+    assert itemized == ["Blog Post Title — why it matters: Targets a question your customers actually search."]
+
+
+def test_business_context():
+    client = {
+        "gbp": {"gbp_category": "Roofing contractor", "address": "Columbus, OH"},
+        "business_location": "Columbus, OH",
+        "detected_icp": None, "differentiators": None, "icp_text": "Homeowners with storm damage",
+    }
+    ctx = P.business_context(client)
+    assert "Roofing contractor" in ctx and "Columbus, OH" in ctx
+    assert "Homeowners with storm damage" in ctx
+    # Nothing known → empty, never fabricated.
+    assert P.business_context({"gbp": None}) == ""
+
+
+def test_narrative_facts_include_business_block():
+    facts = P.narrative_facts("Acme", date(2026, 7, 13), [], [], [], [], [],
+                              "Agency", business="Business type: Roofing contractor")
+    assert "BUSINESS CONTEXT:" in facts and "Roofing contractor" in facts
+
+
+# ---------------------------------------------------------------------------
 # Narrative mode — grounded facts + fallback
 # ---------------------------------------------------------------------------
 def test_narrative_facts_carry_only_filtered_data():

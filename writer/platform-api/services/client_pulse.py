@@ -54,15 +54,32 @@ def week_start_of(today: date) -> date:
     return today - timedelta(days=today.weekday())
 
 
-def split_by_category(tasks: list[dict], itemize_keys: set, cat_labels: dict) -> tuple[list[str], list[str]]:
-    """(itemized task names, summary count lines) under the category filter.
+def describe_task(task: dict, blurbs: Optional[dict] = None) -> str:
+    """One itemized task line, enriched with its client-facing context: the
+    task's own client_note wins (task-specific), else the Task Library blurb
+    for its type ("why it matters"), else just the name. Pure. The INTERNAL
+    description field is deliberately never used here."""
+    name = (task.get("name") or "").strip()
+    note = (task.get("client_note") or "").strip()
+    if note:
+        return f"{name} — {note}"
+    if blurbs:
+        for key in (task.get("library_task_name"), name):
+            if key and (blurb := blurbs.get(key.strip().casefold())):
+                return f"{name} — why it matters: {blurb}"
+    return name
+
+
+def split_by_category(tasks: list[dict], itemize_keys: set, cat_labels: dict,
+                      blurbs: Optional[dict] = None) -> tuple[list[str], list[str]]:
+    """(itemized task lines, summary count lines) under the category filter.
     Unknown/missing categories are summarized (never itemized by accident). Pure."""
     itemized: list[str] = []
     counts: dict[str, int] = {}
     for t in tasks:
         cat = (t.get("category") or "").strip()
         if cat in itemize_keys:
-            itemized.append((t.get("name") or "").strip())
+            itemized.append(describe_task(t, blurbs))
         else:
             label = cat_labels.get(cat, "other")
             counts[label] = counts.get(label, 0) + 1
@@ -71,6 +88,31 @@ def split_by_category(tasks: list[dict], itemize_keys: set, cat_labels: dict) ->
         for label, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
     ]
     return itemized, summaries
+
+
+def business_context(client: dict) -> str:
+    """A short 'who this client is' block for the narrative model — makes the
+    'why' copy specific to their business instead of generic. Pure, best-effort
+    per field; empty string when nothing is known."""
+    gbp = client.get("gbp") or {}
+    lines = []
+    industry = (gbp.get("gbp_category") or "").strip()
+    place = (client.get("business_location") or gbp.get("address") or "").strip()
+    if industry and place:
+        lines.append(f"Business type: {industry}, based in {place}")
+    elif industry:
+        lines.append(f"Business type: {industry}")
+    elif place:
+        lines.append(f"Based in: {place}")
+    try:
+        from services.icp_service import resolve_icp_text
+
+        icp = (resolve_icp_text(client) or "").strip()
+        if icp:
+            lines.append(f"Their ideal customer: {icp[:280]}")
+    except Exception:
+        pass
+    return "\n".join(lines)
 
 
 def _bulleted(lines: list[str], done_suffix: str = "") -> list[str]:
@@ -127,14 +169,19 @@ _NARRATIVE_SYSTEM = (
     "manager personalizes it). Structure: one short paragraph on what was done last "
     "week and why it helps; one on what's planned this week and why; close by inviting "
     "questions (e.g. 'If you have any questions about any of this, just reply — happy "
-    "to walk you through it.'). Sign off with the agency name provided. 120–190 words."
+    "to walk you through it.'). Sign off with the agency name provided. 120–190 words. "
+    "Use the business context (industry, location, ideal customer) to make the 'why' "
+    "specific to THEIR business. Where a work item carries a 'why it matters' or note, "
+    "prefer that explanation over your own. FRAMING: always positive and proactive — "
+    "diagnostic or repair work is 'proactive optimization/tune-up'; NEVER tell the "
+    "client their rankings dropped or something is broken."
 )
 
 
 def narrative_facts(client_name: str, week_start: date, done_items: list[str],
                     done_summaries: list[str], published: list[str],
                     upcoming_items: list[str], upcoming_summaries: list[str],
-                    agency_name: str) -> str:
+                    agency_name: str, business: str = "") -> str:
     """The grounded fact sheet the narrative model may draw from — nothing else
     ever reaches it, so the category filter holds by construction. Pure."""
     prev = week_start - timedelta(days=7)
@@ -143,9 +190,13 @@ def narrative_facts(client_name: str, week_start: date, done_items: list[str],
         f"Last week: {prev.isoformat()} to {(week_start - timedelta(days=1)).isoformat()}",
         f"This week starts: {week_start.isoformat()}",
         f"Agency signature: {agency_name}",
+    ]
+    if business:
+        lines.extend(["", "BUSINESS CONTEXT:", business])
+    lines.extend([
         "",
         "WORK COMPLETED LAST WEEK:",
-    ]
+    ])
     lines.extend(f"- Published: {p}" for p in published)
     lines.extend(f"- {d}" for d in done_items)
     lines.extend(f"- {s} (summarize as ongoing authority/technical work)" for s in done_summaries)
@@ -194,16 +245,29 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
     today = today or date.today()
     ws = week_start_of(today)
     sb = get_supabase()
-    crow = (sb.table("clients").select("id, name").eq("id", client_id).limit(1).execute()).data
+    crow = (
+        sb.table("clients")
+        .select("id, name, gbp, business_location, detected_icp, differentiators, icp_text")
+        .eq("id", client_id).limit(1).execute()
+    ).data
     if not crow:
         return None
     client_name = crow[0].get("name") or "your campaign"
+    business = business_context(crow[0])
 
     itemize = set(settings.pulse_itemize_categories or [])
     cat_labels = {}
     try:
         for c in (sb.table("task_categories").select("key, label").execute()).data or []:
             cat_labels[c["key"]] = c.get("label") or c["key"]
+    except Exception:
+        pass
+    # Task Library blurbs — the team's own "why this work matters" per task type.
+    blurbs: dict = {}
+    try:
+        for r in (sb.table("asana_task_library").select("name, client_blurb").execute()).data or []:
+            if r.get("client_blurb"):
+                blurbs[(r.get("name") or "").strip().casefold()] = r["client_blurb"].strip()
     except Exception:
         pass
 
@@ -216,14 +280,14 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
     try:
         rows = (
             sb.table("tasks")
-            .select("name, category, source, created_at, completed_at")
+            .select("name, category, source, created_at, completed_at, client_note, library_task_name")
             .eq("client_id", client_id).eq("completed", True)
             .is_("deleted_at", "null").is_("parent_task_id", "null")
             .gte("completed_at", prev_start_iso).lt("completed_at", ws.isoformat())
             .execute()
         ).data or []
         rows = [r for r in rows if not is_import_stamped(r)]
-        done_items, done_summaries = split_by_category(rows, itemize, cat_labels)
+        done_items, done_summaries = split_by_category(rows, itemize, cat_labels, blurbs)
     except Exception as exc:
         logger.warning("pulse_done_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
@@ -263,7 +327,7 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
         in_progress_keys = {s["key"] for s in statuses if s.get("category") == "in_progress"}
         rows = (
             sb.table("tasks")
-            .select("name, category, status_key, due_date")
+            .select("name, category, status_key, due_date, client_note, library_task_name")
             .eq("client_id", client_id).eq("completed", False)
             .is_("deleted_at", "null").is_("parent_task_id", "null")
             .execute()
@@ -273,7 +337,7 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
             if (t.get("due_date") and ws.isoformat() <= t["due_date"] < week_end_iso)
             or t.get("status_key") in in_progress_keys
         ]
-        upcoming_items, upcoming_summaries = split_by_category(upcoming, itemize, cat_labels)
+        upcoming_items, upcoming_summaries = split_by_category(upcoming, itemize, cat_labels, blurbs)
     except Exception as exc:
         logger.warning("pulse_upcoming_read_failed", extra={"client_id": client_id, "error": str(exc)})
 
@@ -282,7 +346,7 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
     agency = settings.client_report_agency_name
     body = narrate_pulse(narrative_facts(
         client_name, ws, done_items, done_summaries, published,
-        upcoming_items, upcoming_summaries, agency,
+        upcoming_items, upcoming_summaries, agency, business=business,
     )) or render_pulse(client_name, ws, done_items, done_summaries, published,
                        upcoming_items, upcoming_summaries, agency)
     try:
