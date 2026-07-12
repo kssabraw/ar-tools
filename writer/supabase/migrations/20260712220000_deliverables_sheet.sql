@@ -69,6 +69,6 @@ alter table async_jobs add constraint async_jobs_job_type_check check (job_type 
   'task_month_generate','task_due_sweep','task_import_asana',
   'leadoff_tryout','leadoff_scout','leadoff_ai_probe',
   'domain_overview','keyword_gap','link_gap',
-  'leadoff_permits','leadoff_geocode',
+  'leadoff_permits','leadoff_geocode','qa_review',
   'deliverables_sheet_provision','deliverables_log','deliverable_notes_scan'
 ));
