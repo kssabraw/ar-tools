@@ -239,7 +239,7 @@ async def _outscraper_coord(client: httpx.AsyncClient,
         places = _places_from_response(resp.json())
     except Exception as exc:
         logger.warning("leadoff_geocode.outscraper_failed",
-                       extra={"name": name, "error": str(exc)})
+                       extra={"place_name": name, "error": str(exc)})
         return None
     if not places or not isinstance(places[0], dict):
         return None
