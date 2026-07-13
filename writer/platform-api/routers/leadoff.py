@@ -96,6 +96,97 @@ async def refresh_signals(auth: dict = Depends(require_staff)) -> dict:
     return {"enqueued": True}
 
 
+@router.get("/leadoff/find-cities")
+async def find_cities(
+    category: str,
+    state: str | None = None,
+    sort: str = "build",
+    limit: int = Query(default=15, ge=1, le=100),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """"Which cities for category X?" — the free board-lookup path. Resolves the
+    text to a scanned category and returns ranked cities; if the category isn't
+    in the scan, returns scanned=false + a paid-finder cost estimate."""
+    from services import leadoff_finder as finder
+
+    cats = finder.board_categories()
+    matched = finder.resolve_category(category, cats)
+    if not matched:
+        # not scanned — offer the paid finder
+        candidates = finder.shortlist_cities(
+            state=state, region=None, min_pop=30000,
+            limit=finder.DEFAULT_SHORTLIST)
+        return {"scanned": False, "query": category,
+                "finder_estimate": {
+                    "cities": len(candidates),
+                    "est_cost": finder.estimate_finder_cost(len(candidates))},
+                "note": ("Not in the scan yet. A paid city-finder scores a "
+                         "population-ranked shortlist for this new category.")}
+    return {"scanned": True, "matched_category": matched,
+            **finder.find_board_cities(matched, state=state, sort=sort, limit=limit)}
+
+
+class CityFinderRequest(BaseModel):
+    category: str = Field(..., min_length=2, max_length=120)
+    state: str | None = None
+    region: str | None = None
+    min_pop: int = Field(default=30000, ge=10000)
+    limit: int = Field(default=120, ge=10, le=300)
+    lead_value: float | None = None
+
+
+@router.get("/leadoff/city-finder/estimate")
+async def city_finder_estimate(
+    state: str | None = None,
+    region: str | None = None,
+    min_pop: int = Query(default=30000, ge=10000),
+    limit: int = Query(default=120, ge=10, le=300),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    from services import leadoff_finder as finder
+    cities = finder.shortlist_cities(state=state, region=region,
+                                     min_pop=min_pop, limit=limit)
+    return {"cities": len(cities),
+            "est_cost": finder.estimate_finder_cost(len(cities))}
+
+
+@router.post("/leadoff/city-finder", status_code=202)
+async def start_city_finder(
+    body: CityFinderRequest,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Paid finder for a new category: score a population-ranked city shortlist.
+    Poll GET /leadoff/city-finder/{run_id}."""
+    from services import leadoff_actions
+    from services import leadoff_finder as finder
+
+    cities = finder.shortlist_cities(state=body.state, region=body.region,
+                                     min_pop=body.min_pop, limit=body.limit)
+    if not cities:
+        raise HTTPException(status_code=422, detail="no_candidate_cities")
+    est = finder.estimate_finder_cost(len(cities))
+    try:
+        leadoff_actions.check_budget(auth["user_id"], est)
+    except leadoff_actions.BudgetExceeded as exc:
+        raise HTTPException(status_code=422, detail="budget_exceeded") from exc
+    out = finder.enqueue_city_finder(
+        auth["user_id"], category=body.category, state=body.state,
+        region=body.region, min_pop=body.min_pop, limit=body.limit,
+        lead_value=body.lead_value, est_cost=est)
+    leadoff_actions.record_spend(auth["user_id"], "city_finder", est,
+                                 category=body.category, state=body.state)
+    return {**out, "cities": len(cities)}
+
+
+@router.get("/leadoff/city-finder/{run_id}")
+async def get_city_finder(run_id: str, auth: dict = Depends(require_auth)) -> dict:
+    rows = (get_supabase().table("leadoff_city_finder_runs").select("*")
+            .eq("id", run_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="not_found")
+    return rows[0]
+
+
 @router.get("/leadoff/neighborhoods")
 async def get_neighborhoods(
     metro: str | None = None,

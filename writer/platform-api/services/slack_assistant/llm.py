@@ -314,6 +314,93 @@ async def _run_list_nonindexed(client_id: str, args: dict) -> str:
     return json.dumps(payload, default=str)[:_NONINDEXED_RESULT_CHARS]
 
 
+# ---------------------------------------------------------------------------
+# LeadOff market lookup — "which cities should I target for category X?" A
+# free, client-agnostic board read (pre-client market intel, not a client
+# module). Returns the ranked graded cities when the category was scanned;
+# when it wasn't, returns the paid city-finder's cost so Claude can offer the
+# run_leadoff_city_finder action. Free — no confirmation.
+# ---------------------------------------------------------------------------
+_LEADOFF_RESULT_CHARS = 4000
+
+_LEADOFF_FIND_TOOL = {
+    "name": "leadoff_find_cities",
+    "description": (
+        "Answer 'which cities should I target for <category>?' from the LeadOff "
+        "market board (pre-client market intelligence — every scanned US "
+        "city×category graded A+…F for lead-gen buildability). FREE — no "
+        "confirmation. Give the business category (e.g. 'tree service', "
+        "'plumber', 'computer support'); optionally a 2-letter state to filter, "
+        "and a sort (build=overall grade, roi=win-cheapest, expected=$/mo, "
+        "demand). If the category is already scanned it returns the ranked "
+        "cities with grade/expected-value/ROI/reviews-to-beat-#3. If it is NOT "
+        "scanned it returns the cost of a paid city-finder run — relay that and "
+        "offer the run_leadoff_city_finder action. Use for any market-selection "
+        "/ 'where should I start a GBP' question."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "category": {"type": "string",
+                         "description": "Business/GBP category, e.g. 'tree service'."},
+            "state": {"type": "string",
+                      "description": "Optional 2-letter state filter (e.g. 'TX')."},
+            "sort": {"type": "string", "enum": ["build", "roi", "expected", "demand"],
+                     "description": "Ranking: build=overall, roi=win-cheapest, expected=$/mo, demand."},
+        },
+        "required": ["category"],
+    },
+}
+
+
+def _run_leadoff_find(args: dict) -> str:
+    """Execute a LeadOff board lookup; returns a JSON summary string (never
+    raises — errors return an explanatory string)."""
+    from services import leadoff_finder as finder
+
+    category = (args.get("category") or "").strip()
+    if not category:
+        return "Provide a business category (e.g. 'tree service')."
+    state = (args.get("state") or "").strip() or None
+    sort = args.get("sort") if args.get("sort") in ("build", "roi", "expected", "demand") else "build"
+    try:
+        cats = finder.board_categories()
+        matched = finder.resolve_category(category, cats)
+        if not matched:
+            candidates = finder.shortlist_cities(
+                state=state, region=None, min_pop=30000, limit=finder.DEFAULT_SHORTLIST)
+            est = finder.estimate_finder_cost(len(candidates))
+            return json.dumps({
+                "scanned": False, "query": category,
+                "finder": {"cities": len(candidates), "est_cost": est},
+                "note": (f"'{category}' isn't in the pre-run scan, so there's no "
+                         f"free board answer. A paid city-finder would score the "
+                         f"top {len(candidates)} cities by population for this "
+                         f"category for ~${est:.2f} (reuses the demographic data "
+                         f"we already own; only pays for this keyword's demand + "
+                         f"who ranks). Tell the teammate the cost and that they "
+                         f"can run it from the LeadOff page (city-finder), then "
+                         f"the ranked cities land there. Don't invent city "
+                         f"rankings yourself — you have no data for this category.")})
+        res = finder.find_board_cities(matched, state=state, sort=sort, limit=15)
+        rows = [{
+            "city": f"{m.get('city_name')}, {m.get('state_code')}",
+            "grade": m.get("grade"), "exp_val_mo": m.get("exp_val"),
+            "roi": m.get("roi"), "reviews_to_beat_3": m.get("rev_win"),
+            "demand": m.get("xdem"),
+        } for m in (res.get("markets") or [])]
+        return json.dumps({
+            "scanned": True, "matched_category": matched, "state": state,
+            "sort": sort, "as_of": res.get("as_of"), "top_cities": rows,
+            "note": ("Grades include the enrichment layer. rev_win=0 on a big "
+                     "market can be a weak field OR hidden review counts — "
+                     "eyeball the live SERP (LeadOff SOP). Sort by roi to find "
+                     "the cheapest wins."),
+        }, default=str)[:_LEADOFF_RESULT_CHARS]
+    except Exception as exc:
+        return f"LeadOff board lookup failed: {exc}"
+
+
 def build_llm_tools() -> list[dict]:
     """The tool list for the assistant's Claude call.
 
@@ -443,7 +530,9 @@ async def interpret(
         max_retries=_LLM_MAX_RETRIES,
     )
     messages: list[dict] = [{"role": "user", "content": user}]
-    tools = build_llm_tools() + [_read_sop_tool(), _LIVE_GSC_TOOL, _LIST_NONINDEXED_TOOL, _MEMORY_TOOL]
+    tools = build_llm_tools() + [_read_sop_tool(), _LIVE_GSC_TOOL,
+                                 _LIST_NONINDEXED_TOOL, _MEMORY_TOOL,
+                                 _LEADOFF_FIND_TOOL]
     # Bounded tool loop: read_sop / fetch_live_gsc calls are answered
     # in-conversation; an action call returns immediately (actions never mix
     # with in-answer tool reads — first wins).
@@ -477,7 +566,8 @@ async def interpret(
         tool_calls = [
             b for b in resp.content
             if getattr(b, "type", None) == "tool_use"
-            and b.name in ("read_sop", _LIVE_GSC_TOOL["name"], _LIST_NONINDEXED_TOOL["name"], _MEMORY_TOOL["name"])
+            and b.name in ("read_sop", _LIVE_GSC_TOOL["name"], _LIST_NONINDEXED_TOOL["name"],
+                           _MEMORY_TOOL["name"], _LEADOFF_FIND_TOOL["name"])
         ]
         if not tool_calls or final_round:
             break
@@ -491,6 +581,7 @@ async def interpret(
                     _LIVE_GSC_TOOL["name"]: "Pulling live Search Console data",
                     _LIST_NONINDEXED_TOOL["name"]: "Checking Search Console for non-indexed pages",
                     _MEMORY_TOOL["name"]: "Saving a note to memory",
+                    _LEADOFF_FIND_TOOL["name"]: "Looking up the LeadOff market board",
                 }.get(b.name, "Working")
                 await on_event({"type": "status", "label": label})
             if b.name == "read_sop":
@@ -502,6 +593,8 @@ async def interpret(
                 )
             elif b.name == _LIST_NONINDEXED_TOOL["name"]:
                 text = await _run_list_nonindexed(client["id"], args)
+            elif b.name == _LEADOFF_FIND_TOOL["name"]:
+                text = await asyncio.to_thread(_run_leadoff_find, args)
             else:
                 text = await _run_live_gsc(client["id"], args)
             results.append({"type": "tool_result", "tool_use_id": b.id, "content": text})
@@ -545,18 +638,42 @@ async def interpret_portfolio(
     async def on_text(delta: str) -> None:
         await on_event({"type": "text", "text": delta})
 
+    # Portfolio mode is client-less, but market-selection questions ("which
+    # cities for tree service?") are inherently client-less — so the free,
+    # client-agnostic LeadOff board lookup is available here with a small
+    # bounded tool loop (no client-scoped tools, no confirm-gated actions).
+    messages = [{"role": "user", "content": "\n\n".join(blocks)}]
+    tools = [_LEADOFF_FIND_TOOL]
+    resp = None
     try:
-        resp = await _one_llm_call(
-            api, system, [{"role": "user", "content": "\n\n".join(blocks)}], [],
-            {}, on_text if on_event else None,
-        )
+        for round_no in range(3):
+            final = round_no == 2
+            resp = await _one_llm_call(
+                api, system, messages, [] if final else tools,
+                {"tool_choice": {"type": "none"}} if final else {},
+                on_text if on_event else None,
+            )
+            calls = [b for b in resp.content
+                     if getattr(b, "type", None) == "tool_use"
+                     and b.name == _LEADOFF_FIND_TOOL["name"]]
+            if not calls or final:
+                break
+            messages.append({"role": "assistant", "content": resp.content})
+            out = []
+            for b in calls:
+                if on_event:
+                    await on_event({"type": "status",
+                                    "label": "Looking up the LeadOff market board"})
+                text = await asyncio.to_thread(_run_leadoff_find, dict(b.input or {}))
+                out.append({"type": "tool_result", "tool_use_id": b.id, "content": text})
+            messages.append({"role": "user", "content": out})
     except anthropic.APIStatusError as exc:
         if exc.status_code in _CAPACITY_STATUS_CODES:
             return _BUSY_REPLY
         raise
-    parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
+    parts = [b.text for b in (resp.content if resp else []) if getattr(b, "type", None) == "text"]
     reply = "\n".join(parts).strip() or "I couldn't generate an answer just now — try rephrasing."
-    if getattr(resp, "stop_reason", None) == "max_tokens":
+    if resp is not None and getattr(resp, "stop_reason", None) == "max_tokens":
         reply += "\n\n_…I hit my reply-length limit — say “continue” and I'll pick up where I left off._"
     return reply
 

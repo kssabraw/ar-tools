@@ -1043,6 +1043,10 @@ class Settings(BaseSettings):
     # precomputed proximity + footprint pressure from leadoff_market_signals;
     # the refresh job self-gates, re-running when the cache is older than this.
     leadoff_signal_refresh_days: int = 7
+    # City-finder (assistant "which cities for category X"): default per-lead
+    # value used when a NEW category has no CPL on file (CPL is user-supplied
+    # per category — flagged as an assumption in the run result).
+    leadoff_finder_default_lead_value: float = 50.0
 
     class Config:
         env_file = ".env"
