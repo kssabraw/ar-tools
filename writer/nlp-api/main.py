@@ -6924,6 +6924,11 @@ Write the press release now. Remember: minimum 650 words in the body. Check your
 # prompt applies product-vs-collection nuance. See CLAUDE.md (Ecommerce Writer).
 # ══════════════════════════════════════════════════════════════════════════════
 
+# How many (most-salient) SERP entities to RDFa-mark on an ecommerce page. Kept
+# small: a "buy X" SERP is often informational, so beyond the top few the entity
+# list is off-domain noise with wrong sameAs links for a product page.
+_ECOMMERCE_RDFA_MAX_ENTITIES = 5
+
 # Weights sum to 1.0. serp_signal_coverage is the deterministic Python engine
 # (reused verbatim from the Local SEO stack); the other 7 are scored by Claude.
 _ECOMMERCE_ENGINE_WEIGHTS = {
@@ -6978,7 +6983,7 @@ SCORING CRITERIA — score each engine 0–100:
 
 1. organic_ranking (weight 10%): target keyword / product (or category) name in <title> + H1 + opening sentence; commercial/transactional tone (a PDP or PLP, NOT a blog post); unique, specific copy (not manufacturer-boilerplate or thin duplicate text); clear single offering.
 
-2. commercial_intent (weight 15%): buy-intent signals present. Credit an explicit price or price range OR an explicit pricing/availability cue the page actually states; a clear purchase CTA (Add to Cart / Buy Now / Shop the collection); shipping / returns / warranty / stock cues; truthful urgency or scarcity. Score LOW if the page reads informational rather than purchase-ready. Do NOT invent or reward pricing that is merely implied or absent.
+2. commercial_intent (weight 15%): buy-intent signals present. Credit an explicit price or price range OR an explicit pricing/availability cue the page actually states; a purchase-oriented CTA line; shipping / returns / warranty / stock MENTIONS; truthful urgency or scarcity. Score LOW if the page reads informational rather than purchase-ready. Do NOT invent or reward pricing that is merely implied or absent. IMPORTANT — you are scoring the on-page DESCRIPTION COPY only: the store platform renders the actual Add-to-Cart / Buy-Now button, the live stock/availability widget, price selector, and checkout. Do NOT penalise the copy for lacking a literal cart button or a live stock badge — judge the copy's commercial framing (pricing clarity, shipping/returns/warranty mentions, purchase-oriented language, a clear CTA line), and assume the platform supplies the buy button.
 
 3. product_content_depth (weight 15%): PRODUCT — specific attributes (materials, dimensions, specs, variants/options, what's included, use-cases), features translated into concrete benefits, differentiation vs. alternatives; quantified specs bound to the use-case where they matter, in consensus units; penalise generic filler and unquantified claims. COLLECTION — breadth of subcategory/product coverage, buying guidance ("how to choose", key considerations), internally-linkable structure to the products it lists.
 
@@ -6986,7 +6991,7 @@ SCORING CRITERIA — score each engine 0–100:
 
 5. aeo_llm_retrieval (weight 20% of the 7 — treat as high value): the MCS methodology, scored strictly. A Direct Definition ("[Main entity] is …") in the FIRST sentence under the H1; ZERO conversational filler/warm-up; MCS headings (each H2/H3 = main entity + a fact-forward topic, penalise bare "Features"/"Details"/"Overview" and penalise the exact search phrase used verbatim as a subheading); extractable standalone snippets (each key claim quotable without surrounding context — penalise vague "it depends" phrasing); a scannable bulleted/numbered list placed HIGH on the page (list-top); ≥1 fact-model <table> whose final cell is a verifiable number/noun-entity (penalise dangling adjectives like "High"/"Best" as the fact, and penalise a genuinely-comparative page with no table); an FAQ with 4–7 entries (penalise fewer than 4 or more than 7), each answer-first; each section ≤300 words; specific facts over filler; active voice.
 
-6. conversion_readiness (weight 10%): a specific value proposition near the top (the concrete outcome the buyer gets); trust signals that are actually present (ratings/review count, guarantees, returns/warranty policy, social proof) — credit ONLY when present, never invented; a benefit-led hero; a clear, value-forward primary CTA; a strictly positive/pro sentiment toward the product; objection handling; scannable structure; DECISION-FIT — when the product has a real choice (variants/options, or related products to route between), credit a clear answer-first condition→option "which is right for you" treatment, and penalise only when such a choice plainly exists but the page leaves the decision criteria vague or missing; do NOT penalise a genuinely single-option product that has no such choice; bold-tag hygiene per the HTML STRUCTURE FACTS (penalise > 15 bold tags).
+6. conversion_readiness (weight 10%): a specific value proposition near the top (the concrete outcome the buyer gets); a benefit-led hero; a clear, value-forward primary CTA line; a strictly positive/pro sentiment toward the product; objection handling; scannable structure. Trust signals mentioned in the copy (guarantees, returns/warranty, credentials/testing, social proof) are credited when present — but the review/ratings module and star widget are platform CHROME, so do NOT penalise the copy for lacking a literal review count or ratings widget; judge the trust the COPY conveys. DECISION-FIT — when the product has a real choice (variants/options, or related products to route between), credit a clear answer-first condition→option "which is right for you" treatment, and penalise only when such a choice plainly exists but the page leaves the decision criteria vague or missing; do NOT penalise a genuinely single-option product that has no such choice; bold-tag hygiene per the HTML STRUCTURE FACTS (penalise > 15 bold tags).
 
 7. structured_data (weight 10%): valid, populated JSON-LD. PRODUCT — Product with name, description, brand, and an Offer (price, priceCurrency, availability); AggregateRating/Review ONLY when real review data exists on the page; BreadcrumbList is a plus. COLLECTION — CollectionPage and/or ItemList (with itemListElement entries) + BreadcrumbList. Penalise missing schema, empty required properties, or schema that claims data the page doesn't show.
 
@@ -7456,7 +7461,10 @@ Primary keyword: {body.keyword}
         # RDFa entity markup: annotate the TextRazor/Wikidata entities from the SERP
         # analysis inline in the HTML (typeof/property + Wikidata sameAs) — the same
         # entity signal the Local SEO writer stamps. No-op when there are no entities.
-        content_html = _apply_rdfa_markup(content_html, (serp_analysis_dict or {}).get("google_entities", []))
+        # Cap to the few most-salient entities: a "buy X" SERP is often full of
+        # informational competitors, so the long tail of entities is off-domain
+        # noise (e.g. "gummy", "energy") with wrong sameAs links on a product page.
+        content_html = _apply_rdfa_markup(content_html, (serp_analysis_dict or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES])
 
         # Score the generated page (single pass, with retries on transient failure).
         await q.put({"step": "progress", "progress": 90, "message": "Scoring your page…"})
@@ -7603,7 +7611,7 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
         content_html, schema_json, page_title, content_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
 
         # RDFa entity markup from the SERP analysis (parity with generate).
-        content_html = _apply_rdfa_markup(content_html, (body.serp_analysis or {}).get("google_entities", []))
+        content_html = _apply_rdfa_markup(content_html, (body.serp_analysis or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES])
 
         await q.put({"step": "progress", "progress": 82, "message": "Scoring your page…"})
         brand_context = _ecommerce_brand_context(body.business_name, body.brand_voice)
