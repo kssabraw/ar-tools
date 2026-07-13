@@ -67,6 +67,7 @@ from services.leadoff_permits import run_permits_job as run_leadoff_permits_job
 from services.leadoff_geocode import run_geocode_job as run_leadoff_geocode_job
 from services.leadoff_signals import run_signal_refresh_job as run_leadoff_signal_refresh_job
 from services.leadoff_income import run_income_backfill_job as run_leadoff_income_backfill_job
+from services.leadoff_counties import run_county_backfill_job as run_leadoff_county_backfill_job
 from services.leadoff_finder import run_city_finder_job as run_leadoff_city_finder_job
 from services.local_relevance import run_local_relevance_job
 from services.page_structure_scraper import analyze_page_structure
@@ -478,6 +479,8 @@ async def _process_job(job: dict) -> None:
         await run_leadoff_signal_refresh_job(job)
     elif job_type == "leadoff_income_backfill":
         await run_leadoff_income_backfill_job(job)
+    elif job_type == "leadoff_county_backfill":
+        await run_leadoff_county_backfill_job(job)
     elif job_type == "leadoff_city_finder":
         await run_leadoff_city_finder_job(job)
     elif job_type == "domain_overview":

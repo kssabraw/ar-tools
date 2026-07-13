@@ -287,7 +287,8 @@ def list_categories() -> list[str]:
 
 def list_board(*, city: str | None, state: str | None, category: str | None,
                min_demand: int | None, sort: str, capture: float, lead_tier: str,
-               limit: int, prefetch: int) -> dict[str, Any]:
+               limit: int, prefetch: int,
+               county: str | None = None) -> dict[str, Any]:
     q = _client().table("leadoff_board").select("*")
     if city:
         q = q.ilike("city_name", f"%{city}%")
@@ -297,6 +298,18 @@ def list_board(*, city: str | None, state: str | None, category: str | None,
         q = q.ilike("category", f"%{category}%")
     if min_demand:
         q = q.gte("xdem", min_demand)
+    if county:
+        # county lives in the app-owned city_counties map (the scanner board has
+        # none) — resolve to the county's city_ids and filter the board on them.
+        from services.leadoff_counties import city_ids_for_county
+        city_ids = city_ids_for_county(county, state)
+        if not city_ids:
+            return {"markets": [], "as_of": None,
+                    "assumptions": {"capture": capture, "lead_tier": lead_tier,
+                                    "approximate": abs(capture - DEFAULT_CAPTURE) >= 1e-9
+                                    or lead_tier != DEFAULT_TIER},
+                    "county_unresolved": True}
+        q = q.in_("city_id", city_ids)
     prerank = _PRERANK_COLUMN[sort]
     rows = (q.order(prerank, desc=True)
             .limit(max(limit, prefetch)).execute().data or [])
