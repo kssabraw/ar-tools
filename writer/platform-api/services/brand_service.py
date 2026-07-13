@@ -552,16 +552,37 @@ def _gather_tracked_keywords(supabase, client_id: str) -> list[str]:
     return seeds[: settings.brand_suggest_max_seed_keywords]
 
 
+def _website_host(url: Optional[str]) -> str:
+    """Bare hostname (no scheme, no leading www) for a website URL, or ''."""
+    if not url:
+        return ""
+    from urllib.parse import urlparse
+
+    try:
+        host = urlparse(url if "//" in url else f"https://{url}").netloc or ""
+    except Exception:  # pragma: no cover - defensive
+        return ""
+    return host[4:] if host.startswith("www.") else host
+
+
 def _business_context(client: dict) -> str:
     """A short business descriptor for grounding the conversational queries when
-    (or alongside) the ICP: name + GBP primary category + location."""
+    (or alongside) the ICP. Prefers the GBP primary category + location for a
+    local client; for a website-only (non-local) client with no GBP, grounds on
+    the site domain + any stored business location so the model has more than the
+    bare brand name to work with."""
     gbp = client.get("gbp") or {}
     parts = [client.get("name") or ""]
-    if gbp.get("gbp_category"):
-        parts.append(f"({gbp['gbp_category']})")
-    loc = gbp.get("address") or gbp.get("formatted_address")
+    category = gbp.get("gbp_category")
+    if category:
+        parts.append(f"({category})")
+    loc = gbp.get("address") or gbp.get("formatted_address") or client.get("business_location")
     if loc:
         parts.append(f"— {loc}")
+    if not category:
+        host = _website_host(client.get("website_url"))
+        if host:
+            parts.append(f"[website: {host}]")
     return " ".join(p for p in parts if p).strip()
 
 
@@ -583,6 +604,10 @@ async def suggest_keywords_for_client(client_id: str) -> dict:
     client = rows[0]
     brand = client.get("name") or ""
     seeds = _gather_tracked_keywords(supabase, client_id)
+    # A GBP means the client competes locally; without one (a website-only,
+    # non-local-SEO client) suggestions are grounded on the website-derived ICP
+    # and stay category/need-focused instead of forcing local/service-intent.
+    is_local = bool(client.get("gbp"))
 
     try:
         if seeds:
@@ -591,13 +616,24 @@ async def suggest_keywords_for_client(client_id: str) -> dict:
                 business_context=_business_context(client),
                 icp_text=icp_service.resolve_icp_text(client),
                 seed_keywords=seeds,
+                local=is_local,
             )
-        else:
+        elif is_local:
             # No tracked keywords to expand — fall back to GBP-seeded suggestions.
             gbp = client.get("gbp") or {}
             business_types = [t for t in [gbp.get("gbp_category")] if t]
             address = gbp.get("address") or gbp.get("formatted_address")
             keywords = await brand_insights.suggest_keywords(brand, business_types, address)
+        else:
+            # Website-only client with nothing tracked yet: seed from the
+            # website-derived business descriptor + ICP rather than a GBP.
+            ctx = _business_context(client)
+            icp = icp_service.resolve_icp_text(client)
+            if icp:
+                ctx = f"{ctx}\nIdeal customer: {icp}".strip()
+            keywords = await brand_insights.suggest_keywords(
+                brand, [], None, local=False, business_context=ctx,
+            )
     except brand_insights.InsightUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return {"keywords": keywords}

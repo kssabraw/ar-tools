@@ -62,6 +62,25 @@ def test_conversational_prompt_forbids_near_me():
     assert 'Never use the phrase "near me"' in p
 
 
+# ── non-local / website-only clients ──────────────────────────────────────────
+def test_suggest_prompt_non_local_drops_local_framing():
+    s = bi._suggest_prompt("Acme", ["SaaS"], None, local=False, business_context="Social media scheduler")
+    assert "local SEO" not in s
+    assert "Social media scheduler" in s
+    assert "not a local business" in s
+    assert '"near me"' in s  # still explicitly forbidden
+
+
+def test_conversational_prompt_non_local_drops_location_reqs():
+    p = bi._conversational_prompt(
+        "Acme", "Acme [website: acme.com]", "SMB marketing teams",
+        ["social scheduler"], local=False,
+    )
+    assert "and local SEO" not in p  # expert framing is AEO-only
+    assert "not a local business" in p
+    assert "resolve" not in p.lower() or "city/suburb" not in p  # no near-me→city rewrite instruction
+
+
 # ── conversational-query suggestions ──────────────────────────────────────────
 def test_parse_string_list_respects_cap():
     assert bi._parse_string_list('["a","b","c"]', cap=2) == ["a", "b"]
