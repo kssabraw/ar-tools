@@ -394,19 +394,45 @@ async def diagnose_invisibility(
     return (resp.choices[0].message.content or "").strip()
 
 
-def _suggest_prompt(brand: str, business_types: list[str], address: Optional[str]) -> str:
+def _suggest_prompt(
+    brand: str,
+    business_types: list[str],
+    address: Optional[str],
+    *,
+    local: bool = True,
+    business_context: str = "",
+) -> str:
     type_ctx = f"Business types: {', '.join(business_types)}." if business_types else ""
     loc_ctx = f"Located at: {address}." if address else ""
+    ctx_ctx = f"About the business: {business_context.strip()}" if business_context.strip() else ""
+    if local:
+        return (
+            "You are an expert at local SEO and AI Answer Engine Optimization. Generate "
+            "exactly 5 high-intent search keywords that potential customers would use to "
+            "find this business through AI assistants like ChatGPT, Gemini, or Perplexity.\n\n"
+            f"Business name: {brand}\n{type_ctx}\n{loc_ctx}\n{ctx_ctx}\n\n"
+            "Requirements:\n"
+            '- Focus on local/service-intent keywords (e.g., "emergency plumber Sydney", "24 hour AC repair")\n'
+            '- Never use the phrase "near me"; use the actual suburb/city for local intent\n'
+            f'- Include the business name in at least one keyword (e.g., "{brand} reviews")\n'
+            "- Make keywords specific to the business type, not generic\n"
+            "- Keywords should be what someone would ask an AI assistant\n"
+            "- Return ONLY a JSON array of 5 strings, nothing else"
+        )
+    # Non-local / website-only client: a business that doesn't compete on a
+    # geographic footprint (SaaS, e-commerce, national/online service). Ground
+    # on what it offers (from the website-derived context) rather than a place.
     return (
-        "You are an expert at local SEO and AI Answer Engine Optimization. Generate "
-        "exactly 5 high-intent search keywords that potential customers would use to "
-        "find this business through AI assistants like ChatGPT, Gemini, or Perplexity.\n\n"
-        f"Business name: {brand}\n{type_ctx}\n{loc_ctx}\n\n"
+        "You are an expert at AI Answer Engine Optimization (AEO). Generate exactly 5 "
+        "high-intent search queries that potential customers would use to find this "
+        "business through AI assistants like ChatGPT, Gemini, or Perplexity.\n\n"
+        f"Business name: {brand}\n{type_ctx}\n{ctx_ctx}\n\n"
         "Requirements:\n"
-        '- Focus on local/service-intent keywords (e.g., "emergency plumber Sydney", "24 hour AC repair")\n'
-        '- Never use the phrase "near me"; use the actual suburb/city for local intent\n'
-        f'- Include the business name in at least one keyword (e.g., "{brand} reviews")\n'
-        "- Make keywords specific to the business type, not generic\n"
+        "- Focus on the customer's need and the product/service category this business "
+        "offers — NOT a location (this is not a local business, so do not append a "
+        "city/suburb or use the phrase \"near me\")\n"
+        f'- Include the business name in at least one keyword (e.g., "{brand} reviews", "{brand} alternatives")\n'
+        "- Make keywords specific to what this business actually offers, not generic\n"
         "- Keywords should be what someone would ask an AI assistant\n"
         "- Return ONLY a JSON array of 5 strings, nothing else"
     )
@@ -446,14 +472,28 @@ def _drop_near_me(items: list[str]) -> list[str]:
     return [s for s in items if not _NEAR_ME_RE.search(s)]
 
 
-async def suggest_keywords(brand: str, business_types: list[str], address: Optional[str]) -> list[str]:
+async def suggest_keywords(
+    brand: str,
+    business_types: list[str],
+    address: Optional[str],
+    *,
+    local: bool = True,
+    business_context: str = "",
+) -> list[str]:
     client = _client()
+    system = (
+        "You are a local SEO expert. Return only valid JSON arrays."
+        if local
+        else "You are an AI Answer Engine Optimization (AEO) expert. Return only valid JSON arrays."
+    )
     try:
         resp = await client.chat.completions.create(
             model=settings.brand_suggest_model,
             messages=[
-                {"role": "system", "content": "You are a local SEO expert. Return only valid JSON arrays."},
-                {"role": "user", "content": _suggest_prompt(brand, business_types, address)},
+                {"role": "system", "content": system},
+                {"role": "user", "content": _suggest_prompt(
+                    brand, business_types, address, local=local, business_context=business_context,
+                )},
             ],
         )
     except Exception as exc:  # pragma: no cover
@@ -468,11 +508,14 @@ _QUERIES_PER_KEYWORD_MAX = 5
 
 
 def _conversational_prompt(
-    brand: str, business_context: str, icp_text: str, seed_keywords: list[str]
+    brand: str, business_context: str, icp_text: str, seed_keywords: list[str],
+    *, local: bool = True,
 ) -> str:
     """Prompt to expand each tracked ranking keyword into 3-5 conversational,
-    ICP-grounded queries someone would actually type/ask an AI assistant."""
-    ctx = business_context.strip() or brand or "this local business"
+    ICP-grounded queries someone would actually type/ask an AI assistant. When
+    ``local`` is False (a non-local / website-only client), the location-preserving
+    and "near me" framing is dropped so suggestions stay category/need-focused."""
+    ctx = business_context.strip() or brand or ("this local business" if local else "this business")
     icp_block = (
         "The ideal customer (ICP) for this business:\n" + icp_text.strip() + "\n\n"
         if icp_text.strip()
@@ -480,8 +523,30 @@ def _conversational_prompt(
         "business context above.\n\n"
     )
     seeds = "\n".join(f"- {k}" for k in seed_keywords)
+    expert = (
+        "AI Answer Engine Optimization (AEO) and local SEO" if local
+        else "AI Answer Engine Optimization (AEO)"
+    )
+    example = (
+        'who\'s the best emergency plumber in Sydney for a burst pipe?' if local
+        else 'what\'s the best tool for scheduling social media posts for a small team?'
+    )
+    if local:
+        location_reqs = (
+            "- Preserve the seed keyword's location and qualifier (an emergency/suburb "
+            "term stays that specific).\n"
+            '- Never use the phrase "near me". If a seed keyword says "near me", resolve '
+            "it to the business's actual city/suburb (from the business context above) "
+            "instead — a real person talking to an AI names the place.\n"
+        )
+    else:
+        location_reqs = (
+            "- This is not a local business — do NOT append a city/suburb or use the "
+            'phrase "near me". Keep queries focused on the need, category, and how this '
+            "business is chosen (features, alternatives, use case, pricing intent).\n"
+        )
     return (
-        "You are an expert in AI Answer Engine Optimization (AEO) and local SEO. "
+        f"You are an expert in {expert}. "
         "The business below is tracked for a set of ranking keywords. For EACH seed "
         "keyword, write natural-language, conversational queries that its ideal "
         "customer would actually ask an AI assistant (ChatGPT, Gemini, Perplexity, "
@@ -494,7 +559,7 @@ def _conversational_prompt(
         f"- Produce {_QUERIES_PER_KEYWORD_MIN}-{_QUERIES_PER_KEYWORD_MAX} conversational "
         "queries per seed keyword.\n"
         "- Write full natural questions/requests, the way a real person talks to an AI "
-        '(e.g. "who\'s the best emergency plumber in Sydney for a burst pipe?"), '
+        f'(e.g. "{example}"), '
         "NOT keyword fragments.\n"
         "- Keep each query SHORT and natural: one sentence, roughly 8-14 words, the way "
         "someone actually types into an AI. Do not exceed ~16 words.\n"
@@ -505,11 +570,7 @@ def _conversational_prompt(
         "- Ground each query in the ideal customer's real situation and intent from the "
         "ICP above, but reflect it through ONE concrete angle per query — do not narrate "
         "the whole customer profile in a single question.\n"
-        "- Preserve the seed keyword's location and qualifier (an emergency/suburb "
-        "term stays that specific).\n"
-        '- Never use the phrase "near me". If a seed keyword says "near me", resolve '
-        "it to the business's actual city/suburb (from the business context above) "
-        "instead — a real person talking to an AI names the place.\n"
+        f"{location_reqs}"
         "- Keep them commercial/high-intent (finding or choosing a provider), not "
         "generic informational trivia.\n"
         "- Return ONLY a flat JSON array of all the query strings, nothing else."
@@ -517,19 +578,26 @@ def _conversational_prompt(
 
 
 async def suggest_conversational_queries(
-    brand: str, business_context: str, icp_text: str, seed_keywords: list[str]
+    brand: str, business_context: str, icp_text: str, seed_keywords: list[str],
+    *, local: bool = True,
 ) -> list[str]:
     """Expand tracked ranking keywords into ICP-grounded conversational AI queries.
     One flagship call; returns a flat, de-duplicated list (case-insensitive)."""
     if not seed_keywords:
         return []
     client = _client()
+    system = (
+        "You are an AEO/local SEO expert. Return only valid JSON arrays." if local
+        else "You are an AEO expert. Return only valid JSON arrays."
+    )
     try:
         resp = await client.chat.completions.create(
             model=settings.brand_suggest_model,
             messages=[
-                {"role": "system", "content": "You are an AEO/local SEO expert. Return only valid JSON arrays."},
-                {"role": "user", "content": _conversational_prompt(brand, business_context, icp_text, seed_keywords)},
+                {"role": "system", "content": system},
+                {"role": "user", "content": _conversational_prompt(
+                    brand, business_context, icp_text, seed_keywords, local=local,
+                )},
             ],
         )
     except Exception as exc:  # pragma: no cover
