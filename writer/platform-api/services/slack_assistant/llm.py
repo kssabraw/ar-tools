@@ -390,6 +390,8 @@ def _run_leadoff_find(args: dict) -> str:
             "city": f"{m.get('city_name')}, {m.get('state_code')}",
             "opportunity_v3": m.get("opportunity_v3", m.get("v3")),
             "grade": m.get("grade"),
+            "beatability": m.get("beatability"),
+            "beatability_band": m.get("beatability_band"),
             "exp_val_mo": m.get("exp_val"), "roi": m.get("roi"),
             "reviews_to_beat_3": m.get("rev_win"), "demand": m.get("xdem"),
             "population": m.get("population"),
@@ -404,9 +406,12 @@ def _run_leadoff_find(args: dict) -> str:
                      "demand. These are deliberately NOT the biggest "
                      "metros; a mid-size city with solid demand and a weak field "
                      "(low reviews_to_beat_3) is the Moneyball pick. Lead with "
-                     "these. rev_win=0 on a large market can be a weak field OR "
-                     "hidden review counts — flag it for a live-SERP eyeball "
-                     "(LeadOff SOP)."),
+                     "these. beatability (0-100, higher=easier) is a plain read "
+                     "of how weak the incumbent field is — soft/moderate/tough; "
+                     "a high opportunity_v3 AND a soft beatability is the "
+                     "strongest pick. rev_win=0 on a large market can be a weak "
+                     "field OR hidden review counts — flag it for a live-SERP "
+                     "eyeball (LeadOff SOP)."),
         }, default=str)[:_LEADOFF_RESULT_CHARS]
     except Exception as exc:
         return f"LeadOff board lookup failed: {exc}"

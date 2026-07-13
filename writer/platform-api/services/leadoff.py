@@ -313,6 +313,8 @@ def list_board(*, city: str | None, state: str | None, category: str | None,
     as_of = rows[0].get("as_of") if rows else None
     markets = attach_permits(rows[:limit])
     markets = _enrich_board_grades(markets, capture, lead_tier, sort)
+    from services.leadoff_beatability import attach_beatability
+    markets = attach_beatability(markets)
     return {"markets": markets, "as_of": as_of,
             "assumptions": {"capture": capture, "lead_tier": lead_tier,
                             "approximate": not default_assumptions}}
@@ -438,8 +440,9 @@ def get_market_brief(city_id: int, category_id: str) -> dict[str, Any] | None:
                                              trend[0] if trend else None,
                                              city_id),
     }])[0]
-    return _enrich_brief_grade(brief, comps, city_id, category_id,
-                              trend[0] if trend else None)
+    from services.leadoff_beatability import with_beatability
+    return with_beatability(_enrich_brief_grade(
+        brief, comps, city_id, category_id, trend[0] if trend else None))
 
 
 def _enrich_brief_grade(brief: dict[str, Any], comps: list[dict[str, Any]],
