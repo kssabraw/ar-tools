@@ -7075,7 +7075,9 @@ OUTPUT CONTRACT — return EXACTLY these parts in order, and NOTHING else (no ma
 
 HARD RULE — NEVER invent facts. Do not fabricate prices, specs, measurements, materials, certifications, review counts, or ratings. Use ONLY the product facts + store data provided. When a needed fact is missing, write around it (do not state a made-up value) and record it in CONTENT_GAPS_REPORT.
 
-WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must be written. The "main entity" is the product (PDP) or the category (PLP). Follow ALL of these:
+STORE-PAGE FRAMING (critical — read before writing) — This is a live STORE product/collection page, NOT an informational article, blog post, or encyclopedia entry. The MAIN ENTITY is THIS specific product (or category) as sold by this store (e.g. "Nova Life B12 12mg vial"), NOT the generic ingredient / material / topic ("vitamin B12"). Write to help a ready-to-buy shopper choose and purchase THIS product. Do NOT write general "What X is", "How X works in the body", "Benefits of X", or "History of X" sections — that is informational content and does not belong on a store page. You MAY include at most ONE short (2–4 sentence) product-anchored passage on why the product's key property matters for the buyer's specific use (e.g. why verified purity matters for their research) — never a general explainer of the underlying topic. Anchor EVERY heading and section on the product and the purchase decision.
+
+WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must be written. The "main entity" is THIS specific product/SKU (PDP) or category (PLP) as sold by this store — never the generic ingredient/material/topic. Follow ALL of these:
 
 1. Direct Definition (immediately under the H1): the FIRST sentence is a plain "[Main entity] is [what it is] + [its key benefit]" statement — standalone, high-confidence, quotable. DO: "The Acme Trail Runner is a Vibram-soled trail shoe built to grip wet rock without slipping." DON'T open with a vague/hedging line.
 2. Zero-Filler Protocol: NO conversational warm-up anywhere. Never open with "In today's world…", "Have you ever…", or throat-clearing. Move straight to the substantive answer under every heading.
@@ -7094,7 +7096,17 @@ WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must b
 15. Voice & audience: match the provided BRAND VOICE and speak directly to the provided IDEAL CUSTOMER.
 
 PAGE-TYPE DIRECTIVE (stated in the user message):
-- PRODUCT — write a single product description page (PDP): hero/overview, key features & benefits, specifications/variants, use-cases, trust/returns, FAQ, CTA.
+- PRODUCT — write a single STORE product page (PDP) for THIS product. When a "STRUCTURE TO MIRROR" block is supplied, follow THAT layout; otherwise use this default commerce-first section order:
+  1) Hero — H1 = the product name; the Direct Definition of the PRODUCT (what it is + who it's for + its standout benefit) in 1–2 sentences.
+  2) At-a-glance — a short bulleted highlights/spec list (key attributes, plus price/availability when known).
+  3) Why choose this one — the product's differentiators/benefits (quality, testing, guarantees), benefit-led.
+  4) Specifications — a fact-model <table> of the product's real specs/variants.
+  5) What's included / options — variants, quantity, what ships.
+  6) Who it's for & how it's used — the buyer + their use case (the ONE allowed short product-anchored educational sentence may go here).
+  7) Shipping, returns & guarantees — state what's known; flag unknowns as gaps.
+  8) FAQ — 4–7 real buyer questions (fit, compatibility, shipping, returns, care).
+  9) A clear closing CTA.
+  Keep it commercial throughout — it is a page that sells THIS product, NOT an article about the ingredient/material.
 - COLLECTION — write a category/collection landing page (PLP): intro that frames the category and who it's for, buying guidance ("how to choose", key considerations), an overview of the notable sub-types/products (named only if provided), internal-link-worthy structure, FAQ, CTA. Do NOT write a single-product description.
 
 SCHEMA RULES (the final JSON-LD block):
@@ -7112,8 +7124,11 @@ def _ecommerce_page_type_directive(page_type: str) -> str:
             "product description. Emit CollectionPage/ItemList + BreadcrumbList schema."
         )
     return (
-        "PAGE TYPE: PRODUCT — write a single product description page (PDP) per the PRODUCT "
-        "directive. Emit Product + Offer (+ BreadcrumbList) schema."
+        "PAGE TYPE: PRODUCT — write a live STORE product page (PDP) for THIS specific product "
+        "per the PRODUCT directive. The main entity is the product/SKU, NOT the generic "
+        "ingredient/material — do NOT write encyclopedic 'what X is / how it works' sections "
+        "(at most one short product-anchored 'why it matters for your use' sentence). Emit "
+        "Product + Offer (+ BreadcrumbList) schema."
     )
 
 
