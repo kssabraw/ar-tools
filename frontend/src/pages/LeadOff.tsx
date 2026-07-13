@@ -146,6 +146,10 @@ interface CategoryMatch {
   category: string | null
   label: string
   confidence: number
+  // location extracted from the same query (independent of the category match)
+  city?: string | null
+  state?: string | null
+  county?: string | null
 }
 
 type Sort = 'v3' | 'build' | 'roi' | 'expected' | 'value' | 'leads' | 'demand'
@@ -266,8 +270,11 @@ export function LeadOff() {
     queryFn: () => api.get<BoardResponse>(`/leadoff/board?${params.toString()}`),
   })
 
-  // Smart search: map free text → a scanned category via Sonnet; a confident
-  // match filters the board, a weak one shows "No Data Provided" (no filtering).
+  // Smart search: one Sonnet call maps free text → a scanned category AND any
+  // US location (city/state/county), applied independently. "roofers in
+  // Cleveland" filters both; "Cuyahoga County Ohio" filters location only;
+  // "roofers" filters category only. A weak category match shows "No Data
+  // Provided" (no category filter) but still applies any location it found.
   const runSmartSearch = async () => {
     const q = searchText.trim()
     if (!q || searching) return
@@ -275,8 +282,15 @@ export function LeadOff() {
     try {
       const res = await api.post<CategoryMatch>('/leadoff/category-search', { query: q })
       setSearchResult(res)
-      if (res.matched && res.category) {
-        const next = { ...filters, category: res.category }
+      const next = {
+        ...filters,
+        category: res.matched && res.category ? res.category : '',
+        city: res.city || '',
+        state: res.state || '',
+        county: res.county || '',
+      }
+      // only touch the board if the search resolved to something applicable
+      if (next.category || next.city || next.state || next.county) {
         setFilters(next)
         setApplied(next)
       }
@@ -289,7 +303,7 @@ export function LeadOff() {
   const clearSmartSearch = () => {
     setSearchText('')
     setSearchResult(null)
-    const next = { ...filters, category: '' }
+    const next = { ...filters, category: '', city: '', state: '', county: '' }
     setFilters(next)
     setApplied(next)
   }
@@ -377,30 +391,37 @@ export function LeadOff() {
         {view === 'tryouts' && <TryoutsView />}
 
         {view === 'board' && <>
-        {/* Smart search — Sonnet maps free text to a scanned category */}
+        {/* Smart search — Sonnet maps free text to a scanned category and/or a location */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
           <Sparkles size={16} color="#0e7d6f" style={{ flexShrink: 0 }} />
           <input
-            style={{ ...inputStyle, flex: 1, minWidth: 220, maxWidth: 420 }}
+            style={{ ...inputStyle, flex: 1, minWidth: 240, maxWidth: 460 }}
             value={searchText}
-            placeholder="Smart search — describe a business type (e.g. “someone to fix my roof”)"
+            placeholder="Smart search — a business type and/or a place (e.g. “roofers in Cleveland”, “Cuyahoga County OH”)"
             onChange={e => setSearchText(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') runSmartSearch() }}
           />
           <button style={primaryBtn} disabled={searching || !searchText.trim()} onClick={runSmartSearch}>
             {searching ? <Loader2 size={14} className="spin" /> : <Search size={14} />} Match
           </button>
-          {searchResult?.matched && (
-            <span style={{ ...pill, background: '#e3f2ef', color: '#0e7d6f' }}>
-              Matched → {searchResult.category} ({Math.round(searchResult.confidence * 100)}%)
-            </span>
-          )}
-          {searchResult && !searchResult.matched && (
-            <span style={{ ...pill, background: '#fef3c7', color: '#92400e' }}
-              title={`Confidence ${(searchResult.confidence * 100).toFixed(0)}% — below the 85% match threshold`}>
-              No Data Provided
-            </span>
-          )}
+          {searchResult && (() => {
+            const bits: string[] = []
+            if (searchResult.matched && searchResult.category)
+              bits.push(`${searchResult.category} (${Math.round(searchResult.confidence * 100)}%)`)
+            const loc = [searchResult.city, searchResult.county && `${searchResult.county} County`,
+              searchResult.state].filter(Boolean).join(', ')
+            if (loc) bits.push(loc)
+            return bits.length ? (
+              <span style={{ ...pill, background: '#e3f2ef', color: '#0e7d6f' }}>
+                Filtered → {bits.join(' · ')}
+              </span>
+            ) : (
+              <span style={{ ...pill, background: '#fef3c7', color: '#92400e' }}
+                title={`Confidence ${(searchResult.confidence * 100).toFixed(0)}% — below the 85% match threshold, and no location recognized`}>
+                No Data Provided
+              </span>
+            )
+          })()}
           {(searchResult || searchText) && (
             <button style={secondaryBtn} onClick={clearSmartSearch} title="Clear smart search"><X size={14} /></button>
           )}
