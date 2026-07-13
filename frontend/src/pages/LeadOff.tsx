@@ -134,6 +134,7 @@ interface ScoutEstimate {
   site_misses?: number
   mention_misses?: number
   fully_cached: boolean
+  running_job_id?: string | null
 }
 
 type Sort = 'v3' | 'build' | 'roi' | 'expected' | 'value' | 'leads' | 'demand'
@@ -942,6 +943,12 @@ function ScoutCard({ cityId, categoryId }: { cityId: number; categoryId: string 
     refetchInterval: jobId ? 5000 : false,
   })
 
+  // Adopt an in-flight scout for this market (e.g. one started before the brief
+  // was reopened) so the running indicator survives navigating away and back.
+  useEffect(() => {
+    if (est?.running_job_id && !jobId) setJobId(est.running_job_id)
+  }, [est?.running_job_id])
+
   const start = async () => {
     if (busy || !est) return
     setBusy(true)
@@ -966,9 +973,16 @@ function ScoutCard({ cityId, categoryId }: { cityId: number; categoryId: string 
   return (
     <div style={{ marginTop: 8 }}>
       {jobId ? (
-        <div style={{ fontSize: 12, color: '#64748b' }}>
-          <Loader2 size={13} className="spin" style={{ verticalAlign: -2 }} /> Scouting — RD, review
-          velocity, trend (a few minutes)…
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px',
+          background: '#f0fdfa', border: '1px solid #99f6e4', borderRadius: 8 }}>
+          <Loader2 size={18} className="spin" style={{ color: '#0e7d6f', flexShrink: 0 }} />
+          <div style={{ fontSize: 12, color: '#0f766e', lineHeight: 1.4 }}>
+            <div style={{ fontWeight: 600 }}>Scouting this market…</div>
+            <div style={{ color: '#5b8c85' }}>
+              Pulling RD, review velocity &amp; demand trend · estimated time ~7 minutes.
+              Safe to leave — results save automatically and appear here when done.
+            </div>
+          </div>
         </div>
       ) : (
         <button style={{ ...secondaryBtn, width: '100%', justifyContent: 'center' }} disabled={busy || !est} onClick={start}>
