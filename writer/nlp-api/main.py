@@ -860,11 +860,12 @@ def _apply_rdfa_markup(html: str, entities: list) -> str:
 
     Format:
       <span vocab="https://schema.org/" typeof="Place" property="name" content="Anaheim">
-        <link property="sameAs" href="https://www.google.com/search?kgmid=/m/0r5yc"/>
+        <link property="sameAs" href="https://en.wikipedia.org/wiki/Anaheim,_California"/>
         Anaheim
       </span>
 
-    Only entities that have a Knowledge Graph mid are marked up.
+    Only entities that have a Knowledge-Graph id (Wikidata `mid`) are marked up;
+    the sameAs prefers the entity's Wikipedia link, else its Wikidata page.
     Longest entity names are processed first to avoid substring conflicts.
     Each entity is marked only on its first occurrence.
     Text inside <a>, <script>, <style>, <code>, <pre> tags is left untouched.
@@ -907,7 +908,11 @@ def _apply_rdfa_markup(html: str, entities: list) -> str:
                 continue
             mid          = entity["mid"]
             schema_type  = _RDFA_TYPE_MAP.get(entity.get("entity_type", ""), "Thing")
-            kg_url       = f"https://www.google.com/search?kgmid={mid}"
+            # sameAs = an authoritative entity URL. Since the TextRazor migration
+            # `mid` is a Wikidata ID (e.g. "Q42"), not a Google KG "/m/…" id — so
+            # prefer the entity's Wikipedia link, else the Wikidata entity page,
+            # rather than a malformed Google `kgmid` search URL.
+            kg_url       = entity.get("wiki_link") or f"https://www.wikidata.org/wiki/{mid}"
             pat          = re.compile(r'\b' + re.escape(name) + r'\b', re.IGNORECASE)
             m            = pat.search(text)
             if m:
