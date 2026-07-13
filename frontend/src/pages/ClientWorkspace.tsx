@@ -353,14 +353,14 @@ export function ClientWorkspace() {
         <ActionCard
           icon={<KanbanSquare size={22} />}
           label="Tasks"
-          description="The native task board — this client's monthly delivery work as a Kanban/list with subtask checklists, statuses & assignees. Replacing Asana; runs in parallel during the transition."
+          description="The task board — this client's delivery work as a Kanban/list with subtask checklists, statuses & assignees. This is where assigned and completed tasks live."
           to={id ? `/clients/${id}/tasks` : undefined}
           cta="Open"
         />
         <ActionCard
           icon={<ClipboardList size={22} />}
-          label="Asana Tasks"
-          description="Define the tasks this client gets each month — name, assignee & category. The monthly job creates them in Asana under a new section, automatically or on demand."
+          label="Monthly Template"
+          description="Define the recurring tasks this client gets each month — name, assignee & category. The monthly job creates them on the Tasks board under a new month section, automatically or on demand. (Not a board — edit the template here; open Tasks to see the work.)"
           to={id ? `/clients/${id}/asana-tasks` : undefined}
           cta="Open"
         />
