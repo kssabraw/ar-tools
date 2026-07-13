@@ -382,6 +382,15 @@ async def scout_estimate(
     state = leadoff_actions.scout_market_state(city_id, category_id)
     if state is None:
         raise HTTPException(status_code=404, detail="not_found")
+    # Surface any in-flight scout for this exact market so the brief can show a
+    # running indicator even when it's reopened in a fresh session (the client's
+    # own job handle is component-local and lost on navigation).
+    running = (get_supabase().table("async_jobs").select("id")
+               .eq("job_type", "leadoff_scout")
+               .in_("status", ["pending", "running"])
+               .eq("payload->>city_id", str(city_id))
+               .eq("payload->>category_id", category_id)
+               .order("created_at", desc=True).limit(1).execute().data or [])
     return {
         "est_cost": state["est_cost"],
         "rd_misses": len(state["rd_misses"]),
@@ -390,6 +399,7 @@ async def scout_estimate(
         "site_misses": len(state.get("site_misses") or []),
         "mention_misses": len(state.get("mention_misses") or {}),
         "fully_cached": state["est_cost"] == 0,
+        "running_job_id": running[0]["id"] if running else None,
     }
 
 
