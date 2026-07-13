@@ -133,12 +133,22 @@ def enrich_grade(row: dict[str, Any], signals: dict[str, Any], *,
     exp_val = round(value * adj_rankab) if value is not None else 0
     grade, build = grade_for(percentile_of(exp_val, breakpoints), leads,
                              adj_rankab, lead_value)
+    # Fold the same enrichment into the scanner's v3 opportunity score so the
+    # gem ranking is signal-aware, not just the grade. v3 already blends
+    # demand-vs-competition; the four factors (proximity / site / brand /
+    # permit / seasonal) are orthogonal dimensions it never saw, so the pillar
+    # multipliers layer in without double-counting. base_v3 kept for inspection.
+    base_v3 = float(row.get("v3") or 0.0)
+    opportunity_v3 = round(max(0.0, base_v3 * wf * df), 1)
+
     present = {k: (round(v, 3) if isinstance(v, (int, float)) else v)
                for k, v in signals.items() if v is not None}
     return {
         **row,
         "base_grade": base_grade,
         "base_exp_val": base_exp_val,
+        "base_v3": round(base_v3, 1),
+        "opportunity_v3": opportunity_v3,
         "base_rankab": round(base_rankab, 3),
         "rankab": round(adj_rankab, 3),
         "xdem": round(adj_xdem),

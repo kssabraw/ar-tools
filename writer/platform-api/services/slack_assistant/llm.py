@@ -388,7 +388,8 @@ def _run_leadoff_find(args: dict) -> str:
         res = finder.find_board_cities(matched, state=state, sort=sort, limit=15)
         rows = [{
             "city": f"{m.get('city_name')}, {m.get('state_code')}",
-            "opportunity_v3": m.get("v3"), "grade": m.get("grade"),
+            "opportunity_v3": m.get("opportunity_v3", m.get("v3")),
+            "grade": m.get("grade"),
             "exp_val_mo": m.get("exp_val"), "roi": m.get("roi"),
             "reviews_to_beat_3": m.get("rev_win"), "demand": m.get("xdem"),
             "population": m.get("population"),
@@ -396,9 +397,11 @@ def _run_leadoff_find(args: dict) -> str:
         return json.dumps({
             "scanned": True, "matched_category": matched, "state": state,
             "sort": sort, "as_of": res.get("as_of"), "top_cities": rows,
-            "note": ("Ranked by v3 = the opportunity/hidden-gem score (markets "
+            "note": ("Ranked by opportunity_v3 = the hidden-gem score (markets "
                      "LESS competitive than their demand/size predicts — the "
-                     "undervalued ones). These are deliberately NOT the biggest "
+                     "undervalued ones), now enrichment-folded with proximity / "
+                     "incumbent site+brand pressure / permit pipeline / seasonal "
+                     "demand. These are deliberately NOT the biggest "
                      "metros; a mid-size city with solid demand and a weak field "
                      "(low reviews_to_beat_3) is the Moneyball pick. Lead with "
                      "these. rev_win=0 on a large market can be a weak field OR "
