@@ -7415,6 +7415,11 @@ Primary keyword: {body.keyword}
         token_rec = _token_record("generate-ecommerce-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
         content_html, schema_json, page_title, content_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
 
+        # RDFa entity markup: annotate the TextRazor/Wikidata entities from the SERP
+        # analysis inline in the HTML (typeof/property + Wikidata sameAs) — the same
+        # entity signal the Local SEO writer stamps. No-op when there are no entities.
+        content_html = _apply_rdfa_markup(content_html, (serp_analysis_dict or {}).get("google_entities", []))
+
         # Score the generated page (single pass, with retries on transient failure).
         await q.put({"step": "progress", "progress": 90, "message": "Scoring your page…"})
         brand_context = _ecommerce_brand_context(body.business_name, body.brand_voice)
@@ -7558,6 +7563,9 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
 
         token_rec = _token_record("reoptimize-ecommerce-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
         content_html, schema_json, page_title, content_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
+
+        # RDFa entity markup from the SERP analysis (parity with generate).
+        content_html = _apply_rdfa_markup(content_html, (body.serp_analysis or {}).get("google_entities", []))
 
         await q.put({"step": "progress", "progress": 82, "message": "Scoring your page…"})
         brand_context = _ecommerce_brand_context(body.business_name, body.brand_voice)
