@@ -14,3 +14,20 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# Cache-busting for deploys. Vite fingerprints JS/CSS into /assets/<name>.<hash>.<ext>,
+# so those are content-addressed and safe to cache forever. Everything else —
+# most importantly the HTML app shell (served for every route via the SPA
+# fallback above) plus sw.js / the manifest — must always revalidate, or a
+# browser will keep serving the previous build's shell (which points at stale
+# asset hashes) after a deploy. Netlify applies the most specific path rule per
+# header, so /assets/* overrides the catch-all for hashed files.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
