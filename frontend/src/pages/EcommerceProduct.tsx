@@ -129,12 +129,22 @@ export function EcommerceProduct() {
           const res = await ecommerceApi.getGenerateJob(clientId, job_id)
           if (genCancelledRef.current) return
           if (res.status === 'complete' && res.page_id) {
+            // 'complete' is TERMINAL — always leave the Creating screen. If the
+            // page-detail fetch fails, the page is still saved, so fall back to
+            // Saved Pages rather than looping the poll forever.
             stopTicker()
             refreshSaved()
-            if (!genDetachedRef.current) {
-              const page = await ecommerceApi.getPage(res.page_id)
-              if (!genCancelledRef.current && !genDetachedRef.current) {
-                setView({ kind: 'generated', page, isNew: true, prevScore: null })
+            if (!genDetachedRef.current && !genCancelledRef.current) {
+              try {
+                const page = await ecommerceApi.getPage(res.page_id)
+                if (!genCancelledRef.current && !genDetachedRef.current) {
+                  setView({ kind: 'generated', page, isNew: true, prevScore: null })
+                }
+              } catch {
+                if (!genCancelledRef.current && !genDetachedRef.current) {
+                  setView({ kind: 'form' })
+                  setTab('saved')
+                }
               }
             }
             return

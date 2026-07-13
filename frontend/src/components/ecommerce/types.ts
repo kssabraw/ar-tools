@@ -52,7 +52,8 @@ export interface EcommercePageDetail extends EcommercePageListItem {
   product_input?: string | null
   content_html: string
   schema_json: string
-  content_gaps: ContentGap[]
+  // Either rich objects or plain strings, depending on what the writer emitted.
+  content_gaps: Array<ContentGap | string>
   composite_score?: number | null
   composite_status?: string | null
   engine_scores?: Record<string, EngineScore> | null

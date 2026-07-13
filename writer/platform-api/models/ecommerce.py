@@ -114,7 +114,10 @@ class EcommercePageDetail(BaseModel):
     content_html: str
     schema_json: str
     page_title: Optional[str] = None
-    content_gaps: list[dict[str, Any]] = Field(default_factory=list)
+    # Either structured objects {category, missing, why_important, how_to_add,
+    # score_impact} or plain strings — tolerate both so a page always loads
+    # regardless of the shape the writer emitted.
+    content_gaps: list[Any] = Field(default_factory=list)
     composite_score: Optional[float] = None
     composite_status: Optional[str] = None
     engine_scores: Optional[dict[str, Any]] = None
