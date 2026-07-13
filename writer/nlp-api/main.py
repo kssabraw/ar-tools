@@ -7070,7 +7070,7 @@ _ECOMMERCE_GEN_SYSTEM_PROMPT = """You are an expert ecommerce SEO copywriter and
 OUTPUT CONTRACT — return EXACTLY these parts in order, and NOTHING else (no markdown, no code fences, no commentary):
 1. <title>…</title> — an SEO title ≤ 60 characters with the primary keyword near the front.
 2. The page body as a single <article>…</article> of clean semantic HTML — use <h1>, <h2>, <h3>, <p>, <ul>/<ol>, <li>, <table>, <strong>. NO <html>/<head>/<body> wrappers, NO inline CSS/styles, NO class attributes, NO markdown.
-3. CONTENT_GAPS_REPORT_START [ … ] CONTENT_GAPS_REPORT_END — a JSON array of product/store facts you needed but were NOT given (e.g. exact price, dimensions, warranty length, review count). Use an empty array [] if none.
+3. CONTENT_GAPS_REPORT_START [ … ] CONTENT_GAPS_REPORT_END — a JSON array of the product/store facts you needed but were NOT given (e.g. exact price, dimensions, warranty length, review count). Each item is an OBJECT: {"category": short label, "missing": what fact is missing, "why_important": why it would lift the score/conversion, "how_to_add": where to source it, "score_impact": "high"|"medium"|"low"}. Use an empty array [] if none.
 4. A single <script type="application/ld+json"> … </script> block with the page's structured data.
 
 HARD RULE — NEVER invent facts. Do not fabricate prices, specs, measurements, materials, certifications, review counts, or ratings. Use ONLY the product facts + store data provided. When a needed fact is missing, write around it (do not state a made-up value) and record it in CONTENT_GAPS_REPORT.

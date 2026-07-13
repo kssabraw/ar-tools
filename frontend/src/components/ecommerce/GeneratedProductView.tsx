@@ -3,7 +3,7 @@ import {
   ArrowLeft, ArrowRight, Check, Copy, Download, ExternalLink, TrendingUp, Wand2,
 } from 'lucide-react'
 import { ecommerceApi } from './api'
-import type { EcommercePageDetail } from './types'
+import type { ContentGap, EcommercePageDetail } from './types'
 import { FeaturedImagePicker } from '../FeaturedImagePicker'
 import {
   backLink, card, downloadFile, errorBox, formatHtml, outlineBtn,
@@ -219,23 +219,32 @@ export function GeneratedProductView({ page, isNew, prevScore, onBack, onScoreAn
                 </p>
               </div>
               <div>
-                {content_gaps.map((gap, i) => (
-                  <div key={i} style={{ padding: '14px 20px', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                      <span style={{
-                        fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999,
-                        background: gap.score_impact === 'high' ? '#fef2f2' : gap.score_impact === 'medium' ? '#fffbeb' : '#f1f5f9',
-                        color: gap.score_impact === 'high' ? '#dc2626' : gap.score_impact === 'medium' ? '#d97706' : '#64748b',
-                      }}>
-                        {gap.score_impact === 'high' ? 'High impact' : gap.score_impact === 'medium' ? 'Medium impact' : 'Low impact'}
-                      </span>
-                      <span style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>{gap.category}</span>
+                {content_gaps.map((gap, i) => {
+                  // Gaps may be rich objects or plain strings — normalise so a
+                  // string gap still renders as a legible line.
+                  const g: Partial<ContentGap> = typeof gap === 'string' ? { missing: gap } : gap
+                  return (
+                    <div key={i} style={{ padding: '14px 20px', borderTop: i ? '1px solid #f1f5f9' : 'none' }}>
+                      {(g.score_impact || g.category) && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                          {g.score_impact && (
+                            <span style={{
+                              fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 999,
+                              background: g.score_impact === 'high' ? '#fef2f2' : g.score_impact === 'medium' ? '#fffbeb' : '#f1f5f9',
+                              color: g.score_impact === 'high' ? '#dc2626' : g.score_impact === 'medium' ? '#d97706' : '#64748b',
+                            }}>
+                              {g.score_impact === 'high' ? 'High impact' : g.score_impact === 'medium' ? 'Medium impact' : 'Low impact'}
+                            </span>
+                          )}
+                          {g.category && <span style={{ fontSize: 14, fontWeight: 600, color: '#0f172a' }}>{g.category}</span>}
+                        </div>
+                      )}
+                      {g.missing && <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 2px' }}>{g.missing}</p>}
+                      {g.why_important && <p style={{ fontSize: 12, color: '#475569', margin: '0 0 2px' }}><b>Why it matters:</b> {g.why_important}</p>}
+                      {g.how_to_add && <p style={{ fontSize: 12, color: '#475569', margin: 0 }}><b>How to add it:</b> {g.how_to_add}</p>}
                     </div>
-                    <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 2px' }}>{gap.missing}</p>
-                    <p style={{ fontSize: 12, color: '#475569', margin: '0 0 2px' }}><b>Why it matters:</b> {gap.why_important}</p>
-                    <p style={{ fontSize: 12, color: '#475569', margin: 0 }}><b>How to add it:</b> {gap.how_to_add}</p>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
