@@ -46,6 +46,10 @@ interface MarketRow {
   opportunity_v3?: number | null
   score_factors?: { winnability: number; demand: number
     signals: Record<string, number | string> } | null
+  // Beatability — reading-only 0-100 "how weak is the incumbent field" score
+  // (higher = easier), collapsing rev_win + exact_open + rating into one chip.
+  beatability?: number | null
+  beatability_band?: string | null
   // peer-cohort field-strength: this market's rev_win vs comparable-size,
   // comparable-income cities in the same category (context for the signal).
   peer_cohort_median?: number | null
@@ -163,14 +167,15 @@ type View = 'board' | 'neighborhoods' | 'tryouts'
 // Board columns + click-to-sort model. `key: null` = a non-sortable column
 // (the luck/permit icon strip). `num` picks the default first-click direction
 // (descending for numbers, ascending for text) and the compare fn.
-type ColKey = 'grade' | 'market' | 'category' | 'opportunity' | 'exp_val'
-  | 'roi' | 'demand' | 'rev_win' | 'rating' | 'exact_open'
+type ColKey = 'grade' | 'market' | 'category' | 'opportunity' | 'beatability'
+  | 'exp_val' | 'roi' | 'demand' | 'rev_win' | 'rating' | 'exact_open'
 const BOARD_COLUMNS: { label: string; key: ColKey | null; num: boolean }[] = [
   { label: 'Grade', key: 'grade', num: true },
   { label: '', key: null, num: false },
   { label: 'Market', key: 'market', num: false },
   { label: 'Category', key: 'category', num: false },
   { label: 'Opportunity', key: 'opportunity', num: true },
+  { label: 'Beatability', key: 'beatability', num: true },
   { label: 'Exp $/mo', key: 'exp_val', num: true },
   { label: 'ROI $/rev', key: 'roi', num: true },
   { label: 'Demand', key: 'demand', num: true },
@@ -185,6 +190,7 @@ function colValue(r: MarketRow, key: ColKey): number | string {
     case 'market': return `${r.city_name}, ${r.state_code}`
     case 'category': return r.category ?? ''
     case 'opportunity': return r.opportunity_v3 ?? r.v3 ?? -1
+    case 'beatability': return r.beatability ?? -1
     case 'exp_val': return r.exp_val ?? -1
     case 'roi': return r.roi ?? -1
     case 'demand': return r.xdem ?? -1
@@ -307,11 +313,12 @@ export function LeadOff() {
     const rows = displayRows
     if (!rows.length) return
     const headers = ['grade', 'city_name', 'state_code', 'category', 'opportunity',
-      'exp_val', 'roi', 'demand', 'rev_win', 'rating', 'exact_open']
+      'beatability', 'beatability_band', 'exp_val', 'roi', 'demand', 'rev_win',
+      'rating', 'exact_open']
     downloadCsv('leadoff_shortlist.csv', toCsv(headers,
       rows.map(r => [r.grade, r.city_name, r.state_code, r.category,
-        r.opportunity_v3 ?? r.v3, r.exp_val,
-        r.roi, r.xdem, r.rev_win, r.rating, r.exact_open])))
+        r.opportunity_v3 ?? r.v3, r.beatability ?? '', r.beatability_band ?? '',
+        r.exp_val, r.roi, r.xdem, r.rev_win, r.rating, r.exact_open])))
   }
 
   return (
@@ -492,6 +499,10 @@ export function LeadOff() {
                           : 'Hidden-gem score (v3): demand vs competition undervaluation'}>
                         {(r.opportunity_v3 ?? r.v3)?.toFixed(1) ?? '—'}
                       </td>
+                      <td style={tdStyle}>
+                        <BeatabilityChip score={r.beatability} band={r.beatability_band}
+                          revWin={r.rev_win} holders={r.exact_open} rating={r.rating} />
+                      </td>
                       <td style={{ ...tdStyle, fontWeight: 600 }}>{usd(r.exp_val)}</td>
                       <td style={tdStyle}>{r.roi?.toFixed(1)}</td>
                       <td style={tdStyle}>{r.xdem?.toLocaleString()}</td>
@@ -589,6 +600,12 @@ export function LeadOff() {
               )}
 
               <SectionTitle>Field forensics</SectionTitle>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '2px 0 6px' }}>
+                <span style={{ fontSize: 12, color: '#64748b' }}>Beatability</span>
+                <BeatabilityChip score={brief.beatability} band={brief.beatability_band}
+                  revWin={brief.rev_win} holders={brief.exact_open} rating={brief.rating} />
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>how weak the field is · reading aid</span>
+              </div>
               <KV k="Reviews to beat #3" v={String(brief.rev_win)} strong />
               {brief.peer_cohort_median != null && (
                 <KV k="Field vs comparable cities"
@@ -1188,6 +1205,29 @@ function GradeChip({ grade }: { grade: string }) {
       padding: '2px 6px', fontSize: 11, fontWeight: 700, color: '#fff',
       background: GRADE_COLORS[grade] ?? '#94a3b8',
     }}>{grade}</span>
+  )
+}
+const BEATABILITY_COLORS: Record<string, string> = {
+  soft: '#177245', moderate: '#c99a2e', tough: '#b3362b',
+}
+const BEATABILITY_LABELS: Record<string, string> = {
+  soft: 'Soft', moderate: 'Moderate', tough: 'Tough',
+}
+function BeatabilityChip({ score, band, revWin, holders, rating }: {
+  score?: number | null; band?: string | null
+  revWin?: number | null; holders?: number | null; rating?: number | null
+}) {
+  if (score === null || score === undefined || !band) return <span style={{ color: '#94a3b8' }}>—</span>
+  const tip = `How beatable the field is (0-100, higher = easier). `
+    + `Beat #3 with ~${revWin ?? '?'} reviews · ${holders ?? '?'} exact-category competitors`
+    + (rating ? ` · incumbents ${rating}★` : '')
+    + `. Reading aid only — not a grade input.`
+  return (
+    <span title={tip} style={{
+      display: 'inline-block', borderRadius: 5, padding: '2px 7px', fontSize: 11,
+      fontWeight: 700, color: '#fff', whiteSpace: 'nowrap',
+      background: BEATABILITY_COLORS[band] ?? '#94a3b8',
+    }}>{BEATABILITY_LABELS[band] ?? band} {score}</span>
   )
 }
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
