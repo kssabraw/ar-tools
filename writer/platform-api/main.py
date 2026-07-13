@@ -24,6 +24,7 @@ from routers.citations import router as citations_router
 from routers.clients import router as clients_router
 from routers.competitors import router as competitors_router
 from routers.domain_intel import router as domain_intel_router
+from routers.keyword_research import router as keyword_research_router
 from routers.content_schedule import router as content_schedule_router
 from routers.dashboard import router as dashboard_router
 from routers.deliverables import router as deliverables_router
@@ -201,6 +202,7 @@ app.include_router(dashboard_router)
 app.include_router(deliverables_router)
 app.include_router(domain_intel_router)
 app.include_router(ecommerce_router)
+app.include_router(keyword_research_router)
 app.include_router(files_router)
 app.include_router(forecast_router)
 app.include_router(freeze_router)

@@ -38,6 +38,7 @@ from services.deliverables_sheet import (
     run_provision_job as run_deliverables_provision_job,
 )
 from services.domain_intel import run_domain_overview_job, run_keyword_gap_job, run_link_gap_job
+from services.keyword_research import run_keyword_research_job
 from services.freeze import FREEZE_GATED_JOB_TYPES, is_frozen, job_client_id, run_freeze_check_job
 from services.page_backlink_intel import run_page_backlink_job
 from services.notifications import run_notification_dispatch_job
@@ -67,6 +68,7 @@ from services.leadoff_permits import run_permits_job as run_leadoff_permits_job
 from services.leadoff_geocode import run_geocode_job as run_leadoff_geocode_job
 from services.leadoff_signals import run_signal_refresh_job as run_leadoff_signal_refresh_job
 from services.leadoff_income import run_income_backfill_job as run_leadoff_income_backfill_job
+from services.leadoff_counties import run_county_backfill_job as run_leadoff_county_backfill_job
 from services.leadoff_finder import run_city_finder_job as run_leadoff_city_finder_job
 from services.local_relevance import run_local_relevance_job
 from services.page_structure_scraper import analyze_page_structure
@@ -484,6 +486,8 @@ async def _process_job(job: dict) -> None:
         await run_leadoff_signal_refresh_job(job)
     elif job_type == "leadoff_income_backfill":
         await run_leadoff_income_backfill_job(job)
+    elif job_type == "leadoff_county_backfill":
+        await run_leadoff_county_backfill_job(job)
     elif job_type == "leadoff_city_finder":
         await run_leadoff_city_finder_job(job)
     elif job_type == "domain_overview":
@@ -492,6 +496,8 @@ async def _process_job(job: dict) -> None:
         await run_keyword_gap_job(job)
     elif job_type == "link_gap":
         await run_link_gap_job(job)
+    elif job_type == "keyword_research":
+        await run_keyword_research_job(job)
     elif job_type == "deliverables_log":
         await run_deliverables_log_job(job)
     elif job_type == "deliverable_notes_scan":

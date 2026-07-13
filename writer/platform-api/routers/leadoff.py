@@ -27,6 +27,7 @@ async def get_board(
     city: str | None = None,
     state: str | None = None,
     category: str | None = None,
+    county: str | None = None,
     min_demand: int | None = Query(default=None, ge=0),
     sort: str = "v3",
     capture: float = Query(default=DEFAULT_CAPTURE, ge=0.01, le=0.5),
@@ -39,10 +40,42 @@ async def get_board(
     if lead_tier not in LEAD_TIERS:
         raise HTTPException(status_code=422, detail="invalid_lead_tier")
     return leadoff_service.list_board(
-        city=city, state=state, category=category, min_demand=min_demand,
+        city=city, state=state, category=category, county=county,
+        min_demand=min_demand,
         sort=sort, capture=capture, lead_tier=lead_tier, limit=limit,
         prefetch=settings.leadoff_prefetch_rows,
     )
+
+
+@router.get("/leadoff/counties")
+async def list_counties(
+    state: str | None = None,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Distinct counties (name + state) for the board's county picker, optionally
+    scoped to a state. Reads the app-owned city_counties map."""
+    from services import leadoff_counties
+    return {"counties": leadoff_counties.list_counties(state)}
+
+
+@router.post("/leadoff/counties/backfill")
+async def backfill_counties(auth: dict = Depends(require_staff)) -> dict:
+    """Admin: enqueue the per-city county backfill (free Census reverse-geocode).
+    Idempotent — only fills cities without a county row; self-continues if the
+    endpoint throttles."""
+    import uuid
+    from db.supabase_client import get_supabase
+    supabase = get_supabase()
+    active = (supabase.table("async_jobs").select("id", count="exact")
+              .eq("job_type", "leadoff_county_backfill")
+              .in_("status", ["pending", "running"]).limit(1).execute().count or 0)
+    if active:
+        return {"status": "already_running"}
+    entity_id = str(uuid.uuid4())
+    supabase.table("async_jobs").insert({
+        "job_type": "leadoff_county_backfill", "entity_id": entity_id,
+        "payload": {}, "max_attempts": 5}).execute()
+    return {"status": "enqueued", "entity_id": entity_id}
 
 
 @router.get("/leadoff/categories")

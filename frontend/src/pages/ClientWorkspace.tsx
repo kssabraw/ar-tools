@@ -221,9 +221,9 @@ export function ClientWorkspace() {
         <ActionCard
           icon={<Search size={22} />}
           label="Keyword Research"
-          description="Discover and cluster keyword opportunities into topic silos for this client — opens the Topic Fan-out keyword-research & planning tool."
-          href={id ? `/fanout/?client_id=${id}&client_name=${encodeURIComponent(client?.name ?? '')}` : '/fanout/'}
-          cta="Open"
+          description="Enter a seed keyword to discover the related keyword universe — volume, CPC, competition, difficulty & intent — auto-grouped into topic clusters, with CSV export."
+          to={id ? `/clients/${id}/keyword-research` : undefined}
+          cta="Research"
         />
         <ActionCard
           icon={<CalendarPlus size={22} />}

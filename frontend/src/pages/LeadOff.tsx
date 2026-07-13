@@ -59,6 +59,7 @@ interface BoardResponse {
   markets: MarketRow[]
   as_of: string | null
   assumptions: { capture: number; lead_tier: string; approximate: boolean }
+  county_unresolved?: boolean
 }
 interface Competitor {
   rank_position: number
@@ -215,7 +216,7 @@ function sortMarkets(rows: MarketRow[], cs: { key: ColKey; dir: 'asc' | 'desc' }
 
 export function LeadOff() {
   const [view, setView] = useState<View>('board')
-  const [filters, setFilters] = useState({ city: '', state: '', category: '', minDemand: '' })
+  const [filters, setFilters] = useState({ city: '', state: '', category: '', county: '', minDemand: '' })
   const [applied, setApplied] = useState(filters)
   const [sort, setSort] = useState<Sort>('v3')
   const [capture, setCapture] = useState(0.10)
@@ -236,10 +237,23 @@ export function LeadOff() {
   })
   const categories = catData?.categories ?? []
 
+  // County suggestions for the datalist — scoped to the typed state (there are
+  // ~3,143 US counties, so a state filter keeps the list usable). Only fetched
+  // once a 2-letter state is entered.
+  const { data: countyData } = useQuery<{ counties: { county_name: string; state_code: string }[] }>({
+    queryKey: ['leadoff-counties', filters.state],
+    queryFn: () => api.get<{ counties: { county_name: string; state_code: string }[] }>(
+      `/leadoff/counties${filters.state.length === 2 ? `?state=${filters.state}` : ''}`),
+    enabled: filters.state.length === 2,
+    staleTime: 60 * 60_000,
+  })
+  const countyOptions = countyData?.counties ?? []
+
   const params = new URLSearchParams()
   if (applied.city) params.set('city', applied.city)
   if (applied.state) params.set('state', applied.state)
   if (applied.category) params.set('category', applied.category)
+  if (applied.county) params.set('county', applied.county)
   if (applied.minDemand) params.set('min_demand', applied.minDemand)
   params.set('sort', sort)
   params.set('capture', String(capture))
@@ -401,6 +415,16 @@ export function LeadOff() {
             <input style={{ ...inputStyle, width: 52 }} value={filters.state} placeholder="any" maxLength={2}
               onChange={e => setFilters({ ...filters, state: e.target.value.toUpperCase() })} />
           </Field>
+          <Field label="County">
+            <input style={{ ...inputStyle, width: 140 }} value={filters.county}
+              placeholder={filters.state.length === 2 ? 'any' : 'set state first'}
+              list="leadoff-county-list" disabled={filters.state.length !== 2}
+              title={filters.state.length !== 2 ? 'Enter a 2-letter state to filter by county' : 'County within the state'}
+              onChange={e => setFilters({ ...filters, county: e.target.value })} />
+            <datalist id="leadoff-county-list">
+              {countyOptions.map(c => <option key={c.county_name} value={c.county_name} />)}
+            </datalist>
+          </Field>
           <Field label="Category">
             <select style={{ ...inputStyle, maxWidth: 220 }} value={filters.category}
               onChange={e => { setFilters({ ...filters, category: e.target.value }); setSearchResult(null) }}>
@@ -444,6 +468,15 @@ export function LeadOff() {
 
         {error instanceof Error && (
           <div style={errorBox}>{error.message === 'not_found' ? 'No data.' : error.message}</div>
+        )}
+
+        {board?.county_unresolved && (
+          <div style={{ fontSize: 12, color: '#8a6d1a', background: '#fdf6e3',
+            border: '1px solid #f0e2b6', borderRadius: 8, padding: '8px 12px', margin: '4px 0' }}>
+            No scanned markets found for that county{applied.state ? ` in ${applied.state}` : ''}.
+            Either the county map hasn't reached these cities yet, or the scanner
+            never ran the towns in it — smaller towns need a Tryout to score.
+          </div>
         )}
 
         {/* Board */}

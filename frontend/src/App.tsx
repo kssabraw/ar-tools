@@ -27,6 +27,7 @@ import { CampaignGoals } from './pages/CampaignGoals'
 import { Backlinks } from './pages/Backlinks'
 import { Competitors } from './pages/Competitors'
 import { DomainIntel } from './pages/DomainIntel'
+import { KeywordResearch } from './pages/KeywordResearch'
 import { Forecast } from './pages/Forecast'
 import { Sops } from './pages/Sops'
 import { Guides } from './pages/Guides'
@@ -104,6 +105,7 @@ export default function App() {
                       <Route path="/clients/:id/competitors" element={<Competitors />} />
                       <Route path="/clients/:id/backlinks" element={<Backlinks />} />
                       <Route path="/clients/:id/domain-intel" element={<DomainIntel />} />
+                      <Route path="/clients/:id/keyword-research" element={<KeywordResearch />} />
                       <Route path="/clients/:id/forecast" element={<Forecast />} />
                       <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />

@@ -514,6 +514,25 @@ class Settings(BaseSettings):
     # How many top keyword-gap opportunities surface as Action Plan items.
     domain_intel_action_max: int = 3
 
+    # Keyword Research module (the seed-keyword explorer) — per-client keyword
+    # ideas from the DataForSEO Labs keyword_ideas endpoint, enriched + clustered.
+    # This backs the "Keyword Research" workspace card (replaced the Topic Fanout
+    # there; the Fanout remains behind "Create Mass Posts").
+    keyword_research_enabled: bool = True
+    # Daily ceiling on paid Labs calls for this module (own meter:
+    # keyword_research_usage). One billed call per run, so this is generous;
+    # 0 disables the guard.
+    keyword_research_daily_call_budget: int = 500
+    # Max keyword ideas fetched/stored per run (Labs caps at 1000).
+    keyword_research_idea_limit: int = 700
+    # Max seed keywords accepted per run (Labs caps the ideas seed set at 200).
+    keyword_research_max_seeds: int = 20
+    # Client-facing keyword research PDF report: the exec-summary LLM (best-effort,
+    # Anthropic with OpenAI→Gemini fallback via report_llm; deterministic fallback
+    # summary when no key is set).
+    keyword_research_report_model: str = "claude-sonnet-4-6"
+    keyword_research_report_max_tokens: int = 600
+
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
     # than the competitor median; distinct topics competitors cover the client lacks).
@@ -1053,6 +1072,10 @@ class Settings(BaseSettings):
     leadoff_income_enabled: bool = True
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
+    # Per-city county map (public.city_counties) — reverse-geocoded from each
+    # city's lat/lng via the free US Census endpoint; powers the board's county
+    # filter. See services/leadoff_counties.py.
+    leadoff_counties_enabled: bool = True
     # Optional Census Data API key (free, instant from api.census.gov/data/key_signup.html).
     # Not required for low volume, but keyed requests bypass the anonymous
     # throttle if the ~51-state backfill gets edge-blocked.
