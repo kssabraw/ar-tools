@@ -514,6 +514,20 @@ class Settings(BaseSettings):
     # How many top keyword-gap opportunities surface as Action Plan items.
     domain_intel_action_max: int = 3
 
+    # Keyword Research module (the seed-keyword explorer) — per-client keyword
+    # ideas from the DataForSEO Labs keyword_ideas endpoint, enriched + clustered.
+    # This backs the "Keyword Research" workspace card (replaced the Topic Fanout
+    # there; the Fanout remains behind "Create Mass Posts").
+    keyword_research_enabled: bool = True
+    # Daily ceiling on paid Labs calls for this module (own meter:
+    # keyword_research_usage). One billed call per run, so this is generous;
+    # 0 disables the guard.
+    keyword_research_daily_call_budget: int = 500
+    # Max keyword ideas fetched/stored per run (Labs caps at 1000).
+    keyword_research_idea_limit: int = 700
+    # Max seed keywords accepted per run (Labs caps the ideas seed set at 200).
+    keyword_research_max_seeds: int = 20
+
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
     # than the competitor median; distinct topics competitors cover the client lacks).
