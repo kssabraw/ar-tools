@@ -30,12 +30,21 @@ _CENSUS_COORD_URL = (
     "https://geocoding.geo.census.gov/geocoder/geographies/coordinates")
 _CENSUS_BENCHMARK = "Public_AR_Current"
 _CENSUS_VINTAGE = "Current_Current"
-_RETRY_WAITS = [10, 30, 90]        # transient-failure backoff (seconds)
-_CONCURRENCY = 6                   # polite bounded concurrency on the endpoint
+# Census coordinates endpoint is burst-sensitive: an early run at ~26 req/s
+# tripped its rate limiter and then throttled everything into backoff. So keep
+# this GENTLE — low concurrency + a per-request pace — and bound each run small
+# so it self-continues across rate windows instead of hogging the worker lane.
+_RETRY_WAITS = [8, 30]             # transient-failure backoff (seconds); short — pacing avoids the wall
+_CONCURRENCY = 3                   # gentle concurrency on the endpoint
+_REQUEST_PAUSE = 0.35              # per-request pace inside the semaphore (~8 req/s ceiling)
 _PAGE = 1000                       # city pages / commit chunks
-# A single throttled run resolves this many cities max before self-continuing,
-# so a partial run always makes progress and never runs unbounded.
-_MAX_PER_RUN = 6000
+# Each run resolves at most this many cities, then self-continues with a fresh
+# job — bounds wall-clock per run (deploy-interruption + reaper safety) and
+# spreads load across Census rate windows.
+_MAX_PER_RUN = 1200
+# Safety cap on the self-continue chain (payload 'run' counter) so a persistent
+# failure can't spawn jobs forever. 4,682 cities / 1,200 ≈ 4 runs; 15 is slack.
+_MAX_CONTINUATIONS = 15
 
 
 # ── Pure helpers (unit-tested) ────────────────────────────────────────────────
@@ -230,6 +239,8 @@ async def run_county_backfill_job(job: dict) -> None:
     from db.supabase_client import get_supabase
     supabase = get_supabase()
     job_id = job["id"]
+    payload = job.get("payload") or {}
+    run_n = int(payload.get("run", 0)) if isinstance(payload, dict) else 0
     try:
         done = _existing_city_ids(supabase)
         pending = [c for c in _all_cities()
@@ -248,6 +259,9 @@ async def run_county_backfill_job(job: dict) -> None:
                 async with sem:
                     res = await _county_for_coord(
                         client, float(c["latitude"]), float(c["longitude"]))
+                    # pace inside the slot so the endpoint's burst limiter isn't
+                    # tripped (a fast run once throttled the whole continuation)
+                    await asyncio.sleep(_REQUEST_PAUSE)
                 row = {"city_id": c["city_id"], "city_name": c.get("name"),
                        "state_code": c.get("state_code"), "source": "census",
                        "updated_at": now}
@@ -271,17 +285,22 @@ async def run_county_backfill_job(job: dict) -> None:
 
         remaining = total_pending - len(batch)
         continued = False
-        if remaining > 0:
+        # Self-continue with a fresh job (bounded chain) so each run stays short
+        # and load spreads across Census rate windows. Progress-gated: only chain
+        # when this run actually wrote something, so a persistent failure fails
+        # instead of spawning no-op jobs forever.
+        if remaining > 0 and (matched + missed) > 0 and run_n + 1 <= _MAX_CONTINUATIONS:
             supabase.table("async_jobs").insert({
                 "job_type": "leadoff_county_backfill",
-                "entity_id": str(uuid.uuid4()), "payload": {}, "max_attempts": 5,
+                "entity_id": str(uuid.uuid4()), "payload": {"run": run_n + 1},
+                "max_attempts": 5,
             }).execute()
             continued = True
 
         have = (supabase.table("city_counties").select("city_id", count="exact")
                 .limit(1).execute().count or 0)
         result = {
-            "processed_this_run": len(batch),
+            "run": run_n, "processed_this_run": len(batch),
             "county_matched": matched, "no_county": missed,
             "remaining": remaining, "continuation_enqueued": continued,
             "total_with_county": have,
