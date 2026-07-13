@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown } from 'lucide-react'
+import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown, Sparkles, ChevronLeft, ChevronRight } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 
@@ -136,6 +136,12 @@ interface ScoutEstimate {
   fully_cached: boolean
   running_job_id?: string | null
 }
+interface CategoryMatch {
+  matched: boolean
+  category: string | null
+  label: string
+  confidence: number
+}
 
 type Sort = 'v3' | 'build' | 'roi' | 'expected' | 'value' | 'leads' | 'demand'
 type Tier = 'low' | 'mid' | 'high'
@@ -209,6 +215,20 @@ export function LeadOff() {
   const [capture, setCapture] = useState(0.10)
   const [tier, setTier] = useState<Tier>('mid')
   const [selected, setSelected] = useState<{ city_id: number; category_id: string } | null>(null)
+  // Smart search (Sonnet → category match) + pagination.
+  const [searchText, setSearchText] = useState('')
+  const [searchResult, setSearchResult] = useState<CategoryMatch | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [page, setPage] = useState(0)
+  const PAGE_SIZE = 50
+
+  // Category dropdown options (all scanned categories, alphabetical).
+  const { data: catData } = useQuery<{ categories: string[] }>({
+    queryKey: ['leadoff-categories'],
+    queryFn: () => api.get<{ categories: string[] }>('/leadoff/categories'),
+    staleTime: 60 * 60_000,
+  })
+  const categories = catData?.categories ?? []
 
   const params = new URLSearchParams()
   if (applied.city) params.set('city', applied.city)
@@ -218,12 +238,41 @@ export function LeadOff() {
   params.set('sort', sort)
   params.set('capture', String(capture))
   params.set('lead_tier', tier)
-  params.set('limit', '50')
+  // Fetch a deep set so client-side pagination (50/screen) has pages to turn.
+  params.set('limit', '500')
 
   const { data: board, isLoading, error } = useQuery<BoardResponse>({
     queryKey: ['leadoff-board', applied, sort, capture, tier],
     queryFn: () => api.get<BoardResponse>(`/leadoff/board?${params.toString()}`),
   })
+
+  // Smart search: map free text → a scanned category via Sonnet; a confident
+  // match filters the board, a weak one shows "No Data Provided" (no filtering).
+  const runSmartSearch = async () => {
+    const q = searchText.trim()
+    if (!q || searching) return
+    setSearching(true)
+    try {
+      const res = await api.post<CategoryMatch>('/leadoff/category-search', { query: q })
+      setSearchResult(res)
+      if (res.matched && res.category) {
+        const next = { ...filters, category: res.category }
+        setFilters(next)
+        setApplied(next)
+      }
+    } catch {
+      setSearchResult({ matched: false, category: null, label: 'No Data Provided', confidence: 0 })
+    } finally {
+      setSearching(false)
+    }
+  }
+  const clearSmartSearch = () => {
+    setSearchText('')
+    setSearchResult(null)
+    const next = { ...filters, category: '' }
+    setFilters(next)
+    setApplied(next)
+  }
 
   const { data: brief, isLoading: briefLoading } = useQuery<MarketBrief>({
     queryKey: ['leadoff-brief', selected],
@@ -238,7 +287,8 @@ export function LeadOff() {
   const [colSort, setColSort] = useState<{ key: ColKey; dir: 'asc' | 'desc' } | null>(null)
   // Reset when the loaded population changes (server sort / filters / assumptions
   // re-fetch), so the server ordering takes over until a header is clicked again.
-  useEffect(() => { setColSort(null) }, [applied, sort, capture, tier])
+  useEffect(() => { setColSort(null); setPage(0) }, [applied, sort, capture, tier])
+  useEffect(() => { setPage(0) }, [colSort])
   const onHeaderSort = (key: ColKey | null, num: boolean) => {
     if (!key) return
     setColSort(prev => prev?.key === key
@@ -249,6 +299,9 @@ export function LeadOff() {
     const rows = board?.markets ?? []
     return colSort ? sortMarkets(rows, colSort) : rows
   }, [board, colSort])
+  const pageCount = Math.max(1, Math.ceil(displayRows.length / PAGE_SIZE))
+  const safePage = Math.min(page, pageCount - 1)
+  const pageRows = displayRows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
 
   const exportCsv = () => {
     const rows = displayRows
@@ -303,6 +356,34 @@ export function LeadOff() {
         {view === 'tryouts' && <TryoutsView />}
 
         {view === 'board' && <>
+        {/* Smart search — Sonnet maps free text to a scanned category */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+          <Sparkles size={16} color="#0e7d6f" style={{ flexShrink: 0 }} />
+          <input
+            style={{ ...inputStyle, flex: 1, minWidth: 220, maxWidth: 420 }}
+            value={searchText}
+            placeholder="Smart search — describe a business type (e.g. “someone to fix my roof”)"
+            onChange={e => setSearchText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') runSmartSearch() }}
+          />
+          <button style={primaryBtn} disabled={searching || !searchText.trim()} onClick={runSmartSearch}>
+            {searching ? <Loader2 size={14} className="spin" /> : <Search size={14} />} Match
+          </button>
+          {searchResult?.matched && (
+            <span style={{ ...pill, background: '#e3f2ef', color: '#0e7d6f' }}>
+              Matched → {searchResult.category} ({Math.round(searchResult.confidence * 100)}%)
+            </span>
+          )}
+          {searchResult && !searchResult.matched && (
+            <span style={{ ...pill, background: '#fef3c7', color: '#92400e' }}
+              title={`Confidence ${(searchResult.confidence * 100).toFixed(0)}% — below the 85% match threshold`}>
+              No Data Provided
+            </span>
+          )}
+          {(searchResult || searchText) && (
+            <button style={secondaryBtn} onClick={clearSmartSearch} title="Clear smart search"><X size={14} /></button>
+          )}
+        </div>
         {/* Filter / assumption bar */}
         <div style={barStyle}>
           <Field label="City">
@@ -314,8 +395,11 @@ export function LeadOff() {
               onChange={e => setFilters({ ...filters, state: e.target.value.toUpperCase() })} />
           </Field>
           <Field label="Category">
-            <input style={inputStyle} value={filters.category} placeholder="any"
-              onChange={e => setFilters({ ...filters, category: e.target.value })} />
+            <select style={{ ...inputStyle, maxWidth: 220 }} value={filters.category}
+              onChange={e => { setFilters({ ...filters, category: e.target.value }); setSearchResult(null) }}>
+              <option value="">any</option>
+              {categories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
           </Field>
           <Field label="Min demand">
             <input style={{ ...inputStyle, width: 80 }} type="number" value={filters.minDemand}
@@ -384,7 +468,7 @@ export function LeadOff() {
                 </tr>
               </thead>
               <tbody>
-                {displayRows.map(r => {
+                {pageRows.map(r => {
                   const isSel = selected?.city_id === r.city_id && selected?.category_id === r.category_id
                   return (
                     <tr key={`${r.city_id}:${r.category_id}`}
@@ -430,6 +514,27 @@ export function LeadOff() {
               </tbody>
             </table>
           </div>
+          {/* Pagination — 50 markets/screen */}
+          {displayRows.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              gap: 12, padding: '8px 12px', borderTop: '1px solid #e2e8f0',
+              background: '#f8fafc', fontSize: 13, color: '#475569', flexWrap: 'wrap' }}>
+              <span>
+                {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, displayRows.length)} of {displayRows.length}
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <button style={{ ...secondaryBtn, opacity: safePage === 0 ? 0.5 : 1 }}
+                  disabled={safePage === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>
+                  <ChevronLeft size={14} /> Prev
+                </button>
+                <span style={{ minWidth: 92, textAlign: 'center' }}>Page {safePage + 1} of {pageCount}</span>
+                <button style={{ ...secondaryBtn, opacity: safePage >= pageCount - 1 ? 0.5 : 1 }}
+                  disabled={safePage >= pageCount - 1} onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))}>
+                  Next <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         </>}
       </div>

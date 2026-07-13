@@ -274,6 +274,17 @@ def attach_permits(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
+def list_categories() -> list[str]:
+    """All scanned categories, sorted alphabetically — powers the board's
+    category dropdown and the smart-search matcher's candidate set. Reads the
+    small `categories` reference table (~100 rows, a superset of the board's
+    categories with identical display names), not a distinct over the 34k-row
+    board."""
+    rows = (_client().table("categories").select("category_name")
+            .execute().data or [])
+    return sorted({r["category_name"] for r in rows if r.get("category_name")})
+
+
 def list_board(*, city: str | None, state: str | None, category: str | None,
                min_demand: int | None, sort: str, capture: float, lead_tier: str,
                limit: int, prefetch: int) -> dict[str, Any]:
