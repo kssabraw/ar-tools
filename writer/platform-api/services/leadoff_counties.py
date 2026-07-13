@@ -59,10 +59,18 @@ def parse_county(resp_json: dict[str, Any]) -> Optional[tuple[str, str]]:
         geos = (resp_json.get("result") or {}).get("geographies") or {}
     except AttributeError:
         return None
-    # be tolerant of the layer label ("Counties")
+    # Match on "counties" (plural) specifically — NOT the bare substring
+    # "count", which also matches the "County Subdivisions" layer (a real,
+    # confirmed bug: every response carries both layers, and "county
+    # subdivisions" contains "count" too, so a bare-substring check silently
+    # picked the subdivision — Jersey City's own MCD — instead of its real
+    # county, Hudson, on 100% of rows in the first live run).
     counties = None
     for key, val in geos.items():
-        if "count" in key.lower():
+        kl = key.lower()
+        if "subdivision" in kl:
+            continue
+        if "counties" in kl:
             counties = val
             break
     if not counties:
@@ -70,7 +78,10 @@ def parse_county(resp_json: dict[str, Any]) -> Optional[tuple[str, str]]:
     c = counties[0]
     name = (c.get("NAME") or c.get("BASENAME") or "").strip()
     fips = (c.get("GEOID") or "").strip()
-    if not name or not fips:
+    # Defense-in-depth: a real county GEOID is exactly 5 digits (2-digit state
+    # + 3-digit county). Anything else (e.g. a 10-digit subdivision GEOID) means
+    # a wrong layer slipped through — refuse rather than store bad geography.
+    if not name or not fips or not (len(fips) == 5 and fips.isdigit()):
         return None
     return name, fips
 

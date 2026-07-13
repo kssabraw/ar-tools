@@ -32,6 +32,28 @@ class TestParseCounty:
         assert parse_county({"result": {"geographies": {"Counties": [
             {"BASENAME": "Cook", "GEOID": "17031"}]}}}) == ("Cook", "17031")
 
+    def test_ignores_county_subdivisions_layer(self):
+        # Regression: the real Census response for a coordinate carries BOTH
+        # "County Subdivisions" and "Counties" layers. "County Subdivisions"
+        # also contains the substring "count", so a bare substring match picks
+        # it first — every live row came back as the city's own MCD (e.g.
+        # "Jersey City city", a 10-digit GEOID) instead of its real county
+        # (Hudson County, 5-digit GEOID). Order the dict as the real API does
+        # (subdivision layer listed before the county layer) to prove the fix
+        # skips it regardless of iteration order.
+        resp = {"result": {"geographies": {
+            "County Subdivisions": [{"NAME": "Jersey City city",
+                                     "GEOID": "3401736000"}],
+            "Counties": [{"NAME": "Hudson County", "GEOID": "34017"}],
+        }}}
+        assert parse_county(resp) == ("Hudson County", "34017")
+
+    def test_rejects_non_5digit_fips_even_if_layer_key_matches(self):
+        # Defense-in-depth: a 10-digit GEOID under a layer key that still
+        # slipped past the subdivision filter must be refused, not stored.
+        assert parse_county({"result": {"geographies": {"Counties": [
+            {"NAME": "Jersey City city", "GEOID": "3401736000"}]}}}) is None
+
 
 class TestBareCounty:
     def test_strips_governance_suffix(self):
