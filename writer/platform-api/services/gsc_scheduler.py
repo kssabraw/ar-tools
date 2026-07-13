@@ -471,6 +471,7 @@ async def gsc_scheduler() -> None:
     from services.leadoff_permits import enqueue_due_permits as enqueue_due_leadoff_permits
     from services.leadoff_signals import enqueue_due_signal_refresh as enqueue_due_leadoff_signals
     from services.leadoff_income import enqueue_due_income_backfill as enqueue_due_leadoff_income
+    from services.leadoff_counties import enqueue_due_county_backfill as enqueue_due_leadoff_counties
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.backlink_explorer import auto_track_client_domains, enqueue_due_backlink_snapshots
     from services.response_episodes import run_episode_sync
@@ -532,6 +533,10 @@ async def gsc_scheduler() -> None:
                 # only runs when the store is empty or ~annually stale). Feeds
                 # the peer-cohort field-strength signal.
                 enqueue_due_leadoff_income()
+                # LeadOff per-city county backfill (free Census reverse-geocode;
+                # runs once to fill, then only tops up new cities). Powers the
+                # board's county filter.
+                enqueue_due_leadoff_counties()
                 # LeadOff market-signal cache refresh ($0 — proximity +
                 # footprint + peer-cohort precompute for the board grade;
                 # self-gates on empty/stale cache).

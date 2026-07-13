@@ -1072,6 +1072,10 @@ class Settings(BaseSettings):
     leadoff_income_enabled: bool = True
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
+    # Per-city county map (public.city_counties) — reverse-geocoded from each
+    # city's lat/lng via the free US Census endpoint; powers the board's county
+    # filter. See services/leadoff_counties.py.
+    leadoff_counties_enabled: bool = True
     # Optional Census Data API key (free, instant from api.census.gov/data/key_signup.html).
     # Not required for low volume, but keyed requests bypass the anonymous
     # throttle if the ~51-state backfill gets edge-blocked.
