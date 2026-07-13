@@ -1003,7 +1003,31 @@ async def run_brand_scan_job(job: dict) -> None:
         # Process cells with bounded concurrency so a large scan overlaps its
         # network-bound provider calls instead of monopolising the worker.
         counts = {"completed": 0, "failed": 0}
+        total_cells = len(rows_to_process)
         sem = asyncio.Semaphore(max(1, settings.brand_scan_concurrency))
+
+        # Live progress: the frontend's scan progress bar polls this job's
+        # result.total/completed. Write a snapshot up-front (so the bar has a
+        # real denominator immediately instead of sitting at 0/0 until the very
+        # end) and again as cells finish. Throttled to at most ~40 writes across
+        # the whole scan so a large (200-cell) run doesn't hammer async_jobs.
+        # Best-effort — a progress-write failure never affects the scan.
+        progress_step = max(1, total_cells // 40)
+
+        def _write_progress() -> None:
+            try:
+                supabase.table("async_jobs").update({
+                    "result": {
+                        "scan_batch_id": scan_batch_id,
+                        "total": total_cells,
+                        "completed": counts["completed"],
+                        "failed": counts["failed"],
+                    },
+                }).eq("id", job_id).execute()
+            except Exception:  # pragma: no cover - progress is best-effort
+                pass
+
+        _write_progress()
 
         async def _process_cell(row_id: str, keyword: str, engine: str) -> None:
             async with sem:
@@ -1052,6 +1076,13 @@ async def run_brand_scan_job(job: dict) -> None:
                         {"status": "failed", "failure_reason": "internal_error", "updated_at": "now()"}
                     ).eq("id", row_id).execute()
                     counts["failed"] += 1
+
+                # Report progress on a throttled cadence (and always on the last
+                # cell). asyncio is single-threaded, so the counter reads are
+                # race-free; the final authoritative write happens below.
+                done = counts["completed"] + counts["failed"]
+                if done >= total_cells or done % progress_step == 0:
+                    _write_progress()
 
         await asyncio.gather(*(_process_cell(rid, kw, eng) for rid, kw, eng in rows_to_process))
 
