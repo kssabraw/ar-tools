@@ -76,6 +76,26 @@ async def get_proximity(
         return {"available": False, "reason": "proximity_error"}
 
 
+@router.post("/leadoff/signals/refresh", status_code=202)
+async def refresh_signals(auth: dict = Depends(require_staff)) -> dict:
+    """Seed / refresh the board's market-signal cache (proximity + footprint
+    precompute) on demand. $0 — pure math on already-captured data. Idempotent;
+    a no-op if a refresh is already queued."""
+    from services.leadoff_signals import enqueue_due_signal_refresh
+    import uuid
+    # force an enqueue (the scheduler helper is staleness-gated; here the user
+    # asked explicitly) unless one is already active
+    active = (get_supabase().table("async_jobs").select("id", count="exact")
+              .eq("job_type", "leadoff_signal_refresh")
+              .in_("status", ["pending", "running"]).limit(1).execute().count or 0)
+    if active:
+        return {"enqueued": False, "reason": "already_running"}
+    get_supabase().table("async_jobs").insert({
+        "job_type": "leadoff_signal_refresh", "entity_id": str(uuid.uuid4()),
+        "payload": {}, "max_attempts": 3}).execute()
+    return {"enqueued": True}
+
+
 @router.get("/leadoff/neighborhoods")
 async def get_neighborhoods(
     metro: str | None = None,
@@ -143,11 +163,19 @@ async def create_client_from_market(
                 "client_id": client_id, "competitor": comp.get("name"),
                 "error": str(exc)})
 
+    # Distance-pillar read for the handoff (placement recommendation) +
+    # calibration (proximity_opportunity the geo-grid later verifies).
+    from services.leadoff_proximity import market_proximity
+    try:
+        proximity = await market_proximity(body.city_id, body.category_id)
+    except Exception:
+        proximity = None
+
     goal_created = False
     try:
         campaign_goals.create_goal(
             client_id,
-            leadoff_service.handoff_goal(brief, brief.get("enrichment")),
+            leadoff_service.handoff_goal(brief, brief.get("enrichment"), proximity),
             created_by=auth["user_id"],
         )
         goal_created = True
@@ -159,7 +187,8 @@ async def create_client_from_market(
     # immutable — the machine copy of the prose goal above). Best-effort.
     from services import leadoff_calibration
     prediction_id = leadoff_calibration.capture_prediction(
-        client_id, brief, DEFAULT_CAPTURE, DEFAULT_TIER, auth.get("user_id"))
+        client_id, brief, DEFAULT_CAPTURE, DEFAULT_TIER, auth.get("user_id"),
+        proximity=proximity)
 
     logger.info("leadoff_client_created", extra={
         "client_id": client_id, "city_id": body.city_id,

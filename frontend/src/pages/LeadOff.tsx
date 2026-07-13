@@ -409,7 +409,7 @@ export function LeadOff() {
                         {compact(c.site_pages)} pages
                         {c.mentions != null && <> · {compact(c.mentions)} mentions{c.generic_name ? '*' : ''}</>}
                         {c.unlinked_mentions != null && <> ({compact(c.unlinked_mentions)} unlinked)</>}
-                        {c.nap_citations != null && <> · {compact(c.nap_citations)} NAP</>}
+                        {(c.nap_citations ?? 0) > 0 && <> · {compact(c.nap_citations)} NAP</>}
                       </div>
                     )}
                   </div>

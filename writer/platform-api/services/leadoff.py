@@ -173,7 +173,8 @@ def handoff_competitors(competitors: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def handoff_goal(row: dict[str, Any],
-                 enrichment: dict[str, Any] | None) -> dict[str, Any]:
+                 enrichment: dict[str, Any] | None,
+                 proximity: dict[str, Any] | None = None) -> dict[str, Any]:
     """Custom campaign-goal fields carrying the market's effort targets, so the
     strategist judges the campaign against what LeadOff said it would take.
     Manual goal (no auto-measurement): the targets are entry-decision numbers,
@@ -194,6 +195,17 @@ def handoff_goal(row: dict[str, Any],
             lines.append(
                 f"Field momentum at scan: {enrichment['momentum']} (field reviews "
                 f"30d {enrichment.get('field_vel30')} vs {enrichment.get('field_prior30')}).")
+    # Distance-pillar placement (proximity plan §3): the suggested GBP zone(s)
+    # where no ranked competitor is anchored — a concrete entry recommendation.
+    if proximity and proximity.get("available") and proximity.get("placement"):
+        def _zone(p: dict[str, Any]) -> str:
+            loc = p.get("locality")
+            return f"{p.get('octant')}" + (f" (near {loc})" if loc else "")
+        zones = ", ".join(_zone(p) for p in proximity["placement"])
+        lines.append(
+            f"Suggested GBP placement: {zones} — undefended by ranked "
+            f"competitors (pre-client proximity read; the geo-grid verifies "
+            f"post-client).")
     return {
         "goal_type": "custom",
         "label": f"LeadOff targets — {row.get('category')} in {city}",
@@ -291,26 +303,37 @@ def list_board(*, city: str | None, state: str | None, category: str | None,
 
 def _enrich_board_grades(markets: list[dict[str, Any]], capture: float,
                          lead_tier: str, sort: str) -> list[dict[str, Any]]:
-    """Board-wide grade enrichment (owner ruling 2026-07-12). Increment 1 uses
-    the demand-side **permit** signal only — the board-wide signal we can read
-    for $0 (attach_permits already joined it). Winnability signals (proximity,
-    footprint) join the board grade in increment 2 behind a per-market signal
-    cache (computing octant math + footprint for every board row on each load
-    would be too heavy); the full four-signal grade already runs on the deep
-    market brief. Re-sorts the displayed set on the enriched score so ordering
-    stays consistent with the shown grades."""
+    """Board-wide grade enrichment (owner ruling 2026-07-12). Demand-side
+    **permit** signal from the joined permit_flag ($0, always) + the winnability
+    signals (**proximity**, incumbent **site/brand** pressure) read from the
+    precomputed public.leadoff_market_signals cache (increment 2 — populated by
+    the leadoff_signal_refresh job so octant math isn't recomputed per row).
+    Markets the cache hasn't reached yet degrade to permit-only. Re-sorts the
+    displayed set on the enriched score so ordering matches the shown grades."""
     from config import settings
     if not settings.leadoff_scoring_enabled or not markets:
         return markets
     try:
+        from db.supabase_client import get_supabase
         from services import leadoff_scoring
+        from services.leadoff_signals import read_signals
+
+        cached = read_signals(get_supabase(),
+                              [(r.get("city_id"), r.get("category_id"))
+                               for r in markets])
         lv = _lead_values(lead_tier)
         bp = _percentile_breakpoints()
         w = leadoff_scoring.default_weights()
         out = []
         for r in markets:
-            signals = {"permit": (leadoff_scoring.permit_signal(r.get("permit_flag"))
-                                  if r.get("permit_flag") else None)}
+            c = cached.get((r.get("city_id"), r.get("category_id"))) or {}
+            signals = {
+                "permit": (leadoff_scoring.permit_signal(r.get("permit_flag"))
+                           if r.get("permit_flag") else None),
+                "proximity": c.get("proximity_opportunity"),
+                "site_pressure": c.get("site_pressure"),
+                "brand_pressure": c.get("brand_pressure"),
+            }
             out.append(leadoff_scoring.enrich_grade(
                 r, signals, capture=capture, lead_value=lv.get(r.get("category")),
                 breakpoints=bp, w=w))
