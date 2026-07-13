@@ -339,7 +339,12 @@ def _enrich_board_grades(markets: list[dict[str, Any]], capture: float,
                 "proximity": c.get("proximity_opportunity"),
                 "site_pressure": c.get("site_pressure"),
                 "brand_pressure": c.get("brand_pressure"),
+                "peer_field": c.get("peer_field"),
             }
+            # carry the cohort detail for UI transparency (not a grade input)
+            for k in ("peer_cohort_median", "peer_cohort_n"):
+                if c.get(k) is not None:
+                    r[k] = c.get(k)
             out.append(leadoff_scoring.enrich_grade(
                 r, signals, capture=capture, lead_value=lv.get(r.get("category")),
                 breakpoints=bp, w=w))
@@ -437,14 +442,24 @@ def _enrich_brief_grade(brief: dict[str, Any], comps: list[dict[str, Any]],
     if not settings.leadoff_scoring_enabled:
         return brief
     try:
+        from db.supabase_client import get_supabase
         from services import leadoff_scoring
         from services.leadoff_proximity import market_proximity_score
+        from services.leadoff_signals import read_signals
 
         # sync score (no pin naming) — safe to call from the sync brief path
         prox_opp = market_proximity_score(city_id, category_id)
+        # peer-cohort field-strength is precomputed board-wide (its cohort math
+        # can't be recomputed per-brief cheaply) — read it from the cache.
+        cached = read_signals(get_supabase(), [(city_id, category_id)]).get(
+            (city_id, category_id)) or {}
+        for k in ("peer_cohort_median", "peer_cohort_n"):
+            if cached.get(k) is not None:
+                brief[k] = cached.get(k)
         signals = leadoff_scoring.brief_signals(
             brief, comps, prox_opp,
-            (trend_row or {}).get("growth_yoy_ss"))
+            (trend_row or {}).get("growth_yoy_ss"),
+            peer_field=cached.get("peer_field"))
         lv = _lead_values(DEFAULT_TIER).get(brief.get("category"))
         return leadoff_scoring.enrich_grade(
             brief, signals, capture=DEFAULT_CAPTURE, lead_value=lv,

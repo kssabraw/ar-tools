@@ -96,6 +96,23 @@ async def refresh_signals(auth: dict = Depends(require_staff)) -> dict:
     return {"enqueued": True}
 
 
+@router.post("/leadoff/income/backfill", status_code=202)
+async def backfill_income(auth: dict = Depends(require_staff)) -> dict:
+    """Fetch per-city median household income from the free Census ACS 5-year
+    API (the peer-cohort field-strength input). ~51 calls, $0; idempotent.
+    A no-op if a backfill is already queued."""
+    import uuid
+    active = (get_supabase().table("async_jobs").select("id", count="exact")
+              .eq("job_type", "leadoff_income_backfill")
+              .in_("status", ["pending", "running"]).limit(1).execute().count or 0)
+    if active:
+        return {"enqueued": False, "reason": "already_running"}
+    get_supabase().table("async_jobs").insert({
+        "job_type": "leadoff_income_backfill", "entity_id": str(uuid.uuid4()),
+        "payload": {}, "max_attempts": 3}).execute()
+    return {"enqueued": True}
+
+
 @router.get("/leadoff/find-cities")
 async def find_cities(
     category: str,

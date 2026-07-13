@@ -470,6 +470,7 @@ async def gsc_scheduler() -> None:
     )
     from services.leadoff_permits import enqueue_due_permits as enqueue_due_leadoff_permits
     from services.leadoff_signals import enqueue_due_signal_refresh as enqueue_due_leadoff_signals
+    from services.leadoff_income import enqueue_due_income_backfill as enqueue_due_leadoff_income
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.backlink_explorer import auto_track_client_domains, enqueue_due_backlink_snapshots
     from services.response_episodes import run_episode_sync
@@ -527,9 +528,13 @@ async def gsc_scheduler() -> None:
                 # BPS prospect-pipeline refresh (free flat files; the job
                 # only actually runs when the store is empty or stale).
                 enqueue_due_leadoff_permits()
+                # LeadOff household-income backfill (free Census ACS; the job
+                # only runs when the store is empty or ~annually stale). Feeds
+                # the peer-cohort field-strength signal.
+                enqueue_due_leadoff_income()
                 # LeadOff market-signal cache refresh ($0 — proximity +
-                # footprint precompute for the board grade; self-gates on
-                # empty/stale cache).
+                # footprint + peer-cohort precompute for the board grade;
+                # self-gates on empty/stale cache).
                 enqueue_due_leadoff_signals()
                 # Weekly citation liveness (per-client interval-gated) +
                 # monthly page-level RD-imbalance captures.

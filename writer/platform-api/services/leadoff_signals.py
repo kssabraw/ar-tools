@@ -11,6 +11,10 @@ read joins the cache cheaply.
   * site_pressure / brand_pressure — fill only where a scout has populated the
     footprint caches; absent elsewhere (graceful — the board grade then uses
     proximity + permits for those markets)
+  * peer_field — board-wide peer-cohort field-strength (this market's rev_win
+    vs comparable-size, comparable-income cities in the same category; see
+    services/leadoff_peer_cohort.py). Needs the Census income backfill; degrades
+    to a size-only cohort when a city's income is missing.
 
 Reaper-safe: the whole competitor pin set is loaded once (paginated), grouped
 in memory, and results upserted in chunks. Idempotent (PK upsert).
@@ -131,6 +135,55 @@ def _footprint_caches(supabase) -> tuple[dict[str, Any], dict[str, Any]]:
     return site, mentions
 
 
+def _board_markets() -> list[dict[str, Any]]:
+    """(city_id, category_id, category, rev_win) for every board market — the
+    field-strength (rev_win) input to the peer-cohort signal."""
+    from services.leadoff_db import get_leadoff_client
+    client = get_leadoff_client()
+    out: list[dict[str, Any]] = []
+    page = 0
+    while True:
+        chunk = (client.table("leadoff_board")
+                 .select("city_id, category_id, category, rev_win")
+                 .range(page * _PAGE, page * _PAGE + _PAGE - 1).execute().data or [])
+        out.extend(chunk)
+        if len(chunk) < _PAGE:
+            return out
+        page += 1
+
+
+def _city_meta() -> dict[int, tuple[Any, Any]]:
+    """{city_id: (size_tier, population)} — the size dimension of the cohort."""
+    from services.leadoff_db import get_leadoff_client
+    client = get_leadoff_client()
+    idx: dict[int, tuple[Any, Any]] = {}
+    page = 0
+    while True:
+        chunk = (client.table("cities").select("city_id, size_tier, population")
+                 .range(page * _PAGE, page * _PAGE + _PAGE - 1).execute().data or [])
+        for c in chunk:
+            idx[c["city_id"]] = (c.get("size_tier"), c.get("population"))
+        if len(chunk) < _PAGE:
+            return idx
+        page += 1
+
+
+def _income_map(supabase) -> dict[int, int]:
+    """{city_id: median_household_income} from the app-owned Census backfill."""
+    out: dict[int, int] = {}
+    page = 0
+    while True:
+        chunk = (supabase.table("city_household_income")
+                 .select("city_id, median_household_income")
+                 .range(page * _PAGE, page * _PAGE + _PAGE - 1).execute().data or [])
+        for r in chunk:
+            if r.get("median_household_income") is not None:
+                out[r["city_id"]] = r["median_household_income"]
+        if len(chunk) < _PAGE:
+            return out
+        page += 1
+
+
 def read_signals(supabase, markets: list[tuple[int, str]]) -> dict[tuple[int, str], dict]:
     """Cheap board-read: cached signal rows for the displayed markets. Fetches
     by the ≤N city_ids (composite-key .in_ is awkward in PostgREST) and matches
@@ -140,7 +193,8 @@ def read_signals(supabase, markets: list[tuple[int, str]]) -> dict[tuple[int, st
     city_ids = sorted({c for c, _ in markets})
     rows = (supabase.table("leadoff_market_signals")
             .select("city_id, category_id, proximity_opportunity, "
-                    "site_pressure, brand_pressure")
+                    "site_pressure, brand_pressure, peer_field, "
+                    "peer_cohort_median, peer_cohort_n")
             .in_("city_id", city_ids).execute().data or [])
     return {(r["city_id"], r["category_id"]): r for r in rows}
 
@@ -190,28 +244,54 @@ async def run_signal_refresh_job(job: dict) -> None:
     supabase = get_supabase()
     job_id = job["id"]
     try:
+        from config import settings
+        from services.leadoff_peer_cohort import compute_peer_signals
+
         centers = _city_centers()
         pins_by_market = _grouped_pins(supabase)
         site_by_domain, mentions_by_key = _footprint_caches(supabase)
         now = datetime.now(timezone.utc).isoformat()
 
-        writes: list[dict[str, Any]] = []
-        computed = 0
+        # One row body per market, merging every available signal so a market
+        # with only a peer-cohort read (no pins) still gets a cache row.
+        by_market: dict[tuple[int, str], dict[str, Any]] = {}
+
+        # 1) pin-based winnability signals (proximity + footprint pressure)
         for (city_id, category_id), pins in pins_by_market.items():
             body = compute_market_signal(centers.get(city_id), pins,
                                          site_by_domain, mentions_by_key)
-            if body is None:
-                continue
-            writes.append({"city_id": city_id, "category_id": category_id,
-                           **body, "computed_at": now})
-            computed += 1
-            if len(writes) >= _UPSERT_CHUNK:
-                supabase.table("leadoff_market_signals").upsert(writes).execute()
-                writes = []
-        if writes:
-            supabase.table("leadoff_market_signals").upsert(writes).execute()
+            if body is not None:
+                by_market[(city_id, category_id)] = dict(body)
 
-        result = {"markets_with_pins": len(pins_by_market), "computed": computed,
+        # 2) board-wide peer-cohort field-strength (comparable size + income)
+        board = _board_markets()
+        city_meta = _city_meta()
+        income = _income_map(supabase)
+        cohort_input = [{
+            "city_id": r.get("city_id"), "category_id": r.get("category_id"),
+            "category": r.get("category"), "rev_win": r.get("rev_win"),
+            "size_tier": city_meta.get(r.get("city_id"), (None, None))[0],
+            "population": city_meta.get(r.get("city_id"), (None, None))[1],
+            "income": income.get(r.get("city_id")),
+        } for r in board]
+        peer = compute_peer_signals(
+            cohort_input, min_peers=settings.leadoff_peer_cohort_min_peers)
+        for key, sig in peer.items():
+            row = by_market.setdefault(key, {})
+            row["peer_field"] = sig["peer_field"]
+            row["peer_cohort_median"] = sig["cohort_median"]
+            row["peer_cohort_n"] = sig["cohort_n"]
+
+        # upsert everything, chunked (reaper-safe)
+        writes = [{"city_id": c, "category_id": cat, **body, "computed_at": now}
+                  for (c, cat), body in by_market.items()]
+        for i in range(0, len(writes), _UPSERT_CHUNK):
+            supabase.table("leadoff_market_signals").upsert(
+                writes[i:i + _UPSERT_CHUNK]).execute()
+
+        result = {"markets_with_pins": len(pins_by_market),
+                  "signal_rows": len(writes), "peer_cohort_rows": len(peer),
+                  "income_cities": len(income),
                   "footprint_domains": len(site_by_domain),
                   "footprint_brands": len(mentions_by_key)}
         supabase.table("async_jobs").update({

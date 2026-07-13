@@ -1039,10 +1039,24 @@ class Settings(BaseSettings):
     leadoff_score_w_brand: float = 0.08       # strong incumbent brands → harder
     leadoff_score_w_permit: float = 0.06      # housing pipeline → more demand
     leadoff_score_w_seasonal: float = 0.05    # same-month YoY demand direction
+    leadoff_score_w_peer_cohort: float = 0.07  # field weak/strong vs comparable
+    #                                            (size + income) cities → easier/harder
     # Market-signal cache (score-enrichment increment 2): the board reads
     # precomputed proximity + footprint pressure from leadoff_market_signals;
     # the refresh job self-gates, re-running when the cache is older than this.
     leadoff_signal_refresh_days: int = 7
+    # Household-income backfill (peer-cohort field-strength input): per-city
+    # median household income from the free Census ACS 5-year API (table
+    # B19013). One value per city, refreshed ~annually; the peer-cohort signal
+    # compares each market's field against comparable-size, comparable-income
+    # cities. See services/leadoff_income.py + services/leadoff_peer_cohort.py.
+    leadoff_income_enabled: bool = True
+    leadoff_income_acs_year: int = 2023
+    leadoff_income_refresh_days: int = 365
+    # Peer-cohort math: the minimum comparable cities needed for a stable
+    # cohort median before the signal is trusted (else the fallback ladder
+    # widens the cohort, or the signal drops out → contributes 0 to the grade).
+    leadoff_peer_cohort_min_peers: int = 5
     # City-finder (assistant "which cities for category X"): default per-lead
     # value used when a NEW category has no CPL on file (CPL is user-supplied
     # per category — flagged as an assumption in the run result).
