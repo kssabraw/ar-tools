@@ -87,6 +87,54 @@ def test_generate_payload_blank_facts_become_none():
     assert payload["product_input"] is None
 
 
+# ── house PDP template resolution ────────────────────────────────────────────
+
+def _capture_generate_payload(client_row, page_type, page_template_url=None):
+    """Drive generate_page with the network/DB mocked, returning the payload sent
+    to nlp so we can assert house-template resolution."""
+    sent = {}
+
+    async def _fake_stream(path, payload):
+        sent.update(payload)
+        return {"content_html": "<article></article>", "composite_score": 90}
+
+    with patch.object(e, "_get_client", return_value=client_row), \
+         patch.object(e, "_stream_nlp", new=AsyncMock(side_effect=_fake_stream)), \
+         patch.object(e, "_persist_page", return_value={"id": "p1"}):
+        _run(e.generate_page("c1", "kw", page_type, None, None, "u1", page_template_url=page_template_url))
+    return sent
+
+
+def test_product_uses_client_default_house_template():
+    row = _client_row(ecommerce_page_template_url="https://acmegear.com/best-pdp")
+    sent = _capture_generate_payload(row, "product")
+    assert sent["page_template_url"] == "https://acmegear.com/best-pdp"
+
+
+def test_per_call_template_overrides_client_default():
+    row = _client_row(ecommerce_page_template_url="https://acmegear.com/best-pdp")
+    sent = _capture_generate_payload(row, "product", page_template_url="https://acmegear.com/other-pdp")
+    assert sent["page_template_url"] == "https://acmegear.com/other-pdp"
+
+
+def test_collection_ignores_house_template():
+    row = _client_row(ecommerce_page_template_url="https://acmegear.com/best-pdp")
+    sent = _capture_generate_payload(row, "collection")
+    assert sent["page_template_url"] is None
+
+
+def test_set_page_template_default_normalizes_blank_to_none():
+    supabase = MagicMock()
+    table = MagicMock()
+    supabase.table.return_value = table
+    for m in ("update", "eq"):
+        getattr(table, m).return_value = table
+    table.execute.return_value = MagicMock(data=[{"id": "c1"}])
+    with patch.object(e, "get_supabase", return_value=supabase):
+        out = e.set_page_template_default("c1", "   ")
+    assert out["ecommerce_page_template_url"] is None
+
+
 # ── score-run history row ────────────────────────────────────────────────────
 
 def test_score_run_row_shape():

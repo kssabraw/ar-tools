@@ -28,6 +28,7 @@ from models.ecommerce import (
     EcommerceJobsStatusRequest,
     EcommercePageDetail,
     EcommercePageListItem,
+    EcommercePageTemplateRequest,
     EcommerceReoptimizeBulkJob,
     EcommerceReoptimizeBulkRequest,
     EcommerceScoreRequest,
@@ -58,8 +59,29 @@ async def generate_ecommerce_page_async(
         source_url=body.source_url,
         product_input=body.product_input,
         user_id=auth["user_id"],
+        page_template_url=body.page_template_url,
     )
     return EcommerceGenerateJob(job_id=job_id, status="pending")
+
+
+@router.get("/clients/{client_id}/ecommerce/page-template-default")
+async def get_ecommerce_page_template_default(
+    client_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Return the client's saved house PDP template URL (products mirror it)."""
+    return ecommerce_service.get_page_template_default(str(client_id))
+
+
+@router.put("/clients/{client_id}/ecommerce/page-template-default")
+async def set_ecommerce_page_template_default(
+    client_id: UUID,
+    body: EcommercePageTemplateRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Set/clear the client's house PDP template — the reference product page whose
+    structure every new PRODUCT description mirrors."""
+    return ecommerce_service.set_page_template_default(str(client_id), body.page_template_url)
 
 
 @router.get(

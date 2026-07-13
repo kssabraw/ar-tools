@@ -7270,6 +7270,12 @@ class GenerateEcommerceRequest(BaseModel):
     run_analysis: bool = True
     location: str = _ECOMMERCE_SERP_LOCATION
     location_code: Optional[int] = None
+    # House PDP template (products only): a reference product page whose section
+    # layout/order/blocks the writer mirrors so every product follows the client's
+    # fixed house structure. `page_template_url` is scraped here; `page_template_html`
+    # wins if supplied. Ignored for collections.
+    page_template_url: Optional[str] = None
+    page_template_html: Optional[str] = None
 
 
 @app.post('/generate-ecommerce-page')
@@ -7323,6 +7329,30 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
             diff_text = "Differentiators (use these — include the mechanism for each):\n" + \
                 "\n".join(f"  - {d.get('claim','')} (mechanism: {d.get('mechanism','')})" for d in body.differentiators)
 
+        # House PDP template (products only): mirror the client's reference product
+        # page's section layout/order/blocks so every product follows the same
+        # structure. Best-effort — an unreachable/empty template degrades to the
+        # default PDP structure rather than failing.
+        template_text = ""
+        if page_type == "product" and (body.page_template_url or body.page_template_html):
+            await q.put({"step": "progress", "progress": 58, "message": "Applying your house template…"})
+            _outline = await _extract_template_outline(body.page_template_url, body.page_template_html)
+            if _outline:
+                template_text = (
+                    "STRUCTURE TO MIRROR — OVERRIDES THE DEFAULT PRODUCT-PAGE STRUCTURE:\n"
+                    "Reproduce the section layout, order, and heading hierarchy of the reference "
+                    "product page below — adapt ALL wording to THIS product (do NOT copy the "
+                    "reference's wording or its specific facts). Each line is annotated with that "
+                    "section's approximate length and its content blocks: MATCH them — keep a short "
+                    "section short, a long section long, and reproduce the noted blocks in the same "
+                    "places (a '[list]' → use a list; a '[table]' → use a table). STILL apply every "
+                    "ecommerce writing rule (answer-first, features→benefits, an FAQ with 4–7 "
+                    "entries, a specs/variants table where comparative, a clear CTA, trust signals) "
+                    "and STILL emit the Product/Offer JSON-LD block. Reference outline:\n"
+                    f"{_outline}"
+                )
+                logger.info(f"generate-ecommerce: mirroring house template ({_outline.count(chr(10)) + 1} headings)")
+
         user_prompt = f"""STORE / BUSINESS DATA
 Store name: {body.business_name}
 Website: {body.website or "Not provided"}
@@ -7336,7 +7366,9 @@ Primary keyword: {body.keyword}
 
 {facts_text}
 
-{serp_ctx}"""
+{serp_ctx}
+
+{template_text}"""
 
         await q.put({"step": "progress", "progress": 65, "message": "Writing your page…"})
         try:

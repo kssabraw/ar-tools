@@ -18,6 +18,15 @@ class EcommerceGenerateRequest(BaseModel):
     page_type: PageType = "product"
     source_url: Optional[str] = None
     product_input: Optional[str] = None
+    # Optional per-call override of the client's house PDP template (products
+    # only). Omit to use the client's saved default.
+    page_template_url: Optional[str] = None
+
+
+class EcommercePageTemplateRequest(BaseModel):
+    """Set/clear the client's house PDP template URL (products mirror it)."""
+
+    page_template_url: Optional[str] = None
 
 
 class EcommerceGenerateJob(BaseModel):

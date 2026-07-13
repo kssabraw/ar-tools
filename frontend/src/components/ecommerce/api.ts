@@ -22,8 +22,24 @@ export const ecommerceApi = {
       page_type: EcommercePageType
       source_url?: string | null
       product_input?: string | null
+      // Optional per-call override of the client's house PDP template (products
+      // only); omit to use the saved default.
+      page_template_url?: string | null
     },
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/ecommerce/generate-async`, body),
+
+  // House PDP template (products only): the client's reference product page whose
+  // structure every new product description mirrors. Set once per client.
+  getPageTemplate: (clientId: string) =>
+    api.get<{ ecommerce_page_template_url: string | null }>(
+      `/clients/${clientId}/ecommerce/page-template-default`,
+    ),
+
+  setPageTemplate: (clientId: string, url: string | null) =>
+    api.put<{ ecommerce_page_template_url: string | null }>(
+      `/clients/${clientId}/ecommerce/page-template-default`,
+      { page_template_url: url },
+    ),
 
   getGenerateJob: (clientId: string, jobId: string) =>
     api.get<{ status: string; page_id?: string | null; error?: string | null }>(

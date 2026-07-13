@@ -83,10 +83,12 @@ def _brand_context(client: dict) -> str:
 def _generate_payload(
     client: dict, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str],
+    page_template_url: Optional[str] = None,
 ) -> dict:
     """Map a suite client row to the nlp GenerateEcommerceRequest. The converged
     brand_voice / detected_icp / differentiators assets are passed through so the
-    writer targets the client's voice + customers."""
+    writer targets the client's voice + customers. `page_template_url` (products
+    only) is the house PDP structure the writer mirrors."""
     return {
         "keyword": keyword,
         "page_type": page_type,
@@ -97,6 +99,7 @@ def _generate_payload(
         "brand_voice": client.get("brand_voice"),
         "detected_icp": client.get("detected_icp"),
         "differentiators": client.get("differentiators") or [],
+        "page_template_url": (page_template_url or "").strip() or None,
         "run_analysis": True,
     }
 
@@ -245,12 +248,23 @@ def _record_score_run(
 async def generate_page(
     client_id: str, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str], user_id: str,
+    page_template_url: Optional[str] = None,
 ) -> dict:
     """Generate an ecommerce page for a client and persist it. Competitor SERP
-    analysis runs inside the nlp endpoint (run_analysis defaults True)."""
+    analysis runs inside the nlp endpoint (run_analysis defaults True).
+
+    House PDP template (products only): the per-call `page_template_url` wins,
+    else the client's saved default (`clients.ecommerce_page_template_url`), so
+    every product follows the client's fixed house structure. Collections ignore
+    it (they keep the default structure)."""
     client = _get_client(client_id)
     page_type = _norm_page_type(page_type)
-    payload = _generate_payload(client, keyword.strip(), page_type, source_url, product_input)
+    template_url = None
+    if page_type == "product":
+        template_url = (page_template_url or "").strip() or client.get("ecommerce_page_template_url")
+    payload = _generate_payload(
+        client, keyword.strip(), page_type, source_url, product_input, page_template_url=template_url,
+    )
     result = await _stream_nlp("/generate-ecommerce-page", payload)
     return _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id)
 
@@ -453,6 +467,31 @@ def set_featured_image(page_id: str, url: Optional[str]) -> dict:
     return {"featured_image_url": url or None}
 
 
+# ── house PDP template (products only) ───────────────────────────────────────
+
+def get_page_template_default(client_id: str) -> dict:
+    """Return the client's saved house PDP template URL (products mirror it)."""
+    res = get_supabase().table("clients").select("ecommerce_page_template_url").eq("id", client_id).single().execute()
+    if not res.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    return {"ecommerce_page_template_url": res.data.get("ecommerce_page_template_url")}
+
+
+def set_page_template_default(client_id: str, page_template_url: Optional[str]) -> dict:
+    """Persist (or clear, when falsy) the client's house PDP template URL. Applied
+    to every PRODUCT generation so all product descriptions follow one structure."""
+    url = (page_template_url or "").strip() or None
+    res = (
+        get_supabase().table("clients")
+        .update({"ecommerce_page_template_url": url, "updated_at": "now()"})
+        .eq("id", client_id).execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    logger.info("ecommerce.page_template_default_set", extra={"client_id": client_id, "set": bool(url)})
+    return {"ecommerce_page_template_url": url}
+
+
 # ── publish ──────────────────────────────────────────────────────────────────
 
 async def _publish_page_to_wordpress(page: dict, client: dict, user_id: str, status: str) -> dict:
@@ -556,8 +595,11 @@ def _bulk_scheduled_at(index: int) -> str:
 async def enqueue_generate(
     client_id: str, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str], user_id: str,
+    page_template_url: Optional[str] = None,
 ) -> str:
-    """Enqueue an `ecommerce_generate` job. Returns the job id."""
+    """Enqueue an `ecommerce_generate` job. Returns the job id. `page_template_url`
+    is an optional per-call override of the client's house PDP template (products
+    only); when omitted, generate_page falls back to the client's saved default."""
     _get_client(client_id)
     res = get_supabase().table("async_jobs").insert({
         "job_type": "ecommerce_generate",
@@ -568,6 +610,7 @@ async def enqueue_generate(
             "page_type": _norm_page_type(page_type),
             "source_url": (source_url or "").strip() or None,
             "product_input": (product_input or "").strip() or None,
+            "page_template_url": (page_template_url or "").strip() or None,
             "user_id": user_id,
         },
     }).execute()
@@ -583,7 +626,7 @@ async def run_generate_job(job: dict) -> None:
             client_id=payload["client_id"], keyword=payload["keyword"],
             page_type=payload.get("page_type", "product"),
             source_url=payload.get("source_url"), product_input=payload.get("product_input"),
-            user_id=payload["user_id"],
+            user_id=payload["user_id"], page_template_url=payload.get("page_template_url"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}

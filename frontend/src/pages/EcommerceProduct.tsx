@@ -331,6 +331,9 @@ export function EcommerceProduct() {
             </button>
           </div>
 
+          {/* House PDP template (products only) — every product mirrors this structure */}
+          {pageType === 'product' && <HouseTemplatePanel clientId={clientId} />}
+
           {/* Keyword */}
           <div>
             <label style={label}>Target keyword</label>
@@ -683,6 +686,79 @@ function DraftsList({ pages, loading, onOpen, onRestore, onPurge, onPurgeAll }: 
           </div>
         ))}
       </div>
+    </div>
+  )
+}
+
+// House PDP template (products only): set once per client — the reference product
+// page whose structure every new product description mirrors. Persisted via the
+// clients.ecommerce_page_template_url default; generation resolves it server-side.
+function HouseTemplatePanel({ clientId }: { clientId: string }) {
+  const [url, setUrl] = useState('')
+  const [saved, setSaved] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    ecommerceApi.getPageTemplate(clientId)
+      .then(r => { if (alive) { setSaved(r.ecommerce_page_template_url); setUrl(r.ecommerce_page_template_url ?? '') } })
+      .catch(() => {})
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [clientId])
+
+  const dirty = (url.trim() || null) !== (saved || null)
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const r = await ecommerceApi.setPageTemplate(clientId, url.trim() || null)
+      setSaved(r.ecommerce_page_template_url)
+      setUrl(r.ecommerce_page_template_url ?? '')
+    } finally { setSaving(false) }
+  }
+
+  if (loading) return null
+
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, background: '#f8fafc', padding: '12px 14px' }}>
+      <div
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, cursor: 'pointer' }}
+        onClick={() => setOpen(o => !o)}
+      >
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
+          House template{' '}
+          {saved
+            ? <span style={{ color: '#16a34a', fontWeight: 500 }}>· product pages mirror your reference layout</span>
+            : <span style={{ color: '#94a3b8', fontWeight: 400 }}>· not set (using the default structure)</span>}
+        </div>
+        <span style={{ fontSize: 12, color: '#6366f1', fontWeight: 600 }}>{open ? 'Hide' : saved ? 'Change' : 'Set up'}</span>
+      </div>
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 8px' }}>
+            Paste the URL of one existing product page whose layout you want every product to follow. The writer reproduces its
+            section structure, order and blocks — adapting the copy to each product. Applies to product pages only.
+          </p>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              style={{ ...input, flex: 1 }}
+              value={url}
+              onChange={e => setUrl(e.target.value)}
+              placeholder="https://yourstore.com/products/your-best-example"
+            />
+            <button
+              style={{ ...outlineBtn, whiteSpace: 'nowrap', opacity: dirty && !saving ? 1 : 0.5, cursor: dirty && !saving ? 'pointer' : 'not-allowed' }}
+              disabled={!dirty || saving}
+              onClick={save}
+            >
+              {saving ? 'Saving…' : saved && !url.trim() ? 'Clear' : 'Save'}
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
