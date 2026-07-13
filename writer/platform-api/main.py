@@ -39,6 +39,7 @@ from routers.guides import router as guides_router
 from routers.icp import router as icp_router
 from routers.internal_linking import router as internal_linking_router
 from routers.leadoff import router as leadoff_router
+from routers.ecommerce import router as ecommerce_router
 from routers.local_seo import router as local_seo_router
 from routers.maps import router as maps_router
 from routers.notifications import router as notifications_router
@@ -200,6 +201,7 @@ app.include_router(content_schedule_router)
 app.include_router(dashboard_router)
 app.include_router(deliverables_router)
 app.include_router(domain_intel_router)
+app.include_router(ecommerce_router)
 app.include_router(keyword_research_router)
 app.include_router(files_router)
 app.include_router(forecast_router)
