@@ -11,6 +11,10 @@ from the deployed worker).
 
 Best-effort per state: a failing state is logged and skipped, never aborting
 the run. Idempotent (city_id PK upsert); a re-run refreshes in place.
+
+Requests carry a browser-ish User-Agent + JSON Accept (api.census.gov sits
+behind Akamai, which serves a 200 HTML block page to default-UA requests from
+datacenter IPs) and an optional CENSUS_API_KEY when set.
 """
 from __future__ import annotations
 
@@ -183,10 +187,24 @@ async def _fetch_state(client, fips: str) -> list[list[Any]]:
         "for": "place:*",
         "in": f"state:{fips}",
     }
+    # A Census API key isn't strictly required, but keyed requests bypass the
+    # anonymous throttle; set CENSUS_API_KEY (free, instant from census.gov) if
+    # anonymous requests get edge-blocked.
+    if settings.census_api_key:
+        params["key"] = settings.census_api_key
+    # api.census.gov sits behind Akamai, which serves a 200 HTML block page to
+    # requests with a default python-httpx UA from datacenter IPs; a browser-ish
+    # UA + explicit JSON Accept gets the real data response.
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (compatible; AR-Tools-LeadOff/1.0; "
+                       "+https://amazingrankings.com)"),
+        "Accept": "application/json",
+    }
     url = f"{_ACS_BASE}/{settings.leadoff_income_acs_year}/acs/acs5"
     for attempt in range(len(_RETRY_WAITS) + 1):
         try:
-            resp = await client.get(url, params=params, timeout=120.0)
+            resp = await client.get(url, params=params, headers=headers,
+                                    timeout=120.0)
             if resp.status_code in (429, 500, 502, 503, 504):
                 resp.raise_for_status()
             resp.raise_for_status()
@@ -202,8 +220,16 @@ async def _fetch_state(client, fips: str) -> list[list[Any]]:
             logger.warning("leadoff_income.state_failed",
                            extra={"fips": fips, "error": str(exc)[:200]})
             return []
-        except ValueError:  # non-JSON body
-            logger.warning("leadoff_income.state_bad_json", extra={"fips": fips})
+        except ValueError:  # non-JSON body — log status + snippet to diagnose
+            body = ""
+            try:
+                body = resp.text[:300]
+            except Exception:
+                pass
+            logger.warning("leadoff_income.state_bad_json",
+                           extra={"fips": fips,
+                                  "status": getattr(resp, "status_code", None),
+                                  "body_snippet": body})
             return []
     return []
 

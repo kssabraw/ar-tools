@@ -1053,6 +1053,10 @@ class Settings(BaseSettings):
     leadoff_income_enabled: bool = True
     leadoff_income_acs_year: int = 2023
     leadoff_income_refresh_days: int = 365
+    # Optional Census Data API key (free, instant from api.census.gov/data/key_signup.html).
+    # Not required for low volume, but keyed requests bypass the anonymous
+    # throttle if the ~51-state backfill gets edge-blocked.
+    census_api_key: str = ""
     # Peer-cohort math: the minimum comparable cities needed for a stable
     # cohort median before the signal is trusted (else the fallback ladder
     # widens the cohort, or the signal drops out → contributes 0 to the grade).
