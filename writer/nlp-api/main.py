@@ -6889,3 +6889,644 @@ Write the press release now. Remember: minimum 650 words in the body. Check your
         gbp_embed_html=gbp_embed_html,
         token_usage=token_rec,
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Ecommerce Product & Collection Writer + Reoptimizer
+# ------------------------------------------------------------------------------
+# A sibling of the Local SEO generate/score/reoptimize stack, reusing the same
+# SERP-analysis + auto-retry-scoring spine (_run_serp_analysis, _serp_context,
+# _compute_serp_signal_coverage, _composite_from_scores, _sse_stream, …) but with
+# an ecommerce scoring rubric (no geo — national scope) and ecommerce-specific
+# generation prompts. Two page types share one stable set of engine keys; the
+# prompt applies product-vs-collection nuance. See CLAUDE.md (Ecommerce Writer).
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Weights sum to 1.0. serp_signal_coverage is the deterministic Python engine
+# (reused verbatim from the Local SEO stack); the other 7 are scored by Claude.
+_ECOMMERCE_ENGINE_WEIGHTS = {
+    "organic_ranking":       0.10,
+    "commercial_intent":     0.15,
+    "product_content_depth": 0.15,
+    "entity_establishment":  0.10,
+    "aeo_llm_retrieval":     0.15,
+    "conversion_readiness":  0.10,
+    "structured_data":       0.10,
+    "serp_signal_coverage":  0.15,   # deterministic — scored in Python, not Claude
+}
+
+_ECOMMERCE_ENGINE_LABELS = {
+    "organic_ranking":       "Organic Ranking Engine",
+    "commercial_intent":     "Commercial Intent Engine",
+    "product_content_depth": "Product Content Depth Engine",
+    "entity_establishment":  "Entity Establishment Engine",
+    "aeo_llm_retrieval":     "AEO / LLM Retrieval Engine",
+    "conversion_readiness":  "Conversion Readiness Engine",
+    "structured_data":       "Structured Data (Schema) Engine",
+    "serp_signal_coverage":  "SERP Signal Coverage",
+}
+
+
+def _ecommerce_build_deficiencies(scores: dict) -> List[dict]:
+    """Per-engine deficiencies (<80) using the ecommerce labels. Mirrors
+    _build_deficiencies but keyed to _ECOMMERCE_ENGINE_LABELS."""
+    out = []
+    for key, label in _ECOMMERCE_ENGINE_LABELS.items():
+        eng = scores.get(key, {})
+        if eng.get("score", 100) < 80:
+            out.append({
+                "engine": label,
+                "engine_key": key,
+                "score": eng.get("score", 0),
+                "issues": eng.get("issues", []),
+                "recommendations": eng.get("recommendations", []),
+            })
+    return out
+
+
+_ECOMMERCE_SCORE_SYSTEM_PROMPT = """You are an expert ecommerce SEO + conversion analyst. Score the provided page against all 7 engines below.
+
+IMPORTANT: These 7 engines account for 85% of the composite score. The remaining 15% is scored separately by a deterministic Python engine (SERP Signal Coverage) that checks exact keyword/entity/quadgram presence per HTML zone. You do NOT score that engine — focus only on the 7 below.
+
+The page is either a PRODUCT page (a single product description / PDP) or a COLLECTION page (a category / product-listing page / PLP). The CONTEXT block states which. Apply the noted product-vs-collection nuance.
+
+SCORING CRITERIA — score each engine 0–100:
+
+1. organic_ranking (weight 10%): target keyword / product (or category) name in <title> + H1 + opening sentence; commercial/transactional tone (a PDP or PLP, NOT a blog post); unique, specific copy (not manufacturer-boilerplate or thin duplicate text); clear single offering.
+
+2. commercial_intent (weight 15%): buy-intent signals present. Credit an explicit price or price range OR an explicit pricing/availability cue the page actually states; a clear purchase CTA (Add to Cart / Buy Now / Shop the collection); shipping / returns / warranty / stock cues; truthful urgency or scarcity. Score LOW if the page reads informational rather than purchase-ready. Do NOT invent or reward pricing that is merely implied or absent.
+
+3. product_content_depth (weight 15%): PRODUCT — specific attributes (materials, dimensions, specs, variants/options, what's included, use-cases), features translated into concrete benefits, differentiation vs. alternatives; penalise generic filler. COLLECTION — breadth of subcategory/product coverage, buying guidance ("how to choose", key considerations), internally-linkable structure to the products it lists.
+
+4. entity_establishment (weight 10%): brand + product + category entity co-occurrence across ≥3 sections; attribute entities (materials, standards, compatible models/sizes); topical depth and related-term coverage.
+
+5. aeo_llm_retrieval (weight 20% of the 7 — treat as high value): answer-first formatting (direct claim before elaboration); an FAQ with 4–7 entries (penalise fewer than 4 or more than 7), each opening with a direct statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets (key features/benefits); a comparison/spec <table> where the content is genuinely comparative (variants, sizes, tiers, spec sheets) — penalise ONLY if comparative data is present but no table was used; specific facts (numbers, materials, measurements) rather than vague filler.
+
+6. conversion_readiness (weight 10%): trust signals that are actually present (ratings/review count, guarantees, returns/warranty policy, social proof) — credit ONLY when present, never invented; benefit-led hero near the top; a clear, prominent primary CTA; objection handling; scannable structure.
+
+7. structured_data (weight 10%): valid, populated JSON-LD. PRODUCT — Product with name, description, brand, and an Offer (price, priceCurrency, availability); AggregateRating/Review ONLY when real review data exists on the page; BreadcrumbList is a plus. COLLECTION — CollectionPage and/or ItemList (with itemListElement entries) + BreadcrumbList. Penalise missing schema, empty required properties, or schema that claims data the page doesn't show.
+
+Return ONLY valid JSON — no markdown, no explanation:
+{
+  "organic_ranking":       {"score": 0, "issues": [], "recommendations": []},
+  "commercial_intent":     {"score": 0, "issues": [], "recommendations": []},
+  "product_content_depth": {"score": 0, "issues": [], "recommendations": []},
+  "entity_establishment":  {"score": 0, "issues": [], "recommendations": []},
+  "aeo_llm_retrieval":     {"score": 0, "issues": [], "recommendations": []},
+  "conversion_readiness":  {"score": 0, "issues": [], "recommendations": []},
+  "structured_data":       {"score": 0, "issues": [], "recommendations": []}
+}
+
+Be specific — reference actual content found (or missing) in the page."""
+
+
+def _build_ecommerce_score_prompt(
+    business_name: str,
+    brand_context: str,
+    keyword: str,
+    page_type: str,
+    serp_ctx: str,
+    page_text: str,
+    html_structure: str = "",
+) -> str:
+    """Dynamic user-message portion of the ecommerce scoring prompt. The static
+    rubric lives in _ECOMMERCE_SCORE_SYSTEM_PROMPT (cached separately)."""
+    structure_block = f"\n{html_structure}\n" if html_structure else ""
+    ptype = "COLLECTION / category page" if page_type == "collection" else "PRODUCT page"
+    ctx_line = f"Brand/category context: {brand_context}\n" if brand_context else ""
+    return f"""CONTEXT
+Business / store: {business_name}
+Page type: {ptype}
+Target keyword: {keyword}
+{ctx_line}{serp_ctx}{structure_block}
+PAGE CONTENT (first 8,000 chars):
+{page_text[:8000]}"""
+
+
+async def _ecommerce_score_html_inline(
+    page_html: str,
+    keyword: str,
+    page_type: str,
+    business_name: str,
+    brand_context: str,
+    serp_analysis_dict: Optional[dict],
+    client,
+) -> tuple:
+    """Score an ecommerce page in-process (no HTTP). Returns
+    (composite_score, deficiencies, scores, token_rec)."""
+    from bs4 import BeautifulSoup as _BS
+    html_structure = _detect_html_structure(page_html)
+    page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
+    serp_ctx = _serp_context(serp_analysis_dict)
+    user_prompt = _build_ecommerce_score_prompt(
+        business_name, brand_context, keyword, page_type, serp_ctx, page_text, html_structure,
+    )
+    msg = await client.messages.create(
+        model=SCORE_MODEL,
+        max_tokens=8192,
+        system=[{"type": "text", "text": _ECOMMERCE_SCORE_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    token_rec = _token_record("score-ecommerce-inline", SCORE_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+    scores = _parse_claude_json(msg.content[0].text)
+    if not scores:
+        raise Exception("Inline ecommerce scoring returned invalid JSON")
+    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    composite, _ = _composite_from_scores(scores, _ECOMMERCE_ENGINE_WEIGHTS)
+    deficiencies = _ecommerce_build_deficiencies(scores)
+    return composite, deficiencies, scores, token_rec
+
+
+_ECOMMERCE_GEN_SYSTEM_PROMPT = """You are an expert ecommerce SEO copywriter and conversion-rate specialist. You write publication-ready, on-page-optimized ecommerce pages as clean semantic HTML that ranks in Google AND converts shoppers.
+
+OUTPUT CONTRACT — return EXACTLY these parts in order, and NOTHING else (no markdown, no code fences, no commentary):
+1. <title>…</title> — an SEO title ≤ 60 characters with the primary keyword near the front.
+2. The page body as a single <article>…</article> of clean semantic HTML — use <h1>, <h2>, <h3>, <p>, <ul>/<ol>, <li>, <table>, <strong>. NO <html>/<head>/<body> wrappers, NO inline CSS/styles, NO class attributes, NO markdown.
+3. CONTENT_GAPS_REPORT_START [ … ] CONTENT_GAPS_REPORT_END — a JSON array of product/store facts you needed but were NOT given (e.g. exact price, dimensions, warranty length, review count). Use an empty array [] if none.
+4. A single <script type="application/ld+json"> … </script> block with the page's structured data.
+
+HARD RULE — NEVER invent facts. Do not fabricate prices, specs, measurements, materials, certifications, review counts, or ratings. Use ONLY the product facts + store data provided. When a needed fact is missing, write around it (do not state a made-up value) and record it in CONTENT_GAPS_REPORT.
+
+WRITING RULES (AEO + conversion):
+- Lead with the answer: open with a direct, benefit-led statement of what the product/collection is and who it's for.
+- Primary keyword in the <title>, the H1, and the opening sentence.
+- Short paragraphs (1–2 sentences each); scannable structure with descriptive H2/H3s.
+- Translate features into concrete benefits ("aircraft-grade aluminium → survives drops without denting").
+- Include ≥1 bulleted list of key features/benefits (outcome-first bullets).
+- Include a comparison/spec <table> when the item has comparable variants, sizes, tiers, or a real spec sheet (for a collection, a "how to choose / which is right for you" table when it helps). Do NOT force a table when nothing is genuinely comparative.
+- Include an FAQ section (H2 "Frequently Asked Questions") with 4–7 <h3> questions, each answered answer-first in 1–3 sentences. Base questions on real buyer concerns (fit, compatibility, shipping, returns, care, differences between options).
+- Include a clear primary call-to-action (e.g. "Add to Cart", "Buy Now", "Shop the collection") and, where truthful and provided, trust signals (returns window, warranty, ratings, guarantees).
+- Match the provided BRAND VOICE and speak directly to the provided IDEAL CUSTOMER.
+
+PAGE-TYPE DIRECTIVE (stated in the user message):
+- PRODUCT — write a single product description page (PDP): hero/overview, key features & benefits, specifications/variants, use-cases, trust/returns, FAQ, CTA.
+- COLLECTION — write a category/collection landing page (PLP): intro that frames the category and who it's for, buying guidance ("how to choose", key considerations), an overview of the notable sub-types/products (named only if provided), internal-link-worthy structure, FAQ, CTA. Do NOT write a single-product description.
+
+SCHEMA RULES (the final JSON-LD block):
+- PRODUCT → a Product object: name, description, brand, sku (only if given), image (only if given), and an "offers" Offer with price + priceCurrency + availability (use the provided values; if price is unknown, omit the price/offers rather than inventing one). Add aggregateRating / review ONLY if real review data was provided. Add a BreadcrumbList when a category path is inferable.
+- COLLECTION → a CollectionPage and/or ItemList whose itemListElement entries are the sub-types/products actually named in your copy, plus a BreadcrumbList.
+- Include ONLY properties you have real data for. Never emit placeholder or invented values in schema."""
+
+
+def _ecommerce_page_type_directive(page_type: str) -> str:
+    if page_type == "collection":
+        return (
+            "PAGE TYPE: COLLECTION — write a category/collection landing page (PLP) per the "
+            "COLLECTION directive. Frame the category, give buying guidance, and overview the "
+            "sub-types/products (name specific products only if provided). Do NOT write a single "
+            "product description. Emit CollectionPage/ItemList + BreadcrumbList schema."
+        )
+    return (
+        "PAGE TYPE: PRODUCT — write a single product description page (PDP) per the PRODUCT "
+        "directive. Emit Product + Offer (+ BreadcrumbList) schema."
+    )
+
+
+def _parse_generated_ecommerce(raw: str) -> tuple:
+    """Split a generated ecommerce page into (content_html, schema_json,
+    page_title, content_gaps). Mirrors the generate-page parsing contract."""
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
+        raw = re.sub(r'\n?```$', '', raw)
+        raw = raw.strip()
+
+    title_match = re.search(r'<title>(.*?)</title>', raw, re.IGNORECASE | re.DOTALL)
+    page_title = title_match.group(1).strip() if title_match else ""
+    if title_match:
+        raw = (raw[:title_match.start()] + raw[title_match.end():]).strip()
+
+    content_gaps: list = []
+    gaps_start = raw.find("CONTENT_GAPS_REPORT_START")
+    gaps_end   = raw.find("CONTENT_GAPS_REPORT_END")
+    if gaps_start != -1 and gaps_end != -1:
+        gaps_json_str = raw[gaps_start + len("CONTENT_GAPS_REPORT_START"):gaps_end].strip()
+        raw = (raw[:gaps_start] + raw[gaps_end + len("CONTENT_GAPS_REPORT_END"):]).strip()
+        try:
+            content_gaps = json.loads(gaps_json_str)
+            if not isinstance(content_gaps, list):
+                content_gaps = []
+        except Exception:
+            content_gaps = []
+
+    schema_split = raw.find('<script type="application/ld+json">')
+    if schema_split != -1:
+        content_html = raw[:schema_split].strip()
+        schema_json  = raw[schema_split:].strip()
+    else:
+        content_html = raw
+        schema_json  = ""
+    return content_html, schema_json, page_title, content_gaps
+
+
+async def _scrape_source_facts(url: str) -> str:
+    """Best-effort scrape of a source/product URL for factual reference text.
+    ScrapeOwl no-JS → JS fallback. Returns '' on failure (never raises)."""
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as _c:
+            html = await _scrape_one(url, _c, render_js=False)
+            if not html:
+                html = await _scrape_one(url, _c, render_js=True)
+        if not html:
+            return ""
+        _s = BeautifulSoup(html, "html.parser")
+        for _t in _s(["script", "style", "nav", "footer", "head", "noscript"]):
+            _t.decompose()
+        return _s.get_text(separator=" ", strip=True)[:8000]
+    except Exception as _e:
+        logger.info(f"generate-ecommerce: source scrape skipped for {url}: {_e}")
+        return ""
+
+
+def _ecommerce_brand_context(business_name: str, brand_voice: Optional[dict]) -> str:
+    """A short brand/category context string for the scoring prompt."""
+    bits = [business_name] if business_name else []
+    if brand_voice:
+        tone = (brand_voice.get("tone") or brand_voice.get("voice") or "")
+        if tone:
+            bits.append(str(tone)[:200])
+    return " — ".join(bits)
+
+
+# National scope for ecommerce SERP analysis (keyword SERPs are not geo-local).
+_ECOMMERCE_SERP_LOCATION = "United States"
+_ECOMMERCE_SERP_LOCATION_CODE = 2840
+
+
+class EcommerceScoreRequest(BaseModel):
+    keyword: str
+    page_type: str = "product"          # "product" | "collection"
+    page_url: Optional[str] = None
+    page_content: Optional[str] = None  # if omitted, fetched from page_url
+    business_name: str = ""
+    brand_context: Optional[str] = None
+    serp_analysis: Optional[dict] = None
+    location: str = _ECOMMERCE_SERP_LOCATION
+    location_code: Optional[int] = None
+
+
+class EcommerceScoreResponse(BaseModel):
+    composite_score: float
+    composite_status: str
+    engine_scores: dict
+    deficiencies: List[dict]
+    token_usage: dict
+    serp_analysis: Optional[dict] = None
+    analysis_cost: Optional[dict] = None
+
+
+@app.post('/score-ecommerce-page', response_model=EcommerceScoreResponse)
+@limiter.limit("10/minute")
+async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    import anthropic as _anthropic
+    client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+    page_type = "collection" if (body.page_type or "").lower() == "collection" else "product"
+
+    # SERP analysis inline if not supplied (national scope — ecommerce is not geo-local).
+    inline_serp = None
+    serp_analysis_dict: Optional[dict] = body.serp_analysis
+    if not serp_analysis_dict:
+        try:
+            _loc = body.location or _ECOMMERCE_SERP_LOCATION
+            _code = body.location_code or _ECOMMERCE_SERP_LOCATION_CODE
+            inline_serp = await _run_serp_analysis(body.keyword, _loc, _code)
+            serp_analysis_dict = inline_serp.model_dump()
+        except Exception as _serp_err:
+            logger.warning(f"score-ecommerce: inline SERP analysis failed ({_serp_err})")
+            raise HTTPException(status_code=503, detail="Could not fetch competitor data. Please try again in a moment.")
+
+    from bs4 import BeautifulSoup as _BS
+    page_html = body.page_content
+    if not page_html and body.page_url:
+        async with httpx.AsyncClient() as _fc:
+            page_html = await _scrape_one(body.page_url, _fc, render_js=False)
+            if not page_html:
+                page_html = await _scrape_one(body.page_url, _fc, render_js=True)
+        if not page_html:
+            raise HTTPException(status_code=422, detail="Could not fetch the provided page URL. Check that it is correct and publicly accessible.")
+    if not page_html:
+        raise HTTPException(status_code=422, detail="Either page_content or page_url is required")
+
+    html_structure = _detect_html_structure(page_html)
+    page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
+    serp_ctx = _serp_context(serp_analysis_dict)
+    brand_context = body.brand_context or body.business_name
+    user_prompt = _build_ecommerce_score_prompt(
+        body.business_name, brand_context, body.keyword, page_type, serp_ctx, page_text, html_structure,
+    )
+
+    scores = None
+    token_rec = None
+    for attempt in range(2):
+        try:
+            msg = await client.messages.create(
+                model=SCORE_MODEL,
+                max_tokens=8192,
+                system=[{"type": "text", "text": _ECOMMERCE_SCORE_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            token_rec = _token_record("score-ecommerce-page", SCORE_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+            parsed = _parse_claude_json(msg.content[0].text)
+            if parsed:
+                scores = parsed
+                break
+            logger.warning(f"score-ecommerce: invalid JSON on attempt {attempt + 1}")
+        except Exception:
+            logger.exception(f"Ecommerce scoring error on attempt {attempt + 1}")
+            if attempt == 1:
+                raise HTTPException(status_code=502, detail="Scoring service temporarily unavailable. Please try again.")
+
+    if not scores:
+        raise HTTPException(status_code=502, detail="Scoring service returned an invalid response. Please try again.")
+
+    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    composite, status = _composite_from_scores(scores, _ECOMMERCE_ENGINE_WEIGHTS)
+
+    return EcommerceScoreResponse(
+        composite_score=composite,
+        composite_status=status,
+        engine_scores=scores,
+        deficiencies=_ecommerce_build_deficiencies(scores),
+        token_usage=token_rec,
+        serp_analysis=serp_analysis_dict if inline_serp else None,
+        analysis_cost=inline_serp.analysis_cost if inline_serp else None,
+    )
+
+
+class GenerateEcommerceRequest(BaseModel):
+    keyword: str
+    page_type: str = "product"           # "product" | "collection"
+    business_name: str
+    website: Optional[str] = None
+    source_url: Optional[str] = None     # scraped for product facts
+    product_input: Optional[str] = None  # pasted product facts (specs/price/variants)
+    brand_voice: Optional[dict] = None
+    detected_icp: Optional[dict] = None
+    differentiators: Optional[List[dict]] = None
+    serp_analysis: Optional[dict] = None
+    run_analysis: bool = True
+    location: str = _ECOMMERCE_SERP_LOCATION
+    location_code: Optional[int] = None
+
+
+@app.post('/generate-ecommerce-page')
+@limiter.limit("5/minute")
+async def generate_ecommerce_page(request: Request, body: GenerateEcommerceRequest):
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    import anthropic as _anthropic
+    page_type = "collection" if (body.page_type or "").lower() == "collection" else "product"
+
+    async def _worker(q: asyncio.Queue):
+        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        await q.put({"step": "progress", "progress": 5, "message": "Starting…"})
+
+        # SERP analysis (national scope) unless supplied or explicitly skipped.
+        serp_analysis_dict = body.serp_analysis
+        if not serp_analysis_dict and body.run_analysis:
+            await q.put({"step": "progress", "progress": 10, "message": "Fetching top search results…"})
+            try:
+                _loc = body.location or _ECOMMERCE_SERP_LOCATION
+                _code = body.location_code or _ECOMMERCE_SERP_LOCATION_CODE
+                inline_serp = await _run_serp_analysis(body.keyword, _loc, _code)
+                serp_analysis_dict = inline_serp.model_dump() if hasattr(inline_serp, "model_dump") else dict(inline_serp)
+                await q.put({"step": "progress", "progress": 45, "message": "Analyzing competitor pages…"})
+            except Exception as _serp_err:
+                logger.warning(f"generate-ecommerce: inline SERP analysis failed ({_serp_err})")
+                serp_analysis_dict = None
+
+        serp_ctx = _serp_context(serp_analysis_dict)
+
+        # Product facts: pasted input + optional scrape of a source URL.
+        await q.put({"step": "progress", "progress": 55, "message": "Gathering product facts…"})
+        facts_sections: list[str] = []
+        if (body.product_input or "").strip():
+            facts_sections.append("PROVIDED PRODUCT DETAILS (authoritative — use these facts; do not contradict them):\n" + body.product_input.strip())
+        if body.source_url:
+            _scraped = await _scrape_source_facts(body.source_url)
+            if _scraped:
+                facts_sections.append(f"SOURCE PAGE CONTENT ({body.source_url}) — extract accurate facts, do NOT copy wording:\n{_scraped}")
+        facts_text = "\n\n".join(facts_sections) if facts_sections else (
+            "NO explicit product facts were provided. Write from the keyword + brand context only, "
+            "keep claims generic-but-truthful, and record specific missing facts (price, specs, "
+            "dimensions, warranty) in CONTENT_GAPS_REPORT."
+        )
+
+        brand_voice_text = _build_brand_voice_text(body.brand_voice)
+        icp_text = _build_icp_text(body.detected_icp)
+        diff_text = ""
+        if body.differentiators:
+            diff_text = "Differentiators (use these — include the mechanism for each):\n" + \
+                "\n".join(f"  - {d.get('claim','')} (mechanism: {d.get('mechanism','')})" for d in body.differentiators)
+
+        user_prompt = f"""STORE / BUSINESS DATA
+Store name: {body.business_name}
+Website: {body.website or "Not provided"}
+Primary keyword: {body.keyword}
+
+{_ecommerce_page_type_directive(page_type)}
+
+{brand_voice_text}
+{icp_text}
+{diff_text}
+
+{facts_text}
+
+{serp_ctx}"""
+
+        await q.put({"step": "progress", "progress": 65, "message": "Writing your page…"})
+        try:
+            claude_msg = await client.messages.create(
+                model=GENERATION_MODEL,
+                max_tokens=16000,
+                system=[{"type": "text", "text": _ECOMMERCE_GEN_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+        except Exception:
+            logger.exception("Claude ecommerce generation error")
+            raise Exception("Content generation failed. Please try again.")
+
+        token_rec = _token_record("generate-ecommerce-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
+        content_html, schema_json, page_title, content_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
+
+        # Score the generated page (single pass, with retries on transient failure).
+        await q.put({"step": "progress", "progress": 90, "message": "Scoring your page…"})
+        brand_context = _ecommerce_brand_context(body.business_name, body.brand_voice)
+        inline_score = None
+        inline_scores = None
+        for _attempt in range(3):
+            try:
+                inline_score, _, inline_scores, score_tok = await _ecommerce_score_html_inline(
+                    content_html, body.keyword, page_type, body.business_name, brand_context,
+                    serp_analysis_dict, client,
+                )
+                token_rec["input_tokens"]  += score_tok["input_tokens"]
+                token_rec["output_tokens"] += score_tok["output_tokens"]
+                token_rec["cost_usd"]       = round(token_rec["cost_usd"] + score_tok["cost_usd"], 6)
+                break
+            except Exception as _ae:
+                if _attempt < 2:
+                    await asyncio.sleep(2 ** _attempt)
+                else:
+                    logger.warning(f"generate-ecommerce: scoring failed after 3 attempts: {_ae}")
+
+        ac = (serp_analysis_dict or {}).get("analysis_cost", {})
+        claude_cost = token_rec["cost_usd"]
+        cost_breakdown = {
+            "dataforseo":           ac.get("dataforseo", 0),
+            "scrapeowl_pages":      ac.get("scrapeowl_pages", 0),
+            "scrapeowl":            ac.get("scrapeowl", 0),
+            "textrazor_requests":   ac.get("textrazor_requests", 0),
+            "textrazor":            ac.get("textrazor", 0),
+            "claude_model":         token_rec["model"],
+            "claude_input_tokens":  token_rec["input_tokens"],
+            "claude_output_tokens": token_rec["output_tokens"],
+            "claude":               round(claude_cost, 6),
+            "total":                round(ac.get("subtotal", 0) + claude_cost, 6),
+        }
+
+        await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
+        await q.put({
+            "step": "done",
+            "result": {
+                "content_html": content_html,
+                "schema_json": schema_json,
+                "page_title": page_title,
+                "composite_score": inline_score,
+                "composite_status": _status_for_score(inline_score) if inline_score is not None else None,
+                "engine_scores": inline_scores,
+                "deficiencies": _ecommerce_build_deficiencies(inline_scores) if inline_scores else [],
+                "token_usage": token_rec,
+                "cost_breakdown": cost_breakdown,
+                "serp_analysis": serp_analysis_dict,
+                "content_gaps": content_gaps,
+            },
+        })
+
+    return await _sse_stream(_worker)
+
+
+class ReoptimizeEcommerceRequest(BaseModel):
+    keyword: str
+    page_type: str = "product"
+    existing_page_html: Optional[str] = None   # if omitted, fetched from existing_page_url
+    existing_page_url: Optional[str] = None
+    deficiencies: List[dict] = []
+    business_name: str = ""
+    brand_voice: Optional[dict] = None
+    detected_icp: Optional[dict] = None
+    serp_analysis: Optional[dict] = None
+    product_input: Optional[str] = None
+
+
+@app.post('/reoptimize-ecommerce-page')
+@limiter.limit("5/minute")
+async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceRequest):
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY not configured")
+
+    import anthropic as _anthropic
+    page_type = "collection" if (body.page_type or "").lower() == "collection" else "product"
+
+    async def _worker(q: asyncio.Queue):
+        client = _anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY, max_retries=ANTHROPIC_MAX_RETRIES)
+        await q.put({"step": "progress", "progress": 10, "message": "Fetching existing page…"})
+
+        existing_html = body.existing_page_html or ""
+        if not existing_html and body.existing_page_url:
+            async with httpx.AsyncClient() as _fc:
+                existing_html = await _scrape_one(body.existing_page_url, _fc, render_js=False)
+                if not existing_html:
+                    existing_html = await _scrape_one(body.existing_page_url, _fc, render_js=True)
+            if not existing_html:
+                raise Exception("Could not fetch the provided page URL. Check that it is correct and publicly accessible.")
+        if not existing_html:
+            raise Exception("Either existing_page_html or existing_page_url is required")
+
+        existing_page_text = BeautifulSoup(existing_html, "html.parser").get_text(separator="\n", strip=True)
+        serp_ctx = _serp_context(body.serp_analysis)
+
+        deficiency_text = "\n".join(
+            f"  Engine: {d.get('engine','')} (score: {d.get('score','?')}/100)\n"
+            f"  Issues: {'; '.join(d.get('issues', []))}\n"
+            f"  Fixes needed: {'; '.join(d.get('recommendations', []))}"
+            for d in (body.deficiencies or [])
+        ) or "  (No per-engine deficiencies supplied — rewrite to maximise all engines.)"
+
+        brand_voice_text = _build_brand_voice_text(body.brand_voice)
+        icp_text = _build_icp_text(body.detected_icp)
+        extra_facts = ""
+        if (body.product_input or "").strip():
+            extra_facts = "ADDITIONAL PRODUCT DETAILS (authoritative — use these facts):\n" + body.product_input.strip()
+
+        user_prompt = f"""STORE / BUSINESS DATA
+Store name: {body.business_name}
+Primary keyword: {body.keyword}
+
+{_ecommerce_page_type_directive(page_type)}
+
+{brand_voice_text}
+{icp_text}
+
+{serp_ctx}
+
+SEO DEFICIENCIES TO FIX — address ALL of these in the rewritten page:
+{deficiency_text}
+
+{extra_facts}
+
+EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT invent any facts not present here or in the additional details above):
+{existing_page_text[:5000]}"""
+
+        await q.put({"step": "progress", "progress": 40, "message": "Rewriting your page…"})
+        try:
+            claude_msg = await client.messages.create(
+                model=GENERATION_MODEL,
+                max_tokens=16000,
+                system=[{"type": "text", "text": _ECOMMERCE_GEN_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+        except Exception:
+            logger.exception("Claude ecommerce reoptimize error")
+            raise Exception("Content generation failed. Please try again.")
+
+        token_rec = _token_record("reoptimize-ecommerce-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
+        content_html, schema_json, page_title, content_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
+
+        await q.put({"step": "progress", "progress": 82, "message": "Scoring your page…"})
+        brand_context = _ecommerce_brand_context(body.business_name, body.brand_voice)
+        inline_score = None
+        inline_scores = None
+        try:
+            inline_score, _, inline_scores, score_tok = await _ecommerce_score_html_inline(
+                content_html, body.keyword, page_type, body.business_name, brand_context,
+                body.serp_analysis, client,
+            )
+            token_rec["input_tokens"]  += score_tok["input_tokens"]
+            token_rec["output_tokens"] += score_tok["output_tokens"]
+            token_rec["cost_usd"]       = round(token_rec["cost_usd"] + score_tok["cost_usd"], 6)
+        except Exception as _ae:
+            logger.warning(f"reoptimize-ecommerce: scoring failed: {_ae}")
+
+        await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
+        await q.put({
+            "step": "done",
+            "result": {
+                "content_html": content_html,
+                "schema_json": schema_json,
+                "page_title": page_title,
+                "composite_score": inline_score,
+                "composite_status": _status_for_score(inline_score) if inline_score is not None else None,
+                "engine_scores": inline_scores,
+                "deficiencies": _ecommerce_build_deficiencies(inline_scores) if inline_scores else [],
+                "token_usage": token_rec,
+                "original_html": existing_html[:30000],
+                "content_gaps": content_gaps,
+            },
+        })
+
+    return await _sse_stream(_worker)

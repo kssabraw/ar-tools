@@ -24,6 +24,7 @@ from services.local_seo_service import (
     run_reoptimize_url_job,
 )
 from services.local_seo_silo import run_silo_plan_job
+from services import ecommerce_service
 from services.rank_location import run_rank_location_derive_job
 from services.service_page_plan import run_service_plan_job
 from services.rank_analysis_report import run_rank_keyword_report_job
@@ -423,6 +424,12 @@ async def _process_job(job: dict) -> None:
         await run_reoptimize_page_job(job)
     elif job_type == "local_seo_action":
         await run_local_seo_action_job(job)
+    elif job_type == "ecommerce_generate":
+        await ecommerce_service.run_generate_job(job)
+    elif job_type == "ecommerce_reoptimize_url":
+        await ecommerce_service.run_reoptimize_url_job(job)
+    elif job_type == "ecommerce_action":
+        await ecommerce_service.run_ecommerce_action_job(job)
     elif job_type == "service_page_plan":
         await run_service_plan_job(job)
     elif job_type == "rank_location_derive":
