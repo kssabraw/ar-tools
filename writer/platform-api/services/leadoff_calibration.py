@@ -231,13 +231,21 @@ def summarize(predictions: list[dict[str, Any]],
 # ── Capture (at the create-client seam) ───────────────────────────────────────
 
 def capture_prediction(client_id: str, brief: dict[str, Any], capture: float,
-                       lead_tier: str, user_id: Optional[str]) -> Optional[str]:
+                       lead_tier: str, user_id: Optional[str],
+                       proximity: Optional[dict[str, Any]] = None) -> Optional[str]:
     """Freeze the full prediction vector at engagement creation. Best-effort —
-    never fails the client (same policy as competitor/goal seeding)."""
+    never fails the client (same policy as competitor/goal seeding).
+
+    Captures the enriched grade + its `score_factors` and the proximity read so
+    calibration can later test whether the enrichment signals (proximity,
+    footprint, permits, seasonal) actually predicted the outcome — the loop
+    that eventually tunes the enrichment weights."""
     predicted = {k: brief.get(k) for k in (
         "rev_win", "rankab", "xdem", "est_leads_mo", "exp_leads_mo",
         "value_mo", "exp_val", "grade", "build", "roi", "rating", "namekw",
-        "exact_open", "luck", "conf", "v3", "population")}
+        "exact_open", "luck", "conf", "v3", "population",
+        # enrichment layer (score-enrichment v1) — the signals under test
+        "base_grade", "base_exp_val", "base_rankab", "enriched", "score_factors")}
     lead_value = None
     if brief.get("value_mo") and brief.get("est_leads_mo"):
         try:
@@ -258,6 +266,11 @@ def capture_prediction(client_id: str, brief: dict[str, Any], capture: float,
             "predicted": predicted,
             "competitors": brief.get("competitors") or [],
             "enrichment": brief.get("enrichment"),
+            "proximity": ({"opportunity": proximity.get("opportunity"),
+                           "underserved": proximity.get("underserved"),
+                           "placement": proximity.get("placement"),
+                           "pins_used": proximity.get("pins_used")}
+                          if proximity and proximity.get("available") else None),
             "model_version": MODEL_VERSION,
             "created_by": user_id,
         }).execute().data[0]

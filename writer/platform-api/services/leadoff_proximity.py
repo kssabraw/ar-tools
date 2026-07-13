@@ -234,16 +234,25 @@ async def market_proximity(city_id: int, category_id: str) -> dict[str, Any]:
         weak_frac=settings.leadoff_proximity_weak_frac,
     )
     # Best-effort zone naming (plan §2.2/§2.3): label each suggested pin with
-    # its nearest locality via the geo-grid's cached reverse geocoder. Passes
-    # through unnamed when GOOGLE_MAPS_API_KEY is absent or the call fails.
-    if result.get("placement"):
+    # its nearest locality via the geo-grid's cached reverse geocoder, and DROP
+    # pins that name to nothing (water / unpopulated land — an empty octant
+    # over the ocean is not an opportunity). Only filters when naming actually
+    # ran (API key present): with no key everything reads None and we must not
+    # drop everything, so those pass through unnamed. Passes through on error.
+    if result.get("placement") and settings.google_maps_api_key:
         try:
             from db.supabase_client import get_supabase
             from services.maps_geocode import reverse_geocode_points
             named = await reverse_geocode_points(result["placement"],
                                                  supabase=get_supabase())
+            kept = []
             for pin, loc in zip(result["placement"], named):
-                pin["locality"] = loc.get("city") or loc.get("admin_area")
+                locality = loc.get("city") or loc.get("admin_area")
+                if locality:
+                    pin["locality"] = locality
+                    kept.append(pin)
+                # else: unnamed → likely unpopulated, drop from the suggestions
+            result["placement"] = kept
         except Exception:
             logger.warning("leadoff_proximity.naming_failed", exc_info=True)
     return result

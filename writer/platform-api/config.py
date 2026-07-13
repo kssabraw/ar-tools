@@ -1021,6 +1021,10 @@ class Settings(BaseSettings):
     leadoff_score_w_brand: float = 0.08       # strong incumbent brands → harder
     leadoff_score_w_permit: float = 0.06      # housing pipeline → more demand
     leadoff_score_w_seasonal: float = 0.05    # same-month YoY demand direction
+    # Market-signal cache (score-enrichment increment 2): the board reads
+    # precomputed proximity + footprint pressure from leadoff_market_signals;
+    # the refresh job self-gates, re-running when the cache is older than this.
+    leadoff_signal_refresh_days: int = 7
 
     class Config:
         env_file = ".env"
