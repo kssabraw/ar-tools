@@ -396,11 +396,16 @@ def _store_web_pending(action: str, client: dict, args: dict, requester: Optiona
 
 async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: Optional[str],
                            pending_token: Optional[str], context: ActionContext,
-                           on_event=None) -> Optional[dict]:
+                           on_event=None, force: bool = False) -> Optional[dict]:
     """Handle a web chat turn if it's PACE's (a PACE pending token, or a
     PACE-shaped message). Returns the chat payload dict when handled, else None
     → fall through to SerMaStr. On web the confirmer is the authenticated
     session, so actor-binding is inherent; we still check it.
+
+    `force=True` is the **dedicated PACE surface** path (the /pace sidebar chat):
+    the shape gate is skipped so PACE answers every turn — the persona defers
+    strategy questions to SerMaStr in prose rather than by falling through. With
+    `force=True` this never returns None.
 
     The deterministic reads (client list, board digest, brief/portfolio text)
     do blocking Supabase I/O, so they're pushed to a threadpool to keep the
@@ -424,7 +429,7 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
             return {"reply": reply, "client_id": entry["client_id"], "client_name": entry.get("client_name")}
         # Non-affirmative supersedes; fall through to normal handling.
 
-    if not is_pace_message(message):
+    if not force and not is_pace_message(message):
         return None
     try:
         if is_personal_brief(message):

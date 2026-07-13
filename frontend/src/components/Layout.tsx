@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, Menu, X, Radar } from 'lucide-react'
+import { api } from '../lib/api'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -67,10 +69,22 @@ export function Layout({ children }: { children: React.ReactNode }) {
     navigate('/login')
   }
 
+  // PACE (delivery-PM chat) is gated behind the server-side pace_enabled flag —
+  // hide the sidebar entry until an admin turns it on, so we never surface a
+  // dead chatbot.
+  const { data: paceStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ['pace-status'],
+    queryFn: () => api.get<{ enabled: boolean }>('/pace/status'),
+    staleTime: 5 * 60_000,
+  })
+
   const clientId = currentClientId(location.pathname)
   const quickNav: NavItem[] = [
     { label: 'Home', to: '/', icon: <Home size={18} /> },
     { label: 'SerMaStr', to: '/assistant', icon: <Sparkles size={18} /> },
+    ...(paceStatus?.enabled
+      ? [{ label: 'PACE', to: '/pace', icon: <ListTodo size={18} /> }]
+      : []),
     ...(clientId
       ? [{ label: 'Dashboard', to: `/clients/${clientId}`, icon: <LayoutDashboard size={18} /> }]
       : []),

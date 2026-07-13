@@ -6,6 +6,7 @@ import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
 import { Home } from './pages/Home'
 import { Assistant } from './pages/Assistant'
+import { Pace } from './pages/Pace'
 import { Runs } from './pages/Runs'
 import { RunDetail } from './pages/RunDetail'
 import { Clients } from './pages/Clients'
@@ -71,6 +72,7 @@ export default function App() {
                     <Routes>
                       <Route path="/" element={<Home />} />
                       <Route path="/assistant" element={<Assistant />} />
+                      <Route path="/pace" element={<Pace />} />
                       <Route path="/backlinks" element={<Backlinks />} />
                       {/* Topic Fan-out, merged in (Option C) — a native route
                           subtree that renders inside the suite Layout, so it
