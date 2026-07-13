@@ -527,6 +527,11 @@ class Settings(BaseSettings):
     keyword_research_idea_limit: int = 700
     # Max seed keywords accepted per run (Labs caps the ideas seed set at 200).
     keyword_research_max_seeds: int = 20
+    # Client-facing keyword research PDF report: the exec-summary LLM (best-effort,
+    # Anthropic with OpenAI→Gemini fallback via report_llm; deterministic fallback
+    # summary when no key is set).
+    keyword_research_report_model: str = "claude-sonnet-4-6"
+    keyword_research_report_max_tokens: int = 600
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
