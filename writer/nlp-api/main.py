@@ -6950,19 +6950,21 @@ IMPORTANT: These 7 engines account for 85% of the composite score. The remaining
 
 The page is either a PRODUCT page (a single product description / PDP) or a COLLECTION page (a category / product-listing page / PLP). The CONTEXT block states which. Apply the noted product-vs-collection nuance.
 
+The page is expected to follow the Max-Cosine Score (MCS) writing methodology. Judge adherence within the aeo_llm_retrieval, product_content_depth, and conversion_readiness engines: a plain "[Main entity] is [what it is + benefit]" Direct Definition immediately under the H1; zero conversational filler / warm-up; MCS headings (each H2/H3 names the main entity + a fact-forward topic, NOT bare words like "Features"/"Details", and does NOT use the exact search phrase verbatim); extractable standalone snippets (each key claim quotable without context); a scannable list placed high on the page; fact-model tables whose final cell is a verifiable number/noun-entity (penalise "dangling adjectives" like "High"/"Best"/"Reliable" as the fact); a strictly positive/pro tone; and bold-tag hygiene. Use the deterministic HTML STRUCTURE FACTS in the CONTEXT (list/table/bold counts) — do NOT re-count from the stripped text; a bold-tag count over 15 is a hygiene violation.
+
 SCORING CRITERIA — score each engine 0–100:
 
 1. organic_ranking (weight 10%): target keyword / product (or category) name in <title> + H1 + opening sentence; commercial/transactional tone (a PDP or PLP, NOT a blog post); unique, specific copy (not manufacturer-boilerplate or thin duplicate text); clear single offering.
 
 2. commercial_intent (weight 15%): buy-intent signals present. Credit an explicit price or price range OR an explicit pricing/availability cue the page actually states; a clear purchase CTA (Add to Cart / Buy Now / Shop the collection); shipping / returns / warranty / stock cues; truthful urgency or scarcity. Score LOW if the page reads informational rather than purchase-ready. Do NOT invent or reward pricing that is merely implied or absent.
 
-3. product_content_depth (weight 15%): PRODUCT — specific attributes (materials, dimensions, specs, variants/options, what's included, use-cases), features translated into concrete benefits, differentiation vs. alternatives; penalise generic filler. COLLECTION — breadth of subcategory/product coverage, buying guidance ("how to choose", key considerations), internally-linkable structure to the products it lists.
+3. product_content_depth (weight 15%): PRODUCT — specific attributes (materials, dimensions, specs, variants/options, what's included, use-cases), features translated into concrete benefits, differentiation vs. alternatives; quantified specs bound to the use-case where they matter, in consensus units; penalise generic filler and unquantified claims. COLLECTION — breadth of subcategory/product coverage, buying guidance ("how to choose", key considerations), internally-linkable structure to the products it lists.
 
 4. entity_establishment (weight 10%): brand + product + category entity co-occurrence across ≥3 sections; attribute entities (materials, standards, compatible models/sizes); topical depth and related-term coverage.
 
-5. aeo_llm_retrieval (weight 20% of the 7 — treat as high value): answer-first formatting (direct claim before elaboration); an FAQ with 4–7 entries (penalise fewer than 4 or more than 7), each opening with a direct statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets (key features/benefits); a comparison/spec <table> where the content is genuinely comparative (variants, sizes, tiers, spec sheets) — penalise ONLY if comparative data is present but no table was used; specific facts (numbers, materials, measurements) rather than vague filler.
+5. aeo_llm_retrieval (weight 20% of the 7 — treat as high value): the MCS methodology, scored strictly. A Direct Definition ("[Main entity] is …") in the FIRST sentence under the H1; ZERO conversational filler/warm-up; MCS headings (each H2/H3 = main entity + a fact-forward topic, penalise bare "Features"/"Details"/"Overview" and penalise the exact search phrase used verbatim as a subheading); extractable standalone snippets (each key claim quotable without surrounding context — penalise vague "it depends" phrasing); a scannable bulleted/numbered list placed HIGH on the page (list-top); ≥1 fact-model <table> whose final cell is a verifiable number/noun-entity (penalise dangling adjectives like "High"/"Best" as the fact, and penalise a genuinely-comparative page with no table); an FAQ with 4–7 entries (penalise fewer than 4 or more than 7), each answer-first; each section ≤300 words; specific facts over filler; active voice.
 
-6. conversion_readiness (weight 10%): trust signals that are actually present (ratings/review count, guarantees, returns/warranty policy, social proof) — credit ONLY when present, never invented; benefit-led hero near the top; a clear, prominent primary CTA; objection handling; scannable structure.
+6. conversion_readiness (weight 10%): a specific value proposition near the top (the concrete outcome the buyer gets); trust signals that are actually present (ratings/review count, guarantees, returns/warranty policy, social proof) — credit ONLY when present, never invented; a benefit-led hero; a clear, value-forward primary CTA; a strictly positive/pro sentiment toward the product; objection handling; scannable structure; bold-tag hygiene per the HTML STRUCTURE FACTS (penalise > 15 bold tags).
 
 7. structured_data (weight 10%): valid, populated JSON-LD. PRODUCT — Product with name, description, brand, and an Offer (price, priceCurrency, availability); AggregateRating/Review ONLY when real review data exists on the page; BreadcrumbList is a plus. COLLECTION — CollectionPage and/or ItemList (with itemListElement entries) + BreadcrumbList. Penalise missing schema, empty required properties, or schema that claims data the page doesn't show.
 
@@ -6978,6 +6980,27 @@ Return ONLY valid JSON — no markdown, no explanation:
 }
 
 Be specific — reference actual content found (or missing) in the page."""
+
+
+def _detect_ecommerce_structure(page_html: str) -> str:
+    """Deterministic structure facts for the ecommerce scorer: list/table presence
+    (list-top + fact-model table rules) and the bold-tag count (MCS bold-hygiene:
+    a median ~7, over 15 is a deindex-associated violation). Extends
+    _detect_html_structure with the <strong>/<b> count the scorer can't get from
+    the stripped page text."""
+    from bs4 import BeautifulSoup as _BS
+    soup = _BS(page_html, "html.parser")
+    lists = len(soup.find_all("ul")) + len(soup.find_all("ol"))
+    tables = len(soup.find_all("table"))
+    bolds = len(soup.find_all(["strong", "b"]))
+    lines = ["HTML STRUCTURE FACTS (deterministic — do NOT override or re-count):"]
+    lines.append(f"  • <ul>/<ol> lists: {lists} found" + (" ✓" if lists >= 1 else " ✗ MISSING (list-top rule)"))
+    lines.append(f"  • <table> elements: {tables} found" + (" ✓" if tables >= 1 else " — expected ≥1 spec/comparison table"))
+    lines.append(
+        f"  • <strong>/<b> bold tags: {bolds}"
+        + (" ✓ within hygiene range" if bolds <= 15 else " ✗ OVER 15 — bold-hygiene violation (deindex risk)")
+    )
+    return "\n".join(lines)
 
 
 def _build_ecommerce_score_prompt(
@@ -7015,7 +7038,7 @@ async def _ecommerce_score_html_inline(
     """Score an ecommerce page in-process (no HTTP). Returns
     (composite_score, deficiencies, scores, token_rec)."""
     from bs4 import BeautifulSoup as _BS
-    html_structure = _detect_html_structure(page_html)
+    html_structure = _detect_ecommerce_structure(page_html)
     page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
     serp_ctx = _serp_context(serp_analysis_dict)
     user_prompt = _build_ecommerce_score_prompt(
@@ -7047,16 +7070,23 @@ OUTPUT CONTRACT — return EXACTLY these parts in order, and NOTHING else (no ma
 
 HARD RULE — NEVER invent facts. Do not fabricate prices, specs, measurements, materials, certifications, review counts, or ratings. Use ONLY the product facts + store data provided. When a needed fact is missing, write around it (do not state a made-up value) and record it in CONTENT_GAPS_REPORT.
 
-WRITING RULES (AEO + conversion):
-- Lead with the answer: open with a direct, benefit-led statement of what the product/collection is and who it's for.
-- Primary keyword in the <title>, the H1, and the opening sentence.
-- Short paragraphs (1–2 sentences each); scannable structure with descriptive H2/H3s.
-- Translate features into concrete benefits ("aircraft-grade aluminium → survives drops without denting").
-- Include ≥1 bulleted list of key features/benefits (outcome-first bullets).
-- Include a comparison/spec <table> when the item has comparable variants, sizes, tiers, or a real spec sheet (for a collection, a "how to choose / which is right for you" table when it helps). Do NOT force a table when nothing is genuinely comparative.
-- Include an FAQ section (H2 "Frequently Asked Questions") with 4–7 <h3> questions, each answered answer-first in 1–3 sentences. Base questions on real buyer concerns (fit, compatibility, shipping, returns, care, differences between options).
-- Include a clear primary call-to-action (e.g. "Add to Cart", "Buy Now", "Shop the collection") and, where truthful and provided, trust signals (returns window, warranty, ratings, guarantees).
-- Match the provided BRAND VOICE and speak directly to the provided IDEAL CUSTOMER.
+WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must be written. The "main entity" is the product (PDP) or the category (PLP). Follow ALL of these:
+
+1. Direct Definition (immediately under the H1): the FIRST sentence is a plain "[Main entity] is [what it is] + [its key benefit]" statement — standalone, high-confidence, quotable. DO: "The Acme Trail Runner is a Vibram-soled trail shoe built to grip wet rock without slipping." DON'T open with a vague/hedging line.
+2. Zero-Filler Protocol: NO conversational warm-up anywhere. Never open with "In today's world…", "Have you ever…", or throat-clearing. Move straight to the substantive answer under every heading.
+3. Value proposition up top: within the first block, state the specific outcome the buyer gets (concrete, not hype).
+4. MCS headings — [Main entity] + a fact-forward topic: every H2/H3 names the main entity AND pairs it with a fact-forward topic, NOT a bare topic word. DO: "Acme Trail Runner Grips Wet Rock with Vibram Megagrip", "Acme Trail Runner Fits True to Size for Wide Feet". DON'T: bare "Features", "Details", "Overview", "Benefits". Do NOT use the exact target search phrase verbatim as a subheading (avoid EMQ in H2–H6) — front the entity + a fact instead.
+5. One Main-Entity EMQ in the body: include the primary target search phrase verbatim EXACTLY ONCE, in normal <p> body text (never in a subheading).
+6. Extractable Snippets: write every key claim as a standalone sentence that is true and liftable without surrounding context (a machine could quote it verbatim). DO: "Air-dry the boots for 24 hours after wet use to protect the membrane." DON'T: "It really depends on a few things we'll get into."
+7. List-Top: place a scannable bulleted or numbered list HIGH on the page — ideally right after the opening definition — covering the key features/specs (or the how-to steps). Outcome-first items.
+8. Tables (Fact-Sentence model): include at least one spec/comparison <table> (aim for 1–2). Every row reads [Main entity / choice] → [relationship] → [VERIFIABLE fact]. The FINAL cell MUST be a number or noun-entity (e.g. "8.5 Mohs", "$125", "1.2 kg", "IP67") — NEVER a dangling adjective like "High", "Reliable", or "Best". Bind each spec to the use-case where it matters, and express tradeoffs as quantified deltas. Use consensus units. NEVER invent numbers — if a spec is unknown, omit that row and record it in CONTENT_GAPS.
+9. Pro tone: maintain a strictly positive sentiment toward the product/category throughout.
+10. Evidence: back claims with specific numbers; cite the source of a statistic where one genuinely exists. Never fabricate data, prices, or ratings.
+11. Active voice; consistent terminology (pick one name for a thing and keep it); power words only when they truthfully reflect the product.
+12. FAQ: an H2 "Frequently Asked Questions" with 4–7 <h3> questions in real buyer language (sizing, compatibility, shipping, returns, care, differences between options), each answered answer-first in 1–3 sentences.
+13. CTA: a clear, value-forward primary call-to-action (e.g. "Add to Cart", "Shop the collection") — prefer value framing over a bare "Buy now" where natural. Where truthful and provided, include trust signals (returns window, warranty, ratings, guarantees).
+14. Formatting hygiene: short paragraphs (1–2 sentences). Use <strong> SPARINGLY — a median of ~7 bold tags per page and NEVER more than 15 (over-bolding is associated with deindexing).
+15. Voice & audience: match the provided BRAND VOICE and speak directly to the provided IDEAL CUSTOMER.
 
 PAGE-TYPE DIRECTIVE (stated in the user message):
 - PRODUCT — write a single product description page (PDP): hero/overview, key features & benefits, specifications/variants, use-cases, trust/returns, FAQ, CTA.
@@ -7210,7 +7240,7 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
     if not page_html:
         raise HTTPException(status_code=422, detail="Either page_content or page_url is required")
 
-    html_structure = _detect_html_structure(page_html)
+    html_structure = _detect_ecommerce_structure(page_html)
     page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
     serp_ctx = _serp_context(serp_analysis_dict)
     brand_context = body.brand_context or body.business_name
