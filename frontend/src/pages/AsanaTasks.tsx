@@ -160,11 +160,13 @@ export function AsanaTasks() {
         <ArrowLeft size={14} /> Back to {client?.name ?? 'Client'}
       </Link>
 
-      <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 4px' }}>Asana Tasks</h1>
+      <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 4px' }}>Monthly Template</h1>
       <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 20px' }}>
-        Define the tasks this client should get every month. The monthly job creates them in
-        Asana under a new “Month Year” section — assigned, categorized, status “Not Started”,
-        no due dates. Runs automatically each month, or on demand below.
+        Define the recurring tasks this client should get every month. The monthly job creates them
+        on the client’s <strong>Tasks</strong> board under a new “Month Year” section — assigned,
+        categorized, status “Not Started”, no due dates. Runs automatically each month, or on demand
+        below. This page is the <em>template</em> — open the <strong>Tasks</strong> board to see the
+        actual tasks, including everything imported from Asana (assigned &amp; completed).
       </p>
 
       {!configured && (
