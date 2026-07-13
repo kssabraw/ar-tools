@@ -11,7 +11,7 @@ import { api } from '../../lib/api'
 // straight to their WordPress site, or both. The destination is chosen once for
 // the whole batch.
 
-export type PublishItemType = 'run' | 'local_seo_page'
+export type PublishItemType = 'run' | 'local_seo_page' | 'ecommerce_page'
 // Where a batch publishes to. 'both' fans out to Google Docs *and* WordPress
 // per item (two calls). 'github' commits to the client's repo.
 export type PublishDestination = 'google_docs' | 'wordpress' | 'github' | 'both'
@@ -42,7 +42,9 @@ const CONCURRENCY = 3
 function endpointFor(item: PublishItem): string {
   return item.type === 'local_seo_page'
     ? `/local-seo/pages/${item.id}/publish`
-    : `/runs/${item.id}/publish`
+    : item.type === 'ecommerce_page'
+      ? `/ecommerce/pages/${item.id}/publish`
+      : `/runs/${item.id}/publish`
 }
 
 // Publish a single item to one target, returning whichever URL that target

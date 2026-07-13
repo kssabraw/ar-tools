@@ -17,6 +17,7 @@ import { BrandVoice } from './pages/BrandVoice'
 import { Icp } from './pages/Icp'
 import { InternalLinks } from './pages/InternalLinks'
 import { LocalSeoContent } from './pages/LocalSeoContent'
+import { EcommerceProduct } from './pages/EcommerceProduct'
 import { ContentScheduler } from './pages/ContentScheduler'
 import { ServicePages } from './pages/ServicePages'
 import { LocationPages } from './pages/LocationPages'
@@ -88,6 +89,7 @@ export default function App() {
                       <Route path="/clients/:id/icp" element={<Icp />} />
                       <Route path="/clients/:id/content" element={<ClientContent />} />
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
+                      <Route path="/clients/:id/ecommerce" element={<EcommerceProduct />} />
                       <Route path="/clients/:id/content-scheduler" element={<ContentScheduler />} />
                       <Route path="/clients/:id/service-pages" element={<ServicePages />} />
                       <Route path="/clients/:id/location-pages" element={<LocationPages />} />

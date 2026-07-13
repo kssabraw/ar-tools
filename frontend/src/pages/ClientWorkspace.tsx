@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -29,6 +29,14 @@ export function ClientWorkspace() {
     enabled: Boolean(id),
   })
   const savedLocalSeoCount = localSeoPages?.length ?? 0
+
+  // Count of Ecommerce (product / collection) pages generated for this client.
+  const { data: ecommercePages } = useQuery<Array<{ id: string }>>({
+    queryKey: ['ecommerce-pages', id],
+    queryFn: () => api.get<Array<{ id: string }>>(`/clients/${id}/ecommerce/pages`),
+    enabled: Boolean(id),
+  })
+  const savedEcommerceCount = ecommercePages?.length ?? 0
 
   // Count of service pages generated for this client (service_page runs).
   const { data: servicePageRuns } = useQuery<{ total: number }>({
@@ -152,6 +160,24 @@ export function ClientWorkspace() {
             savedLocalSeoCount > 0 && id ? (
               <Link to={`/clients/${id}/local-seo?tab=saved`} style={footerLinkStyle}>
                 View {savedLocalSeoCount} saved page{savedLocalSeoCount === 1 ? '' : 's'} <ArrowRight size={13} />
+              </Link>
+            ) : undefined
+          }
+        />
+        <ActionCard
+          icon={<ShoppingBag size={22} />}
+          label="Ecommerce Writer"
+          description={
+            savedEcommerceCount > 0
+              ? `SEO product & collection pages, generated and reoptimized. ${savedEcommerceCount} saved page${savedEcommerceCount === 1 ? '' : 's'} for this client.`
+              : 'Generate and reoptimize SEO-optimized ecommerce product & collection pages.'
+          }
+          to={id ? `/clients/${id}/ecommerce` : undefined}
+          cta="Create"
+          footer={
+            savedEcommerceCount > 0 && id ? (
+              <Link to={`/clients/${id}/ecommerce?tab=saved`} style={footerLinkStyle}>
+                View {savedEcommerceCount} saved page{savedEcommerceCount === 1 ? '' : 's'} <ArrowRight size={13} />
               </Link>
             ) : undefined
           }
