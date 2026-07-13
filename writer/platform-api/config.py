@@ -1065,6 +1065,11 @@ class Settings(BaseSettings):
     # value used when a NEW category has no CPL on file (CPL is user-supplied
     # per category — flagged as an assumption in the run result).
     leadoff_finder_default_lead_value: float = 50.0
+    # Category smart-search: one forced Sonnet tool call maps a free-text search
+    # to a scanned board category + confidence. Below the threshold (or no real
+    # match) the API returns "No Data Provided" rather than guessing.
+    leadoff_category_match_model: str = "claude-sonnet-4-6"
+    leadoff_category_match_threshold: float = 0.85
 
     class Config:
         env_file = ".env"

@@ -45,6 +45,30 @@ async def get_board(
     )
 
 
+@router.get("/leadoff/categories")
+async def list_categories(auth: dict = Depends(require_auth)) -> dict:
+    """All scanned categories, alphabetical — feeds the board's category
+    dropdown and the smart-search candidate set."""
+    return {"categories": leadoff_service.list_categories()}
+
+
+class CategorySearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=200)
+
+
+@router.post("/leadoff/category-search")
+async def category_search(
+    body: CategorySearchRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Map a free-text search to a scanned category via one forced Sonnet call.
+    Returns {matched, category, label, confidence}; below the confidence
+    threshold (or no real match) label is "No Data Provided"."""
+    from services import leadoff_category_match
+    cats = leadoff_service.list_categories()
+    return await leadoff_category_match.match_category(body.query, cats)
+
+
 @router.get("/leadoff/market-brief")
 async def get_market_brief(
     city_id: int,
