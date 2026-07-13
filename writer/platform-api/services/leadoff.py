@@ -94,9 +94,15 @@ def recompute_economics(row: dict[str, Any], capture: float, lead_value: float |
 
 
 def sort_value(row: dict[str, Any], sort: str) -> float:
+    if sort == "v3":
+        # Prefer the enrichment-folded opportunity (v3 × winnability × demand)
+        # when the row has been enriched; fall back to the raw scanner v3.
+        v = row.get("opportunity_v3")
+        if v is None:
+            v = row.get("v3")
+        return float(v) if v is not None else -1.0
     key = {"build": "build", "roi": "roi", "expected": "exp_val",
-           "value": "value_mo", "leads": "exp_leads_mo", "demand": "xdem",
-           "v3": "v3"}[sort]
+           "value": "value_mo", "leads": "exp_leads_mo", "demand": "xdem"}[sort]
     v = row.get(key)
     return float(v) if v is not None else -1.0
 

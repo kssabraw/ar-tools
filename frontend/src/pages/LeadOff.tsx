@@ -42,6 +42,8 @@ interface MarketRow {
   base_grade?: string | null
   base_exp_val?: number | null
   base_rankab?: number | null
+  base_v3?: number | null
+  opportunity_v3?: number | null
   score_factors?: { winnability: number; demand: number
     signals: Record<string, number | string> } | null
 }
@@ -130,7 +132,7 @@ interface ScoutEstimate {
   fully_cached: boolean
 }
 
-type Sort = 'build' | 'roi' | 'expected' | 'value' | 'leads' | 'demand'
+type Sort = 'v3' | 'build' | 'roi' | 'expected' | 'value' | 'leads' | 'demand'
 type Tier = 'low' | 'mid' | 'high'
 
 const GRADE_COLORS: Record<string, string> = {
@@ -151,7 +153,7 @@ export function LeadOff() {
   const [view, setView] = useState<View>('board')
   const [filters, setFilters] = useState({ city: '', state: '', category: '', minDemand: '' })
   const [applied, setApplied] = useState(filters)
-  const [sort, setSort] = useState<Sort>('build')
+  const [sort, setSort] = useState<Sort>('v3')
   const [capture, setCapture] = useState(0.10)
   const [tier, setTier] = useState<Tier>('mid')
   const [selected, setSelected] = useState<{ city_id: number; category_id: string } | null>(null)
@@ -183,10 +185,11 @@ export function LeadOff() {
   const exportCsv = () => {
     const rows = board?.markets ?? []
     if (!rows.length) return
-    const headers = ['grade', 'city_name', 'state_code', 'category', 'exp_val',
-      'roi', 'demand', 'rev_win', 'rating', 'exact_open']
+    const headers = ['grade', 'city_name', 'state_code', 'category', 'opportunity',
+      'exp_val', 'roi', 'demand', 'rev_win', 'rating', 'exact_open']
     downloadCsv('leadoff_shortlist.csv', toCsv(headers,
-      rows.map(r => [r.grade, r.city_name, r.state_code, r.category, r.exp_val,
+      rows.map(r => [r.grade, r.city_name, r.state_code, r.category,
+        r.opportunity_v3 ?? r.v3, r.exp_val,
         r.roi, r.xdem, r.rev_win, r.rating, r.exact_open])))
   }
 
@@ -212,7 +215,7 @@ export function LeadOff() {
         </div>
         <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 12px' }}>
           Market intelligence — every scanned US market graded for lead-gen buildability.
-          Sort by <b>ROI</b> to win cheapest. Estimates are planning numbers, not promises.
+          Default sort is <b>Opportunity</b> — the hidden-gem score (markets less competitive than their demand predicts). Estimates are planning numbers, not promises.
         </p>
 
         {/* View tabs */}
@@ -252,7 +255,8 @@ export function LeadOff() {
           </Field>
           <Field label="Sort">
             <select style={inputStyle} value={sort} onChange={e => setSort(e.target.value as Sort)}>
-              <option value="build">Grade (default)</option>
+              <option value="v3">Opportunity — hidden gems (default)</option>
+              <option value="build">Grade — raw value (big metros)</option>
               <option value="roi">ROI — win cheapest</option>
               <option value="expected">Expected $/mo</option>
               <option value="leads">Expected leads</option>
@@ -289,7 +293,7 @@ export function LeadOff() {
             <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 900, fontSize: 13 }}>
               <thead>
                 <tr>
-                  {['Grade', '', 'Market', 'Category', 'Exp $/mo', 'ROI $/rev', 'Demand',
+                  {['Grade', '', 'Market', 'Category', 'Opportunity', 'Exp $/mo', 'ROI $/rev', 'Demand',
                     'Rev to win', 'Field ★', 'Cat open'].map(h => (
                     <th key={h} style={thStyle}>{h}</th>
                   ))}
@@ -314,6 +318,12 @@ export function LeadOff() {
                       </td>
                       <td style={{ ...tdStyle, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.city_name}, {r.state_code}</td>
                       <td style={tdStyle}>{r.category}</td>
+                      <td style={{ ...tdStyle, fontWeight: 700, color: '#0f766e' }}
+                        title={r.opportunity_v3 != null && r.base_v3 != null && r.score_factors
+                          ? `Hidden-gem score. Raw v3 ${r.base_v3.toFixed(1)} × winnability ${r.score_factors.winnability.toFixed(2)} × demand ${r.score_factors.demand.toFixed(2)}`
+                          : 'Hidden-gem score (v3): demand vs competition undervaluation'}>
+                        {(r.opportunity_v3 ?? r.v3)?.toFixed(1) ?? '—'}
+                      </td>
                       <td style={{ ...tdStyle, fontWeight: 600 }}>{usd(r.exp_val)}</td>
                       <td style={tdStyle}>{r.roi?.toFixed(1)}</td>
                       <td style={tdStyle}>{r.xdem?.toLocaleString()}</td>
@@ -368,8 +378,12 @@ export function LeadOff() {
                   Grade includes context enrichment — winnability ×{brief.score_factors.winnability.toFixed(2)},
                   demand ×{brief.score_factors.demand.toFixed(2)}
                   {brief.base_exp_val != null && <> · base {usd(brief.base_exp_val)} → {usd(brief.exp_val)}</>}
+                  {brief.opportunity_v3 != null && brief.base_v3 != null && (
+                    <> · opportunity {brief.base_v3.toFixed(1)} → {brief.opportunity_v3.toFixed(1)}</>
+                  )}
                 </div>
               )}
+              <KV k="Opportunity (hidden-gem score)" v={(brief.opportunity_v3 ?? brief.v3)?.toFixed(1)} strong />
               <KV k="Expected $/mo" v={usd(brief.exp_val)} strong />
               <KV k="$/mo if ranked" v={usd(brief.value_mo)} />
               <KV k="Win likelihood" v={brief.rankab?.toFixed(2)} />

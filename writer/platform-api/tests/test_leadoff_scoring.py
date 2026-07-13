@@ -94,6 +94,30 @@ class TestEnrichGrade:
         assert out["rankab"] < 0.5 and out["xdem"] < 1000
         assert out["exp_val"] < 2500
 
+    def test_v3_opportunity_folds_in_the_enrichment(self):
+        # the gem ranking (opportunity_v3) must respond to the four signals, not
+        # just the grade — v3 × winnability × demand, base_v3 preserved.
+        row = {**base_row(rankab=0.5, xdem=1000, rev_win=20), "v3": 60.0}
+        tailwind = enrich_grade(
+            row, {"proximity": 1.0, "permit": 1.0, "seasonal": 1.0},
+            capture=0.1, lead_value=50, breakpoints=BP, w=W)
+        headwind = enrich_grade(
+            row, {"site_pressure": 1.0, "brand_pressure": 1.0,
+                  "permit": -1.0, "seasonal": -1.0},
+            capture=0.1, lead_value=50, breakpoints=BP, w=W)
+        assert tailwind["base_v3"] == 60.0 and headwind["base_v3"] == 60.0
+        # wf=1.10, df=1.11 → 60*1.10*1.11 = 73.3 ; strong tailwind lifts the gem
+        assert tailwind["opportunity_v3"] > 60.0
+        # site+brand headwind + falling demand sinks it below raw v3
+        assert headwind["opportunity_v3"] < 60.0
+        # and a market with tailwinds outranks the same market with headwinds
+        assert tailwind["opportunity_v3"] > headwind["opportunity_v3"]
+
+    def test_v3_opportunity_defaults_to_zero_without_v3(self):
+        out = enrich_grade(base_row(), {"permit": 1.0}, capture=0.1,
+                           lead_value=50, breakpoints=BP, w=W)
+        assert out["base_v3"] == 0.0 and out["opportunity_v3"] == 0.0
+
     def test_rankab_clamped(self):
         row = base_row(rankab=0.99)
         signals = {"proximity": 1.0}  # would push >1
