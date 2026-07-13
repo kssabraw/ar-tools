@@ -87,9 +87,12 @@ def board_categories() -> list[str]:
 
 
 def find_board_cities(category: str, *, state: Optional[str] = None,
-                      sort: str = "build", limit: int = 15) -> dict[str, Any]:
+                      sort: str = "v3", limit: int = 15) -> dict[str, Any]:
     """Ranked board cities for an already-scanned category (enriched grades).
-    Reuses list_board so the grades carry the permit/proximity enrichment."""
+    Reuses list_board so the grades carry the permit/proximity enrichment.
+    Defaults to the **v3 opportunity score** — the Moneyball "hidden gem"
+    ranking (demand-vs-competition undervaluation), NOT raw expected value
+    (which just surfaces the biggest metros)."""
     from services import leadoff as svc
     from services.leadoff import BOARD_SORTS, DEFAULT_CAPTURE, DEFAULT_TIER
 
@@ -130,6 +133,33 @@ def shortlist_cities(*, state: Optional[str], region: Optional[str],
 
 def estimate_finder_cost(n_cities: int) -> float:
     return round(n_cities * COST_FINDER_PER_CITY, 2)
+
+
+def add_opportunity(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach a within-run **opportunity (gem) score** and sort by it — the
+    finder's analogue of the board's v3. A gem is a market whose field is weak
+    relative to its demand, so raw size is NEUTRALIZED: demand enters as a
+    percentile *gate* (sqrt-damped), winnability (rankability — high when the
+    field is beatable) is the driver. Big-but-contested metros sink; mid-size
+    markets with real demand and a soft field rise. Pure."""
+    if not rows:
+        return rows
+    vols = sorted(float(r.get("vol") or 0) for r in rows)
+    n = len(vols)
+
+    def _pct(v: float) -> float:
+        # share of the run at or below this demand (0-1)
+        import bisect
+        return bisect.bisect_right(vols, v) / n if n else 0.0
+
+    out = []
+    for r in rows:
+        dem_gate = _pct(float(r.get("vol") or 0)) ** 0.5   # damped demand percentile
+        winnability = float(r.get("rankab") or 0)
+        gem = round(100 * dem_gate * winnability, 1)
+        out.append({**r, "opportunity": gem})
+    out.sort(key=lambda r: r.get("opportunity") or 0, reverse=True)
+    return out
 
 
 def enqueue_city_finder(user_id: str, *, category: str, state: Optional[str],
@@ -242,8 +272,9 @@ async def run_city_finder_job(job: dict) -> None:
                         "state_code": c["state_code"], "population": c["population"]}
 
             gathered = await asyncio.gather(*(one(c) for c in cities))
-        results = [r for r in gathered if r]
-        results.sort(key=lambda r: r.get("exp_val") or 0, reverse=True)
+        # rank by the opportunity/gem score (undervaluation), NOT raw exp_val —
+        # the whole point is to surface less-competitive-than-expected markets.
+        results = add_opportunity([r for r in gathered if r])
 
         supabase.table("leadoff_city_finder_runs").update({
             "status": "complete", "completed_at": "now()",

@@ -130,7 +130,7 @@ interface ScoutEstimate {
   fully_cached: boolean
 }
 
-type Sort = 'build' | 'roi' | 'expected' | 'value' | 'leads' | 'demand'
+type Sort = 'v3' | 'build' | 'roi' | 'expected' | 'value' | 'leads' | 'demand'
 type Tier = 'low' | 'mid' | 'high'
 
 const GRADE_COLORS: Record<string, string> = {
@@ -151,7 +151,7 @@ export function LeadOff() {
   const [view, setView] = useState<View>('board')
   const [filters, setFilters] = useState({ city: '', state: '', category: '', minDemand: '' })
   const [applied, setApplied] = useState(filters)
-  const [sort, setSort] = useState<Sort>('build')
+  const [sort, setSort] = useState<Sort>('v3')
   const [capture, setCapture] = useState(0.10)
   const [tier, setTier] = useState<Tier>('mid')
   const [selected, setSelected] = useState<{ city_id: number; category_id: string } | null>(null)
@@ -212,7 +212,7 @@ export function LeadOff() {
         </div>
         <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 12px' }}>
           Market intelligence — every scanned US market graded for lead-gen buildability.
-          Sort by <b>ROI</b> to win cheapest. Estimates are planning numbers, not promises.
+          Default sort is <b>Opportunity</b> — the hidden-gem score (markets less competitive than their demand predicts). Estimates are planning numbers, not promises.
         </p>
 
         {/* View tabs */}
@@ -252,7 +252,8 @@ export function LeadOff() {
           </Field>
           <Field label="Sort">
             <select style={inputStyle} value={sort} onChange={e => setSort(e.target.value as Sort)}>
-              <option value="build">Grade (default)</option>
+              <option value="v3">Opportunity — hidden gems (default)</option>
+              <option value="build">Grade — raw value (big metros)</option>
               <option value="roi">ROI — win cheapest</option>
               <option value="expected">Expected $/mo</option>
               <option value="leads">Expected leads</option>

@@ -331,12 +331,15 @@ _LEADOFF_FIND_TOOL = {
         "city×category graded A+…F for lead-gen buildability). FREE — no "
         "confirmation. Give the business category (e.g. 'tree service', "
         "'plumber', 'computer support'); optionally a 2-letter state to filter, "
-        "and a sort (build=overall grade, roi=win-cheapest, expected=$/mo, "
-        "demand). If the category is already scanned it returns the ranked "
-        "cities with grade/expected-value/ROI/reviews-to-beat-#3. If it is NOT "
-        "scanned it returns the cost of a paid city-finder run — relay that and "
-        "offer the run_leadoff_city_finder action. Use for any market-selection "
-        "/ 'where should I start a GBP' question."
+        "and a sort. The DEFAULT sort is 'v3' — the Moneyball **opportunity / "
+        "hidden-gem** score (markets LESS competitive than their demand/size "
+        "predict — the undervalued ones you actually want), NOT raw value. "
+        "Other sorts: build=overall grade, roi=win-cheapest, expected=$/mo, "
+        "demand=raw volume (these tilt toward big obvious metros — only use if "
+        "asked). If the category is scanned it returns the ranked cities with "
+        "grade/opportunity(v3)/expected-value/reviews-to-beat-#3. If NOT scanned "
+        "it returns the cost of a paid city-finder run — relay that. Use for any "
+        "market-selection / 'where should I start a GBP' question."
     ),
     "input_schema": {
         "type": "object",
@@ -345,8 +348,8 @@ _LEADOFF_FIND_TOOL = {
                          "description": "Business/GBP category, e.g. 'tree service'."},
             "state": {"type": "string",
                       "description": "Optional 2-letter state filter (e.g. 'TX')."},
-            "sort": {"type": "string", "enum": ["build", "roi", "expected", "demand"],
-                     "description": "Ranking: build=overall, roi=win-cheapest, expected=$/mo, demand."},
+            "sort": {"type": "string", "enum": ["v3", "build", "roi", "expected", "demand"],
+                     "description": "Ranking. DEFAULT v3=opportunity/hidden-gem (undervalued markets — use this unless asked otherwise); build=overall grade; roi=win-cheapest; expected=$/mo; demand=raw volume (build/expected/demand tilt toward big metros)."},
         },
         "required": ["category"],
     },
@@ -362,7 +365,7 @@ def _run_leadoff_find(args: dict) -> str:
     if not category:
         return "Provide a business category (e.g. 'tree service')."
     state = (args.get("state") or "").strip() or None
-    sort = args.get("sort") if args.get("sort") in ("build", "roi", "expected", "demand") else "build"
+    sort = args.get("sort") if args.get("sort") in ("v3", "build", "roi", "expected", "demand") else "v3"
     try:
         cats = finder.board_categories()
         matched = finder.resolve_category(category, cats)
@@ -385,17 +388,22 @@ def _run_leadoff_find(args: dict) -> str:
         res = finder.find_board_cities(matched, state=state, sort=sort, limit=15)
         rows = [{
             "city": f"{m.get('city_name')}, {m.get('state_code')}",
-            "grade": m.get("grade"), "exp_val_mo": m.get("exp_val"),
-            "roi": m.get("roi"), "reviews_to_beat_3": m.get("rev_win"),
-            "demand": m.get("xdem"),
+            "opportunity_v3": m.get("v3"), "grade": m.get("grade"),
+            "exp_val_mo": m.get("exp_val"), "roi": m.get("roi"),
+            "reviews_to_beat_3": m.get("rev_win"), "demand": m.get("xdem"),
+            "population": m.get("population"),
         } for m in (res.get("markets") or [])]
         return json.dumps({
             "scanned": True, "matched_category": matched, "state": state,
             "sort": sort, "as_of": res.get("as_of"), "top_cities": rows,
-            "note": ("Grades include the enrichment layer. rev_win=0 on a big "
-                     "market can be a weak field OR hidden review counts — "
-                     "eyeball the live SERP (LeadOff SOP). Sort by roi to find "
-                     "the cheapest wins."),
+            "note": ("Ranked by v3 = the opportunity/hidden-gem score (markets "
+                     "LESS competitive than their demand/size predicts — the "
+                     "undervalued ones). These are deliberately NOT the biggest "
+                     "metros; a mid-size city with solid demand and a weak field "
+                     "(low reviews_to_beat_3) is the Moneyball pick. Lead with "
+                     "these. rev_win=0 on a large market can be a weak field OR "
+                     "hidden review counts — flag it for a live-SERP eyeball "
+                     "(LeadOff SOP)."),
         }, default=str)[:_LEADOFF_RESULT_CHARS]
     except Exception as exc:
         return f"LeadOff board lookup failed: {exc}"

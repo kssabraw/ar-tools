@@ -28,7 +28,7 @@ async def get_board(
     state: str | None = None,
     category: str | None = None,
     min_demand: int | None = Query(default=None, ge=0),
-    sort: str = "build",
+    sort: str = "v3",
     capture: float = Query(default=DEFAULT_CAPTURE, ge=0.01, le=0.5),
     lead_tier: str = DEFAULT_TIER,
     limit: int = Query(default=50, ge=1, le=500),
@@ -100,7 +100,7 @@ async def refresh_signals(auth: dict = Depends(require_staff)) -> dict:
 async def find_cities(
     category: str,
     state: str | None = None,
-    sort: str = "build",
+    sort: str = "v3",
     limit: int = Query(default=15, ge=1, le=100),
     auth: dict = Depends(require_auth),
 ) -> dict:
