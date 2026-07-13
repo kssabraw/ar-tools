@@ -44,6 +44,7 @@ _DOMAIN_RANK_OVERVIEW_PATH = "/v3/dataforseo_labs/google/domain_rank_overview/li
 _BULK_TRAFFIC_PATH = "/v3/dataforseo_labs/google/bulk_traffic_estimation/live"
 _COMPETITORS_DOMAIN_PATH = "/v3/dataforseo_labs/google/competitors_domain/live"
 _KEYWORD_OVERVIEW_PATH = "/v3/dataforseo_labs/google/keyword_overview/live"
+_KEYWORD_IDEAS_PATH = "/v3/dataforseo_labs/google/keyword_ideas/live"
 
 _DEFAULT_LOCATION_CODE = 2840  # US
 _DEFAULT_LANGUAGE_CODE = "en"
@@ -225,6 +226,42 @@ def parse_keyword_overview(body: dict) -> dict[str, dict]:
     return out
 
 
+def parse_keyword_ideas(body: dict) -> list[dict]:
+    """Rows for the keyword ideas a seed set expands into. One row per item:
+    {keyword, volume, cpc_usd, competition_index, competition_level,
+    keyword_difficulty, search_intent, monthly_searches}.
+
+    Keyword-ideas items carry the same nested metric objects as
+    keyword_overview (``keyword_info`` / ``keyword_properties`` /
+    ``search_intent_info``), so an idea arrives fully enriched in the one billed
+    call — no follow-up keyword_overview batch is needed. Missing sub-objects
+    degrade the row (fields → None) rather than dropping it."""
+    result = _first_result(body, "labs_keyword_ideas_error")
+    out: list[dict] = []
+    for item in result.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        kw = item.get("keyword")
+        if not isinstance(kw, str) or not kw.strip():
+            continue
+        ki = item.get("keyword_info") or {}
+        kp = item.get("keyword_properties") or {}
+        si = item.get("search_intent_info") or {}
+        out.append({
+            "keyword": kw.strip(),
+            "volume": _coerce_int(ki.get("search_volume")),
+            "cpc_usd": _coerce_float(ki.get("cpc")),
+            "competition_index": _coerce_float(ki.get("competition_index")),
+            "competition_level": ki.get("competition_level") if isinstance(ki, dict) else None,
+            "keyword_difficulty": _coerce_float(
+                kp.get("keyword_difficulty") if isinstance(kp, dict) else None
+            ),
+            "search_intent": si.get("main_intent") if isinstance(si, dict) else None,
+            "monthly_searches": ki.get("monthly_searches") if isinstance(ki, dict) else None,
+        })
+    return out
+
+
 def chunk(items: list, size: int) -> list[list]:
     """Split a list into chunks of at most ``size``. Pure."""
     return [items[i : i + size] for i in range(0, len(items), size)]
@@ -345,6 +382,29 @@ async def fetch_competitors_domain(
     payload = [{"target": target_domain, **_loc(location_code, language_code), "limit": limit}]
     body = await _post(_COMPETITORS_DOMAIN_PATH, payload)
     return parse_competitors_domain(body), cost_of(body)
+
+
+async def fetch_keyword_ideas(
+    seeds: list[str],
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+    limit: int = 700,
+) -> tuple[list[dict], Optional[float]]:
+    """Keyword ideas the ``seeds`` expand into, each already enriched with
+    volume / CPC / competition / KD / intent. Ordered by search volume desc so
+    the highest-demand ideas survive the ``limit`` cap. One billed call.
+
+    Labs caps the ideas seed set at 200 keywords — extra seeds are dropped."""
+    clean = [s.strip() for s in (seeds or []) if s and s.strip()]
+    if not clean:
+        return [], None
+    payload = [{
+        "keywords": clean[:200], **_loc(location_code, language_code),
+        "limit": max(1, min(limit, 1000)),
+        "order_by": ["keyword_info.search_volume,desc"],
+    }]
+    body = await _post(_KEYWORD_IDEAS_PATH, payload)
+    return parse_keyword_ideas(body), cost_of(body)
 
 
 async def fetch_keyword_overview(
