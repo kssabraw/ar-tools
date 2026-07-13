@@ -902,30 +902,47 @@ def _apply_rdfa_markup(html: str, entities: list) -> str:
             continue
 
         text = seg
+        # Collect each entity's first match on the ORIGINAL text, then keep only
+        # NON-OVERLAPPING matches (longest-first priority — kg_entities is sorted
+        # that way) and splice the spans in one pass. Mutating `text` and
+        # re-searching per entity (the old approach) let a shorter overlapping
+        # entity ("vitamin" inside "Vitamin B12") match inside an already-inserted
+        # span's attributes and corrupt the markup — that produced mangled H1s.
+        chosen: list[tuple[int, int, dict]] = []
         for entity in kg_entities:
             name = entity["name"]
             if name in marked:
                 continue
-            mid          = entity["mid"]
-            schema_type  = _RDFA_TYPE_MAP.get(entity.get("entity_type", ""), "Thing")
-            # sameAs = an authoritative entity URL. Since the TextRazor migration
-            # `mid` is a Wikidata ID (e.g. "Q42"), not a Google KG "/m/…" id — so
-            # prefer the entity's Wikipedia link, else the Wikidata entity page,
-            # rather than a malformed Google `kgmid` search URL.
-            kg_url       = entity.get("wiki_link") or f"https://www.wikidata.org/wiki/{mid}"
-            pat          = re.compile(r'\b' + re.escape(name) + r'\b', re.IGNORECASE)
-            m            = pat.search(text)
-            if m:
-                rdfa = (
-                    f'<span vocab="https://schema.org/" typeof="{schema_type}" '
-                    f'property="name" content="{_html_mod.escape(name)}">'
-                    f'<link property="sameAs" href="{kg_url}"/>'
-                    f'{m.group()}</span>'
-                )
-                text = text[:m.start()] + rdfa + text[m.end():]
-                marked.add(name)
+            m = re.search(r'\b' + re.escape(name) + r'\b', text, re.IGNORECASE)
+            if not m:
+                continue
+            s, e = m.start(), m.end()
+            if any(s < te and e > ts for ts, te, _ in chosen):
+                continue  # overlaps a higher-priority match already taken
+            chosen.append((s, e, entity))
+            marked.add(name)
 
-        result.append(text)
+        if not chosen:
+            result.append(text)
+            continue
+
+        chosen.sort(key=lambda x: x[0])
+        pos = 0
+        pieces: list = []
+        for s, e, entity in chosen:
+            schema_type = _RDFA_TYPE_MAP.get(entity.get("entity_type", ""), "Thing")
+            kg_url = entity.get("wiki_link") or f'https://www.wikidata.org/wiki/{entity["mid"]}'
+            surface = text[s:e]
+            pieces.append(text[pos:s])
+            pieces.append(
+                f'<span vocab="https://schema.org/" typeof="{schema_type}" '
+                f'property="name" content="{_html_mod.escape(surface)}">'
+                f'<link property="sameAs" href="{kg_url}"/>'
+                f'{surface}</span>'
+            )
+            pos = e
+        pieces.append(text[pos:])
+        result.append("".join(pieces))
 
     return "".join(result)
 
@@ -7075,7 +7092,7 @@ OUTPUT CONTRACT — return EXACTLY these parts in order, and NOTHING else (no ma
 
 HARD RULE — NEVER invent facts. Do not fabricate prices, specs, measurements, materials, certifications, review counts, or ratings. Use ONLY the product facts + store data provided. When a needed fact is missing, write around it (do not state a made-up value) and record it in CONTENT_GAPS_REPORT.
 
-STORE-PAGE FRAMING (critical — read before writing) — This is a live STORE product/collection page, NOT an informational article, blog post, or encyclopedia entry. The MAIN ENTITY is THIS specific product (or category) as sold by this store (e.g. "Nova Life B12 12mg vial"), NOT the generic ingredient / material / topic ("vitamin B12"). Write to help a ready-to-buy shopper choose and purchase THIS product. Do NOT write general "What X is", "How X works in the body", "Benefits of X", or "History of X" sections — that is informational content and does not belong on a store page. You MAY include at most ONE short (2–4 sentence) product-anchored passage on why the product's key property matters for the buyer's specific use (e.g. why verified purity matters for their research) — never a general explainer of the underlying topic. Anchor EVERY heading and section on the product and the purchase decision.
+STORE-PAGE FRAMING (critical — read before writing) — This is a live STORE product/collection page, NOT an informational article, blog post, or encyclopedia entry. The MAIN ENTITY is THIS specific product (or category) as sold by this store (e.g. "Nova Life B12 12mg vial"), NOT the generic ingredient / material / topic ("vitamin B12"). Write to help a ready-to-buy shopper choose and purchase THIS product. What's BANNED is generic-topic ENCYCLOPEDIA that doesn't help the buyer decide or use the product: "what X is in the human body", physiology, mechanism-of-action, history, or health benefits of the underlying ingredient. What's WELCOME — and SHOULD be developed with substantive, specific detail — is informational depth that serves THIS buyer's use and purchase decision: the product's real-world applications and use cases, how it's used / handled / stored, compatibility, quality & testing context, and compliance — always anchored to THIS product and this buyer (e.g. the specific research contexts a lab would use it in, not a textbook explainer of the molecule). Write a THOROUGH, in-depth page — develop each section with concrete, useful detail; do not produce a thin stub. Anchor EVERY heading and section on the product and the purchase decision.
 
 WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must be written. The "main entity" is THIS specific product/SKU (PDP) or category (PLP) as sold by this store — never the generic ingredient/material/topic. Follow ALL of these:
 
@@ -7085,8 +7102,8 @@ WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must b
 4. MCS headings — [Main entity] + a fact-forward topic: every H2/H3 names the main entity AND pairs it with a fact-forward topic, NOT a bare topic word. DO: "Acme Trail Runner Grips Wet Rock with Vibram Megagrip", "Acme Trail Runner Fits True to Size for Wide Feet". DON'T: bare "Features", "Details", "Overview", "Benefits". Do NOT use the exact target search phrase verbatim as a subheading (avoid EMQ in H2–H6) — front the entity + a fact instead.
 5. One Main-Entity EMQ in the body: include the primary target search phrase verbatim EXACTLY ONCE, in normal <p> body text (never in a subheading).
 6. Extractable Snippets: write every key claim as a standalone sentence that is true and liftable without surrounding context (a machine could quote it verbatim). DO: "Air-dry the boots for 24 hours after wet use to protect the membrane." DON'T: "It really depends on a few things we'll get into."
-7. List-Top: place a scannable bulleted or numbered list HIGH on the page — ideally right after the opening definition — covering the key features/specs (or the how-to steps). Outcome-first items.
-8. Tables (Fact-Sentence model): include at least one spec/comparison <table> (aim for 1–2). Every row reads [Main entity / choice] → [relationship] → [VERIFIABLE fact]. The FINAL cell MUST be a number or noun-entity (e.g. "8.5 Mohs", "$125", "1.2 kg", "IP67") — NEVER a dangling adjective like "High", "Reliable", or "Best". Bind each spec to the use-case where it matters, and express tradeoffs as quantified deltas. Use consensus units. NEVER invent numbers — if a spec is unknown, omit that row and record it in CONTENT_GAPS.
+7. Lists: place a scannable bulleted or numbered list HIGH on the page (right after the opening definition), AND use SEVERAL more lists across the page wherever they aid scanning — e.g. applications/use cases, what's-included, use contexts, storage/handling steps. Outcome-first items. Do not rely on a single list.
+8. Tables (Fact-Sentence model): include at least one spec/comparison <table> (aim for 1–2). Give it DESCRIPTIVE, product-anchored column HEADERS — NEVER bare generic labels like "Attribute"/"Detail"; prefer headers such as "Specification", "Verified value", and a "Why it matters for your work" column that binds each spec to its use. Every row reads [Main entity / choice] → [relationship] → [VERIFIABLE fact]. The FINAL cell MUST be a number or noun-entity (e.g. "8.5 Mohs", "$125", "1.2 kg", "IP67") — NEVER a dangling adjective like "High", "Reliable", or "Best". Express tradeoffs as quantified deltas. Use consensus units. NEVER invent numbers — if a spec is unknown, omit that row and record it in CONTENT_GAPS.
 9. Pro tone: maintain a strictly positive sentiment toward the product/category throughout.
 10. Evidence: back claims with specific numbers; cite the source of a statistic where one genuinely exists. Never fabricate data, prices, or ratings.
 11. Active voice; consistent terminology (pick one name for a thing and keep it); power words only when they truthfully reflect the product.
