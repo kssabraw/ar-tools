@@ -19,7 +19,7 @@ from pydantic import BaseModel
 from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
-from services import keyword_research
+from services import keyword_research, keyword_research_report
 
 router = APIRouter(tags=["keyword-research"])
 logger = logging.getLogger(__name__)
@@ -80,6 +80,44 @@ async def start_research(
         logger.error("keyword_research_start_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
     return {"job_id": job_id, "seeds": seeds}
+
+
+@router.post("/clients/{client_id}/keyword-research/runs/{run_id}/report")
+async def create_report(
+    client_id: UUID, run_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    """Generate a client-facing PDF report for a run (synchronous: build →
+    exec-summary → PDF → store → Drive copy). Returns the report + download link."""
+    try:
+        return keyword_research_report.generate_report(
+            str(client_id), str(run_id), user_id=auth.get("sub") or auth.get("user_id"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("keyword_research_report_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/clients/{client_id}/keyword-research/reports")
+async def list_reports(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Report history for the client (newest first)."""
+    try:
+        return {"reports": keyword_research_report.list_reports(str(client_id))}
+    except Exception as exc:
+        logger.error("keyword_research_reports_list_failed", extra={"client_id": str(client_id), "error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/clients/{client_id}/keyword-research/reports/{report_id}/download")
+async def download_report(
+    client_id: UUID, report_id: UUID, auth: dict = Depends(require_auth)
+) -> dict:
+    """A fresh signed download URL for a stored report PDF."""
+    url = keyword_research_report.report_download_url(str(client_id), str(report_id))
+    if not url:
+        raise HTTPException(status_code=404, detail="report_not_found")
+    return {"download_url": url}
 
 
 @router.get("/clients/{client_id}/keyword-research/jobs/{job_id}")

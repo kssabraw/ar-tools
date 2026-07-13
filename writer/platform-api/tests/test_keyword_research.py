@@ -2,6 +2,7 @@
 
 from services import keyword_research as kr
 from services import dataforseo_labs
+from services import keyword_research_report as krr
 
 
 # --- is_question --------------------------------------------------------------
@@ -179,3 +180,68 @@ def test_parse_keyword_ideas_skips_blank_keywords():
     ]}]}]}
     rows = dataforseo_labs.parse_keyword_ideas(body)
     assert [r["keyword"] for r in rows] == ["good"]
+
+
+# --- report builders (pure) ---------------------------------------------------
+def _sample_keywords():
+    return [
+        {"keyword": "emergency plumber sydney", "cluster_label": "plumber", "volume": 800,
+         "cpc_usd": 12.0, "keyword_difficulty": 25, "search_intent": "transactional",
+         "is_question": False, "opportunity_score": 7200.0},
+        {"keyword": "plumber near me", "cluster_label": "plumber", "volume": 500,
+         "cpc_usd": 10.0, "keyword_difficulty": 40, "search_intent": "commercial",
+         "is_question": False, "opportunity_score": 2700.0},
+        {"keyword": "how much does a plumber cost", "cluster_label": "cost", "volume": 300,
+         "cpc_usd": 5.0, "keyword_difficulty": 15, "search_intent": "informational",
+         "is_question": True, "opportunity_score": 765.0},
+    ]
+
+
+def test_report_stats_rollup_and_clusters():
+    stats = krr.build_report_stats(run={"seeds": ["plumber"]}, keywords=_sample_keywords())
+    assert stats["total_keywords"] == 3
+    assert stats["total_clusters"] == 2
+    assert stats["total_volume"] == 1600
+    assert stats["metrics_present"] is True
+    assert stats["question_count"] == 1
+    # Clusters sorted by total volume desc — "plumber" (1300) before "cost" (300).
+    assert [c["label"] for c in stats["clusters"]] == ["plumber", "cost"]
+    plumber = stats["clusters"][0]
+    assert plumber["count"] == 2
+    assert plumber["top_keyword"] == "emergency plumber sydney"
+
+
+def test_report_stats_top_opportunities_sorted_by_score():
+    stats = krr.build_report_stats(run={"seeds": ["plumber"]}, keywords=_sample_keywords())
+    assert stats["top_opportunities"][0]["keyword"] == "emergency plumber sydney"
+    assert stats["questions"][0]["keyword"] == "how much does a plumber cost"
+
+
+def test_report_stats_no_metrics():
+    kws = [{"keyword": "x", "cluster_label": "x", "volume": None, "cpc_usd": None,
+            "keyword_difficulty": None, "is_question": False, "opportunity_score": 0}]
+    stats = krr.build_report_stats(run={"seeds": []}, keywords=kws)
+    assert stats["metrics_present"] is False
+    assert stats["avg_difficulty"] is None
+
+
+def test_fallback_summary_mentions_counts_and_top():
+    stats = krr.build_report_stats(run={"seeds": ["plumber"]}, keywords=_sample_keywords())
+    text = krr.fallback_summary(stats)
+    assert "3" in text and "plumber" in text.lower()
+    assert "emergency plumber sydney" in text
+
+
+def test_render_report_html_is_escaped_and_self_contained():
+    kws = [{"keyword": "<b>inject</b> plumber", "cluster_label": "plumber", "volume": 10,
+            "cpc_usd": 1.0, "keyword_difficulty": 5, "search_intent": "commercial",
+            "is_question": False, "opportunity_score": 9.0}]
+    stats = krr.build_report_stats(run={"seeds": ["plumber"]}, keywords=kws)
+    html = krr.render_report_html(stats=stats, exec_summary="Great <results>.",
+                                  agency_name="Acme SEO", client_name="Bob & Co",
+                                  generated_on="Jul 13, 2026")
+    assert html.startswith("<!DOCTYPE html>")
+    assert "&lt;b&gt;inject&lt;/b&gt;" in html      # keyword escaped
+    assert "<b>inject" not in html                   # no raw injection
+    assert "Bob &amp; Co" in html
+    assert "Acme SEO" in html

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, HelpCircle, RefreshCw, Search } from 'lucide-react'
+import { ArrowLeft, Download, FileText, HelpCircle, RefreshCw, Search } from 'lucide-react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 
@@ -45,6 +45,14 @@ interface RunResponse {
   run: (RunSummary & { location_code: number | null; language_code: string | null }) | null
   keywords: ResearchKeyword[]
   clusters: ClusterSummary[]
+}
+interface ReportRow {
+  id: string
+  run_id: string
+  title: string | null
+  status: string
+  drive_url: string | null
+  created_at: string
 }
 
 const num = (n: number | null | undefined, digits = 0) =>
@@ -114,6 +122,32 @@ export function KeywordResearch() {
     if (onlyQuestions) ks = ks.filter((k) => k.is_question)
     return ks
   }, [keywords, activeCluster, onlyQuestions])
+
+  // --- Client-facing PDF report ---
+  const { data: reportsData } = useQuery<{ reports: ReportRow[] }>({
+    queryKey: ['keyword-research-reports', id],
+    queryFn: () => api.get(`/clients/${id}/keyword-research/reports`),
+    enabled: Boolean(id),
+  })
+  const genReport = useMutation({
+    mutationFn: (rid: string) =>
+      api.post<{ report_id: string; download_url: string | null; drive_url: string | null }>(
+        `/clients/${id}/keyword-research/runs/${rid}/report`, {}),
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ['keyword-research-reports', id] })
+      if (r.download_url) window.open(r.download_url, '_blank')
+    },
+  })
+  const runReports = useMemo(
+    () => (reportsData?.reports ?? []).filter((r) => r.run_id === runId),
+    [reportsData, runId],
+  )
+  const downloadReport = async (reportId: string) => {
+    try {
+      const { download_url } = await api.get<{ download_url: string }>(`/clients/${id}/keyword-research/reports/${reportId}/download`)
+      if (download_url) window.open(download_url, '_blank')
+    } catch { /* ignore */ }
+  }
 
   const submit = () => { if (seeds.trim()) research.mutate(seeds) }
 
@@ -224,14 +258,31 @@ export function KeywordResearch() {
           )}
 
           {/* Keyword table */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, gap: 8, flexWrap: 'wrap' }}>
             <span style={{ fontSize: 12, color: '#94a3b8' }}>
               Showing {num(filtered.length)}{activeCluster ? ` in "${activeCluster}"` : ''}{onlyQuestions ? ' · questions' : ''}
             </span>
-            <button style={ghostBtn} onClick={exportCsv} disabled={!filtered.length}>
-              <Download size={14} /> Export CSV
-            </button>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button style={ghostBtn} onClick={() => runId && genReport.mutate(runId)} disabled={!keywords.length || genReport.isPending}>
+                <FileText size={14} /> {genReport.isPending ? 'Building…' : 'Client PDF report'}
+              </button>
+              <button style={ghostBtn} onClick={exportCsv} disabled={!filtered.length}>
+                <Download size={14} /> Export CSV
+              </button>
+            </div>
           </div>
+          {genReport.isError && <div style={errBox}>{(genReport.error as Error)?.message ?? 'Report failed.'}</div>}
+          {runReports.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+              {runReports.map((r) => (
+                <span key={r.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '5px 10px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12, color: '#475569' }}>
+                  <FileText size={12} /> {new Date(r.created_at).toLocaleDateString()}
+                  <button style={linkBtn} onClick={() => downloadReport(r.id)}>Download</button>
+                  {r.drive_url && <a href={r.drive_url} target="_blank" rel="noreferrer" style={{ color: '#2563eb', textDecoration: 'none' }}>Drive</a>}
+                </span>
+              ))}
+            </div>
+          )}
           <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
@@ -278,6 +329,7 @@ const backLink: React.CSSProperties = { display: 'inline-flex', alignItems: 'cen
 const inputStyle: React.CSSProperties = { padding: '9px 12px', border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 14, color: '#0f172a', outline: 'none' }
 const primaryBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 16px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer', height: 40 }
 const ghostBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px', background: '#fff', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }
+const linkBtn: React.CSSProperties = { background: 'none', border: 'none', color: '#2563eb', fontSize: 12, cursor: 'pointer', padding: 0 }
 const chip: React.CSSProperties = { padding: '5px 12px', background: '#f1f5f9', color: '#475569', border: '1px solid transparent', borderRadius: 999, fontSize: 12, cursor: 'pointer' }
 const chipActive: React.CSSProperties = { background: '#dbeafe', color: '#1d4ed8', borderColor: '#93c5fd' }
 const clusterChip: React.CSSProperties = { padding: '5px 12px', background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12, cursor: 'pointer' }
