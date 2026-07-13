@@ -10,7 +10,8 @@ from services.leadoff_scoring import (
     winnability_factor,
 )
 
-W = {"prox": 0.10, "site": 0.08, "brand": 0.08, "permit": 0.06, "season": 0.05}
+W = {"prox": 0.10, "site": 0.08, "brand": 0.08, "permit": 0.06, "season": 0.05,
+     "peer": 0.07}
 # a coarse breakpoint reference (0..1000 in 100-point steps)
 BP = list(range(0, 1001, 10))
 
@@ -58,6 +59,25 @@ class TestFactors:
         assert round(demand_factor(1.0, 1.0, W), 3) == 1.11      # HOT + rising
         assert round(demand_factor(-1.0, -1.0, W), 3) == 0.89
         assert demand_factor(None, None, W) == 1.0
+
+    def test_peer_field_shifts_winnability(self):
+        # field weaker than comparable cities (+1) → more winnable
+        assert round(winnability_factor(None, None, None, W, peer_field=1.0), 3) == 1.07
+        # field stronger than peers (−1) → less winnable
+        assert round(winnability_factor(None, None, None, W, peer_field=-1.0), 3) == 0.93
+        # absent → neutral, and it composes with the other winnability signals
+        assert winnability_factor(1.0, 0.0, 0.0, W, peer_field=None) == 1.10
+        assert round(winnability_factor(1.0, 0.0, 0.0, W, peer_field=1.0), 3) == 1.17
+
+    def test_peer_field_flows_through_enrich_grade(self):
+        row = base_row(rankab=0.5, xdem=1000, rev_win=20, exp_val=2500)
+        soft = enrich_grade(row, {"peer_field": 1.0}, capture=0.1, lead_value=50,
+                            breakpoints=BP, w=W)
+        hard = enrich_grade(row, {"peer_field": -1.0}, capture=0.1, lead_value=50,
+                            breakpoints=BP, w=W)
+        assert soft["rankab"] > 0.5 > hard["rankab"]
+        assert soft["exp_val"] > hard["exp_val"]
+        assert soft["score_factors"]["signals"].get("peer_field") == 1.0
 
 
 class TestEnrichGrade:
@@ -152,4 +172,9 @@ class TestBriefSignals:
                           proximity_opportunity=None, growth_yoy_ss=None)
         assert all(s[k] is None for k in
                    ("proximity", "site_pressure", "brand_pressure",
-                    "permit", "seasonal"))
+                    "permit", "seasonal", "peer_field"))
+
+    def test_peer_field_passthrough(self):
+        s = brief_signals({}, [], proximity_opportunity=None,
+                          growth_yoy_ss=None, peer_field=0.4)
+        assert s["peer_field"] == 0.4

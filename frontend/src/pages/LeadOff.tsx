@@ -46,6 +46,10 @@ interface MarketRow {
   opportunity_v3?: number | null
   score_factors?: { winnability: number; demand: number
     signals: Record<string, number | string> } | null
+  // peer-cohort field-strength: this market's rev_win vs comparable-size,
+  // comparable-income cities in the same category (context for the signal).
+  peer_cohort_median?: number | null
+  peer_cohort_n?: number | null
 }
 interface BoardResponse {
   markets: MarketRow[]
@@ -208,7 +212,7 @@ export function LeadOff() {
           )}
           {(board?.markets ?? []).some(m => m.enriched) && (
             <span style={{ ...pill, background: '#e3f2ef', color: '#0e7d6f' }}
-              title="Grades include the context-enrichment layer: winnability adjusted by proximity + incumbent size, demand by permits + seasonal trend (conservative, calibration-tunable). Board rows currently use the permit signal; the full four-signal grade runs on each market's brief.">
+              title="Grades include the context-enrichment layer: winnability adjusted by proximity + incumbent size + peer-cohort field-strength (field vs comparable-size, comparable-income cities), demand by permits + seasonal trend (conservative, calibration-tunable). The full grade runs on each market's brief.">
               enriched grades
             </span>
           )}
@@ -374,7 +378,7 @@ export function LeadOff() {
               {brief.enriched && brief.score_factors && (
                 <div style={{ fontSize: 11, color: '#0e7d6f', background: '#e3f2ef',
                   borderRadius: 6, padding: '6px 8px', margin: '2px 0 6px', lineHeight: 1.5 }}
-                  title="Today's context signals promoted to grade inputs (conservative, config-weighted, calibration-tunable). Winnability ×proximity/site/brand; demand ×permits/seasonal.">
+                  title="Today's context signals promoted to grade inputs (conservative, config-weighted, calibration-tunable). Winnability ×proximity/site/brand/peer-cohort field-strength; demand ×permits/seasonal.">
                   Grade includes context enrichment — winnability ×{brief.score_factors.winnability.toFixed(2)},
                   demand ×{brief.score_factors.demand.toFixed(2)}
                   {brief.base_exp_val != null && <> · base {usd(brief.base_exp_val)} → {usd(brief.exp_val)}</>}
@@ -401,6 +405,16 @@ export function LeadOff() {
 
               <SectionTitle>Field forensics</SectionTitle>
               <KV k="Reviews to beat #3" v={String(brief.rev_win)} strong />
+              {brief.peer_cohort_median != null && (
+                <KV k="Field vs comparable cities"
+                  v={`${brief.rev_win} vs ${brief.peer_cohort_median} median`
+                    + (brief.rev_win < brief.peer_cohort_median ? ' — softer'
+                      : brief.rev_win > brief.peer_cohort_median ? ' — tougher' : ' — typical')}
+                  hint={`This market's reviews-to-win vs the median of ${brief.peer_cohort_n ?? '—'} `
+                    + `cities of similar size and household income in the same category. `
+                    + `A field softer than its peers is genuinely beatable (not just small); `
+                    + `a tougher-than-peers field is harder than it looks. Feeds the winnability grade.`} />
+              )}
               <KV k="Field rating" v={brief.rating != null ? `${brief.rating}★` : '—'} />
               <KV k="Keyword-named top-5" v={`${brief.namekw}/5`} />
               <KV k="Exact-category holders" v={String(brief.exact_open)} />

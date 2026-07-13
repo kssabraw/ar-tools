@@ -9,6 +9,8 @@ bounded, config-weighted multipliers:
     + proximity opportunity   (undefended geographic zones → easier)
     − incumbent site size     (big authoritative sites → harder)
     − incumbent brand strength(established brands are sticky → harder)
+    ± peer-cohort field       (field weaker/stronger than comparable-size,
+                               comparable-income cities → easier/harder)
   Demand (× regressed demand):
     + permit pipeline         (future customers)
     + seasonal trajectory     (real same-month YoY demand direction)
@@ -74,9 +76,11 @@ def seasonal_signal(growth_yoy_ss: Optional[float]) -> float:
 # ── Pillar multipliers ────────────────────────────────────────────────────────
 
 def winnability_factor(proximity: Optional[float], site_p: Optional[float],
-                       brand_p: Optional[float], w: dict[str, float]) -> float:
+                       brand_p: Optional[float], w: dict[str, float],
+                       peer_field: Optional[float] = None) -> float:
     return (1.0 + w["prox"] * (proximity or 0.0)
-            - w["site"] * (site_p or 0.0) - w["brand"] * (brand_p or 0.0))
+            - w["site"] * (site_p or 0.0) - w["brand"] * (brand_p or 0.0)
+            + w.get("peer", 0.0) * (peer_field or 0.0))
 
 
 def demand_factor(permit_s: Optional[float], season_s: Optional[float],
@@ -92,6 +96,7 @@ def default_weights() -> dict[str, float]:
         "brand": settings.leadoff_score_w_brand,
         "permit": settings.leadoff_score_w_permit,
         "season": settings.leadoff_score_w_seasonal,
+        "peer": settings.leadoff_score_w_peer_cohort,
     }
 
 
@@ -113,7 +118,8 @@ def enrich_grade(row: dict[str, Any], signals: dict[str, Any], *,
     rev_win = float(row.get("rev_win") or 0.0)
 
     wf = winnability_factor(signals.get("proximity"), signals.get("site_pressure"),
-                            signals.get("brand_pressure"), w)
+                            signals.get("brand_pressure"), w,
+                            peer_field=signals.get("peer_field"))
     df = demand_factor(signals.get("permit"), signals.get("seasonal"), w)
     adj_rankab = _clamp(base_rankab * wf, 0.01, 1.0)
     adj_xdem = max(0.0, base_xdem * df)
@@ -167,10 +173,13 @@ def enrich_grade(row: dict[str, Any], signals: dict[str, Any], *,
 
 def brief_signals(row: dict[str, Any], competitors: list[dict[str, Any]],
                   proximity_opportunity: Optional[float],
-                  growth_yoy_ss: Optional[float]) -> dict[str, Any]:
+                  growth_yoy_ss: Optional[float],
+                  peer_field: Optional[float] = None) -> dict[str, Any]:
     """Assemble the normalized signal magnitudes for one market from the pieces
     the brief already holds. Pure. Medians over whatever footprint the
-    competitor rows carry (missing → that signal is None)."""
+    competitor rows carry (missing → that signal is None). `peer_field` is the
+    precomputed peer-cohort field-strength signal read from the signal cache
+    (its board-wide cohort math can't be recomputed per-brief cheaply)."""
     def _median(vals: list[float]) -> Optional[float]:
         vs = sorted(v for v in vals if v is not None)
         if not vs:
@@ -188,4 +197,5 @@ def brief_signals(row: dict[str, Any], competitors: list[dict[str, Any]],
                    if row.get("permit_flag") else None),
         "seasonal": (seasonal_signal(growth_yoy_ss)
                      if growth_yoy_ss is not None else None),
+        "peer_field": peer_field,
     }
