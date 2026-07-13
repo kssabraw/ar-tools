@@ -40,9 +40,86 @@ _TOOL_SCHEMA = {
             "description": "Confidence from 0.0 to 1.0 that this category is "
                            "what the user's search refers to.",
         },
+        "city": {
+            "type": "string",
+            "description": "The US city named in the search, if any (e.g. "
+                           "'Cleveland'). Empty string if no city is mentioned.",
+        },
+        "state": {
+            "type": "string",
+            "description": "The US state named in the search as its 2-letter "
+                           "USPS code (e.g. 'OH' for Ohio). Empty string if no "
+                           "state is mentioned.",
+        },
+        "county": {
+            "type": "string",
+            "description": "The US county named in the search, WITHOUT the word "
+                           "'County'/'Parish' (e.g. 'Cuyahoga'). Empty string if "
+                           "no county is mentioned.",
+        },
     },
     "required": ["category", "confidence"],
 }
+
+# USPS state codes (50 + DC) + full-name fallback, for normalizing the model's
+# `state` extraction to a 2-letter code the board filter expects.
+_STATE_CODES = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "DC", "FL", "GA", "HI",
+    "ID", "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN",
+    "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY", "NC", "ND", "OH",
+    "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA",
+    "WV", "WI", "WY",
+}
+_STATE_NAME_TO_CODE = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "district of columbia": "DC", "washington dc": "DC", "florida": "FL",
+    "georgia": "GA", "hawaii": "HI", "idaho": "ID", "illinois": "IL",
+    "indiana": "IN", "iowa": "IA", "kansas": "KS", "kentucky": "KY",
+    "louisiana": "LA", "maine": "ME", "maryland": "MD", "massachusetts": "MA",
+    "michigan": "MI", "minnesota": "MN", "mississippi": "MS", "missouri": "MO",
+    "montana": "MT", "nebraska": "NE", "nevada": "NV", "new hampshire": "NH",
+    "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI",
+    "south carolina": "SC", "south dakota": "SD", "tennessee": "TN",
+    "texas": "TX", "utah": "UT", "vermont": "VT", "virginia": "VA",
+    "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+}
+
+
+def normalize_state(raw: Any) -> str | None:
+    """Model's `state` extraction → a valid 2-letter USPS code, or None. Accepts
+    a code ('oh', 'OH') or a full name ('Ohio'); anything unrecognized → None so
+    a bad guess never over-filters the board. Pure."""
+    s = str(raw or "").strip()
+    if not s:
+        return None
+    up = s.upper()
+    if up in _STATE_CODES:
+        return up
+    return _STATE_NAME_TO_CODE.get(s.lower())
+
+
+def resolve_location(result: dict[str, Any] | None) -> dict[str, Any]:
+    """Extract {city, state, county} from the model result. State is normalized
+    to a 2-letter code (else None); city/county are trimmed strings (else None).
+    Pure — location applies INDEPENDENTLY of the category match/threshold, so a
+    pure-location query ('Cuyahoga County Ohio') still filters even when no
+    service category is present."""
+    r = result or {}
+
+    def _clean(key: str) -> str | None:
+        v = str(r.get(key) or "").strip()
+        # strip a trailing "County"/"Parish" if the model included it anyway
+        if key == "county" and v:
+            for suf in (" county", " parish", " borough"):
+                if v.lower().endswith(suf):
+                    v = v[: -len(suf)].strip()
+        return v or None
+
+    return {"city": _clean("city"), "state": normalize_state(r.get("state")),
+            "county": _clean("county")}
 
 
 def _no_data(confidence: float = 0.0, **extra: Any) -> dict[str, Any]:
@@ -83,13 +160,18 @@ async def match_category(query: str, categories: list[str]) -> dict[str, Any]:
     from services import report_llm
 
     system = (
-        "You map a user's free-text description of a home-services business "
-        "type to exactly ONE category from a fixed list. Return the category "
-        "string copied verbatim from the list, plus your confidence (0-1). "
-        "If the text does not clearly correspond to any listed category, return "
-        'category "NONE". Be conservative: only give confidence >= 0.85 when you '
-        "are genuinely sure the user means that specific category. Never invent "
-        "a category that is not in the list."
+        "You parse a user's free-text market search into a business category "
+        "and/or a US location. TWO independent jobs:\n"
+        "1) CATEGORY: map any home-services business type to exactly ONE "
+        "category from the fixed list, copied verbatim, plus confidence (0-1). "
+        'If no listed category clearly applies, return category "NONE". Be '
+        "conservative: confidence >= 0.85 only when genuinely sure. Never "
+        "invent a category not in the list.\n"
+        "2) LOCATION: extract any US city, state (as a 2-letter USPS code), and "
+        "county (without the word 'County') mentioned. Leave a location field "
+        "empty if not present.\n"
+        "A query may have a category only ('roofers'), a location only "
+        "('Cuyahoga County Ohio'), or both ('plumbers in Dallas TX')."
     )
     user = (
         f"User search: {q!r}\n\n"
@@ -103,7 +185,8 @@ async def match_category(query: str, categories: list[str]) -> dict[str, Any]:
             system=system,
             user=user,
             tool_name="report_match",
-            tool_description="Report the best-matching category and your confidence.",
+            tool_description="Report the best-matching category + confidence, "
+                             "and any US city/state/county in the search.",
             input_schema=_TOOL_SCHEMA,
             max_tokens=200,
             log_tag="leadoff_category_match",
@@ -111,5 +194,9 @@ async def match_category(query: str, categories: list[str]) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 — best-effort: never 500 the search box
         logger.warning("leadoff_category_match.llm_failed", exc_info=True)
         return _no_data(error="match_failed")
-    return resolve_llm_result(result, categories,
-                              settings.leadoff_category_match_threshold)
+    # Category (thresholded) and location (independent) are merged — a query can
+    # carry either, both, or neither.
+    out = resolve_llm_result(result, categories,
+                             settings.leadoff_category_match_threshold)
+    out.update(resolve_location(result))
+    return out
