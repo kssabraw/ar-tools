@@ -1,7 +1,7 @@
-import { Fragment, useState } from 'react'
+import { Fragment, useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer } from 'lucide-react'
+import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 
@@ -153,6 +153,53 @@ const compact = (n: number | null | undefined) =>
 
 type View = 'board' | 'neighborhoods' | 'tryouts'
 
+// Board columns + click-to-sort model. `key: null` = a non-sortable column
+// (the luck/permit icon strip). `num` picks the default first-click direction
+// (descending for numbers, ascending for text) and the compare fn.
+type ColKey = 'grade' | 'market' | 'category' | 'opportunity' | 'exp_val'
+  | 'roi' | 'demand' | 'rev_win' | 'rating' | 'exact_open'
+const BOARD_COLUMNS: { label: string; key: ColKey | null; num: boolean }[] = [
+  { label: 'Grade', key: 'grade', num: true },
+  { label: '', key: null, num: false },
+  { label: 'Market', key: 'market', num: false },
+  { label: 'Category', key: 'category', num: false },
+  { label: 'Opportunity', key: 'opportunity', num: true },
+  { label: 'Exp $/mo', key: 'exp_val', num: true },
+  { label: 'ROI $/rev', key: 'roi', num: true },
+  { label: 'Demand', key: 'demand', num: true },
+  { label: 'Rev to win', key: 'rev_win', num: true },
+  { label: 'Field ★', key: 'rating', num: true },
+  { label: 'Cat open', key: 'exact_open', num: true },
+]
+
+function colValue(r: MarketRow, key: ColKey): number | string {
+  switch (key) {
+    case 'grade': return r.build ?? -1            // numeric grade score
+    case 'market': return `${r.city_name}, ${r.state_code}`
+    case 'category': return r.category ?? ''
+    case 'opportunity': return r.opportunity_v3 ?? r.v3 ?? -1
+    case 'exp_val': return r.exp_val ?? -1
+    case 'roi': return r.roi ?? -1
+    case 'demand': return r.xdem ?? -1
+    case 'rev_win': return r.rev_win ?? -1
+    case 'rating': return r.rating ?? -1
+    case 'exact_open': return r.exact_open ?? -1
+  }
+}
+
+// Client-side sort of the loaded rows (a table nicety over the server's
+// top-N ordering — re-orders what's shown, e.g. "of these, fewest reviews
+// to win"). Nulls sort last via the -1 fallbacks in colValue.
+function sortMarkets(rows: MarketRow[], cs: { key: ColKey; dir: 'asc' | 'desc' }): MarketRow[] {
+  const mult = cs.dir === 'asc' ? 1 : -1
+  return [...rows].sort((a, b) => {
+    const va = colValue(a, cs.key), vb = colValue(b, cs.key)
+    if (typeof va === 'string' || typeof vb === 'string')
+      return mult * String(va).localeCompare(String(vb))
+    return mult * (va - vb)
+  })
+}
+
 export function LeadOff() {
   const [view, setView] = useState<View>('board')
   const [filters, setFilters] = useState({ city: '', state: '', category: '', minDemand: '' })
@@ -186,8 +233,24 @@ export function LeadOff() {
     enabled: Boolean(selected),
   })
 
-  const exportCsv = () => {
+  // Click-to-sort on the column headers (client-side, over the loaded rows).
+  const [colSort, setColSort] = useState<{ key: ColKey; dir: 'asc' | 'desc' } | null>(null)
+  // Reset when the loaded population changes (server sort / filters / assumptions
+  // re-fetch), so the server ordering takes over until a header is clicked again.
+  useEffect(() => { setColSort(null) }, [applied, sort, capture, tier])
+  const onHeaderSort = (key: ColKey | null, num: boolean) => {
+    if (!key) return
+    setColSort(prev => prev?.key === key
+      ? { key, dir: prev.dir === 'desc' ? 'asc' : 'desc' }
+      : { key, dir: num ? 'desc' : 'asc' })
+  }
+  const displayRows = useMemo(() => {
     const rows = board?.markets ?? []
+    return colSort ? sortMarkets(rows, colSort) : rows
+  }, [board, colSort])
+
+  const exportCsv = () => {
+    const rows = displayRows
     if (!rows.length) return
     const headers = ['grade', 'city_name', 'state_code', 'category', 'opportunity',
       'exp_val', 'roi', 'demand', 'rev_win', 'rating', 'exact_open']
@@ -297,14 +360,30 @@ export function LeadOff() {
             <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 900, fontSize: 13 }}>
               <thead>
                 <tr>
-                  {['Grade', '', 'Market', 'Category', 'Opportunity', 'Exp $/mo', 'ROI $/rev', 'Demand',
-                    'Rev to win', 'Field ★', 'Cat open'].map(h => (
-                    <th key={h} style={thStyle}>{h}</th>
-                  ))}
+                  {BOARD_COLUMNS.map((c, i) => {
+                    const active = c.key !== null && colSort?.key === c.key
+                    return (
+                      <th key={c.label || `icons-${i}`}
+                        onClick={() => onHeaderSort(c.key, c.num)}
+                        title={c.key ? `Sort by ${c.label}` : undefined}
+                        style={{ ...thStyle, whiteSpace: 'nowrap', userSelect: 'none',
+                          cursor: c.key ? 'pointer' : 'default' }}>
+                        {c.label}
+                        {c.key && (
+                          <span style={{ verticalAlign: 'middle', marginLeft: 3,
+                            display: 'inline-flex', opacity: active ? 1 : 0.3 }}>
+                            {active
+                              ? (colSort!.dir === 'asc' ? <ArrowUp size={11} /> : <ArrowDown size={11} />)
+                              : <ChevronsUpDown size={11} />}
+                          </span>
+                        )}
+                      </th>
+                    )
+                  })}
                 </tr>
               </thead>
               <tbody>
-                {(board?.markets ?? []).map(r => {
+                {displayRows.map(r => {
                   const isSel = selected?.city_id === r.city_id && selected?.category_id === r.category_id
                   return (
                     <tr key={`${r.city_id}:${r.category_id}`}
@@ -338,12 +417,12 @@ export function LeadOff() {
                   )
                 })}
                 {isLoading && (
-                  <tr><td colSpan={10} style={{ ...tdStyle, textAlign: 'center', padding: 32 }}>
+                  <tr><td colSpan={BOARD_COLUMNS.length} style={{ ...tdStyle, textAlign: 'center', padding: 32 }}>
                     <Loader2 size={18} className="spin" style={{ verticalAlign: -4 }} /> Loading board…
                   </td></tr>
                 )}
-                {!isLoading && !(board?.markets ?? []).length && (
-                  <tr><td colSpan={10} style={{ ...tdStyle, textAlign: 'center', padding: 32, color: '#64748b' }}>
+                {!isLoading && !displayRows.length && (
+                  <tr><td colSpan={BOARD_COLUMNS.length} style={{ ...tdStyle, textAlign: 'center', padding: 32, color: '#64748b' }}>
                     No markets match.
                   </td></tr>
                 )}
