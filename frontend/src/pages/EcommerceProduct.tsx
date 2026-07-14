@@ -179,6 +179,19 @@ export function EcommerceProduct() {
     setTab('saved')
   }
 
+  // Stop the generation: cancel the client's queued ecommerce jobs, halt the
+  // local poll + ticker, and return to the form. A job already running finishes
+  // server-side; anything still queued is dropped.
+  const stopGenerating = async () => {
+    if (!window.confirm('Stop all queued ecommerce jobs for this client? Jobs already running will finish.')) return
+    genCancelledRef.current = true
+    if (genPollRef.current) { clearTimeout(genPollRef.current); genPollRef.current = null }
+    stopTicker()
+    try { await ecommerceApi.cancelJobs(clientId) } catch { /* best-effort — UI already reset */ }
+    setError('Queued generation cancelled.')
+    setView({ kind: 'form' })
+  }
+
   const openSaved = async (pageId: string) => {
     setView({ kind: 'loading' })
     try {
@@ -200,7 +213,7 @@ export function EcommerceProduct() {
   }
 
   // ── Sub-view routing ───────────────────────────────────────────────────────
-  if (view.kind === 'creating') return <CreatingView elapsed={elapsed} pageType={pageType} onLeave={leaveGenerating} />
+  if (view.kind === 'creating') return <CreatingView elapsed={elapsed} pageType={pageType} onLeave={leaveGenerating} onStop={stopGenerating} />
 
   if (view.kind === 'loading') {
     return (
@@ -400,7 +413,12 @@ function BulkGenerateForm({ keywords, setKeywords, pageType, bulk, onSwitchSingl
   onStart: () => void
   onViewSaved: () => void
 }) {
-  const { creating, detached, total, done, failed, error, leave } = bulk
+  const { creating, detached, total, done, failed, error, leave, stop } = bulk
+
+  const handleStop = () => {
+    if (!window.confirm('Stop all queued ecommerce jobs for this client? Jobs already running will finish.')) return
+    void stop()
+  }
   const count = keywords.split('\n').map(k => k.trim()).filter(Boolean).length
   const finished = done + failed
 
@@ -457,6 +475,9 @@ function BulkGenerateForm({ keywords, setKeywords, pageType, bulk, onSwitchSingl
             </p>
             <button onClick={leave} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#6366f1', flexShrink: 0 }}>
               Leave &amp; finish in the background
+            </button>
+            <button onClick={handleStop} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#dc2626', flexShrink: 0 }}>
+              Stop
             </button>
           </div>
         </div>
@@ -773,7 +794,7 @@ function HouseTemplatePanel({ clientId }: { clientId: string }) {
   )
 }
 
-function CreatingView({ elapsed, pageType, onLeave }: { elapsed: number; pageType: EcommercePageType; onLeave?: () => void }) {
+function CreatingView({ elapsed, pageType, onLeave, onStop }: { elapsed: number; pageType: EcommercePageType; onLeave?: () => void; onStop?: () => void }) {
   const pct = Math.min(95, Math.round((elapsed / 180) * 100))
   const steps = [
     { label: 'Fetching top search results', done: pct >= 35, active: pct < 35 },
@@ -812,11 +833,18 @@ function CreatingView({ elapsed, pageType, onLeave }: { elapsed: number; pageTyp
         <p style={{ fontSize: 12, color: '#64748b', textAlign: 'center', margin: 0 }}>
           You can leave this page — generation continues in the background and the finished page appears in <b>Saved Pages</b>.
         </p>
-        {onLeave && (
-          <button style={outlineBtn} onClick={onLeave}>
-            Leave &amp; finish in the background
-          </button>
-        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+          {onLeave && (
+            <button style={outlineBtn} onClick={onLeave}>
+              Leave &amp; finish in the background
+            </button>
+          )}
+          {onStop && (
+            <button style={{ ...outlineBtn, color: '#dc2626', borderColor: '#fecaca' }} onClick={onStop}>
+              Stop
+            </button>
+          )}
+        </div>
       </div>
     </div>
   )

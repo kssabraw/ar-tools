@@ -746,6 +746,34 @@ def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
     return out
 
 
+_JOB_TYPES = ("ecommerce_generate", "ecommerce_reoptimize_url", "ecommerce_action")
+
+
+def cancel_queued_jobs(client_id: str, job_ids: Optional[list[str]] = None) -> dict:
+    """Cancel QUEUED (pending) ecommerce jobs for a client so they never run.
+
+    The worker only ever claims jobs with status='pending', so flipping them to a
+    terminal state removes them from the queue. async_jobs has no 'cancelled'
+    status (CHECK allows pending/running/complete/failed), so we mark them
+    'failed' with a `cancelled_by_user` marker. A job already 'running' cannot be
+    interrupted mid-flight and is intentionally left to finish. Optionally scope
+    to specific `job_ids`; otherwise cancels ALL of the client's pending ecommerce
+    jobs. Returns ``{"cancelled": N}``."""
+    query = (
+        get_supabase().table("async_jobs")
+        .update({"status": "failed", "error": "cancelled_by_user", "completed_at": "now()"})
+        .eq("entity_id", client_id)
+        .eq("status", "pending")
+        .in_("job_type", list(_JOB_TYPES))
+    )
+    if job_ids:
+        query = query.in_("id", job_ids)
+    res = query.execute()
+    count = len(res.data or [])
+    logger.info("ecommerce.jobs_cancelled", extra={"client_id": client_id, "count": count})
+    return {"cancelled": count}
+
+
 # ── interactive actions (score / discover) as backgrounded jobs ──────────────
 
 _ACTION_JOB_TYPE = "ecommerce_action"

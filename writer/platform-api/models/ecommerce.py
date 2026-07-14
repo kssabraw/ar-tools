@@ -76,6 +76,13 @@ class EcommerceJobsStatusRequest(BaseModel):
     job_ids: list[UUID] = Field(default_factory=list)
 
 
+class EcommerceCancelJobsRequest(BaseModel):
+    """Cancel queued jobs. An empty job_ids cancels ALL of the client's pending
+    ecommerce jobs; otherwise only the listed ones."""
+
+    job_ids: list[UUID] = Field(default_factory=list)
+
+
 class EcommerceJobStatus(BaseModel):
     job_id: UUID
     status: str  # pending | running | complete | failed

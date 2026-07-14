@@ -104,5 +104,15 @@ export function useBulkGenerate(clientId: string, onCreated?: () => void) {
     onCreated?.()
   }
 
-  return { creating, detached, total, done, failed, elapsed, error, start, leave, reset }
+  // Stop the batch: cancel the client's queued ecommerce jobs, then tear down the
+  // poll/tick timers like leave() so the bar stops. Jobs already running finish.
+  const stop = async () => {
+    cancelledRef.current = true
+    stopTimers()
+    setCreating(false)
+    try { await ecommerceApi.cancelJobs(clientId) } catch { /* best-effort — UI already stopped */ }
+    onCreated?.()
+  }
+
+  return { creating, detached, total, done, failed, elapsed, error, start, leave, stop, reset }
 }
