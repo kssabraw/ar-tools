@@ -9,3 +9,6 @@ input, select, textarea { font-family: inherit; }
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+/* Utility class for spinner icons using className="spin" (the keyframe alone
+   doesn't animate anything without this — several Loader2 spinners were static). */
+.spin { animation: spin 1s linear infinite; }
