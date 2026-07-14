@@ -35,7 +35,7 @@ export function useBulkGenerate(clientId: string, onCreated?: () => void) {
   const reset = () => { setTotal(0); setDone(0); setFailed(0); setDetached(false); setError('') }
 
   // Enqueue one background generate job per keyword, then poll.
-  const start = async (keywords: string[], pageType: EcommercePageType) => {
+  const start = async (keywords: string[], pageType: EcommercePageType, notes?: string | null) => {
     const queue = keywords.map(k => k.trim()).filter(Boolean)
     if (!queue.length || creating) return
     cancelledRef.current = false
@@ -51,7 +51,7 @@ export function useBulkGenerate(clientId: string, onCreated?: () => void) {
 
     let jobIds: string[] = []
     try {
-      const res = await ecommerceApi.generateBulk(clientId, { keywords: queue, page_type: pageType })
+      const res = await ecommerceApi.generateBulk(clientId, { keywords: queue, page_type: pageType, notes: notes?.trim() || null })
       jobIds = res.job_ids ?? []
     } catch (e) {
       stopTimers()

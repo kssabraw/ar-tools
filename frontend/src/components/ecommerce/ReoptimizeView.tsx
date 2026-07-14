@@ -49,6 +49,7 @@ export function ReoptimizeView({ clientId, clientName, pageType, onOpenSaved }: 
   const [mode, setMode] = useState<'urls' | 'discover'>('urls')
   const [keyword, setKeyword] = useState('')
   const [bulkText, setBulkText] = useState('')
+  const [notes, setNotes] = useState('')
   const [publishToDoc, setPublishToDoc] = useState(false)
 
   // Discover-from-site state.
@@ -131,6 +132,7 @@ export function ReoptimizeView({ clientId, clientName, pageType, onOpenSaved }: 
         targets: valid.map(t => ({ page_url: t.url, keyword: t.keyword || null, page_type: t.pageType })),
         score_threshold: SCORE_THRESHOLD,
         publish_to_doc: publishToDoc,
+        notes: notes.trim() || null,
       })
       handles = res.jobs ?? []
     } catch (e) {
@@ -313,6 +315,18 @@ export function ReoptimizeView({ clientId, clientName, pageType, onOpenSaved }: 
           )}
         </div>
       )}
+
+      {/* Notes (optional) — applies to every page in the batch */}
+      <div>
+        <label style={label}>Notes <span style={{ fontWeight: 400, color: '#94a3b8' }}>(optional) — guidance for the writer, e.g. “remove the Research Use Only designation”. Applies to every page in this batch.</span></label>
+        <textarea
+          style={{ ...input, minHeight: 80, fontFamily: 'inherit', resize: 'vertical' }}
+          value={notes}
+          disabled={running}
+          onChange={e => setNotes(e.target.value)}
+          placeholder={'e.g. emphasize fast shipping; write for clinics not individuals'}
+        />
+      </div>
 
       {/* Publish-to-Doc option */}
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#64748b', cursor: 'pointer' }}>

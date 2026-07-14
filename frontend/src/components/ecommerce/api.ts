@@ -25,6 +25,8 @@ export const ecommerceApi = {
       // Optional per-call override of the client's house PDP template (products
       // only); omit to use the saved default.
       page_template_url?: string | null
+      // High-priority per-job writing guidance the writer follows.
+      notes?: string | null
     },
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/ecommerce/generate-async`, body),
 
@@ -49,7 +51,7 @@ export const ecommerceApi = {
   // Bulk background generation — one job per keyword; poll jobsStatus.
   generateBulk: (
     clientId: string,
-    body: { keywords: string[]; page_type: EcommercePageType },
+    body: { keywords: string[]; page_type: EcommercePageType; notes?: string | null },
   ) => api.post<{ job_ids: string[] }>(`/clients/${clientId}/ecommerce/generate-bulk`, body),
 
   // Bulk background reoptimization — one job per page URL; poll jobsStatus. Each
@@ -60,6 +62,7 @@ export const ecommerceApi = {
       targets: Array<{ page_url: string; keyword?: string | null; page_type: EcommercePageType }>
       score_threshold?: number | null
       publish_to_doc?: boolean
+      notes?: string | null
     },
   ) => api.post<{ jobs: Array<{ job_id: string; page_url: string }> }>(
     `/clients/${clientId}/ecommerce/reoptimize-bulk`, body,

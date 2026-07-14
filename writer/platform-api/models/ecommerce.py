@@ -21,6 +21,9 @@ class EcommerceGenerateRequest(BaseModel):
     # Optional per-call override of the client's house PDP template (products
     # only). Omit to use the client's saved default.
     page_template_url: Optional[str] = None
+    # Per-job writing notes the writer follows as high-priority guidance
+    # (e.g. "remove the Research Use Only designation").
+    notes: Optional[str] = None
 
 
 class EcommercePageTemplateRequest(BaseModel):
@@ -45,6 +48,8 @@ class EcommerceBulkGenerateRequest(BaseModel):
 
     keywords: list[str] = Field(..., min_length=1)
     page_type: PageType = "product"
+    # Batch-level writing notes applied to every page in the batch.
+    notes: Optional[str] = None
 
 
 class EcommerceBulkGenerateJob(BaseModel):
@@ -61,6 +66,9 @@ class EcommerceReoptimizeBulkRequest(BaseModel):
     targets: list[EcommerceReoptimizeTarget] = Field(..., min_length=1)
     score_threshold: Optional[float] = None
     publish_to_doc: bool = False
+    # Batch-level writing notes applied to every rewrite (also forces a rewrite
+    # even on an already-high-scoring page).
+    notes: Optional[str] = None
 
 
 class EcommerceReoptimizeJobHandle(BaseModel):
@@ -118,6 +126,7 @@ class EcommercePageDetail(BaseModel):
     page_type: str
     source_url: Optional[str] = None
     product_input: Optional[str] = None
+    notes: Optional[str] = None
     content_html: str
     schema_json: str
     page_title: Optional[str] = None
