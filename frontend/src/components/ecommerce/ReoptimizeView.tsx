@@ -195,6 +195,19 @@ export function ReoptimizeView({ clientId, clientName, pageType, onOpenSaved }: 
     ))
   }
 
+  // Stop the batch: cancel the client's queued ecommerce jobs, halt the poll, and
+  // reset the progress UI. Jobs already running finish server-side.
+  const stop = async () => {
+    if (!window.confirm('Stop all queued ecommerce jobs for this client? Jobs already running will finish.')) return
+    detachedRef.current = true
+    if (pollRef.current) { clearTimeout(pollRef.current); pollRef.current = null }
+    setRunning(false)
+    setProgress(null)
+    setRows([])
+    try { await ecommerceApi.cancelJobs(clientId) } catch { /* best-effort — UI already reset */ }
+    setError('Queued reoptimizations cancelled.')
+  }
+
   const reoptimizedCount = rows.filter(r => r.state.phase === 'done' && r.state.result.status === 'reoptimized').length
   const allDiscoverSelected = Boolean(discoverItems && discoverItems.length > 0 && discoverItems.every(it => selectedUrls.has(it.url)))
 
@@ -337,6 +350,9 @@ export function ReoptimizeView({ clientId, clientName, pageType, onOpenSaved }: 
             </span>
             <button onClick={leave} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#6366f1' }}>
               Leave &amp; finish in the background
+            </button>
+            <button onClick={stop} style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 600, color: '#dc2626' }}>
+              Stop
             </button>
           </div>
           {progress && (

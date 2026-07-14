@@ -91,6 +91,15 @@ export const ecommerceApi = {
       `/clients/${clientId}/ecommerce/jobs/status`, { job_ids: jobIds },
     ),
 
+  // Cancel QUEUED (pending) generations/reoptimizations. Pass jobIds to cancel a
+  // specific batch, or omit to cancel ALL of the client's pending ecommerce jobs.
+  // A job already running is left to finish. Returns { cancelled: N }.
+  cancelJobs: (clientId: string, jobIds?: string[]) =>
+    api.post<{ cancelled: number }>(
+      `/clients/${clientId}/ecommerce/jobs/cancel`,
+      { job_ids: jobIds ?? [] },
+    ),
+
   listPages: (clientId: string) =>
     api.get<EcommercePageListItem[]>(`/clients/${clientId}/ecommerce/pages`),
 

@@ -24,6 +24,7 @@ from models.ecommerce import (
     EcommerceGenerateJob,
     EcommerceGenerateJobResult,
     EcommerceGenerateRequest,
+    EcommerceCancelJobsRequest,
     EcommerceJobStatus,
     EcommerceJobsStatusRequest,
     EcommercePageDetail,
@@ -173,6 +174,18 @@ async def ecommerce_jobs_status(
     """Batch-poll a set of background jobs for this client."""
     rows = ecommerce_service.get_jobs_status(str(client_id), [str(j) for j in body.job_ids])
     return [EcommerceJobStatus(**row) for row in rows]
+
+
+@router.post("/clients/{client_id}/ecommerce/jobs/cancel")
+async def cancel_ecommerce_jobs(
+    client_id: UUID,
+    body: EcommerceCancelJobsRequest = EcommerceCancelJobsRequest(),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Cancel queued (pending) generations/reoptimizations. Empty job_ids cancels
+    ALL of the client's pending ecommerce jobs; a running job is left to finish."""
+    ids = [str(j) for j in body.job_ids] or None
+    return ecommerce_service.cancel_queued_jobs(str(client_id), ids)
 
 
 # ── CRUD / lifecycle ─────────────────────────────────────────────────────────
