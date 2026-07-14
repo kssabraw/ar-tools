@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Loader2 } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -78,9 +78,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
     staleTime: 5 * 60_000,
   })
 
+  // Live count of the user's in-flight content generation (ecommerce / Local
+  // SEO pages, blog runs), so a long batch they navigated away from stays
+  // visible everywhere. Polls in the background; the Activity page polls faster.
+  const { data: activity } = useQuery<{ count: number }>({
+    queryKey: ['activity-count'],
+    queryFn: () => api.get<{ count: number }>('/activity'),
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  })
+  const activityCount = activity?.count ?? 0
+
   const clientId = currentClientId(location.pathname)
   const quickNav: NavItem[] = [
     { label: 'Home', to: '/', icon: <Home size={18} /> },
+    { label: 'Activity', to: '/activity', icon: <Loader2 size={18} className={activityCount > 0 ? 'spin' : undefined} /> },
     { label: 'SerMaStr', to: '/assistant', icon: <Sparkles size={18} /> },
     ...(paceStatus?.enabled
       ? [{ label: 'PACE', to: '/pace', icon: <ListTodo size={18} /> }]
@@ -110,7 +122,18 @@ export function Layout({ children }: { children: React.ReactNode }) {
         }}
       >
         {item.icon}
-        {item.label}
+        <span style={{ flex: 1 }}>{item.label}</span>
+        {item.to === '/activity' && activityCount > 0 && (
+          <span
+            style={{
+              minWidth: 20, height: 20, padding: '0 6px', borderRadius: 999,
+              background: '#6366f1', color: '#fff', fontSize: 11, fontWeight: 700,
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            {activityCount}
+          </span>
+        )}
       </Link>
     )
   }
