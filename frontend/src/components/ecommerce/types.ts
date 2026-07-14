@@ -50,6 +50,7 @@ export interface Deficiency {
 
 export interface EcommercePageDetail extends EcommercePageListItem {
   product_input?: string | null
+  notes?: string | null
   content_html: string
   schema_json: string
   // Either rich objects or plain strings, depending on what the writer emitted.

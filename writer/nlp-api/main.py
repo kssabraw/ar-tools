@@ -7155,6 +7155,26 @@ def _ecommerce_page_type_directive(page_type: str) -> str:
     )
 
 
+def _ecommerce_notes_block(notes: Optional[str]) -> str:
+    """A high-priority 'special instructions' block from the user's per-job notes.
+    Returns '' when there are no notes. The notes take precedence over the default
+    framing/structure for what to include, exclude, emphasise, and the tone — the
+    user may drop default sections, disclaimers, or designations (e.g. 'Research
+    Use Only') — but they can never license fabricating prices/specs/ratings."""
+    text = (notes or "").strip()
+    if not text:
+        return ""
+    return (
+        "\nSPECIAL INSTRUCTIONS FROM THE USER (HIGH PRIORITY — follow these exactly). They take "
+        "precedence over the default framing, structure, and included sections: what to include, "
+        "exclude, emphasise, the tone, and the framing. You MAY drop or change default sections, "
+        "disclaimers, or product designations (e.g. remove a 'Research Use Only' label) if these "
+        "instructions say so. You must STILL never fabricate prices, specs, measurements, "
+        "certifications, or ratings:\n"
+        f"{text}\n"
+    )
+
+
 def _parse_generated_ecommerce(raw: str) -> tuple:
     """Split a generated ecommerce page into (content_html, schema_json,
     page_title, content_gaps). Mirrors the generate-page parsing contract."""
@@ -7349,6 +7369,10 @@ class GenerateEcommerceRequest(BaseModel):
     # wins if supplied. Ignored for collections.
     page_template_url: Optional[str] = None
     page_template_html: Optional[str] = None
+    # Free-text writing notes from the user — high-priority editorial guidance the
+    # writer must follow (e.g. "remove the Research Use Only designation",
+    # "emphasize fast shipping", "write for clinics not individuals").
+    notes: Optional[str] = None
 
 
 @app.post('/generate-ecommerce-page')
@@ -7426,13 +7450,15 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
                 )
                 logger.info(f"generate-ecommerce: mirroring house template ({_outline.count(chr(10)) + 1} headings)")
 
+        notes_text = _ecommerce_notes_block(body.notes)
+
         user_prompt = f"""STORE / BUSINESS DATA
 Store name: {body.business_name}
 Website: {body.website or "Not provided"}
 Primary keyword: {body.keyword}
 
 {_ecommerce_page_type_directive(page_type)}
-
+{notes_text}
 {brand_voice_text}
 {icp_text}
 {diff_text}
@@ -7534,6 +7560,9 @@ class ReoptimizeEcommerceRequest(BaseModel):
     detected_icp: Optional[dict] = None
     serp_analysis: Optional[dict] = None
     product_input: Optional[str] = None
+    # High-priority editorial guidance from the user (e.g. "remove the Research
+    # Use Only designation") the rewrite must follow.
+    notes: Optional[str] = None
 
 
 @app.post('/reoptimize-ecommerce-page')
@@ -7581,7 +7610,7 @@ Store name: {body.business_name}
 Primary keyword: {body.keyword}
 
 {_ecommerce_page_type_directive(page_type)}
-
+{_ecommerce_notes_block(body.notes)}
 {brand_voice_text}
 {icp_text}
 

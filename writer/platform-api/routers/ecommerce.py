@@ -61,6 +61,7 @@ async def generate_ecommerce_page_async(
         product_input=body.product_input,
         user_id=auth["user_id"],
         page_template_url=body.page_template_url,
+        notes=body.notes,
     )
     return EcommerceGenerateJob(job_id=job_id, status="pending")
 
@@ -107,7 +108,7 @@ async def generate_ecommerce_pages_bulk(
     """Enqueue one generation job per keyword (bulk-create)."""
     assert_not_frozen(str(client_id))
     job_ids = await ecommerce_service.enqueue_generate_bulk(
-        str(client_id), body.keywords, body.page_type, auth["user_id"],
+        str(client_id), body.keywords, body.page_type, auth["user_id"], notes=body.notes,
     )
     return EcommerceBulkGenerateJob(job_ids=job_ids)
 
@@ -128,6 +129,7 @@ async def reoptimize_ecommerce_pages_bulk(
         auth["user_id"],
         score_threshold=body.score_threshold,
         publish_to_doc=body.publish_to_doc,
+        notes=body.notes,
     )
     return EcommerceReoptimizeBulkJob(jobs=jobs)
 

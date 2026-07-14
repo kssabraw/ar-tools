@@ -83,12 +83,13 @@ def _brand_context(client: dict) -> str:
 def _generate_payload(
     client: dict, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str],
-    page_template_url: Optional[str] = None,
+    page_template_url: Optional[str] = None, notes: Optional[str] = None,
 ) -> dict:
     """Map a suite client row to the nlp GenerateEcommerceRequest. The converged
     brand_voice / detected_icp / differentiators assets are passed through so the
     writer targets the client's voice + customers. `page_template_url` (products
-    only) is the house PDP structure the writer mirrors."""
+    only) is the house PDP structure the writer mirrors. `notes` is high-priority
+    per-job editorial guidance the writer follows."""
     return {
         "keyword": keyword,
         "page_type": page_type,
@@ -100,6 +101,7 @@ def _generate_payload(
         "detected_icp": client.get("detected_icp"),
         "differentiators": client.get("differentiators") or [],
         "page_template_url": (page_template_url or "").strip() or None,
+        "notes": (notes or "").strip() or None,
         "run_analysis": True,
     }
 
@@ -182,6 +184,7 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
 def _persist_page(
     client_id: str, keyword: str, page_type: str, source_url: Optional[str],
     product_input: Optional[str], mode: str, result: dict, user_id: str,
+    notes: Optional[str] = None,
 ) -> dict:
     row = {
         "client_id": client_id,
@@ -189,6 +192,7 @@ def _persist_page(
         "page_type": page_type,
         "source_url": (source_url or "").strip() or None,
         "product_input": (product_input or "").strip() or None,
+        "notes": (notes or "").strip() or None,
         "content_html": result.get("content_html") or "",
         "schema_json": result.get("schema_json") or "",
         "page_title": result.get("page_title"),
@@ -248,7 +252,7 @@ def _record_score_run(
 async def generate_page(
     client_id: str, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str], user_id: str,
-    page_template_url: Optional[str] = None,
+    page_template_url: Optional[str] = None, notes: Optional[str] = None,
 ) -> dict:
     """Generate an ecommerce page for a client and persist it. Competitor SERP
     analysis runs inside the nlp endpoint (run_analysis defaults True).
@@ -263,10 +267,11 @@ async def generate_page(
     if page_type == "product":
         template_url = (page_template_url or "").strip() or client.get("ecommerce_page_template_url")
     payload = _generate_payload(
-        client, keyword.strip(), page_type, source_url, product_input, page_template_url=template_url,
+        client, keyword.strip(), page_type, source_url, product_input,
+        page_template_url=template_url, notes=notes,
     )
     result = await _stream_nlp("/generate-ecommerce-page", payload)
-    return _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id)
+    return _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id, notes=notes)
 
 
 async def score_page(
@@ -298,10 +303,11 @@ async def reoptimize_from(
     client_id: str, keyword: str, page_type: str,
     existing_page_html: Optional[str], existing_page_url: Optional[str],
     deficiencies: list[dict], serp_analysis: Optional[dict],
-    product_input: Optional[str], user_id: str,
+    product_input: Optional[str], user_id: str, notes: Optional[str] = None,
 ) -> dict:
     """Rewrite an existing ecommerce page to lift its score, then persist it as a
-    `mode='reoptimize'` row. The nlp endpoint re-scores the rewrite."""
+    `mode='reoptimize'` row. The nlp endpoint re-scores the rewrite. `notes` is
+    high-priority editorial guidance (e.g. drop a designation) the rewrite follows."""
     client = _get_client(client_id)
     page_type = _norm_page_type(page_type)
     if not existing_page_html and not existing_page_url:
@@ -317,18 +323,24 @@ async def reoptimize_from(
         "detected_icp": client.get("detected_icp"),
         "serp_analysis": serp_analysis,
         "product_input": (product_input or "").strip() or None,
+        "notes": (notes or "").strip() or None,
     })
-    return _persist_page(client_id, keyword, page_type, existing_page_url, product_input, "reoptimize", result, user_id)
+    return _persist_page(client_id, keyword, page_type, existing_page_url, product_input, "reoptimize", result, user_id, notes=notes)
 
 
 async def reoptimize_url(
     client_id: str, page_url: str, keyword: str, page_type: str, user_id: str,
     score_threshold: float = REOPT_SCORE_THRESHOLD, publish_to_doc: bool = False,
+    notes: Optional[str] = None,
 ) -> dict:
     """Score a live page (by URL) and reoptimize it only if it scores below
     `score_threshold`. The SERP analysis the score produced is threaded into the
     rewrite so the SERP is scraped once. Returns a status dict (skipped |
-    reoptimized), mirroring the Local SEO reoptimize-by-URL contract."""
+    reoptimized), mirroring the Local SEO reoptimize-by-URL contract.
+
+    When `notes` are supplied the score-threshold skip is BYPASSED — the notes are
+    an explicit rewrite instruction (e.g. "remove the Research Use Only
+    designation") that must apply even to an already-high-scoring page."""
     page_type = _norm_page_type(page_type)
     score_result = await score_page(
         client_id, keyword, page_type, page_url=page_url, page_content=None, user_id=user_id,
@@ -338,7 +350,7 @@ async def reoptimize_url(
     _record_score_run(client_id, keyword, page_type, "reoptimize_before", score_result, page_id=None, page_url=page_url, user_id=user_id)
 
     composite = score_result.get("composite_score")
-    if composite is not None and composite >= score_threshold:
+    if composite is not None and composite >= score_threshold and not (notes or "").strip():
         logger.info("ecommerce.reoptimize_url_skipped", extra={"client_id": client_id, "page_url": page_url, "score": composite})
         return {
             "status": "skipped",
@@ -357,7 +369,7 @@ async def reoptimize_url(
         existing_page_html=None, existing_page_url=page_url,
         deficiencies=score_result.get("deficiencies") or [],
         serp_analysis=score_result.get("serp_analysis"),
-        product_input=None, user_id=user_id,
+        product_input=None, user_id=user_id, notes=notes,
     )
 
     out: dict = {
@@ -595,11 +607,12 @@ def _bulk_scheduled_at(index: int) -> str:
 async def enqueue_generate(
     client_id: str, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str], user_id: str,
-    page_template_url: Optional[str] = None,
+    page_template_url: Optional[str] = None, notes: Optional[str] = None,
 ) -> str:
     """Enqueue an `ecommerce_generate` job. Returns the job id. `page_template_url`
     is an optional per-call override of the client's house PDP template (products
-    only); when omitted, generate_page falls back to the client's saved default."""
+    only); when omitted, generate_page falls back to the client's saved default.
+    `notes` is per-job writing guidance the writer follows."""
     _get_client(client_id)
     res = get_supabase().table("async_jobs").insert({
         "job_type": "ecommerce_generate",
@@ -611,6 +624,7 @@ async def enqueue_generate(
             "source_url": (source_url or "").strip() or None,
             "product_input": (product_input or "").strip() or None,
             "page_template_url": (page_template_url or "").strip() or None,
+            "notes": (notes or "").strip() or None,
             "user_id": user_id,
         },
     }).execute()
@@ -627,6 +641,7 @@ async def run_generate_job(job: dict) -> None:
             page_type=payload.get("page_type", "product"),
             source_url=payload.get("source_url"), product_input=payload.get("product_input"),
             user_id=payload["user_id"], page_template_url=payload.get("page_template_url"),
+            notes=payload.get("notes"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
@@ -654,10 +669,13 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
 
 async def enqueue_generate_bulk(
     client_id: str, keywords: list[str], page_type: str, user_id: str,
+    notes: Optional[str] = None,
 ) -> list[str]:
-    """Enqueue one `ecommerce_generate` job per keyword. Returns job ids."""
+    """Enqueue one `ecommerce_generate` job per keyword. Returns job ids. `notes`
+    is batch-level writing guidance applied to every page in the batch."""
     _get_client(client_id)
     ptype = _norm_page_type(page_type)
+    note = (notes or "").strip() or None
     rows = []
     for kw in keywords:
         if not (kw or "").strip():
@@ -668,7 +686,7 @@ async def enqueue_generate_bulk(
             "scheduled_at": _bulk_scheduled_at(len(rows)),
             "payload": {
                 "client_id": client_id, "keyword": kw.strip(), "page_type": ptype,
-                "source_url": None, "product_input": None, "user_id": user_id,
+                "source_url": None, "product_input": None, "notes": note, "user_id": user_id,
             },
         })
     if not rows:
@@ -680,11 +698,15 @@ async def enqueue_generate_bulk(
 async def enqueue_reoptimize_bulk(
     client_id: str, targets: list[dict], user_id: str,
     score_threshold: Optional[float] = None, publish_to_doc: bool = False,
+    notes: Optional[str] = None,
 ) -> list[dict]:
     """Enqueue one `ecommerce_reoptimize_url` job per target. Each target is
-    ``{page_url, keyword, page_type}``. Returns ``[{job_id, page_url}]``."""
+    ``{page_url, keyword, page_type}``. Returns ``[{job_id, page_url}]``. `notes`
+    is batch-level guidance applied to every rewrite (and forces the rewrite even
+    on an already-high-scoring page)."""
     _get_client(client_id)
     threshold = REOPT_SCORE_THRESHOLD if score_threshold is None else score_threshold
+    note = (notes or "").strip() or None
     rows = []
     for t in targets:
         page_url = (t.get("page_url") or "").strip()
@@ -699,7 +721,7 @@ async def enqueue_reoptimize_bulk(
                 "keyword": (t.get("keyword") or "").strip(),
                 "page_type": _norm_page_type(t.get("page_type")),
                 "user_id": user_id, "score_threshold": threshold,
-                "publish_to_doc": bool(publish_to_doc),
+                "publish_to_doc": bool(publish_to_doc), "notes": note,
             },
         })
     if not rows:
@@ -717,7 +739,7 @@ async def run_reoptimize_url_job(job: dict) -> None:
             client_id=payload["client_id"], page_url=payload["page_url"],
             keyword=payload["keyword"], page_type=payload.get("page_type", "product"),
             user_id=payload["user_id"], score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
-            publish_to_doc=bool(payload.get("publish_to_doc")),
+            publish_to_doc=bool(payload.get("publish_to_doc")), notes=payload.get("notes"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}

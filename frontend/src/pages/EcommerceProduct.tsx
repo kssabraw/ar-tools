@@ -70,7 +70,9 @@ export function EcommerceProduct() {
   const [keyword, setKeyword] = useState('')
   const [sourceUrl, setSourceUrl] = useState('')
   const [productInput, setProductInput] = useState('')
+  const [notes, setNotes] = useState('')
   const [bulkKeywords, setBulkKeywords] = useState('')
+  const [bulkNotes, setBulkNotes] = useState('')
   const [error, setError] = useState('')
 
   // Creating-progress ticker + background-generation poll (same pattern as the
@@ -122,6 +124,7 @@ export function EcommerceProduct() {
         page_type: pageType,
         source_url: sourceUrl.trim() || null,
         product_input: productInput.trim() || null,
+        notes: notes.trim() || null,
       })
       const poll = async () => {
         if (genCancelledRef.current) return
@@ -209,7 +212,7 @@ export function EcommerceProduct() {
     const keywords = bulkKeywords.split('\n').map(k => k.trim()).filter(Boolean)
     if (!keywords.length) return
     bulkGen.reset()
-    void bulkGen.start(keywords, pageType)
+    void bulkGen.start(keywords, pageType, bulkNotes.trim() || null)
   }
 
   // ── Sub-view routing ───────────────────────────────────────────────────────
@@ -232,7 +235,7 @@ export function EcommerceProduct() {
           prevScore={view.prevScore}
           onBack={() => setView({ kind: 'form' })}
           onScoreAndImprove={(page) => setView({ kind: 'score', pageUrl: page.source_url ?? undefined, pageHtml: page.content_html })}
-          onNewPage={() => { setView({ kind: 'form' }); setKeyword(''); setSourceUrl(''); setProductInput('') }}
+          onNewPage={() => { setView({ kind: 'form' }); setKeyword(''); setSourceUrl(''); setProductInput(''); setNotes('') }}
         />
       </div>
     )
@@ -333,6 +336,8 @@ export function EcommerceProduct() {
         <BulkGenerateForm
           keywords={bulkKeywords}
           setKeywords={setBulkKeywords}
+          notes={bulkNotes}
+          setNotes={setBulkNotes}
           pageType={pageType}
           bulk={bulkGen}
           onSwitchSingle={() => setGenMode('single')}
@@ -383,6 +388,17 @@ export function EcommerceProduct() {
             />
           </div>
 
+          {/* Notes (optional) — freeform guidance the writer follows */}
+          <div>
+            <label style={label}>Notes <span style={{ fontWeight: 400, color: '#94a3b8' }}>(optional) — guidance for the writer, e.g. “remove the Research Use Only designation”.</span></label>
+            <textarea
+              style={{ ...input, minHeight: 80, fontFamily: 'inherit', resize: 'vertical' }}
+              value={notes}
+              onChange={e => setNotes(e.target.value)}
+              placeholder={'e.g. emphasize fast shipping; write for clinics not individuals'}
+            />
+          </div>
+
           {error && <div style={errorBox}>{error}</div>}
 
           <button
@@ -404,9 +420,11 @@ export function EcommerceProduct() {
 }
 
 // Bulk-generate a list of keywords into pages of the current page type.
-function BulkGenerateForm({ keywords, setKeywords, pageType, bulk, onSwitchSingle, onStart, onViewSaved }: {
+function BulkGenerateForm({ keywords, setKeywords, notes, setNotes, pageType, bulk, onSwitchSingle, onStart, onViewSaved }: {
   keywords: string
   setKeywords: (v: string) => void
+  notes: string
+  setNotes: (v: string) => void
   pageType: EcommercePageType
   bulk: ReturnType<typeof useBulkGenerate>
   onSwitchSingle: () => void
@@ -448,6 +466,18 @@ function BulkGenerateForm({ keywords, setKeywords, pageType, bulk, onSwitchSingl
         <p style={{ fontSize: 12, color: '#94a3b8', margin: '6px 0 0' }}>
           Each keyword becomes its own <b style={{ textTransform: 'capitalize' }}>{pageType}</b> page. They generate in the background — you can leave once they start.
         </p>
+      </div>
+
+      {/* Notes (optional) — applies to every page in the batch */}
+      <div>
+        <label style={label}>Notes <span style={{ fontWeight: 400, color: '#94a3b8' }}>(optional) — guidance for the writer, e.g. “remove the Research Use Only designation”. Applies to every page in this batch.</span></label>
+        <textarea
+          style={{ ...input, minHeight: 80, fontFamily: 'inherit', resize: 'vertical' }}
+          value={notes}
+          disabled={creating}
+          onChange={e => setNotes(e.target.value)}
+          placeholder={'e.g. emphasize fast shipping; write for clinics not individuals'}
+        />
       </div>
 
       {error && <div style={errorBox}>{error}</div>}
