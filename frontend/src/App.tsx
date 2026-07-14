@@ -25,6 +25,7 @@ import { Rankings } from './pages/Rankings'
 import { ActionPlan } from './pages/ActionPlan'
 import { CampaignGoals } from './pages/CampaignGoals'
 import { Backlinks } from './pages/Backlinks'
+import { Activity } from './pages/Activity'
 import { Competitors } from './pages/Competitors'
 import { DomainIntel } from './pages/DomainIntel'
 import { KeywordResearch } from './pages/KeywordResearch'
@@ -76,6 +77,7 @@ export default function App() {
                       <Route path="/assistant" element={<Assistant />} />
                       <Route path="/pace" element={<Pace />} />
                       <Route path="/backlinks" element={<Backlinks />} />
+                      <Route path="/activity" element={<Activity />} />
                       {/* Topic Fan-out, merged in (Option C) — a native route
                           subtree that renders inside the suite Layout, so it
                           shares the suite sidebar. */}

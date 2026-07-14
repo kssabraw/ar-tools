@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from config import settings
+from routers.activity import router as activity_router
 from routers.asana import router as asana_router
 from routers.assistant import router as assistant_router
 from routers.backlinks import router as backlinks_router
@@ -188,6 +189,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     return response
 
 
+app.include_router(activity_router)
 app.include_router(asana_router)
 app.include_router(assistant_router)
 app.include_router(backlinks_router)

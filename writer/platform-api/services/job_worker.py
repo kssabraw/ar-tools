@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import activity
 from services.brand_scan import run_brand_scan_job
 from services.brand_report import run_brand_report_job
 from services.brand_voice_service import run_brand_voice_scan_job
@@ -508,6 +509,19 @@ async def _process_job(job: dict) -> None:
         await run_qa_review_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
+
+    # Cross-module batch awareness: after a content-generation job settles (the
+    # handler has already written its terminal status), check whether it was the
+    # last in-flight one for its (user, client, family) group and, if so, notify
+    # the user their batch finished. Best-effort — never breaks the worker.
+    if job_type in activity.CONTENT_JOB_TYPES:
+        try:
+            activity.on_content_job_settled(job)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error(
+                "job_worker.activity_settle_failed",
+                extra={"job_id": job.get("id"), "error": str(exc)},
+            )
 
 
 async def job_worker(job_types: list[str] | None = None, lane: str = "main") -> None:
