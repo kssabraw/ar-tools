@@ -146,7 +146,11 @@ SCRAPEOWL_RETRY_BASE  = float(os.environ.get("SCRAPEOWL_RETRY_BASE", "1.0"))
 # MCS still derives the entity + answer facts (Phases 1-3) but skips cosine
 # synthesis (Phase 4), degrading to guidance-text-only.
 GEMINI_API_KEY       = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_EMBED_MODEL   = os.environ.get("GEMINI_EMBED_MODEL", "text-embedding-004")
+# gemini-embedding-2 @ 1536 dims — the suite-wide embedding standard. Verified
+# against the live batchEmbedContents endpoint (SEMANTIC_SIMILARITY, 1536-dim).
+# Env-overridable; a wrong ID fails closed (MCS synthesis then no-ops).
+GEMINI_EMBED_MODEL   = os.environ.get("GEMINI_EMBED_MODEL", "gemini-embedding-2")
+GEMINI_EMBED_DIM     = int(os.environ.get("GEMINI_EMBED_DIM", "1536"))
 GEMINI_EMBED_ENDPOINT = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBED_MODEL}:batchEmbedContents"
 )
@@ -179,7 +183,12 @@ async def _gemini_embed(texts: List[str]) -> List[List[float]]:
         return []
     payload = {
         "requests": [
-            {"model": f"models/{GEMINI_EMBED_MODEL}", "content": {"parts": [{"text": t or ""}]}}
+            {
+                "model": f"models/{GEMINI_EMBED_MODEL}",
+                "content": {"parts": [{"text": t or ""}]},
+                "taskType": "SEMANTIC_SIMILARITY",
+                "outputDimensionality": GEMINI_EMBED_DIM,
+            }
             for t in texts
         ]
     }
