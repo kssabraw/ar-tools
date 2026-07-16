@@ -246,6 +246,11 @@ async def drain_inflight_jobs() -> None:
     genuinely hung, and consuming attempts there is what eventually fails it;
     drain only runs on a clean shutdown, where the interruption is definitely us.
 
+    MUST be called AFTER the worker tasks are cancelled and awaited (see
+    lifespan): the worker loop keeps a cancelled job's id registered exactly so
+    this can find it, and draining while a lane still runs would let it claim a
+    fresh job right after the drain — orphaning that one until the reaper.
+
     Each update is guarded on status='running' so a job that settled between the
     read and the write is never stomped (its terminal write wins), and on id so a
     sibling container's freshly-claimed jobs are untouched. Best-effort — a drain
@@ -612,11 +617,19 @@ async def job_worker(job_types: list[str] | None = None, lane: str = "main") -> 
                     extra={"job_id": job["id"], "job_type": job.get("job_type"), "lane": lane},
                 )
                 # Track as in-flight so a graceful shutdown can requeue it (see
-                # `drain_inflight_jobs`); always cleared, even on handler error.
+                # `drain_inflight_jobs`). Cleared when the job settles — but NOT
+                # on cancellation: shutdown cancels this task mid-job, and the id
+                # must survive so the drain (which runs after the worker tasks
+                # are awaited) can find and requeue it.
                 _inflight_jobs.add(job["id"])
+                interrupted = False
                 try:
                     await _process_job(job)
+                except asyncio.CancelledError:
+                    interrupted = True  # leave registered for the shutdown drain
+                    raise
                 finally:
-                    _inflight_jobs.discard(job["id"])
+                    if not interrupted:
+                        _inflight_jobs.discard(job["id"])
         except Exception as exc:
             logger.error("job_worker.unhandled", extra={"error": str(exc), "lane": lane})

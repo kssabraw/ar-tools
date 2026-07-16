@@ -288,6 +288,89 @@ def test_drain_skips_settled_job(monkeypatch):
     assert len(sb._table.updates) == 1
 
 
+# ── worker-loop in-flight registry (drain depends on these semantics) ─────────
+async def _noop_reap():
+    return None
+
+
+def _wire_loop(monkeypatch, process, registry):
+    monkeypatch.setattr(settings, "job_worker_poll_interval_seconds", 0, raising=False)
+    monkeypatch.setattr(job_worker, "_inflight_jobs", registry, raising=False)
+    monkeypatch.setattr(job_worker, "_reap_stale_jobs", _noop_reap)
+    served = {"done": False}
+
+    async def fake_claim(job_types=None):
+        if served["done"]:
+            return None
+        served["done"] = True
+        return {"id": "j1", "job_type": "x"}
+
+    monkeypatch.setattr(job_worker, "_claim_next_job", fake_claim)
+    monkeypatch.setattr(job_worker, "_process_job", process)
+
+
+async def test_loop_keeps_id_registered_on_cancellation(monkeypatch):
+    """Shutdown cancels the worker mid-job → the id must SURVIVE in the registry
+    so drain_inflight_jobs (running after the tasks are awaited) can requeue it."""
+    registry: set = set()
+    started = asyncio.Event()
+
+    async def blocking_process(job):
+        started.set()
+        await asyncio.Event().wait()  # park until cancelled
+
+    _wire_loop(monkeypatch, blocking_process, registry)
+    task = asyncio.create_task(job_worker.job_worker())
+    await asyncio.wait_for(started.wait(), timeout=2)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    assert "j1" in registry
+
+
+async def test_loop_discards_id_when_job_settles(monkeypatch):
+    registry: set = set()
+    settled = asyncio.Event()
+
+    async def quick_process(job):
+        settled.set()
+
+    _wire_loop(monkeypatch, quick_process, registry)
+    task = asyncio.create_task(job_worker.job_worker())
+    await asyncio.wait_for(settled.wait(), timeout=2)
+    await asyncio.sleep(0)  # let the finally run
+    assert registry == set()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_loop_discards_id_when_handler_raises(monkeypatch):
+    """An ordinary handler crash is NOT a shutdown — the id must be discarded so
+    a later drain can't requeue a job the reaper/terminal-write path owns."""
+    registry: set = set()
+    crashed = asyncio.Event()
+
+    async def crashing_process(job):
+        crashed.set()
+        raise RuntimeError("boom")
+
+    _wire_loop(monkeypatch, crashing_process, registry)
+    task = asyncio.create_task(job_worker.job_worker())
+    await asyncio.wait_for(crashed.wait(), timeout=2)
+    await asyncio.sleep(0)
+    assert registry == set()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 # ── interactive-lane claim filter ─────────────────────────────────────────────
 class _ClaimQuery(_Query):
     def in_(self, col, vals):
