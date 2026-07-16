@@ -82,3 +82,60 @@ def test_channel_gating_off_when_unconfigured(monkeypatch):
     monkeypatch.setattr(settings, "slack_default_channel", "")
     assert notifications.email_configured() is False
     assert notifications.slack_configured() is False
+
+
+# ---------------------------------------------------------------------------
+# emit — the recipient (personal-bell target) is written to the row
+# ---------------------------------------------------------------------------
+def test_emit_writes_recipient_profile_id(monkeypatch):
+    monkeypatch.setattr(settings, "notifications_enabled", True)
+    monkeypatch.setattr(settings, "smtp_host", "")
+    monkeypatch.setattr(settings, "slack_bot_token", "")
+    monkeypatch.setattr(settings, "slack_default_channel", "")
+    captured: dict = {}
+
+    class _Q:
+        def __init__(self, tbl):
+            self.tbl = tbl
+
+        def insert(self, row):
+            if self.tbl == "notifications":
+                captured.update(row)
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": [{"id": "n1"}]})()
+
+    monkeypatch.setattr(notifications, "get_supabase", lambda: type("SB", (), {"table": lambda self, n: _Q(n)})())
+    nid = notifications.emit(
+        client_id="c1", kind="task_nudge", title="Nudge", recipient_profile_id="p_ivy",
+    )
+    assert nid == "n1"
+    assert captured["recipient_profile_id"] == "p_ivy"     # targeted at the person's bell
+    assert captured["client_id"] == "c1"
+
+
+def test_emit_recipient_defaults_none(monkeypatch):
+    """A broadcast (agency/client-wide) notification carries a null recipient —
+    unchanged behaviour for every existing producer."""
+    monkeypatch.setattr(settings, "notifications_enabled", True)
+    monkeypatch.setattr(settings, "smtp_host", "")
+    monkeypatch.setattr(settings, "slack_bot_token", "")
+    monkeypatch.setattr(settings, "slack_default_channel", "")
+    captured: dict = {}
+
+    class _Q:
+        def __init__(self, tbl):
+            self.tbl = tbl
+
+        def insert(self, row):
+            if self.tbl == "notifications":
+                captured.update(row)
+            return self
+
+        def execute(self):
+            return type("R", (), {"data": [{"id": "n2"}]})()
+
+    monkeypatch.setattr(notifications, "get_supabase", lambda: type("SB", (), {"table": lambda self, n: _Q(n)})())
+    notifications.emit(client_id="c1", kind="rank_drop", title="Drop")
+    assert captured["recipient_profile_id"] is None

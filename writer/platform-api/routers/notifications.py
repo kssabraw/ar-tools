@@ -16,10 +16,65 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
-from models.notifications import Notification, OkResponse, UnreadCount, UnreadCountsResponse
+from models.notifications import (
+    MyNotificationsResponse,
+    Notification,
+    OkResponse,
+    UnreadCount,
+    UnreadCountsResponse,
+)
 
 router = APIRouter(tags=["notifications"])
 logger = logging.getLogger(__name__)
+
+
+# --- Personal inbox (the logged-in user's header bell) ---------------------
+# Static `/notifications/mine…` routes are declared before the
+# `/notifications/{notification_id}` param routes so they can't be shadowed.
+@router.get("/notifications/mine", response_model=MyNotificationsResponse)
+async def my_notifications(limit: int = 30, auth: dict = Depends(require_auth)) -> MyNotificationsResponse:
+    """The logged-in user's own notifications (nudges, task assignments,
+    @mentions) newest-first, plus their unread count — polled by the header bell.
+    profiles.id == the auth user id, so the recipient is the caller."""
+    me = auth["user_id"]
+    supabase = get_supabase()
+    items = (
+        supabase.table("notifications").select("*")
+        .eq("recipient_profile_id", me)
+        .order("created_at", desc=True)
+        .limit(min(max(limit, 1), 100))
+        .execute()
+    ).data or []
+    unread = (
+        supabase.table("notifications").select("id", count="exact")
+        .eq("recipient_profile_id", me).eq("status", "unread").execute()
+    )
+    return MyNotificationsResponse(
+        items=[Notification(**r) for r in items], unread=unread.count or 0
+    )
+
+
+@router.post("/notifications/mine/read-all", response_model=OkResponse)
+async def mark_all_mine_read(auth: dict = Depends(require_auth)) -> OkResponse:
+    """Mark all of the caller's unread notifications read."""
+    get_supabase().table("notifications").update(
+        {"status": "read", "read_at": "now()"}
+    ).eq("recipient_profile_id", auth["user_id"]).eq("status", "unread").execute()
+    return OkResponse()
+
+
+@router.post("/notifications/mine/{notification_id}/read", response_model=OkResponse)
+async def mark_mine_read(notification_id: UUID, auth: dict = Depends(require_auth)) -> OkResponse:
+    """Mark ONE of the caller's own notifications read (ownership-checked)."""
+    res = (
+        get_supabase().table("notifications")
+        .update({"status": "read", "read_at": "now()"})
+        .eq("id", str(notification_id)).eq("recipient_profile_id", auth["user_id"])
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="not_found")
+    return OkResponse()
 
 
 @router.get("/notifications/unread-counts", response_model=UnreadCountsResponse)

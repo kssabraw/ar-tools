@@ -11,6 +11,7 @@ from pydantic import BaseModel
 class Notification(BaseModel):
     id: UUID
     client_id: Optional[UUID] = None
+    recipient_profile_id: Optional[UUID] = None
     kind: str
     severity: str
     title: str
@@ -20,6 +21,13 @@ class Notification(BaseModel):
     channels_sent: Optional[dict] = None
     created_at: str
     read_at: Optional[str] = None
+
+
+class MyNotificationsResponse(BaseModel):
+    """The logged-in user's personal notification feed + unread count — the
+    header bell."""
+    items: list[Notification] = []
+    unread: int = 0
 
 
 class UnreadCount(BaseModel):
