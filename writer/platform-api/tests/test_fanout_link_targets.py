@@ -91,18 +91,23 @@ def _t(url: str) -> LinkTarget:
     return LinkTarget(url=url, anchors=["x"], title=url)
 
 
-def test_merge_priority_uplink_then_extras_then_laterals():
-    arch = [_t("https://s.com/blog/pillar/"), _t("https://s.com/blog/lat1/"),
-            _t("https://s.com/blog/lat2/"), _t("https://s.com/blog/lat3/"),
-            _t("https://s.com/blog/lat4/")]
+def test_merge_priority_extras_then_laterals():
+    arch = [_t("https://s.com/blog/lat1/"), _t("https://s.com/blog/lat2/"),
+            _t("https://s.com/blog/lat3/"), _t("https://s.com/blog/lat4/")]
     extras = [_t("https://s.com/money-1/"), _t("https://s.com/money-2/")]
     merged = merge_targets(arch, extras)
     assert len(merged) == MAX_OUTBOUND_LINKS
-    # up-link survives, extras outrank laterals, tail laterals trimmed
+    # extras outrank laterals (they always resolve), tail laterals trimmed
     assert [t.url for t in merged] == [
-        "https://s.com/blog/pillar/", "https://s.com/money-1/", "https://s.com/money-2/",
-        "https://s.com/blog/lat1/", "https://s.com/blog/lat2/",
+        "https://s.com/money-1/", "https://s.com/money-2/",
+        "https://s.com/blog/lat1/", "https://s.com/blog/lat2/", "https://s.com/blog/lat3/",
     ]
+
+
+def test_merge_extras_alone_when_no_architecture_targets():
+    # First articles of a session: nothing generated yet -> money pages still link.
+    merged = merge_targets([], [_t("https://s.com/money-1/")])
+    assert [t.url for t in merged] == ["https://s.com/money-1/"]
 
 
 def test_merge_dedupes_by_url():
@@ -134,12 +139,12 @@ _TOPICS = {"t1": {"id": "t1", "name": "Retatrutide"}}
 _KEYWORDS = {"k1": "retatrutide dosage", "k2": "retatrutide side effects"}
 
 
-def test_build_targets_default_scheme_unchanged():
+def test_build_targets_default_scheme_laterals_only_no_pillar_uplink():
+    # Pillar pages are never generated, so no up-link is emitted — laterals only.
     targets, _ = build_targets(
         "c1", architecture=_ARCH, clusters_by_id=_CLUSTERS, topics_by_id=_TOPICS,
         keywords_by_id=_KEYWORDS, base_url="https://site.com")
     assert [t.url for t in targets] == [
-        "https://site.com/retatrutide/",
         "https://site.com/retatrutide/retatrutide-side-effects",
     ]
 
@@ -151,6 +156,33 @@ def test_build_targets_client_inferred_flat_scheme():
         keywords_by_id=_KEYWORDS, base_url="https://novalifepeptides.com",
         url_style=style)
     assert [t.url for t in targets] == [
-        "https://novalifepeptides.com/blog/retatrutide/",
         "https://novalifepeptides.com/blog/retatrutide-side-effects/",
+    ]
+
+
+def test_build_targets_gates_laterals_on_generated_articles():
+    # Peer c2 has no generated article -> its link is withheld (would 404 live).
+    targets, _ = build_targets(
+        "c1", architecture=_ARCH, clusters_by_id=_CLUSTERS, topics_by_id=_TOPICS,
+        keywords_by_id=_KEYWORDS, base_url="https://site.com",
+        generated_cluster_ids=set())
+    assert targets == []
+
+    # Once c2's article exists, the lateral link comes back.
+    targets, _ = build_targets(
+        "c1", architecture=_ARCH, clusters_by_id=_CLUSTERS, topics_by_id=_TOPICS,
+        keywords_by_id=_KEYWORDS, base_url="https://site.com",
+        generated_cluster_ids={"c2"})
+    assert [t.url for t in targets] == [
+        "https://site.com/retatrutide/retatrutide-side-effects",
+    ]
+
+
+def test_build_targets_none_gate_means_ungated():
+    targets, _ = build_targets(
+        "c1", architecture=_ARCH, clusters_by_id=_CLUSTERS, topics_by_id=_TOPICS,
+        keywords_by_id=_KEYWORDS, base_url="https://site.com",
+        generated_cluster_ids=None)
+    assert [t.url for t in targets] == [
+        "https://site.com/retatrutide/retatrutide-side-effects",
     ]

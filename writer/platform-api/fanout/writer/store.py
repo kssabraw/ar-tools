@@ -48,6 +48,25 @@ def get_session_article_markdown(session_id: str) -> list[tuple[str, str]]:
     return list(latest.items())
 
 
+def list_generated_cluster_ids(session_id: str) -> set[str]:
+    """Cluster ids in the session that already have at least one generated article —
+    the link injector's gate so an article never links a planned-but-unwritten peer.
+    Paged past PostgREST's ~1000-row cap."""
+    client = get_service_client()
+    ids: set[str] = set()
+    page = 0
+    while True:
+        rows = (client.table("article_outputs")
+                .select("cluster_id")
+                .eq("session_id", session_id)
+                .range(page * 1000, page * 1000 + 999).execute().data or [])
+        ids.update(r["cluster_id"] for r in rows if r.get("cluster_id"))
+        if len(rows) < 1000:
+            break
+        page += 1
+    return ids
+
+
 def get_latest_article(cluster_id: str) -> dict | None:
     res = (
         get_service_client()
