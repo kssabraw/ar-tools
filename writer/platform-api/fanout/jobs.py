@@ -875,11 +875,15 @@ def _inject_internal_links(session_id: str, cluster_id: str, article) -> None:
     """M15 — wrap the M6 architecture link graph into the article as absolute internal
     links, then re-serialize. No-op when the session has no `site_base_url` or no generated
     architecture. URLs follow the linked client's real permalink pattern when a blog-post
-    reference URL is on the client card; the session's user-specified extra link URLs
-    (money pages) are folded in under the ≤5-outbound cap. Enrichment only — any failure
-    is swallowed (the article still ships)."""
+    reference URL is on the client card; lateral links are gated on the peer's article
+    actually existing (a drip schedule leaves planned peers unwritten for months — a live
+    post must not link a URL that doesn't resolve); the session's user-specified extra
+    link URLs (money pages) are folded in under the ≤5-outbound cap and inject even when
+    no lateral survives the gate (the first articles of a session have no generated
+    peers yet). Enrichment only — any failure is swallowed (the article still ships)."""
     try:
         from fanout.storage import silo as store
+        from fanout.writer import store as article_store
         from fanout.writer.link_injector import inject_links
         from fanout.writer.link_targets import (
             build_extra_targets,
@@ -904,14 +908,15 @@ def _inject_internal_links(session_id: str, cluster_id: str, article) -> None:
         targets, is_pillar = build_targets(
             cluster_id, architecture=architecture, clusters_by_id=clusters_by_id,
             topics_by_id=topics_by_id, keywords_by_id=keywords_by_id, base_url=base_url,
-            url_style=_client_blog_url_style(session))
-        if not targets:
-            return
+            url_style=_client_blog_url_style(session),
+            generated_cluster_ids=article_store.list_generated_cluster_ids(session_id))
         extras = build_extra_targets((session or {}).get("extra_link_urls"))
         if extras and not is_pillar:
             # Not on pillars: their target list renders as the "In This Guide" children
             # list, and money pages don't belong in it.
             targets = merge_targets(targets, extras)
+        if not targets:
+            return
         result = inject_links(article.article, targets, is_pillar=is_pillar)
         article.article = result.article
         article.article_markdown = to_markdown(result.article)

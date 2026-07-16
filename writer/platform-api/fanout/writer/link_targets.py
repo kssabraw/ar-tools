@@ -4,19 +4,21 @@ Pure: given the stored `architecture_json` + per-cluster slugs + topic names + p
 keywords + the site base URL, produce the ordered `LinkTarget`s for one article. The job
 (activation) fetches that data and feeds it here, then calls `link_injector.inject_links`.
 
-Supporting article (a cluster) → its up-link (parent pillar) + lateral peer articles.
-Pillar generation (silo-level) lands with the worker slice; here a non-supporting
+Supporting article (a cluster) → its lateral peer articles, gated on the peer actually
+having a generated article (`generated_cluster_ids`) so a live post never links to a URL
+that doesn't resolve yet — a drip schedule can leave planned peers unwritten for months.
+The parent-pillar up-link is NOT emitted: pillar pages are planned in the architecture
+but pillar generation isn't built, so the up-link was a guaranteed-dead URL on every
+published article (restore it when pillar generation lands). A non-supporting
 `cluster_id` returns no targets.
 
 URL shapes — default (handoff §9.5):
-  pillar             {base}/{silo-slug}/
   supporting article {base}/{silo-slug}/{article-slug}
 
 URL shapes — client-inferred (`url_style` from the client's blog-post reference URL,
 e.g. https://client.com/blog/some-post/ → prefix "/blog/", trailing slash): the site's
-real permalink structure has no per-silo directories, so pillars and articles are both
-flat posts under the prefix:
-  pillar             {base}{prefix}{silo-slug}[/]
+real permalink structure has no per-silo directories, so articles are flat posts under
+the prefix:
   supporting article {base}{prefix}{article-slug}[/]
 """
 
@@ -107,10 +109,10 @@ def merge_targets(
     targets: list[LinkTarget], extras: list[LinkTarget], *, cap: int = MAX_OUTBOUND_LINKS,
 ) -> list[LinkTarget]:
     """Fold user extras into an article's architecture targets under the ≤cap outbound
-    rule. Priority: the up-link (first architecture target — mandatory per M6), then the
-    user's extras (they asked for these explicitly), then remaining laterals until the
-    cap. Deduped by URL."""
-    ordered = (targets[:1] + extras + targets[1:]) if targets else list(extras)
+    rule. Priority: the user's extras first (money pages they asked for explicitly, and
+    they always resolve), then the laterals until the cap. (The pillar up-link that used
+    to outrank extras is no longer emitted — see the module docstring.) Deduped by URL."""
+    ordered = extras + targets
     merged: list[LinkTarget] = []
     seen: set[str] = set()
     for t in ordered:
@@ -131,15 +133,21 @@ def _silo_slug(topic_id: str, topics_by_id: dict[str, dict], fallback: str = "")
 def build_targets(
     cluster_id: str, *, architecture: dict, clusters_by_id: dict[str, dict],
     topics_by_id: dict[str, dict], keywords_by_id: dict[str, str], base_url: str,
-    url_style: UrlStyle | None = None,
+    url_style: UrlStyle | None = None, generated_cluster_ids: set[str] | None = None,
 ) -> tuple[list[LinkTarget], bool]:
     """`(targets, is_pillar)` for `cluster_id`. Empty when the cluster isn't a supporting
     article in the architecture (gap placeholder / not yet planned). With a `url_style`
     (inferred from the client's blog-post reference URL), URLs follow the site's real
-    flat permalink pattern instead of the default per-silo directory scheme."""
+    flat permalink pattern instead of the default per-silo directory scheme. With
+    `generated_cluster_ids` (clusters that already have a generated article), lateral
+    peers outside the set are skipped so no link points at a not-yet-written page;
+    None means no gating (all planned peers link, the pre-gate behavior).
+
+    No pillar up-link is emitted: pillar pages are never generated (pillar generation
+    isn't built yet), so linking them shipped a permanently-dead URL on every article.
+    """
     base = (base_url or "").rstrip("/")
     supporting = {a["article_id"]: a for a in architecture.get("supporting_articles", [])}
-    pillars_by_topic = {p["topic_id"]: p for p in architecture.get("pillars", [])}
 
     node = supporting.get(cluster_id)
     if not node:
@@ -148,21 +156,10 @@ def build_targets(
     targets: list[LinkTarget] = []
     seen_urls: set[str] = set()
 
-    # Up-link to the parent pillar (mandatory). Default scheme: the pillar page lives at
-    # the silo root; client-inferred scheme: the pillar is a flat post whose slug is the
-    # silo slug.
-    pillar = pillars_by_topic.get(node.get("parent_pillar_topic_id"))
-    if pillar:
-        silo = _silo_slug(pillar["topic_id"], topics_by_id, pillar.get("silo_name", ""))
-        url = url_style.post_url(base, silo) if url_style else f"{base}/{silo}/"
-        anchors = [a for a in (pillar.get("target_keyword"), pillar.get("silo_name")) if a]
-        targets.append(LinkTarget(
-            url=url, anchors=anchors,
-            title=pillar.get("title") or pillar.get("silo_name") or "Overview"))
-        seen_urls.add(url)
-
-    # Lateral links to peer supporting articles.
+    # Lateral links to peer supporting articles (only peers whose article exists).
     for peer_id in node.get("lateral_article_links", []):
+        if generated_cluster_ids is not None and peer_id not in generated_cluster_ids:
+            continue
         peer = clusters_by_id.get(peer_id)
         if not peer or not peer.get("slug"):
             continue
