@@ -83,6 +83,7 @@ export function Tasks() {
   const [activeSavedView, setActiveSavedView] = useState<SavedView | null>(null)
   const [showTrash, setShowTrash] = useState(false)
   const [quickAdd, setQuickAdd] = useState<Record<string, string>>({})
+  const [boardAdd, setBoardAdd] = useState<Record<string, string>>({})
   const [genResult, setGenResult] = useState<string | null>(null)
 
   // Drawer state lives in the URL (?task=…) so mention notifications can
@@ -280,6 +281,21 @@ export function Tasks() {
     setQuickAdd((prev) => ({ ...prev, [key]: '' }))
   }
 
+  // Board quick-add: a task added under a status column is created with that
+  // column's status, and lands in the newest month section so it also shows in
+  // List view. A "done" column marks it complete (mirrors drag-to-done).
+  const quickAddToStatus = (status: TaskStatus) => {
+    const name = (boardAdd[status.key] ?? '').trim()
+    if (!name) return
+    createMut
+      .mutateAsync({ name, client_id: id, section_id: sections[0]?.id ?? null, status_key: status.key, sort_order: tasks.length })
+      .then((created) => {
+        if (status.is_done && created?.id) completeMut.mutate(created.id)
+      })
+      .catch(() => {})
+    setBoardAdd((prev) => ({ ...prev, [status.key]: '' }))
+  }
+
   const card = (t: TaskItem) => {
     const cat = t.category ? catByKey[t.category] : null
     return (
@@ -332,6 +348,17 @@ export function Tasks() {
               <span style={{ fontSize: 11, color: '#94a3b8' }}>{colTasks.length}</span>
             </div>
             {colTasks.map(card)}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 4px 2px' }}>
+              <Plus size={14} color="#94a3b8" />
+              <input
+                value={boardAdd[s.key] ?? ''}
+                onChange={(e) => setBoardAdd((prev) => ({ ...prev, [s.key]: e.target.value }))}
+                onKeyDown={(e) => { if (e.key === 'Enter') quickAddToStatus(s) }}
+                onBlur={() => quickAddToStatus(s)}
+                placeholder="Add a task…"
+                style={{ flex: 1, border: 'none', outline: 'none', fontSize: 12, background: 'transparent', color: '#0f172a' }}
+              />
+            </div>
           </div>
         )
       })}
