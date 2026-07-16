@@ -28,10 +28,12 @@ async def generate_research(request: ResearchRequest) -> ResearchResponse:
             run_research(request), timeout=settings.research_deadline_seconds
         )
     except asyncio.TimeoutError:
-        # The fan-out blew the wall-clock budget. Fail the request ourselves
-        # (cancelling the in-flight fetches/LLM calls) rather than letting it run
-        # on until the caller's transport timeout fires. 504 so platform-api
-        # treats it as a retryable transient (its retry-once-on-5xx path).
+        # Hard backstop. run_research self-bounds to its soft budget and returns
+        # a partial citation set on time, so this only fires in the pathological
+        # case where even that path stalls past the hard deadline. Fail the
+        # request ourselves (cancelling in-flight work) rather than letting it
+        # run to the caller's transport timeout. 504 so platform-api treats it as
+        # a retryable transient (its retry-once-on-5xx path).
         logger.warning(
             "research.timeout",
             extra={

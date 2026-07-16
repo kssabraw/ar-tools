@@ -79,6 +79,12 @@ class CitationsMetadata(BaseModel):
     authority_gap_h3s_with_citations: int = 0
     supplemental_citations_added: int = 0
     competitor_exclusion_unavailable: bool = False
+    # Set when the per-target research budget was exhausted and some targets were
+    # skipped rather than aborting the whole stage - the citations returned are a
+    # partial set (the article still generates, just with fewer sources). Purely
+    # additive to schema 1.1; readers that don't know these fields ignore them.
+    research_deadline_hit: bool = False
+    targets_incomplete: int = 0
     citations_schema_version: Literal["1.1"] = "1.1"
 
 
