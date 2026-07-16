@@ -4,10 +4,11 @@
   authority gap agent, FAQ concern extraction, response content extraction,
   how-to reordering, plus v2.0's title/scope generation, persona generation,
   and scope verification.
-- OpenAI text-embedding-3-small (`embed_batch`) for: legacy v1.8 brief
-  pipeline, SIE filters, and Research & Citations snippet ranking.
-- OpenAI text-embedding-3-large (`embed_batch_large`) for: Brief Generator
-  v2.0 - finer-grained paraphrase discrimination and the coverage graph.
+- Gemini embeddings for ALL vector work (suite standardized off OpenAI):
+  `embed_batch` (legacy v1.8 brief, SIE filters, Research snippet ranking) and
+  `embed_batch_large` (Brief v2.0 paraphrase discrimination + coverage graph)
+  both delegate to `embed_gemini` in the SEMANTIC_SIMILARITY space; AIO
+  proximity uses the asymmetric RETRIEVAL_QUERY/DOCUMENT spaces.
 
 All Anthropic calls are wrapped in a single global semaphore (default 5
 concurrent, configurable via `anthropic_max_concurrency`) to dodge the
@@ -38,7 +39,6 @@ from typing import Any, Optional
 
 import anthropic
 from anthropic import AsyncAnthropic
-from openai import AsyncOpenAI
 import httpx
 
 from config import settings
@@ -50,11 +50,8 @@ CLAUDE_MODEL = "claude-sonnet-4-6"
 # brief's direction and must be willing to contradict a false premise. Opus 4.8
 # rejects a `temperature` param, so callers pass temperature=None for it.
 CLAUDE_OPUS_MODEL = "claude-opus-4-8"
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_MODEL_LARGE = "text-embedding-3-large"
 
 _anthropic: Optional[AsyncAnthropic] = None
-_openai: Optional[AsyncOpenAI] = None
 
 # Module-level semaphore guarding all `client.messages.create()` calls.
 # Lazily constructed on first use so it binds to the running event loop
@@ -76,13 +73,6 @@ def get_anthropic() -> AsyncAnthropic:
     if _anthropic is None:
         _anthropic = AsyncAnthropic(api_key=settings.anthropic_api_key)
     return _anthropic
-
-
-def get_openai() -> AsyncOpenAI:
-    global _openai
-    if _openai is None:
-        _openai = AsyncOpenAI(api_key=settings.openai_api_key)
-    return _openai
 
 
 # ---- Anthropic helpers ----
@@ -278,48 +268,40 @@ async def claude_text(
     ).strip()
 
 
-# ---- OpenAI embeddings ----
+# ---- Text embeddings (Gemini) ----
+#
+# Brief v2, SIE, and Research embed through these two functions. They were
+# OpenAI (`text-embedding-3-{small,large}`); the suite standardized on Gemini
+# (AIO alignment + a single embedding space), so both now delegate to
+# `embed_gemini` in the SEMANTIC_SIMILARITY space. Vectors are unit-normalized
+# (cosine == dot) at `settings.gemini_embedding_dim`. Requires GEMINI_API_KEY —
+# there is NO OpenAI fallback anymore.
+_SIMILARITY_TASK = "SEMANTIC_SIMILARITY"
+
 
 async def embed_batch(texts: list[str]) -> list[list[float]]:
-    """Embed a batch of texts using text-embedding-3-small.
-
-    Used by the legacy brief pipeline, SIE, and Research. Brief v2.0 calls
-    `embed_batch_large` instead. Returns one vector per input.
-    """
+    """Embed a batch of texts for symmetric similarity (Gemini). Used by the
+    legacy brief pipeline, SIE, and Research. Returns one vector per input."""
     if not texts:
         return []
-    client = get_openai()
-    # OpenAI accepts up to 2048 inputs per call; we won't approach that.
-    response = await client.embeddings.create(
-        model=EMBEDDING_MODEL,
-        input=texts,
-    )
-    return [item.embedding for item in response.data]
+    return await embed_gemini(texts, task_type=_SIMILARITY_TASK)
 
 
 async def embed_batch_large(
     texts: list[str],
     normalize: bool = True,
 ) -> list[list[float]]:
-    """Embed a batch of texts using text-embedding-3-large (Brief v2.0).
+    """Embed a batch of texts for symmetric similarity (Gemini, Brief v2.0).
 
-    PRD §12.2 normalizes embeddings to unit length so cosine == dot product.
-    The `normalize` flag is on by default for that reason; tests may flip
-    it off when they want to inspect raw cosines independently.
+    Vectors are unit-normalized so cosine == dot product. `normalize` is kept
+    for signature compatibility; the Gemini path always L2-normalizes (its
+    truncated <3072-dim outputs require it), so it is effectively always on.
 
     Returns one vector per input. Empty input → empty output (no API call).
     """
     if not texts:
         return []
-    client = get_openai()
-    response = await client.embeddings.create(
-        model=EMBEDDING_MODEL_LARGE,
-        input=texts,
-    )
-    vectors = [list(item.embedding) for item in response.data]
-    if normalize:
-        return [_unit_normalize(v) for v in vectors]
-    return vectors
+    return await embed_gemini(texts, task_type=_SIMILARITY_TASK)
 
 
 def _unit_normalize(v: list[float]) -> list[float]:
@@ -329,13 +311,13 @@ def _unit_normalize(v: list[float]) -> list[float]:
     return [x / norm for x in v]
 
 
-# ---- Gemini embeddings (dual-space AIO proximity, advisory) ----
+# ---- Gemini embeddings ----
 #
-# Asymmetric retrieval embeddings: headings embed as RETRIEVAL_QUERY, the AIO
-# answer + fan-out questions embed as RETRIEVAL_DOCUMENT. This matches how Google
-# scores AI Overview retrieval better than OpenAI's symmetric space. Used ONLY by
-# aio_proximity.py (observability); it never feeds a gate or selection. Falls back
-# to OpenAI 3-large when no GEMINI_API_KEY is configured.
+# The single embedding backend for this service. `embed_batch`/`embed_batch_large`
+# delegate here in the SEMANTIC_SIMILARITY space; `aio_proximity.py` uses the
+# asymmetric retrieval spaces (headings as RETRIEVAL_QUERY, the AIO answer +
+# fan-out questions as RETRIEVAL_DOCUMENT), which matches how Google scores AI
+# Overview retrieval. Requires GEMINI_API_KEY — there is no OpenAI fallback.
 _GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 _GEMINI_BATCH_LIMIT = 100  # Gemini batchEmbedContents caps inputs per request
 

@@ -354,7 +354,7 @@ async def test_pipeline_produces_schema_v2_response():
 
     # ---- Schema contract ----
     assert result.metadata.schema_version == "2.8"
-    assert result.metadata.embedding_model == "text-embedding-3-large"
+    assert result.metadata.embedding_model == "gemini-embedding-2"
 
     # ---- Step 3.5 outputs surface on the response ----
     assert result.title.startswith("What TikTok Shop Is")
@@ -558,7 +558,7 @@ async def test_cache_hit_short_circuits_pipeline():
             "llm_fanout_queries_captured": {"chatgpt": 0, "claude": 0, "gemini": 0, "perplexity": 0},
             "llm_response_subtopics_extracted": {"chatgpt": 0, "claude": 0, "gemini": 0, "perplexity": 0},
             "intent_signals": {"shopping_box": False, "news_box": False, "local_pack": False, "featured_snippet": False, "comparison_tables": False},
-            "embedding_model": "text-embedding-3-large",
+            "embedding_model": "gemini-embedding-2",
             "relevance_floor_threshold": 0.55,
             "restatement_ceiling_threshold": 0.78,
             "inter_heading_threshold": 0.75,

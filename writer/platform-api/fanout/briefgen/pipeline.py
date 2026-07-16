@@ -7,10 +7,9 @@
   → assemble the v2.6 BriefOutput (Step 11).
 
 Deps are injected (`BriefDeps`) so the orchestration is testable; `build_brief_deps`
-constructs the real clients, including the DUAL embedding spaces (aio §0 #1): OpenAI
-`text-embedding-3-large` for the organic gates + ChatGPT proximity, and Gemini
-(RETRIEVAL_* task types) for AIO proximity — the Gemini path is invoked DIRECTLY here,
-independent of the app-wide `embedding_provider` (which stays openai). Persona /
+constructs the real clients, including the embedding spaces (aio §0 #1): a symmetric
+Gemini space for the organic gates + ChatGPT proximity, and Gemini RETRIEVAL_* task
+types for AIO proximity — all Gemini now that the suite has standardized off OpenAI. Persona /
 authority / H3 / FAQ enrichment (5c) layer onto the BriefOutput after this.
 """
 
@@ -42,7 +41,7 @@ class BriefDeps:
     dfs: object                 # DataForSEOClient (bound to the session location_code)
     scrapeowl: object           # ScrapeOwlClient (discussion-thread content)
     np_extract: object          # spaCy noun-phrase extractor (entity derivation)
-    embed_3large: EmbedFn       # OpenAI text-embedding-3-large (gates + ChatGPT proximity)
+    embed_3large: EmbedFn       # Gemini symmetric space (gates + ChatGPT proximity)
     embed_aio_query: EmbedFn    # Gemini RETRIEVAL_QUERY (candidate headings)
     embed_aio_doc: EmbedFn      # Gemini RETRIEVAL_DOCUMENT (AIO answer points)
     gen_llm: object             # Haiku — MCS candidate generation
@@ -53,20 +52,23 @@ class BriefDeps:
 
 def build_brief_deps(location_code: int) -> BriefDeps:
     """Construct the real egress clients (lazy imports keep the pure modules importable
-    without httpx/openai/spaCy). Builds the two Gemini embedders (asymmetric retrieval
-    task types) directly — independent of `embedding_provider`."""
-    from openai import OpenAI
-
+    without httpx/spaCy). Builds three Gemini embedders — a symmetric one for the
+    gates + ChatGPT proximity, and the two asymmetric retrieval task types for AIO
+    proximity — now that the suite has standardized off OpenAI."""
     from fanout.config import get_settings
     from fanout.dataforseo import get_dataforseo
     from fanout.llm.anthropic_client import AnthropicLLM
-    from fanout.llm.embeddings import GeminiEmbedder, OpenAIEmbedder
+    from fanout.llm.embeddings import GeminiEmbedder
     from fanout.sie.scrapeowl_client import ScrapeOwlClient
 
     from .entity import build_np_extractor
 
     s = get_settings()
-    large = OpenAIEmbedder(OpenAI(api_key=s.openai_api_key), s.brief_embedding_model_large)
+    large = GeminiEmbedder(
+        api_key=s.gemini_api_key, model=s.gemini_embedding_model,
+        output_dim=s.gemini_embedding_dim, task_type=s.gemini_embedding_task_type,
+        max_workers=s.gemini_embedding_max_workers,
+    )
     gem_q = GeminiEmbedder(
         api_key=s.gemini_api_key, model=s.gemini_embedding_model,
         output_dim=s.gemini_embedding_dim, task_type=s.brief_aio_query_task_type,

@@ -47,9 +47,12 @@ class Settings(BaseSettings):
     # cosine threshold below (the Gemini similarity distribution differs from
     # OpenAI's). gemini-embedding-001 @ 1536 dims (Matryoshka truncation) keeps the
     # existing vector(1536) columns, so no schema migration of stored vectors.
-    embedding_provider: str = "openai"  # "openai" | "gemini"
+    embedding_provider: str = "gemini"  # "openai" | "gemini" — suite standardized on Gemini
     gemini_api_key: str = ""
-    gemini_embedding_model: str = "gemini-embedding-001"  # GA. Dormant — provider is openai (Gemini deferred 2026-06-16). Embedding-2 preview gave poor write-time relevance discrimination; override via GEMINI_EMBEDDING_MODEL to revisit.
+    # NOTE: a prior eval found the embedding-2 preview gave POOR write-time relevance
+    # discrimination for the fan-out gate; set per the suite-wide directive, but revisit
+    # (override GEMINI_EMBEDDING_MODEL to gemini-embedding-001) if relevance regresses.
+    gemini_embedding_model: str = "gemini-embedding-2"
     gemini_embedding_dim: int = 1536
     gemini_embedding_task_type: str = "SEMANTIC_SIMILARITY"
     # Concurrent batchEmbedContents calls (Gemini caps each at 100 inputs, so a
@@ -314,9 +317,10 @@ class Settings(BaseSettings):
     textrazor_cost_per_request: float = 0.0006
 
     # ----- M13 Brief Generator (answer-engine-first) -----
-    # Dual/triple embedding spaces (aio plan §0 #1): 3-large for the organic gates +
-    # ChatGPT proximity; Gemini (RETRIEVAL_* task types) for AIO proximity. The Gemini
-    # path here is INDEPENDENT of the app-wide embedding_provider (which stays openai).
+    # Embedding spaces (aio plan §0 #1): a symmetric Gemini space for the organic
+    # gates + ChatGPT proximity, and the Gemini RETRIEVAL_* task types for AIO
+    # proximity. All Gemini now (suite standardized off OpenAI). This field is
+    # retained for provenance but is no longer used to build an embedder.
     brief_embedding_model_large: str = "text-embedding-3-large"
     # Clustered-keyword coverage audit (2b): a supporting keyword counts as "covered" when
     # its 3-large cosine to some brief heading clears this (lexical subset match also counts).

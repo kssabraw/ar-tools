@@ -9,7 +9,7 @@ Algorithm summary (per PRD §8.5):
   For each silo candidate in the brief output's silo_candidates array:
     1. Skip if viable_as_standalone_article == false (defense in depth)
     2. Skip if the originating run's client is archived
-    3. Embed suggested_keyword via text-embedding-3-large @ 1536 dims
+    3. Embed suggested_keyword via Gemini @ 1536 dims (SEMANTIC_SIMILARITY)
     4. Query existing silo_candidates rows for the same client_id
        (excluding rejected) ordered by cosine distance ascending
     5. If best distance <= 0.15 (cosine >= 0.85): increment occurrence
@@ -28,22 +28,14 @@ import logging
 import math
 from typing import Any, Optional
 
-from openai import AsyncOpenAI
+import httpx
 
 from config import settings
 from db.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
-
-_openai_client: Optional[AsyncOpenAI] = None
-
-
-def _openai() -> AsyncOpenAI:
-    global _openai_client
-    if _openai_client is None:
-        _openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
-    return _openai_client
+_GEMINI_EMBED_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
 
 # ---------------------------------------------------------------------------
@@ -107,18 +99,35 @@ def _unit_normalize(v: list[float]) -> list[float]:
 
 
 async def _embed_keyword(text: str) -> list[float]:
-    """Call OpenAI text-embedding-3-large @ configured dimensions.
+    """Embed a keyword with Gemini @ configured dimensions, unit-normalized so
+    cosine == dot product.
 
-    Unit-normalizes the result so cosine == dot product (consistent with
-    Brief Generator v2.0's convention, even though the platform stores
-    its own embedding rather than reusing the brief's).
+    The suite standardized off OpenAI. The stored `silo_candidates` vectors are
+    Gemini now (dimension unchanged at `silo_embedding_dimensions`, so no DDL);
+    existing OpenAI rows are re-embedded once by
+    `scripts/backfill_silo_embeddings_gemini.py` at cutover — until that runs,
+    old rows sit in a different space and simply won't match new ones (a missed
+    dedup makes a duplicate candidate, never a wrong merge).
     """
-    response = await _openai().embeddings.create(
-        model=settings.silo_embedding_model,
-        input=text,
-        dimensions=settings.silo_embedding_dimensions,
-    )
-    return _unit_normalize(list(response.data[0].embedding))
+    if not settings.gemini_api_key:
+        raise RuntimeError("gemini_api_key_not_configured")
+    model = settings.silo_embedding_model
+    model_path = model if model.startswith("models/") else f"models/{model}"
+    url = f"{_GEMINI_EMBED_BASE}/{model_path}:embedContent"
+    payload = {
+        "model": model_path,
+        "content": {"parts": [{"text": text}]},
+        "taskType": "SEMANTIC_SIMILARITY",
+        "outputDimensionality": settings.silo_embedding_dimensions,
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            url, headers={"x-goog-api-key": settings.gemini_api_key}, json=payload
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    values = ((data.get("embedding") or {}).get("values")) or []
+    return _unit_normalize([float(x) for x in values])
 
 
 # ---------------------------------------------------------------------------
@@ -358,8 +367,8 @@ async def process_silo_dedup_job(job: dict) -> None:
             elif result == "skipped_non_viable":
                 metrics["skipped_non_viable"] += 1
 
-        # text-embedding-3-large @ 1536 dims is ~$0.00013 per 1K tokens;
-        # silo keywords are 5–10 tokens → ~$0.0005 per call.
+        # Gemini embeddings @ 1536 dims; silo keywords are 5–10 tokens → a few
+        # hundredths of a cent per call.
         billed = metrics["dedup_hits"] + metrics["new_inserts"]
         metrics["embedding_cost_usd"] = round(billed * 0.0005, 6)
 

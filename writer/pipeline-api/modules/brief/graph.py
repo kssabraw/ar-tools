@@ -3,7 +3,7 @@
 Implements PRD §5 Step 5 (5.1 through 5.5):
 
 5.1  Embed seed, title, scope_statement, and every candidate using
-     text-embedding-3-large with unit normalization (cosine == dot).
+     Gemini (embed_batch_large) with unit normalization (cosine == dot).
 5.2  Pre-filter candidates by cosine to title:
        below relevance_floor   → discard `below_relevance_floor`
        above restatement_ceiling → discard `above_restatement_ceiling`

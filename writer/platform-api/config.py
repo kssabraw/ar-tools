@@ -551,7 +551,10 @@ class Settings(BaseSettings):
     # text-embedding-3-large supports a `dimensions` parameter (1..3072);
     # we use 1536 because pgvector's HNSW index is capped at 2000 dims.
     silo_embedding_dimensions: int = 1536
-    silo_embedding_model: str = "text-embedding-3-large"
+    # Gemini (suite standardized off OpenAI). Must support outputDimensionality =
+    # silo_embedding_dimensions; the silo_candidates column stays vector(1536).
+    # Env-overridable — verify the model ID resolves before deploy.
+    silo_embedding_model: str = "gemini-embedding-2"
 
     # Local SEO silo planner — neighborhood discovery. After the Fanout pipeline
     # builds the service silos, the planner proposes neighborhoods within the

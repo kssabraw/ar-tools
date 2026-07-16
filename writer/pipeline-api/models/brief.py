@@ -527,8 +527,11 @@ class BriefMetadata(BaseModel):
     llm_response_subtopics_extracted: LLMFanoutCounts = LLMFanoutCounts()
     intent_signals: IntentSignals = IntentSignals()
 
-    # Threshold values used during this run (echoed for tuning)
-    embedding_model: Literal["text-embedding-3-large"] = "text-embedding-3-large"
+    # Threshold values used during this run (echoed for tuning). Records the
+    # active embedding model — now Gemini and env-configurable, so this is a
+    # free string (was a Literal locked to text-embedding-3-large before the
+    # suite-wide switch to Gemini).
+    embedding_model: str = "gemini-embedding-2"
     relevance_floor_threshold: float = 0.55
     restatement_ceiling_threshold: float = 0.78
     inter_heading_threshold: float = 0.75

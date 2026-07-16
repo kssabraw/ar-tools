@@ -9,8 +9,9 @@ byte-identical whether or not it runs.
 Embedding space (v2.8): when a GEMINI_API_KEY is configured, headings embed as
 RETRIEVAL_QUERY and the AIO answer + fan-out questions embed as
 RETRIEVAL_DOCUMENT — Gemini's asymmetric retrieval spaces track Google's AI
-Overview retrieval better than a symmetric space. When Gemini is unconfigured or
-errors, this falls back to OpenAI text-embedding-3-large (the prior behavior).
+Overview retrieval better than a symmetric space. On a Gemini error it falls
+back to `embed_batch_large` (the symmetric SEMANTIC_SIMILARITY space — also
+Gemini now that the suite has standardized off OpenAI).
 
 IMPORTANT - still not decision-grade. `proximity_mean` is a relative, internal
 signal for the §X.6 measurement loop — do NOT treat it as a predictor of AIO
@@ -80,9 +81,10 @@ async def compute_aio_proximity(
     fanout_coverage_pct: fraction of AIO fan-out questions for which some
     selected heading is within `coverage_threshold`.
 
-    Uses Gemini dual-space embeddings when configured (and `embed_fn` is not
-    explicitly overridden); otherwise — or on any Gemini error — falls back to
-    single-space OpenAI 3-large.
+    Uses Gemini dual-space (asymmetric) embeddings when configured (and
+    `embed_fn` is not explicitly overridden); otherwise — or on any Gemini error
+    — falls back to the single-space `embed_batch_large` (Gemini
+    SEMANTIC_SIMILARITY).
     """
     if not (answer_text or "").strip() or not heading_texts:
         return None, None
@@ -104,13 +106,13 @@ async def compute_aio_proximity(
                     len(fanout_questions), coverage_threshold,
                 )
             logger.warning("brief.aio_proximity.gemini_count_mismatch")
-        except Exception as exc:  # noqa: BLE001 — advisory; fall back to OpenAI
+        except Exception as exc:  # noqa: BLE001 — advisory; fall back to embed_batch_large
             logger.warning(
                 "brief.aio_proximity.gemini_failed",
                 extra={"reason": repr(exc)},
             )
 
-    # Single-space fallback (OpenAI 3-large) — one batched call.
+    # Single-space fallback (Gemini SEMANTIC_SIMILARITY) — one batched call.
     embed = embed_fn or embed_batch_large
     n_head = len(heading_texts)
     texts = [answer_text, *heading_texts, *fanout_questions]
