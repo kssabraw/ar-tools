@@ -59,6 +59,18 @@ the native task manager (`in-app-task-manager-prd-v1_0.md`) + the SerMaStr assis
 >   batch pendings are **actor-bound** (only the requester confirms) on both Slack
 >   (`_pace_pending` batch entry) and web (`_store_web_batch` token). Capped at
 >   `_BATCH_MAX`=15 with an overflow note; unstageable targets become ⚠️ flag lines.
+>
+> **Direct-DM nudges (same revision, `pace_actions.run_nudge`).** A nudge now
+> prefers a **direct Slack DM** to the assignee (`post_message(slack_user_id, …)`,
+> the pace_briefs DM primitive — needs the app's `im:write` scope) over an
+> @mention in the shared channel. Graceful, three-tier degrade: linked + scope →
+> DM; linked but DMs off/unavailable → channel @mention; unlinked → in-app only.
+> The in-app copy is always written; the DM path sets `skip_channels=["slack"]` so
+> the channel isn't double-posted. A first `missing_scope`/`invalid_auth` error
+> trips a process-level `_dm_scope_broken` flag so later nudges skip the failing
+> DM call and use the channel until the scope is granted (self-heals on redeploy).
+> Config `pace_nudge_via_dm` (default True — safe before the scope lands because
+> of the fallback). `run_nudge` is now async (the registry already awaits `run`).
 
 > **Revision note (v1.4 — initiative: from coordinator to manager).** Owner target
 > (2026-07-12): PACE should cover **90–95% of the internal delivery-PM job**. The gap

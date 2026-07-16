@@ -980,6 +980,12 @@ class Settings(BaseSettings):
     # Empty ⇒ shared-channel shape-routing (backward-compatible). PACE's digest +
     # weekly report also post here when set.
     pace_slack_channel: str = ""
+    # PACE nudge delivery: DM the assignee directly (chat.postMessage to their
+    # slack_user_id — needs the Slack app's `im:write` scope) instead of an
+    # @mention in the shared channel. Graceful: an unlinked assignee or a missing
+    # scope falls back to the channel @mention (then to in-app only), so this is
+    # safe to leave on before the scope is granted — it self-heals on grant.
+    pace_nudge_via_dm: bool = True
     # PACE v1.4 — initiative (§4.8–§4.13). Master gate for the Chase Plan engine,
     # follow-through episodes, triage, rebalancing, slip forecasting, DM briefs.
     pace_initiative_enabled: bool = False
