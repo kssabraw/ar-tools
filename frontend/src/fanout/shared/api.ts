@@ -1154,6 +1154,7 @@ export interface ScheduledRun {
   started_at: string | null;
   completed_at: string | null;
   error: string | null;
+  attempts?: number;
 }
 export interface CreateScheduleResponse {
   status: "scheduled" | "requires_approval";
@@ -1219,3 +1220,11 @@ export const cancelScheduleRunsBulk = (sessionId: string, runIds: string[]) =>
 export const reinstateScheduleRun = (sessionId: string, runId: string) =>
   request<{ status: string; run_id: string }>(
     `/sessions/${sessionId}/schedule-runs/${runId}/reinstate`, { method: "POST" });
+// Manually requeue a single dead-lettered (failed) article — resets its attempt budget.
+export const retryScheduleRun = (sessionId: string, runId: string) =>
+  request<{ status: string; run_id: string }>(
+    `/sessions/${sessionId}/schedule-runs/${runId}/retry`, { method: "POST" });
+// Requeue every failed article in a schedule at once.
+export const retryFailedRuns = (sessionId: string, scheduleId: string) =>
+  request<{ status: string; retried: number }>(
+    `/sessions/${sessionId}/schedules/${scheduleId}/retry-failed`, { method: "POST" });

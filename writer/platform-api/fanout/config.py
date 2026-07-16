@@ -330,6 +330,14 @@ class Settings(BaseSettings):
     scheduler_concurrency_cap: int = 3        # in-flight article writes (LLM rate-limit guard)
     scheduler_stuck_minutes: int = 30         # startup sweep: running rows older than this requeue
     scheduler_shutdown_grace_s: float = 20.0  # max wait for in-flight writes on shutdown
+    # Bounded retry for transient generation failures (LLM overload / 529, research
+    # timeout, a DataForSEO hiccup, a worker restart mid-write). A failed run is
+    # requeued with exponential backoff up to this many total attempts, then
+    # dead-lettered (status=failed + a notification). A backoff of base * 2**(n-1)
+    # capped at `retry_cap`, e.g. 5m -> 10m -> 20m for attempts 1..3.
+    scheduler_max_attempts: int = 4
+    scheduler_retry_base_seconds: int = 300     # first-retry delay (5 min)
+    scheduler_retry_cap_seconds: int = 3600     # max single-retry delay (1 hr)
     writer_schedule_approval_threshold_usd: float = 90.0   # VA Schedule-all > this -> M9 approval
     writer_article_cost_estimate_usd: float = 0.30         # per-article preview figure (§9.4)
     # Publishing destinations (dormant until provisioned). GitHub: fine-grained PAT with

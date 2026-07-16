@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from fanout.config import get_settings
 from fanout.cost_attribution import metered_run
 from fanout.storage.supabase_client import get_service_client
+from fanout.writer import retry as retry_policy
 
 logger = logging.getLogger(__name__)
 
@@ -110,14 +111,21 @@ def _claim_due(cap: int) -> list[dict]:
 
 
 def _recover_stuck(stuck_minutes: int) -> None:
-    """Requeue rows left `running` by a prior process (restart mid-write)."""
+    """Requeue rows left `running` by a prior process (restart mid-write).
+
+    Attempts-aware: each recovered row goes through `_retry_or_fail` so a row that
+    repeatedly strands the worker (a poison run that crashes the process) is
+    eventually dead-lettered instead of requeued forever. Recovery retries are
+    `immediate` (due now) — a restart isn't a content failure, so there's no
+    reason to back it off."""
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stuck_minutes)).isoformat()
-    res = (get_service_client().table("scheduled_article_runs")
-           .update({"status": "queued", "started_at": None})
-           .eq("status", "running").lt("started_at", cutoff).execute())
-    if res.data:
+    rows = (get_service_client().table("scheduled_article_runs").select("*")
+            .eq("status", "running").lt("started_at", cutoff).execute().data or [])
+    for row in rows:
+        _retry_or_fail(row, "worker restarted mid-generation", immediate=True)
+    if rows:
         logger.info("scheduler_requeued_stuck",
-                    extra={"event": "scheduler_requeued_stuck", "count": len(res.data)})
+                    extra={"event": "scheduler_requeued_stuck", "count": len(rows)})
 
 
 def _process_run(row: dict) -> None:
@@ -130,12 +138,16 @@ def _process_run(row: dict) -> None:
     cluster_id = row["cluster_id"]
     session_id = row["session_id"]
     schedule_id = row.get("content_schedule_id")
+    client_id: str | None = None
     try:
         cluster = store.get_cluster(cluster_id)
         pkid = (cluster or {}).get("primary_keyword_id")
         keyword = store.get_keyword_texts([pkid]).get(pkid) if pkid else None
         session = store.get_session(session_id)
+        client_id = (session or {}).get("client_id")
         if not keyword or not session:
+            # A structural/data problem (no primary keyword, or the session is
+            # gone) won't self-heal — terminal, not retryable.
             _finish_run(run_id, "failed", error="cluster has no primary keyword or session missing")
             return
         # Freeze Protocol (suite): scheduled content creation stops for a frozen
@@ -169,8 +181,14 @@ def _process_run(row: dict) -> None:
         # local_seo_page / service_page return the artifact id (truthy) on success;
         # blog returns True. `bool(ok)` is the success signal for both.
         success = bool(ok)
-        _finish_run(run_id, "complete" if success else "failed",
-                    error=None if success else "content generation failed")
+        if not success:
+            # A generation miss is treated as transient: requeue with backoff up to
+            # scheduler_max_attempts, then dead-letter. Safe against double-work —
+            # a miss happens before the article is persisted, so a retry re-runs
+            # cleanly (and publish only ever runs on success below).
+            _retry_or_fail(row, "content generation failed", client_id=client_id)
+            return
+        _finish_run(run_id, "complete", error=None)
         # Opt-in auto-publish: push the finished piece to the client's Drive folder.
         if success and (schedule or {}).get("auto_publish"):
             _auto_publish_to_client_drive(
@@ -188,7 +206,9 @@ def _process_run(row: dict) -> None:
         logger.error("scheduled_run_failed",
                      extra={"event": "scheduled_run_failed", "run_id": run_id,
                             "cluster_id": cluster_id, "reason": repr(exc)})
-        _finish_run(run_id, "failed", error=repr(exc)[:500])
+        # An unexpected error (DB read, external-API blip) is transient by default:
+        # requeue with backoff up to the attempt cap, then dead-letter.
+        _retry_or_fail(row, repr(exc)[:500], client_id=client_id)
     finally:
         if schedule_id:
             _maybe_complete_schedule(schedule_id)
@@ -356,6 +376,75 @@ def _finish_run(run_id: str, status: str, *, error: str | None) -> None:
         "status": status, "completed_at": datetime.now(timezone.utc).isoformat(),
         "error": error,
     }).eq("id", run_id).execute()
+
+
+def _retry_or_fail(
+    row: dict, reason: str, *, client_id: str | None = None, immediate: bool = False,
+) -> None:
+    """Record a transient failure: requeue the run with backoff up to
+    `scheduler_max_attempts`, else dead-letter it (status=failed + a
+    notification). `immediate=True` requeues due-now with no backoff (used by the
+    restart-recovery sweep, where the failure was a process restart, not content).
+
+    Idempotency: this only ever fires for a *generation* failure, which happens
+    before the article is persisted and before any publish — so a re-run can't
+    double-generate or double-post."""
+    s = get_settings()
+    run_id = row["id"]
+    attempts = retry_policy.next_attempt_number(row.get("attempts"))
+    reason = (reason or "")[:500]
+    if retry_policy.should_retry(attempts, s.scheduler_max_attempts):
+        if immediate:
+            next_at = datetime.now(timezone.utc)
+        else:
+            delay = retry_policy.retry_delay_seconds(
+                attempts, s.scheduler_retry_base_seconds, s.scheduler_retry_cap_seconds)
+            next_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        get_service_client().table("scheduled_article_runs").update({
+            "status": "queued", "attempts": attempts, "started_at": None,
+            "completed_at": None, "scheduled_at": next_at.isoformat(), "error": reason,
+        }).eq("id", run_id).execute()
+        logger.info("scheduled_run_retry",
+                    extra={"event": "scheduled_run_retry", "run_id": run_id,
+                           "attempt": attempts, "max_attempts": s.scheduler_max_attempts,
+                           "next_at": next_at.isoformat(), "reason": reason})
+        return
+    # Out of attempts — dead-letter and surface it so a human looks.
+    get_service_client().table("scheduled_article_runs").update({
+        "status": "failed", "attempts": attempts,
+        "completed_at": datetime.now(timezone.utc).isoformat(), "error": reason,
+    }).eq("id", run_id).execute()
+    logger.error("scheduled_run_dead_letter",
+                 extra={"event": "scheduled_run_dead_letter", "run_id": run_id,
+                        "attempts": attempts, "reason": reason})
+    _notify_dead_letter(row, client_id, attempts, reason)
+
+
+def _notify_dead_letter(row: dict, client_id: str | None, attempts: int, reason: str) -> None:
+    """Best-effort in-app/email/Slack alert when a scheduled article gives up.
+    Never raises into the worker (a notification failure must not affect the
+    run's outcome). Resolves the client from the session when not supplied so the
+    alert lands on the right client card."""
+    try:
+        from services import notifications
+
+        if not client_id and row.get("session_id"):
+            from fanout.storage import silo as store
+            client_id = (store.get_session(row["session_id"]) or {}).get("client_id")
+        notifications.emit(
+            client_id,
+            kind="content_generation_failed",
+            title="Scheduled article failed to generate",
+            summary=f"A scheduled article gave up after {attempts} attempt(s): {reason}",
+            severity="warning",
+            payload={"run_id": row.get("id"), "cluster_id": row.get("cluster_id"),
+                     "schedule_id": row.get("content_schedule_id"),
+                     "session_id": row.get("session_id")},
+        )
+    except Exception as exc:  # noqa: BLE001 — notification is best-effort
+        logger.warning("dead_letter_notify_failed",
+                       extra={"event": "dead_letter_notify_failed",
+                              "run_id": row.get("id"), "reason": repr(exc)})
 
 
 def _maybe_complete_schedule(schedule_id: str) -> None:

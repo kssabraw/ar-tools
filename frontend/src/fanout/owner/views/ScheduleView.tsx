@@ -11,6 +11,8 @@ import {
   pauseSchedule,
   reinstateScheduleRun,
   resumeSchedule,
+  retryFailedRuns,
+  retryScheduleRun,
   updateScheduleCadence,
   updateSchedulePublishTargets,
   type ContentSchedule,
@@ -119,6 +121,7 @@ export function ScheduleView() {
                 if (confirm("Cancel this schedule? Pending articles won’t be written (already-written ones stay)."))
                   act.mutate(() => cancelSchedule(sessionId, s.id));
               }}
+              onRetryFailed={() => act.mutate(() => retryFailedRuns(sessionId, s.id))}
               onUpdateTargets={(body) =>
                 act.mutate(() => updateSchedulePublishTargets(sessionId, s.id, body))}
               onUpdateCadence={(body) =>
@@ -194,6 +197,16 @@ export function ScheduleView() {
                         Reinstate
                       </button>
                     )}
+                    {r.status === "failed" && (
+                      <button
+                        className="link-btn"
+                        disabled={act.isPending}
+                        title="Requeue this article to try generating it again"
+                        onClick={() => act.mutate(() => retryScheduleRun(sessionId, r.id))}
+                      >
+                        Retry
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -213,6 +226,7 @@ function ScheduleCard(p: {
   onPause: () => void;
   onResume: () => void;
   onCancel: () => void;
+  onRetryFailed: () => void;
   onUpdateTargets: (body: { auto_publish?: boolean; wp_publish?: boolean; wp_status?: "draft" | "publish" }) => void;
   onUpdateCadence: (body: {
     mode: ScheduleRequest["mode"]; per_day?: number; start_date?: string;
@@ -271,6 +285,16 @@ function ScheduleCard(p: {
             {cancelled ? ` · ${cancelled} cancelled` : ""}
           </div>
         </div>
+        {(pr.failed ?? 0) > 0 && s.status !== "cancelled" && (
+          <button
+            className="btn btn-sm"
+            disabled={p.busy}
+            title="Requeue every failed article in this schedule to try again"
+            onClick={p.onRetryFailed}
+          >
+            Retry {pr.failed} failed
+          </button>
+        )}
         {s.status === "active" && (
           <button className="btn btn-sm" disabled={p.busy} onClick={p.onPause}>Pause</button>
         )}

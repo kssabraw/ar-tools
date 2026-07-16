@@ -220,6 +220,48 @@ def reinstate_run(run_id: str) -> bool:
     return bool(res.data)
 
 
+def retry_failed_run(run_id: str) -> bool:
+    """Manually requeue a single dead-lettered run (failed -> queued), resetting
+    its attempt budget and clearing prior started/completed/error state, and
+    making it due now (`scheduled_at = now()`). Conditional on status='failed' so
+    it can't disturb a queued/running/complete/cancelled row. Returns whether it
+    flipped."""
+    from datetime import datetime, timezone
+
+    res = (get_service_client().table("scheduled_article_runs")
+           .update({"status": "queued", "attempts": 0, "started_at": None,
+                    "completed_at": None, "error": None,
+                    "scheduled_at": datetime.now(timezone.utc).isoformat()})
+           .eq("id", run_id).eq("status", "failed").execute())
+    return bool(res.data)
+
+
+def retry_failed_runs(schedule_id: str) -> int:
+    """Manually requeue every dead-lettered run in a schedule (failed -> queued,
+    due now, attempts reset). Returns how many flipped. Paged conditional updates
+    keep it correct above the ~1000-row cap while staying filtered to failed
+    rows so nothing else is disturbed."""
+    from datetime import datetime, timezone
+
+    client = get_service_client()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    total = 0
+    while True:
+        ids = [r["id"] for r in (client.table("scheduled_article_runs").select("id")
+               .eq("content_schedule_id", schedule_id).eq("status", "failed")
+               .limit(500).execute().data or [])]
+        if not ids:
+            return total
+        res = (client.table("scheduled_article_runs")
+               .update({"status": "queued", "attempts": 0, "started_at": None,
+                        "completed_at": None, "error": None, "scheduled_at": now_iso})
+               .in_("id", ids).eq("status", "failed").execute())
+        touched = len(res.data or [])
+        total += touched
+        if touched == 0:
+            return total
+
+
 def reflow_queued(schedule_id: str) -> int:
     """Re-pack a schedule's still-queued runs densely onto its cadence slots, from the
     earliest *available* slot — so cancelling articles (even the soonest ones) pulls the
