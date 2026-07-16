@@ -1026,12 +1026,17 @@ def run_article_job(
 def generate_article_core(
     session_id: str, cluster_id: str, keyword: str, location_code: int,
     force_refresh: bool = False, *, scheduled_article_run_id: str | None = None,
+    error_sink: list[str] | None = None,
 ) -> bool:
     """Generate one article for a cluster's keyword and persist it. Stage 1 ensures the Brief
     (Input A) and SIE (Input C) exist (running them on a miss), then the Writer runs the
     degraded 1.7-no-context flow and the result is persisted to `fanout.article_outputs`.
     Returns True on success; on a WriterAbort / load-bearing failure logs, persists nothing,
-    and returns False. The caller owns metering + any inflight guard."""
+    and returns False. The caller owns metering + any inflight guard.
+
+    `error_sink` (optional): on failure the human-readable reason is appended to it,
+    so a caller that only sees the bool (the scheduler) can surface the ACTUAL cause
+    (e.g. the WriterAbort code) instead of a generic 'content generation failed'."""
     from fanout.briefgen import cache as brief_cache
     from fanout.cost_meter import current_meter
     from fanout.sie import cache as sie_cache
@@ -1091,18 +1096,24 @@ def generate_article_core(
         # to write them as separate articles. Suppressed on auto-split children (recursion guard).
         _attach_unused_keywords(cluster_id, brief_row["output_json"], article)
     except WriterAbort as exc:
+        reason = f"{exc.code}: {exc.message}"
         logger.error(
             "step_failed",
             extra={"event": "step_failed", "step": "article_job", "keyword": keyword,
-                   "reason": f"{exc.code}: {exc.message}"},
+                   "reason": reason},
         )
+        if error_sink is not None:
+            error_sink.append(reason)
         return False
     except Exception as exc:  # noqa: BLE001 — side analysis; never crash the worker
+        reason = repr(exc)
         logger.error(
             "step_failed",
             extra={"event": "step_failed", "step": "article_job", "keyword": keyword,
-                   "reason": repr(exc)},
+                   "reason": reason},
         )
+        if error_sink is not None:
+            error_sink.append(reason)
         return False
 
     cost = round((meter.snapshot()[0] if meter else 0.0) - before, 6)
@@ -1148,6 +1159,7 @@ def generate_article_core(
 def generate_local_seo_page_core(
     *, session: dict, keyword: str, location: str,
     location_code: int | None, user_id: str | None,
+    error_sink: list[str] | None = None,
 ) -> str | None:
     """Generate one Local SEO page for a cluster's keyword via the suite's nlp-api
     generator (`services.local_seo_service.generate_page`) — competitor analysis +
@@ -1163,14 +1175,18 @@ def generate_local_seo_page_core(
     worker thread, so we drive it on a fresh event loop."""
     import asyncio
 
+    def _record(reason: str) -> None:
+        logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
+                     "keyword": keyword, "reason": reason})
+        if error_sink is not None:
+            error_sink.append(reason)
+
     client_id = session.get("client_id")
     if not client_id:
-        logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
-                     "keyword": keyword, "reason": "session has no client_id"})
+        _record("session has no client_id")
         return None
     if not (location or "").strip():
-        logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
-                     "keyword": keyword, "reason": "no target location"})
+        _record("no target location")
         return None
     try:
         from services.local_seo_service import generate_page
@@ -1180,8 +1196,7 @@ def generate_local_seo_page_core(
             force_refresh=False, page_template_url=None,
         ))
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
-        logger.error("step_failed", extra={"event": "step_failed", "step": "local_seo_page_job",
-                     "keyword": keyword, "reason": repr(exc)})
+        _record(repr(exc))
         return None
     logger.info("step_complete", extra={"event": "step_complete", "step": "local_seo_page_job",
                 "keyword": keyword, "location": location})
@@ -1190,6 +1205,7 @@ def generate_local_seo_page_core(
 
 def generate_service_page_core(
     *, session: dict, keyword: str, user_id: str | None,
+    error_sink: list[str] | None = None,
 ) -> str | None:
     """Generate one Service Page for a cluster's keyword by creating a suite
     `runs` row (content_type='service_page') and driving the orchestrator
@@ -1208,10 +1224,15 @@ def generate_service_page_core(
     run status, so we read that status to decide success."""
     import asyncio
 
+    def _record(reason: str) -> None:
+        logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
+                     "keyword": keyword, "reason": reason})
+        if error_sink is not None:
+            error_sink.append(reason)
+
     client_id = session.get("client_id")
     if not client_id:
-        logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
-                     "keyword": keyword, "reason": "session has no client_id"})
+        _record("session has no client_id")
         return None
     try:
         from db.supabase_client import get_supabase
@@ -1230,12 +1251,10 @@ def generate_service_page_core(
             or {}
         ).get("status")
         if status != "complete":
-            logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
-                         "keyword": keyword, "reason": f"run status {status}"})
+            _record(f"run status {status}")
             return None
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
-        logger.error("step_failed", extra={"event": "step_failed", "step": "service_page_job",
-                     "keyword": keyword, "reason": repr(exc)})
+        _record(repr(exc))
         return None
     logger.info("step_complete", extra={"event": "step_complete", "step": "service_page_job",
                 "keyword": keyword})
