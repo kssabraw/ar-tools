@@ -82,6 +82,16 @@ from services.website_scraper import llm_extract_website_data, scrapeowl_fetch
 
 logger = logging.getLogger(__name__)
 
+# Ids of async_jobs THIS process is currently executing (populated when a lane
+# claims a job, cleared when the handler settles — see `job_worker`). On a
+# graceful shutdown (redeploy) these are requeued immediately via
+# `drain_inflight_jobs` so the next container picks them up, instead of the
+# interrupted job sitting 'running' until the stale-job reaper heals it (up to
+# job_stale_timeout_minutes later). Per-process, NOT global: a rolling redeploy
+# briefly runs old + new containers at once, and we must never requeue a job the
+# sibling container just claimed — so drain only touches ids in this set.
+_inflight_jobs: set[str] = set()
+
 
 async def _claim_next_job(job_types: list[str] | None = None) -> dict | None:
     """Claim the oldest pending job (optionally restricted to `job_types` — the
@@ -219,6 +229,61 @@ async def _reap_stale_jobs() -> None:
                 "job_worker.reap_update_failed",
                 extra={"job_id": job["id"], "error": str(exc)},
             )
+
+
+async def drain_inflight_jobs() -> None:
+    """Graceful-shutdown handoff: requeue every job THIS process is still mid-run
+    so the next container claims it immediately, instead of the interrupted job
+    sitting 'running' until the stale-job reaper heals it (up to
+    job_stale_timeout_minutes later — the source of the "every redeploy stalls
+    in-progress work" symptom).
+
+    A restart is not the job's fault, so the retry attempt the claim consumed is
+    REFUNDED (attempts−1, floored at 0). Without the refund, a couple of
+    back-to-back redeploys would drive attempts to max_attempts and strand the
+    job unclaimable in 'pending' forever (the claim skips attempts>=max). The
+    reaper deliberately does NOT refund — a job that trips the reaper may be
+    genuinely hung, and consuming attempts there is what eventually fails it;
+    drain only runs on a clean shutdown, where the interruption is definitely us.
+
+    Each update is guarded on status='running' so a job that settled between the
+    read and the write is never stomped (its terminal write wins), and on id so a
+    sibling container's freshly-claimed jobs are untouched. Best-effort — a drain
+    failure must never block shutdown."""
+    job_ids = list(_inflight_jobs)
+    if not job_ids:
+        return
+    supabase = get_supabase()
+    drained = 0
+    for job_id in job_ids:
+        try:
+            row = (
+                supabase.table("async_jobs")
+                .select("attempts")
+                .eq("id", job_id)
+                .single()
+                .execute()
+            ).data or {}
+            attempts = max(0, int(row.get("attempts") or 0) - 1)
+            result = (
+                supabase.table("async_jobs")
+                .update({"status": "pending", "started_at": None, "attempts": attempts})
+                .eq("id", job_id)
+                .eq("status", "running")  # don't stomp a job that just completed
+                .execute()
+            )
+            if result.data:
+                drained += 1
+        except Exception as exc:
+            logger.error(
+                "job_worker.drain_failed",
+                extra={"job_id": job_id, "error": str(exc)},
+            )
+    if drained:
+        logger.warning(
+            "job_worker.drained_inflight_jobs",
+            extra={"drained": drained, "of": len(job_ids)},
+        )
 
 
 async def _run_website_scrape(job: dict) -> None:
@@ -546,6 +611,12 @@ async def job_worker(job_types: list[str] | None = None, lane: str = "main") -> 
                     "async_job_claimed",
                     extra={"job_id": job["id"], "job_type": job.get("job_type"), "lane": lane},
                 )
-                await _process_job(job)
+                # Track as in-flight so a graceful shutdown can requeue it (see
+                # `drain_inflight_jobs`); always cleared, even on handler error.
+                _inflight_jobs.add(job["id"])
+                try:
+                    await _process_job(job)
+                finally:
+                    _inflight_jobs.discard(job["id"])
         except Exception as exc:
             logger.error("job_worker.unhandled", extra={"error": str(exc), "lane": lane})

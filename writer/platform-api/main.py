@@ -60,7 +60,7 @@ from routers.syndication import router as syndication_router
 from routers.tasks import router as tasks_router
 from routers.users import router as users_router
 from services.gsc_scheduler import gsc_scheduler
-from services.job_worker import job_worker
+from services.job_worker import drain_inflight_jobs, job_worker
 from services.orchestrator import recover_stuck_runs
 
 # Topic Fanout Tool — vendored sub-package (writer/platform-api/fanout/).
@@ -120,6 +120,14 @@ async def lifespan(app: FastAPI):
     await fanout_scheduler.start()
     yield
     await fanout_scheduler.stop()
+    # Graceful handoff: requeue jobs this process is mid-run BEFORE cancelling the
+    # worker tasks, so the next container claims them immediately on redeploy
+    # instead of waiting out the stale-job reaper. Best-effort — never blocks
+    # shutdown (a hard SIGKILL that skips this path still self-heals via the reaper).
+    try:
+        await drain_inflight_jobs()
+    except Exception as exc:  # pragma: no cover - shutdown best-effort
+        logger.warning("job_worker_drain_failed", extra={"error": str(exc)})
     for task in (worker_task, interactive_worker_task, scheduler_task):
         if task is None:
             continue
