@@ -37,6 +37,28 @@ the native task manager (`in-app-task-manager-prd-v1_0.md`) + the SerMaStr assis
 > `_resolve_scope` → `interpret_pace` → stage), so scope routing + actor-bound
 > confirmation stay identical across surfaces. No new infra, no schema change; all
 > gated by the existing `pace_enabled`.
+>
+> **Structural autonomy (same revision, `services/pace_batch.py`).** Two
+> conversational-autonomy levers on top of enumeration:
+> - **Drill-down** — a read-only `drill_task` tool (subtask rollup, recent
+>   activity, comments, days-in-status via `pace_agent._drill_read`) executed
+>   inline over a bounded loop (`_PACE_TOOL_ROUNDS`=3, forced to text on the last
+>   round, mirroring `interpret_portfolio`), so PACE can explain *why* a task is
+>   stuck instead of only naming it.
+> - **On-demand batches** — a `batch_action` tool. One instruction ("nudge all of
+>   Ivy's overdue", "bump every overdue date on Acme", "reassign the unassigned
+>   ones to Marcus") deterministically expands a `selector` (overdue / stuck /
+>   unassigned / no-due-date / due-today / this-week) over the scope's
+>   already-built board data (`select_targets` — never a hallucinated task),
+>   stages each as a `PACE_ACTIONS` item **under the requester** (so each is
+>   permission-checked + confirm-line'd at stage), and presents them as ONE
+>   confirm reusing the Chase Plan executor (`pace_proposals.execute_plan_selection`
+>   / `parse_plan_reply` — reply *yes* for all, `yes 1,3` to pick). Items carry
+>   `min_role=None` (pre-authorized at stage) so `execute_plan_selection` skips the
+>   role re-check for on-demand batches while Chase Plan items keep it; on-demand
+>   batch pendings are **actor-bound** (only the requester confirms) on both Slack
+>   (`_pace_pending` batch entry) and web (`_store_web_batch` token). Capped at
+>   `_BATCH_MAX`=15 with an overflow note; unstageable targets become ⚠️ flag lines.
 
 > **Revision note (v1.4 — initiative: from coordinator to manager).** Owner target
 > (2026-07-12): PACE should cover **90–95% of the internal delivery-PM job**. The gap

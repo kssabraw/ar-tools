@@ -29,7 +29,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import pace_auth, pm_signals
+from services import pace_auth, pace_batch, pm_signals
 from services.pace_actions import PACE_ACTIONS
 from services.pace_auth import ActionContext
 
@@ -147,7 +147,12 @@ _PACE_SYSTEM = (
     "ACTIONS. When the teammate asks you to DO something operational, call the "
     "matching tool with your best-guess arguments — the system resolves the exact "
     "task/member and asks for a confirmation. Don't ask permission before calling "
-    "the tool; the confirm step IS the permission, so offer and act freely.\n\n"
+    "the tool; the confirm step IS the permission, so offer and act freely. To run "
+    "one action over a SET of tasks (\"nudge all her overdue\", \"bump every overdue "
+    "date\", \"reassign the unassigned ones to Marcus\"), call `batch_action` once "
+    "— never fire the same per-task tool many times. To explain WHY a task is stuck "
+    "or late, call the read-only `drill_task` first and answer from what it returns "
+    "(subtasks, activity, comments, days stuck).\n\n"
     "SCOPE. The board data you're given is either one client, one team member across "
     "ALL their clients, or the whole agency (every board). Answer within that scope "
     "and name clients and people explicitly.\n\n"
@@ -234,6 +239,7 @@ def build_member_context(member: dict, today: Optional[date] = None) -> dict:
 
     def _row(t: dict) -> dict:
         return {"id": t["id"], "name": t.get("name"),
+                "client_id": t.get("client_id"),
                 "client": names.get(t.get("client_id"), "unknown"),
                 "due_date": t.get("due_date"), "status_key": t.get("status_key")}
 
@@ -348,15 +354,24 @@ def _client_names(client_ids: list) -> dict:
 # ---------------------------------------------------------------------------
 # LLM interpret (PACE loop — reuses the shared Anthropic primitive)
 # ---------------------------------------------------------------------------
+# Bounded drill-down rounds — PACE may read a couple of stuck tasks in depth
+# before answering, then is forced to text.
+_PACE_TOOL_ROUNDS = 3
+
+
 async def interpret_pace(question: str, client: Optional[dict], context: dict,
                          history: Optional[list[dict]] = None, style: str = "slack",
                          on_event=None, scope: str = "client") -> tuple[str, object]:
-    """One PACE turn: ("action", {name, args}) when a PACE tool is called, else
-    ("text", reply). Reuses `_one_llm_call`; Sonnet (`pace_model`).
+    """One PACE turn over a bounded tool loop: returns ("action", {name, args})
+    for a single PACE_ACTIONS call, ("batch", {action, selector, …}) for a
+    `batch_action` call, else ("text", reply). The read-only `drill_task` tool is
+    executed inline and folded back so PACE can explain *why* a task is stuck.
+    Sonnet (`pace_model`).
 
     ``scope`` is ``"client"`` (``client`` set), ``"member"`` (``context['member']``
     across all boards), or ``"portfolio"`` (every board) — it frames the board
     data so the LLM enumerates within the right scope."""
+    import asyncio
     import json
 
     import anthropic
@@ -375,25 +390,113 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
     blocks.append("Board data (JSON):\n" + json.dumps(context, default=str, ensure_ascii=False))
     blocks.append(f"Latest message: {question}")
     api = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0, max_retries=2)
+    drill_client_id = client.get("id") if client else None
+    tools = build_pace_tools() + [pace_batch.DRILL_TOOL, pace_batch.BATCH_TOOL]
+    messages = [{"role": "user", "content": "\n\n".join(blocks)}]
 
     async def on_text(delta: str) -> None:
         await on_event({"type": "text", "text": delta})
 
-    call_kwargs = {"model": settings.pace_model, "max_tokens": settings.pace_max_tokens}
+    def _kw(final: bool) -> dict:
+        kw = {"model": settings.pace_model, "max_tokens": settings.pace_max_tokens}
+        if final:
+            kw["tool_choice"] = {"type": "none"}
+        return kw
+
+    resp = None
     try:
-        resp = await _one_llm_call(
-            api, _PACE_SYSTEM, [{"role": "user", "content": "\n\n".join(blocks)}],
-            build_pace_tools(), call_kwargs, on_text if on_event else None,
-        )
+        for round_no in range(_PACE_TOOL_ROUNDS):
+            final = round_no == _PACE_TOOL_ROUNDS - 1
+            resp = await _one_llm_call(
+                api, _PACE_SYSTEM, messages, [] if final else tools,
+                _kw(final), on_text if on_event else None,
+            )
+            for b in resp.content:
+                if getattr(b, "type", None) != "tool_use":
+                    continue
+                if b.name in PACE_ACTIONS:
+                    return ("action", {"name": b.name, "args": dict(b.input or {})})
+                if b.name == pace_batch.BATCH_TOOL["name"]:
+                    return ("batch", dict(b.input or {}))
+            drills = [b for b in resp.content
+                      if getattr(b, "type", None) == "tool_use" and b.name == pace_batch.DRILL_TOOL["name"]]
+            if not drills or final:
+                break
+            messages.append({"role": "assistant", "content": resp.content})
+            results = []
+            for b in drills:
+                name = dict(b.input or {}).get("task_name", "")
+                if on_event:
+                    await on_event({"type": "status", "label": f"Reading task: {name}".strip()})
+                text = await asyncio.to_thread(_drill_read, name, drill_client_id)
+                results.append({"type": "tool_result", "tool_use_id": b.id, "content": text})
+            messages.append({"role": "user", "content": results})
     except anthropic.APIStatusError as exc:
         if exc.status_code in (429, 529, 503):
             return ("text", "PACE is busy right now — try again in a moment.")
         raise
-    for b in resp.content:
-        if getattr(b, "type", None) == "tool_use" and b.name in PACE_ACTIONS:
-            return ("action", {"name": b.name, "args": dict(b.input or {})})
-    parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
+
+    parts = [b.text for b in (resp.content if resp else []) if getattr(b, "type", None) == "text"]
     return ("text", "\n".join(parts).strip() or "I couldn't work that out — try rephrasing.")
+
+
+def _drill_read(task_name: str, client_id_hint: Optional[str] = None) -> str:
+    """Impure single-task read for the `drill_task` tool — resolve the task
+    (within a client hint when in client scope, else across all boards) and
+    format its detail. Best-effort; returns a clarification string on miss."""
+    from services import task_collab, task_service
+    from services.slack_assistant.actions import match_open_tasks
+
+    q = (get_supabase().table("tasks").select("id, name, client_id")
+         .eq("completed", False).is_("deleted_at", "null").is_("parent_task_id", "null")
+         .not_.is_("client_id", "null"))
+    if client_id_hint:
+        q = q.eq("client_id", client_id_hint)
+    matches = match_open_tasks(q.execute().data or [], task_name or "")
+    if not matches:
+        return f"No open task matches “{task_name}”."
+    if len({m.get("client_id") for m in matches}) > 1:
+        return f"“{task_name}” matches tasks on more than one client — name the client."
+    detail = task_service.get_task_detail(matches[0]["id"])
+    if not detail:
+        return f"“{task_name}” not found."
+    days = pm_signals.days_in_status(detail, detail.get("activity") or [], date.today())
+    try:
+        comments = task_collab.list_comments(matches[0]["id"])
+    except Exception:
+        comments = []
+    return pace_batch.format_drill(detail, comments, days)
+
+
+# How many tasks a single on-demand batch stages (the rest are held).
+_BATCH_MAX = 15
+
+
+async def _stage_batch(action: str, targets: list[dict], extra_args: dict,
+                       requester: ActionContext) -> tuple[list[dict], list[str]]:
+    """Stage each target as a `PACE_ACTIONS` item under the requester (so each is
+    permission-checked and confirm-line'd at stage). Returns (items, flags) —
+    items reuse the Chase Plan item shape so `execute_plan_selection` runs them
+    verbatim; ``min_role`` is None (already authorized here) so the confirmer
+    check is skipped. Unstageable targets become ⚠️ flag lines."""
+    items, flags = [], []
+    for t in targets:
+        args = {"task_name": t["task_name"], **{k: v for k, v in extra_args.items() if v}}
+        try:
+            outcome, staged = await _stage(action, requester, t["client_id"], args)
+        except Exception as exc:
+            logger.warning("pace_batch_stage_failed", extra={"action": action, "error": str(exc)})
+            flags.append(f"“{t['task_name']}” — couldn't stage")
+            continue
+        if outcome == "reply":
+            flags.append(f"“{t['task_name']}” — {staged}")
+            continue
+        confirm = staged.pop("_confirm", None)
+        staged.pop("_requester", None)
+        items.append({"index": len(items) + 1, "action": action, "client_id": t["client_id"],
+                      "client_name": t.get("client_name") or "client", "args": staged,
+                      "reason": confirm or PACE_ACTIONS[action]["label"], "min_role": None})
+    return items, flags
 
 
 async def _run_pace_action(name: str, client_id: str, args: dict, context: ActionContext) -> str:
@@ -447,7 +550,9 @@ async def _answer(question: str, history: Optional[list[dict]], sticky_client_id
     scope). Returns:
         {"reply": str|None, "client_id"?, "client_name"?,
          "pending": {name, client_id, client_name, args, requester, confirm}?}
-    Each entrypoint formats the confirmation + owns its pending store."""
+    Each entrypoint formats the confirmation + owns its pending store. A
+    `batch_action` returns a ``{"batch": {items, flags, overflow, requester}}``
+    descriptor instead of ``pending`` — one confirm over many staged items."""
     scope, subject, ctx = await runner(_resolve_scope, question, sticky_client_id)
     client = subject if scope == "client" else None
     base = {"client_id": client["id"], "client_name": client.get("name")} if client else {}
@@ -459,6 +564,8 @@ async def _answer(question: str, history: Optional[list[dict]], sticky_client_id
         return {**base, "reply": _fallback_text(scope)}
     if kind == "text":
         return {**base, "reply": payload}
+    if kind == "batch":
+        return await _build_batch(payload, scope, subject, ctx, actor, base)
 
     # An action. Resolve the target client — given in client scope, else from the
     # task name across all boards.
@@ -482,6 +589,32 @@ async def _answer(question: str, history: Optional[list[dict]], sticky_client_id
             "pending": {"name": name, "client_id": action_client["id"],
                         "client_name": action_client.get("name"), "args": staged,
                         "requester": requester, "confirm": confirm}}
+
+
+async def _build_batch(payload: dict, scope: str, subject: Optional[dict], ctx: dict,
+                       actor: ActionContext, base: dict) -> dict:
+    """Expand a `batch_action` call into staged items over the scope's board data.
+    Returns a ``{"batch": {...}}`` descriptor the entrypoint turns into one
+    confirm, or a plain ``reply`` when nothing was targetable."""
+    action = payload.get("action")
+    selector = payload.get("selector")
+    if action not in pace_batch.BATCH_ACTIONS or not selector:
+        return {**base, "reply": "I can batch nudge / reassign / set-due / unblock / triage over "
+                                 "overdue / stuck / unassigned / no-due-date tasks — tell me which."}
+    targets, overflow = pace_batch.select_targets(scope, subject, ctx, selector, cap=_BATCH_MAX)
+    if not targets:
+        return {**base, "reply": f"No {selector.replace('_', ' ')} tasks in this scope to act on."}
+    extra = {}
+    if action == "reassign_task":
+        extra = {"assignee": payload.get("assignee") or ""}
+    elif action == "set_task_due":
+        extra = {"due_date": payload.get("due_date") or ""}
+    items, flags = await _stage_batch(action, targets, extra, actor)
+    if not items:
+        note = (" — " + "; ".join(flags)) if flags else ""
+        return {**base, "reply": f"Nothing I could stage for that batch{note}."}
+    return {**base, "batch": {"items": items, "flags": flags, "overflow": overflow,
+                              "requester": actor.profile_id}}
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +649,11 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
         selection = pace_proposals.parse_plan_reply(question, len(pending["items"]))
         if selection is not None:
             _pace_pending.pop(pend_key, None)
+            # On-demand batches are actor-bound (a Chase Plan has no requester and
+            # authorizes each item by role at confirm time instead).
+            if pending.get("requester") and not pace_auth.confirm_actor_ok(pending["requester"], context):
+                await post_message(channel, "Only the person who requested this can confirm it.", thread_ts)
+                return True
             reply = await pace_proposals.execute_plan_selection(pending["items"], selection, context)
             await post_message(channel, reply, thread_ts)
             return True
@@ -543,6 +681,15 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
             await post_message(channel, personal_brief_text(context), thread_ts)
             return True
         result = await _answer(question, None, None, context, "slack", None, _run_direct)
+        batch = result.get("batch")
+        if batch:
+            _pace_pending[pend_key] = {"batch": True, "items": batch["items"],
+                                       "requester": batch["requester"], "on_demand": True}
+            await post_message(
+                channel, pace_batch.render_batch(batch["items"], batch["flags"], batch.get("overflow", 0)),
+                thread_ts,
+            )
+            return True
         pending = result.get("pending")
         if pending:
             _pace_pending[pend_key] = {"action": pending["name"], "client_id": pending["client_id"],
@@ -608,6 +755,21 @@ def _store_web_pending(action: str, client: dict, args: dict, requester: Optiona
     return token
 
 
+def _store_web_batch(items: list[dict], requester: Optional[str]) -> str:
+    """Stash an on-demand batch under a web token (same store/eviction as single
+    actions, tagged ``batch`` so the confirm path runs it selectively)."""
+    import uuid
+    now = time.time()
+    for tok, e in list(_pace_web_pending.items()):
+        if now - e["created"] > _WEB_PENDING_TTL:
+            _pace_web_pending.pop(tok, None)
+    while len(_pace_web_pending) >= _WEB_PENDING_MAX:
+        _pace_web_pending.pop(min(_pace_web_pending, key=lambda t: _pace_web_pending[t]["created"]), None)
+    token = uuid.uuid4().hex
+    _pace_web_pending[token] = {"batch": True, "items": items, "requester": requester, "created": now}
+    return token
+
+
 async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: Optional[str],
                            pending_token: Optional[str], context: ActionContext,
                            on_event=None, force: bool = False) -> Optional[dict]:
@@ -629,10 +791,20 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
 
     from services.slack_assistant import is_affirmative
 
-    # 1) Confirm a staged PACE web action (its own token store).
+    # 1) Confirm a staged PACE web action or batch (its own token store).
     if pending_token and pending_token in _pace_web_pending:
         entry = _pace_web_pending.pop(pending_token)
-        if is_affirmative(message):
+        if entry.get("batch"):
+            from services import pace_proposals
+
+            selection = pace_proposals.parse_plan_reply(message, len(entry["items"]))
+            if selection is not None:
+                if not pace_auth.confirm_actor_ok(entry.get("requester"), context):
+                    return {"reply": "Only the person who requested this can confirm it."}
+                reply = await pace_proposals.execute_plan_selection(entry["items"], selection, context)
+                return {"reply": reply}
+            # Not an approval — the batch is superseded; fall through.
+        elif is_affirmative(message):
             if not pace_auth.confirm_actor_ok(entry.get("requester"), context):
                 return {"reply": "Only the person who requested this can confirm it."}
             try:
@@ -649,6 +821,12 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
         if is_personal_brief(message):
             return {"reply": await run_in_threadpool(personal_brief_text, context)}
         result = await _answer(message, history, sticky_client_id, context, "web", on_event, run_in_threadpool)
+        batch = result.get("batch")
+        if batch:
+            token = _store_web_batch(batch["items"], batch["requester"])
+            return {"reply": pace_batch.render_batch(batch["items"], batch["flags"],
+                                                     batch.get("overflow", 0), bold="**"),
+                    "pending_token": token}
         pending = result.get("pending")
         if pending:
             token = _store_web_pending(

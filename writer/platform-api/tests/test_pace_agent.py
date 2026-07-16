@@ -368,3 +368,119 @@ async def test_answer_taskless_action_needs_client(monkeypatch):
     monkeypatch.setattr(pace_agent, "build_portfolio_context", lambda today=None: {"clients": []})
     out = await pace_agent._answer("generate the month", None, None, _staff(), "web", None, pace_agent._run_direct)
     assert "Name the client" in out["reply"]
+
+
+# ---------------------------------------------------------------------------
+# Structural autonomy (v1.5) — batch staging + drill-down
+# ---------------------------------------------------------------------------
+async def test_stage_batch_stages_and_flags(monkeypatch):
+    async def _fake_stage(action, actor, client_id, args):
+        if args["task_name"] == "bad":
+            return "reply", "unassigned — nobody to nudge"
+        return "confirm", {"task_id": "x", "_confirm": f"nudge about “{args['task_name']}”",
+                           "_requester": actor.profile_id}
+
+    monkeypatch.setattr(pace_agent, "_stage", _fake_stage)
+    targets = [{"client_id": "c1", "client_name": "Acme", "task_name": "GBP audit"},
+               {"client_id": "c1", "client_name": "Acme", "task_name": "bad"}]
+    items, flags = await pace_agent._stage_batch("nudge_assignee", targets, {}, _staff())
+    assert len(items) == 1 and items[0]["index"] == 1 and items[0]["client_id"] == "c1"
+    assert items[0]["min_role"] is None                     # pre-authorized at stage
+    assert items[0]["reason"].startswith("nudge about")
+    assert flags == ["“bad” — unassigned — nobody to nudge"]
+
+
+async def test_build_batch_success(monkeypatch):
+    monkeypatch.setattr(pace_agent.pace_batch, "select_targets",
+                        lambda *a, **k: ([{"client_id": "c1", "client_name": "Acme", "task_name": "GBP"}], 2))
+
+    async def _fake_stage_batch(action, targets, extra, actor):
+        assert extra == {"assignee": "Marcus"}             # reassign threads the assignee
+        return ([{"index": 1, "action": action, "client_id": "c1", "client_name": "Acme",
+                  "args": {}, "reason": "reassign", "min_role": None}], [])
+
+    monkeypatch.setattr(pace_agent, "_stage_batch", _fake_stage_batch)
+    out = await pace_agent._build_batch(
+        {"action": "reassign_task", "selector": "overdue", "assignee": "Marcus"},
+        "client", {"id": "c1", "name": "Acme"}, {}, _staff(), {"client_id": "c1", "client_name": "Acme"})
+    assert out["batch"]["requester"] == "p_staff" and out["batch"]["overflow"] == 2
+    assert out["batch"]["items"][0]["reason"] == "reassign"
+
+
+async def test_build_batch_rejects_unknown_action():
+    out = await pace_agent._build_batch({"action": "delete_all", "selector": "overdue"},
+                                        "client", {"id": "c1"}, {}, _staff(), {})
+    assert "batch nudge" in out["reply"]
+
+
+async def test_build_batch_no_targets(monkeypatch):
+    monkeypatch.setattr(pace_agent.pace_batch, "select_targets", lambda *a, **k: ([], 0))
+    out = await pace_agent._build_batch({"action": "nudge_assignee", "selector": "overdue"},
+                                        "client", {"id": "c1"}, {}, _staff(), {})
+    assert "No overdue tasks" in out["reply"]
+
+
+async def test_answer_batch_kind_routes_to_build_batch(monkeypatch):
+    async def _fake_interpret(*a, **k):
+        return ("batch", {"action": "nudge_assignee", "selector": "overdue"})
+
+    async def _fake_build(payload, scope, subject, ctx, actor, base):
+        return {**base, "batch": {"items": [{"index": 1}], "flags": [], "overflow": 0,
+                                  "requester": actor.profile_id}}
+
+    monkeypatch.setattr(pace_agent, "interpret_pace", _fake_interpret)
+    monkeypatch.setattr(pace_agent, "_resolve_scope",
+                        lambda q, s: ("client", {"id": "c1", "name": "Acme"}, {"overdue": [{"name": "GBP"}]}))
+    monkeypatch.setattr(pace_agent, "_build_batch", _fake_build)
+    out = await pace_agent._answer("nudge all overdue", None, None, _staff(), "web", None, pace_agent._run_direct)
+    assert out["batch"]["requester"] == "p_staff"
+
+
+async def test_web_batch_confirm_runs_selection(monkeypatch):
+    pace_agent._pace_web_pending.clear()
+    items = [{"index": 1, "action": "nudge_assignee", "client_id": "c1", "client_name": "Acme",
+              "args": {}, "reason": "nudge", "min_role": None}]
+    token = pace_agent._store_web_batch(items, requester="p_staff")
+    called = {}
+
+    async def _fake_exec(items_, selection, ctx):
+        called.update(selection=selection, actor=ctx.profile_id)
+        return "✅ nudged"
+
+    monkeypatch.setattr("services.pace_proposals.execute_plan_selection", _fake_exec)
+    out = await pace_agent.maybe_handle_web("yes", [], None, token, _staff())
+    assert out["reply"] == "✅ nudged" and called["selection"] == [1] and called["actor"] == "p_staff"
+    pace_agent._pace_web_pending.clear()
+
+
+async def test_web_batch_confirm_actor_binding_refuses_other(monkeypatch):
+    pace_agent._pace_web_pending.clear()
+    items = [{"index": 1, "action": "nudge_assignee", "client_id": "c1", "client_name": "Acme",
+              "args": {}, "reason": "n", "min_role": None}]
+    token = pace_agent._store_web_batch(items, requester="p_staff")
+    ran = {"n": 0}
+
+    async def _fake_exec(*a):
+        ran["n"] += 1
+        return "x"
+
+    monkeypatch.setattr("services.pace_proposals.execute_plan_selection", _fake_exec)
+    out = await pace_agent.maybe_handle_web(
+        "yes", [], None, token, ActionContext(profile_id="p_other", role="staff", source="web"))
+    assert "Only the person who requested" in out["reply"] and ran["n"] == 0
+    pace_agent._pace_web_pending.clear()
+
+
+def test_drill_read_formats_detail(monkeypatch):
+    _fake_supabase(monkeypatch, {"tasks": [{"id": "t1", "name": "GBP audit", "client_id": "c1"}]})
+    monkeypatch.setattr("services.task_service.get_task_detail",
+                        lambda tid: {"name": "GBP audit", "status_key": "in_progress",
+                                     "activity": [{"created_at": "2026-07-10", "kind": "created"}], "subtasks": []})
+    monkeypatch.setattr("services.task_collab.list_comments", lambda tid: [])
+    out = pace_agent._drill_read("GBP", "c1")
+    assert "Task: GBP audit" in out and "Status: in_progress" in out
+
+
+def test_drill_read_no_match(monkeypatch):
+    _fake_supabase(monkeypatch, {"tasks": [{"id": "t1", "name": "GBP audit", "client_id": "c1"}]})
+    assert "No open task matches" in pace_agent._drill_read("nonexistent", "c1")
