@@ -956,10 +956,13 @@ class Settings(BaseSettings):
     # is admin-only (loosen to "staff" to let leads generate).
     pace_perm_read_board_min_role: str = "team_member"
     pace_perm_generate_month_min_role: str = "admin"
-    # PACE persona (Phase 3) — cheap model, small budget (delivery Q&A + action
-    # arg-filling, not strategy prose).
-    pace_model: str = "claude-haiku-4-5-20251001"
-    pace_max_tokens: int = 1200
+    # PACE persona (Phase 3) — a real conversational PM: Sonnet (owner ruling
+    # 2026-07-16) so it enumerates tasks + reasons about the board like a PM,
+    # not a cheap model that collapses lists into counts. Larger budget so it can
+    # actually list the overdue/stuck rows across a client, a member, or the
+    # whole agency rather than summarizing them.
+    pace_model: str = "claude-sonnet-4-6"
+    pace_max_tokens: int = 2400
     # PACE v1.3 Phase 5 — role/skill placement (§4.6). Whether producer tasks
     # (rank_drop/maps_alert/action_plan) are auto-placed on creation (default off
     # — approved proposals always are). When the skilled+eligible pool is over

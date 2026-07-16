@@ -6,7 +6,37 @@ scope, PR #345 — dormant behind `pace_initiative_enabled`; §4.13 additionally
 behind `pace_daily_brief_push` + the Slack `im:write` scope) · **Sibling to:** SerMaStr (`seo-strategist-agent-plan-v1_0.md`) · **Rides:**
 the native task manager (`in-app-task-manager-prd-v1_0.md`) + the SerMaStr assistant
 (`services/slack_assistant/`) · **Authored:** 2026-07-11 · **Revised:** 2026-07-11
-(v1.1 review #1, v1.2 review #2), 2026-07-12 (v1.3 full-PM scope; v1.4 initiative)
+(v1.1 review #1, v1.2 review #2), 2026-07-12 (v1.3 full-PM scope; v1.4 initiative),
+2026-07-16 (v1.5 conversational fidelity)
+
+> **Revision note (v1.5 — conversational fidelity: enumerate, don't count).** Owner
+> report (2026-07-16): asking "what's overdue?" or "what does <member> have overdue?"
+> returned a high-level total ("there are 10 tasks overdue") instead of the actual
+> list — PACE read like a dashboard, not a PM. Three root causes, all fixed:
+> 1. **The no-client path was counts-only *by construction*.** A question with no
+>    named client short-circuited to `_portfolio_pace_text` — a deterministic template
+>    that only sums and says "name a client and I'll break it down"; it never reached
+>    the LLM and structurally could not list tasks. Now no-client questions build the
+>    **whole-agency board data** (`build_portfolio_context` — the full per-board
+>    overdue/stale/unassigned rows with client names, per-bucket capped) and hand it to
+>    the LLM to enumerate. `_portfolio_pace_text` is kept only as the error fallback.
+> 2. **No per-staff-member scope existed.** "What does Ivy have overdue?" is a
+>    person-scoped, cross-client question; the only person path (`personal_brief_text`)
+>    matched just *"what should **I** work on"*. Added `resolve_member` (whole-word
+>    roster-name match) + `build_member_context` (a member's open tasks across ALL
+>    clients, bucketed by urgency with client names) and a **member scope** in the
+>    shared router. Actions raised in member/portfolio scope resolve their target
+>    client from the task (`_resolve_task_client`) before staging.
+> 3. **Prompt + model biased to summarize.** The persona prompt now **mandates
+>    enumeration** (list name · client · assignee · due/days, grouped by urgency; a bare
+>    count only when there are genuinely no rows) and the **PM-autonomy** behaviour
+>    (after listing, name the specific lever per item and offer to pull it). The model
+>    moved from Haiku to **Sonnet** (`pace_model = claude-sonnet-4-6`, `pace_max_tokens`
+>    2400) so it reliably reasons over the board instead of collapsing lists.
+> Both entrypoints (Slack + web) now share one turn-resolution core (`_answer` →
+> `_resolve_scope` → `interpret_pace` → stage), so scope routing + actor-bound
+> confirmation stay identical across surfaces. No new infra, no schema change; all
+> gated by the existing `pace_enabled`.
 
 > **Revision note (v1.4 — initiative: from coordinator to manager).** Owner target
 > (2026-07-12): PACE should cover **90–95% of the internal delivery-PM job**. The gap

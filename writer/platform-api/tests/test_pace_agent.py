@@ -9,6 +9,8 @@ suite; these tests pin the routing + gating + actor-binding around it.
 
 from __future__ import annotations
 
+from datetime import date
+
 from services import pace_agent
 from services.pace_agent import PACE_ACTIONS
 from services.pace_auth import ActionContext
@@ -186,3 +188,183 @@ def test_store_web_pending_evicts(monkeypatch):
     assert t in pace_agent._pace_web_pending
     assert pace_agent._pace_web_pending[t]["requester"] == "p1"
     pace_agent._pace_web_pending.clear()
+
+
+# ---------------------------------------------------------------------------
+# Fake Supabase — routes reads by table name to preset rows. The server-side
+# filters are ignored (Python-side match_open_tasks / bucket_by_due still run on
+# the returned rows), so the tests exercise the real routing logic.
+# ---------------------------------------------------------------------------
+class _FakeQuery:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def __getattr__(self, _name):
+        # select/eq/is_/not_/in_/limit/order… all chain back to self.
+        def _chain(*a, **k):
+            return self
+        return _chain
+
+    @property
+    def not_(self):
+        return self
+
+    def execute(self):
+        return type("R", (), {"data": self._rows})()
+
+
+class _FakeSB:
+    def __init__(self, by_table):
+        self._by_table = by_table
+
+    def table(self, name):
+        return _FakeQuery(self._by_table.get(name, []))
+
+
+def _fake_supabase(monkeypatch, by_table):
+    monkeypatch.setattr(pace_agent, "get_supabase", lambda: _FakeSB(by_table))
+
+
+# ---------------------------------------------------------------------------
+# resolve_member — the per-staff-member scope gate (pure)
+# ---------------------------------------------------------------------------
+def test_resolve_member_full_and_first_name():
+    members = [{"gid": "g1", "name": "Ivy Chen"}, {"gid": "g2", "name": "Marcus Bell"}]
+    assert pace_agent.resolve_member("what does Ivy have overdue?", members)["gid"] == "g1"
+    assert pace_agent.resolve_member("is Marcus Bell behind?", members)["gid"] == "g2"
+    # No roster name present → None (→ falls to portfolio/client scope).
+    assert pace_agent.resolve_member("what's overdue across everything?", members) is None
+    # Substrings of other words don't false-match (whole-word only).
+    assert pace_agent.resolve_member("ivory tower tasks", members) is None
+
+
+def test_resolve_member_longest_match_wins():
+    members = [{"gid": "g1", "name": "Jo"}, {"gid": "g2", "name": "Joanna Reed"}]
+    # "Jo" is < 3 chars so it's skipped; "Joanna" wins on the full string.
+    assert pace_agent.resolve_member("what does Joanna have?", members)["gid"] == "g2"
+
+
+# ---------------------------------------------------------------------------
+# build_member_context — a member's open tasks across all clients, bucketed
+# ---------------------------------------------------------------------------
+def test_build_member_context_buckets_and_names(monkeypatch):
+    tasks = [
+        {"id": "t1", "client_id": "c1", "name": "GBP audit", "due_date": "2020-01-01", "status_key": "in_progress"},
+        {"id": "t2", "client_id": "c2", "name": "Blog draft", "due_date": "2999-01-01", "status_key": "not_started"},
+        {"id": "t3", "client_id": "c1", "name": "No due task", "due_date": None, "status_key": "not_started"},
+    ]
+    _fake_supabase(monkeypatch, {
+        "tasks": tasks,
+        "clients": [{"id": "c1", "name": "Acme"}, {"id": "c2", "name": "Globex"}],
+    })
+    ctx = pace_agent.build_member_context({"gid": "g1", "name": "Ivy"}, today=date(2024, 6, 1))
+    assert ctx["member"] == "Ivy" and ctx["open_count"] == 3
+    assert [r["name"] for r in ctx["overdue"]] == ["GBP audit"]
+    assert ctx["overdue"][0]["client"] == "Acme"           # client name attached
+    assert [r["name"] for r in ctx["later"]] == ["Blog draft"]
+    assert [r["name"] for r in ctx["no_due_date"]] == ["No due task"]
+
+
+# ---------------------------------------------------------------------------
+# build_portfolio_context — full lists (not counts) with client names + caps
+# ---------------------------------------------------------------------------
+def test_build_portfolio_context_attaches_names_and_caps(monkeypatch):
+    big = [{"id": f"t{i}", "name": f"task {i}"} for i in range(pace_agent._PORTFOLIO_ROW_CAP + 5)]
+    monkeypatch.setattr(pace_agent.pm_signals, "build_board_digest",
+                        lambda cid, today=None: {"clients": [{"client_id": "c1", "overdue": big, "stale": []}]})
+    _fake_supabase(monkeypatch, {"clients": [{"id": "c1", "name": "Acme"}]})
+    ctx = pace_agent.build_portfolio_context()
+    c = ctx["clients"][0]
+    assert c["client_name"] == "Acme"
+    # Capped to the row cap + a truncation marker (so the LLM says "and N more").
+    assert len(c["overdue"]) == pace_agent._PORTFOLIO_ROW_CAP + 1
+    assert c["overdue"][-1] == {"_truncated": 5}
+
+
+# ---------------------------------------------------------------------------
+# _resolve_task_client — cross-client action target resolution
+# ---------------------------------------------------------------------------
+def test_resolve_task_client_unique(monkeypatch):
+    _fake_supabase(monkeypatch, {
+        "tasks": [{"id": "t1", "name": "GBP audit", "client_id": "c1"}],
+        "clients": [{"id": "c1", "name": "Acme"}],
+    })
+    client, reply = pace_agent._resolve_task_client("GBP audit")
+    assert reply is None and client["id"] == "c1" and client["name"] == "Acme"
+
+
+def test_resolve_task_client_spans_clients(monkeypatch):
+    _fake_supabase(monkeypatch, {
+        "tasks": [{"id": "t1", "name": "GBP audit", "client_id": "c1"},
+                  {"id": "t2", "name": "GBP audit", "client_id": "c2"}],
+        "clients": [{"id": "c1", "name": "Acme"}, {"id": "c2", "name": "Globex"}],
+    })
+    client, reply = pace_agent._resolve_task_client("GBP audit")
+    assert client is None and "more than one client" in reply
+
+
+def test_resolve_task_client_no_match(monkeypatch):
+    _fake_supabase(monkeypatch, {"tasks": [{"id": "t1", "name": "GBP audit", "client_id": "c1"}]})
+    client, reply = pace_agent._resolve_task_client("nonexistent")
+    assert client is None and "No open task" in reply
+
+
+# ---------------------------------------------------------------------------
+# _answer — scope routing + enumeration feed (the fix for "just a count")
+# ---------------------------------------------------------------------------
+async def test_answer_member_scope_feeds_member_context(monkeypatch):
+    """A named member routes to member scope and the member's task list — not a
+    client digest, not a count — is what interpret_pace is handed."""
+    captured = {}
+
+    async def _fake_interpret(question, client, ctx, history, style, on_event, scope="client"):
+        captured.update(scope=scope, ctx=ctx, client=client)
+        return ("text", "Ivy has 1 overdue: GBP audit (Acme).")
+
+    monkeypatch.setattr(pace_agent, "interpret_pace", _fake_interpret)
+    monkeypatch.setattr(pace_agent, "_all_clients", lambda: [{"id": "c9", "name": "Zeta"}])
+    monkeypatch.setattr(pace_agent, "_active_members", lambda: [{"gid": "g1", "name": "Ivy"}])
+    monkeypatch.setattr(pace_agent, "build_member_context",
+                        lambda m, today=None: {"member": "Ivy", "overdue": [{"name": "GBP audit"}]})
+    out = await pace_agent._answer("what does Ivy have overdue?", None, None, _staff(), "web", None,
+                                   pace_agent._run_direct)
+    assert captured["scope"] == "member"
+    assert captured["client"] is None
+    assert captured["ctx"]["overdue"] == [{"name": "GBP audit"}]   # real rows, not a total
+    assert out["reply"].startswith("Ivy has 1 overdue")
+
+
+async def test_answer_portfolio_action_resolves_task_client(monkeypatch):
+    """In portfolio scope an action (reassign) names a task; PACE resolves which
+    client's board it lives on before staging."""
+    async def _fake_interpret(question, client, ctx, history, style, on_event, scope="client"):
+        return ("action", {"name": "reassign_task", "args": {"task_name": "GBP audit", "assignee": "Marcus"}})
+
+    async def _fake_stage(name, actor, client_id, args):
+        assert client_id == "c1"        # resolved from the task, not the (absent) client scope
+        return "confirm", {"task_id": "t1", "_confirm": "reassign it", "_requester": actor.profile_id}
+
+    monkeypatch.setattr(pace_agent, "interpret_pace", _fake_interpret)
+    monkeypatch.setattr(pace_agent, "_stage", _fake_stage)
+    monkeypatch.setattr(pace_agent, "_all_clients", lambda: [])
+    monkeypatch.setattr(pace_agent, "_active_members", lambda: [])
+    monkeypatch.setattr(pace_agent, "build_portfolio_context", lambda today=None: {"clients": []})
+    monkeypatch.setattr(pace_agent, "_resolve_task_client",
+                        lambda name: ({"id": "c1", "name": "Acme"}, None))
+    out = await pace_agent._answer("reassign the GBP audit to Marcus", None, None, _staff(), "web", None,
+                                   pace_agent._run_direct)
+    assert out["pending"]["name"] == "reassign_task"
+    assert out["pending"]["client_id"] == "c1" and out["pending"]["confirm"] == "reassign it"
+    assert out["pending"]["requester"] == "p_staff"
+
+
+async def test_answer_taskless_action_needs_client(monkeypatch):
+    async def _fake_interpret(question, client, ctx, history, style, on_event, scope="client"):
+        return ("action", {"name": "generate_client_month", "args": {}})
+
+    monkeypatch.setattr(pace_agent, "interpret_pace", _fake_interpret)
+    monkeypatch.setattr(pace_agent, "_all_clients", lambda: [])
+    monkeypatch.setattr(pace_agent, "_active_members", lambda: [])
+    monkeypatch.setattr(pace_agent, "build_portfolio_context", lambda today=None: {"clients": []})
+    out = await pace_agent._answer("generate the month", None, None, _staff(), "web", None, pace_agent._run_direct)
+    assert "Name the client" in out["reply"]
