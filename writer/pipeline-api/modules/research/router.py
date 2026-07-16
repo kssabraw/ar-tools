@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, HTTPException
 
+from config import settings
 from models.research import ResearchRequest, ResearchResponse
 
 from .pipeline import ResearchError, run_research
@@ -22,7 +24,23 @@ async def generate_research(request: ResearchRequest) -> ResearchResponse:
         extra={"run_id": request.run_id, "keyword": request.keyword},
     )
     try:
-        result = await run_research(request)
+        result = await asyncio.wait_for(
+            run_research(request), timeout=settings.research_deadline_seconds
+        )
+    except asyncio.TimeoutError:
+        # The fan-out blew the wall-clock budget. Fail the request ourselves
+        # (cancelling the in-flight fetches/LLM calls) rather than letting it run
+        # on until the caller's transport timeout fires. 504 so platform-api
+        # treats it as a retryable transient (its retry-once-on-5xx path).
+        logger.warning(
+            "research.timeout",
+            extra={
+                "run_id": request.run_id,
+                "keyword": request.keyword,
+                "deadline_s": settings.research_deadline_seconds,
+            },
+        )
+        raise HTTPException(status_code=504, detail="research_timeout")
     except ResearchError as exc:
         logger.warning("research.failed: %s - %s", exc.code, exc.message)
         raise HTTPException(status_code=422, detail=exc.message)
