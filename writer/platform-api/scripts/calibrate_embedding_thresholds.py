@@ -125,10 +125,18 @@ def _load_briefs(limit: int) -> list[dict]:
 
 
 def _headings(p: dict) -> list[str]:
+    """Content headings (H2/H3) — the ones the relevance/restatement gates score.
+    `level` is a string like "H2"/"H3" (occasionally an int); H1 is excluded."""
     hs = p.get("heading_structure") or []
-    return [(h.get("text") or "").strip() for h in hs
-            if isinstance(h, dict) and (h.get("text") or "").strip()
-            and (h.get("level") in (2, 3, "h2", "h3", None))]
+    out = []
+    for h in hs:
+        if not isinstance(h, dict):
+            continue
+        text = (h.get("text") or "").strip()
+        lvl = str(h.get("level") or "").lower().lstrip("h")  # "H2"->"2", 2->"2", ""->""
+        if text and lvl in ("2", "3", ""):
+            out.append(text)
+    return out
 
 
 def _discarded(p: dict, reasons: set[str]) -> list[str]:
