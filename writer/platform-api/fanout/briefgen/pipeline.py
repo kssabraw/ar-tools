@@ -97,6 +97,18 @@ def build_brief_deps(location_code: int) -> BriefDeps:
     )
 
 
+def _coverage_texts(heading_structure, faqs) -> tuple[list[str], list[str]]:
+    """(all heading + FAQ texts, headings sourced from cluster keywords) for the
+    coverage audit. `heading_structure`/`faqs` are Pydantic models (HeadingItem /
+    FAQ), so this uses attribute access — dict access (`h["text"]` / `h.get(...)`)
+    raised `AttributeError: 'HeadingItem' object has no attribute 'get'` and
+    aborted brief generation for every cluster with supporting keywords."""
+    heading_texts = [h.text for h in heading_structure if h.text]
+    heading_texts += [f.question for f in faqs if f.question]
+    used_texts = [h.text for h in heading_structure if h.source == "cluster_keyword"]
+    return heading_texts, used_texts
+
+
 def generate_brief(
     keyword: str, *, location_code: int, deps: BriefDeps, intent_override: str | None = None,
     supporting_keywords: list[str] | None = None,
@@ -219,11 +231,7 @@ def generate_brief(
 
         from .coverage import audit
 
-        heading_texts = [h["text"] for h in output.heading_structure if h.get("text")]
-        heading_texts += [f.get("question", "") for f in output.faqs if f.get("question")]
-        used_texts = [
-            h["text"] for h in output.heading_structure if h.get("source") == "cluster_keyword"
-        ]
+        heading_texts, used_texts = _coverage_texts(output.heading_structure, output.faqs)
         output.metadata["cluster_keyword_coverage"] = audit(
             supporting_keywords, heading_texts=heading_texts, used_texts=used_texts,
             embed_fn=deps.embed_3large, threshold=get_settings().brief_coverage_threshold,
