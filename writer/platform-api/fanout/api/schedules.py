@@ -409,6 +409,56 @@ def reinstate_schedule_run(
     return {"status": "queued", "run_id": run_id}
 
 
+def _reactivate_if_drained(schedule_id: str | None) -> None:
+    """A schedule that had drained to `complete` (its last runs failed) must go
+    active again so the worker picks up a retried run. Paused/cancelled/active are
+    left as-is (a retry shouldn't silently un-pause or resurrect a cancellation)."""
+    if not schedule_id:
+        return
+    sched = schedule_store.get_schedule(schedule_id)
+    if sched and sched["status"] == "complete":
+        schedule_store.set_schedule_status(schedule_id, "active")
+
+
+@router.post("/sessions/{session_id}/schedule-runs/{run_id}/retry")
+def retry_schedule_run(
+    session_id: str, run_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Manually requeue a single dead-lettered article (failed -> queued, due now,
+    attempt budget reset). Only a `failed` run can be retried; the worker picks it
+    up on its next tick (the parent schedule is reactivated if it had drained)."""
+    _require_session(user, session_id)
+    run = schedule_store.get_run(run_id)
+    if not run or run["session_id"] != session_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if run["status"] != "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This article is {run['status']} — only a failed one can be retried.",
+        )
+    if not schedule_store.retry_failed_run(run_id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Couldn't retry this article — its state changed.",
+        )
+    _reactivate_if_drained(run.get("content_schedule_id"))
+    return {"status": "queued", "run_id": run_id}
+
+
+@router.post("/sessions/{session_id}/schedules/{schedule_id}/retry-failed")
+def retry_failed_schedule_runs(
+    session_id: str, schedule_id: str, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Requeue every dead-lettered article in a schedule at once (failed -> queued,
+    due now, attempts reset). Reactivates the schedule if it had drained. Returns
+    how many were retried."""
+    _require_schedule(user, session_id, schedule_id)
+    retried = schedule_store.retry_failed_runs(schedule_id)
+    if retried:
+        _reactivate_if_drained(schedule_id)
+    return {"status": "queued", "retried": retried}
+
+
 def _require_schedule(user: AuthedUser, session_id: str, schedule_id: str) -> dict:
     _require_session(user, session_id)
     sched = schedule_store.get_schedule(schedule_id)
