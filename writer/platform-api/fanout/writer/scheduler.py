@@ -178,21 +178,25 @@ def _process_run(row: dict) -> None:
         schedule = schedule_store.get_schedule(schedule_id) if schedule_id else None
         content_type = (schedule or {}).get("content_type", "blog_post")
         location_code = store.session_location_code(session)
+        # The generators append the human-readable failure reason here (the
+        # WriterAbort code / exception repr) so a miss carries the ACTUAL cause
+        # into the run's error field + the dead-letter alert, not a generic label.
+        gen_errors: list[str] = []
         with metered_run(session_id, "article_generation"):
             if content_type == "local_seo_page":
                 ok = jobs.generate_local_seo_page_core(
                     session=session, keyword=keyword,
                     location=(schedule or {}).get("location") or "",
                     location_code=(schedule or {}).get("location_code"),
-                    user_id=row.get("user_id"))
+                    user_id=row.get("user_id"), error_sink=gen_errors)
             elif content_type == "service_page":
                 ok = jobs.generate_service_page_core(
                     session=session, keyword=keyword,
-                    user_id=row.get("user_id"))
+                    user_id=row.get("user_id"), error_sink=gen_errors)
             else:
                 ok = jobs.generate_article_core(
                     session_id, cluster_id, keyword, location_code,
-                    scheduled_article_run_id=run_id)
+                    scheduled_article_run_id=run_id, error_sink=gen_errors)
         # local_seo_page / service_page return the artifact id (truthy) on success;
         # blog returns True. `bool(ok)` is the success signal for both.
         success = bool(ok)
@@ -200,8 +204,10 @@ def _process_run(row: dict) -> None:
             # A generation miss is treated as transient: requeue with backoff up to
             # scheduler_max_attempts, then dead-letter. Safe against double-work —
             # a miss happens before the article is persisted, so a retry re-runs
-            # cleanly (and publish only ever runs on success below).
-            _retry_or_fail(row, "content generation failed", client_id=client_id)
+            # cleanly (and publish only ever runs on success below). Surface the
+            # generator's actual reason when it recorded one.
+            reason = gen_errors[0] if gen_errors else "content generation failed"
+            _retry_or_fail(row, reason, client_id=client_id)
             return
         _finish_run(run_id, "complete", error=None)
         # Opt-in auto-publish: push the finished piece to the client's Drive folder.

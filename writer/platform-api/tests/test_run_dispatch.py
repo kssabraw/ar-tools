@@ -108,18 +108,59 @@ def test_generate_service_page_core_success():
 def test_generate_service_page_core_failed_run():
     from fanout import jobs
 
+    errors: list[str] = []
     with patch("services.local_seo_service._get_client", return_value={"id": "c1"}), \
          patch("services.run_dispatch.create_run_and_snapshot", return_value="run-1"), \
          patch("services.orchestrator.orchestrate_run", AsyncMock()), \
          patch("db.supabase_client.get_supabase", return_value=_run_status_supabase("failed")):
         ok = jobs.generate_service_page_core(
-            session={"client_id": "c1"}, keyword="x", user_id=None,
+            session={"client_id": "c1"}, keyword="x", user_id=None, error_sink=errors,
         )
     assert ok is None
+    # The real reason is surfaced to the caller's sink, not swallowed.
+    assert errors == ["run status failed"]
 
 
 def test_generate_service_page_core_no_client():
     from fanout import jobs
 
+    errors: list[str] = []
+    ok = jobs.generate_service_page_core(session={}, keyword="x", user_id=None, error_sink=errors)
+    assert ok is None
+    assert errors == ["session has no client_id"]
+
+
+def test_generate_service_page_core_error_sink_optional():
+    # Back-compat: callers that don't pass error_sink (the Generate button path)
+    # still work unchanged and never raise on the sink being absent.
+    from fanout import jobs
+
     ok = jobs.generate_service_page_core(session={}, keyword="x", user_id=None)
     assert ok is None
+
+
+def test_generate_article_core_surfaces_writer_abort_to_sink():
+    # A blog WriterAbort (the load-bearing brief/writer failure — e.g. what the
+    # 'liraglutide vs semaglutide' cluster hit) must surface its stable code to the
+    # caller's sink, so the scheduler dead-letters with the ACTUAL reason instead
+    # of a generic 'content generation failed'.
+    from fanout import jobs
+    from fanout.writer.models import WriterAbort
+
+    errors: list[str] = []
+    brief_row = {"output_json": {"intent_type": None, "metadata": {}}}
+    sie_row = {"output_json": {}}
+    with patch("fanout.jobs._cluster_intent_override", return_value=(None, False)), \
+         patch("fanout.jobs._sync_cluster_intent"), \
+         patch("fanout.briefgen.cache.get_fresh_brief", return_value=brief_row), \
+         patch("fanout.sie.cache.get_fresh_analysis", return_value=sie_row), \
+         patch("fanout.writer.adapter.build_writer_inputs",
+               return_value=(object(), object(), [])), \
+         patch("fanout.writer.pipeline.build_writer_deps", return_value=object()), \
+         patch("fanout.writer.pipeline.generate_article",
+               side_effect=WriterAbort("empty_serp", "no SERP results")):
+        ok = jobs.generate_article_core(
+            "s1", "cl1", "liraglutide vs semaglutide", 2840, error_sink=errors,
+        )
+    assert ok is False
+    assert errors == ["empty_serp: no SERP results"]
