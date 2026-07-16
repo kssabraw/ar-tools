@@ -191,6 +191,186 @@ def test_reap_override_past_its_own_timeout(monkeypatch):
     assert len(sb._table.updates) == 1
 
 
+# ── graceful-shutdown drain (redeploy handoff) ────────────────────────────────
+class _DrainQuery:
+    """Fake for the drain's select(attempts).single() then update()... chain."""
+
+    def __init__(self, table):
+        self._table = table
+        self.update_payload = None
+        self.filters = {}
+
+    def select(self, *_a, **_k):
+        return self
+
+    def single(self):
+        return self
+
+    def update(self, payload):
+        self.update_payload = payload
+        return self
+
+    def eq(self, col, val):
+        self.filters[col] = val
+        return self
+
+    def execute(self):
+        if self.update_payload is None:
+            # select(attempts) → the current row for the filtered id.
+            row = self._table.rows.get(self.filters.get("id"))
+            return type("R", (), {"data": row})()
+        self._table.updates.append((self.filters, self.update_payload))
+        # Guarded on status='running'; a settled job (not in `running_ids`) misses.
+        hit = self.filters.get("status") == "running" and self.filters.get("id") in self._table.running_ids
+        return type("R", (), {"data": [{"id": "x"}] if hit else []})()
+
+
+class _DrainTable:
+    def __init__(self, rows, running_ids):
+        self.rows = rows  # id -> {"attempts": n}
+        self.running_ids = running_ids
+        self.updates = []
+
+    def _q(self):
+        return _DrainQuery(self)
+
+    def select(self, *a, **k):
+        return self._q().select(*a, **k)
+
+    def update(self, payload):
+        return self._q().update(payload)
+
+
+class _DrainSupabase:
+    def __init__(self, rows, running_ids):
+        self._table = _DrainTable(rows, running_ids)
+
+    def table(self, _name):
+        return self._table
+
+
+def test_drain_requeues_and_refunds_attempt(monkeypatch):
+    sb = _DrainSupabase({"j1": {"attempts": 1}}, running_ids={"j1"})
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+    monkeypatch.setattr(job_worker, "_inflight_jobs", {"j1"}, raising=False)
+    _run(job_worker.drain_inflight_jobs())
+    filters, payload = sb._table.updates[0]
+    assert payload == {"status": "pending", "started_at": None, "attempts": 0}
+    assert filters["status"] == "running"  # guarded so a settled job is untouched
+    assert filters["id"] == "j1"
+
+
+def test_drain_floors_attempts_at_zero(monkeypatch):
+    sb = _DrainSupabase({"j1": {"attempts": 0}}, running_ids={"j1"})
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+    monkeypatch.setattr(job_worker, "_inflight_jobs", {"j1"}, raising=False)
+    _run(job_worker.drain_inflight_jobs())
+    _filters, payload = sb._table.updates[0]
+    assert payload["attempts"] == 0
+
+
+def test_drain_noop_when_nothing_inflight(monkeypatch):
+    sb = _DrainSupabase({}, running_ids=set())
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+    monkeypatch.setattr(job_worker, "_inflight_jobs", set(), raising=False)
+    _run(job_worker.drain_inflight_jobs())
+    assert sb._table.updates == []
+
+
+def test_drain_skips_settled_job(monkeypatch):
+    # Job finished between claim and drain → not in running_ids → guarded update
+    # misses. Drain must not raise; the terminal write is left intact.
+    sb = _DrainSupabase({"j1": {"attempts": 1}}, running_ids=set())
+    monkeypatch.setattr(job_worker, "get_supabase", lambda: sb)
+    monkeypatch.setattr(job_worker, "_inflight_jobs", {"j1"}, raising=False)
+    _run(job_worker.drain_inflight_jobs())
+    # The guarded update was attempted but reported no rows changed — no crash.
+    assert len(sb._table.updates) == 1
+
+
+# ── worker-loop in-flight registry (drain depends on these semantics) ─────────
+async def _noop_reap():
+    return None
+
+
+def _wire_loop(monkeypatch, process, registry):
+    monkeypatch.setattr(settings, "job_worker_poll_interval_seconds", 0, raising=False)
+    monkeypatch.setattr(job_worker, "_inflight_jobs", registry, raising=False)
+    monkeypatch.setattr(job_worker, "_reap_stale_jobs", _noop_reap)
+    served = {"done": False}
+
+    async def fake_claim(job_types=None):
+        if served["done"]:
+            return None
+        served["done"] = True
+        return {"id": "j1", "job_type": "x"}
+
+    monkeypatch.setattr(job_worker, "_claim_next_job", fake_claim)
+    monkeypatch.setattr(job_worker, "_process_job", process)
+
+
+async def test_loop_keeps_id_registered_on_cancellation(monkeypatch):
+    """Shutdown cancels the worker mid-job → the id must SURVIVE in the registry
+    so drain_inflight_jobs (running after the tasks are awaited) can requeue it."""
+    registry: set = set()
+    started = asyncio.Event()
+
+    async def blocking_process(job):
+        started.set()
+        await asyncio.Event().wait()  # park until cancelled
+
+    _wire_loop(monkeypatch, blocking_process, registry)
+    task = asyncio.create_task(job_worker.job_worker())
+    await asyncio.wait_for(started.wait(), timeout=2)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    assert "j1" in registry
+
+
+async def test_loop_discards_id_when_job_settles(monkeypatch):
+    registry: set = set()
+    settled = asyncio.Event()
+
+    async def quick_process(job):
+        settled.set()
+
+    _wire_loop(monkeypatch, quick_process, registry)
+    task = asyncio.create_task(job_worker.job_worker())
+    await asyncio.wait_for(settled.wait(), timeout=2)
+    await asyncio.sleep(0)  # let the finally run
+    assert registry == set()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+async def test_loop_discards_id_when_handler_raises(monkeypatch):
+    """An ordinary handler crash is NOT a shutdown — the id must be discarded so
+    a later drain can't requeue a job the reaper/terminal-write path owns."""
+    registry: set = set()
+    crashed = asyncio.Event()
+
+    async def crashing_process(job):
+        crashed.set()
+        raise RuntimeError("boom")
+
+    _wire_loop(monkeypatch, crashing_process, registry)
+    task = asyncio.create_task(job_worker.job_worker())
+    await asyncio.wait_for(crashed.wait(), timeout=2)
+    await asyncio.sleep(0)
+    assert registry == set()
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
 # ── interactive-lane claim filter ─────────────────────────────────────────────
 class _ClaimQuery(_Query):
     def in_(self, col, vals):

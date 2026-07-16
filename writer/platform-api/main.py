@@ -60,7 +60,7 @@ from routers.syndication import router as syndication_router
 from routers.tasks import router as tasks_router
 from routers.users import router as users_router
 from services.gsc_scheduler import gsc_scheduler
-from services.job_worker import job_worker
+from services.job_worker import drain_inflight_jobs, job_worker
 from services.orchestrator import recover_stuck_runs
 
 # Topic Fanout Tool — vendored sub-package (writer/platform-api/fanout/).
@@ -119,15 +119,28 @@ async def lifespan(app: FastAPI):
     # mounted into this app.
     await fanout_scheduler.start()
     yield
-    await fanout_scheduler.stop()
-    for task in (worker_task, interactive_worker_task, scheduler_task):
-        if task is None:
-            continue
+    try:
+        await fanout_scheduler.stop()
+    except Exception as exc:  # pragma: no cover - shutdown best-effort
+        logger.warning("fanout_scheduler_stop_failed", extra={"error": str(exc)})
+    # Stop ALL lanes before draining: cancel first (so no lane can claim a fresh
+    # job mid-shutdown and orphan it), await them (a cancelled mid-run job keeps
+    # its id registered — see the worker loop), THEN requeue what was in flight
+    # so the next container claims it immediately instead of waiting out the
+    # stale-job reaper. Best-effort — a hard SIGKILL that skips this whole path
+    # still self-heals via the reaper.
+    tasks = [t for t in (worker_task, interactive_worker_task, scheduler_task) if t]
+    for task in tasks:
         task.cancel()
+    for task in tasks:
         try:
             await task
         except asyncio.CancelledError:
             pass
+    try:
+        await drain_inflight_jobs()
+    except Exception as exc:  # pragma: no cover - shutdown best-effort
+        logger.warning("job_worker_drain_failed", extra={"error": str(exc)})
     logger.info("platform-api shut down")
 
 
