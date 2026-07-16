@@ -460,10 +460,22 @@ def create_subtasks(
     return len(rows)
 
 
+def _profile_for_member(assignee_gid: Optional[str]) -> Optional[str]:
+    """The suite-user profile linked to a task-board member (identity bridge), or
+    None when the member isn't linked to a login yet."""
+    if not assignee_gid:
+        return None
+    rows = (
+        get_supabase().table("asana_team_members")
+        .select("profile_id").eq("gid", assignee_gid).limit(1).execute()
+    ).data
+    return rows[0].get("profile_id") if rows else None
+
+
 def _notify_assignment(task: dict) -> None:
-    """Best-effort 'assigned to you' notification (PRD §6.11). Recipients are
-    agency-level channels for v1 (in-app + Slack) — per-user routing waits on
-    the profiles unification, so `task_notification_prefs` isn't enforced yet."""
+    """Best-effort 'assigned to you' notification (PRD §6.11). Targets the
+    assignee's personal bell when their board member is linked to a login
+    (identity bridge); the client feed + Slack copy fire regardless."""
     try:
         from services import notifications
 
@@ -480,6 +492,7 @@ def _notify_assignment(task: dict) -> None:
             summary=(f"Due {task['due_date']}" if task.get("due_date") else None),
             severity="info",
             payload={"link": link, "task_id": task["id"], "assignee_gid": task.get("assignee_gid")},
+            recipient_profile_id=_profile_for_member(task.get("assignee_gid")),
         )
     except Exception as exc:
         logger.warning("task_assign_notify_failed", extra={"task_id": task.get("id"), "error": str(exc)})

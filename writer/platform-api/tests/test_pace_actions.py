@@ -59,7 +59,7 @@ _NUDGE_ARGS = {"assignee_gid": "g1", "assignee_name": "Ivy", "task_name": "GBP a
 
 async def test_run_nudge_dms_the_individual(monkeypatch):
     A._dm_scope_broken = False
-    monkeypatch.setattr(A, "_assignee_slack_id", lambda gid: "U9")
+    monkeypatch.setattr(A, "_assignee_profile_slack", lambda gid: ("p_ivy", "U9"))
     monkeypatch.setattr(A.settings, "pace_nudge_via_dm", True)
     monkeypatch.setattr(A.settings, "slack_bot_token", "xoxb-test")
     sent = {}
@@ -73,13 +73,14 @@ async def test_run_nudge_dms_the_individual(monkeypatch):
     out = await A.run_nudge(_staff(), "c1", dict(_NUDGE_ARGS))
     assert sent["channel"] == "U9" and "GBP audit" in sent["text"]     # DM'd the user id
     assert out == "✅ Nudge sent — DM'd Ivy directly."
-    # In-app copy written; the shared-channel Slack copy suppressed (no double-post).
+    # In-app copy targeted at their bell; shared-channel Slack copy suppressed.
     assert emits and emits[0]["payload"]["skip_channels"] == ["slack"]
+    assert emits[0]["recipient_profile_id"] == "p_ivy"
 
 
 async def test_run_nudge_falls_back_to_channel_on_missing_scope(monkeypatch):
     A._dm_scope_broken = False
-    monkeypatch.setattr(A, "_assignee_slack_id", lambda gid: "U9")
+    monkeypatch.setattr(A, "_assignee_profile_slack", lambda gid: ("p_ivy", "U9"))
     monkeypatch.setattr(A.settings, "pace_nudge_via_dm", True)
     monkeypatch.setattr(A.settings, "slack_bot_token", "xoxb-test")
 
@@ -94,17 +95,19 @@ async def test_run_nudge_falls_back_to_channel_on_missing_scope(monkeypatch):
     assert A._dm_scope_broken is True                                  # stop retrying DMs this process
     assert "skip_channels" not in emits[0]["payload"]                  # channel copy allowed
     assert emits[0]["summary"].startswith("<@U9> ")                    # @mention leads the line
+    assert emits[0]["recipient_profile_id"] == "p_ivy"                 # still hits their bell
     A._dm_scope_broken = False                                         # reset for isolation
 
 
 async def test_run_nudge_unlinked_is_in_app_only(monkeypatch):
     A._dm_scope_broken = False
-    monkeypatch.setattr(A, "_assignee_slack_id", lambda gid: None)
+    monkeypatch.setattr(A, "_assignee_profile_slack", lambda gid: (None, None))
     emits = []
     monkeypatch.setattr("services.notifications.emit", lambda **k: emits.append(k) or "nid")
     out = await A.run_nudge(_staff(), "c1", dict(_NUDGE_ARGS))
     assert "in-app nudge (Ivy has no Slack link)" in out
     assert emits[0]["summary"].startswith("a reminder")               # no mention token
+    assert emits[0]["recipient_profile_id"] is None                   # unlinked → no personal bell
 
 
 # ---------------------------------------------------------------------------

@@ -308,20 +308,22 @@ def stage_nudge(context: ActionContext, client_id: str, args: dict) -> tuple[str
     )
 
 
-def _assignee_slack_id(assignee_gid: str) -> Optional[str]:
-    """The assignee's Slack user id via member → profile → slack_user_id, or None
-    when they aren't linked (link on the Team page)."""
+def _assignee_profile_slack(assignee_gid: str) -> tuple[Optional[str], Optional[str]]:
+    """(profile_id, slack_user_id) for a task-board member via the identity
+    bridge. profile_id targets their in-app bell; slack_user_id their DM. Either
+    is None when the member isn't linked (link on the Team page)."""
     member = (
         get_supabase().table("asana_team_members")
         .select("profile_id").eq("gid", assignee_gid).limit(1).execute()
     ).data
-    if not (member and member[0].get("profile_id")):
-        return None
+    profile_id = member[0].get("profile_id") if member else None
+    if not profile_id:
+        return None, None
     prof = (
         get_supabase().table("profiles").select("slack_user_id")
-        .eq("id", member[0]["profile_id"]).limit(1).execute()
+        .eq("id", profile_id).limit(1).execute()
     ).data
-    return prof[0].get("slack_user_id") if prof else None
+    return profile_id, (prof[0].get("slack_user_id") if prof else None)
 
 
 async def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
@@ -332,7 +334,7 @@ async def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
     global _dm_scope_broken
     from services import notifications
 
-    slack_id = _assignee_slack_id(args["assignee_gid"])
+    profile_id, slack_id = _assignee_profile_slack(args["assignee_gid"])
     who = args.get("assignee_name") or "the assignee"
     task_name = args["task_name"]
     link = f"/clients/{client_id}/tasks?task={args['task_id']}"
@@ -344,11 +346,12 @@ async def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
             from services.slack_assistant import post_message
 
             await post_message(slack_id, f"👋 Nudge from PACE — a reminder to move *“{task_name}”* along.")
-            # In-app copy too, but don't also post to the shared channel.
+            # In-app copy (to their bell) too, but don't also post to the channel.
             notifications.emit(
                 client_id=client_id, kind="task_nudge", title=f"Nudge: “{task_name}”",
                 summary=f"DM'd {who} a reminder to move *“{task_name}”* along.",
                 severity="info", payload={**base_payload, "skip_channels": ["slack"]},
+                recipient_profile_id=profile_id,
             )
             return f"✅ Nudge sent — DM'd {who} directly."
         except Exception as exc:
@@ -368,7 +371,7 @@ async def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
     notifications.emit(
         client_id=client_id, kind="task_nudge", title=f"Nudge: “{task_name}”",
         summary=f"{lead}a reminder to move *“{task_name}”* along.",
-        severity="info", payload=base_payload,
+        severity="info", payload=base_payload, recipient_profile_id=profile_id,
     )
     delivery = f"pinged {who} in the channel" if mention else f"posted an in-app nudge ({who} has no Slack link)"
     return f"✅ Nudge sent — {delivery}."

@@ -153,22 +153,23 @@ def create_comment(task: dict, author_id: str, body: str) -> dict:
 
     if mentions:
         try:
-            names = profile_names([author_id, *mentions])
-            author = names.get(author_id, "Someone")
-            mentioned = ", ".join(names[m] for m in mentions if m in names)
+            author = profile_names([author_id]).get(author_id, "Someone")
             link = (
                 f"/clients/{task['client_id']}/tasks?task={task['id']}"
                 if task.get("client_id")
                 else "/my-tasks"
             )
-            notifications.emit(
-                client_id=task.get("client_id"),
-                kind="task_mention",
-                title=f"{author} mentioned {mentioned} on '{task.get('name')}'",
-                summary=body[:300],
-                severity="info",
-                payload={"link": link, "task_id": task["id"], "mentions": mentions},
-            )
+            # One personal notification per mentioned person → their own bell.
+            for m in mentions:
+                notifications.emit(
+                    client_id=task.get("client_id"),
+                    kind="task_mention",
+                    title=f"{author} mentioned you on '{task.get('name')}'",
+                    summary=body[:300],
+                    severity="info",
+                    payload={"link": link, "task_id": task["id"], "mentions": mentions},
+                    recipient_profile_id=m,
+                )
         except Exception as exc:  # a notify failure never fails the comment
             logger.warning("task_mention_notify_failed", extra={"task_id": task["id"], "error": str(exc)})
 

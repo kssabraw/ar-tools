@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
+import { NotificationBell } from './NotificationBell'
 import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Loader2 } from 'lucide-react'
 
 interface NavItem {
@@ -176,9 +177,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
           : {}),
       }}>
         <div style={{ padding: '0 20px 24px', borderBottom: '1px solid #1e293b' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <FileText size={20} color="#6366f1" />
-            <span style={{ fontWeight: 700, fontSize: 16, color: '#f1f5f9' }}>AR Tools</span>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <FileText size={20} color="#6366f1" />
+              <span style={{ fontWeight: 700, fontSize: 16, color: '#f1f5f9' }}>AR Tools</span>
+            </div>
+            <NotificationBell />
           </div>
           <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>{user?.email}</div>
         </div>

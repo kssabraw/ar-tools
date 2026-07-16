@@ -127,11 +127,16 @@ def emit(
     severity: str = "info",
     payload: Optional[dict] = None,
     dedupe_key: Optional[str] = None,
+    recipient_profile_id: Optional[str] = None,
 ) -> Optional[str]:
     """Record an in-app notification and enqueue its email/Slack dispatch.
 
     Best-effort: never raises into the caller (a notification failure must not
     break the producer's own work). Returns the notification id, or None.
+
+    ``recipient_profile_id`` (optional) targets the notification at ONE suite
+    user — it surfaces in their personal header bell (``GET /notifications/mine``)
+    in addition to the per-client feed. None = agency/client-wide (unchanged).
 
     ``dedupe_key`` (optional) gives **atomic** idempotency via the unique
     ``notifications.dedupe_key`` index: if a row with this key already exists
@@ -151,6 +156,7 @@ def emit(
             "summary": summary,
             "payload": payload,
             "dedupe_key": dedupe_key,
+            "recipient_profile_id": recipient_profile_id,
         }
         try:
             row = supabase.table("notifications").insert(insert_row).execute()
