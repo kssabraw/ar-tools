@@ -70,9 +70,18 @@ async def stop() -> None:
 
 async def _run_loop() -> None:
     s = get_settings()
+    ticks = 0
     while True:
+        ticks += 1
         try:
             await _tick()
+            # Periodically re-run the stuck-row sweep (not just at startup) so a run
+            # orphaned mid-write by a deploy/restart is recovered on a bounded clock
+            # instead of only on the next process restart. Runs on the default
+            # executor (a quick DB sweep), never the cap-sized worker pool.
+            if ticks % max(1, s.scheduler_sweep_every_ticks) == 0:
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, _recover_stuck, s.scheduler_stuck_minutes)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 — a bad tick must not kill the loop
@@ -122,7 +131,13 @@ def _recover_stuck(stuck_minutes: int) -> None:
     rows = (get_service_client().table("scheduled_article_runs").select("*")
             .eq("status", "running").lt("started_at", cutoff).execute().data or [])
     for row in rows:
-        _retry_or_fail(row, "worker restarted mid-generation", immediate=True)
+        # One bad row (a DB write blip) must not skip recovery of the rest.
+        try:
+            _retry_or_fail(row, "worker restarted mid-generation", immediate=True)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("scheduler_recover_row_failed",
+                           extra={"event": "scheduler_recover_row_failed",
+                                  "run_id": row.get("id"), "reason": repr(exc)})
     if rows:
         logger.info("scheduler_requeued_stuck",
                     extra={"event": "scheduler_requeued_stuck", "count": len(rows)})
@@ -388,7 +403,12 @@ def _retry_or_fail(
 
     Idempotency: this only ever fires for a *generation* failure, which happens
     before the article is persisted and before any publish — so a re-run can't
-    double-generate or double-post."""
+    double-generate or double-post.
+
+    Every write is conditional on the row still being `running` (its state when
+    the RPC claimed it). If a user cancelled the run mid-generation (running ->
+    cancelled), the update no-ops and the run stays cancelled — never resurrected
+    into a `queued` zombie that would silently regenerate + spend."""
     s = get_settings()
     run_id = row["id"]
     attempts = retry_policy.next_attempt_number(row.get("attempts"))
@@ -400,20 +420,31 @@ def _retry_or_fail(
             delay = retry_policy.retry_delay_seconds(
                 attempts, s.scheduler_retry_base_seconds, s.scheduler_retry_cap_seconds)
             next_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
-        get_service_client().table("scheduled_article_runs").update({
+        res = (get_service_client().table("scheduled_article_runs").update({
             "status": "queued", "attempts": attempts, "started_at": None,
             "completed_at": None, "scheduled_at": next_at.isoformat(), "error": reason,
-        }).eq("id", run_id).execute()
-        logger.info("scheduled_run_retry",
-                    extra={"event": "scheduled_run_retry", "run_id": run_id,
-                           "attempt": attempts, "max_attempts": s.scheduler_max_attempts,
-                           "next_at": next_at.isoformat(), "reason": reason})
+        }).eq("id", run_id).eq("status", "running").execute())
+        if res.data:
+            logger.info("scheduled_run_retry",
+                        extra={"event": "scheduled_run_retry", "run_id": run_id,
+                               "attempt": attempts, "max_attempts": s.scheduler_max_attempts,
+                               "next_at": next_at.isoformat(), "reason": reason})
+        else:
+            logger.info("scheduled_run_retry_skipped",
+                        extra={"event": "scheduled_run_retry_skipped", "run_id": run_id,
+                               "reason": "run no longer running (cancelled?)"})
         return
-    # Out of attempts — dead-letter and surface it so a human looks.
-    get_service_client().table("scheduled_article_runs").update({
+    # Out of attempts — dead-letter and surface it so a human looks. Only notify
+    # if the row was still running (i.e. we actually dead-lettered it).
+    res = (get_service_client().table("scheduled_article_runs").update({
         "status": "failed", "attempts": attempts,
         "completed_at": datetime.now(timezone.utc).isoformat(), "error": reason,
-    }).eq("id", run_id).execute()
+    }).eq("id", run_id).eq("status", "running").execute())
+    if not res.data:
+        logger.info("scheduled_run_dead_letter_skipped",
+                    extra={"event": "scheduled_run_dead_letter_skipped", "run_id": run_id,
+                           "reason": "run no longer running (cancelled?)"})
+        return
     logger.error("scheduled_run_dead_letter",
                  extra={"event": "scheduled_run_dead_letter", "run_id": run_id,
                         "attempts": attempts, "reason": reason})

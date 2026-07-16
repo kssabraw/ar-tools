@@ -338,6 +338,11 @@ class Settings(BaseSettings):
     scheduler_max_attempts: int = 4
     scheduler_retry_base_seconds: int = 300     # first-retry delay (5 min)
     scheduler_retry_cap_seconds: int = 3600     # max single-retry delay (1 hr)
+    # Re-run the stuck-row sweep every N ticks (not just at startup), so a run
+    # orphaned mid-write by a deploy/restart is recovered within ~stuck_minutes
+    # instead of waiting for the *next* restart. At the 60s tick default this is
+    # a 5-min cadence.
+    scheduler_sweep_every_ticks: int = 5
     writer_schedule_approval_threshold_usd: float = 90.0   # VA Schedule-all > this -> M9 approval
     writer_article_cost_estimate_usd: float = 0.30         # per-article preview figure (§9.4)
     # Publishing destinations (dormant until provisioned). GitHub: fine-grained PAT with
