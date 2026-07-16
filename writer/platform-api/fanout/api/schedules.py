@@ -409,14 +409,17 @@ def reinstate_schedule_run(
     return {"status": "queued", "run_id": run_id}
 
 
-def _reactivate_if_drained(schedule_id: str | None) -> None:
-    """A schedule that had drained to `complete` (its last runs failed) must go
-    active again so the worker picks up a retried run. Paused/cancelled/active are
-    left as-is (a retry shouldn't silently un-pause or resurrect a cancellation)."""
+def _reactivate_for_retry(schedule_id: str | None) -> None:
+    """Reactivate a schedule so the worker will pick up a retried run — for a
+    schedule that had drained to `complete` (its last runs failed) OR was
+    `cancelled` (mirroring `reinstate_schedule_run`, so a retried run isn't left
+    `queued` under a schedule the claim RPC will never touch). A `paused` schedule
+    is left paused (a deliberate hold — the retried run runs on resume), and an
+    `active` one needs no change."""
     if not schedule_id:
         return
     sched = schedule_store.get_schedule(schedule_id)
-    if sched and sched["status"] == "complete":
+    if sched and sched["status"] in ("complete", "cancelled"):
         schedule_store.set_schedule_status(schedule_id, "active")
 
 
@@ -441,7 +444,7 @@ def retry_schedule_run(
             status_code=status.HTTP_409_CONFLICT,
             detail="Couldn't retry this article — its state changed.",
         )
-    _reactivate_if_drained(run.get("content_schedule_id"))
+    _reactivate_for_retry(run.get("content_schedule_id"))
     return {"status": "queued", "run_id": run_id}
 
 
@@ -455,7 +458,7 @@ def retry_failed_schedule_runs(
     _require_schedule(user, session_id, schedule_id)
     retried = schedule_store.retry_failed_runs(schedule_id)
     if retried:
-        _reactivate_if_drained(schedule_id)
+        _reactivate_for_retry(schedule_id)
     return {"status": "queued", "retried": retried}
 
 
