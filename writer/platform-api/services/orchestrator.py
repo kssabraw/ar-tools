@@ -81,6 +81,16 @@ MODULE_PATHS: dict[str, str] = {
 # time to bring the replacement container up (swaps complete in a few seconds).
 RETRY_BACKOFF_SECONDS = 3.0
 
+# Hard wall-clock ceiling above the per-module httpx timeout. httpx's own read
+# timeout should fire first, but it is enforced by this (heavily loaded, single)
+# event loop's timer, and under load that timer can be starved: a research call
+# budgeted at 130s was once observed stranded in `research_running` for ~17 min.
+# asyncio.wait_for gives an independent, guaranteed cutoff so a slow or hung
+# pipeline-api can never hold a run open indefinitely. The buffer lets the
+# transport timeout win in the normal case (cleaner error text) while still
+# capping the pathological case.
+HARD_DEADLINE_BUFFER_SECONDS = 15.0
+
 
 def _extract_schema_version(module: str, result: dict) -> str | None:
     if module == "brief":
@@ -380,7 +390,10 @@ async def _call_module(
     start = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, json=payload)
+            response = await asyncio.wait_for(
+                client.post(url, json=payload),
+                timeout=timeout + HARD_DEADLINE_BUFFER_SECONDS,
+            )
             duration_ms = int((time.perf_counter() - start) * 1000)
 
             if response.status_code != 200:
@@ -392,9 +405,12 @@ async def _call_module(
 
             result = response.json()
 
-    except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+    except (httpx.TransportError, httpx.HTTPStatusError, asyncio.TimeoutError) as exc:
         duration_ms = int((time.perf_counter() - start) * 1000)
-        is_timeout = isinstance(exc, httpx.TimeoutException)
+        # A blown hard deadline (asyncio.TimeoutError) is treated exactly like a
+        # transport-level read timeout: retryable once, then surfaced as
+        # module_timeout.
+        is_timeout = isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError))
         is_5xx = isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
         # A transport error that isn't a timeout means the connection itself
         # failed before a response arrived — most commonly the pipeline-api

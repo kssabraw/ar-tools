@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from config import settings
 from models.research import (
     Citation,
     CitationsByScope,
@@ -49,6 +50,10 @@ MAX_AUTHORITY_GAP_CITATIONS = 3
 MAX_SUPPLEMENTAL_CITATIONS = 4
 TOP_CANDIDATES_PER_TARGET = 5
 ACCESSIBLE_CANDIDATES_PER_TARGET = 3
+# Minimum remaining wall-clock budget (seconds) needed to bother attempting the
+# supplemental article-scope citations; below it we skip them and flag the run
+# partial rather than start work that can't finish.
+SUPPLEMENTAL_MIN_BUDGET_SECONDS = 15.0
 
 
 class ResearchError(Exception):
@@ -426,20 +431,52 @@ async def run_research(req: ResearchRequest) -> ResearchResponse:
     h2_targets, auth_targets = _extract_targets(brief)
     all_targets = h2_targets + auth_targets
 
+    # Overall wall-clock budget. Rather than abort the whole stage when a few
+    # sources hang (some SERPs contain a page that drags every fetch to its
+    # timeout), we gather whatever finished by the deadline and return a partial
+    # citation set - the article still generates, just with fewer sources. The
+    # router keeps a hard backstop above this soft budget for the pathological
+    # case where even assembly stalls.
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + settings.research_soft_budget_seconds
+    deadline_hit = False
+    targets_incomplete = 0
+
     # Step 1: query generation in parallel
     queries_by_target = await _generate_all_queries(keyword, intent_type, h2_targets, auth_targets)
 
-    # Steps 2-6: process each target in parallel
-    target_coros = [
-        _process_target(
-            keyword=keyword,
-            target=t,
-            queries=queries_by_target.get(t.target_id, []),
-            competitor_domains=competitor_domains,
+    # Steps 2-6: process each target in parallel, bounded by the shared deadline.
+    target_tasks = [
+        asyncio.ensure_future(
+            _process_target(
+                keyword=keyword,
+                target=t,
+                queries=queries_by_target.get(t.target_id, []),
+                competitor_domains=competitor_domains,
+            )
         )
         for t in all_targets
     ]
-    target_citations = await asyncio.gather(*target_coros, return_exceptions=True)
+    target_citations: list[Any] = [None] * len(all_targets)
+    if target_tasks:
+        remaining = max(0.0, deadline - loop.time())
+        done, pending = await asyncio.wait(set(target_tasks), timeout=remaining)
+        if pending:
+            deadline_hit = True
+            targets_incomplete = len(pending)
+            logger.warning(
+                "research deadline hit: %d of %d targets skipped",
+                len(pending), len(all_targets),
+            )
+            for task in pending:
+                task.cancel()
+            # Swallow the CancelledErrors so they don't surface as task warnings.
+            await asyncio.gather(*pending, return_exceptions=True)
+        for idx, task in enumerate(target_tasks):
+            if task in done and not task.cancelled():
+                exc = task.exception()
+                target_citations[idx] = exc if exc is not None else task.result()
+            # else: left as None (skipped by the deadline)
 
     citations: list[Citation] = []
     target_to_citation_id: dict[str, str] = {}
@@ -457,9 +494,14 @@ async def run_research(req: ResearchRequest) -> ResearchResponse:
         target_to_citation_id[target.target_id] = cid
         citations.append(citation)
 
-    # Step 7: supplemental citations (article scope)
+    # Step 7: supplemental citations (article scope). Best-effort AND
+    # budget-aware: skipped when the per-target work already consumed the
+    # deadline, and time-boxed to whatever budget remains so it can't push the
+    # stage past the router's hard backstop.
     supplemental_added = 0
-    try:
+
+    async def _gather_supplemental() -> None:
+        nonlocal supplemental_added, citation_counter
         supp_queries = await generate_supplemental_queries(keyword, intent_type)
         supp_target = CitationTarget(
             target_id="article_supplemental",
@@ -516,8 +558,22 @@ async def run_research(req: ResearchRequest) -> ResearchResponse:
                     for c in claims
                 ],
             ))
-    except Exception as exc:
-        logger.warning("Supplemental citations failed: %s", exc)
+
+    supp_remaining = deadline - loop.time()
+    if supp_remaining >= SUPPLEMENTAL_MIN_BUDGET_SECONDS:
+        try:
+            await asyncio.wait_for(_gather_supplemental(), timeout=supp_remaining)
+        except asyncio.TimeoutError:
+            deadline_hit = True
+            logger.warning("Supplemental citations cut off by research deadline")
+        except Exception as exc:
+            logger.warning("Supplemental citations failed: %s", exc)
+    else:
+        # Not enough budget left for the bonus supplemental pass; skip it. This
+        # is not flagged as a partial run on its own - supplemental citations are
+        # article-scope extras, not heading coverage - so `deadline_hit` stays
+        # driven by whether actual targets were dropped above.
+        logger.info("Skipping supplemental citations: %.1fs budget left", supp_remaining)
 
     # Mark shared citations
     url_count: dict[str, int] = {}
@@ -574,6 +630,8 @@ async def run_research(req: ResearchRequest) -> ResearchResponse:
         authority_gap_h3s_with_citations=auth_with,
         supplemental_citations_added=supplemental_added,
         competitor_exclusion_unavailable=competitor_unavailable,
+        research_deadline_hit=deadline_hit,
+        targets_incomplete=targets_incomplete,
     )
 
     # Inject citations array + citations_metadata into the enriched brief

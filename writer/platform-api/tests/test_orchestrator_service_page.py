@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -185,3 +186,35 @@ async def test_call_module_connection_drop_exhausts_retry_as_unavailable():
     assert ei.value.stage == "sie"
     assert "module_unavailable" in str(ei.value.cause)
     assert post.await_count == 2
+
+
+async def test_call_module_hard_deadline_cuts_off_hung_module():
+    # A pipeline module that hangs far past its budget (the ~17-min research
+    # stall) must be cut off by the asyncio.wait_for hard ceiling even when
+    # httpx's own transport timeout never fires, and surface as a retryable
+    # module_timeout (one retry, then terminal).
+    async def _hang(*a, **k):
+        await asyncio.sleep(5)
+        return _ok_response()
+
+    post = AsyncMock(side_effect=_hang)
+    ps = [
+        patch.object(orch, "_create_module_output", AsyncMock(return_value="out1")),
+        patch.object(orch, "_fail_module_output", AsyncMock()),
+        patch.object(orch, "_save_module_output", AsyncMock()),
+        # Tiny effective deadline so the test doesn't actually wait: 0 + 0.05.
+        patch.dict(orch.MODULE_TIMEOUTS, {"sie": 0}),
+        patch.object(orch, "HARD_DEADLINE_BUFFER_SECONDS", 0.05),
+        patch.object(orch.httpx, "AsyncClient", _fake_async_client(post)),
+    ]
+    for p in ps:
+        p.start()
+    try:
+        with pytest.raises(orch.StageError) as ei:
+            await orch._call_module("sie", "r1", {"k": "v"})
+    finally:
+        for p in ps:
+            p.stop()
+    assert ei.value.stage == "sie"
+    assert "module_timeout" in str(ei.value.cause)
+    assert post.await_count == 2      # timed out, retried once, timed out again

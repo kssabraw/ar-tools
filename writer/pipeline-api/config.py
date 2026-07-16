@@ -29,6 +29,36 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
 
     # ------------------------------------------------------------
+    # Research & Citations module - latency guards
+    # ------------------------------------------------------------
+    # The pipeline fans out per heading (SERP search + up to 5 ScrapeOwl
+    # render_js fetches at 45s each + sequential claim-extraction LLM calls) with
+    # no natural bound, so a slow or rate-limited run could churn for many
+    # minutes - one was observed running ~17 minutes against platform-api's 130s
+    # HTTP budget, burning ScrapeOwl + LLM spend on a request the caller had
+    # already abandoned. Two nested guards bound it:
+    #
+    # `research_soft_budget_seconds` is the in-pipeline wall-clock target. When
+    # per-target work exceeds it, whatever finished is kept and the stragglers
+    # are dropped, so the stage returns a PARTIAL citation set (flagged
+    # `research_deadline_hit`) and the article still generates - rather than
+    # aborting the whole run because a handful of sources hung.
+    research_soft_budget_seconds: float = 100.0
+    # `research_deadline_seconds` is the router's hard backstop (asyncio.wait_for
+    # around run_research) for the pathological case where even assembly stalls.
+    # Kept above the soft budget but below platform-api's 130s research HTTP
+    # timeout, so pipeline-api returns a clean 504 before the caller's transport
+    # timeout fires.
+    research_deadline_seconds: float = 120.0
+    # Global cap on concurrent outbound content fetches (ScrapeOwl / PDF) across
+    # ALL research targets in one request. Each heading fetches its candidates
+    # under a local Semaphore(6); with ~10 headings running at once those local
+    # pools multiply into dozens of simultaneous render_js calls that ScrapeOwl
+    # rate-limits, so every one drags out to its 45s timeout. A shared ceiling
+    # keeps total fetch pressure sane and is the main latency reducer.
+    research_fetch_global_concurrency: int = 10
+
+    # ------------------------------------------------------------
     # Brief Generator v2.0 - threshold tuning (PRD §12.6)
     # ------------------------------------------------------------
     # All thresholds must be configurable per the PRD. Defaults match the

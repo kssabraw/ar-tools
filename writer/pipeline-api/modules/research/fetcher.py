@@ -25,6 +25,21 @@ logger = logging.getLogger(__name__)
 SCRAPEOWL_URL = "https://api.scrapeowl.com/v1/scrape"
 DEFAULT_TIMEOUT = 45.0
 
+# Process-wide ceiling on concurrent outbound content fetches. `fetch_many` runs
+# per research target with its own local Semaphore(6); across many targets in one
+# request those local pools multiply into dozens of simultaneous render_js calls
+# that ScrapeOwl rate-limits (each then dragging to its 45s timeout). This shared
+# semaphore bounds the total. Created lazily so it binds to the running event
+# loop rather than import-time.
+_GLOBAL_FETCH_SEM: Optional[asyncio.Semaphore] = None
+
+
+def _global_fetch_sem() -> asyncio.Semaphore:
+    global _GLOBAL_FETCH_SEM
+    if _GLOBAL_FETCH_SEM is None:
+        _GLOBAL_FETCH_SEM = asyncio.Semaphore(settings.research_fetch_global_concurrency)
+    return _GLOBAL_FETCH_SEM
+
 PAYWALL_MARKERS = (
     "subscribe", "subscription", "log in to read", "sign in to read",
     "members only", "premium content", "paid subscribers",
@@ -144,8 +159,9 @@ async def _scrapeowl_html(url: str) -> tuple[str, str, Optional[str]]:
         "render_js": True,
     }
     try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            response = await client.post(SCRAPEOWL_URL, json=payload)
+        async with _global_fetch_sem():
+            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                response = await client.post(SCRAPEOWL_URL, json=payload)
         if response.status_code != 200:
             return ("", url, f"http_{response.status_code}")
         data = response.json()
@@ -161,11 +177,12 @@ async def _scrapeowl_html(url: str) -> tuple[str, str, Optional[str]]:
 async def _fetch_pdf_bytes(url: str) -> tuple[bytes, Optional[str]]:
     """Direct fetch of a PDF file (no JS rendering needed)."""
     try:
-        async with httpx.AsyncClient(
-            timeout=DEFAULT_TIMEOUT, follow_redirects=True,
-            headers={"User-Agent": "Mozilla/5.0 (compatible; ar-tools-research/1.0)"},
-        ) as client:
-            response = await client.get(url)
+        async with _global_fetch_sem():
+            async with httpx.AsyncClient(
+                timeout=DEFAULT_TIMEOUT, follow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; ar-tools-research/1.0)"},
+            ) as client:
+                response = await client.get(url)
         if response.status_code != 200:
             return (b"", f"http_{response.status_code}")
         return (response.content, None)
