@@ -28,12 +28,19 @@ import logging
 from datetime import date
 from typing import Optional
 
+from config import settings
 from db.supabase_client import get_supabase
 from services import pace_auth, task_service
 from services.pace_auth import ActionContext
 from services.slack_assistant.actions import match_named, match_open_tasks
 
 logger = logging.getLogger(__name__)
+
+# Slack errors meaning DMs aren't provisioned (missing im:write etc.). On the
+# first such error we stop attempting DMs for the rest of the process and fall
+# back to the channel @mention — no per-nudge failing call, no error storm.
+_DM_SCOPE_ERRORS = ("missing_scope", "not_allowed_token_type", "invalid_auth", "channel_not_found")
+_dm_scope_broken = False
 
 
 # ---------------------------------------------------------------------------
@@ -301,32 +308,69 @@ def stage_nudge(context: ActionContext, client_id: str, args: dict) -> tuple[str
     )
 
 
-def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
-    from services import notifications
-    # Resolve the assignee's Slack id via member → profile → slack_user_id.
-    slack_id = None
+def _assignee_slack_id(assignee_gid: str) -> Optional[str]:
+    """The assignee's Slack user id via member → profile → slack_user_id, or None
+    when they aren't linked (link on the Team page)."""
     member = (
         get_supabase().table("asana_team_members")
-        .select("profile_id").eq("gid", args["assignee_gid"]).limit(1).execute()
+        .select("profile_id").eq("gid", assignee_gid).limit(1).execute()
     ).data
-    if member and member[0].get("profile_id"):
-        prof = (
-            get_supabase().table("profiles").select("slack_user_id")
-            .eq("id", member[0]["profile_id"]).limit(1).execute()
-        ).data
-        if prof:
-            slack_id = prof[0].get("slack_user_id")
-    mention = build_nudge_mention(slack_id)
+    if not (member and member[0].get("profile_id")):
+        return None
+    prof = (
+        get_supabase().table("profiles").select("slack_user_id")
+        .eq("id", member[0]["profile_id"]).limit(1).execute()
+    ).data
+    return prof[0].get("slack_user_id") if prof else None
+
+
+async def run_nudge(context: ActionContext, client_id: str, args: dict) -> str:
+    """Nudge the assignee. Preferred delivery is a **direct Slack DM** to the
+    person (`pace_nudge_via_dm`, needs the app's `im:write` scope); it falls back
+    to a channel @mention, then to an in-app-only nudge when the assignee has no
+    Slack link. The in-app notification is always written."""
+    global _dm_scope_broken
+    from services import notifications
+
+    slack_id = _assignee_slack_id(args["assignee_gid"])
     who = args.get("assignee_name") or "the assignee"
+    task_name = args["task_name"]
+    link = f"/clients/{client_id}/tasks?task={args['task_id']}"
+    base_payload = {"link": link, "assignee_gid": args["assignee_gid"]}
+
+    # 1) Direct DM to the individual (the real "tap on the shoulder").
+    if slack_id and settings.pace_nudge_via_dm and settings.slack_bot_token and not _dm_scope_broken:
+        try:
+            from services.slack_assistant import post_message
+
+            await post_message(slack_id, f"👋 Nudge from PACE — a reminder to move *“{task_name}”* along.")
+            # In-app copy too, but don't also post to the shared channel.
+            notifications.emit(
+                client_id=client_id, kind="task_nudge", title=f"Nudge: “{task_name}”",
+                summary=f"DM'd {who} a reminder to move *“{task_name}”* along.",
+                severity="info", payload={**base_payload, "skip_channels": ["slack"]},
+            )
+            return f"✅ Nudge sent — DM'd {who} directly."
+        except Exception as exc:
+            msg = str(exc)
+            if any(code in msg for code in _DM_SCOPE_ERRORS):
+                # Scope isn't granted yet — stop trying DMs this process, use the
+                # channel. Grant `im:write` + reinstall to enable direct DMs.
+                _dm_scope_broken = True
+                logger.warning("nudge_dm_unavailable", extra={"error": msg, "hint": "grant im:write + reinstall"})
+            else:
+                logger.warning("nudge_dm_failed", extra={"member": who, "error": msg})
+            # fall through to the channel @mention
+
+    # 2) Channel @mention (linked but DMs off/unavailable) or 3) in-app only.
+    mention = build_nudge_mention(slack_id)
     lead = f"{mention} " if mention else ""
     notifications.emit(
-        client_id=client_id, kind="task_nudge",
-        title=f"Nudge: “{args['task_name']}”",
-        summary=f"{lead}a reminder to move *“{args['task_name']}”* along.",
-        severity="info",
-        payload={"link": f"/clients/{client_id}/tasks?task={args['task_id']}", "assignee_gid": args["assignee_gid"]},
+        client_id=client_id, kind="task_nudge", title=f"Nudge: “{task_name}”",
+        summary=f"{lead}a reminder to move *“{task_name}”* along.",
+        severity="info", payload=base_payload,
     )
-    delivery = f"pinged {who}" if mention else f"posted an in-app nudge ({who} has no Slack link)"
+    delivery = f"pinged {who} in the channel" if mention else f"posted an in-app nudge ({who} has no Slack link)"
     return f"✅ Nudge sent — {delivery}."
 
 

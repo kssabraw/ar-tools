@@ -52,6 +52,62 @@ def test_build_nudge_mention():
 
 
 # ---------------------------------------------------------------------------
+# run_nudge — DM-first delivery with channel / in-app fallbacks
+# ---------------------------------------------------------------------------
+_NUDGE_ARGS = {"assignee_gid": "g1", "assignee_name": "Ivy", "task_name": "GBP audit", "task_id": "t1"}
+
+
+async def test_run_nudge_dms_the_individual(monkeypatch):
+    A._dm_scope_broken = False
+    monkeypatch.setattr(A, "_assignee_slack_id", lambda gid: "U9")
+    monkeypatch.setattr(A.settings, "pace_nudge_via_dm", True)
+    monkeypatch.setattr(A.settings, "slack_bot_token", "xoxb-test")
+    sent = {}
+
+    async def _post(channel, text):
+        sent.update(channel=channel, text=text)
+
+    emits = []
+    monkeypatch.setattr("services.slack_assistant.post_message", _post)
+    monkeypatch.setattr("services.notifications.emit", lambda **k: emits.append(k) or "nid")
+    out = await A.run_nudge(_staff(), "c1", dict(_NUDGE_ARGS))
+    assert sent["channel"] == "U9" and "GBP audit" in sent["text"]     # DM'd the user id
+    assert out == "✅ Nudge sent — DM'd Ivy directly."
+    # In-app copy written; the shared-channel Slack copy suppressed (no double-post).
+    assert emits and emits[0]["payload"]["skip_channels"] == ["slack"]
+
+
+async def test_run_nudge_falls_back_to_channel_on_missing_scope(monkeypatch):
+    A._dm_scope_broken = False
+    monkeypatch.setattr(A, "_assignee_slack_id", lambda gid: "U9")
+    monkeypatch.setattr(A.settings, "pace_nudge_via_dm", True)
+    monkeypatch.setattr(A.settings, "slack_bot_token", "xoxb-test")
+
+    async def _post(channel, text):
+        raise RuntimeError("slack_error: missing_scope")
+
+    emits = []
+    monkeypatch.setattr("services.slack_assistant.post_message", _post)
+    monkeypatch.setattr("services.notifications.emit", lambda **k: emits.append(k) or "nid")
+    out = await A.run_nudge(_staff(), "c1", dict(_NUDGE_ARGS))
+    assert "pinged Ivy in the channel" in out
+    assert A._dm_scope_broken is True                                  # stop retrying DMs this process
+    assert "skip_channels" not in emits[0]["payload"]                  # channel copy allowed
+    assert emits[0]["summary"].startswith("<@U9> ")                    # @mention leads the line
+    A._dm_scope_broken = False                                         # reset for isolation
+
+
+async def test_run_nudge_unlinked_is_in_app_only(monkeypatch):
+    A._dm_scope_broken = False
+    monkeypatch.setattr(A, "_assignee_slack_id", lambda gid: None)
+    emits = []
+    monkeypatch.setattr("services.notifications.emit", lambda **k: emits.append(k) or "nid")
+    out = await A.run_nudge(_staff(), "c1", dict(_NUDGE_ARGS))
+    assert "in-app nudge (Ivy has no Slack link)" in out
+    assert emits[0]["summary"].startswith("a reminder")               # no mention token
+
+
+# ---------------------------------------------------------------------------
 # reassign_task — permission + resolution + actor-bound requester
 # ---------------------------------------------------------------------------
 @pytest.fixture()

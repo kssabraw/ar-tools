@@ -196,7 +196,9 @@ async def execute_plan_selection(items: list[dict], selection: list[int],
         it = by_index.get(idx)
         if not it:
             continue
-        if role_rank(context.role) < role_rank(it["min_role"]):
+        # min_role None ⇒ the item was already authorized at stage (on-demand
+        # batches stage under the requester); Chase Plan items always carry one.
+        if it.get("min_role") and role_rank(context.role) < role_rank(it["min_role"]):
             lines.append(f"⛔ {idx}. {it['reason']} — needs *{it['min_role']}* or higher")
             continue
         try:

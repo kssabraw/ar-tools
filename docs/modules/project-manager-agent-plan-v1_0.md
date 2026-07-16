@@ -6,7 +6,71 @@ scope, PR #345 — dormant behind `pace_initiative_enabled`; §4.13 additionally
 behind `pace_daily_brief_push` + the Slack `im:write` scope) · **Sibling to:** SerMaStr (`seo-strategist-agent-plan-v1_0.md`) · **Rides:**
 the native task manager (`in-app-task-manager-prd-v1_0.md`) + the SerMaStr assistant
 (`services/slack_assistant/`) · **Authored:** 2026-07-11 · **Revised:** 2026-07-11
-(v1.1 review #1, v1.2 review #2), 2026-07-12 (v1.3 full-PM scope; v1.4 initiative)
+(v1.1 review #1, v1.2 review #2), 2026-07-12 (v1.3 full-PM scope; v1.4 initiative),
+2026-07-16 (v1.5 conversational fidelity)
+
+> **Revision note (v1.5 — conversational fidelity: enumerate, don't count).** Owner
+> report (2026-07-16): asking "what's overdue?" or "what does <member> have overdue?"
+> returned a high-level total ("there are 10 tasks overdue") instead of the actual
+> list — PACE read like a dashboard, not a PM. Three root causes, all fixed:
+> 1. **The no-client path was counts-only *by construction*.** A question with no
+>    named client short-circuited to `_portfolio_pace_text` — a deterministic template
+>    that only sums and says "name a client and I'll break it down"; it never reached
+>    the LLM and structurally could not list tasks. Now no-client questions build the
+>    **whole-agency board data** (`build_portfolio_context` — the full per-board
+>    overdue/stale/unassigned rows with client names, per-bucket capped) and hand it to
+>    the LLM to enumerate. `_portfolio_pace_text` is kept only as the error fallback.
+> 2. **No per-staff-member scope existed.** "What does Ivy have overdue?" is a
+>    person-scoped, cross-client question; the only person path (`personal_brief_text`)
+>    matched just *"what should **I** work on"*. Added `resolve_member` (whole-word
+>    roster-name match) + `build_member_context` (a member's open tasks across ALL
+>    clients, bucketed by urgency with client names) and a **member scope** in the
+>    shared router. Actions raised in member/portfolio scope resolve their target
+>    client from the task (`_resolve_task_client`) before staging.
+> 3. **Prompt + model biased to summarize.** The persona prompt now **mandates
+>    enumeration** (list name · client · assignee · due/days, grouped by urgency; a bare
+>    count only when there are genuinely no rows) and the **PM-autonomy** behaviour
+>    (after listing, name the specific lever per item and offer to pull it). The model
+>    moved from Haiku to **Sonnet** (`pace_model = claude-sonnet-4-6`, `pace_max_tokens`
+>    2400) so it reliably reasons over the board instead of collapsing lists.
+> Both entrypoints (Slack + web) now share one turn-resolution core (`_answer` →
+> `_resolve_scope` → `interpret_pace` → stage), so scope routing + actor-bound
+> confirmation stay identical across surfaces. No new infra, no schema change; all
+> gated by the existing `pace_enabled`.
+>
+> **Structural autonomy (same revision, `services/pace_batch.py`).** Two
+> conversational-autonomy levers on top of enumeration:
+> - **Drill-down** — a read-only `drill_task` tool (subtask rollup, recent
+>   activity, comments, days-in-status via `pace_agent._drill_read`) executed
+>   inline over a bounded loop (`_PACE_TOOL_ROUNDS`=3, forced to text on the last
+>   round, mirroring `interpret_portfolio`), so PACE can explain *why* a task is
+>   stuck instead of only naming it.
+> - **On-demand batches** — a `batch_action` tool. One instruction ("nudge all of
+>   Ivy's overdue", "bump every overdue date on Acme", "reassign the unassigned
+>   ones to Marcus") deterministically expands a `selector` (overdue / stuck /
+>   unassigned / no-due-date / due-today / this-week) over the scope's
+>   already-built board data (`select_targets` — never a hallucinated task),
+>   stages each as a `PACE_ACTIONS` item **under the requester** (so each is
+>   permission-checked + confirm-line'd at stage), and presents them as ONE
+>   confirm reusing the Chase Plan executor (`pace_proposals.execute_plan_selection`
+>   / `parse_plan_reply` — reply *yes* for all, `yes 1,3` to pick). Items carry
+>   `min_role=None` (pre-authorized at stage) so `execute_plan_selection` skips the
+>   role re-check for on-demand batches while Chase Plan items keep it; on-demand
+>   batch pendings are **actor-bound** (only the requester confirms) on both Slack
+>   (`_pace_pending` batch entry) and web (`_store_web_batch` token). Capped at
+>   `_BATCH_MAX`=15 with an overflow note; unstageable targets become ⚠️ flag lines.
+>
+> **Direct-DM nudges (same revision, `pace_actions.run_nudge`).** A nudge now
+> prefers a **direct Slack DM** to the assignee (`post_message(slack_user_id, …)`,
+> the pace_briefs DM primitive — needs the app's `im:write` scope) over an
+> @mention in the shared channel. Graceful, three-tier degrade: linked + scope →
+> DM; linked but DMs off/unavailable → channel @mention; unlinked → in-app only.
+> The in-app copy is always written; the DM path sets `skip_channels=["slack"]` so
+> the channel isn't double-posted. A first `missing_scope`/`invalid_auth` error
+> trips a process-level `_dm_scope_broken` flag so later nudges skip the failing
+> DM call and use the channel until the scope is granted (self-heals on redeploy).
+> Config `pace_nudge_via_dm` (default True — safe before the scope lands because
+> of the fallback). `run_nudge` is now async (the registry already awaits `run`).
 
 > **Revision note (v1.4 — initiative: from coordinator to manager).** Owner target
 > (2026-07-12): PACE should cover **90–95% of the internal delivery-PM job**. The gap
