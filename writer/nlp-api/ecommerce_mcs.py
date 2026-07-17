@@ -584,10 +584,13 @@ def build_mcs_prompt_block(
     entity: MCSEntity,
     facts: list[str],
     synthesized: Optional[list[ScoredHeading]] = None,
+    noun: str = "product",
 ) -> str:
-    """Render the MCS guidance block for the ecommerce generation prompt.
-    Returns '' when there is nothing useful to inject (no facts and a plain
-    input-fallback entity), so pages without an AIO behave exactly as today."""
+    """Render the MCS guidance block for the generation prompt. `noun` labels the
+    subject's data/facts ("product" for ecommerce, "business" for local SEO) so
+    the same engine serves both writers. Returns '' when there is nothing useful
+    to inject (no facts and a plain input-fallback entity), so pages without an
+    AIO behave exactly as today."""
     have_signal = bool(facts) or entity.source in ("aio",) or bool(entity.variants)
     if not have_signal:
         return ""
@@ -595,8 +598,8 @@ def build_mcs_prompt_block(
     lines: list[str] = [
         "MAX-COSINE TARGET (from the live Google AI Overview for this query) — "
         "use this to aim the ENTITY and HEADINGS at the answer Google already "
-        "rewards. This does NOT license new facts; obey the HARD RULE on "
-        "fabrication above and use only provided product data for specifics.",
+        "rewards. This does NOT license new facts; obey the anti-fabrication rules "
+        f"above and use only provided {noun} data for specifics.",
         f"- MAIN ENTITY to repeat across H1/H2/H3 (in this surface form): \"{entity.canonical}\".",
     ]
     if entity.variants:
@@ -607,7 +610,7 @@ def build_mcs_prompt_block(
     if synthesized:
         lines.append(
             "- HEADINGS — use these max-cosine heading targets (entity + a point "
-            "the answer makes), adapting wording to the real product facts and "
+            f"the answer makes), adapting wording to the real {noun} facts and "
             "dropping any you cannot support truthfully:"
         )
         for s in synthesized:
@@ -615,7 +618,7 @@ def build_mcs_prompt_block(
     elif facts:
         lines.append(
             "- Build each H2/H3 as the MAIN ENTITY + one of these points the "
-            "answer actually makes (one point per heading; adapt to real product "
+            f"answer actually makes (one point per heading; adapt to real {noun} "
             "facts, drop any you cannot support):"
         )
         for fact in facts:
