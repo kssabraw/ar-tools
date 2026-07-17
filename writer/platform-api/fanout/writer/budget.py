@@ -65,6 +65,26 @@ def allocate_budget(
     return out
 
 
+def mcs_answer_validated_orders(
+    headings: list[BriefHeading], *, aio_present: bool, chatgpt_present: bool,
+) -> set[int]:
+    """MCS-proper adherence — the parent-H2 `order`s whose answer-adherence was already
+    decided by the brief's Max-Cosine Synthesis against the live AI answer(s).
+
+    When an answer-engine target was present, MCS selected these content H2s to *cover
+    that answer* (in the correct dual embedding space). Re-dropping them by cosine-to-
+    **title** would measure a different thing in a different space and can discard
+    genuinely on-answer headings the brief chose — so the caller exempts these orders
+    from the title-adherence gate. With no answer-engine target (MCS could not score),
+    nothing is exempt and the title-cosine proxy stands."""
+    if not (aio_present or chatgpt_present):
+        return set()
+    return {
+        h.order for h in headings
+        if h.type == "content" and h.level == "H2" and (h.source or "") == "mcs"
+    }
+
+
 def drop_low_adherence(
     headings: list[BriefHeading], scores: dict[int, float], *,
     threshold: float = ADHERENCE_THRESHOLD,
