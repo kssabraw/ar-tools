@@ -504,8 +504,8 @@ Section 1 — Intro / Direct Answer Block (100–150 words)
 
 Section 2 — USP / Value Proposition (150–200 words)
 <section id="usp">
-  <h2>[Single sentence combining: exact match keyword + persuasion/outcome + 1–2 entities]</h2>
-  FIRST H2 FORMULA: Must be a complete sentence (not a fragment) that includes the primary keyword, a persuasive outcome or differentiator, and 1–2 entities. (e.g. "When Anaheim Homeowners Need an Emergency Plumber Fast, [Brand] Delivers Same-Day Repairs Across Orange County")
+  <h2>[Single sentence combining: the main entity (service, + city where it fits) worded naturally + persuasion/outcome + 1–2 entities]</h2>
+  FIRST H2 FORMULA: Must be a complete sentence (not a fragment) that names the main entity — the service (and city where it reads naturally) — paired with a persuasive outcome or differentiator and 1–2 entities. Word the entity NATURALLY; do NOT drop the exact-match keyword in verbatim. Exact-match keywords stuffed into H2s are a demoting signal — the H1 already carries the primary keyword verbatim (rule 9), so front the service + the buyer's situation here instead. (e.g. "When Anaheim Homeowners Face a Burst Pipe After Hours, [Brand] Delivers Same-Day Emergency Plumbing Across Orange County" — names the service + city + situation without repeating the exact query string)
   [Min 3 differentiators with mechanisms. One contrast statement. One proof signal.]
 </section>
 
