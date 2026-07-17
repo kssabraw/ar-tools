@@ -46,7 +46,7 @@ A per-suite **Websites** module (with per-client attachment) that:
 1. **Ingests a Claude Design export** (uploaded HTML/zip, or a pasted share/export URL) and **compiles it into an Astro theme**: design tokens (colors, fonts, spacing), layout components (header/footer/nav), and section components (hero, service card, review strip, article card…) with content slots — then renders a **preview** the user approves before anything is provisioned.
 2. **Provisions the site**: creates a GitHub repo from a house **`ar-site-template`** Astro repo, commits the compiled theme + a `site.config.json`, creates the Cloudflare project, and deploys a skeleton immediately (every site gets a `*.workers.dev`/`*.pages.dev` staging URL before the real domain exists). Attaches the custom domain + DNS when the zone is on Cloudflare.
 3. **Generates and populates content** using the engines the suite already has:
-   - **Local business site**: site plan from Plan Silo + GBP → home, `/services/<slug>`, `/locations/<slug>`, about, contact (+ optional `/blog`). Business facts and LocalBusiness/Service JSON-LD come from GBP — the writer never invents NAP.
+   - **Local business site**: site plan from Plan Silo + GBP → home, `/services/<slug>`, `/locations/<slug>`, about, contact (+ optional `/blog`). Business facts and LocalBusiness/Service JSON-LD come from the client's business-facts block (manual entry > GBP — §4.5; GBP is a source, not a dependency) — the writer never invents NAP.
    - **Informational site**: content plan from Keyword Research / Fanout → `/ [category] / [post]` articles from the Blog Writer pipeline, plus magazine home, category indexes, RSS, author/about pages.
    - Content is committed to the repo as **content-collection Markdown with frontmatter** (blogs are native Markdown; local pages converted via the existing HTML→Markdown path, JSON-LD carried in frontmatter and injected by the layout).
 4. **Deploys on every content change** (build in GitHub Actions → deploy to Cloudflare) and records deploy status per commit.
@@ -146,7 +146,24 @@ Themes are versioned (`website_themes.version`); recompiling a re-uploaded desig
 
 Generated content **also** persists where it already does (`local_seo_pages`, `runs`) — the website row links to those records, so scoring/reoptimization keep working; a reoptimized page can be re-published to the repo (new commit) from the same UI. `website_pages` maps content → repo path + commit sha + route + status (`draft | queued | published | failed`), and per-item publish jobs are **id-based idempotent** (a retry never duplicates a commit for an already-published sha), mirroring the syndication module's contract.
 
-Home pages get a dedicated composer: for local sites, assembled from GBP + services + reviews into the theme's section components (one nlp-api call with a home-page prompt profile — a v1 prompt-design task, see §16 Q9); for info sites, the home is a deterministic template (latest posts, categories) needing no LLM.
+Home pages get a dedicated composer: for local sites, assembled from business facts + services + reviews into the theme's section components (one nlp-api call with a home-page prompt profile — a v1 prompt-design task, see §12 Q9); for info sites, the home is a deterministic template (latest posts, categories) needing no LLM.
+
+### 4.5 Business facts & the no-GBP path
+
+GBP is **one source of business facts, not a dependency** — and site-before-GBP is likely the *default* order for this module: a brand-new business (e.g. a LeadOff market-entry play) needs the website first, because GBP verification goes smoother when the listing can point at a live site. So the design is:
+
+**Precedence: manual entry > GBP > absent.** The template's `site.config.json` business block (name, address, phone, hours, service areas, categories) is populated at provisioning with per-field-group provenance (`source: "user" | "gbp"`, mirroring how brand voice tracks user-authored vs scanned text). In the creation wizard, a client with a GBP on file pre-fills the block from it; a client without one gets a **business-facts form** as a first-class wizard step (only the facts that exist — everything is optional except the business name). Nothing downstream cares where the facts came from: the writer still never invents NAP, it just reads the config.
+
+**Every fact-consuming surface degrades by section** (the theme contract treats sections as optional slots, so a missing section is a no-op, not a broken layout):
+
+- **NAP + LocalBusiness JSON-LD** — emitted from whatever facts exist. A service-area business, or one with no address yet, suppresses the street address and leans on `areaServed`.
+- **Review strip** — not rendered until reviews exist.
+- **Hours / categories** — render if present, omit if not.
+- **Home-page composer** — its prompt receives whatever facts + ICP/differentiators are available; with no reviews it writes a proof-free hero (services + service area + positioning) rather than fabricating social proof.
+
+**The content engines are GBP-independent anyway.** Plan Silo's inputs are a typed seed service + area; GBP's service area is only one of four multi-city discovery sources (manual `target_cities`, site place-names, and Overpass nearby-cities still work). The nlp-api generator, scoring, and reoptimization don't touch GBP. The auto brand-voice/ICP scans already skip gracefully when a client has neither website nor GBP — and once this module deploys the site, the client *has* a website, so those scans become possible where they previously had nothing to analyze.
+
+**When the GBP arrives later**, the existing paste-a-link/resolve flow captures it on the client, and the module refreshes the business block on the next config re-commit — but under the precedence rule GBP **fills gaps and never silently overwrites user-entered facts** (same philosophy as the auto-scans never overriding user-authored voice/ICP). Reviews start flowing into the review strip, and the loop closes: the live site gives the new GBP something to link to, and the geo-grid then measures whether the market entry worked.
 
 ---
 
