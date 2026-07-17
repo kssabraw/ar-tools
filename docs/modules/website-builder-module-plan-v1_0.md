@@ -65,7 +65,7 @@ A per-suite **Websites** module (with per-client attachment) that:
 
 **Non-goals (v1)**
 - A visual page editor / drag-drop builder. Design changes happen in Claude Design → re-upload → theme recompile.
-- E-commerce, forms backends beyond a simple contact form (Cloudflare Worker → email/notification), auth, or any dynamic server rendering. Sites are static output.
+- E-commerce, forms backends beyond the Web3Forms contact form (§4.8), auth, or any dynamic server rendering. Sites are static output.
 - Domain **purchase** automation (registrar APIs are patchy; v1 assumes the domain exists in the Cloudflare account or gets a manual NS step).
 - Multi-language sites.
 - Migrating existing client websites into the module (import is a later phase, if ever).
@@ -135,7 +135,7 @@ Two viable Cloudflare paths:
 3. Deterministic post-checks: valid Astro/HTML, no external script/style URLs (self-contained), all tokens referenced exist, sample page renders.
 4. Output: theme files stored (storage bucket + `website_themes` row) and a **static preview** (sample page with placeholder content) rendered to the bucket → signed URL shown in the UI. **User approves the preview before provisioning** — this is the fidelity gate; a bad compile costs a re-run, never a bad live site.
 
-Themes are versioned (`website_themes.version`); recompiling a re-uploaded design creates a new version, and applying it to a live site is an explicit action (commit → redeploy). Info sites can **share a theme** across sites (theme library); a local business site's theme is typically its own.
+Themes are versioned (`website_themes.version`); recompiling a re-uploaded design creates a new version, and applying it to a live site is an explicit action (commit → redeploy). **Themes are reusable across sites and industries** (owner ruling 2026-07-17): the theme library is industry-agnostic, so the efficient steady-state is a handful of approved house themes where a new site is often just a token swap (colors, logo, fonts) on an existing theme — a fresh Claude Design session is for genuinely custom builds, not every site.
 
 ### 4.4 Content mapping
 
@@ -175,9 +175,32 @@ Per page:
 
 - **Home** — inputs: the §4.5 business-facts block, the site plan's *selected* services (teasers link to real `/services/*` routes), reviews if any, ICP + differentiators, brand voice. The LLM writes hero/positioning/teaser copy into the slot structure; LocalBusiness JSON-LD is emitted deterministically from facts. No reviews → proof-free hero (§4.5).
 - **About** — the trust/entity page, the most LLM-shaped of the three. The wizard gains an optional **"about facts"** free-text box (origin story, years in business, certifications, team — the user-authored brand guide often already carries this). The LLM writes the narrative in brand voice under the same hard rule as the ecommerce writer: **factual claims (license numbers, years, awards) come only from provided facts; missing facts land in a `content_gaps` report**, never invented. AboutPage/Organization JSON-LD deterministic.
-- **Contact** — nearly zero LLM. NAP, hours table, service-area list, and the CF Worker contact form are deterministic renders of the facts block; the map embed comes from the GBP place_id or the geocoded address. (A Google Maps iframe is the one sanctioned exception to the theme's "self-contained, no external scripts" rule.) The only generated text is a short intro blurb, batched into the same call rather than its own request. ContactPage JSON-LD deterministic.
+- **Contact** — nearly zero LLM. NAP, hours table, service-area list, and the Web3Forms contact form (§4.8) are deterministic renders of the facts block; the map embed comes from the GBP place_id or the geocoded address. (The Google Maps iframe and the §4.8 third-party snippets are the sanctioned exceptions to the theme's "self-contained, no external scripts" rule.) The only generated text is a short intro blurb, batched into the same call rather than its own request. ContactPage JSON-LD deterministic.
 
 **Mechanics:** one `website_core_pages` job generates all three at site setup (each individually regenerable afterward); it is freeze-gated like all content generation. Validation replaces scoring: required slots filled, length bounds, and a deterministic **facts-consistency check** that the output contains no NAP/claims absent from the facts block.
+
+### 4.7 Imagery
+
+A local business site without photos looks generated. Every hero, service card, and about section needs an image, sourced down this ladder (best trust signal first):
+
+1. **GBP photos** — real storefront/jobsite photos already attached to the listing; the GBP enrichment path pulls them into a per-site media library. Strongest local trust signal, $0.
+2. **Client uploads** — a media step in the wizard reusing the existing file-upload path (and `clients.logo_url` for the logo).
+3. **AI-generated** (owner ruling 2026-07-17: include an image-generation API) — a provider-pluggable `image_gen` service fills whatever the ladder leaves empty. **Default: Gemini image generation ("Nano Banana")** — `GEMINI_API_KEY` is already on PLATFORM (AI-visibility engine), so no new vendor; **OpenAI** (`gpt-image-1`) as the config-switchable alternative (key also already provisioned); **Ideogram** optional behind a new key if text-in-image graphics are ever needed (`website_image_provider` config, mirroring the `report_llm` provider-selection pattern). Prompts are derived from the page context (service, area, brand palette from the theme tokens). Guardrail: generated images are used as **illustrative/hero art, never presented as real jobsite/team/before-after photos** — fabricated "proof" imagery is the trust equivalent of invented NAP.
+
+Mechanics: images land in the site repo's `public/` (Astro's asset pipeline handles responsive sizes at build), each with LLM-written alt text; `website_pages` slots record the image source (`gbp|upload|generated`) so a later real photo can replace a generated one surgically. Generation rides the existing job pattern (part of `website_core_pages` / per-page publish jobs, freeze-gated).
+
+### 4.8 Launch kit & lead handling
+
+Everything between "pages generated" and "site you'd hand a client," owned by the module so launches don't revert to manual fiddling. **Owner rulings 2026-07-17:** launch inputs are **a form filled out in the module**; analytics/GSC snippets are added **after the site is live** (a post-launch settings panel, not a wizard blocker); forms are handled by **Web3Forms**; calls most likely by **CallRail**, else a user-provided phone number.
+
+- **Launch form (in-module):** logo/favicon (pre-filled from `clients.logo_url`), the §4.5 business facts, about facts (§4.6), form recipient email, phone setup (below). Deterministic **privacy policy / terms** pages render from templates with the business facts merged in — no LLM.
+- **Post-launch settings panel:** GA4 snippet id, GSC (the module's DNS-TXT auto-verify — §8), CallRail snippet, and any other third-party tags — editable any time; each change is a config re-commit + redeploy, never a regeneration.
+- **Forms — Web3Forms:** the contact form POSTs to Web3Forms with a per-site access key stored in `websites.config` (static-site-friendly, no backend of ours; submissions go to the configured recipient email). The earlier CF-Worker form idea is dropped. Follow-up (not v1): a webhook copy into the suite so lead volume is visible in-app — the module's own success metric, and the number that proves a LeadOff market entry worked.
+- **Calls — CallRail (or plain number):** the phone block distinguishes **real number** (emitted in LocalBusiness JSON-LD and the GBP-consistent NAP) from **displayed number** (CallRail tracking number / dynamic-number-insertion snippet on-page) — the standard local-SEO pattern so citations stay consistent while calls get attributed. No CallRail → the user-provided number is used for both.
+- **Nav + internal linking:** header/footer nav generated from the site plan, with silo-aware internal links between service and location pages (the SEO structure Plan Silo already implies, rendered deterministically).
+- **Launch checklist view:** a per-site checklist in the UI — domain active, GSC verified, form test submission received, legal pages present, images sourced — so "is it done" is a glance, not an audit.
+
+The Maps iframe, Web3Forms endpoint, and CallRail/GA4 snippets are the **sanctioned exceptions** to the theme's self-contained rule; the theme compiler still strips everything else.
 
 ---
 
@@ -196,11 +219,11 @@ Backend services: `website_theme.py` (ingest + compile), `website_provision.py` 
 
 Routes (shape, not exhaustive): themes CRUD + compile + approve; websites CRUD; `POST /websites/{id}/provision`; site-plan build + review (`GET/POST /websites/{id}/plan`); publish selected pages; `POST /websites/{id}/domain` (attach + DNS + status); deploys list; per-page retry/republish.
 
-Frontend: suite-level **`pages/Websites.tsx`** (sidebar entry; list + create wizard: client → type → design upload/URL → theme preview/approve → business facts + about facts (local sites, §4.5/§4.6) → provision → plan review → generate → publish) and a client-workspace **"Websites"** card filtered to that client. Deploy status chips poll `website_deploys`; the plan-review screen reuses the Plan Silo selection UX (checkboxes + bulk bar + `useBulkCreate` patterns).
+Frontend: suite-level **`pages/Websites.tsx`** (sidebar entry; list + create wizard: client → type → design upload/URL or pick a house theme (§4.3) → theme preview/approve → launch form (business facts, about facts, media, form recipient, phone setup — §4.5/§4.6/§4.8) → provision → plan review → generate → publish) plus a per-site **post-launch settings panel** (analytics/GSC/CallRail snippets, §4.8) and **launch checklist view**, and a client-workspace **"Websites"** card filtered to that client. Deploy status chips poll `website_deploys`; the plan-review screen reuses the Plan Silo selection UX (checkboxes + bulk bar + `useBulkCreate` patterns).
 
 ## 7. Credentials & config
 
-New env on `PLATFORM`: `GITHUB_SITES_TOKEN` (fine-grained PAT or GitHub App for a **dedicated sites org** — repo create/contents/secrets/actions-read only, NOT the ar-tools repo), `GITHUB_SITES_ORG`, `CLOUDFLARE_API_TOKEN` (Workers/Pages + DNS edit, scoped to the sites account), `CLOUDFLARE_ACCOUNT_ID`. Config: `website_builder_enabled` (default False), `website_theme_model` (Sonnet), `website_publish_job_spacing_seconds` (reuse the bulk-stagger pattern), `website_template_repo`.
+New env on `PLATFORM`: `GITHUB_SITES_TOKEN` (fine-grained PAT or GitHub App for a **dedicated sites org** — repo create/contents/secrets/actions-read only, NOT the ar-tools repo), `GITHUB_SITES_ORG`, `CLOUDFLARE_API_TOKEN` (Workers/Pages + DNS edit, scoped to the sites account), `CLOUDFLARE_ACCOUNT_ID`, `WEB3FORMS_API_KEY` (per-site access keys created/stored in `websites.config`), optionally `IDEOGRAM_API_KEY` (only if that provider is enabled — the default image provider reuses the existing `GEMINI_API_KEY`/OpenAI keys, §4.7). Config: `website_builder_enabled` (default False), `website_theme_model` (Sonnet), `website_image_provider` (`gemini|openai|ideogram`, default `gemini`), `website_publish_job_spacing_seconds` (reuse the bulk-stagger pattern), `website_template_repo`.
 
 Repos are **private** (content is invisible until deployed; drafts never leak). The Cloudflare token in repo secrets is the standard Actions pattern; scope it to deploy-only.
 
@@ -220,7 +243,7 @@ Repos are **private** (content is invisible until deployed; drafts never leak). 
 | **0 — Foundations** | Owner decisions (§12), creds provisioned, **`ar-site-template` built by hand** (the template is real engineering: theme contract, collections, SEO plumbing, deploy workflow), migration, config flags. One site deployed *manually* from the template end-to-end to prove the GitHub→Actions→Cloudflare line before any module code. | The manual dry run de-risks everything downstream. |
 | **1 — Theme pipeline** | Upload/URL ingest → `website_theme_compile` → preview → approve. Theme library CRUD. | Testable in isolation (fixtures of real Claude Design exports). |
 | **2 — Provision + deploy** | Repo-from-template, theme commit, secrets, CF project, first deploy, staging URL, `website_deploys` + poll job, custom domain + DNS attach. | Idempotent step machine; every step re-runnable. |
-| **3 — Local business sites** | Site plan (Plan Silo + fixed pages + business facts), core-pages generator (§4.6, incl. the three prompt profiles), generate → HTML→MD → publish jobs, plan-review UI. | The nlp-api engine is reused unchanged for service/location pages; the core-pages endpoint is the one new generation surface. |
+| **3 — Local business sites** | Site plan (Plan Silo + fixed pages + business facts), core-pages generator (§4.6, incl. the three prompt profiles), imagery ladder + `image_gen` service (§4.7), launch form + Web3Forms/phone setup + legal pages + checklist (§4.8), generate → HTML→MD → publish jobs, plan-review UI. | The nlp-api engine is reused unchanged for service/location pages; the core-pages endpoint is the one new generation surface. |
 | **4 — Informational sites** | Content plan from Keyword Research/Fanout, Blog Writer runs → posts, categories/RSS/home, drip publishing via the Fanout scheduler. | Blog output is already Markdown — lightest content phase. |
 | **5 — Operate & polish** | GSC auto-verify → rank tracker hookup, notifications, SerMaStr provider, theme re-apply/versioning UX, template-upgrade roll-out mechanism. | |
 
@@ -230,15 +253,18 @@ Repos are **private** (content is invisible until deployed; drafts never leak). 
 - **Thin/doorway-site SEO risk**: mass-generated local pages are exactly what Google's scaled-content policies target. Mitigations already exist — the nlp-api scoring/reopt loop, Plan Silo's relevance gating — plus the human plan-review gate. Info-site drip cadence is throttled by the Fanout scheduler's existing gating. This is an agency-judgment surface, not a module-automation surface.
 - **GitHub/Cloudflare API drift + rate limits**: thin clients, per-item staggered jobs (the suite's existing bulk pattern), and the repo-is-the-site property means the blast radius of API failure is "publish delayed", never "site down".
 - **Secrets sprawl**: one deploy token per Cloudflare account (not per site), set as repo secrets by the provisioner; rotation = update secrets via API across repos (a listed follow-up script).
-- **Contact forms / anything dynamic**: out of v1 except a single optional CF Worker form handler in the template; scope creep here is the classic website-builder tarpit — the non-goals list is the defense.
+- **Contact forms / anything dynamic**: out of v1 except the Web3Forms contact form + the sanctioned third-party snippets (§4.8); scope creep here is the classic website-builder tarpit — the non-goals list is the defense.
+- **AI imagery trust risk**: generated images are illustrative only — never presented as real jobsite/team/before-after photos (§4.7); the GBP-photos-first ladder keeps real photos winning whenever they exist.
 
 ## 11. Cost
 
-Hosting is ~$0 (private GitHub repos on the org plan, Cloudflare free tier covers static sites/Workers at this scale). Per-page LLM cost is the same as the existing generators (the only new generation surface is the core-pages endpoint (§4.6) — a few Claude calls per site, no SERP spend). Theme compile ≈ one Sonnet call per design version. The only new spend surface is negligible (GitHub/CF API calls are free).
+Hosting is ~$0 (private GitHub repos on the org plan, Cloudflare free tier covers static sites/Workers at this scale). Per-page LLM cost is the same as the existing generators (the only new generation surface is the core-pages endpoint (§4.6) — a few Claude calls per site, no SERP spend). Theme compile ≈ one Sonnet call per design version. Image generation (§4.7) is cents per image — well under $1 per site at a typical 10–20 images, and $0 when GBP photos/uploads cover the ladder. Web3Forms/CallRail ride the agency's existing accounts. The only new spend surface is negligible (GitHub/CF API calls are free).
 
 ---
 
 ## 12. Open questions for the owner (blocking Phase 0)
+
+> **Resolved (owner rulings 2026-07-17):** include an image-generation API (§4.7 — default Gemini/Nano Banana, OpenAI alternative, Ideogram optional); launch inputs are a form filled out in the module, with analytics/GSC snippets added post-launch (§4.8); forms via **Web3Forms**; calls via **CallRail** where used, else a user-provided number (§4.8); **themes are reusable across industries** (§4.3).
 
 1. **GitHub home for site repos** — a dedicated org (recommended: keeps the sites token away from ar-tools) vs the existing account? Org name?
 2. **Cloudflare account** — existing agency account or a dedicated one? Confirm API token can be scoped to Workers + DNS on it.
@@ -250,3 +276,6 @@ Hosting is ~$0 (private GitHub repos on the org plan, Cloudflare free tier cover
 8. **Locked-decision sign-off** — the roadmap locks the Blog Writer's publish destination as Google Doc ("CMS-ready later"). This module is the "later": adding *website* as an additional destination is additive, not a reversal — but it touches a locked line, so explicit sign-off.
 9. **Core-pages prompt copy** — the core-pages generator (§4.6) needs three small prompt profiles (home / about / contact blurb). Per the "things to ask" convention: exact prompt copy is an owner-involved design task in Phase 3.
 10. **Volume expectation** — roughly how many sites in year one, and posting cadence per info site? (Sanity-checks the free-tier assumption and the job-stagger tuning; nothing in the design breaks at 10× but the answer shapes defaults.)
+11. **Web3Forms account** — whose account/API key, and per-site access keys vs one shared key? (Per-site recommended: a leaked key only spams one site's inbox, and per-site recipient routing is free.)
+12. **CallRail specifics** — which CallRail account, and per-site tracking numbers vs the dynamic-number-insertion snippet? (Determines whether the phone block stores a number or a snippet; the real-number-in-JSON-LD rule holds either way.)
+13. **Pilot clients** — one client *with* a GBP and one without (the §4.5 path) to validate Phase 3 end-to-end, plus a real Claude Design export sample for the Phase 1 fixture (Q4).
