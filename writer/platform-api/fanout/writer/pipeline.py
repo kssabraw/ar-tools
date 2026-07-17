@@ -358,10 +358,6 @@ def _write_takeaways(deps: WriterDeps, brief: Brief, body_text: str) -> tuple[li
 # ----- orchestration --------------------------------------------------------
 
 
-def _content_h2_texts(brief: Brief) -> list[str]:
-    return [h.text for h in brief.heading_structure if h.level == "H2" and h.type == "content"]
-
-
 def generate_article(
     brief: Brief, sie: SieInput, *, warnings: dict, deps: WriterDeps,
     word_budget: int | None = None, coverage_enabled: bool = True,
@@ -381,14 +377,27 @@ def generate_article(
     title = brief.title
     title_vec = deps.embed_fn([title])[0]
 
-    # Step 3 — topic-adherence filter over content H2s (cosine to title).
-    h2_texts = _content_h2_texts(brief)
+    # Step 3 — topic-adherence filter over content H2s. MCS-proper: when the brief had a
+    # live AI-answer target, its Max-Cosine Synthesis already selected the H2s against
+    # that answer (the real adherence decision, in the correct dual space) — so those
+    # headings are exempt here and the title-cosine gate only bites on non-MCS rows
+    # (degraded / organic-fallback briefs, or briefs with no answer-engine target).
+    mcs_meta = (brief.metadata or {}).get("mcs") or {}
+    exempt_orders = budget_mod.mcs_answer_validated_orders(
+        brief.heading_structure,
+        aio_present=bool(mcs_meta.get("aio_present")),
+        chatgpt_present=bool(mcs_meta.get("chatgpt_present")),
+    )
+    h2_texts = [
+        h.text for h in brief.heading_structure
+        if h.level == "H2" and h.type == "content" and h.order not in exempt_orders
+    ]
     scores: dict[int, float] = {}
     if h2_texts:
         h2_vecs = deps.embed_fn(h2_texts)
         vec_by_text = dict(zip(h2_texts, h2_vecs))
         for h in brief.heading_structure:
-            if h.level == "H2" and h.type == "content":
+            if h.level == "H2" and h.type == "content" and h.order not in exempt_orders:
                 scores[h.order] = _cosine(vec_by_text[h.text], title_vec)
     kept_orders, dropped = budget_mod.drop_low_adherence(
         brief.heading_structure, scores, threshold=adherence_threshold)
