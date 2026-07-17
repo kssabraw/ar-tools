@@ -51,6 +51,7 @@ WRITING RULES:
 - Write every key claim as a standalone, self-contained sentence that is fully understandable without the surrounding context (no pronouns pointing outside the sentence) - each key claim must be liftable verbatim into an AI answer.
 - Use bulleted/numbered lists and Markdown tables where they help comprehension. Distribute lists/tables across sections (do not stack in one).
 - Any table must put verifiable numbers/units or named noun-entities in its cells - never bare adjectives like "High", "Best", or "Reliable" - and must tie each specification to the specific scenario where it matters, quantifying trade-offs.
+- Comparative depth (Goldilocks): when a section weighs 2+ real options (products, methods, approaches), compare them on the SAME decision axes that actually drive the choice (cost, durability, effort, when-to-choose) at a depth that lets the reader decide and no more. Cover the genuine trade-offs concisely; never pad with trivial differences or manufacture a comparison where only one real option exists.
 - No promotional superlatives ("the best", "industry-leading", "world-class").
 - Cite specific facts using {{cit_N}} markers immediately after the closing punctuation of the sentence, like: "Heat pump installations grew 11% year over year.{{cit_001}}"
 - Use the citation_id values provided. Never invent citation IDs.
@@ -64,7 +65,7 @@ INTENT_GUIDANCE = {
     "how-to": "This is a how-to article. Write each H2 as a numbered step. First sentence = the action instruction. Use H3s for sub-steps.",
     "listicle": "This is a listicle. Each H2 is a list item with a clear label. Use parallel structure across items.",
     "informational": "This is informational. Explanatory prose with answer-first paragraphs. Use evidence and concrete examples.",
-    "comparison": "This is a comparison piece. Each section evaluates the same axis across compared options. Maintain parallel structure.",
+    "comparison": "This is a comparison piece. Each section evaluates the same axis across compared options, maintaining parallel structure. Comparative depth (Goldilocks): go deep on the axes that actually drive the decision so the reader can choose, but no deeper - cover the real trade-offs, do not pad with trivial differences.",
     "local-seo": "Informational base with service framing. Avoid claims tied to specific cities you cannot verify.",
     "ecom": "Feature-benefit framing focused on practical outcomes. Neutral tone, not promotional.",
     "informational-commercial": "Buyer-education tone. Compare options. Do not endorse a single product.",

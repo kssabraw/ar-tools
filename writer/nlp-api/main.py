@@ -606,6 +606,12 @@ select, ANSWER-FIRST and CONDITION-FIRST:
   guarantees. This is subject to all FACTUAL ACCURACY rules below.
 - Keep it concise and genuinely decision-useful; do not add a gimmicky standalone marketing
   heading and do not pad with vague "it depends" filler.
+- COMPARATIVE DEPTH (Goldilocks): when the reader is genuinely weighing 2+ options (tiers,
+  repair vs replace, material A vs B, emergency vs scheduled), compare them on the SAME
+  decision axes that actually matter — cost, durability, timeline, disruption, when-to-choose —
+  ideally in the required comparison table plus a one-line "choose X if…, Y if…". Go deep
+  enough to let the reader decide, but NO deeper: cover the real tradeoffs, never pad with
+  trivial differences, and never manufacture a comparison when only one real option exists.
 
 HARD RULES — NEVER:
 - Start with "Welcome to [Brand]"
@@ -7373,7 +7379,7 @@ WRITING METHODOLOGY — Max-Cosine Score (MCS). This is HOW every section must b
 13. CTA: a clear, value-forward primary call-to-action (e.g. "Add to Cart", "Shop the collection") — prefer value framing over a bare "Buy now" where natural. Where truthful and provided, include trust signals (returns window, warranty, ratings, guarantees).
 14. Formatting hygiene: short paragraphs (1–2 sentences). Use <strong> SPARINGLY — a median of ~7 bold tags per page and NEVER more than 15 (over-bolding is associated with deindexing).
 15. Voice & audience: match the provided BRAND VOICE and speak directly to the provided IDEAL CUSTOMER.
-16. Decision-fit mapping (only when a real choice exists): if THIS product has genuine variants/options (size, strength, quantity, form, tier) OR there are relevant related products to route between, include a concise, answer-first condition→option treatment — "if your work needs X, choose A; if Y, choose B" — woven into the copy or as a small "which is right for you" list/table, using ONLY options actually offered. If the product is genuinely single-option with no meaningful choice, OMIT this — never manufacture a fake choice.
+16. Decision-fit mapping (only when a real choice exists): if THIS product has genuine variants/options (size, strength, quantity, form, tier) OR there are relevant related products to route between, include a concise, answer-first condition→option treatment — "if your work needs X, choose A; if Y, choose B" — woven into the copy or as a small "which is right for you" list/table, using ONLY options actually offered. COMPARATIVE DEPTH (Goldilocks): when you do compare, compare the options on the SAME decision axes that matter for THIS product (e.g. size/strength, use-case fit, per-unit value) — deep enough to let the buyer choose, but NO deeper; cover the real tradeoffs, never pad with trivial differences. If the product is genuinely single-option with no meaningful choice, OMIT this — never manufacture a fake choice.
 
 PAGE-TYPE DIRECTIVE (stated in the user message):
 - PRODUCT — write a single STORE product page (PDP) for THIS product. When a "STRUCTURE TO MIRROR" block is supplied, follow THAT layout; otherwise use this default commerce-first section order:
