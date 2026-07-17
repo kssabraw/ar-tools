@@ -5453,6 +5453,53 @@ class GeneratePageResponse(BaseModel):
     content_gaps: list = []
 
 
+async def _local_seo_mcs_block(client, serp_analysis_dict: Optional[dict], keyword: str) -> str:
+    """Max-Cosine Synthesis for local service pages — the SRT's 'real cosine vs the
+    AIO answer' (MCS proper). Reuses the shared MCS engine: the main entity is the
+    service+city keyword; the AIO answer's points become max-cosine heading targets
+    (Gemini cosine synthesis). Best-effort — returns '' when no AIO was captured, on
+    any failure, or without GEMINI_API_KEY (then it degrades to entity+facts guidance,
+    or nothing). The AIO is already captured on the shared SERP path; this just uses it."""
+    sa = serp_analysis_dict or {}
+    aio_text = (sa.get("aio_text") or "").strip()
+    if not sa.get("aio_present") or not aio_text:
+        return ""
+    try:
+        embed_fn = _gemini_embed if GEMINI_API_KEY else None
+        entity = await mcs.derive_main_entity(
+            page_type="service", input_entity=keyword, primary_keyword=keyword,
+            aio_text=aio_text, aio_sources=sa.get("aio_sources") or [], embed_fn=embed_fn,
+        )
+        facts: list = []
+        try:
+            fsys, fuser = mcs.build_fact_extraction_messages(aio_text, entity.canonical)
+            fmsg = await client.messages.create(
+                model=SCORE_MODEL, max_tokens=600,
+                system=[{"type": "text", "text": fsys}],
+                messages=[{"role": "user", "content": fuser}],
+            )
+            _token_record("local-seo-mcs-facts", SCORE_MODEL, fmsg.usage.input_tokens, fmsg.usage.output_tokens)
+            facts = mcs.parse_facts(fmsg.content[0].text)
+        except Exception as _fe:
+            logger.warning(f"local SEO MCS fact extraction failed (non-fatal): {_fe}")
+        synthesized = None
+        if embed_fn and facts:
+            try:
+                synthesized = await mcs.synthesize_headings(
+                    aio_text=aio_text, entity=entity.canonical, facts=facts, embed_fn=embed_fn,
+                )
+            except Exception as _se:
+                logger.warning(f"local SEO MCS synthesis failed (non-fatal): {_se}")
+        block = mcs.build_mcs_prompt_block(entity, facts, synthesized, noun="business")
+        if block:
+            logger.info(f"local SEO MCS: entity='{entity.canonical}' facts={len(facts)} "
+                        f"synth={len(synthesized) if synthesized else 0}")
+        return block
+    except Exception as _me:
+        logger.warning(f"local SEO MCS block failed (non-fatal): {_me}")
+        return ""
+
+
 @app.post('/generate-page')
 @limiter.limit("5/minute")
 async def generate_page(request: Request, body: GeneratePageRequest):
@@ -5485,6 +5532,12 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 serp_analysis_dict = None
 
         serp_ctx = _serp_context(serp_analysis_dict)
+
+        # Max-Cosine Synthesis (the SRT's "real cosine vs the AIO answer"): aim the
+        # main entity + H2/H3 headings at the live AI Overview via Gemini cosine
+        # synthesis. Best-effort; '' when no AIO was captured / on failure.
+        await q.put({"step": "progress", "progress": 60, "message": "Aligning headings to the AI answer…"})
+        mcs_block = await _local_seo_mcs_block(client, serp_analysis_dict, body.keyword)
 
         diff_text = ""
         if body.differentiators:
@@ -5705,6 +5758,7 @@ Full location: {body.location}
 {diff_text}
 {reviews_text}
 {website_text}
+{mcs_block}
 {serp_ctx}
 
 {decision_map_text}
@@ -5901,6 +5955,10 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
         page_zones = _parse_page_zones(existing_html)
         serp_ctx = _reopt_serp_context(page_zones, body.serp_analysis)
 
+        # Max-Cosine Synthesis against the live AI Overview (best-effort; '' when the
+        # supplied serp_analysis carried no AIO / on failure).
+        mcs_block = await _local_seo_mcs_block(client, body.serp_analysis, body.keyword)
+
         deficiency_text = "\n".join(
             f"  Engine: {d['engine']} (score: {d['score']}/100)\n"
             f"  Issues: {'; '.join(d.get('issues', []))}\n"
@@ -5946,6 +6004,7 @@ Primary keyword: {body.keyword}
 Target city: {city}
 Full location: {body.location}
 
+{mcs_block}
 {serp_ctx}
 
 {decision_map_text}
