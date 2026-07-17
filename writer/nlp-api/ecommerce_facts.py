@@ -41,6 +41,11 @@ _STORE_HINTS = (
     "third-party lab", "third party lab", "testing lab", "laboratory name",
     "accredit", "iso 17025", "certificate of analysis", "coa",
     "phone", "address", "hours", "contact", "vendor", "seller", "brand name",
+    # Clinical / therapeutic / regulatory / dosing — never researched.
+    "clinical", "trial", "efficacy", "therapeutic", "indication", "dosing",
+    "dosage", "administration route", "drug class", "mechanism of action",
+    "fda", "approval", "prescription", "regulatory", "weight loss",
+    "weight reduction", "investigational",
 )
 
 _PUBLIC_HINTS = (
@@ -57,8 +62,35 @@ _PUBLIC_HINTS = (
 )
 
 
+# Clinical / therapeutic / regulatory / dosing claims are NEVER invariant
+# physicochemical specs — they must not be auto-filled onto a consumer product
+# page (medical-claim + compliance risk). This is the hard line enforced in
+# `parse_researched_facts` even if the research model returns one. Receptor
+# targets + in-vitro binding constants (EC50/Kd) are DELIBERATELY absent here —
+# they're physicochemical binding properties and are allowed (owner ruling
+# 2026-07-17: identity + handling + receptor pharmacology).
+_EXCLUDED_FACT_HINTS = (
+    "clinical", "trial", "phase 1", "phase 2", "phase 3", "phase i", "phase ii",
+    "efficacy", "weight loss", "weight reduction", "body weight", "endpoint",
+    "placebo", "therapeutic", "indication", "treats", "treatment of",
+    "used to treat", "drug class", "mechanism of action", "investigational",
+    "dosing", "dosage", "administration route", "administration frequency",
+    "regimen", "how to use", "how to dose",
+    "fda", "approval", "approved", "prescription", "legal status", "regulatory",
+    "controlled substance", "scheduling",
+)
+
+
 def _norm(text: object) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
+
+
+def is_excluded_fact(field: object, value: object = "") -> bool:
+    """True when a researched fact is a clinical/therapeutic/regulatory/dosing
+    claim that must never be auto-filled (owner ruling 2026-07-17). Checked
+    against field + value; receptor/EC50 binding data is NOT excluded."""
+    blob = _norm(f"{field} {value}")
+    return any(h in blob for h in _EXCLUDED_FACT_HINTS)
 
 
 def classify_gap(gap: dict) -> str:
@@ -138,22 +170,36 @@ RESEARCH_TOOL = {
 
 RESEARCH_SYSTEM_PROMPT = (
     "You are a product-data researcher for an ecommerce page. Your ONE job is to "
-    "find the INVARIANT, publicly-documented specifications of a named product or "
-    "compound — the properties that are TRUE of the item itself no matter which "
-    "store sells it — and report each with an authoritative public citation.\n\n"
-    "RESEARCH (use web_search) and report ONLY facts like:\n"
+    "find the INVARIANT, publicly-documented PHYSICOCHEMICAL identity + handling "
+    "specifications of a named product or compound — the properties that are TRUE "
+    "of the item itself no matter which store sells it — and report each with an "
+    "authoritative public citation.\n\n"
+    "RESEARCH (use web_search) and report ONLY facts in these categories:\n"
     "  • Chemical identity: CAS number, molecular weight, molecular formula, "
-    "InChI/SMILES, IUPAC name\n"
-    "  • Peptide/biologic: amino-acid sequence, sequence length/residue count, "
-    "receptor targets\n"
+    "InChI/SMILES, IUPAC name, PubChem CID\n"
+    "  • Peptide/biologic identity: amino-acid sequence, sequence length/residue "
+    "count, receptor targets and in-vitro receptor-binding affinity/potency "
+    "(e.g. Kd or EC50 binding constants) — these are physicochemical binding "
+    "properties of the molecule\n"
     "  • Physical/handling: solubility (water/DMSO), standard reconstitution "
     "practice, post-reconstitution stability, storage temperature, purity assay "
     "norms (HPLC/MS)\n"
     "  • For non-chemical products: only manufacturer specs that are invariant "
     "across sellers (documented dimensions, materials, standardised ratings).\n\n"
-    "NEVER report vendor-specific facts — price, discounts, review counts or "
-    "ratings, THIS store's testing lab identity/accreditation, shipping or "
-    "returns terms, stock. Those belong to the store, not the product.\n\n"
+    "HARD EXCLUSIONS — NEVER report any of these (they are medical/vendor claims, "
+    "not invariant product specs, and must NOT appear on a consumer product "
+    "page):\n"
+    "  • Clinical-trial data or outcomes, efficacy/therapeutic results (e.g. "
+    "'X% body-weight reduction', trial phase, endpoints)\n"
+    "  • Therapeutic indications / medical uses / mechanism-of-action framed as "
+    "a benefit, drug class, 'treats/used for' claims\n"
+    "  • Dosing, administration route, or dosing frequency / regimens\n"
+    "  • Regulatory or legal status — FDA approval/warnings, prescription "
+    "status, 'only available via clinical trial', scheduling\n"
+    "  • Vendor facts — price, discounts, review counts/ratings, THIS store's "
+    "testing-lab identity/accreditation, shipping/returns terms, stock\n\n"
+    "If you are unsure whether a fact is an invariant physicochemical spec or a "
+    "clinical/medical/regulatory claim, DO NOT report it.\n\n"
     "RULES:\n"
     "  1. Only report a value you can source to an authoritative public page "
     "(PubChem, ChemSpider, DrugBank, NIH/NCBI, peer-reviewed literature, an "
@@ -214,6 +260,8 @@ def parse_researched_facts(raw_facts: list) -> list[dict]:
             continue
         if not source_url.lower().startswith(("http://", "https://")):
             continue
+        if is_excluded_fact(field, value):
+            continue  # clinical/therapeutic/regulatory/dosing — never auto-fill
         key = _norm(field)
         if key in seen:
             continue

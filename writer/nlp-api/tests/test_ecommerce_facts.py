@@ -106,6 +106,45 @@ def test_parse_handles_junk():
     assert ef.parse_researched_facts(["not a dict", 5, {}]) == []
 
 
+# --- exclusion of clinical/therapeutic/regulatory/dosing facts --------------
+
+def test_is_excluded_fact():
+    # excluded: clinical / therapeutic / regulatory / dosing
+    assert ef.is_excluded_fact("Phase 2 Clinical Outcome — Mean Body Weight Reduction", "24.2%")
+    assert ef.is_excluded_fact("Administration Route / Dosing Frequency", "SC weekly")
+    assert ef.is_excluded_fact("Drug Class / Mechanism", "triple agonist")
+    assert ef.is_excluded_fact("Regulatory status", "FDA investigational")
+    assert ef.is_excluded_fact("Therapeutic indication", "obesity")
+    # allowed: identity + handling + receptor pharmacology
+    assert not ef.is_excluded_fact("CAS Number", "2381089-83-2")
+    assert not ef.is_excluded_fact("Molecular Weight", "4731.3 Da")
+    assert not ef.is_excluded_fact("Receptor Binding EC50 — GLP-1R", "0.775 nM")
+    assert not ef.is_excluded_fact("Amino Acid Sequence", "YXQGT...")
+    assert not ef.is_excluded_fact("Solubility", "soluble in water")
+
+
+def test_parse_drops_excluded_but_keeps_receptor():
+    facts = ef.parse_researched_facts([
+        _fact(field="CAS Number", value="2381089-83-2"),
+        _fact(field="Receptor Binding EC50 — GIPR", value="0.0643 nM"),
+        _fact(field="Phase 2 Clinical Outcome", value="24.2% body weight reduction"),
+        _fact(field="Dosing Frequency", value="once weekly"),
+        _fact(field="FDA Approval Status", value="investigational"),
+    ])
+    kept = [f["field"] for f in facts]
+    assert "CAS Number" in kept
+    assert "Receptor Binding EC50 — GIPR" in kept
+    assert "Phase 2 Clinical Outcome" not in kept
+    assert "Dosing Frequency" not in kept
+    assert "FDA Approval Status" not in kept
+
+
+def test_classify_clinical_gap_is_store():
+    assert ef.classify_gap({"category": "Clinical data", "missing": "Phase 2 efficacy weight loss"}) == "store"
+    assert ef.classify_gap({"category": "Dosing", "missing": "recommended dosing frequency"}) == "store"
+    assert ef.classify_gap({"category": "Regulatory", "missing": "FDA approval status"}) == "store"
+
+
 # --- render_researched_facts_block ------------------------------------------
 
 def test_render_empty_is_blank():
