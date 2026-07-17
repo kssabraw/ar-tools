@@ -81,6 +81,15 @@ _EXCLUDED_FACT_HINTS = (
 )
 
 
+# Word-boundary matched so a hint never fires inside a larger word — e.g.
+# "trial" must NOT match "indus​trial", "approved" must not match a longer
+# token. (`re.escape` leaves spaces intact on 3.7+, so multi-word phrases like
+# "phase 2" / "mechanism of action" match verbatim.)
+_EXCLUDED_RE = re.compile(
+    r"\b(" + "|".join(re.escape(h) for h in _EXCLUDED_FACT_HINTS) + r")\b"
+)
+
+
 def _norm(text: object) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
@@ -88,9 +97,9 @@ def _norm(text: object) -> str:
 def is_excluded_fact(field: object, value: object = "") -> bool:
     """True when a researched fact is a clinical/therapeutic/regulatory/dosing
     claim that must never be auto-filled (owner ruling 2026-07-17). Checked
-    against field + value; receptor/EC50 binding data is NOT excluded."""
-    blob = _norm(f"{field} {value}")
-    return any(h in blob for h in _EXCLUDED_FACT_HINTS)
+    against field + value with word-boundary matching; receptor/EC50 binding
+    data is NOT excluded."""
+    return bool(_EXCLUDED_RE.search(_norm(f"{field} {value}")))
 
 
 def classify_gap(gap: dict) -> str:
@@ -111,24 +120,6 @@ def classify_gap(gap: dict) -> str:
     if any(h in blob for h in _PUBLIC_HINTS):
         return "public"
     return "store"
-
-
-def public_gap_labels(content_gaps: list) -> list[str]:
-    """The 'missing' labels of the gaps that are public specs — a focus list the
-    research pass can prioritise. De-duplicated, order-preserving."""
-    out: list[str] = []
-    seen: set[str] = set()
-    for g in content_gaps or []:
-        if not isinstance(g, dict):
-            continue
-        if classify_gap(g) != "public":
-            continue
-        label = str(g.get("missing") or g.get("category") or "").strip()
-        key = _norm(label)
-        if label and key not in seen:
-            seen.add(key)
-            out.append(label)
-    return out
 
 
 # ── The research tool (Anthropic client tool) ──────────────────────────────
