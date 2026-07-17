@@ -146,7 +146,7 @@ Themes are versioned (`website_themes.version`); recompiling a re-uploaded desig
 
 Generated content **also** persists where it already does (`local_seo_pages`, `runs`) — the website row links to those records, so scoring/reoptimization keep working; a reoptimized page can be re-published to the repo (new commit) from the same UI. `website_pages` maps content → repo path + commit sha + route + status (`draft | queued | published | failed`), and per-item publish jobs are **id-based idempotent** (a retry never duplicates a commit for an already-published sha), mirroring the syndication module's contract.
 
-Home pages get a dedicated composer: for local sites, assembled from business facts + services + reviews into the theme's section components (one nlp-api call with a home-page prompt profile — a v1 prompt-design task, see §12 Q9); for info sites, the home is a deterministic template (latest posts, categories) needing no LLM.
+Home, about, and contact pages don't go through this pipeline at all — they're a different kind of page with their own generator (§4.6). For info sites, the home is a deterministic template (latest posts, categories) needing no LLM.
 
 ### 4.5 Business facts & the no-GBP path
 
@@ -159,11 +159,25 @@ GBP is **one source of business facts, not a dependency** — and site-before-GB
 - **NAP + LocalBusiness JSON-LD** — emitted from whatever facts exist. A service-area business, or one with no address yet, suppresses the street address and leans on `areaServed`.
 - **Review strip** — not rendered until reviews exist.
 - **Hours / categories** — render if present, omit if not.
-- **Home-page composer** — its prompt receives whatever facts + ICP/differentiators are available; with no reviews it writes a proof-free hero (services + service area + positioning) rather than fabricating social proof.
+- **Core-pages generator (§4.6)** — its prompts receive whatever facts + ICP/differentiators are available; with no reviews the home page gets a proof-free hero (services + service area + positioning) rather than fabricated social proof.
 
 **The content engines are GBP-independent anyway.** Plan Silo's inputs are a typed seed service + area; GBP's service area is only one of four multi-city discovery sources (manual `target_cities`, site place-names, and Overpass nearby-cities still work). The nlp-api generator, scoring, and reoptimization don't touch GBP. The auto brand-voice/ICP scans already skip gracefully when a client has neither website nor GBP — and once this module deploys the site, the client *has* a website, so those scans become possible where they previously had nothing to analyze.
 
 **When the GBP arrives later**, the existing paste-a-link/resolve flow captures it on the client, and the module refreshes the business block on the next config re-commit — but under the precedence rule GBP **fills gaps and never silently overwrites user-entered facts** (same philosophy as the auto-scans never overriding user-authored voice/ICP). Reviews start flowing into the review strip, and the loop closes: the live site gives the new GBP something to link to, and the geo-grid then measures whether the market entry worked.
+
+### 4.6 Core-pages generator (home / about / contact)
+
+The three fixed pages every local business site needs are a **different kind of page** from everything the suite generates today: they don't compete in a SERP, so the nlp-api `/generate-page` pipeline is the wrong shape for them — it would burn a DataForSEO SERP pull on pages with no target query and score them against a ranking rubric that doesn't apply. Instead, a lighter **core-pages generator**: one new nlp-api endpoint (`POST /generate-core-page`, `page_kind ∈ {home, about, contact}`) that reuses the existing brand-voice/ICP prompt helpers (`_build_brand_voice_text`/`_build_icp_text`) but skips SERP analysis and the 8-engine scoring/reopt loop entirely.
+
+**Structured section output, not article HTML.** Service/location pages are long-form articles; these three are *assemblies of theme sections*. The generator returns JSON keyed to the theme contract's slots (hero, services grid, differentiators band, review strip, CTA band…), and each page commits as a **data-collection entry** the theme renders (`content_source: "composed"`) — not converted Markdown. That keeps the design mirror faithful and makes regeneration surgical: a facts change re-renders the deterministic parts without touching the LLM copy.
+
+Per page:
+
+- **Home** — inputs: the §4.5 business-facts block, the site plan's *selected* services (teasers link to real `/services/*` routes), reviews if any, ICP + differentiators, brand voice. The LLM writes hero/positioning/teaser copy into the slot structure; LocalBusiness JSON-LD is emitted deterministically from facts. No reviews → proof-free hero (§4.5).
+- **About** — the trust/entity page, the most LLM-shaped of the three. The wizard gains an optional **"about facts"** free-text box (origin story, years in business, certifications, team — the user-authored brand guide often already carries this). The LLM writes the narrative in brand voice under the same hard rule as the ecommerce writer: **factual claims (license numbers, years, awards) come only from provided facts; missing facts land in a `content_gaps` report**, never invented. AboutPage/Organization JSON-LD deterministic.
+- **Contact** — nearly zero LLM. NAP, hours table, service-area list, and the CF Worker contact form are deterministic renders of the facts block; the map embed comes from the GBP place_id or the geocoded address. (A Google Maps iframe is the one sanctioned exception to the theme's "self-contained, no external scripts" rule.) The only generated text is a short intro blurb, batched into the same call rather than its own request. ContactPage JSON-LD deterministic.
+
+**Mechanics:** one `website_core_pages` job generates all three at site setup (each individually regenerable afterward); it is freeze-gated like all content generation. Validation replaces scoring: required slots filled, length bounds, and a deterministic **facts-consistency check** that the output contains no NAP/claims absent from the facts block.
 
 ---
 
@@ -174,7 +188,7 @@ GBP is **one source of business facts, not a dependency** — and site-before-GB
 - **`website_pages`** — id, `website_id`, `route`, `title`, `content_source` (`local_seo_page|run|composed|static`), `source_id`, `repo_path`, `commit_sha`, `status`, `published_at`, error. Unique (`website_id`, `route`).
 - **`website_deploys`** — id, `website_id`, `commit_sha`, `trigger` (`provision|publish|theme|manual`), `status` (`queued|building|success|failed`), `actions_run_id`, `url`, error, timestamps.
 
-`async_jobs` types: `website_theme_compile`, `website_provision`, `website_page_publish`, `website_deploy_poll` (checks the Actions run + CF deployment for a pending `website_deploys` row; scheduler-driven, cheap). `website_page_publish` and site-plan generation join `FREEZE_GATED_JOB_TYPES`; provisioning/deploy-status jobs do not (observation vs output, same split as everywhere else).
+`async_jobs` types: `website_theme_compile`, `website_provision`, `website_core_pages` (§4.6), `website_page_publish`, `website_deploy_poll` (checks the Actions run + CF deployment for a pending `website_deploys` row; scheduler-driven, cheap). `website_page_publish`, `website_core_pages`, and site-plan generation join `FREEZE_GATED_JOB_TYPES`; provisioning/deploy-status jobs do not (observation vs output, same split as everywhere else).
 
 ## 6. API surface (`routers/websites.py`) & frontend
 
@@ -182,7 +196,7 @@ Backend services: `website_theme.py` (ingest + compile), `website_provision.py` 
 
 Routes (shape, not exhaustive): themes CRUD + compile + approve; websites CRUD; `POST /websites/{id}/provision`; site-plan build + review (`GET/POST /websites/{id}/plan`); publish selected pages; `POST /websites/{id}/domain` (attach + DNS + status); deploys list; per-page retry/republish.
 
-Frontend: suite-level **`pages/Websites.tsx`** (sidebar entry; list + create wizard: client → type → design upload/URL → theme preview/approve → provision → plan review → generate → publish) and a client-workspace **"Websites"** card filtered to that client. Deploy status chips poll `website_deploys`; the plan-review screen reuses the Plan Silo selection UX (checkboxes + bulk bar + `useBulkCreate` patterns).
+Frontend: suite-level **`pages/Websites.tsx`** (sidebar entry; list + create wizard: client → type → design upload/URL → theme preview/approve → business facts + about facts (local sites, §4.5/§4.6) → provision → plan review → generate → publish) and a client-workspace **"Websites"** card filtered to that client. Deploy status chips poll `website_deploys`; the plan-review screen reuses the Plan Silo selection UX (checkboxes + bulk bar + `useBulkCreate` patterns).
 
 ## 7. Credentials & config
 
@@ -206,7 +220,7 @@ Repos are **private** (content is invisible until deployed; drafts never leak). 
 | **0 — Foundations** | Owner decisions (§12), creds provisioned, **`ar-site-template` built by hand** (the template is real engineering: theme contract, collections, SEO plumbing, deploy workflow), migration, config flags. One site deployed *manually* from the template end-to-end to prove the GitHub→Actions→Cloudflare line before any module code. | The manual dry run de-risks everything downstream. |
 | **1 — Theme pipeline** | Upload/URL ingest → `website_theme_compile` → preview → approve. Theme library CRUD. | Testable in isolation (fixtures of real Claude Design exports). |
 | **2 — Provision + deploy** | Repo-from-template, theme commit, secrets, CF project, first deploy, staging URL, `website_deploys` + poll job, custom domain + DNS attach. | Idempotent step machine; every step re-runnable. |
-| **3 — Local business sites** | Site plan (Plan Silo + fixed pages + GBP), home-page composer prompt, generate → HTML→MD → publish jobs, plan-review UI. | The nlp-api engine is reused unchanged; new work is assembly. |
+| **3 — Local business sites** | Site plan (Plan Silo + fixed pages + business facts), core-pages generator (§4.6, incl. the three prompt profiles), generate → HTML→MD → publish jobs, plan-review UI. | The nlp-api engine is reused unchanged for service/location pages; the core-pages endpoint is the one new generation surface. |
 | **4 — Informational sites** | Content plan from Keyword Research/Fanout, Blog Writer runs → posts, categories/RSS/home, drip publishing via the Fanout scheduler. | Blog output is already Markdown — lightest content phase. |
 | **5 — Operate & polish** | GSC auto-verify → rank tracker hookup, notifications, SerMaStr provider, theme re-apply/versioning UX, template-upgrade roll-out mechanism. | |
 
@@ -220,7 +234,7 @@ Repos are **private** (content is invisible until deployed; drafts never leak). 
 
 ## 11. Cost
 
-Hosting is ~$0 (private GitHub repos on the org plan, Cloudflare free tier covers static sites/Workers at this scale). Per-page LLM cost is the same as the existing generators (this module adds no new writer). Theme compile ≈ one Sonnet call per design version. The only new spend surface is negligible (GitHub/CF API calls are free).
+Hosting is ~$0 (private GitHub repos on the org plan, Cloudflare free tier covers static sites/Workers at this scale). Per-page LLM cost is the same as the existing generators (the only new generation surface is the core-pages endpoint (§4.6) — a few Claude calls per site, no SERP spend). Theme compile ≈ one Sonnet call per design version. The only new spend surface is negligible (GitHub/CF API calls are free).
 
 ---
 
@@ -234,5 +248,5 @@ Hosting is ~$0 (private GitHub repos on the org plan, Cloudflare free tier cover
 6. **Domains** — who buys them, and are they (or will they be) on Cloudflare DNS? v1 assumes zone-on-Cloudflare with a manual registrar NS step; domain purchase automation is out.
 7. **Publish gates** — local sites: human reviews the plan + pages before first publish (assumed yes). Info sites: auto-publish drip once trusted, or always reviewed?
 8. **Locked-decision sign-off** — the roadmap locks the Blog Writer's publish destination as Google Doc ("CMS-ready later"). This module is the "later": adding *website* as an additional destination is additive, not a reversal — but it touches a locked line, so explicit sign-off.
-9. **Home-page composer copy** — the local-site home page needs a prompt profile (hero copy, service teasers, review highlights from GBP). Per the "things to ask" convention: exact prompt copy is an owner-involved design task in Phase 3.
+9. **Core-pages prompt copy** — the core-pages generator (§4.6) needs three small prompt profiles (home / about / contact blurb). Per the "things to ask" convention: exact prompt copy is an owner-involved design task in Phase 3.
 10. **Volume expectation** — roughly how many sites in year one, and posting cadence per info site? (Sanity-checks the free-tier assumption and the job-stagger tuning; nothing in the design breaks at 10× but the answer shapes defaults.)
