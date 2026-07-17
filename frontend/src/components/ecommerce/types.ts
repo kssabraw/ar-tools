@@ -48,6 +48,17 @@ export interface Deficiency {
   recommendations?: string[]
 }
 
+// An invariant public spec the writer auto-researched with a citation
+// (CAS/MW/sequence/…). Vendor facts are never researched — they stay gaps.
+export interface ResearchedFact {
+  field: string
+  value: string
+  unit?: string
+  source_name?: string
+  source_url: string
+  confidence?: 'high' | 'medium'
+}
+
 export interface EcommercePageDetail extends EcommercePageListItem {
   product_input?: string | null
   notes?: string | null
@@ -55,6 +66,8 @@ export interface EcommercePageDetail extends EcommercePageListItem {
   schema_json: string
   // Either rich objects or plain strings, depending on what the writer emitted.
   content_gaps: Array<ContentGap | string>
+  // Public specs auto-filled from cited sources; empty when none were found.
+  researched_facts?: ResearchedFact[]
   composite_score?: number | null
   composite_status?: string | null
   engine_scores?: Record<string, EngineScore> | null

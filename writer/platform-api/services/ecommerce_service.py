@@ -197,6 +197,7 @@ def _persist_page(
         "schema_json": result.get("schema_json") or "",
         "page_title": result.get("page_title"),
         "content_gaps": result.get("content_gaps") or [],
+        "researched_facts": result.get("researched_facts") or [],
         "composite_score": result.get("composite_score"),
         "composite_status": result.get("composite_status"),
         "engine_scores": result.get("engine_scores"),

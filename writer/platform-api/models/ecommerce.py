@@ -134,6 +134,10 @@ class EcommercePageDetail(BaseModel):
     # score_impact} or plain strings — tolerate both so a page always loads
     # regardless of the shape the writer emitted.
     content_gaps: list[Any] = Field(default_factory=list)
+    # Invariant public specs (CAS/MW/sequence/…) the writer auto-researched with
+    # citations: [{field, value, unit, source_name, source_url, confidence}].
+    # Shown as an "auto-sourced — verify" panel; empty when research found none.
+    researched_facts: list[Any] = Field(default_factory=list)
     composite_score: Optional[float] = None
     composite_status: Optional[str] = None
     engine_scores: Optional[dict[str, Any]] = None
