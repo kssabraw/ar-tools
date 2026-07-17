@@ -3,7 +3,7 @@
 **Status:** Proposed (not built). Planning document only — nothing in this doc is implemented.
 **Owner:** Kyle
 **Last updated:** 2026-07-17
-**Relationship to other work:** consumes the Local SEO generator (nlp-api), the Blog Writer pipeline, Plan Silo, GBP data, Keyword Research/Fanout, and the shared scheduler/notifications rails. Gives the suite its first true "publish to a live site we control" destination (adjacent to — but not reversing — the locked "publish = Google Doc, CMS-ready later" decision; see §12 Q8).
+**Relationship to other work:** consumes the Local SEO generator (nlp-api), the Blog Writer pipeline, Plan Silo, GBP data, Keyword Research/Fanout, and the shared scheduler/notifications rails. Gives the suite its first true "publish to a live site we control" destination (adjacent to — but not reversing — the locked "publish = Google Doc, CMS-ready later" decision; **owner signed off on the additive website destination 2026-07-17**).
 
 > **One-line summary.** Design a site in **Claude Design**, upload the export to this module, and the suite turns it into a live website: it compiles the design into an **Astro** theme, provisions a **GitHub** repo from a house template, generates the pages/posts with the suite's existing content engines, commits them as content-collection entries, and deploys via **Cloudflare** — for two site shapes: **local business websites** (per-client) and **informational/blog websites** (content properties).
 
@@ -52,7 +52,7 @@ A per-suite **Websites** module (with per-client attachment) that:
 4. **Deploys on every content change** (build in GitHub Actions → deploy to Cloudflare) and records deploy status per commit.
 5. **Keeps operating**: scheduled drip publishing via the Fanout scheduler, auto-verified GSC property (we control DNS → TXT verification) feeding the rank tracker, deploy/failure notifications, and a SerMaStr context provider so "how's the new site doing" is answerable in chat.
 
-**Manual gates, deliberately:** theme preview approval before provisioning, and page review before first publish (configurable to auto-publish for info sites once trusted).
+**Manual gates, deliberately:** theme preview approval before provisioning, and page review before first publish on local business sites. **Info sites auto-publish** (owner ruling 2026-07-17) — both the initial content plan and the scheduled drip run without a review gate.
 
 ## 3. Goals / non-goals
 
@@ -66,7 +66,7 @@ A per-suite **Websites** module (with per-client attachment) that:
 **Non-goals (v1)**
 - A visual page editor / drag-drop builder. Design changes happen in Claude Design → re-upload → theme recompile.
 - E-commerce, forms backends beyond the Web3Forms contact form (§4.8), auth, or any dynamic server rendering. Sites are static output.
-- Domain **purchase** automation (registrar APIs are patchy; v1 assumes the domain exists in the Cloudflare account or gets a manual NS step).
+- Domain **purchase** automation. Decided flow (owner 2026-07-17): domains are bought manually at **Namecheap** and their nameservers pointed at Cloudflare — that NS change is the one manual step per site; the module handles everything from the zone onward (DNS records, domain attach, GSC TXT verify).
 - Multi-language sites.
 - Migrating existing client websites into the module (import is a later phase, if ever).
 
@@ -122,7 +122,7 @@ Two viable Cloudflare paths:
 | Product direction | Pages is feature-frozen; Cloudflare's forward path is Workers static assets | Aligned with Cloudflare's current direction |
 | Deploy status | CF webhooks/API | Actions run status via GitHub API (already have the MCP-style access pattern; backend uses REST) |
 
-**Recommendation: B.** Fully automatable end-to-end, no per-account dashboard step, and the deploy log lives in the site repo's Actions tab where it's debuggable. Pages remains a fallback if Workers static-asset limits bite (they shouldn't for static marketing/blog sites).
+**Decided: B — Workers static assets (owner ruling 2026-07-17).** Fully automatable end-to-end, no per-account dashboard step, and the deploy log lives in the site repo's Actions tab where it's debuggable. Pages remains a fallback if Workers static-asset limits bite (they shouldn't for static marketing/blog sites). Runs on the owner's **existing Cloudflare account** (same ruling).
 
 ### 4.3 Design ingestion & theme compile (the risky part, so it's constrained)
 
@@ -195,8 +195,8 @@ Everything between "pages generated" and "site you'd hand a client," owned by th
 
 - **Launch form (in-module):** logo/favicon (pre-filled from `clients.logo_url`), the §4.5 business facts, about facts (§4.6), form recipient email, phone setup (below). Deterministic **privacy policy / terms** pages render from templates with the business facts merged in — no LLM.
 - **Post-launch settings panel:** GA4 snippet id, GSC (the module's DNS-TXT auto-verify — §8), CallRail snippet, and any other third-party tags — editable any time; each change is a config re-commit + redeploy, never a regeneration.
-- **Forms — Web3Forms:** the contact form POSTs to Web3Forms with a per-site access key stored in `websites.config` (static-site-friendly, no backend of ours; submissions go to the configured recipient email). The earlier CF-Worker form idea is dropped. Follow-up (not v1): a webhook copy into the suite so lead volume is visible in-app — the module's own success metric, and the number that proves a LeadOff market entry worked.
-- **Calls — CallRail (or plain number):** the phone block distinguishes **real number** (emitted in LocalBusiness JSON-LD and the GBP-consistent NAP) from **displayed number** (CallRail tracking number / dynamic-number-insertion snippet on-page) — the standard local-SEO pattern so citations stay consistent while calls get attributed. No CallRail → the user-provided number is used for both.
+- **Forms — Web3Forms:** the contact form POSTs to Web3Forms using **one shared access key on the owner's account** (owner ruling 2026-07-17; per-site recipient routing handled via the form's recipient field). Static-site-friendly, no backend of ours. The earlier CF-Worker form idea is dropped. Follow-up (not v1): a webhook copy into the suite so lead volume is visible in-app — the module's own success metric, and the number that proves a LeadOff market entry worked.
+- **Calls — CallRail via dynamic number insertion (owner ruling 2026-07-17, owner's account):** the phone block distinguishes **real number** (emitted in LocalBusiness JSON-LD and the GBP-consistent NAP, and rendered on-page as the default) from the **CallRail DNI snippet**, which swaps the displayed number at runtime — the standard local-SEO pattern so citations stay consistent while calls get attributed. The post-launch settings panel stores the per-site DNI snippet. No CallRail on a given site → the real number serves both roles.
 - **Nav + internal linking:** header/footer nav generated from the site plan, with silo-aware internal links between service and location pages (the SEO structure Plan Silo already implies, rendered deterministically).
 - **Launch checklist view:** a per-site checklist in the UI — domain active, GSC verified, form test submission received, legal pages present, images sourced — so "is it done" is a glance, not an audit.
 
@@ -206,7 +206,7 @@ The Maps iframe, Web3Forms endpoint, and CallRail/GA4 snippets are the **sanctio
 
 ## 5. Data model (new tables, one migration)
 
-- **`websites`** — id, `client_id` FK (see §12 Q5 — recommendation: every site belongs to a client row, creating a lightweight client for standalone info sites so freeze/notifications/rank-tracking rails all work), name, slug, `site_type` (`local_business|informational`), `theme_id`, `github_repo` (full name), `cf_project`, `staging_url`, `custom_domain`, `domain_status` (`none|pending_ns|active`), `status` (`draft|compiling|ready_to_provision|provisioning|live|error`), `config` JSONB, timestamps.
+- **`websites`** — id, `client_id` FK (**decided, owner 2026-07-17:** every site belongs to a client row — standalone info sites get a lightweight client, so freeze/notifications/rank-tracking rails all work unmodified), name, slug, `site_type` (`local_business|informational`), `theme_id`, `github_repo` (full name), `cf_project`, `staging_url`, `custom_domain`, `domain_status` (`none|pending_ns|active`), `status` (`draft|compiling|ready_to_provision|provisioning|live|error`), `config` JSONB, timestamps.
 - **`website_themes`** — id, name, `source_kind` (`upload|url`), source ref, `version`, `tokens` JSONB, storage path (compiled files), `preview_path`, `status` (`compiling|ready|failed`), `approved_at`, error.
 - **`website_pages`** — id, `website_id`, `route`, `title`, `content_source` (`local_seo_page|run|composed|static`), `source_id`, `repo_path`, `commit_sha`, `status`, `published_at`, error. Unique (`website_id`, `route`).
 - **`website_deploys`** — id, `website_id`, `commit_sha`, `trigger` (`provision|publish|theme|manual`), `status` (`queued|building|success|failed`), `actions_run_id`, `url`, error, timestamps.
@@ -223,7 +223,7 @@ Frontend: suite-level **`pages/Websites.tsx`** (sidebar entry; list + create wiz
 
 ## 7. Credentials & config
 
-New env on `PLATFORM`: `GITHUB_SITES_TOKEN` (fine-grained PAT or GitHub App for a **dedicated sites org** — repo create/contents/secrets/actions-read only, NOT the ar-tools repo), `GITHUB_SITES_ORG`, `CLOUDFLARE_API_TOKEN` (Workers/Pages + DNS edit, scoped to the sites account), `CLOUDFLARE_ACCOUNT_ID`, `WEB3FORMS_API_KEY` (per-site access keys created/stored in `websites.config`), optionally `IDEOGRAM_API_KEY` (only if that provider is enabled — the default image provider reuses the existing `GEMINI_API_KEY`/OpenAI keys, §4.7). Config: `website_builder_enabled` (default False), `website_theme_model` (Sonnet), `website_image_provider` (`gemini|openai|ideogram`, default `gemini`), `website_publish_job_spacing_seconds` (reuse the bulk-stagger pattern), `website_template_repo`.
+New env on `PLATFORM`: `GITHUB_SITES_TOKEN` — site repos live under the **`kssabraw` personal account** (owner ruling 2026-07-17, superseding the dedicated-org recommendation). Caveat that follows: a token able to *create* repos on a personal account is account-wide by nature, so it MUST be a **fine-grained PAT limited to the minimum permissions** (repo administration for create, contents, secrets, actions-read) and never granted more; it can technically see ar-tools, so treat it as a sensitive credential like the service-role key. `GITHUB_SITES_OWNER=kssabraw`, `CLOUDFLARE_API_TOKEN` (Workers + DNS edit on the owner's existing account), `CLOUDFLARE_ACCOUNT_ID`, `WEB3FORMS_ACCESS_KEY` (one shared key, owner's account), optionally `IDEOGRAM_API_KEY` (only if that provider is enabled — the default image provider reuses the existing `GEMINI_API_KEY`/OpenAI keys, §4.7). Config: `website_builder_enabled` (default False), `website_theme_model` (Sonnet), `website_image_provider` (`gemini|openai|ideogram`, default `gemini`), `website_publish_job_spacing_seconds` (reuse the bulk-stagger pattern), `website_template_repo`.
 
 Repos are **private** (content is invisible until deployed; drafts never leak). The Cloudflare token in repo secrets is the standard Actions pattern; scope it to deploy-only.
 
@@ -258,24 +258,34 @@ Repos are **private** (content is invisible until deployed; drafts never leak). 
 
 ## 11. Cost
 
-Hosting is ~$0 (private GitHub repos on the org plan, Cloudflare free tier covers static sites/Workers at this scale). Per-page LLM cost is the same as the existing generators (the only new generation surface is the core-pages endpoint (§4.6) — a few Claude calls per site, no SERP spend). Theme compile ≈ one Sonnet call per design version. Image generation (§4.7) is cents per image — well under $1 per site at a typical 10–20 images, and $0 when GBP photos/uploads cover the ladder. Web3Forms/CallRail ride the agency's existing accounts. The only new spend surface is negligible (GitHub/CF API calls are free).
+Hosting is ~$0 at the ruled scale of **~50 sites in year one** (owner, 2026-07-17): private repos are unlimited on a personal GitHub account, and Workers static-asset requests are free — the $5/mo Workers paid plan is a cheap safety valve if any dynamic pieces grow. Per-page LLM cost is the same as the existing generators (the only new generation surface is the core-pages endpoint (§4.6) — a few Claude calls per site, no SERP spend). Theme compile ≈ one Sonnet call per design version. Image generation (§4.7) is cents per image — well under $1 per site at a typical 10–20 images, and $0 when GBP photos/uploads cover the ladder. Web3Forms/CallRail ride the agency's existing accounts. The only new spend surface is negligible (GitHub/CF API calls are free).
 
 ---
 
-## 12. Open questions for the owner (blocking Phase 0)
+## 12. Decision log & remaining inputs
 
-> **Resolved (owner rulings 2026-07-17):** include an image-generation API (§4.7 — default Gemini/Nano Banana, OpenAI alternative, Ideogram optional); **generated imagery may include realistic jobsite scenes** (the stock-photography role — §4.7); launch inputs are a form filled out in the module, with analytics/GSC snippets added post-launch (§4.8); forms via **Web3Forms**; calls via **CallRail** where used, else a user-provided number (§4.8); **themes are reusable across industries** (§4.3).
+**Resolved (owner rulings 2026-07-17):**
 
-1. **GitHub home for site repos** — a dedicated org (recommended: keeps the sites token away from ar-tools) vs the existing account? Org name?
-2. **Cloudflare account** — existing agency account or a dedicated one? Confirm API token can be scoped to Workers + DNS on it.
-3. **Pages vs Workers static assets** — recommendation is Workers static assets via Actions + wrangler (§4.2); confirm.
-4. **Claude Design export format you actually get** — single-page HTML, multi-page, zip, shareable URL? (Determines the ingest UI; the plan accepts upload + URL, but a real export sample is needed as the Phase 1 fixture.)
-5. **Are info sites clients?** Recommendation: yes — create a lightweight `clients` row per standalone info site so freeze/notifications/rank/GSC rails work unmodified. Alternative (a client-less `websites` row) forks every rail. Confirm.
-6. **Domains** — who buys them, and are they (or will they be) on Cloudflare DNS? v1 assumes zone-on-Cloudflare with a manual registrar NS step; domain purchase automation is out.
-7. **Publish gates** — local sites: human reviews the plan + pages before first publish (assumed yes). Info sites: auto-publish drip once trusted, or always reviewed?
-8. **Locked-decision sign-off** — the roadmap locks the Blog Writer's publish destination as Google Doc ("CMS-ready later"). This module is the "later": adding *website* as an additional destination is additive, not a reversal — but it touches a locked line, so explicit sign-off.
-9. **Core-pages prompt copy** — the core-pages generator (§4.6) needs three small prompt profiles (home / about / contact blurb). Per the "things to ask" convention: exact prompt copy is an owner-involved design task in Phase 3.
-10. **Volume expectation** — roughly how many sites in year one, and posting cadence per info site? (Sanity-checks the free-tier assumption and the job-stagger tuning; nothing in the design breaks at 10× but the answer shapes defaults.)
-11. **Web3Forms account** — whose account/API key, and per-site access keys vs one shared key? (Per-site recommended: a leaked key only spams one site's inbox, and per-site recipient routing is free.)
-12. **CallRail specifics** — which CallRail account, and per-site tracking numbers vs the dynamic-number-insertion snippet? (Determines whether the phone block stores a number or a snippet; the real-number-in-JSON-LD rule holds either way.)
-13. **Pilot clients** — one client *with* a GBP and one without (the §4.5 path) to validate Phase 3 end-to-end, plus a real Claude Design export sample for the Phase 1 fixture (Q4).
+| # | Decision | Ruling |
+|---|---|---|
+| 1 | GitHub home for site repos | The **`kssabraw`** personal account (supersedes the dedicated-org recommendation; see the §7 token-scoping caveat) |
+| 2 | Cloudflare account | The owner's **existing account** |
+| 3 | Pages vs Workers | **Workers static assets** via Actions + wrangler (§4.2) |
+| 4 | Domains | Bought manually at **Namecheap**, nameservers pointed to Cloudflare (§3) |
+| 5 | Info sites are clients | **Yes** — lightweight `clients` row per standalone info site (§5) |
+| 6 | Publish gates | Local sites: human plan/page review before first publish. **Info sites: auto-publish**, including the drip (§2) |
+| 7 | Locked-decision sign-off | **OK** — website is an additive Blog Writer publish destination (header note) |
+| 8 | Volume | **~50 sites in year one** (§11) |
+| 9 | Web3Forms | Owner's account, **one shared access key** (§4.8; supersedes the per-site-keys recommendation) |
+| 10 | CallRail | Owner's account, **dynamic number insertion** snippet per site (§4.8) |
+| 11 | Image generation | Include it — default Gemini/Nano Banana, OpenAI alternative, Ideogram optional (§4.7); **realistic jobsite scenes allowed** (stock-photography role) |
+| 12 | Launch inputs | A form filled out in the module; analytics/GSC snippets added post-launch (§4.8) |
+| 13 | Themes | **Reusable across industries** (§4.3) |
+
+**Remaining inputs (not blocking Phase 0 — needed at the phase indicated):**
+
+1. **A real Claude Design export sample** (owner: later) — needed **before Phase 1** as the theme-compiler fixture; its format (single HTML / multi-page / zip / share URL) finalizes the ingest UI.
+2. **Pilot clients** (owner: later) — one with a GBP and one without (the §4.5 path), needed **before Phase 3** end-to-end validation.
+3. **Core-pages prompt copy** — three small prompt profiles (home / about / contact blurb, §4.6); an owner-involved writing task **in Phase 3**, per the "things to ask" convention.
+
+Phase 0 is unblocked: all infrastructure decisions are made.
