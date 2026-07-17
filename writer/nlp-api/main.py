@@ -711,6 +711,7 @@ for name, val in [
     ("DATAFORSEO_LOGIN",   DATAFORSEO_LOGIN),
     ("SCRAPEOWL_API_KEY",  SCRAPEOWL_API_KEY),
     ("ANTHROPIC_API_KEY",  ANTHROPIC_API_KEY),
+    ("GEMINI_API_KEY",     GEMINI_API_KEY),  # gates ecommerce MCS Phase 4 synthesis
 ]:
     if val:
         logger.info(f"{name} is set")
@@ -7555,6 +7556,17 @@ async def _ecommerce_mcs_block(client, serp_analysis_dict: Optional[dict], page_
         if block:
             logger.info(f"ecommerce MCS: entity='{entity.canonical}' source={entity.source} "
                         f"facts={len(facts)} synth={len(synthesized) if synthesized else 0}")
+        # De-blind Phase 4: when synthesis produced nothing despite the inputs
+        # being present, say WHY (missing key vs empty candidate pool vs the
+        # embedder returning too few vectors) instead of a silent synth=0.
+        if not synthesized and facts:
+            if not embed_fn:
+                logger.warning("ecommerce MCS synth=0: GEMINI_API_KEY not set on nlp — Phase 4 (Gemini synthesis) is OFF")
+            else:
+                logger.info(
+                    "ecommerce MCS synth=0 diag: aio_len=%d pool=%d (key set; check the embed response)",
+                    len(aio_text), len(mcs.build_candidate_headings(entity.canonical, facts)),
+                )
         return block
     except Exception as _me:
         logger.warning(f"ecommerce MCS block failed (non-fatal): {_me}")
