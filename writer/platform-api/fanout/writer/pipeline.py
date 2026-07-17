@@ -143,6 +143,13 @@ _INTENT_PATTERN_HINT = {
 }
 
 
+def _main_entity_label(brief: Brief) -> str:
+    """The brief's canonical main entity (Brief Gen MCS X.2) — the noun an answer engine
+    attributes each extractable section to. Empty when the brief carries no such metadata."""
+    me = (brief.metadata or {}).get("main_entity") or {}
+    return (me.get("canonical") or "").strip()
+
+
 def _write_group(
     deps: WriterDeps, brief: Brief, sie: SieInput, group: budget_mod.Group,
     section_budget: int, *, retry_directive: str = "", is_first: bool = False,
@@ -150,6 +157,7 @@ def _write_group(
     """§5.8 — one Sonnet call for an H2 group (parent + child H3s). Returns markdown
     body (H3s as `### ` subsections inside). No citation markers (no_citations)."""
     h3_lines = "\n".join(f"- {c.text}" for c in group.children)
+    main_entity = _main_entity_label(brief)
     required = ", ".join(t.term for t in sie.terms.required[:20])
     avoid = ", ".join(sie.terms.avoid[:20])
     fd = brief.format_directives
@@ -162,7 +170,8 @@ def _write_group(
         f"Article title: {brief.title}\nScope: {brief.scope_statement or ''}\n"
         f"Intent: {brief.intent_type.value} — {_INTENT_PATTERN_HINT.get(brief.intent_type, '')}\n"
         f"Write the section under this H2: \"{group.parent.text}\"\n"
-        + (f"After the lead, cover these H3 subsections (use a `### ` heading for each):\n{h3_lines}\n"
+        + (f"After the lead, cover these H3 subsections (use a `### ` heading for each, phrased "
+           f"to name the main entity where it reads naturally):\n{h3_lines}\n"
            if group.children else "")
         + f"Target length: ~{section_budget} words.\n"
         + (f"Weave in these terms naturally where relevant: {required}\n" if required else "")
@@ -171,6 +180,11 @@ def _write_group(
         + "Open with at least one answer-first paragraph (lead with a direct answer "
         + "sentence <=25 words) BEFORE any `### ` subheading — never start the section with "
         + "a subheading, and never make a subheading that merely restates the H2. "
+        + (f"Repeat the main entity \"{main_entity}\" (or a clear variant) across this section's "
+           "`### ` subheadings, each paired with that subsection's specific point, so every "
+           "section self-attributes to an answer engine — never a bare generic label "
+           "(\"Overview\", \"Benefits\", \"How It Works\"), and never spam the exact keyword "
+           "verbatim across headings. " if main_entity else "")
         + ("This is the FIRST content section of the article: if its core answer is "
            "enumerable (steps, options, types), present that enumeration as a short "
            "numbered or bulleted list immediately after the answer-first opening — "
