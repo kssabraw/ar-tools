@@ -322,10 +322,23 @@ AEO / LLM WRITING RULES — apply throughout every section
 These rules make content retrievable by AI assistants (ChatGPT, Gemini, Perplexity) and
 optimised for Answer Engine Optimisation. Follow all of them in every section.
 
-1. ANSWER-FIRST: Open every section, paragraph, and FAQ answer with a direct claim.
-   State the conclusion before the explanation.
+1. ANSWER-FIRST + EXTRACTABLE SNIPPETS (the single strongest on-page AEO signal after links):
+   Open every section, paragraph, and FAQ answer with a direct claim — state the conclusion
+   before the explanation — AND write that claim as a STANDALONE, LIFTABLE sentence: one that is
+   true and quotable VERBATIM without its surrounding context, so an AI assistant (ChatGPT /
+   Gemini / Google AI Overview) can lift it straight into an answer.
+   A liftable sentence: (a) names its real subject — the [service] / [Brand] / [city] — not a
+   pronoun; (b) makes ONE complete factual claim; (c) uses NO back-references ("this", "that",
+   "it", "as mentioned", "the above", "these") that only resolve from an earlier sentence. Prefer
+   naming the subject over a pronoun in the key claim — third-person reads as more authoritative
+   and is lifted more often than "we/our".
+   Apply this to the OPENING sentence of every section AND to every factual claim in body prose,
+   not just the FAQ. This is the #1 factor — treat a section whose sentences only make sense in
+   order as a miss.
    ✗ Bad:  "Tree service is a complex process that requires professional expertise..."
+   ✗ Bad:  "It's usually done within a day, though that depends on a few things."
    ✓ Good: "[Brand] handles tree removal in Anaheim — including emergency situations."
+   ✓ Good: "[Brand] completes most Anaheim tree removals within one business day."
 
 2. ONE IDEA PER PARAGRAPH — KEEP PARAGRAPHS SHORT: Each <p> covers exactly one point in
    1–2 sentences. Never exceed 3 sentences, and never let a single <p> run past ~45 words.
@@ -3155,7 +3168,7 @@ SCORING CRITERIA — score each engine 0–100:
 
 4. icp_alignment (weight 5%): detect ICP from keyword modifier (emergency→urgent tone; commercial→B2B tone; general→professional/reliable); CTA tone matches ICP (e.g. emergency ICP requires urgency/fear-based CTA, not generic "call for a free estimate"); pain points addressed; emotional register of copy matches searcher intent.
 
-5. aeo_llm_retrieval (weight 20%): answer-first formatting (direct claim before explanation); FAQ with 4–7 entries (penalise if fewer than 4 or more than 7), each opening with a direct yes/no or factual statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets; ≥1 numbered list for a process or steps; tables used where content is genuinely comparative (service tiers, response times, inclusions) — penalise only if comparative data is present but no table was used; specific operational facts (numbers, timeframes, named places) rather than generic filler; DECISION-FIT: when the buyer faces a real situational choice (which service/tier/urgency fits them), credit a clear answer-first condition→option treatment ("if X, choose A; if Y, choose B") in the FAQ or service body, and penalise only when such a choice plainly exists but the page leaves the decision criteria vague or buried — do NOT penalise a genuinely single-purpose page that has no such choice.
+5. aeo_llm_retrieval (weight 20%): answer-first formatting (direct claim before explanation); EXTRACTABLE / LIFTABLE SNIPPETS (★ the #1 AEO signal — weight this criterion heavily): credit when key claims are written as STANDALONE sentences that are true and quotable VERBATIM without surrounding context — each naming its subject (service/brand/city) rather than a pronoun, making one complete claim, with NO back-references ("this"/"that"/"it"/"as mentioned"/"the above"); penalise sections whose sentences only make sense in reading order or lean on pronouns/back-references to carry meaning; FAQ with 4–7 entries (penalise if fewer than 4 or more than 7), each opening with a direct yes/no or factual statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets; ≥1 numbered list for a process or steps; tables used where content is genuinely comparative (service tiers, response times, inclusions) — penalise only if comparative data is present but no table was used; specific operational facts (numbers, timeframes, named places) rather than generic filler; DECISION-FIT: when the buyer faces a real situational choice (which service/tier/urgency fits them), credit a clear answer-first condition→option treatment ("if X, choose A; if Y, choose B") in the FAQ or service body, and penalise only when such a choice plainly exists but the page leaves the decision criteria vague or buried — do NOT penalise a genuinely single-purpose page that has no such choice.
 
 6. geographic_legitimacy (weight 10%): city in title+H1+opening ¶; ≥2 neighborhood references in sentence context; ≥1 landmark reference; ≥3 zip codes in visible content; geo signals in ≥3 page sections.
 
@@ -3195,7 +3208,7 @@ SCORING CRITERIA — score each engine 0–100:
 
 4. icp_alignment (weight 5%): detect ICP from keyword modifier (emergency→urgent tone; commercial→B2B tone; general→professional/reliable); CTA tone matches ICP; pain points addressed; emotional register of copy matches searcher intent.
 
-5. aeo_llm_retrieval (weight 20%): answer-first formatting (direct claim before explanation); FAQ with 4–7 entries (penalise if fewer than 4 or more than 7), each opening with a direct statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets; ≥1 numbered list for a process or steps; tables used where content is genuinely comparative — penalise only if comparative data is present but no table was used; specific operational facts (numbers, timeframes) rather than generic filler.
+5. aeo_llm_retrieval (weight 20%): answer-first formatting (direct claim before explanation); EXTRACTABLE / LIFTABLE SNIPPETS (★ the #1 AEO signal — weight this criterion heavily): credit when key claims are written as STANDALONE sentences that are true and quotable VERBATIM without surrounding context — each naming its subject (service/brand/city) rather than a pronoun, making one complete claim, with NO back-references ("this"/"that"/"it"/"as mentioned"/"the above"); penalise sections whose sentences only make sense in reading order or lean on pronouns/back-references to carry meaning; FAQ with 4–7 entries (penalise if fewer than 4 or more than 7), each opening with a direct statement; question-format H3s where appropriate; each section ≤300 words; ≥1 bulleted list with outcome-first bullets; ≥1 numbered list for a process or steps; tables used where content is genuinely comparative — penalise only if comparative data is present but no table was used; specific operational facts (numbers, timeframes) rather than generic filler.
 
 Return ONLY valid JSON — no markdown, no explanation:
 {
