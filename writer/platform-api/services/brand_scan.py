@@ -281,14 +281,15 @@ async def _execute_gemini(keyword: str, brand: str) -> tuple[str, list[str]]:
         raise ScanFailed("Gemini API not configured")
     url = (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{settings.brand_engine_gemini_model}:generateContent?key={settings.gemini_api_key}"
+        f"{settings.brand_engine_gemini_model}:generateContent"
     )
     body = {
         "contents": [{"role": "user", "parts": [{"text": _SCAN_PROMPT.format(keyword=keyword, brand=brand)}]}],
         "tools": [{"google_search": {}}],
     }
+    # Key via header, NOT ?key= in the URL (httpx logs request URLs → key leak).
     async with httpx.AsyncClient(timeout=60) as http:
-        resp = await http.post(url, json=body)
+        resp = await http.post(url, headers={"x-goog-api-key": settings.gemini_api_key}, json=body)
     if resp.status_code != 200:
         raise ProviderError(resp.status_code, resp.text)
     return _extract_gemini(resp.json())

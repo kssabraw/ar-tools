@@ -464,9 +464,10 @@ def _run_gemini_text_sync(*, model: str, system: str, user: str, max_tokens: int
 # Gemini REST helpers (no SDK dependency — mirrors services/brand_scan.py).
 # ---------------------------------------------------------------------------
 def _gemini_endpoint(model: str) -> str:
+    # No ?key= in the URL — httpx logs request URLs, so the key goes in a header.
     return (
         "https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{model}:generateContent?key={settings.gemini_api_key}"
+        f"{model}:generateContent"
     )
 
 
@@ -474,7 +475,11 @@ async def _gemini_post(model: str, body: dict) -> dict:
     import httpx  # lazy
 
     async with httpx.AsyncClient(timeout=90) as http:
-        resp = await http.post(_gemini_endpoint(model), json=body)
+        resp = await http.post(
+            _gemini_endpoint(model),
+            headers={"x-goog-api-key": settings.gemini_api_key},
+            json=body,
+        )
     resp.raise_for_status()  # 429/5xx → httpx.HTTPStatusError → treated as transient
     return resp.json()
 

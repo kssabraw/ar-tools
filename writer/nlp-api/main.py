@@ -196,7 +196,7 @@ async def _gemini_embed(texts: List[str]) -> List[List[float]]:
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(
             GEMINI_EMBED_ENDPOINT,
-            params={"key": GEMINI_API_KEY},
+            headers={"x-goog-api-key": GEMINI_API_KEY},  # header, NOT ?key= (httpx logs the URL)
             json=payload,
         )
         resp.raise_for_status()

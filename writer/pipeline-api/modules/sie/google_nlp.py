@@ -105,7 +105,7 @@ async def analyze_entities(url: str, text: str) -> PageNERResult:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(
                 _NLP_URL,
-                params={"key": api_key},
+                headers={"x-goog-api-key": api_key},  # header, NOT ?key= (httpx logs the URL)
                 json=body,
             )
             response.raise_for_status()
