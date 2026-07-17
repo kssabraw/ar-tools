@@ -117,6 +117,8 @@ class LimitRequestSizeMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(LimitRequestSizeMiddleware)
 
+import ecommerce_mcs as mcs  # Max-Cosine Synthesis (AIO capture + entity + heading synthesis)
+
 STOP_WORDS = set(stopwords.words('english'))
 
 # ── API credentials (set all in Railway environment variables) ────────────────
@@ -137,6 +139,22 @@ ANTHROPIC_MAX_RETRIES = int(os.environ.get("ANTHROPIC_MAX_RETRIES", "5"))
 SCRAPEOWL_MAX_RETRIES = int(os.environ.get("SCRAPEOWL_MAX_RETRIES", "3"))
 SCRAPEOWL_RETRY_BASE  = float(os.environ.get("SCRAPEOWL_RETRY_BASE", "1.0"))
 
+# Gemini embeddings power ecommerce Max-Cosine Synthesis (MCS): headings are
+# scored/selected by cosine to Google's live AI Overview answer, using the model
+# family AIO itself runs on. Called over the REST API via httpx (no SDK dep).
+# DORMANT until GEMINI_API_KEY is set on the nlp service — without it, ecommerce
+# MCS still derives the entity + answer facts (Phases 1-3) but skips cosine
+# synthesis (Phase 4), degrading to guidance-text-only.
+GEMINI_API_KEY       = os.environ.get("GEMINI_API_KEY", "")
+# gemini-embedding-2 @ 1536 dims — the suite-wide embedding standard. Verified
+# against the live batchEmbedContents endpoint (SEMANTIC_SIMILARITY, 1536-dim).
+# Env-overridable; a wrong ID fails closed (MCS synthesis then no-ops).
+GEMINI_EMBED_MODEL   = os.environ.get("GEMINI_EMBED_MODEL", "gemini-embedding-2")
+GEMINI_EMBED_DIM     = int(os.environ.get("GEMINI_EMBED_DIM", "1536"))
+GEMINI_EMBED_ENDPOINT = (
+    f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBED_MODEL}:batchEmbedContents"
+)
+
 # Entity analysis: TextRazor (replaced Google Cloud NLP — cheaper + Wikipedia/
 # Wikidata linking). Single endpoint; key passed via the X-TextRazor-Key header.
 TEXTRAZOR_ENDPOINT   = "https://api.textrazor.com/"
@@ -155,6 +173,34 @@ _MODEL_PRICING = {
     "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
     "claude-haiku-4-5-20251001":  {"input": 0.80, "output": 4.00},
 }
+
+
+async def _gemini_embed(texts: List[str]) -> List[List[float]]:
+    """Batch-embed `texts` with the Gemini REST embeddings API (httpx — no SDK).
+    Raises on failure so callers can fall back; returns vectors in input order.
+    Only reached when GEMINI_API_KEY is set (the MCS caller gates on it)."""
+    if not GEMINI_API_KEY or not texts:
+        return []
+    payload = {
+        "requests": [
+            {
+                "model": f"models/{GEMINI_EMBED_MODEL}",
+                "content": {"parts": [{"text": t or ""}]},
+                "taskType": "SEMANTIC_SIMILARITY",
+                "outputDimensionality": GEMINI_EMBED_DIM,
+            }
+            for t in texts
+        ]
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(
+            GEMINI_EMBED_ENDPOINT,
+            params={"key": GEMINI_API_KEY},
+            json=payload,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    return [e.get("values", []) for e in (data.get("embeddings") or [])]
 
 
 # ── Generation constants — restored VERBATIM from the reference copy
@@ -695,6 +741,10 @@ class AnalysisResponse(BaseModel):
     serp_bold_keywords: List[dict] = []       # bolded terms from SERP snippets + competitor usage
     zone_targets: Dict[str, dict] = {}        # max term/entity counts per zone across competitors
     competitor_headings: List[dict] = []      # H2/H3 strings scraped from competitor pages
+    aio_present: bool = False                 # live AI Overview shown for this query
+    aio_text: str = ""                        # the AIO answer text (MCS target)
+    aio_sources: List[str] = []               # domains the AIO cites
+    aio_fanout: List[str] = []                # AIO fan-out sub-questions
     analysis_cost: dict = {}                  # estimated API costs for this analysis run
 
 
@@ -706,11 +756,13 @@ async def fetch_serp_urls(keyword: str, location: str, client: httpx.AsyncClient
     organic URLs for keyword + location. Also extracts highlighted/bold terms
     from SERP titles and descriptions.
 
-    Returns (urls: List[str], bold_terms: List[str]).
+    Returns (urls: List[str], bold_terms: List[str], aio: dict). `aio` is the
+    extracted AI Overview block ({present, text, sources, fanout, asynchronous})
+    from the SAME response — no extra call — for ecommerce Max-Cosine Synthesis.
     """
     if not DATAFORSEO_LOGIN or not DATAFORSEO_PASSWORD:
         logger.warning("DataForSEO credentials not set — skipping SERP fetch")
-        return [], []
+        return [], [], mcs.extract_aio([])
 
     credentials = base64.b64encode(
         f"{DATAFORSEO_LOGIN}:{DATAFORSEO_PASSWORD}".encode()
@@ -740,11 +792,13 @@ async def fetch_serp_urls(keyword: str, location: str, client: httpx.AsyncClient
 
         urls = []
         bold_terms_raw: set = set()
+        all_items: list = []
         kw_lower = keyword.lower().strip()
         kw_words = set(kw_lower.split())
 
         for task in (data.get("tasks") or []):
             for result in (task.get("result") or []):
+                all_items.extend(result.get("items") or [])
                 for item in (result.get("items") or []):
                     if item.get("type") != "organic":
                         continue
@@ -771,6 +825,7 @@ async def fetch_serp_urls(keyword: str, location: str, client: httpx.AsyncClient
                         break
 
         bold_terms = sorted(bold_terms_raw)
+        aio = mcs.extract_aio(all_items)
         # When nothing usable comes back, surface DataForSEO's own task-level
         # status so a failure can be diagnosed. The most common cause is a
         # location_name that DataForSEO couldn't resolve (it returns HTTP 200
@@ -785,12 +840,13 @@ async def fetch_serp_urls(keyword: str, location: str, client: httpx.AsyncClient
                         f"DataForSEO task error for '{keyword}' @ location_name="
                         f"'{location}' (code={t_code}): {t_msg}"
                     )
-        logger.info(f"DataForSEO returned {len(urls)} usable URLs, {len(bold_terms)} bold terms for '{keyword}'")
-        return urls, bold_terms
+        logger.info(f"DataForSEO returned {len(urls)} usable URLs, {len(bold_terms)} bold terms, "
+                    f"AIO={'yes' if aio['present'] else 'no'} for '{keyword}'")
+        return urls, bold_terms, aio
 
     except Exception as e:
         logger.warning(f"DataForSEO error: {e}")
-        return [], []
+        return [], [], mcs.extract_aio([])
 
 
 # ── Phone number linkification ────────────────────────────────────────────────
@@ -1405,12 +1461,13 @@ async def _run_serp_analysis(
     """
     # Step 1: get URLs + bold terms from SERP snippets
     bold_terms_from_serp: List[str] = []
+    aio_insights: dict = mcs.extract_aio([])   # no AIO when URLs are supplied manually
     if urls:
         serp_urls = urls
         logger.info(f"Using {len(serp_urls)} manually provided URLs")
     else:
         async with httpx.AsyncClient() as client:
-            serp_urls, bold_terms_from_serp = await fetch_serp_urls(keyword, location, client, location_code)
+            serp_urls, bold_terms_from_serp, aio_insights = await fetch_serp_urls(keyword, location, client, location_code)
         if not serp_urls:
             raise HTTPException(status_code=502, detail="DataForSEO returned no usable URLs")
 
@@ -1552,6 +1609,10 @@ async def _run_serp_analysis(
         serp_bold_keywords=serp_bold_keywords,
         zone_targets=zone_targets,
         competitor_headings=competitor_headings,
+        aio_present=aio_insights.get("present", False),
+        aio_text=aio_insights.get("text", ""),
+        aio_sources=aio_insights.get("sources", []),
+        aio_fanout=aio_insights.get("fanout", []),
         analysis_cost=analysis_cost,
     )
 
@@ -7375,6 +7436,54 @@ class GenerateEcommerceRequest(BaseModel):
     notes: Optional[str] = None
 
 
+async def _ecommerce_mcs_block(client, serp_analysis_dict: Optional[dict], page_type: str, keyword: str) -> str:
+    """Build the Max-Cosine Synthesis prompt block from the live AI Overview in
+    the SERP analysis. Best-effort — returns '' when no AIO was captured or on
+    any failure, so pages without an AIO behave exactly as before. Phase 4
+    (Gemini cosine synthesis) runs only when GEMINI_API_KEY is set; otherwise the
+    block guides headings with the derived entity + the answer's facts alone."""
+    sa = serp_analysis_dict or {}
+    aio_text = (sa.get("aio_text") or "").strip()
+    if not sa.get("aio_present") or not aio_text:
+        return ""
+    try:
+        embed_fn = _gemini_embed if GEMINI_API_KEY else None
+        entity = await mcs.derive_main_entity(
+            page_type=page_type, input_entity=keyword, primary_keyword=keyword,
+            aio_text=aio_text, aio_sources=sa.get("aio_sources") or [], embed_fn=embed_fn,
+        )
+        # Phase 3 — the points the answer actually makes (one bounded Claude call).
+        facts: list = []
+        try:
+            fsys, fuser = mcs.build_fact_extraction_messages(aio_text, entity.canonical)
+            fmsg = await client.messages.create(
+                model=SCORE_MODEL, max_tokens=600,
+                system=[{"type": "text", "text": fsys}],
+                messages=[{"role": "user", "content": fuser}],
+            )
+            _token_record("ecommerce-mcs-facts", SCORE_MODEL, fmsg.usage.input_tokens, fmsg.usage.output_tokens)
+            facts = mcs.parse_facts(fmsg.content[0].text)
+        except Exception as _fe:
+            logger.warning(f"ecommerce MCS fact extraction failed (non-fatal): {_fe}")
+        # Phase 4 — max-cosine heading synthesis (gated on Gemini embeddings).
+        synthesized = None
+        if embed_fn and facts:
+            try:
+                synthesized = await mcs.synthesize_headings(
+                    aio_text=aio_text, entity=entity.canonical, facts=facts, embed_fn=embed_fn,
+                )
+            except Exception as _se:
+                logger.warning(f"ecommerce MCS synthesis failed (non-fatal): {_se}")
+        block = mcs.build_mcs_prompt_block(entity, facts, synthesized)
+        if block:
+            logger.info(f"ecommerce MCS: entity='{entity.canonical}' source={entity.source} "
+                        f"facts={len(facts)} synth={len(synthesized) if synthesized else 0}")
+        return block
+    except Exception as _me:
+        logger.warning(f"ecommerce MCS block failed (non-fatal): {_me}")
+        return ""
+
+
 @app.post('/generate-ecommerce-page')
 @limiter.limit("5/minute")
 async def generate_ecommerce_page(request: Request, body: GenerateEcommerceRequest):
@@ -7403,6 +7512,11 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
                 serp_analysis_dict = None
 
         serp_ctx = _serp_context(serp_analysis_dict)
+
+        # Max-Cosine Synthesis: aim the entity + headings at the live AI Overview
+        # answer (best-effort; '' when no AIO / on failure).
+        await q.put({"step": "progress", "progress": 52, "message": "Aligning headings to the AI answer…"})
+        mcs_block = await _ecommerce_mcs_block(client, serp_analysis_dict, page_type, body.keyword)
 
         # Product facts: pasted input + optional scrape of a source URL.
         await q.put({"step": "progress", "progress": 55, "message": "Gathering product facts…"})
@@ -7465,6 +7579,7 @@ Primary keyword: {body.keyword}
 
 {facts_text}
 
+{mcs_block}
 {serp_ctx}
 
 {template_text}"""
