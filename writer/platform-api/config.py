@@ -546,7 +546,10 @@ class Settings(BaseSettings):
     analysis_cache_ttl_days: int = 14
 
     # Silo candidate management (Platform PRD v1.4 §7.7 / §8.5)
-    silo_dedup_cosine_threshold: float = 0.85
+    # Recalibrated 0.85->0.87 for gemini-embedding-2 (P99 of cross-silo cosines +
+    # margin, over 83 live silo keywords) — cross-silo pairs sit low under the new
+    # space so this gate barely shifts. Runs together with the silo backfill.
+    silo_dedup_cosine_threshold: float = 0.87
     silo_frequent_threshold: int = 3
     # text-embedding-3-large supports a `dimensions` parameter (1..3072);
     # we use 1536 because pgvector's HNSW index is capped at 2000 dims.

@@ -65,13 +65,21 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------
     # Brief Generator v2.0 - threshold tuning (PRD §12.6)
     # ------------------------------------------------------------
-    # All thresholds must be configurable per the PRD. Defaults match the
-    # PRD's starting values; expect first-week tuning, especially on the
-    # restatement ceiling.
-    brief_relevance_floor: float = 0.55
-    brief_restatement_ceiling: float = 0.78
-    brief_inter_heading_threshold: float = 0.75
-    brief_edge_threshold: float = 0.65
+    # All thresholds must be configurable per the PRD. Values below were
+    # RECALIBRATED for gemini-embedding-2 (the suite embedding switch) — the new
+    # space runs on a different cosine scale, so the old OpenAI-tuned values no
+    # longer mean the same thing. Derived by scripts/calibrate_embedding_thresholds.py
+    # over 47 real briefs (kept vs discard-reason-labeled headings):
+    #   relevance_floor 0.55->0.65 (labeled keep-95%-pos; NOTE this gate is weak/
+    #     overlapping under embedding-2 — validate with shadow runs, may need rethink),
+    #   restatement_ceiling 0.78->0.87 (labeled Youden-J; MANDATORY — at 0.78 the
+    #     new space false-drops ~69% of good headings and guts briefs),
+    #   inter_heading 0.75->0.90 + edge 0.65->0.80 (transfer from kept-heading
+    #     pairwise spread). Env-overridable; expect further tuning.
+    brief_relevance_floor: float = 0.65
+    brief_restatement_ceiling: float = 0.87
+    brief_inter_heading_threshold: float = 0.90
+    brief_edge_threshold: float = 0.80
     brief_mmr_lambda: float = 0.7
     brief_louvain_resolution: float = 1.0
     brief_louvain_seed: int = 42
