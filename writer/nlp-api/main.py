@@ -407,6 +407,15 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
 9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur in the
    intro, the main services body, the local section, and the FAQ. This establishes the
    entity relationship in LLM retrieval.
+   MAIN ENTITY IN SUBHEADINGS: repeat the page's main entity — the [service] (and [city]
+   where it reads naturally) — across the H2/H3 subheadings, EACH paired with a real
+   subtopic. Every section heading should name what the page is about, never a bare
+   generic label.
+   ✗ Bad:  "Our Process" / "Why Choose Us" / "Get Started"
+   ✓ Good: "[Service] Process in [City]" / "Why [City] Homeowners Choose [Brand] for [Service]"
+   Do NOT spam the exact-match keyword VERBATIM across headings — vary the wording and front
+   the entity + the subtopic. Question-format H3s (rule 3) still count as long as they name
+   the entity, e.g. "How much does [service] cost in [city]?".
 
 10. SECTION LENGTH ≤300 words: LLMs extract from dense sections poorly. If a topic needs
     more depth, split it into multiple H2 subsections rather than lengthening one section.
@@ -681,7 +690,7 @@ AEO / LLM WRITING RULES — apply to all text and any new content added:
    introduced by a <p> sentence. Do not fabricate prices or timeframes, and don't force a
    table where a list or prose is more natural.
 8. SPECIFIC FACTS OVER VAGUE CLAIMS — cite numbers, timeframes, named places.
-9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur.
+9. ENTITY TRIPLETS in ≥3 sections: [Brand] + [service] + [city] must co-occur. MAIN ENTITY IN SUBHEADINGS: repeat the main entity ([service], + [city] where natural) across the H2/H3 subheadings, each paired with a real subtopic — never a bare label ("Our Process"/"Why Choose Us"); do NOT spam the exact-match keyword verbatim in headings.
 10. SECTION LENGTH ≤300 words.
 
 HARD RULES — NEVER:
@@ -3164,7 +3173,7 @@ SCORING CRITERIA — score each engine 0–100:
 
 2. gbp_maps (weight 20%): exact city name present; service matches GBP category; brand+service+city entity triplet; NAP signals consistent; multiple service mentions.
 
-3. entity_establishment (weight 10%): brand+service+city co-occurrence in ≥3 sections; sub-services mentioned; descriptive anchor text signals; topical depth.
+3. entity_establishment (weight 10%): brand+service+city co-occurrence in ≥3 sections; MAIN ENTITY IN SUBHEADINGS: the page's main entity (service, + city where natural) repeated across the H2/H3 subheadings, each paired with a real subtopic — penalise bare generic headings ("Our Process"/"Why Choose Us") and penalise spamming the exact-match keyword verbatim across headings; sub-services mentioned; descriptive anchor text signals; topical depth.
 
 4. icp_alignment (weight 5%): detect ICP from keyword modifier (emergency→urgent tone; commercial→B2B tone; general→professional/reliable); CTA tone matches ICP (e.g. emergency ICP requires urgency/fear-based CTA, not generic "call for a free estimate"); pain points addressed; emotional register of copy matches searcher intent.
 
@@ -3204,7 +3213,7 @@ SCORING CRITERIA — score each engine 0–100:
 
 2. gbp_maps (weight 20%): brand + service entity pairing present and consistent; service matches the business's category/offering; multiple, specific service mentions; descriptive, non-generic service framing. Do NOT require or reward any city/NAP/location signal.
 
-3. entity_establishment (weight 10%): brand + service co-occurrence across ≥3 sections; sub-services mentioned; descriptive anchor-text signals; topical depth. No city co-occurrence required.
+3. entity_establishment (weight 10%): brand + service co-occurrence across ≥3 sections; MAIN ENTITY IN SUBHEADINGS: the page's main entity (the service) repeated across the H2/H3 subheadings, each paired with a real subtopic — penalise bare generic headings ("Our Process"/"Why Choose Us") and penalise spamming the exact-match keyword verbatim across headings; sub-services mentioned; descriptive anchor-text signals; topical depth. No city co-occurrence required.
 
 4. icp_alignment (weight 5%): detect ICP from keyword modifier (emergency→urgent tone; commercial→B2B tone; general→professional/reliable); CTA tone matches ICP; pain points addressed; emotional register of copy matches searcher intent.
 
