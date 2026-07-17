@@ -7800,6 +7800,13 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
         existing_page_text = BeautifulSoup(existing_html, "html.parser").get_text(separator="\n", strip=True)
         serp_ctx = _serp_context(body.serp_analysis)
 
+        # Max-Cosine Synthesis: aim the entity + headings at the live AI Overview
+        # answer (Gemini-embedding cosine synthesis), same as generate — the
+        # reoptimize SERP analysis already carried the AIO. Best-effort; '' when
+        # no AIO / on failure, so the rewrite still runs.
+        await q.put({"step": "progress", "progress": 22, "message": "Aligning headings to the AI answer…"})
+        mcs_block = await _ecommerce_mcs_block(client, body.serp_analysis, page_type, body.keyword)
+
         # Auto-research invariant PUBLIC specs (CAS/MW/sequence/…) with citations
         # so the rewrite fills them instead of gating them. Vendor facts stay
         # gated. Best-effort; '' when disabled / nothing found.
@@ -7831,6 +7838,7 @@ Primary keyword: {body.keyword}
 {brand_voice_text}
 {icp_text}
 
+{mcs_block}
 {serp_ctx}
 
 {researched_section}SEO DEFICIENCIES TO FIX — address ALL of these in the rewritten page:
