@@ -6,7 +6,7 @@ heading-form pass (§X.4), the residual restatement gate (§X.3), and
 MCS-style rephrase suggestions.
 
 Deterministic by design: local spaCy parse + 2-3 embedding calls (against
-the OpenAI key already held). No Claude/LLM in the default path, so the
+the Gemini key already held). No Claude/LLM in the default path, so the
 output is reproducible for the same input. Never hard-fails - the title
 fallback always populates `main_entity`.
 
@@ -368,7 +368,7 @@ async def derive_main_entity(
     fallback on AIO absence, low confidence, or sanity-check failure.
 
     `embed_fn` is injectable for deterministic testing; defaults to
-    text-embedding-3-large.
+    Gemini (embed_batch_large).
     """
     embed = embed_fn or embed_batch_large
 

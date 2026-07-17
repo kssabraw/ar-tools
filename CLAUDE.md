@@ -109,7 +109,7 @@ When docs conflict: the engineering spec wins for "how to build it," the product
 | Frontend | React + Vite, in this repo at `/frontend`, deployed to **Netlify** (see `netlify.toml`) | `/frontend`, `netlify.toml` |
 | State management | TanStack Query (no Redux/Zustand) | Engineering spec §10.5 |
 | LLM provider | **Anthropic Claude** for module content generation | User decision |
-| Embeddings | OpenAI `text-embedding-3-small` for SIE only | User decision |
+| Embeddings | **Gemini `gemini-embedding-2` @ 1536 dims** — full switch off OpenAI: brief v2 (`embed_batch`/`embed_batch_large` → Gemini SEMANTIC_SIMILARITY), SIE, research, silo dedup (`silo_candidates` re-embedded via `scripts/backfill_silo_embeddings_gemini.py`), fanout (`EMBEDDING_PROVIDER=gemini` default) + briefgen, and AIO proximity. Reverses the earlier "OpenAI `text-embedding-3-small` for SIE only". (nlp-api ecommerce MCS is already Gemini — align its model to `gemini-embedding-2` too.) Model is env-overridable per service; a prior fanout eval found the embedding-2 preview weaker on write-time relevance — revisit if the fan-out gate regresses | User decision (2026-07-16 — full switch off OpenAI embeddings) |
 | Rank / SERP data | **DataForSEO** for organic SERP; **Local Dominator** for Maps/local-pack **geo-grid** (Module #5 — supersedes DataForSEO geo-grid, user decision 2026-06-23); **Outscraper** for GBP search/details; DataForSEO for GBP review enrichment | Suite roadmap decision log |
 | GSC analytics | Google Search Console via **service account** (no interactive OAuth) | Suite roadmap decision log |
 | Publish destination | Google Doc in client's Drive folder via Apps Script webhook (CMS-ready later) | Suite roadmap decision log |

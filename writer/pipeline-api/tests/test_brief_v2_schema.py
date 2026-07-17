@@ -213,7 +213,7 @@ def test_persona_info_rejects_extras():
 
 def test_metadata_defaults_match_prd_thresholds():
     m = BriefMetadata()
-    assert m.embedding_model == "text-embedding-3-large"
+    assert m.embedding_model == "gemini-embedding-2"
     assert m.relevance_floor_threshold == 0.55
     assert m.restatement_ceiling_threshold == 0.78
     assert m.inter_heading_threshold == 0.75
@@ -312,10 +312,11 @@ def test_metadata_rejects_legacy_fields():
             BriefMetadata(**{legacy: 0})
 
 
-def test_metadata_embedding_model_locked_to_large():
-    # Pydantic Literal enforces this - small no longer accepted.
-    with pytest.raises(ValidationError):
-        BriefMetadata(embedding_model="text-embedding-3-small")  # type: ignore[arg-type]
+def test_metadata_embedding_model_is_gemini():
+    # The suite standardized on Gemini; embedding_model is now a free string
+    # (was a Literal locked to text-embedding-3-large) recording the active model.
+    assert BriefMetadata().embedding_model == "gemini-embedding-2"
+    assert BriefMetadata(embedding_model="gemini-embedding-001").embedding_model == "gemini-embedding-001"
 
 
 # ---- BriefResponse - full envelope ----

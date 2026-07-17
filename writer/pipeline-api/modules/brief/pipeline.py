@@ -1319,7 +1319,7 @@ async def run_brief(req: BriefRequest) -> BriefResponse:
         llm_fanout_queries_captured=fanout_counts,
         llm_response_subtopics_extracted=response_counts,
         intent_signals=signals,
-        embedding_model="text-embedding-3-large",
+        embedding_model=settings.gemini_embedding_model,
         relevance_floor_threshold=settings.brief_relevance_floor,
         restatement_ceiling_threshold=settings.brief_restatement_ceiling,
         inter_heading_threshold=settings.brief_inter_heading_threshold,

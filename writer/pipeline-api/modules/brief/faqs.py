@@ -221,7 +221,7 @@ async def score_faqs(
     """Compute faq_score per PRD §5 Step 10 (v2.0: cosine to title, not seed;
     v2.2: blended cosine-to-title + cosine-to-intent_profile).
 
-    Embeddings come from text-embedding-3-large via embed_batch_large
+    Embeddings come from Gemini via embed_batch_large
     (unit-normalized → cosine == dot product). Title embedding is the
     same vector produced in Step 5.1 - passing it in keeps FAQ scoring
     consistent with H2 selection.
