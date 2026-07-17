@@ -227,6 +227,15 @@ ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES = int(os.environ.get("ECOMMERCE_FACT_RESEAR
 ECOMMERCE_FACT_RESEARCH_MODEL = os.environ.get("ECOMMERCE_FACT_RESEARCH_MODEL", GENERATION_MODEL)
 _ECOM_RESEARCH_MAX_TURNS = ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES + 3  # search rounds + the emit turn
 
+# Ecommerce reoptimize: how many rewrite→score passes to run, climbing toward the
+# score threshold and keeping the BEST-scoring version. Pass 1 is the initial
+# rewrite; passes 2..N refine the latest output against its fresh deficiencies.
+# Pages already at/over threshold do zero passes. Mirrors the Local SEO
+# auto-retry spine (which stops at a fixed 90); here the target is the
+# per-request score_threshold. Rewrites + scoring run at temperature=0 so the
+# same page reoptimizes to the same result run-to-run.
+MAX_ECOMMERCE_AUTO_PASSES = int(os.environ.get("MAX_ECOMMERCE_AUTO_PASSES", "3"))
+
 
 async def _research_public_facts(client, entity: str, page_type: str, focus: Optional[list] = None):
     """Best-effort: research the invariant public specs for `entity` via a
@@ -7216,6 +7225,7 @@ async def _ecommerce_score_html_inline(
     msg = await client.messages.create(
         model=SCORE_MODEL,
         max_tokens=8192,
+        temperature=0,  # deterministic scoring so a page scores the same run-to-run
         system=[{"type": "text", "text": _ECOMMERCE_SCORE_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_prompt}],
     )
@@ -7695,6 +7705,7 @@ Primary keyword: {body.keyword}
             claude_msg = await client.messages.create(
                 model=GENERATION_MODEL,
                 max_tokens=16000,
+                temperature=0,  # deterministic generation run-to-run
                 system=[{"type": "text", "text": _ECOMMERCE_GEN_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
                 messages=[{"role": "user", "content": user_prompt}],
             )
@@ -7790,6 +7801,19 @@ class ReoptimizeEcommerceRequest(BaseModel):
     # High-priority editorial guidance from the user (e.g. "remove the Research
     # Use Only designation") the rewrite must follow.
     notes: Optional[str] = None
+    # Target composite the auto-retry loop climbs toward (keep-best, capped at
+    # MAX_ECOMMERCE_AUTO_PASSES). Threaded from platform-api's REOPT threshold.
+    score_threshold: float = 75.0
+
+
+def _ecommerce_deficiency_text(defs: Optional[List[dict]]) -> str:
+    """Render per-engine deficiencies into the reoptimize prompt's fix list."""
+    return "\n".join(
+        f"  Engine: {d.get('engine','')} (score: {d.get('score','?')}/100)\n"
+        f"  Issues: {'; '.join(d.get('issues', []))}\n"
+        f"  Fixes needed: {'; '.join(d.get('recommendations', []))}"
+        for d in (defs or [])
+    ) or "  (No per-engine deficiencies supplied — rewrite to maximise all engines.)"
 
 
 @app.post('/reoptimize-ecommerce-page')
@@ -7835,20 +7859,14 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
         )
         researched_section = (researched_block + "\n\n") if researched_block else ""
 
-        deficiency_text = "\n".join(
-            f"  Engine: {d.get('engine','')} (score: {d.get('score','?')}/100)\n"
-            f"  Issues: {'; '.join(d.get('issues', []))}\n"
-            f"  Fixes needed: {'; '.join(d.get('recommendations', []))}"
-            for d in (body.deficiencies or [])
-        ) or "  (No per-engine deficiencies supplied — rewrite to maximise all engines.)"
-
         brand_voice_text = _build_brand_voice_text(body.brand_voice)
         icp_text = _build_icp_text(body.detected_icp)
         extra_facts = ""
         if (body.product_input or "").strip():
             extra_facts = "ADDITIONAL PRODUCT DETAILS (authoritative — use these facts):\n" + body.product_input.strip()
 
-        user_prompt = f"""STORE / BUSINESS DATA
+        def _build_reopt_prompt(page_text: str, deficiency_text: str) -> str:
+            return f"""STORE / BUSINESS DATA
 Store name: {body.business_name}
 Primary keyword: {body.keyword}
 
@@ -7866,44 +7884,85 @@ Primary keyword: {body.keyword}
 {extra_facts}
 
 EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT invent any facts not present here or in the additional details above, EXCEPT values given in the VERIFIED PUBLIC SPECIFICATIONS block, which you may state):
-{existing_page_text[:5000]}"""
+{page_text[:5000]}"""
 
-        await q.put({"step": "progress", "progress": 40, "message": "Rewriting your page…"})
-        try:
-            claude_msg = await client.messages.create(
-                model=GENERATION_MODEL,
-                max_tokens=16000,
-                system=[{"type": "text", "text": _ECOMMERCE_GEN_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-        except Exception:
-            logger.exception("Claude ecommerce reoptimize error")
-            raise Exception("Content generation failed. Please try again.")
-
-        token_rec = _token_record("reoptimize-ecommerce-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
-        token_rec["input_tokens"]  += research_tok["input_tokens"]
-        token_rec["output_tokens"] += research_tok["output_tokens"]
-        token_rec["cost_usd"]       = round(token_rec["cost_usd"] + research_tok["cost_usd"], 6)
-        content_html, schema_json, page_title, content_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
-        content_gaps = ecom_facts.filter_researched_gaps(content_gaps, researched_facts)
-
-        # RDFa entity markup from the SERP analysis (parity with generate).
-        content_html = _apply_rdfa_markup(content_html, (body.serp_analysis or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES])
-
-        await q.put({"step": "progress", "progress": 82, "message": "Scoring your page…"})
         brand_context = _ecommerce_brand_context(body.business_name, body.brand_voice)
-        inline_score = None
-        inline_scores = None
-        try:
-            inline_score, _, inline_scores, score_tok = await _ecommerce_score_html_inline(
-                content_html, body.keyword, page_type, body.business_name, brand_context,
-                body.serp_analysis, client,
-            )
-            token_rec["input_tokens"]  += score_tok["input_tokens"]
-            token_rec["output_tokens"] += score_tok["output_tokens"]
-            token_rec["cost_usd"]       = round(token_rec["cost_usd"] + score_tok["cost_usd"], 6)
-        except Exception as _ae:
-            logger.warning(f"reoptimize-ecommerce: scoring failed: {_ae}")
+        # Running token total, seeded with the (one-time) research cost. Built as
+        # a plain dict so the zero seed isn't logged.
+        token_rec = {"endpoint": "reoptimize-ecommerce-page", "model": GENERATION_MODEL,
+                     "input_tokens": research_tok["input_tokens"],
+                     "output_tokens": research_tok["output_tokens"],
+                     "cost_usd": research_tok["cost_usd"]}
+
+        def _accumulate(rec: dict) -> None:
+            token_rec["input_tokens"]  += rec["input_tokens"]
+            token_rec["output_tokens"] += rec["output_tokens"]
+            token_rec["cost_usd"]       = round(token_rec["cost_usd"] + rec["cost_usd"], 6)
+
+        # Auto-retry-to-threshold loop (keep-best). Pass 1 rewrites the existing
+        # page against its supplied deficiencies; each later pass refines the
+        # latest rewrite against ITS fresh deficiencies, climbing toward the
+        # threshold. temperature=0 → the same page reoptimizes the same way
+        # run-to-run, and keep-best means a regressing pass never loses ground.
+        current_text = existing_page_text
+        current_def_text = _ecommerce_deficiency_text(body.deficiencies)
+        best: Optional[dict] = None
+        for pass_num in range(1, MAX_ECOMMERCE_AUTO_PASSES + 1):
+            await q.put({"step": "progress",
+                         "progress": min(88, 40 + pass_num * 12),
+                         "message": ("Rewriting your page…" if pass_num == 1
+                                     else f"Score {best['score'] if best else '?'}/100 — "
+                                          f"optimizing (pass {pass_num} of {MAX_ECOMMERCE_AUTO_PASSES})…")})
+            try:
+                claude_msg = await client.messages.create(
+                    model=GENERATION_MODEL,
+                    max_tokens=16000,
+                    temperature=0,
+                    system=[{"type": "text", "text": _ECOMMERCE_GEN_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
+                    messages=[{"role": "user", "content": _build_reopt_prompt(current_text, current_def_text)}],
+                )
+            except Exception:
+                logger.exception("Claude ecommerce reoptimize error")
+                if best is None:
+                    raise Exception("Content generation failed. Please try again.")
+                break
+            _accumulate(_token_record("reoptimize-ecommerce-page", GENERATION_MODEL,
+                                      claude_msg.usage.input_tokens, claude_msg.usage.output_tokens))
+            pass_html, pass_schema, pass_title, pass_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
+            if not pass_html:
+                logger.warning(f"reoptimize-ecommerce pass {pass_num} returned empty HTML; keeping previous")
+                break
+            pass_gaps = ecom_facts.filter_researched_gaps(pass_gaps, researched_facts)
+            pass_html = _apply_rdfa_markup(pass_html, (body.serp_analysis or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES])
+
+            pass_score, pass_defs, pass_scores = None, [], None
+            try:
+                pass_score, pass_defs, pass_scores, score_tok = await _ecommerce_score_html_inline(
+                    pass_html, body.keyword, page_type, body.business_name, brand_context,
+                    body.serp_analysis, client,
+                )
+                _accumulate(score_tok)
+            except Exception as _ae:
+                logger.warning(f"reoptimize-ecommerce pass {pass_num} scoring failed: {_ae}")
+
+            # Keep-best: an unscored pass only wins if nothing has scored yet.
+            if best is None or (pass_score is not None and (best["score"] is None or pass_score > best["score"])):
+                best = {"score": pass_score, "html": pass_html, "schema": pass_schema,
+                        "title": pass_title, "gaps": pass_gaps, "scores": pass_scores}
+
+            if pass_score is None or pass_score >= body.score_threshold:
+                break  # can't score further, or target reached
+            current_text = BeautifulSoup(pass_html, "html.parser").get_text(separator="\n", strip=True)
+            current_def_text = _ecommerce_deficiency_text(pass_defs)
+
+        if not best or not best.get("html"):
+            raise Exception("Content generation failed. Please try again.")
+        content_html = best["html"]
+        schema_json = best["schema"]
+        page_title = best["title"]
+        content_gaps = best["gaps"]
+        inline_score = best["score"]
+        inline_scores = best["scores"]
 
         await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
         await q.put({

@@ -305,10 +305,12 @@ async def reoptimize_from(
     existing_page_html: Optional[str], existing_page_url: Optional[str],
     deficiencies: list[dict], serp_analysis: Optional[dict],
     product_input: Optional[str], user_id: str, notes: Optional[str] = None,
+    score_threshold: float = REOPT_SCORE_THRESHOLD,
 ) -> dict:
     """Rewrite an existing ecommerce page to lift its score, then persist it as a
-    `mode='reoptimize'` row. The nlp endpoint re-scores the rewrite. `notes` is
-    high-priority editorial guidance (e.g. drop a designation) the rewrite follows."""
+    `mode='reoptimize'` row. The nlp endpoint re-scores the rewrite and runs an
+    auto-retry loop (keep-best) toward `score_threshold`. `notes` is high-priority
+    editorial guidance (e.g. drop a designation) the rewrite follows."""
     client = _get_client(client_id)
     page_type = _norm_page_type(page_type)
     if not existing_page_html and not existing_page_url:
@@ -325,6 +327,7 @@ async def reoptimize_from(
         "serp_analysis": serp_analysis,
         "product_input": (product_input or "").strip() or None,
         "notes": (notes or "").strip() or None,
+        "score_threshold": score_threshold,
     })
     return _persist_page(client_id, keyword, page_type, existing_page_url, product_input, "reoptimize", result, user_id, notes=notes)
 
@@ -371,6 +374,7 @@ async def reoptimize_url(
         deficiencies=score_result.get("deficiencies") or [],
         serp_analysis=score_result.get("serp_analysis"),
         product_input=None, user_id=user_id, notes=notes,
+        score_threshold=score_threshold,
     )
 
     out: dict = {
