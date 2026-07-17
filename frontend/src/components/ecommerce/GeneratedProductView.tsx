@@ -38,7 +38,7 @@ interface Props {
 type Tab = 'preview' | 'html' | 'schema'
 
 export function GeneratedProductView({ page, isNew, prevScore, onBack, onScoreAndImprove, onNewPage }: Props) {
-  const { keyword, page_type, content_html, schema_json, page_title, content_gaps, mode } = page
+  const { keyword, page_type, content_html, schema_json, page_title, content_gaps, researched_facts, mode } = page
   const score = page.composite_score
   const status = page.composite_status
 
@@ -209,6 +209,31 @@ export function GeneratedProductView({ page, isNew, prevScore, onBack, onScoreAn
             <style>{PREVIEW_CSS}</style>
             <div className="ec-preview" dangerouslySetInnerHTML={{ __html: content_html }} />
           </div>
+          {researched_facts && researched_facts.length > 0 && (
+            <div style={{ border: '1px solid #bbf7d0', borderRadius: 12, overflow: 'hidden' }}>
+              <div style={{ background: '#f0fdf4', padding: '16px 20px', borderBottom: '1px solid #bbf7d0' }}>
+                <p style={{ fontSize: 14, fontWeight: 600, color: '#166534', margin: 0 }}>Auto-sourced public specs — verify</p>
+                <p style={{ fontSize: 12, color: '#15803d', margin: '4px 0 0' }}>
+                  These are invariant, publicly-documented properties of the product, researched from the cited
+                  sources and written into the page (not gated to you). Confirm each value against its source before publishing.
+                </p>
+              </div>
+              <div>
+                {researched_facts.map((f, i) => (
+                  <div key={i} style={{ padding: '12px 20px', borderTop: i ? '1px solid #f0fdf4' : 'none', display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{f.field}:</span>
+                    <span style={{ fontSize: 13, color: '#334155' }}>{f.value}{f.unit && !f.value.toLowerCase().includes(f.unit.toLowerCase()) ? ` ${f.unit}` : ''}</span>
+                    {f.source_url && (
+                      <a href={f.source_url} target="_blank" rel="noopener noreferrer"
+                         style={{ fontSize: 12, color: '#6366f1', display: 'inline-flex', alignItems: 'center', gap: 3, marginLeft: 'auto' }}>
+                        {f.source_name || 'source'} <ExternalLink size={11} />
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {content_gaps && content_gaps.length > 0 && (
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>
               <div style={{ background: '#f8fafc', padding: '16px 20px', borderBottom: '1px solid #e2e8f0' }}>

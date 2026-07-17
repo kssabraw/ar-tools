@@ -118,6 +118,7 @@ class LimitRequestSizeMiddleware(BaseHTTPMiddleware):
 app.add_middleware(LimitRequestSizeMiddleware)
 
 import ecommerce_mcs as mcs  # Max-Cosine Synthesis (AIO capture + entity + heading synthesis)
+import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cited)
 
 STOP_WORDS = set(stopwords.words('english'))
 
@@ -208,6 +209,82 @@ async def _gemini_embed(texts: List[str]) -> List[List[float]]:
 # rehome, leaving generate-page / reoptimize-page / augment-page / press-release
 # referencing undefined names (NameError -> 502). Tuned core: do not edit wording.
 GENERATION_MODEL = "claude-sonnet-4-6"
+
+# ── Ecommerce compound-fact auto-research ──────────────────────────────────
+# Fills the INVARIANT, publicly-documented product specs (CAS number, molecular
+# weight, sequence, solubility, reconstitution, stability, …) the writer would
+# otherwise gate to the user — via a bounded Anthropic web_search pass that
+# returns each value WITH a citation. Vendor facts (price, reviews, this store's
+# testing lab, shipping, returns) are NEVER researched; they stay in
+# CONTENT_GAPS_REPORT. Best-effort: any failure (no key, no result, search
+# error) degrades silently to the old gate. Products only (a collection page
+# has no single compound to spec). Requires the web_search_20260209 server tool
+# (4.6+ model) — the default GENERATION_MODEL qualifies.
+ECOMMERCE_FACT_RESEARCH_ENABLED = os.environ.get(
+    "ECOMMERCE_FACT_RESEARCH_ENABLED", "true"
+).lower() in ("1", "true", "yes", "on")
+ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES = int(os.environ.get("ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES", "5"))
+ECOMMERCE_FACT_RESEARCH_MODEL = os.environ.get("ECOMMERCE_FACT_RESEARCH_MODEL", GENERATION_MODEL)
+_ECOM_RESEARCH_MAX_TURNS = ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES + 3  # search rounds + the emit turn
+
+
+async def _research_public_facts(client, entity: str, page_type: str, focus: Optional[list] = None):
+    """Best-effort: research the invariant public specs for `entity` via a
+    bounded Anthropic web_search pass, returning them WITH citations.
+
+    Returns (prompt_block, token_rec, facts). The block is injected as an
+    AUTHORITATIVE facts section so the writer states the values (and does not
+    gap them); `facts` is echoed in the SSE result for the UI to show as
+    "auto-sourced — verify". Never raises — any failure returns
+    ('', <zero token_rec>, []) so generation proceeds exactly as before.
+    """
+    zero = _token_record("ecommerce-fact-research", ECOMMERCE_FACT_RESEARCH_MODEL, 0, 0)
+    if not (ECOMMERCE_FACT_RESEARCH_ENABLED and (entity or "").strip() and page_type == "product"):
+        return "", zero, []
+    try:
+        import anthropic as _anthropic  # noqa: F401  (client already an AsyncAnthropic)
+        tools = [
+            {"type": "web_search_20260209", "name": "web_search",
+             "max_uses": ECOMMERCE_FACT_RESEARCH_MAX_SEARCHES},
+            ecom_facts.RESEARCH_TOOL,
+        ]
+        messages = [{"role": "user", "content": ecom_facts.build_research_user_prompt(entity, page_type, focus)}]
+        in_tok = out_tok = 0
+        raw_facts = None
+        resp = await client.messages.create(
+            model=ECOMMERCE_FACT_RESEARCH_MODEL, max_tokens=2000,
+            system=ecom_facts.RESEARCH_SYSTEM_PROMPT, tools=tools, messages=messages,
+        )
+        for _ in range(_ECOM_RESEARCH_MAX_TURNS):
+            in_tok += resp.usage.input_tokens
+            out_tok += resp.usage.output_tokens
+            emitted = next(
+                (b.input.get("facts") for b in resp.content
+                 if getattr(b, "type", None) == "tool_use" and b.name == "emit_researched_facts"),
+                None,
+            )
+            if emitted is not None:
+                raw_facts = emitted
+                break
+            if getattr(resp, "stop_reason", None) != "pause_turn":
+                break  # end_turn / other — the model finished without emitting
+            messages.append({"role": "assistant", "content": resp.content})
+            resp = await client.messages.create(
+                model=ECOMMERCE_FACT_RESEARCH_MODEL, max_tokens=2000,
+                system=ecom_facts.RESEARCH_SYSTEM_PROMPT, tools=tools, messages=messages,
+            )
+        facts = ecom_facts.parse_researched_facts(raw_facts or [])
+        block = ecom_facts.render_researched_facts_block(facts)
+        tok = _token_record("ecommerce-fact-research", ECOMMERCE_FACT_RESEARCH_MODEL, in_tok, out_tok)
+        if facts:
+            logger.info(
+                f"ecommerce fact research: {len(facts)} public specs for '{entity}' "
+                f"(fields: {', '.join(f['field'] for f in facts)})"
+            )
+        return block, tok, facts
+    except Exception as _fe:  # noqa: BLE001 - never break generation over research
+        logger.warning(f"ecommerce fact research failed (non-fatal): {_fe}")
+        return "", zero, []
 
 _GEN_SYSTEM_PROMPT = """You are an expert local SEO content writer. Generate a complete, publish-ready local service page following the exact structure below.
 
@@ -7156,7 +7233,7 @@ OUTPUT CONTRACT — return EXACTLY these parts in order, and NOTHING else (no ma
 3. CONTENT_GAPS_REPORT_START [ … ] CONTENT_GAPS_REPORT_END — a JSON array of the product/store facts you needed but were NOT given (e.g. exact price, dimensions, warranty length, review count). Each item is an OBJECT: {"category": short label, "missing": what fact is missing, "why_important": why it would lift the score/conversion, "how_to_add": where to source it, "score_impact": "high"|"medium"|"low"}. Use an empty array [] if none.
 4. A single <script type="application/ld+json"> … </script> block with the page's structured data.
 
-HARD RULE — NEVER invent facts. Do not fabricate prices, specs, measurements, materials, certifications, review counts, or ratings. Use ONLY the product facts + store data provided. When a needed fact is missing, write around it (do not state a made-up value) and record it in CONTENT_GAPS_REPORT.
+HARD RULE — NEVER invent facts. Do not fabricate prices, specs, measurements, materials, certifications, review counts, or ratings. Use ONLY the product facts + store data provided — PLUS any values given in a "VERIFIED PUBLIC SPECIFICATIONS" block (those are invariant, publicly-documented properties of the product/compound that were researched from cited public sources: you MAY state them exactly as given, and you must NOT list them in CONTENT_GAPS_REPORT). When a needed fact is missing AND not supplied in any provided block, write around it (do not state a made-up value) and record it in CONTENT_GAPS_REPORT. Vendor/store facts specifically — the exact price, YOUR review counts/ratings, YOUR testing lab's identity/accreditation, YOUR shipping/returns terms — are never researched for you, so always record those in CONTENT_GAPS_REPORT when missing.
 
 STORE-PAGE FRAMING (critical — read before writing) — This is a live STORE product/collection page, NOT an informational article, blog post, or encyclopedia entry. The MAIN ENTITY is THIS specific product (or category) as sold by this store (e.g. "Nova Life B12 12mg vial"), NOT the generic ingredient / material / topic ("vitamin B12"). Write to help a ready-to-buy shopper choose and purchase THIS product. What's BANNED is generic-topic ENCYCLOPEDIA that doesn't help the buyer decide or use the product: "what X is in the human body", physiology, mechanism-of-action, history, or health benefits of the underlying ingredient. What's WELCOME — and SHOULD be developed with substantive, specific detail — is informational depth that serves THIS buyer's use and purchase decision: the product's real-world applications and use cases, how it's used / handled / stored, compatibility, quality & testing context, and compliance — always anchored to THIS product and this buyer (e.g. the specific research contexts a lab would use it in, not a textbook explainer of the molecule). Write a THOROUGH, in-depth page — develop each section with concrete, useful detail; do not produce a thin stub. Anchor EVERY heading and section on the product and the purchase decision.
 
@@ -7518,9 +7595,19 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
         await q.put({"step": "progress", "progress": 52, "message": "Aligning headings to the AI answer…"})
         mcs_block = await _ecommerce_mcs_block(client, serp_analysis_dict, page_type, body.keyword)
 
+        # Auto-research the invariant PUBLIC specs (CAS/MW/sequence/solubility/…)
+        # with citations, so the writer states them instead of gating them.
+        # Vendor facts stay gated. Best-effort; '' when disabled / nothing found.
+        await q.put({"step": "progress", "progress": 54, "message": "Researching public product specs…"})
+        researched_block, research_tok, researched_facts = await _research_public_facts(
+            client, body.keyword, page_type
+        )
+
         # Product facts: pasted input + optional scrape of a source URL.
         await q.put({"step": "progress", "progress": 55, "message": "Gathering product facts…"})
         facts_sections: list[str] = []
+        if researched_block:
+            facts_sections.append(researched_block)
         if (body.product_input or "").strip():
             facts_sections.append("PROVIDED PRODUCT DETAILS (authoritative — use these facts; do not contradict them):\n" + body.product_input.strip())
         if body.source_url:
@@ -7597,7 +7684,12 @@ Primary keyword: {body.keyword}
             raise Exception("Content generation failed. Please try again.")
 
         token_rec = _token_record("generate-ecommerce-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
+        token_rec["input_tokens"]  += research_tok["input_tokens"]
+        token_rec["output_tokens"] += research_tok["output_tokens"]
+        token_rec["cost_usd"]       = round(token_rec["cost_usd"] + research_tok["cost_usd"], 6)
         content_html, schema_json, page_title, content_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
+        # Safety net: never re-surface a researched public spec as a "missing" gap.
+        content_gaps = ecom_facts.filter_researched_gaps(content_gaps, researched_facts)
 
         # RDFa entity markup: annotate the TextRazor/Wikidata entities from the SERP
         # analysis inline in the HTML (typeof/property + Wikidata sameAs) — the same
@@ -7658,6 +7750,7 @@ Primary keyword: {body.keyword}
                 "cost_breakdown": cost_breakdown,
                 "serp_analysis": serp_analysis_dict,
                 "content_gaps": content_gaps,
+                "researched_facts": researched_facts,
             },
         })
 
@@ -7707,6 +7800,15 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
         existing_page_text = BeautifulSoup(existing_html, "html.parser").get_text(separator="\n", strip=True)
         serp_ctx = _serp_context(body.serp_analysis)
 
+        # Auto-research invariant PUBLIC specs (CAS/MW/sequence/…) with citations
+        # so the rewrite fills them instead of gating them. Vendor facts stay
+        # gated. Best-effort; '' when disabled / nothing found.
+        await q.put({"step": "progress", "progress": 25, "message": "Researching public product specs…"})
+        researched_block, research_tok, researched_facts = await _research_public_facts(
+            client, body.keyword, page_type
+        )
+        researched_section = (researched_block + "\n\n") if researched_block else ""
+
         deficiency_text = "\n".join(
             f"  Engine: {d.get('engine','')} (score: {d.get('score','?')}/100)\n"
             f"  Issues: {'; '.join(d.get('issues', []))}\n"
@@ -7731,12 +7833,12 @@ Primary keyword: {body.keyword}
 
 {serp_ctx}
 
-SEO DEFICIENCIES TO FIX — address ALL of these in the rewritten page:
+{researched_section}SEO DEFICIENCIES TO FIX — address ALL of these in the rewritten page:
 {deficiency_text}
 
 {extra_facts}
 
-EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT invent any facts not present here or in the additional details above):
+EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT invent any facts not present here or in the additional details above, EXCEPT values given in the VERIFIED PUBLIC SPECIFICATIONS block, which you may state):
 {existing_page_text[:5000]}"""
 
         await q.put({"step": "progress", "progress": 40, "message": "Rewriting your page…"})
@@ -7752,7 +7854,11 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
             raise Exception("Content generation failed. Please try again.")
 
         token_rec = _token_record("reoptimize-ecommerce-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
+        token_rec["input_tokens"]  += research_tok["input_tokens"]
+        token_rec["output_tokens"] += research_tok["output_tokens"]
+        token_rec["cost_usd"]       = round(token_rec["cost_usd"] + research_tok["cost_usd"], 6)
         content_html, schema_json, page_title, content_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
+        content_gaps = ecom_facts.filter_researched_gaps(content_gaps, researched_facts)
 
         # RDFa entity markup from the SERP analysis (parity with generate).
         content_html = _apply_rdfa_markup(content_html, (body.serp_analysis or {}).get("google_entities", [])[:_ECOMMERCE_RDFA_MAX_ENTITIES])
@@ -7786,6 +7892,7 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
                 "token_usage": token_rec,
                 "original_html": existing_html[:30000],
                 "content_gaps": content_gaps,
+                "researched_facts": researched_facts,
             },
         })
 
