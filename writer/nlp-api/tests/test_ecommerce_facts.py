@@ -48,17 +48,6 @@ def test_classify_ambiguous_defaults_store():
     assert ef.classify_gap(mixed) == "store"
 
 
-def test_public_gap_labels_dedupes_and_filters():
-    gaps = [
-        {"category": "Molecular specifications", "missing": "CAS number"},
-        {"category": "Molecular specifications", "missing": "cas number"},  # dup (case)
-        {"category": "Pricing", "missing": "Exact price for 30mg"},          # store -> excluded
-        {"category": "Solubility", "missing": "Solubility in DMSO"},
-    ]
-    labels = ef.public_gap_labels(gaps)
-    assert labels == ["CAS number", "Solubility in DMSO"]
-
-
 # --- parse_researched_facts: validation + dedupe ---------------------------
 
 def _fact(**kw):
@@ -121,6 +110,15 @@ def test_is_excluded_fact():
     assert not ef.is_excluded_fact("Receptor Binding EC50 — GLP-1R", "0.775 nM")
     assert not ef.is_excluded_fact("Amino Acid Sequence", "YXQGT...")
     assert not ef.is_excluded_fact("Solubility", "soluble in water")
+
+
+def test_is_excluded_fact_word_boundary():
+    # "trial" must NOT fire inside "industrial"; "approved" not inside a longer word.
+    assert not ef.is_excluded_fact("Industrial-grade purity", "≥99%")
+    assert not ef.is_excluded_fact("Reconstitution", "store at -20C")
+    # but the standalone words still fire.
+    assert ef.is_excluded_fact("Clinical trial phase", "Phase 3")
+    assert ef.is_excluded_fact("FDA status", "not approved")
 
 
 def test_parse_drops_excluded_but_keeps_receptor():

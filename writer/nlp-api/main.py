@@ -238,7 +238,10 @@ async def _research_public_facts(client, entity: str, page_type: str, focus: Opt
     "auto-sourced — verify". Never raises — any failure returns
     ('', <zero token_rec>, []) so generation proceeds exactly as before.
     """
-    zero = _token_record("ecommerce-fact-research", ECOMMERCE_FACT_RESEARCH_MODEL, 0, 0)
+    # Zero-cost record built directly (NOT via _token_record, which would log a
+    # misleading "in=0 out=0" line before the real one on every call).
+    zero = {"endpoint": "ecommerce-fact-research", "model": ECOMMERCE_FACT_RESEARCH_MODEL,
+            "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     if not (ECOMMERCE_FACT_RESEARCH_ENABLED and (entity or "").strip() and page_type == "product"):
         return "", zero, []
     try:
@@ -7306,7 +7309,11 @@ def _ecommerce_notes_block(notes: Optional[str]) -> str:
     return (
         "\nSPECIAL INSTRUCTIONS FROM THE USER (HIGH PRIORITY — follow these exactly). They take "
         "precedence over the default framing, structure, and included sections: what to include, "
-        "exclude, emphasise, the tone, and the framing. You MAY drop or change default sections, "
+        "exclude, emphasise, the tone, and the framing — INCLUDING overriding the tone, audience, "
+        "and framing of the competitor pages shown in the SERP analysis and of the existing page "
+        "you are rewriting. If these instructions specify an audience or tone (e.g. 'write for a "
+        "retail consumer, not researchers'), honour it even when the source/competitor material "
+        "reads differently. You MAY drop or change default sections, "
         "disclaimers, or product designations (e.g. remove a 'Research Use Only' label) if these "
         "instructions say so. You must STILL never fabricate prices, specs, measurements, "
         "certifications, or ratings:\n"
