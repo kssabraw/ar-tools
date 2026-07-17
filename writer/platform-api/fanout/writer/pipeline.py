@@ -135,7 +135,7 @@ _INTENT_PATTERN_HINT = {
     IntentType.how_to: "Each H2 is a step; first sentence is an action instruction.",
     IntentType.listicle: "Each H2 is a list item with a bolded label; consistent structure.",
     IntentType.informational: "Explanatory prose; answer-first; evidence where available.",
-    IntentType.comparison: "Parallel structure; address the same evaluative axis for each option.",
+    IntentType.comparison: "Parallel structure; address the same evaluative axis for each option. Comparative depth (Goldilocks): compare on the axes that actually drive the decision at just-enough depth to let the reader choose — cover the real trade-offs, do not pad with trivial differences or invent a comparison where only one real option exists.",
     IntentType.local_seo: "Informational base, service-context framing; avoid city-specific claims.",
     IntentType.ecom: "Feature-benefit framing; practical outcomes; neutral, not promotional.",
     IntentType.informational_commercial: "Buyer-education tone; compare options; do not endorse.",
@@ -220,7 +220,9 @@ def _decision_fit_directive_text(directive: dict | None) -> str:
         "IMPORTANT — this section's best answer depends on the reader's situation. Work the "
         "following condition->recommendation branches into the prose naturally, stating the "
         "condition first in each; do NOT add a separate subheading or a 'which is right for "
-        f"you' label, and do not present them as a bulleted list verbatim:\n{lines}\n"
+        "you' label, and do not present them as a bulleted list verbatim. Keep it decision-"
+        "useful and concise (Goldilocks depth) — cover the real trade-offs between branches, "
+        f"never pad with trivial differences:\n{lines}\n"
         + (f"Across all cases, the overarching guidance is: {default}\n" if default else "")
     )
 
