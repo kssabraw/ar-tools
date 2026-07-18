@@ -267,6 +267,8 @@ async def create_client(
         row["target_cities"] = body.target_cities
     if body.drive_folders is not None:
         row["drive_folders"] = body.drive_folders
+    if body.github_content_paths is not None:
+        row["github_content_paths"] = body.github_content_paths
     # Recipe Engine budget inputs (§1–§2).
     if body.retainer_monthly is not None:
         row["retainer_monthly"] = body.retainer_monthly
@@ -390,6 +392,8 @@ async def update_client(
         updates["github_branch"] = body.github_branch
     if body.github_content_path is not None:
         updates["github_content_path"] = body.github_content_path
+    if body.github_content_paths is not None:
+        updates["github_content_paths"] = body.github_content_paths
     if body.wordpress_site_url is not None:
         updates["wordpress_site_url"] = body.wordpress_site_url or None
     if body.wordpress_username is not None:

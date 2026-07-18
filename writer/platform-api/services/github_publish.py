@@ -35,6 +35,28 @@ def slugify(text: str) -> str:
     return s or "page"
 
 
+def resolve_github_path(client: dict, content_type: str | None) -> str:
+    """Pick the repo content path a piece of content commits into.
+
+    Clients carry a per-content-type path map (`github_content_paths`, keyed by
+    content_type slug) plus a single default path (`github_content_path`). Return
+    the type-specific path when one is set, else the single default, else the
+    server-side `github_default_content_path` — mirroring `resolve_drive_folder`.
+
+    All returned values are `/`-stripped; a blank/whitespace-only or non-string
+    entry is treated as unset (falls through). An empty string is a valid result
+    (commit at the repo root)."""
+    paths = client.get("github_content_paths")
+    if content_type and isinstance(paths, dict):
+        specific = paths.get(content_type)
+        if isinstance(specific, str) and specific.strip():
+            return specific.strip().strip("/")
+    default = client.get("github_content_path")
+    if isinstance(default, str) and default.strip():
+        return default.strip().strip("/")
+    return (settings.github_default_content_path or "").strip("/")
+
+
 def build_markdown_file(title: str, body: str, description: str | None = None) -> str:
     """A minimal Astro-style content file: YAML frontmatter + body. Values are
     JSON-encoded so titles with quotes/colons stay valid YAML."""
@@ -52,6 +74,7 @@ async def publish_to_github(
     body: str,
     slug: str | None = None,
     description: str | None = None,
+    content_type: str | None = None,
 ) -> dict:
     """Commit one piece of content to the client's repo. Returns
     {path, html_url, commit_sha}. Raises GitHubPublishError on failure."""
@@ -65,9 +88,9 @@ async def publish_to_github(
         raise GitHubPublishError("content_is_empty")
 
     branch = (client.get("github_branch") or settings.github_default_branch or "main").strip()
-    content_path = (
-        client.get("github_content_path") or settings.github_default_content_path
-    ).strip("/")
+    # Per-content-type path (github_content_paths[content_type]) wins; falls back
+    # to the single github_content_path, then the server default.
+    content_path = resolve_github_path(client, content_type)
     file_slug = slugify(slug or title)
     path = f"{content_path}/{file_slug}.md" if content_path else f"{file_slug}.md"
     file_md = build_markdown_file(title, body, description)

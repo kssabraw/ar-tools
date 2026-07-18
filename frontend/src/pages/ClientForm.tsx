@@ -21,6 +21,9 @@ interface FormData {
   github_repo: string
   github_branch: string
   github_content_path: string
+  gh_blog_post: string
+  gh_service_page: string
+  gh_location_page: string
   wordpress_site_url: string
   wordpress_username: string
   wordpress_app_password: string
@@ -47,6 +50,7 @@ const empty: FormData = {
   name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
   df_blog_post: '', df_service_page: '', df_location_page: '', df_local_seo_page: '', df_ecom_page: '', df_use_case: '',
   github_repo: '', github_branch: '', github_content_path: '',
+  gh_blog_post: '', gh_service_page: '', gh_location_page: '',
   wordpress_site_url: '', wordpress_username: '', wordpress_app_password: '', wordpress_app_password_set: false,
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
@@ -63,6 +67,16 @@ const DRIVE_FOLDER_FIELDS: { key: keyof FormData; type: string; label: string; r
   { key: 'df_local_seo_page', type: 'local_seo_page', label: 'Local SEO pages' },
   { key: 'df_ecom_page', type: 'ecom_page', label: 'Ecom pages', reserved: true },
   { key: 'df_use_case', type: 'use_case', label: 'Use cases', reserved: true },
+]
+
+// Per-content-type GitHub repo content paths. `type` is the backend content_type
+// slug used as the github_content_paths map key; each overrides the single
+// default path below for that type when set. Only the types the run-publish path
+// commits to GitHub are rendered.
+const GITHUB_PATH_FIELDS: { key: keyof FormData; type: string; label: string; placeholder: string }[] = [
+  { key: 'gh_blog_post', type: 'blog_post', label: 'Blog posts', placeholder: 'src/content/blog' },
+  { key: 'gh_service_page', type: 'service_page', label: 'Service pages', placeholder: 'src/content/services' },
+  { key: 'gh_location_page', type: 'location_page', label: 'Location pages', placeholder: 'src/content/locations' },
 ]
 
 const PAGE_STRUCTURE_FIELDS: { key: keyof FormData; type: PageStructureType; label: string; placeholder: string; help: string }[] = [
@@ -159,6 +173,9 @@ export function ClientForm() {
         github_repo: existing.github_repo ?? '',
         github_branch: existing.github_branch ?? '',
         github_content_path: existing.github_content_path ?? '',
+        gh_blog_post: existing.github_content_paths?.blog_post ?? '',
+        gh_service_page: existing.github_content_paths?.service_page ?? '',
+        gh_location_page: existing.github_content_paths?.location_page ?? '',
         wordpress_site_url: existing.wordpress_site_url ?? '',
         wordpress_username: existing.wordpress_username ?? '',
         wordpress_app_password: '',
@@ -239,6 +256,17 @@ export function ClientForm() {
         github_repo: form.github_repo || null,
         github_branch: form.github_branch || null,
         github_content_path: form.github_content_path || null,
+        // Merge the form's known per-type paths onto the existing map so keys we
+        // don't render are preserved. Blank fields clear their key.
+        github_content_paths: (() => {
+          const merged: Record<string, string> = { ...(existing?.github_content_paths ?? {}) }
+          for (const f of GITHUB_PATH_FIELDS) {
+            const v = (form[f.key] as string).trim()
+            if (v) merged[f.type] = v
+            else delete merged[f.type]
+          }
+          return merged
+        })(),
         wordpress_site_url: form.wordpress_site_url.trim() || null,
         wordpress_username: form.wordpress_username.trim() || null,
         // Only send the password when the user typed a new one; an empty field
@@ -687,7 +715,7 @@ export function ClientForm() {
             <ParkedBadge />
           </div>
           <p style={descStyle}>
-            Optional. Where this client's generated articles get committed when published to a repo (Astro content). Saved on the client now, but the publish endpoints don't read it yet — it activates when GitHub publishing for the Content Scheduler / Topic Fanout tool ships.
+            Optional. Where this client's published content is committed in the repo (Astro content). The content path is the default for every type; the per-type overrides below route each content type into its own collection. Dormant until a GitHub token is configured on the platform.
           </p>
           <label style={labelStyle}>Repository</label>
           <input
@@ -707,7 +735,7 @@ export function ClientForm() {
               />
             </div>
             <div style={{ flex: 2 }}>
-              <label style={labelStyle}>Content path</label>
+              <label style={labelStyle}>Content path (default)</label>
               <input
                 value={form.github_content_path}
                 onChange={set('github_content_path')}
@@ -716,6 +744,20 @@ export function ClientForm() {
               />
             </div>
           </div>
+          <p style={{ ...descStyle, marginTop: 16, marginBottom: 8 }}>
+            Per-type overrides (optional) — leave blank to use the default path above.
+          </p>
+          {GITHUB_PATH_FIELDS.map(f => (
+            <div key={f.key} style={{ marginTop: 8 }}>
+              <label style={labelStyle}>{f.label}</label>
+              <input
+                value={form[f.key] as string}
+                onChange={set(f.key)}
+                placeholder={f.placeholder}
+                style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace' }}
+              />
+            </div>
+          ))}
         </div>
 
         {error && (
