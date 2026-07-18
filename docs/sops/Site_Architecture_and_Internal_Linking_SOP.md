@@ -1,7 +1,7 @@
 # Site Architecture, URL Structure, and Internal Linking SOP
 
-**Current as of:** 02 July 2026
-**Revision:** v2 — all page-type schemas aligned to AR Single Schema Creator v1.1 (Organization + Brand model, real GBP reviews, single deduped `@graph`); FAQ restored on every type; `@id`s unified; internal-linking matrix and glossary added.
+**Current as of:** 18 July 2026
+**Revision:** v3 — adds URL & Slug Construction Rules (slug source per page type, ordered normalization with the special-token pre-pass, kept-stopwords, deterministic automatic collision suffix, immutability), URL canonicalization, existing-site precedence on import, legacy-URL/redirect policy, a machine-readable pattern-config appendix, and URL/slug conformance traces. v2 — all page-type schemas aligned to AR Single Schema Creator v1.1 (Organization + Brand model, real GBP reviews, single deduped `@graph`); FAQ restored on every type; `@id`s unified; internal-linking matrix and glossary added.
 **Goal:** Build a website that is easy to crawl for both Googlebot and users.
 **Who this is for:** All SEO and Web Design clients.
 **When this is done:** During all site builds, and whenever new pages are added.
@@ -587,6 +587,237 @@ This is the geo version of a sub-service: how the company provides a specific su
 The neighborhood-scoped equivalent, at `/location/neighborhood/subservice/`, for the most granular neighborhood + sub-service targeting.
 
 **Schema (merged single `@graph`).** Location-primary third-level page -> use the **Local Landing Page** schema: `@graph` = **Organization + Brand** + **WebPage** + **Person** + **FAQPage**. If a given third-level page is service-primary instead, use the **Service Page** schema.
+
+---
+
+# URL & Slug Construction Rules
+
+**Scope:** How a page's **URL slug** is built from its title/keyword, and how URLs are canonicalized. The URL *patterns* (which segments nest under which) are defined in the URL-structure sections above; this section defines the *string rules* that produce each segment. Output must be **deterministic** — the same input always yields the same slug.
+
+> **Precedence (read first):** On an **existing/imported site**, the site's own URL conventions take precedence over every rule here. These rules are the **greenfield default and the validator**, never an override of a live site. See *Importing an Existing Site — Precedence & Detection*.
+
+## Slug Source (what the slug is built from)
+
+| Page type | URL | Slug source |
+|---|---|---|
+| Top-level service | `/{service}/` | Service name only. `Landscaping` → `/landscaping/`; `Tree Trimming` → `/tree-trimming/`. |
+| Sub-service | `/{service}/{subservice}/` | Full sub-service name, nested under its parent service. Parent `Tree Trimming`, sub `Fruit Tree Trimming` → `/tree-trimming/fruit-tree-trimming/`. |
+| Top-level location | `/{location}/` or `/{location}-{region}/` | City name; region code appended per client preference or same-name disambiguation (see Geo section). `Los Angeles` → `/los-angeles/` or `/los-angeles-ca/`. |
+| Local landing page | `/{location}/{service}/` | Location + service; service modifier preserved. `Los Angeles` + `Landscaping` → `/los-angeles/landscaping/`. |
+| Product page | `/shop/{product}/` | Product name. `Retatrutide` → `/shop/retatrutide/`; `BPC 157` → `/shop/bpc-157/`. |
+| Blog post | `/blog/{slug}/` | Targeted keyword. `How To Do SEO` → `/blog/how-to-do-seo/`; `SEO` → `/blog/seo/`. |
+
+The qualifier of a service is **always preserved** — "emergency plumber" stays *emergency*; it never broadens to "plumber."
+
+## Normalization Pipeline (ordered — order is mandatory)
+
+The special-token pre-pass, year strip, and apostrophe strip run **before** the generic hyphen replacement, or the token substitutions never fire (`&` would collapse to `-` first).
+
+1. **Token pre-pass** — apply the *Numbers & Special Tokens* substitution table.
+2. **Year strip** — remove any standalone token that parses as a 4-digit year in `1900`–`2099`.
+3. **Lowercase.**
+4. **ASCII-fold** — decompose accents, drop combining marks, transliterate to ASCII (`é` → `e`).
+5. **Apostrophe strip** — remove `'` / `'` with **no** replacement (`men's` → `mens`).
+6. **Generic replace** — every remaining non-alphanumeric run → a single hyphen.
+7. **Collapse & trim** — collapse consecutive hyphens; strip leading/trailing hyphens.
+8. **Length cap** — 500 characters; no truncation-at-word-boundary rule (effectively no truncation).
+9. **Collision check** — apply the collision rule below.
+
+## Stopword Policy
+
+**Stopwords are kept.** Conjunctions and prepositions are not stripped, so slugs match spoken search and the `&`/`+` → `and` substitutions survive (`How To Do SEO` → `how-to-do-seo`, unchanged). Length is governed only by the cap.
+
+## Casing
+
+Always lowercase, including acronyms and brand tokens.
+
+## Numbers & Special Tokens
+
+Applied as the token pre-pass (step 1). Preserve the searchable phrase; never percent-encode.
+
+| Token | Render as | Example |
+|---|---|---|
+| `/` in `24/7` | `-` | `24/7` → `24-7` |
+| `/` (general) | `-` | `tv/audio` → `tv-audio` |
+| `24 hour` / `24-hour` | `24-hour` | unchanged |
+| `&` | `and` | `heating & cooling` → `heating-and-cooling` |
+| `+` between words | `and` | `commercial + residential` → `commercial-and-residential` |
+| `+` after a number | `plus` | `55+` → `55-plus` |
+| `%` | `percent` | `50% off` → `50-percent-off` |
+| `$` before a number | drop the `$`, keep the number | `$99 special` → `99-special` |
+| `#` (e.g. "#1") | drop | `#1 rated plumber` → `1-rated-plumber` |
+| `@` | `at` | — |
+| `'` / `'` apostrophe | drop, no hyphen | `men's` → `mens` |
+| `.` in a decimal | `-` | `3.5 ton` → `3-5-ton` |
+| `,` | `-` (collapses) | `plumbing, heating` → `plumbing-heating` |
+| `°` degree | drop | `72° comfort` → `72-comfort` |
+| 4-digit year | **strip entirely** | `best-plumber-2024` → `best-plumber` |
+
+**Notes:**
+- Years are never in a URL — stripped on every page type, regardless of source text. A year in a slug dates the page, and the immutability rule means it can't be quietly fixed later. *(Ruling 18 Jul 2026.)*
+- The year strip is intentionally greedy: a meaningful number in `1900`–`2099` (rare — e.g. a "2000 series" model) is also stripped. Accepted trade-off.
+- `.` in a decimal becoming a hyphen (`3-5-ton`) can read as a range; accepted as a rare, minor imperfection.
+
+## Collision & Reserved Words (fully automatic, no human intervention)
+
+If a computed slug collides with **any reserved structural segment** (`/blog/`, `/contact-us/`, `/bio/`, `/services/`, `/locations/`, `/areas-we-serve/`, `/about-us/`, `/shop/`, etc.) **or an already-published page at that path**, append a hyphen followed by a **deterministic 5-character base-36 suffix** (lowercase `a`–`z`, `0`–`9`) computed as a hash of the page's stable identity (page type + full normalized source string + parent path).
+
+- **Deterministic, not random:** because the suffix is a pure function of the page's own identity — not of scan order or a counter — the same page always produces the same slug, so re-publishing overwrites in place (idempotent) and two genuinely different pages that would collide receive different, stable suffixes.
+- Example: a service literally named "Services" → `services` collides with the reserved hub → `/services-a4f9k/` (and the same page resolves to `/services-a4f9k/` on every run).
+
+## Immutability Rule
+
+**URLs are never changed** by any automated process — period. The only exception is a change **explicitly directed by a human**; when a human authorizes a URL change, a 301 redirect from the old URL to the new one is mandatory (see *Legacy URL Reconciliation & Redirects*). Reoptimizing a page never changes its URL.
+
+---
+
+# URL Canonicalization Rules
+
+- **Trailing slash: yes** — every URL ends in `/`.
+- **No file extensions** in public URLs (`.html`, `.php`), even when the underlying repo file is `.md`.
+- **Canonical host:** https, **non-www**.
+- **One canonical URL per page** — no case or trailing-slash variants; mismatches are handled by redirect, not by serving duplicates.
+
+---
+
+# Geo & Silo Slug Composition
+
+- **Location slug form:** disambiguate same-name cities by appending the region code for the parent administrative area. Region code is appended when either the client's configured preference requests it, **or** two targeted cities share a name (automatic disambiguation). `Springfield` (IL) among same-name targets → `/springfield-il/`.
+- **Service slug form:** modifier always preserved — "emergency plumber" never broadens to "plumber."
+- **Nesting order:** always `/{location}/{service}/`.
+- **Neighborhood:** always `/{location}/{neighborhood}/`.
+- **Blog geo rule:** blogs never carry a geo unless it is explicitly in the user-input keyword.
+
+---
+
+# Importing an Existing Site — Precedence & Detection
+
+When a client is onboarded with a site that already has a built-out architecture, **the existing site is authoritative.** This section overrides the greenfield defaults above.
+
+## Precedence (rule #1)
+
+```
+inferred existing-site pattern  >  per-client override  >  SOP house default  >  hardcoded fallback
+```
+
+The SOP is the **greenfield default and a validator** — subordinate to any existing site architecture, and it never rewrites it.
+
+## What to detect
+
+From the client's live site (repo content tree first for a repo-published site, then the XML sitemap, then the indexed-URL fallback), infer per page type: path prefix, separator, nesting depth, trailing-slash behavior, extension, and any date-nesting.
+
+## Follow-the-site default
+
+When the imported site uses a **valid but different** convention (e.g. `/insights/` instead of `/blog/`, `/service-areas/` instead of `/areas-we-serve/`, a different but consistent nesting), new pages match the site. The SOP does not get a vote on valid existing conventions.
+
+## Validator role
+
+On import the SOP may only **flag** a genuinely broken pattern (uppercase URLs, spaces/encoded characters, `.html` extensions, non-canonical duplicates) for a human decision. It never changes a live URL automatically — consistent with the Immutability Rule, only a human may authorize such a fix, which then requires a 301.
+
+---
+
+# Legacy URL Reconciliation & Redirects
+
+- **Automated processes never change a URL.** A URL change happens only on explicit human instruction.
+- **On a human-directed change**, a 301 from old → new is mandatory — never orphan a URL with rankings or links.
+- **Reoptimize keeps the URL** — always in place.
+- **Where redirects live:** the site repo's redirect layer (`public/_redirects`) and/or Cloudflare redirect rules — recorded, not ad-hoc.
+- **Canonicalization redirects** (not page changes): `http` → `https`, host canonicalization (`www` → non-`www`), and trailing-slash mismatches are served as 301s, not duplicate content.
+
+---
+
+# Appendix — Machine-Readable Pattern Config
+
+The executable distillation of the rules above — the per-type descriptor the publish pipeline reads. On an existing site, a detected pattern **replaces** the matching block (per the precedence rule); this appendix is the greenfield default and the validation baseline.
+
+**Global rules:**
+```json
+{
+  "separator": "-",
+  "case": "lower",
+  "trailing_slash": true,
+  "extension": "",
+  "canonical_host": "https-non-www",
+  "max_len": 500,
+  "truncate": false,
+  "strip_stopwords": false,
+  "strip_years": true,
+  "year_range": [1900, 2099],
+  "collision": {
+    "mode": "deterministic_suffix",
+    "suffix_len": 5,
+    "alphabet": "base36-lower",
+    "hash_input": "page_type + normalized_source + parent_path"
+  },
+  "token_map": {
+    "&": "and", "%": "percent", "@": "at",
+    "+_between_words": "and", "+_after_number": "plus",
+    "$_before_number": "", "#": "", "'": "", "/": "-", "°": ""
+  }
+}
+```
+
+**Per-type patterns** (repo content path assumes an Astro content-collection layout; the public URL is owned by the site's routing):
+
+| Page type | Repo content path | Public URL pattern | Nesting | Slug source |
+|---|---|---|---|---|
+| Blog post | `src/content/blog` | `/blog/{slug}/` | flat (no dates) | Targeted keyword |
+| Top-level service | `src/content/services` | `/{service}/` | 1 | Service name |
+| Sub-service | `src/content/services` | `/{service}/{subservice}/` | 2 | Full sub-service name |
+| Top-level location | `src/content/locations` | `/{location}/` or `/{location}-{region}/` | 1 | City name (+ region code) |
+| Local landing | `src/content/locations` | `/{location}/{service}/` | 2 | Location + service |
+| Neighborhood | `src/content/locations` | `/{location}/{neighborhood}/` | 2 | Neighborhood name |
+| Product | `src/content/shop` | `/shop/{product}/` | 1 | Product name |
+
+*(Repo content paths are house defaults — confirm against each site; on an existing repo they are detected, not assumed. If you use collection/category (PLP) pages, add their own pattern entry.)*
+
+---
+
+# Conformance Traces (URL & Slug)
+
+Any agent applying these rules must reproduce these outputs exactly.
+
+**Slug construction (stopwords kept, tokens applied, years stripped):**
+
+| Input (source string) | Output slug |
+|---|---|
+| `24/7 Emergency Plumber` | `24-7-emergency-plumber` |
+| `Save 50% on Heating & Cooling` | `save-50-percent-on-heating-and-cooling` |
+| `How To Do SEO` | `how-to-do-seo` |
+| `Best Plumber in Los Angeles (2024)` | `best-plumber-in-los-angeles` |
+| `O'Brien's $99 Drain Special` | `obriens-99-drain-special` |
+| `Commercial + Residential HVAC` | `commercial-and-residential-hvac` |
+| `3.5 Ton AC Installation` | `3-5-ton-ac-installation` |
+
+**Full-path by page type:**
+
+| Page (inputs) | URL |
+|---|---|
+| Blog post — keyword `How To Do SEO` | `/blog/how-to-do-seo/` |
+| Sub-service — parent `Tree Trimming`, sub `Fruit Tree Trimming` | `/tree-trimming/fruit-tree-trimming/` |
+| Local landing — `Los Angeles` + `Landscaping` | `/los-angeles/landscaping/` |
+| Product — `BPC 157` | `/shop/bpc-157/` |
+| Location (same-name disambiguation) — `Springfield`, IL | `/springfield-il/` |
+
+**Collision (deterministic, automatic):**
+
+| Situation | Result |
+|---|---|
+| Service named "Services" → slug `services` hits the reserved hub | `/services-a4f9k/` (same suffix on every run) |
+
+**Import (follow-the-site):**
+
+| Detected on live site | Action |
+|---|---|
+| Blog at `/news/{slug}/` | New posts go to `/news/{slug}/` (follow); the `/blog/` default is not applied. |
+| Locations at `/service-areas/{city}/` | New location pages follow `/service-areas/`; noted only. |
+| URLs contain uppercase + spaces (`/Drain Cleaning/`) | Flag for a human; no automatic change (Immutability Rule). |
+
+**Redirect (human-directed change only):**
+
+| Change (human-authorized) | Required 301 |
+|---|---|
+| Consolidate `/la/plumber/` → `/los-angeles/plumbing/` | `/la/plumber/` → `/los-angeles/plumbing/` |
 
 ---
 
