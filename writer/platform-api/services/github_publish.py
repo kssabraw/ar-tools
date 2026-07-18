@@ -15,11 +15,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
-import re
 
 import httpx
 
 from config import settings
+from services.slug_rules import build_slug
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,10 @@ class GitHubPublishError(Exception):
 
 
 def slugify(text: str) -> str:
-    s = re.sub(r"[^a-z0-9]+", "-", (text or "").lower()).strip("-")
-    return s or "page"
+    """Leaf-slug for a content file name. Delegates to the SOP slug engine
+    (`slug_rules.build_slug` — tokens, year strip, apostrophes, etc.), with a
+    non-empty fallback so a blank source still yields a valid file name."""
+    return build_slug(text) or "page"
 
 
 def resolve_github_path(client: dict, content_type: str | None) -> str:
