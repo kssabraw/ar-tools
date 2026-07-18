@@ -208,7 +208,8 @@ async def publish_run(
         .select(
             "name, google_drive_folder_id, drive_folders, "
             "wordpress_site_url, wordpress_username, wordpress_app_password, "
-            "github_repo, github_branch, github_content_path, github_content_paths"
+            "github_repo, github_branch, github_content_path, github_content_paths, "
+            "github_inferred_patterns, business_location, target_cities, gbp"
         )
         .eq("id", run["client_id"])
         .single()

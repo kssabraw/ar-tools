@@ -12,6 +12,7 @@ from services.slug_rules import (
     RESERVED_SEGMENTS,
     apply_collision,
     build_page_path,
+    build_page_slug,
     build_slug,
     collision_suffix,
     compose_path,
@@ -144,6 +145,34 @@ def test_page_path_traces():
 def test_page_path_unknown_type_raises():
     with pytest.raises(ValueError):
         build_page_path("mystery_page", keyword="x")
+
+
+# ── build_page_slug: the prefix-less nested collection slug ───────────────────
+def test_build_page_slug_prefix_less():
+    assert build_page_slug("blog_post", keyword="How To Do SEO") == "how-to-do-seo"
+    assert build_page_slug("local_landing", location="Los Angeles", service="Landscaping") == "los-angeles/landscaping"
+    assert build_page_slug("top_level_service", service="Tree Trimming") == "tree-trimming"
+    assert build_page_slug("product", product="BPC 157") == "bpc-157"
+
+
+# ── inferred-site overrides: prefix + separator (site always wins) ────────────
+def test_page_path_prefix_override():
+    # imported site uses /news/ for the blog and /service-areas/ for locations
+    prefixes = {"blog_post": "news", "location_page": "service-areas"}
+    assert build_page_path("blog_post", keyword="Winter Tips", prefixes=prefixes) == "/news/winter-tips/"
+    assert (
+        build_page_path("top_level_location", location="Inner West", prefixes=prefixes)
+        == "/service-areas/inner-west/"
+    )
+
+
+def test_page_path_separator_override():
+    assert build_page_path("blog_post", keyword="How To Do SEO", separator="_") == "/blog/how_to_do_seo/"
+    assert build_slug("heating & cooling", separator="_") == "heating_and_cooling"
+
+
+def test_page_path_no_trailing_slash():
+    assert build_page_path("product", product="BPC 157", trailing_slash=False) == "/shop/bpc-157"
 
 
 def test_reserved_segments_present():

@@ -72,11 +72,12 @@ def _apply_token_prepass(text: str) -> str:
     return s
 
 
-def build_slug(source: str) -> str:
+def build_slug(source: str, *, separator: str = "-") -> str:
     """Build a URL slug from a source string per the SOP normalization pipeline.
 
     Returns "" for empty/whitespace-only input (callers supply their own fallback
-    where a non-empty slug is required). Stopwords are kept (SOP)."""
+    where a non-empty slug is required). Stopwords are kept (SOP). `separator`
+    (default the house "-") lets a caller match an imported site that uses "_"."""
     if not source:
         return ""
     s = _apply_token_prepass(source)  # 1 token pre-pass
@@ -88,6 +89,8 @@ def build_slug(source: str) -> str:
     s = s.strip("-")  # 7 trim
     if len(s) > MAX_SLUG_LEN:  # 8 hard length cap (no word-boundary truncation)
         s = s[:MAX_SLUG_LEN].strip("-")
+    if separator != "-":
+        s = s.replace("-", separator)
     return s
 
 
@@ -122,15 +125,35 @@ def apply_collision(
     return slug
 
 
-def location_segment(location: str, region: str | None = None) -> str:
+def location_segment(location: str, region: str | None = None, *, separator: str = "-") -> str:
     """Build a location slug, appending the region code (SOP same-name
     disambiguation), e.g. ('Los Angeles','CA') → 'los-angeles-ca'."""
-    seg = build_slug(location)
+    seg = build_slug(location, separator=separator)
     if region:
-        r = build_slug(region)
+        r = build_slug(region, separator=separator)
         if r:
-            seg = f"{seg}-{r}" if seg else r
+            seg = f"{seg}{separator}{r}" if seg else r
     return seg
+
+
+# SOP page_type → content-type family (for prefix overrides). Service and
+# location pages are root-level by default (no URL prefix); blog and product
+# carry a collection prefix.
+_FAMILY: dict[str, str] = {
+    "blog_post": "blog_post",
+    "top_level_service": "service_page",
+    "sub_service": "service_page",
+    "top_level_location": "location_page",
+    "local_landing": "location_page",
+    "neighborhood": "location_page",
+    "product": "product",
+}
+_DEFAULT_PREFIX: dict[str, str | None] = {
+    "blog_post": "blog",
+    "product": "shop",
+    "service_page": None,
+    "location_page": None,
+}
 
 
 def compose_path(segments: list[str], *, trailing_slash: bool = True) -> str:
@@ -154,25 +177,78 @@ def build_page_path(
     neighborhood: str | None = None,
     product: str | None = None,
     keyword: str | None = None,
+    prefixes: dict[str, str] | None = None,
+    separator: str = "-",
     trailing_slash: bool = True,
 ) -> str:
-    """Compose the public URL path for a page per the SOP per-type nesting
-    (greenfield). Each part is run through build_slug. Raises ValueError on an
+    """Compose the public URL path for a page per the SOP per-type nesting.
+
+    Greenfield by default (house prefixes: blog → /blog/, product → /shop/,
+    service/location at root). To follow an imported site, pass `prefixes`
+    (family → prefix, e.g. {'blog_post': 'news', 'location_page': 'service-areas'})
+    and/or `separator` ('_'); the SOP precedence 'site always wins' is applied by
+    the caller supplying these from the inferred pattern. Raises ValueError on an
     unknown page_type."""
-    if page_type == "blog_post":
-        segs = ["blog", build_slug(keyword or "")]
-    elif page_type == "top_level_service":
-        segs = [build_slug(service or "")]
-    elif page_type == "sub_service":
-        segs = [build_slug(service or ""), build_slug(subservice or "")]
-    elif page_type == "top_level_location":
-        segs = [location_segment(location or "", region)]
-    elif page_type == "local_landing":
-        segs = [location_segment(location or "", region), build_slug(service or "")]
-    elif page_type == "neighborhood":
-        segs = [location_segment(location or "", region), build_slug(neighborhood or "")]
-    elif page_type == "product":
-        segs = ["shop", build_slug(product or "")]
-    else:
-        raise ValueError(f"unknown page_type: {page_type!r}")
+    core = _page_core_segments(
+        page_type,
+        service=service,
+        subservice=subservice,
+        location=location,
+        region=region,
+        neighborhood=neighborhood,
+        product=product,
+        keyword=keyword,
+        separator=separator,
+    )
+    family = _FAMILY[page_type]
+    # Site wins: an inferred prefix for this family overrides the house default.
+    prefix = (prefixes or {}).get(family, _DEFAULT_PREFIX[family])
+    segs = ([build_slug(prefix, separator=separator)] if prefix else []) + core
     return compose_path(segs, trailing_slash=trailing_slash)
+
+
+def _page_core_segments(
+    page_type: str,
+    *,
+    service: str | None = None,
+    subservice: str | None = None,
+    location: str | None = None,
+    region: str | None = None,
+    neighborhood: str | None = None,
+    product: str | None = None,
+    keyword: str | None = None,
+    separator: str = "-",
+) -> list[str]:
+    """The prefix-less nested slug segments for a page type (e.g. local landing →
+    ['los-angeles', 'landscaping']). Raises ValueError on an unknown page_type."""
+
+    def s(x: str | None) -> str:
+        return build_slug(x or "", separator=separator)
+
+    def loc() -> str:
+        return location_segment(location or "", region, separator=separator)
+
+    if page_type == "blog_post":
+        return [s(keyword)]
+    if page_type == "top_level_service":
+        return [s(service)]
+    if page_type == "sub_service":
+        return [s(service), s(subservice)]
+    if page_type == "top_level_location":
+        return [loc()]
+    if page_type == "local_landing":
+        return [loc(), s(service)]
+    if page_type == "neighborhood":
+        return [loc(), s(neighborhood)]
+    if page_type == "product":
+        return [s(product)]
+    raise ValueError(f"unknown page_type: {page_type!r}")
+
+
+def build_page_slug(page_type: str, *, separator: str = "-", **parts: str | None) -> str:
+    """The prefix-less nested slug within a collection (e.g. local landing →
+    'los-angeles/landscaping', blog → 'how-to-do-seo'). This is the Astro
+    content-collection `slug` and the nested file path; the collection's route
+    supplies any /blog//shop/ prefix. Empty segments are dropped."""
+    segs = _page_core_segments(page_type, separator=separator, **parts)
+    return "/".join(seg for seg in segs if seg)

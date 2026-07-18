@@ -2,7 +2,7 @@
 (enhancement #1). Mirrors test_google_docs.py's resolve_drive_folder coverage."""
 
 from config import settings
-from services.github_publish import resolve_github_path
+from services.github_publish import build_markdown_file, resolve_github_path
 
 
 def test_type_specific_path_wins():
@@ -68,3 +68,43 @@ def test_server_default_is_slash_stripped(monkeypatch):
 def test_empty_server_default_returns_repo_root(monkeypatch):
     monkeypatch.setattr(settings, "github_default_content_path", "")
     assert resolve_github_path({}, "blog_post") == ""
+
+
+# ── 'site always wins': inferred content path beats override + default ────────
+def test_inferred_content_path_beats_override():
+    client = {
+        "github_inferred_patterns": {"content_paths": {"blog_post": "src/content/news"}},
+        "github_content_paths": {"blog_post": "src/content/manual"},
+        "github_content_path": "src/content/default",
+    }
+    assert resolve_github_path(client, "blog_post") == "src/content/news"
+
+
+def test_inferred_falls_through_when_type_absent():
+    client = {
+        "github_inferred_patterns": {"content_paths": {"blog_post": "src/content/news"}},
+        "github_content_paths": {"service_page": "src/content/manual"},
+    }
+    # inferred has no service_page -> falls to the override map
+    assert resolve_github_path(client, "service_page") == "src/content/manual"
+
+
+def test_inferred_bad_shape_ignored():
+    # non-dict inferred / content_paths must not break resolution
+    assert resolve_github_path({"github_inferred_patterns": "oops", "github_content_path": "d"}, "blog_post") == "d"
+    assert (
+        resolve_github_path({"github_inferred_patterns": {"content_paths": "x"}, "github_content_path": "d"}, "blog_post")
+        == "d"
+    )
+
+
+# ── build_markdown_file slug frontmatter ─────────────────────────────────────
+def test_build_markdown_file_emits_slug():
+    md = build_markdown_file("My Title", "body text", slug="los-angeles/plumbing")
+    assert 'slug: "los-angeles/plumbing"' in md
+    assert 'title: "My Title"' in md
+
+
+def test_build_markdown_file_omits_slug_when_absent():
+    md = build_markdown_file("My Title", "body text")
+    assert "slug:" not in md

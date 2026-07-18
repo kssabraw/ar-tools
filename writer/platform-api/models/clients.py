@@ -97,6 +97,10 @@ class ClientDetail(BaseModel):
     # Per-content-type repo content paths (content_type slug → path). The
     # type-specific path wins; github_content_path is the single fallback.
     github_content_paths: dict[str, str] = Field(default_factory=dict)
+    # Inferred conventions of the client's EXISTING site (system-populated by the
+    # pattern discovery job); SOP "site always wins" — read at publish time.
+    # Nested dict, so NOT run through the flat {str:str} folder sanitizer.
+    github_inferred_patterns: dict[str, Any] = Field(default_factory=dict)
     # WordPress direct-publish target (#3). The site URL + username are safe to
     # surface; the Application Password is a secret and is NEVER returned — only
     # `wordpress_app_password_set` indicates whether one is stored.

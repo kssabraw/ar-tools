@@ -40,31 +40,50 @@ def slugify(text: str) -> str:
 def resolve_github_path(client: dict, content_type: str | None) -> str:
     """Pick the repo content path a piece of content commits into.
 
-    Clients carry a per-content-type path map (`github_content_paths`, keyed by
-    content_type slug) plus a single default path (`github_content_path`). Return
-    the type-specific path when one is set, else the single default, else the
-    server-side `github_default_content_path` — mirroring `resolve_drive_folder`.
+    SOP precedence (`site always wins`):
+      1. the INFERRED existing-site content path (`github_inferred_patterns.
+         content_paths[content_type]`) — the live site is authoritative;
+      2. the per-client override map (`github_content_paths[content_type]`);
+      3. the single default (`github_content_path`);
+      4. the server-side `github_default_content_path`.
 
     All returned values are `/`-stripped; a blank/whitespace-only or non-string
     entry is treated as unset (falls through). An empty string is a valid result
     (commit at the repo root)."""
+    # 1. Inferred existing-site path wins.
+    inferred = client.get("github_inferred_patterns")
+    if content_type and isinstance(inferred, dict):
+        content_paths = inferred.get("content_paths")
+        if isinstance(content_paths, dict):
+            val = content_paths.get(content_type)
+            if isinstance(val, str) and val.strip():
+                return val.strip().strip("/")
+    # 2. Per-client override map.
     paths = client.get("github_content_paths")
     if content_type and isinstance(paths, dict):
         specific = paths.get(content_type)
         if isinstance(specific, str) and specific.strip():
             return specific.strip().strip("/")
+    # 3. Single default.
     default = client.get("github_content_path")
     if isinstance(default, str) and default.strip():
         return default.strip().strip("/")
+    # 4. Server default.
     return (settings.github_default_content_path or "").strip("/")
 
 
-def build_markdown_file(title: str, body: str, description: str | None = None) -> str:
+def build_markdown_file(
+    title: str, body: str, description: str | None = None, slug: str | None = None
+) -> str:
     """A minimal Astro-style content file: YAML frontmatter + body. Values are
-    JSON-encoded so titles with quotes/colons stay valid YAML."""
+    JSON-encoded so titles with quotes/colons stay valid YAML. `slug` is the
+    content-collection nested slug (deep nesting — the collection route supplies
+    any /blog//shop/ prefix)."""
     lines = ["---", f"title: {json.dumps(title or '')}"]
     if description:
         lines.append(f"description: {json.dumps(description)}")
+    if slug:
+        lines.append(f"slug: {json.dumps(slug)}")
     lines.append("---")
     return f"{chr(10).join(lines)}\n\n{body.rstrip()}\n"
 
@@ -90,12 +109,14 @@ async def publish_to_github(
         raise GitHubPublishError("content_is_empty")
 
     branch = (client.get("github_branch") or settings.github_default_branch or "main").strip()
-    # Per-content-type path (github_content_paths[content_type]) wins; falls back
-    # to the single github_content_path, then the server default.
-    content_path = resolve_github_path(client, content_type)
-    file_slug = slugify(slug or title)
-    path = f"{content_path}/{file_slug}.md" if content_path else f"{file_slug}.md"
-    file_md = build_markdown_file(title, body, description)
+    # Resolve the repo file path + nested collection slug per SOP (content_path
+    # precedence 'site always wins' + deep per-type nesting). Lazy import to avoid
+    # a publish_targeting ↔ github_publish import cycle.
+    from services.publish_targeting import resolve_publish_target
+
+    target = resolve_publish_target(content_type, slug or title, client=client)
+    path = target["file_path"]
+    file_md = build_markdown_file(title, body, description, slug=target["nested_slug"])
 
     url = f"{_GITHUB_API}/repos/{repo}/contents/{path}"
     headers = {
