@@ -180,6 +180,23 @@ def _resolve_markdown(supabase, run_id: UUID, content_type: str) -> str:
     return _sections_to_markdown(article)
 
 
+def _resolve_schema(supabase, run_id: UUID, content_type: str) -> str:
+    """The run's JSON-LD (@graph string) for the GitHub frontmatter. Service /
+    location pages carry `schema_jsonld` in the service_writer output; blog posts
+    have none today (a BlogPosting/FAQ graph is a follow-up)."""
+    if content_type not in ("service_page", "location_page"):
+        return ""
+    rows = (
+        supabase.table("module_outputs")
+        .select("output_payload, attempt_number")
+        .eq("run_id", str(run_id)).eq("module", "service_writer").eq("status", "complete")
+        .order("attempt_number", desc=True).execute()
+    ).data or []
+    if not rows:
+        return ""
+    return (rows[0].get("output_payload") or {}).get("schema_jsonld") or ""
+
+
 @router.post("/runs/{run_id}/publish", response_model=dict)
 async def publish_run(
     run_id: UUID,
@@ -314,6 +331,7 @@ async def publish_run(
             result = await publish_to_github(
                 client=client, title=title, body=markdown, slug=run["keyword"],
                 content_type=content_type, hero_image=featured_image_url,
+                schema=_resolve_schema(supabase, run_id, content_type),
             )
         except GitHubPublishError as exc:
             client_errors = {"github_not_configured", "github_repo_not_set", "content_is_empty"}
