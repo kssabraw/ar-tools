@@ -96,7 +96,10 @@ def _layer1_strip_chrome(soup: BeautifulSoup) -> None:
     for el in list(soup.find_all(attrs={"role": True})):
         if not isinstance(el, Tag):
             continue
-        if el.attrs.get("role") in REMOVE_ROLES:
+        # A prior decompose() in this loop (nested role-bearing elements) can
+        # leave a still-listed descendant decomposed, with attrs set to None —
+        # guard exactly as the class/id loop above does.
+        if (el.attrs or {}).get("role") in REMOVE_ROLES:
             el.decompose()
 
 
