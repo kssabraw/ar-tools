@@ -33,6 +33,9 @@ _HR_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
 # A GitHub-flavored-Markdown table delimiter row, e.g. "| --- | :--: | --: |".
 # Requires at least two cells (one internal pipe) so a lone "---" stays an <hr>.
 _TABLE_DELIM_RE = re.compile(r"^\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)+\|?$")
+# A line that opens a block-level HTML element we pass through verbatim (used by
+# the illustration layer, which interleaves <figure>/<svg> blocks into the body).
+_RAW_BLOCK_RE = re.compile(r"^<(figure|svg|div|img|table)\b", re.IGNORECASE)
 
 
 def _escape(text: str) -> str:
@@ -161,6 +164,15 @@ def _parse_blocks(markdown: str) -> list[dict]:
             i += 1
             continue
 
+        # Raw block-level HTML (e.g. an interleaved <figure>/<svg> illustration):
+        # pass the line through verbatim rather than escaping it as prose.
+        if _RAW_BLOCK_RE.match(stripped):
+            flush_paragraph()
+            close_list()
+            blocks.append({"type": "raw", "html": lines[i].rstrip()})
+            i += 1
+            continue
+
         # Tables span multiple lines (header + delimiter + rows); detected with
         # look-ahead and consumed as a block.
         if _is_table_start(lines, i):
@@ -230,6 +242,8 @@ def _render_block_html(b: dict) -> str:
         return f'<blockquote><p>{b["html"]}</p></blockquote>'
     if t == "table":
         return b["html"]
+    if t == "raw":
+        return b["html"]
     if t == "list":
         tag = "ol" if b["ordered"] else "ul"
         items = "\n".join(f"<li>{it}</li>" for it in b["items"])
@@ -256,6 +270,8 @@ def _render_block_gutenberg(b: dict) -> str:
         )
     if t == "table":
         return f'<!-- wp:table -->\n<figure class="wp-block-table">{b["html"]}</figure>\n<!-- /wp:table -->'
+    if t == "raw":
+        return f'<!-- wp:html -->\n{b["html"]}\n<!-- /wp:html -->'
     if t == "list":
         ordered = b["ordered"]
         tag = "ol" if ordered else "ul"

@@ -123,6 +123,7 @@ class ClientDetail(BaseModel):
     # Recipe Engine budget inputs (docs/sops/Link_Building_Recipe_Engine.md §1–§2).
     retainer_monthly: Optional[float] = None
     is_sab: bool = False
+    illustrate_content: bool = False
     client_type: Literal["local", "enterprise"] = "local"
     # Per-client strategist review day (0=Mon..6=Sun). None → the global
     # `strategist_weekly_weekday` default, so reviews can be staggered across
@@ -178,6 +179,7 @@ class ClientCreateRequest(BaseModel):
     # Recipe Engine budget inputs.
     retainer_monthly: Optional[float] = None
     is_sab: Optional[bool] = None
+    illustrate_content: Optional[bool] = None
     client_type: Optional[Literal["local", "enterprise"]] = None
     # Per-client strategist review day (0=Mon..6=Sun); None → global default.
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
@@ -218,6 +220,7 @@ class ClientUpdateRequest(BaseModel):
     # Recipe Engine budget inputs.
     retainer_monthly: Optional[float] = None
     is_sab: Optional[bool] = None
+    illustrate_content: Optional[bool] = None
     client_type: Optional[Literal["local", "enterprise"]] = None
     # Per-client strategist review day (0=Mon..6=Sun); None → global default.
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)

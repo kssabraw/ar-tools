@@ -186,6 +186,12 @@ async def _set_run_status(
 
         task_producers.on_run_completed(run_id)
 
+        # Auto-illustration (hero + inline body images/charts). Gated inside on
+        # the global flag AND the client's illustrate_content toggle; best-effort.
+        from services.illustration import enqueue_illustrate_run
+
+        enqueue_illustrate_run(run_id)
+
 
 async def _sync_silo_promotion_status(run_id: str, run_status: str) -> None:
     """Update the silo candidate (if any) that promoted this run."""

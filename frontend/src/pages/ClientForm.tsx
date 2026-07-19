@@ -42,6 +42,7 @@ interface FormData {
   ps_solution: string
   retainer_monthly: string
   is_sab: boolean
+  illustrate_content: boolean
   client_type: 'local' | 'enterprise'
   strategist_weekday: string  // '' = global default, else '0'..'6'
 }
@@ -54,7 +55,7 @@ const empty: FormData = {
   wordpress_site_url: '', wordpress_username: '', wordpress_app_password: '', wordpress_app_password_set: false,
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
-  retainer_monthly: '', is_sab: false, client_type: 'local', strategist_weekday: '',
+  retainer_monthly: '', is_sab: false, illustrate_content: false, client_type: 'local', strategist_weekday: '',
 }
 
 // Per-content-type Drive folders. `type` is the backend content_type slug used
@@ -194,6 +195,7 @@ export function ClientForm() {
         ps_solution: existing.page_structures?.solution?.url ?? '',
         retainer_monthly: existing.retainer_monthly != null ? String(existing.retainer_monthly) : '',
         is_sab: existing.is_sab ?? false,
+        illustrate_content: existing.illustrate_content ?? false,
         client_type: existing.client_type ?? 'local',
         strategist_weekday: existing.strategist_weekday != null ? String(existing.strategist_weekday) : '',
       })
@@ -281,6 +283,7 @@ export function ClientForm() {
         // Recipe Engine budget inputs (66% margin target → 34% deployable).
         ...(form.retainer_monthly.trim() !== '' ? { retainer_monthly: Number(form.retainer_monthly) } : {}),
         is_sab: form.is_sab,
+        illustrate_content: form.illustrate_content,
         client_type: form.client_type,
         // Always send (number or null) so clearing back to the global default persists.
         strategist_weekday: form.strategist_weekday !== '' ? Number(form.strategist_weekday) : null,
@@ -559,6 +562,18 @@ export function ClientForm() {
                 Hidden address / service-area GBP
               </label>
               <p style={hintStyle}>SABs skip the GBP Blast in the monthly baseline stack ($130 vs $135).</p>
+            </div>
+            <div>
+              <label style={labelStyle}>Auto-illustrate content</label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155', marginTop: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={form.illustrate_content}
+                  onChange={(e) => setForm(f => ({ ...f, illustrate_content: e.target.checked }))}
+                />
+                Add a hero + inline images/charts to finished blog posts
+              </label>
+              <p style={hintStyle}>When on, a completed run auto-generates a hero and up to 2 body visuals (data charts where the article cites figures, else AI illustrations). Off by default — bulk runs are never illustrated unless enabled.</p>
             </div>
             <div>
               <label style={labelStyle}>Strategist Review Day</label>

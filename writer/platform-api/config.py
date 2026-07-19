@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     # above, google_ai_* via DataForSEO) keep working.
     perplexity_api_key: str = ""
     gemini_api_key: str = ""
+    # ── Content illustration (hero + inline body images/charts) ──────────────
+    # Master switch for the auto path (after a run completes). Per-client opt-in
+    # is clients.illustrate_content (default off); on-demand illustration ignores
+    # both flags. Reuses the shared OPENAI_API_KEY — no new vendor.
+    illustration_enabled: bool = False
+    illustration_image_model: str = "gpt-image-1"      # AI illustration renderer
+    illustration_image_size: str = "1536x1024"         # landscape hero/body ratio
+    illustration_brief_model: str = "gpt-5.4-mini"     # art-direction + chart-series extraction
     # ── Cross-provider LLM fallback ──────────────────────────────────────────
     # When a primary-provider call (usually Anthropic) hits a *transient* failure
     # that outlasts its per-provider retry budget — a 429 rate/concurrency limit,
