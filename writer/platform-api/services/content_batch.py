@@ -198,6 +198,7 @@ async def _generate_ecommerce(payload: dict) -> Optional[str]:
         source_url=None,
         product_input=None,
         user_id=payload.get("user_id") or "",
+        page_template_url=payload.get("page_template_url"),
         notes=(payload.get("notes") or "").strip() or None,
     )
     return (page or {}).get("id")

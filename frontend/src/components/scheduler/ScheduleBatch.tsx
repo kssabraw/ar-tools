@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, Download, Loader2, Upload, Zap } from 'lucide-react'
+import { CalendarClock, Download, Loader2, Plus, Upload, X, Zap } from 'lucide-react'
 import { card, errorBox, input, label, outlineBtn, primaryBtn } from '../localseo/shared'
-import { parseSchedulerCsv, toCsv, downloadCsv } from '../../lib/csv'
+import { parseSchedulerCsv, parseIsoDate, toCsv, downloadCsv } from '../../lib/csv'
 import {
   CONTENT_TYPE_LABEL,
   schedulerApi,
@@ -53,17 +53,10 @@ const CSV_EXAMPLE: Record<ContentType, string[]> = {
   ecommerce: ['stainless steel water bottle', 'Highlight BPA-free + 24h cold', '', '2026-08-15'],
 }
 
-// One term per line, trimmed, blanks dropped, deduped (case-insensitive). Split
-// on newlines only — a term may legitimately contain a comma (e.g. "Newtown, NSW").
-function parseTerms(text: string): string[] {
-  const seen = new Set<string>()
-  const out: string[] = []
-  text.split(/\r\n|\r|\n/).forEach(line => {
-    const t = line.trim()
-    if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); out.push(t) }
-  })
-  return out
-}
+// One draft row = one requested page. Rows (not term-keyed maps) are the source of
+// truth so a single Local SEO location can host several services (each its own
+// row) without silently collapsing.
+interface DraftRow { key: string; term: string; service: string; notes: string; date: string }
 
 function segStyle(active: boolean): React.CSSProperties {
   return {
@@ -73,6 +66,8 @@ function segStyle(active: boolean): React.CSSProperties {
   }
 }
 
+const TODAY_ISO = new Date().toISOString().slice(0, 10)
+
 export function ScheduleBatch({ clientId, fixedType, onCreated }: {
   clientId: string
   fixedType?: ContentType
@@ -80,9 +75,11 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
 }) {
   const queryClient = useQueryClient()
   const [contentType, setContentType] = useState<ContentType>(fixedType ?? 'blog_post')
-  const [raw, setRaw] = useState('')
+  const [rows, setRows] = useState<DraftRow[]>([])
+  const [bulk, setBulk] = useState('')
   const [when, setWhen] = useState<'now' | 'schedule'>('now')
   const fileRef = useRef<HTMLInputElement>(null)
+  const keyRef = useRef(0)
 
   // Cadence (only used when scheduling).
   const [mode, setMode] = useState<ScheduleMode>('drip')
@@ -94,32 +91,50 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
   const [startDate, setStartDate] = useState('')
   const [timeOfDay, setTimeOfDay] = useState('09:00')
 
-  // Per-row params, keyed by lowercased term. `notesByTerm` applies to every type
-  // (CSV "Notes" column, fed into generation); `serviceByTerm` is the local SEO
-  // "Service" column (a local page is "<service> in <location>").
-  const [notesByTerm, setNotesByTerm] = useState<Record<string, string>>({})
-  const [serviceByTerm, setServiceByTerm] = useState<Record<string, string>>({})
-  const [dateByTerm, setDateByTerm] = useState<Record<string, string>>({})
+  // Quick-fill inputs for the whole list.
   const [allNotes, setAllNotes] = useState('')
   const [allService, setAllService] = useState('')
   const [allDate, setAllDate] = useState('')
 
   const [notice, setNotice] = useState<string | null>(null)
 
-  const terms = useMemo(() => parseTerms(raw), [raw])
   const isLocalSeo = contentType === 'local_seo_page'
 
-  const items: BatchItemInput[] = useMemo(() => terms.map(term => {
-    const k = term.toLowerCase()
-    const notes = (notesByTerm[k] || '').trim() || null
-    const scheduled_date = (dateByTerm[k] || '').trim() || null
-    if (isLocalSeo) {
-      // Column A is the location; the Service column becomes the page's head term.
-      return { keyword: (serviceByTerm[k] || '').trim(), location: term, notes, scheduled_date }
+  const mkRow = (p: Partial<DraftRow> = {}): DraftRow =>
+    ({ key: `r${keyRef.current++}`, term: '', service: '', notes: '', date: '', ...p })
+
+  const items: BatchItemInput[] = useMemo(() => {
+    const seen = new Set<string>()
+    const out: BatchItemInput[] = []
+    for (const r of rows) {
+      const term = r.term.trim()
+      if (!term) continue
+      const keyword = isLocalSeo ? r.service.trim() : term
+      if (!keyword) continue                       // local SEO row with no service
+      const location = isLocalSeo ? term : undefined
+      const dedup = `${keyword}|${location ?? ''}`.toLowerCase()
+      if (seen.has(dedup)) continue                // matches the backend's identity
+      seen.add(dedup)
+      const it: BatchItemInput = {
+        keyword,
+        notes: r.notes.trim() || null,
+        scheduled_date: parseIsoDate(r.date) || null,
+      }
+      if (location !== undefined) it.location = location
+      out.push(it)
     }
-    return { keyword: term, notes, scheduled_date }
-  }).filter(it => it.keyword.trim().length > 0),
-    [terms, isLocalSeo, notesByTerm, serviceByTerm, dateByTerm])
+    return out
+  }, [rows, isLocalSeo])
+
+  // Rows dropped for lack of a service (local SEO) — surfaced so nothing vanishes silently.
+  const missingService = isLocalSeo
+    ? rows.filter(r => r.term.trim() && !r.service.trim()).length
+    : 0
+  // Rows whose publish date is in the past — those fire immediately; warn the user.
+  const pastDated = rows.filter(r => {
+    const d = parseIsoDate(r.date)
+    return d !== undefined && d < TODAY_ISO
+  }).length
 
   const effectiveMode: ScheduleMode = when === 'now' ? 'now' : mode
   const isPeriodic = when === 'schedule' && PERIODIC.has(mode)
@@ -140,11 +155,14 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
 
   const estimateBody = (): EstimateBody => ({ ...cadence(), content_type: contentType, items })
 
-  // Live estimate (only with valid input). Keyed on everything that changes it.
+  // Signature of the per-row dates so the finish-date preview refreshes when a
+  // date changes (the count alone wouldn't).
+  const datesSig = items.map(i => i.scheduled_date || '').join(',')
+
   const estQ = useQuery({
     queryKey: ['content-batch-estimate', clientId, contentType, effectiveMode, perDay,
       JSON.stringify(weekdays), weekday, weekOfMonth, dayOfMonth, startDate, timeOfDay,
-      items.length],
+      items.length, datesSig],
     queryFn: () => schedulerApi.estimate(clientId, estimateBody()),
     enabled: items.length > 0,
   })
@@ -152,6 +170,10 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['scheduled-content', clientId] })
     queryClient.invalidateQueries({ queryKey: ['content-batches', clientId] })
+  }
+
+  const resetForm = () => {
+    setRows([]); setBulk(''); setAllNotes(''); setAllService(''); setAllDate('')
   }
 
   const createMut = useMutation({
@@ -165,16 +187,29 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
           `$${res.estimate?.approval_threshold_usd} approval limit — ask a senior operator to run it.`)
         return
       }
-      setRaw(''); setNotesByTerm({}); setServiceByTerm({}); setDateByTerm({})
-      setAllNotes(''); setAllService(''); setAllDate('')
-      setNotice(when === 'now'
-        ? `Creating ${res.count} page${res.count === 1 ? '' : 's'} now — they'll appear in Scheduled Content.`
-        : `Scheduled ${res.count} page${res.count === 1 ? '' : 's'}.`)
+      resetForm()
+      if (when === 'now') {
+        // Future-dated rows aren't created now — the scheduler releases them on
+        // their date. Split the message so the count isn't overstated.
+        const later = res.count - res.enqueued
+        setNotice(later > 0
+          ? `Creating ${res.enqueued} now; ${later} scheduled for their dates. They'll appear in Scheduled Content.`
+          : `Creating ${res.count} page${res.count === 1 ? '' : 's'} now — they'll appear in Scheduled Content.`)
+      } else {
+        setNotice(`Scheduled ${res.count} page${res.count === 1 ? '' : 's'}.`)
+      }
       invalidate()
       onCreated?.()
     },
     onError: (e: Error) => setNotice(e.message),
   })
+
+  const addBulk = () => {
+    const lines = bulk.split(/\r\n|\r|\n/).map(l => l.trim()).filter(Boolean)
+    if (!lines.length) return
+    setRows(prev => [...prev, ...lines.map(term => mkRow({ term }))])
+    setBulk('')
+  }
 
   const onCsv = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -183,24 +218,9 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
     const text = await file.text()
     const parsed = parseSchedulerCsv(text, contentType)
     if (!parsed.length) return
-    setRaw(prev => (prev.trim() ? prev.trimEnd() + '\n' : '') + parsed.map(r => r.term).join('\n'))
-    setNotesByTerm(prev => {
-      const next = { ...prev }
-      parsed.forEach(r => { if (r.notes) next[r.term.toLowerCase()] = r.notes })
-      return next
-    })
-    setDateByTerm(prev => {
-      const next = { ...prev }
-      parsed.forEach(r => { if (r.date) next[r.term.toLowerCase()] = r.date })
-      return next
-    })
-    if (isLocalSeo) {
-      setServiceByTerm(prev => {
-        const next = { ...prev }
-        parsed.forEach(r => { if (r.service) next[r.term.toLowerCase()] = r.service })
-        return next
-      })
-    }
+    setRows(prev => [...prev, ...parsed.map(r => mkRow({
+      term: r.term, service: r.service ?? '', notes: r.notes ?? '', date: r.date ?? '',
+    }))])
   }
 
   const downloadTemplate = () => {
@@ -211,11 +231,10 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
     )
   }
 
-  const applyAll = (value: string, setter: (m: Record<string, string>) => void) => {
-    const next: Record<string, string> = {}
-    terms.forEach(t => { next[t.toLowerCase()] = value })
-    setter(next)
-  }
+  const updateRow = (key: string, patch: Partial<DraftRow>) =>
+    setRows(prev => prev.map(r => (r.key === key ? { ...r, ...patch } : r)))
+  const removeRow = (key: string) => setRows(prev => prev.filter(r => r.key !== key))
+  const applyAll = (patch: Partial<DraftRow>) => setRows(prev => prev.map(r => ({ ...r, ...patch })))
 
   const canSubmit = items.length > 0 && !createMut.isPending
 
@@ -240,11 +259,14 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
       )}
 
       <div>
-        <label style={label}>{TERM_LABEL[contentType]}s</label>
-        <textarea value={raw} onChange={e => setRaw(e.target.value)} rows={6}
+        <label style={label}>Add {TERM_LABEL[contentType].toLowerCase()}s</label>
+        <textarea value={bulk} onChange={e => setBulk(e.target.value)} rows={4}
           placeholder={TERM_PLACEHOLDER[contentType]}
           style={{ ...input, resize: 'vertical', fontFamily: 'inherit' }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
+          <button type="button" style={outlineBtn} onClick={addBulk} disabled={!bulk.trim()}>
+            <Plus size={14} /> Add to list
+          </button>
           <button type="button" style={outlineBtn} onClick={() => fileRef.current?.click()}>
             <Upload size={14} /> Upload CSV
           </button>
@@ -263,61 +285,73 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
         </div>
       </div>
 
-      {terms.length > 0 && (
+      {rows.length > 0 && (
         <div>
-          <label style={label}>
-            Per-page details{isLocalSeo ? ' — Service required, Notes optional' : ' — Notes optional'}
-          </label>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <label style={label}>
+              Pages{isLocalSeo ? ' — Service required, Notes optional' : ' — Notes optional'}
+            </label>
+            <button type="button" style={{ ...outlineBtn, padding: '4px 10px', fontSize: 12 }}
+              onClick={() => setRows([])}>Clear all</button>
+          </div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
             {isLocalSeo && (
               <>
                 <input value={allService} onChange={e => setAllService(e.target.value)}
                   placeholder="Service for all rows, e.g. blocked drains" style={input} />
                 <button type="button" style={outlineBtn}
-                  onClick={() => applyAll(allService, setServiceByTerm)}>Apply service to all</button>
+                  onClick={() => applyAll({ service: allService })}>Apply service to all</button>
               </>
             )}
             <input value={allNotes} onChange={e => setAllNotes(e.target.value)}
               placeholder="Notes for all rows (optional)" style={input} />
             <button type="button" style={outlineBtn}
-              onClick={() => applyAll(allNotes, setNotesByTerm)}>Apply notes to all</button>
-            <input type="date" value={allDate} min={new Date().toISOString().slice(0, 10)}
+              onClick={() => applyAll({ notes: allNotes })}>Apply notes to all</button>
+            <input type="date" value={allDate} min={TODAY_ISO}
               onChange={e => setAllDate(e.target.value)} style={{ ...input, maxWidth: 170 }} />
             <button type="button" style={outlineBtn}
-              onClick={() => applyAll(allDate, setDateByTerm)}>Apply date to all</button>
+              onClick={() => applyAll({ date: allDate })}>Apply date to all</button>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
-            {terms.map(term => {
-              const k = term.toLowerCase()
-              return (
-                <div key={term} style={{
-                  display: 'grid',
-                  gridTemplateColumns: isLocalSeo
-                    ? 'minmax(0,1fr) minmax(0,1fr) minmax(0,1.4fr) 160px'
-                    : 'minmax(0,1fr) minmax(0,1.6fr) 160px',
-                  gap: 8,
-                }}>
-                  <span style={{ fontSize: 13, color: '#0f172a', alignSelf: 'center' }}>{term}</span>
-                  {isLocalSeo && (
-                    <input value={serviceByTerm[k] ?? ''}
-                      onChange={e => setServiceByTerm(prev => ({ ...prev, [k]: e.target.value }))}
-                      placeholder="service" style={{ ...input, padding: '7px 10px' }} />
-                  )}
-                  <input value={notesByTerm[k] ?? ''}
-                    onChange={e => setNotesByTerm(prev => ({ ...prev, [k]: e.target.value }))}
-                    placeholder="notes (optional)" style={{ ...input, padding: '7px 10px' }} />
-                  <input type="date" value={dateByTerm[k] ?? ''}
-                    min={new Date().toISOString().slice(0, 10)}
-                    onChange={e => setDateByTerm(prev => ({ ...prev, [k]: e.target.value }))}
-                    style={{ ...input, padding: '7px 10px' }} />
-                </div>
-              )
-            })}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto' }}>
+            {rows.map(r => (
+              <div key={r.key} style={{
+                display: 'grid',
+                gridTemplateColumns: isLocalSeo
+                  ? 'minmax(0,1fr) minmax(0,1fr) minmax(0,1.3fr) 150px 30px'
+                  : 'minmax(0,1.2fr) minmax(0,1.6fr) 150px 30px',
+                gap: 8,
+              }}>
+                <input value={r.term}
+                  onChange={e => updateRow(r.key, { term: e.target.value })}
+                  placeholder={TERM_LABEL[contentType].toLowerCase()}
+                  style={{ ...input, padding: '7px 10px' }} />
+                {isLocalSeo && (
+                  <input value={r.service}
+                    onChange={e => updateRow(r.key, { service: e.target.value })}
+                    placeholder="service" style={{ ...input, padding: '7px 10px' }} />
+                )}
+                <input value={r.notes}
+                  onChange={e => updateRow(r.key, { notes: e.target.value })}
+                  placeholder="notes (optional)" style={{ ...input, padding: '7px 10px' }} />
+                <input type="date" value={r.date} min={TODAY_ISO}
+                  onChange={e => updateRow(r.key, { date: e.target.value })}
+                  style={{ ...input, padding: '7px 10px' }} />
+                <button type="button" onClick={() => removeRow(r.key)}
+                  title="Remove"
+                  style={{ ...outlineBtn, padding: '0', justifyContent: 'center' }}>
+                  <X size={14} />
+                </button>
+              </div>
+            ))}
           </div>
-          {isLocalSeo && items.length < terms.length && (
+          {missingService > 0 && (
             <div style={{ fontSize: 12, color: '#b45309', marginTop: 6 }}>
-              {terms.length - items.length} location{terms.length - items.length === 1 ? '' : 's'} with no
-              service will be skipped.
+              {missingService} location{missingService === 1 ? '' : 's'} with no service will be skipped.
+            </div>
+          )}
+          {pastDated > 0 && (
+            <div style={{ fontSize: 12, color: '#b45309', marginTop: 6 }}>
+              {pastDated} row{pastDated === 1 ? '' : 's'} dated in the past — those will be created immediately.
             </div>
           )}
         </div>
@@ -405,7 +439,7 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
             <div style={{ display: 'flex', gap: 12 }}>
               <div>
                 <label style={label}>{mode === 'fixed' ? 'Publish date' : 'Start date'}</label>
-                <input type="date" value={startDate} min={new Date().toISOString().slice(0, 10)}
+                <input type="date" value={startDate} min={TODAY_ISO}
                   onChange={e => setStartDate(e.target.value)} style={input} />
               </div>
               {mode !== 'all_at_once' && (

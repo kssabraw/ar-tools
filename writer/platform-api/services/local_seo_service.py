@@ -215,12 +215,13 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
 
 # ── persistence ─────────────────────────────────────────────────────────────
 
-def _persist_page(client_id: str, keyword: str, location: str, run_analysis: bool, mode: str, result: dict, user_id: str) -> dict:
+def _persist_page(client_id: str, keyword: str, location: str, run_analysis: bool, mode: str, result: dict, user_id: str, notes: Optional[str] = None) -> dict:
     row = {
         "client_id": client_id,
         "keyword": keyword,
         "location": location,
         "run_analysis": run_analysis,
+        "notes": (notes or "").strip() or None,
         "content_html": result.get("content_html") or "",
         "schema_json": result.get("schema_json") or "",
         "page_title": result.get("page_title"),
@@ -437,7 +438,7 @@ async def generate_page(
     else:
         payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
     result = await _stream_nlp("/generate-page", payload)
-    return _persist_page(client_id, keyword, location, True, "generate", result, user_id)
+    return _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
 
 
 # ── background generation (async job) ────────────────────────────────────────

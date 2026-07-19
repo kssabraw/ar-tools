@@ -196,3 +196,28 @@ def test_estimate_reports_finish_date_for_scheduled():
 def test_estimate_now_has_no_finish_date():
     est = store.estimate_batch(4, "blog_post", "now", now_utc=NOW)
     assert "finish_date" not in est
+
+
+def test_estimate_explicit_date_sets_finish_even_in_now_mode():
+    # A create-now batch with a future-dated row surfaces that date as the finish.
+    est = store.estimate_batch(
+        4, "blog_post", "now", now_utc=NOW, explicit_finish=date(2026, 9, 1)
+    )
+    assert est["finish_date"] == "2026-09-01"
+
+
+def test_estimate_finish_is_later_of_cadence_and_explicit():
+    # 4 items 1/day from 07-11 -> cadence last is 07-14; an explicit 08-01 wins.
+    est = store.estimate_batch(
+        4, "blog_post", "drip", per_day=1, start_date=date(2026, 7, 11),
+        tz_name="UTC", now_utc=NOW, explicit_finish=date(2026, 8, 1),
+    )
+    assert est["finish_date"] == "2026-08-01"
+
+
+def test_estimate_cadence_wins_when_later_than_explicit():
+    est = store.estimate_batch(
+        4, "blog_post", "drip", per_day=1, start_date=date(2026, 7, 11),
+        tz_name="UTC", now_utc=NOW, explicit_finish=date(2026, 7, 12),
+    )
+    assert est["finish_date"] == "2026-07-14"       # cadence last beats the earlier explicit date

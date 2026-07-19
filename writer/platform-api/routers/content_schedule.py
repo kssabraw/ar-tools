@@ -11,6 +11,8 @@ shared scheduler when each item comes due.
 from __future__ import annotations
 
 import logging
+from datetime import date
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -49,6 +51,13 @@ def _require_client(client_id: str) -> dict:
     return row
 
 
+def _explicit_finish(items) -> Optional[date]:
+    """The latest per-row publish Date across the batch (for the estimate's finish
+    date), or None when no row is dated."""
+    dates = [it.scheduled_date for it in items if getattr(it, "scheduled_date", None)]
+    return max(dates) if dates else None
+
+
 def _validate_items(content_type: str, items) -> None:
     """Per-content-type input requirements. Local SEO pages target a place, so each
     item needs a location (per-row). Its `keyword` carries the CSV "Service" column
@@ -83,6 +92,7 @@ async def estimate_batch(
         per_day=body.per_day, start_date=body.start_date, time_of_day=body.time_of_day,
         tz_name=body.timezone, weekday=body.weekday, weekdays=body.weekdays,
         day_of_month=body.day_of_month, week_of_month=body.week_of_month,
+        explicit_finish=_explicit_finish(items),
     )
     threshold = settings.content_batch_approval_threshold_usd
     requires_approval = (
@@ -122,6 +132,7 @@ async def create_batch(
         per_day=body.per_day, start_date=body.start_date, time_of_day=body.time_of_day,
         tz_name=body.timezone, weekday=body.weekday, weekdays=body.weekdays,
         day_of_month=body.day_of_month, week_of_month=body.week_of_month,
+        explicit_finish=_explicit_finish(items),
     )
     threshold = settings.content_batch_approval_threshold_usd
     est_resp = ContentBatchEstimateResponse(

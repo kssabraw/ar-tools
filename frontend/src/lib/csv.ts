@@ -54,28 +54,36 @@ export function parseKeywordsFromCsv(text: string): string[] {
   return out
 }
 
-// Split a full CSV line into fields, honoring double-quoted fields with embedded
-// commas and doubled ("") quotes. RFC-4180-ish.
-function splitCsvLine(line: string): string[] {
-  const out: string[] = []
-  let cur = ''
+// Tokenize a full CSV document into records (rows) of fields, honoring
+// double-quoted fields — including embedded commas, doubled ("") quotes, AND
+// embedded newlines (a quoted cell can span lines, which Excel/Sheets produce
+// whenever a cell contains a line break). A record only ends on a newline that is
+// NOT inside quotes. Fully-blank records are dropped. RFC-4180-ish.
+function parseCsvRecords(text: string): string[][] {
+  const records: string[][] = []
+  let field = ''
+  let record: string[] = []
   let inQuotes = false
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i]
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]
     if (inQuotes) {
       if (c === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; continue }
-        inQuotes = false; continue
+        if (text[i + 1] === '"') { field += '"'; i++ }   // escaped quote
+        else inQuotes = false                            // closing quote
+      } else if (c !== '\r') {                            // keep \n, drop lone \r
+        field += c
       }
-      cur += c
       continue
     }
-    if (c === '"') { inQuotes = true; continue }
-    if (c === ',') { out.push(cur); cur = ''; continue }
-    cur += c
+    if (c === '"') inQuotes = true
+    else if (c === ',') { record.push(field); field = '' }
+    else if (c === '\n') { record.push(field); records.push(record); field = ''; record = [] }
+    else if (c !== '\r') field += c                       // ignore CR outside quotes
   }
-  out.push(cur)
-  return out
+  record.push(field)
+  records.push(record)
+  // Drop fully-blank records (trailing newline, blank lines).
+  return records.filter(r => r.some(f => f.trim() !== ''))
 }
 
 // Recognized header labels — used only to detect + skip a header row. The
@@ -120,23 +128,22 @@ export function parseSchedulerCsv(text: string, contentType: string): SchedulerC
   const isLocalSeo = contentType === 'local_seo_page'
   const out: SchedulerCsvRow[] = []
   const seen = new Set<string>()
-  text.split(/\r\n|\r|\n/).forEach((line, idx) => {
-    if (!line.trim()) return
-    const cols = splitCsvLine(line).map(c => c.trim())
-    const term = cols[0] ?? ''
+  parseCsvRecords(text).forEach((cols, idx) => {
+    const c = cols.map(x => x.trim())
+    const term = c[0] ?? ''
     if (idx === 0 && _SCHED_HEADER_TOKENS.has(term.toLowerCase())) return // header row
     if (!term) return
     const row: SchedulerCsvRow = { term }
     if (isLocalSeo) {
-      const svc = (cols[1] ?? '').replace(/[|;]/g, ', ').trim()
-      const notes = (cols[2] ?? '').trim()
+      const svc = (c[1] ?? '').replace(/[|;]/g, ', ').trim()
+      const notes = (c[2] ?? '').trim()
       if (svc) row.service = svc
       if (notes) row.notes = notes
     } else {
-      const notes = (cols[1] ?? '').trim()
+      const notes = (c[1] ?? '').trim()
       if (notes) row.notes = notes
     }
-    const date = parseIsoDate(cols[3] ?? '')  // column D — always, for every type
+    const date = parseIsoDate(c[3] ?? '')  // column D — always, for every type
     if (date) row.date = date
     // Identity: term (+ service for local SEO, since one location can host many
     // services). Case-insensitive de-dupe.

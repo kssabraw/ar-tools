@@ -171,15 +171,19 @@ def estimate_batch(
     time_of_day: Optional[time] = None, tz_name: str = "UTC",
     weekday: Optional[int] = None, weekdays: Optional[list[int]] = None,
     day_of_month: Optional[int] = None, week_of_month: Optional[int] = None,
-    now_utc: Optional[datetime] = None,
+    now_utc: Optional[datetime] = None, explicit_finish: Optional[date] = None,
 ) -> dict:
     """Preview a batch without creating it: item count, per-content-type cost, and
-    the finish date (the last release datetime). Best-effort on the finish date —
-    a bad cadence just omits it (create validates for real)."""
+    the finish date (the last release date). Best-effort on the finish date — a bad
+    cadence just omits it (create validates for real). `explicit_finish` is the
+    latest per-row publish Date across the batch; the finish date is the later of
+    the cadence's last slot and that, so a dated row beyond the cadence horizon (or
+    a dated create-now batch) is reflected in the preview."""
     costs = cost_per_type or DEFAULT_COST_PER_TYPE
     cost = round(count * costs.get(content_type, DEFAULT_COST_PER_TYPE["blog_post"]), 2)
     out: dict = {"count": count, "cost_estimate_usd": cost,
                  "content_type": content_type, "mode": mode}
+    finish: Optional[date] = None
     if count and mode not in ("now", "all_at_once"):
         try:
             dts = plan_item_datetimes(
@@ -189,9 +193,13 @@ def estimate_batch(
                 week_of_month=week_of_month, now_utc=now_utc,
             )
             if dts:
-                out["finish_date"] = dts[-1].date().isoformat()
+                finish = dts[-1].date()
         except ScheduleError:
             pass
+    if explicit_finish and (finish is None or explicit_finish > finish):
+        finish = explicit_finish
+    if finish:
+        out["finish_date"] = finish.isoformat()
     return out
 
 
