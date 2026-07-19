@@ -158,6 +158,24 @@ _DEFAULT_PREFIX: dict[str, str | None] = {
 }
 
 
+def family_for_page_type(page_type: str) -> str:
+    """The content-type family for an SOP page type (raises on unknown)."""
+    return _FAMILY[page_type]
+
+
+def _clamp_depth(core: list[str], max_depth: int | None, separator: str) -> list[str]:
+    """Collapse trailing segments so the slug is at most `max_depth` segments —
+    used to match an imported site that nests a page type less deeply than the SOP
+    (e.g. a flat location page): ['los-angeles','plumbing'], depth 1 →
+    ['los-angeles-plumbing']. No-op when max_depth is None/<1 or already fits."""
+    core = [s for s in core if s]
+    if not max_depth or max_depth < 1 or len(core) <= max_depth:
+        return core
+    kept = core[: max_depth - 1]
+    collapsed = separator.join(core[max_depth - 1 :])
+    return kept + [collapsed] if collapsed else kept
+
+
 def compose_path(segments: list[str], *, trailing_slash: bool = True) -> str:
     """Join already-built slug segments into a URL path — leading slash, trailing
     slash by default, no file extension (segments are bare slugs). Empty segments
@@ -181,16 +199,17 @@ def build_page_path(
     keyword: str | None = None,
     prefixes: dict[str, str] | None = None,
     separator: str = "-",
+    max_depth: int | None = None,
     trailing_slash: bool = True,
 ) -> str:
     """Compose the public URL path for a page per the SOP per-type nesting.
 
     Greenfield by default (house prefixes: blog → /blog/, product → /shop/,
     service/location at root). To follow an imported site, pass `prefixes`
-    (family → prefix, e.g. {'blog_post': 'news', 'location_page': 'service-areas'})
-    and/or `separator` ('_'); the SOP precedence 'site always wins' is applied by
-    the caller supplying these from the inferred pattern. Raises ValueError on an
-    unknown page_type."""
+    (family → prefix, e.g. {'blog_post': 'news', 'location_page': 'service-areas'}),
+    `separator` ('_'), and/or `max_depth` (clamp nesting to the site's depth); the
+    SOP precedence 'site always wins' is applied by the caller supplying these
+    from the inferred pattern. Raises ValueError on an unknown page_type."""
     core = _page_core_segments(
         page_type,
         service=service,
@@ -202,6 +221,7 @@ def build_page_path(
         keyword=keyword,
         separator=separator,
     )
+    core = _clamp_depth(core, max_depth, separator)
     family = _FAMILY[page_type]
     # Site wins: an inferred prefix for this family overrides the house default.
     prefix = (prefixes or {}).get(family, _DEFAULT_PREFIX[family])
@@ -247,10 +267,14 @@ def _page_core_segments(
     raise ValueError(f"unknown page_type: {page_type!r}")
 
 
-def build_page_slug(page_type: str, *, separator: str = "-", **parts: str | None) -> str:
+def build_page_slug(
+    page_type: str, *, separator: str = "-", max_depth: int | None = None, **parts: str | None
+) -> str:
     """The prefix-less nested slug within a collection (e.g. local landing →
     'los-angeles/landscaping', blog → 'how-to-do-seo'). This is the Astro
     content-collection `slug` and the nested file path; the collection's route
-    supplies any /blog//shop/ prefix. Empty segments are dropped."""
+    supplies any /blog//shop/ prefix. `max_depth` clamps the nesting to match an
+    imported site. Empty segments are dropped."""
     segs = _page_core_segments(page_type, separator=separator, **parts)
+    segs = _clamp_depth(segs, max_depth, separator)
     return "/".join(seg for seg in segs if seg)

@@ -118,6 +118,29 @@ def _page_type_and_parts(
     return "blog_post", {"keyword": keyword}
 
 
+def _inferred_nesting(client: dict) -> dict:
+    inferred = client.get("github_inferred_patterns")
+    nesting = inferred.get("nesting") if isinstance(inferred, dict) else None
+    return nesting if isinstance(nesting, dict) else {}
+
+
+def _reconcile_lookup(client: dict, content_path: str, slug: str) -> dict | None:
+    """An existing repo file for `slug` in `content_path` (from the discovery-built
+    reconcile index), or None. Returns {path, slug} — the file to overwrite in
+    place and its actual slug (to preserve the live URL)."""
+    inferred = client.get("github_inferred_patterns")
+    index = inferred.get("reconcile_index") if isinstance(inferred, dict) else None
+    if not isinstance(index, dict):
+        return None
+    bucket = index.get(content_path)
+    if not isinstance(bucket, dict):
+        return None
+    entry = bucket.get(slug)
+    if isinstance(entry, dict) and entry.get("path"):
+        return entry
+    return None
+
+
 def resolve_publish_target(
     content_type: str | None,
     source: str | None,
@@ -128,19 +151,45 @@ def resolve_publish_target(
 ) -> dict[str, Any]:
     """Resolve the commit target for one piece of content. `source` is the run's
     keyword (falls back to the title upstream); `location` is an explicit place
-    for callers that carry one (e.g. Local SEO pages)."""
+    for callers that carry one (e.g. Local SEO pages).
+
+    Returns `file_path` (where to commit), `frontmatter_slug` (the Astro
+    collection slug to write), `nested_slug` (the computed slug), `public_url`,
+    and `reconciled` (True when overwriting an existing page in place)."""
     keyword = (source or "").strip()
     separator, prefixes, trailing = _inferred_url(client)
     places = client_known_places(client)
     page_type, parts = _page_type_and_parts(content_type, keyword, places, location=location)
 
-    nested = slug_rules.build_page_slug(page_type, separator=separator, **parts)
+    # 2a: clamp nesting to the site's detected depth for this page's family.
+    family = slug_rules.family_for_page_type(page_type)
+    depth = _inferred_nesting(client).get(family)
+    max_depth = depth if isinstance(depth, int) and depth >= 1 else None
+
+    nested = slug_rules.build_page_slug(page_type, separator=separator, max_depth=max_depth, **parts)
     if not nested:  # empty source → a safe, non-empty fallback file name
         nested = slug_rules.build_slug(keyword, separator=separator) or "page"
 
     content_path = resolve_github_path(client, content_type)
+    public_url = slug_rules.build_page_path(
+        page_type, prefixes=prefixes, separator=separator, max_depth=max_depth, trailing_slash=trailing, **parts
+    )
 
-    # Deterministic, automatic collision handling on the leaf segment (SOP).
+    # 2b: reconcile — if the page already exists (possibly at a date-nested or
+    # slug-overridden path), overwrite it in place, preserving its live URL.
+    existing = _reconcile_lookup(client, content_path, nested)
+    if existing:
+        return {
+            "page_type": page_type,
+            "content_path": content_path,
+            "nested_slug": nested,
+            "frontmatter_slug": existing.get("slug") or nested,
+            "file_path": existing["path"],
+            "public_url": public_url,
+            "reconciled": True,
+        }
+
+    # New page: deterministic, automatic collision handling on the leaf segment.
     segments = nested.split("/")
     leaf = slug_rules.apply_collision(
         segments[-1],
@@ -152,13 +201,12 @@ def resolve_publish_target(
     nested = "/".join(segments)
 
     file_path = f"{content_path}/{nested}.md" if content_path else f"{nested}.md"
-    public_url = slug_rules.build_page_path(
-        page_type, prefixes=prefixes, separator=separator, trailing_slash=trailing, **parts
-    )
     return {
         "page_type": page_type,
         "content_path": content_path,
         "nested_slug": nested,
+        "frontmatter_slug": nested,
         "file_path": file_path,
         "public_url": public_url,
+        "reconciled": False,
     }

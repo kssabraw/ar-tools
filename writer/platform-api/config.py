@@ -147,6 +147,12 @@ class Settings(BaseSettings):
         "product": "src/content/shop",
         "ecom_page": "src/content/shop",
     }
+    # Existing-site discovery: cap + concurrency for reading content-file frontmatter
+    # (to index slug overrides for the duplicate reconcile). Bounded so a large
+    # site's discovery stays sane; 0 disables the frontmatter read (path-key
+    # reconcile only).
+    github_infer_max_frontmatter_reads: int = 300
+    github_infer_frontmatter_concurrency: int = 8
     outscraper_api_key: str = ""
     # Google Search Console — Organic Rank Tracker (Module #4).
     # The service-account key JSON (the entire downloaded key file, as a single

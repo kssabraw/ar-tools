@@ -13,13 +13,23 @@ skips the sitemap, and either failing leaves the other's signal intact.
 """
 from __future__ import annotations
 
+import asyncio
+import base64
+import binascii
 import logging
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import httpx
 
 from config import settings
-from services.slug_inference import infer_content_paths_from_repo_tree, infer_slug_patterns
+from services.slug_inference import (
+    build_reconcile_index,
+    infer_content_paths_from_repo_tree,
+    infer_nesting_from_tree,
+    infer_slug_patterns,
+    parse_frontmatter_slug,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,21 +78,22 @@ def parse_tree_response(body: dict) -> list[str]:
     return [t["path"] for t in tree if isinstance(t, dict) and t.get("type") == "blob" and t.get("path")]
 
 
-async def fetch_repo_tree(repo: str, branch: str, token: str) -> list[str]:
-    """Recursively list a repo branch's file paths via the Git Trees API. Returns
-    [] on any error (best-effort). The branch is path-escaped so a branch name
-    containing '/' (e.g. release/x) resolves instead of 404ing."""
-    from urllib.parse import quote
-
-    url = f"{_GITHUB_API}/repos/{repo}/git/trees/{quote(branch, safe='')}"
-    headers = {
+def _gh_headers(token: str) -> dict:
+    return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+
+
+async def fetch_repo_tree(repo: str, branch: str, token: str) -> list[str]:
+    """Recursively list a repo branch's file paths via the Git Trees API. Returns
+    [] on any error (best-effort). The branch is path-escaped so a branch name
+    containing '/' (e.g. release/x) resolves instead of 404ing."""
+    url = f"{_GITHUB_API}/repos/{repo}/git/trees/{quote(branch, safe='')}"
     try:
         async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.get(url, headers=headers, params={"recursive": "1"})
+            resp = await http.get(url, headers=_gh_headers(token), params={"recursive": "1"})
         if resp.status_code != 200:
             logger.warning("github_infer.tree_failed", extra={"repo": repo, "status": resp.status_code})
             return []
@@ -92,11 +103,60 @@ async def fetch_repo_tree(repo: str, branch: str, token: str) -> list[str]:
         return []
 
 
-def assemble_inferred(*, tree_paths: list[str], urls: list[str], now_iso: str) -> dict:
-    """Combine the repo-tree content paths + sitemap URL conventions into the
-    stored descriptor. Pure — the fetches happen in the caller."""
+async def fetch_frontmatter_slugs(
+    repo: str, branch: str, token: str, paths: list[str], *, cap: int, concurrency: int
+) -> dict[str, str]:
+    """Read each file's frontmatter `slug` via the Contents API (bounded by `cap`,
+    concurrent up to `concurrency`). Returns {path: slug} for files that declare
+    one — the slug-override index that lets the reconcile catch a page whose path
+    doesn't reflect its slug. Best-effort per file; runs off the publish hot path."""
+    if cap <= 0 or not paths:
+        return {}
+    targets = paths[:cap]
+    sem = asyncio.Semaphore(max(1, concurrency))
+    out: dict[str, str] = {}
+
+    async with httpx.AsyncClient(timeout=30) as http:
+        async def _one(path: str) -> None:
+            async with sem:
+                try:
+                    r = await http.get(
+                        f"{_GITHUB_API}/repos/{repo}/contents/{quote(path, safe='/')}",
+                        headers=_gh_headers(token),
+                        params={"ref": branch},
+                    )
+                    if r.status_code != 200:
+                        return
+                    content = (r.json() or {}).get("content")
+                    if not content:
+                        return
+                    text = base64.b64decode(content).decode("utf-8", "ignore")
+                    slug = parse_frontmatter_slug(text)
+                    if slug:
+                        out[path] = slug
+                except (httpx.HTTPError, ValueError, binascii.Error):
+                    return
+
+        await asyncio.gather(*(_one(p) for p in targets))
+    return out
+
+
+def assemble_inferred(
+    *,
+    tree_paths: list[str],
+    urls: list[str],
+    now_iso: str,
+    frontmatter_slugs: dict[str, str] | None = None,
+) -> dict:
+    """Combine the repo-tree content paths + nesting + reconcile index and the
+    sitemap URL conventions into the stored descriptor. Pure — the fetches happen
+    in the caller."""
     content_paths = infer_content_paths_from_repo_tree(tree_paths) if tree_paths else {}
     url = infer_slug_patterns(urls) if urls else {}
+    nesting = infer_nesting_from_tree(tree_paths, content_paths) if tree_paths else {}
+    reconcile_index = (
+        build_reconcile_index(tree_paths, content_paths, frontmatter_slugs) if tree_paths else {}
+    )
     sources = []
     if tree_paths:
         sources.append("repo_tree")
@@ -105,6 +165,8 @@ def assemble_inferred(*, tree_paths: list[str], urls: list[str], now_iso: str) -
     return {
         "content_paths": content_paths,
         "url": url,
+        "nesting": nesting,
+        "reconcile_index": reconcile_index,
         "inferred_at": now_iso,
         "source": "+".join(sources) or "none",
     }
@@ -133,8 +195,30 @@ async def run_github_infer_job(job: dict) -> None:
         website = (client.get("website_url") or "").strip()
 
         tree_paths: list[str] = []
+        frontmatter_slugs: dict[str, str] = {}
         if repo and settings.github_publish_token:
-            tree_paths = await fetch_repo_tree(repo, branch, settings.github_publish_token)
+            token = settings.github_publish_token
+            tree_paths = await fetch_repo_tree(repo, branch, token)
+            # Frontmatter slug-override index (bounded, off the publish hot path):
+            # read Markdown files under the detected collections so the reconcile
+            # can match a page whose path doesn't reflect its slug.
+            content_paths = infer_content_paths_from_repo_tree(tree_paths)
+            if content_paths and settings.github_infer_max_frontmatter_reads:
+                cps = tuple(content_paths.values())
+                candidates = [
+                    p
+                    for p in tree_paths
+                    if p.lower().endswith((".md", ".mdx"))
+                    and any(p == cp or p.startswith(cp + "/") for cp in cps)
+                ]
+                frontmatter_slugs = await fetch_frontmatter_slugs(
+                    repo,
+                    branch,
+                    token,
+                    candidates,
+                    cap=settings.github_infer_max_frontmatter_reads,
+                    concurrency=settings.github_infer_frontmatter_concurrency,
+                )
 
         urls: list[str] = []
         if website:
@@ -152,6 +236,7 @@ async def run_github_infer_job(job: dict) -> None:
             tree_paths=tree_paths,
             urls=urls,
             now_iso=datetime.now(timezone.utc).isoformat(),
+            frontmatter_slugs=frontmatter_slugs,
         )
         supabase.table("clients").update({"github_inferred_patterns": descriptor}).eq("id", client_id).execute()
         supabase.table("async_jobs").update(

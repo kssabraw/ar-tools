@@ -123,7 +123,7 @@ async def publish_to_github(
 
     target = resolve_publish_target(content_type, slug or title, client=client, location=location)
     path = target["file_path"]
-    file_md = build_markdown_file(title, body, description, slug=target["nested_slug"])
+    file_md = build_markdown_file(title, body, description, slug=target["frontmatter_slug"])
 
     url = f"{_GITHUB_API}/repos/{repo}/contents/{path}"
     headers = {

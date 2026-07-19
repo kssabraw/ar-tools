@@ -55,4 +55,23 @@ def test_assemble_sitemap_only():
 
 def test_assemble_none():
     d = assemble_inferred(tree_paths=[], urls=[], now_iso="t")
-    assert d == {"content_paths": {}, "url": {}, "inferred_at": "t", "source": "none"}
+    assert d == {
+        "content_paths": {},
+        "url": {},
+        "nesting": {},
+        "reconcile_index": {},
+        "inferred_at": "t",
+        "source": "none",
+    }
+
+
+def test_assemble_includes_nesting_and_reconcile():
+    tree = ["src/content/blog/2024/how-to.md", "src/content/locations/la/plumbing.md"]
+    d = assemble_inferred(
+        tree_paths=tree,
+        urls=[],
+        now_iso="t",
+        frontmatter_slugs={"src/content/blog/2024/how-to.md": "how-to"},
+    )
+    assert d["nesting"]["blog_post"] == 1
+    assert d["reconcile_index"]["src/content/blog"]["how-to"]["path"] == "src/content/blog/2024/how-to.md"
