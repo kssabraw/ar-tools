@@ -1,8 +1,8 @@
 import { useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CalendarClock, Loader2, Upload, Zap } from 'lucide-react'
+import { CalendarClock, Download, Loader2, Upload, Zap } from 'lucide-react'
 import { card, errorBox, input, label, outlineBtn, primaryBtn } from '../localseo/shared'
-import { parseKeywordsFromCsv } from '../../lib/csv'
+import { parseSchedulerCsv, toCsv, downloadCsv } from '../../lib/csv'
 import {
   CONTENT_TYPE_LABEL,
   schedulerApi,
@@ -14,20 +14,51 @@ import {
   type ScheduleMode,
 } from './api'
 
-const CONTENT_TYPES: ContentType[] = ['blog_post', 'service_page', 'location_page', 'local_seo_page']
+const CONTENT_TYPES: ContentType[] =
+  ['blog_post', 'service_page', 'location_page', 'local_seo_page', 'ecommerce']
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] // 0..6
 const PERIODIC = new Set<ScheduleMode>(['drip', 'weekly', 'monthly_date', 'monthly_weekday'])
 const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 
-// One keyword per line (or comma-separated), trimmed, blanks dropped, deduped.
-function parseKeywords(text: string): string[] {
+// The head term in column A means something different per page type.
+const TERM_LABEL: Record<ContentType, string> = {
+  blog_post: 'Keyword',
+  service_page: 'Service',
+  location_page: 'Location',
+  local_seo_page: 'Location',
+  ecommerce: 'Product',
+}
+const TERM_PLACEHOLDER: Record<ContentType, string> = {
+  blog_post: 'One keyword per line…',
+  service_page: 'One service per line…',
+  location_page: 'One location per line…',
+  local_seo_page: 'One location per line…',
+  ecommerce: 'One product per line…',
+}
+// The standardized CSV column layout per page type (headers required).
+const CSV_COLUMNS: Record<ContentType, string[]> = {
+  blog_post: ['Keyword', 'Notes'],
+  service_page: ['Service', 'Notes'],
+  location_page: ['Location', 'Notes'],
+  local_seo_page: ['Location', 'Service', 'Notes'],
+  ecommerce: ['Product', 'Notes'],
+}
+const CSV_EXAMPLE: Record<ContentType, string[]> = {
+  blog_post: ['how to unblock a drain', 'Friendly DIY tone; note when to call a pro'],
+  service_page: ['emergency plumbing', 'Emphasise 24/7 availability'],
+  location_page: ['Parramatta', 'Cover the whole metro area'],
+  local_seo_page: ['Newtown NSW', 'blocked drains', 'Same-day service angle'],
+  ecommerce: ['stainless steel water bottle', 'Highlight BPA-free + 24h cold'],
+}
+
+// One term per line, trimmed, blanks dropped, deduped (case-insensitive). Split
+// on newlines only — a term may legitimately contain a comma (e.g. "Newtown, NSW").
+function parseTerms(text: string): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   text.split(/\r\n|\r|\n/).forEach(line => {
-    line.split(',').forEach(part => {
-      const kw = part.trim()
-      if (kw && !seen.has(kw.toLowerCase())) { seen.add(kw.toLowerCase()); out.push(kw) }
-    })
+    const t = line.trim()
+    if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); out.push(t) }
   })
   return out
 }
@@ -61,25 +92,28 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
   const [startDate, setStartDate] = useState('')
   const [timeOfDay, setTimeOfDay] = useState('09:00')
 
-  // Per-type params.
-  const [batchLocation, setBatchLocation] = useState('')            // local_seo_page
-  const [servicesByKw, setServicesByKw] = useState<Record<string, string>>({}) // location_page
-  const [allServices, setAllServices] = useState('')
+  // Per-row params, keyed by lowercased term. `notesByTerm` applies to every type
+  // (CSV "Notes" column, fed into generation); `serviceByTerm` is the local SEO
+  // "Service" column (a local page is "<service> in <location>").
+  const [notesByTerm, setNotesByTerm] = useState<Record<string, string>>({})
+  const [serviceByTerm, setServiceByTerm] = useState<Record<string, string>>({})
+  const [allNotes, setAllNotes] = useState('')
+  const [allService, setAllService] = useState('')
 
   const [notice, setNotice] = useState<string | null>(null)
 
-  const keywords = useMemo(() => parseKeywords(raw), [raw])
+  const terms = useMemo(() => parseTerms(raw), [raw])
   const isLocalSeo = contentType === 'local_seo_page'
-  const isLocationPage = contentType === 'location_page'
 
-  const splitServices = (s: string) => s.split(/[|,;]/).map(x => x.trim()).filter(Boolean)
-
-  const items: BatchItemInput[] = useMemo(() => keywords.map(kw => {
-    const it: BatchItemInput = { keyword: kw }
-    if (isLocalSeo) it.location = batchLocation.trim() || null
-    if (isLocationPage) it.services = splitServices(servicesByKw[kw.toLowerCase()] ?? '')
-    return it
-  }), [keywords, isLocalSeo, isLocationPage, batchLocation, servicesByKw])
+  const items: BatchItemInput[] = useMemo(() => terms.map(term => {
+    const k = term.toLowerCase()
+    const notes = (notesByTerm[k] || '').trim() || null
+    if (isLocalSeo) {
+      // Column A is the location; the Service column becomes the page's head term.
+      return { keyword: (serviceByTerm[k] || '').trim(), location: term, notes }
+    }
+    return { keyword: term, notes }
+  }).filter(it => it.keyword.trim().length > 0), [terms, isLocalSeo, notesByTerm, serviceByTerm])
 
   const effectiveMode: ScheduleMode = when === 'now' ? 'now' : mode
   const isPeriodic = when === 'schedule' && PERIODIC.has(mode)
@@ -104,9 +138,9 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
   const estQ = useQuery({
     queryKey: ['content-batch-estimate', clientId, contentType, effectiveMode, perDay,
       JSON.stringify(weekdays), weekday, weekOfMonth, dayOfMonth, startDate, timeOfDay,
-      items.length, isLocalSeo ? batchLocation : ''],
+      items.length],
     queryFn: () => schedulerApi.estimate(clientId, estimateBody()),
-    enabled: items.length > 0 && (!isLocalSeo || batchLocation.trim().length > 0),
+    enabled: items.length > 0,
   })
 
   const invalidate = () => {
@@ -125,7 +159,7 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
           `$${res.estimate?.approval_threshold_usd} approval limit — ask a senior operator to run it.`)
         return
       }
-      setRaw(''); setServicesByKw({}); setAllServices('')
+      setRaw(''); setNotesByTerm({}); setServiceByTerm({}); setAllNotes(''); setAllService('')
       setNotice(when === 'now'
         ? `Creating ${res.count} page${res.count === 1 ? '' : 's'} now — they'll appear in Scheduled Content.`
         : `Scheduled ${res.count} page${res.count === 1 ? '' : 's'}.`)
@@ -140,24 +174,39 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
     e.target.value = ''
     if (!file) return
     const text = await file.text()
-    const kws = parseKeywordsFromCsv(text)
-    if (kws.length) setRaw(prev => (prev.trim() ? prev.trimEnd() + '\n' : '') + kws.join('\n'))
-    // Location pages: also lift an optional per-row services column (col 2,
-    // pipe/semicolon-separated inside the cell).
-    if (isLocationPage) {
-      const map: Record<string, string> = {}
-      text.split(/\r\n|\r|\n/).forEach(line => {
-        const cols = line.split(',')
-        const kw = (cols[0] ?? '').trim()
-        const svc = (cols[1] ?? '').trim()
-        if (kw && svc) map[kw.toLowerCase()] = svc.replace(/[|;]/g, ', ')
+    const parsed = parseSchedulerCsv(text, contentType)
+    if (!parsed.length) return
+    setRaw(prev => (prev.trim() ? prev.trimEnd() + '\n' : '') + parsed.map(r => r.term).join('\n'))
+    setNotesByTerm(prev => {
+      const next = { ...prev }
+      parsed.forEach(r => { if (r.notes) next[r.term.toLowerCase()] = r.notes })
+      return next
+    })
+    if (isLocalSeo) {
+      setServiceByTerm(prev => {
+        const next = { ...prev }
+        parsed.forEach(r => { if (r.service) next[r.term.toLowerCase()] = r.service })
+        return next
       })
-      if (Object.keys(map).length) setServicesByKw(prev => ({ ...prev, ...map }))
     }
   }
 
-  const canSubmit = items.length > 0 && !createMut.isPending &&
-    (!isLocalSeo || batchLocation.trim().length > 0)
+  const downloadTemplate = () => {
+    downloadCsv(
+      `content-scheduler-${contentType}-template.csv`,
+      toCsv(CSV_COLUMNS[contentType], [CSV_EXAMPLE[contentType]]),
+    )
+  }
+
+  const applyAll = (value: string, setter: (m: Record<string, string>) => void) => {
+    const next: Record<string, string> = {}
+    terms.forEach(t => { next[t.toLowerCase()] = value })
+    setter(next)
+  }
+
+  const canSubmit = items.length > 0 && !createMut.isPending
+
+  const cols = CSV_COLUMNS[contentType]
 
   return (
     <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -174,52 +223,75 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
       )}
 
       <div>
-        <label style={label}>Keywords</label>
+        <label style={label}>{TERM_LABEL[contentType]}s</label>
         <textarea value={raw} onChange={e => setRaw(e.target.value)} rows={6}
-          placeholder="One keyword per line (or comma-separated)…"
+          placeholder={TERM_PLACEHOLDER[contentType]}
           style={{ ...input, resize: 'vertical', fontFamily: 'inherit' }} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8, flexWrap: 'wrap' }}>
           <button type="button" style={outlineBtn} onClick={() => fileRef.current?.click()}>
             <Upload size={14} /> Upload CSV
           </button>
           <input ref={fileRef} type="file" accept=".csv,text/csv"
             style={{ display: 'none' }} onChange={onCsv} />
+          <button type="button" style={outlineBtn} onClick={downloadTemplate}>
+            <Download size={14} /> CSV template
+          </button>
           <span style={{ fontSize: 13, color: '#64748b' }}>
-            {keywords.length} keyword{keywords.length === 1 ? '' : 's'}
+            {items.length} page{items.length === 1 ? '' : 's'}
           </span>
+        </div>
+        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>
+          CSV columns (with headers): {cols.map((c, i) => `${String.fromCharCode(65 + i)} = ${c}`).join(' · ')}
         </div>
       </div>
 
-      {isLocalSeo && (
+      {terms.length > 0 && (
         <div>
-          <label style={label}>Target location (applied to every page)</label>
-          <input value={batchLocation} onChange={e => setBatchLocation(e.target.value)}
-            placeholder="e.g. Newtown, NSW" style={input} />
-        </div>
-      )}
-
-      {isLocationPage && keywords.length > 0 && (
-        <div>
-          <label style={label}>Services per page (one section each)</label>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-            <input value={allServices} onChange={e => setAllServices(e.target.value)}
-              placeholder="Fill all rows, e.g. drains | hot water | burst pipes" style={input} />
-            <button type="button" style={outlineBtn} onClick={() => {
-              const next: Record<string, string> = {}
-              keywords.forEach(kw => { next[kw.toLowerCase()] = allServices })
-              setServicesByKw(next)
-            }}>Apply to all</button>
+          <label style={label}>
+            Per-page details{isLocalSeo ? ' — Service required, Notes optional' : ' — Notes optional'}
+          </label>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+            {isLocalSeo && (
+              <>
+                <input value={allService} onChange={e => setAllService(e.target.value)}
+                  placeholder="Service for all rows, e.g. blocked drains" style={input} />
+                <button type="button" style={outlineBtn}
+                  onClick={() => applyAll(allService, setServiceByTerm)}>Apply service to all</button>
+              </>
+            )}
+            <input value={allNotes} onChange={e => setAllNotes(e.target.value)}
+              placeholder="Notes for all rows (optional)" style={input} />
+            <button type="button" style={outlineBtn}
+              onClick={() => applyAll(allNotes, setNotesByTerm)}>Apply notes to all</button>
           </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
-            {keywords.map(kw => (
-              <div key={kw} style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 8 }}>
-                <span style={{ fontSize: 13, color: '#0f172a', alignSelf: 'center' }}>{kw}</span>
-                <input value={servicesByKw[kw.toLowerCase()] ?? ''}
-                  onChange={e => setServicesByKw(prev => ({ ...prev, [kw.toLowerCase()]: e.target.value }))}
-                  placeholder="services (comma / | separated)" style={{ ...input, padding: '7px 10px' }} />
-              </div>
-            ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
+            {terms.map(term => {
+              const k = term.toLowerCase()
+              return (
+                <div key={term} style={{
+                  display: 'grid',
+                  gridTemplateColumns: isLocalSeo ? '1fr 1fr 1.4fr' : '1fr 1.6fr',
+                  gap: 8,
+                }}>
+                  <span style={{ fontSize: 13, color: '#0f172a', alignSelf: 'center' }}>{term}</span>
+                  {isLocalSeo && (
+                    <input value={serviceByTerm[k] ?? ''}
+                      onChange={e => setServiceByTerm(prev => ({ ...prev, [k]: e.target.value }))}
+                      placeholder="service" style={{ ...input, padding: '7px 10px' }} />
+                  )}
+                  <input value={notesByTerm[k] ?? ''}
+                    onChange={e => setNotesByTerm(prev => ({ ...prev, [k]: e.target.value }))}
+                    placeholder="notes (optional)" style={{ ...input, padding: '7px 10px' }} />
+                </div>
+              )
+            })}
           </div>
+          {isLocalSeo && items.length < terms.length && (
+            <div style={{ fontSize: 12, color: '#b45309', marginTop: 6 }}>
+              {terms.length - items.length} location{terms.length - items.length === 1 ? '' : 's'} with no
+              service will be skipped.
+            </div>
+          )}
         </div>
       )}
 

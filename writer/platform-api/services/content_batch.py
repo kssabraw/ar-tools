@@ -54,6 +54,7 @@ def _job_payload(batch: dict, item: dict) -> dict:
         "location_code": item.get("location_code"),
         "services": item.get("services") or [],
         "page_template_url": item.get("page_template_url"),
+        "notes": item.get("notes"),
         "auto_publish": bool(batch.get("auto_publish")),
         "wp_publish": bool(batch.get("wp_publish")),
         "wp_status": batch.get("wp_status") or "draft",
@@ -134,6 +135,7 @@ async def _generate_run(payload: dict) -> Optional[str]:
         location=payload.get("location"),
         location_code=payload.get("location_code"),
         services=payload.get("services") or [],
+        writer_notes=(payload.get("notes") or "").strip() or None,
         created_by=payload.get("user_id"),
     )
     await orchestrate_run(run_id)
@@ -159,6 +161,25 @@ async def _generate_local_seo(payload: dict) -> Optional[str]:
         user_id=payload.get("user_id") or "",
         force_refresh=False,
         page_template_url=payload.get("page_template_url"),
+        notes=(payload.get("notes") or "").strip() or None,
+    )
+    return (page or {}).get("id")
+
+
+async def _generate_ecommerce(payload: dict) -> Optional[str]:
+    """Ecommerce product page: the suite ecommerce writer (competitor analysis +
+    Claude + 8-engine scoring). The CSV "Product" column is the head term. Returns
+    the new page id on success, None on failure."""
+    from services.ecommerce_service import generate_page
+
+    page = await generate_page(
+        client_id=payload["client_id"],
+        keyword=payload["keyword"],
+        page_type="product",
+        source_url=None,
+        product_input=None,
+        user_id=payload.get("user_id") or "",
+        notes=(payload.get("notes") or "").strip() or None,
     )
     return (page or {}).get("id")
 
@@ -190,6 +211,9 @@ async def run_content_batch_item_job(job: dict) -> None:
         if content_type == "local_seo_page":
             ref = await _generate_local_seo(payload)
             kind = "local_seo_page"
+        elif content_type == "ecommerce":
+            ref = await _generate_ecommerce(payload)
+            kind = "ecommerce_page"
         elif content_type in ("blog_post", "service_page", "location_page"):
             ref = await _generate_run(payload)
             kind = "run"

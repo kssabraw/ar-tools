@@ -616,6 +616,7 @@ class Settings(BaseSettings):
     content_batch_cost_service_usd: float = 0.60
     content_batch_cost_location_usd: float = 0.60
     content_batch_cost_local_seo_usd: float = 0.90
+    content_batch_cost_ecommerce_usd: float = 0.90
     content_batch_approval_threshold_usd: float = 90.0
     # Target-city discovery: the silo planner serves the seed city plus the other
     # cities a business targets — from its GBP service area, a manual list on the

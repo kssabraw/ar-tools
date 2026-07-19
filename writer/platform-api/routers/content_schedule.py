@@ -37,6 +37,7 @@ def _cost_per_type() -> dict[str, float]:
         "service_page": settings.content_batch_cost_service_usd,
         "location_page": settings.content_batch_cost_location_usd,
         "local_seo_page": settings.content_batch_cost_local_seo_usd,
+        "ecommerce": settings.content_batch_cost_ecommerce_usd,
     }
 
 
@@ -50,8 +51,10 @@ def _require_client(client_id: str) -> dict:
 
 def _validate_items(content_type: str, items) -> None:
     """Per-content-type input requirements. Local SEO pages target a place, so each
-    item needs a location (per-row, Option B). Blog/service are keyword-only;
-    location pages may carry services (per row) but don't require them."""
+    item needs a location (per-row). Its `keyword` carries the CSV "Service" column
+    (a local SEO page is "<service> in <location>"), so a location-only row is
+    dropped as blank upstream. Blog/service/ecommerce are keyword-only; location
+    pages take a location as their head term but no per-row services."""
     if content_type == "local_seo_page":
         missing = [it.keyword for it in items if not (it.location or "").strip()]
         if missing:

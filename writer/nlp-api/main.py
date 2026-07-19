@@ -5462,6 +5462,10 @@ class GeneratePageRequest(BaseModel):
     # situational choice (woven into the FAQ or service body). Set False to
     # suppress for transactional pages where no real choice exists.
     include_decision_map: bool = True
+    # Free-text, high-priority writing guidance from the user (the Content
+    # Scheduler "Notes" column / single-page notes). Followed exactly, but never
+    # licence to fabricate business facts (phone, address, services not offered).
+    notes: Optional[str] = None
 
 class GeneratePageResponse(BaseModel):
     content_html: str
@@ -5760,6 +5764,18 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 "\"which is right for you\" / condition->option choice treatment for this page."
             )
 
+        notes_text = ""
+        if (body.notes or "").strip():
+            notes_text = (
+                "\nSPECIAL INSTRUCTIONS FROM THE USER (HIGH PRIORITY — follow these exactly). "
+                "They take precedence over the default guidance where they conflict, EXCEPT the "
+                "hard rules: never fabricate business facts (phone, address, hours, or services "
+                "this business does not offer), always keep the geo/AEO writing rules, and always "
+                "emit the JSON-LD schema block. If the notes specify an audience, angle, or tone, "
+                "honour it.\n"
+                f"User notes: {body.notes.strip()}\n"
+            )
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -5781,7 +5797,7 @@ Full location: {body.location}
 {serp_ctx}
 
 {decision_map_text}
-
+{notes_text}
 {seo_checklist}
 
 {template_text}"""

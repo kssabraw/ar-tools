@@ -23,7 +23,8 @@ from typing import Optional
 from db.supabase_client import get_supabase
 from fanout.writer.schedule_planner import ScheduleError, plan_runs
 
-CONTENT_TYPES = ("blog_post", "service_page", "location_page", "local_seo_page")
+CONTENT_TYPES = ("blog_post", "service_page", "location_page", "local_seo_page",
+                 "ecommerce")
 
 # Per-content-type cost estimate ($/page) — the deliberate fix for the Fanout
 # scheduler's known caveat of estimating every type at the blog constant. These
@@ -33,6 +34,7 @@ DEFAULT_COST_PER_TYPE: dict[str, float] = {
     "service_page": 0.60,
     "location_page": 0.60,
     "local_seo_page": 0.90,
+    "ecommerce": 0.90,
 }
 
 _MAX_KEYWORD_LEN = 200
@@ -49,6 +51,9 @@ class BatchItemInput:
     location_code: Optional[int] = None
     services: list[str] = field(default_factory=list)
     page_template_url: Optional[str] = None
+    # Per-row free-text writing guidance (CSV "Notes" column). Fed into
+    # generation for every content type — not just stored.
+    notes: Optional[str] = None
 
 
 # ── pure helpers (no DB — unit tested) ───────────────────────────────────────
@@ -82,6 +87,7 @@ def normalize_items(
             location_code=raw.get("location_code"),
             services=_clean_services(raw.get("services")),
             page_template_url=(raw.get("page_template_url") or None),
+            notes=(raw.get("notes") or None),
         )
         kw = (it.keyword or "").strip()
         loc = (it.location or "").strip() or None
@@ -92,6 +98,7 @@ def normalize_items(
         items.append(BatchItemInput(
             keyword=kw, location=loc, location_code=it.location_code,
             services=_clean_services(it.services), page_template_url=it.page_template_url,
+            notes=(it.notes or "").strip() or None,
         ))
     skipped = len(raw_items) - len(items)
     return items[:max_items], skipped
@@ -190,6 +197,7 @@ def create_batch(
         "batch_id": parent["id"], "client_id": client_id, "keyword": it.keyword,
         "location": it.location, "location_code": it.location_code,
         "services": it.services, "page_template_url": it.page_template_url,
+        "notes": it.notes,
         "scheduled_at": dt.isoformat(), "status": "scheduled",
     } for it, dt in zip(items, dts)]
     inserted: list[dict] = []

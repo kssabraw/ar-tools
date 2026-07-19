@@ -71,6 +71,20 @@ def test_normalize_accepts_dataclass_inputs():
     assert skipped == 0
 
 
+def test_normalize_carries_and_trims_notes():
+    items, _ = store.normalize_items(
+        [
+            {"keyword": "plumber austin", "notes": "  Friendly DIY tone  "},
+            {"keyword": "roofer dallas", "notes": "   "},   # blank -> None
+            {"keyword": "hvac denver"},                       # absent -> None
+        ],
+        max_items=5,
+    )
+    assert items[0].notes == "Friendly DIY tone"
+    assert items[1].notes is None
+    assert items[2].notes is None
+
+
 # ── plan_item_datetimes ──────────────────────────────────────────────────────
 
 
@@ -124,6 +138,13 @@ def test_estimate_uses_per_content_type_cost():
     assert blog["cost_estimate_usd"] == round(10 * store.DEFAULT_COST_PER_TYPE["blog_post"], 2)
     assert local["cost_estimate_usd"] == round(10 * store.DEFAULT_COST_PER_TYPE["local_seo_page"], 2)
     assert local["cost_estimate_usd"] != blog["cost_estimate_usd"]
+
+
+def test_estimate_ecommerce_is_a_known_type():
+    assert "ecommerce" in store.CONTENT_TYPES
+    est = store.estimate_batch(3, "ecommerce", "now", now_utc=NOW)
+    assert est["cost_estimate_usd"] == round(3 * store.DEFAULT_COST_PER_TYPE["ecommerce"], 2)
+    assert est["content_type"] == "ecommerce"
 
 
 def test_estimate_custom_cost_map():

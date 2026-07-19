@@ -394,6 +394,7 @@ async def generate_page(
     user_id: str, force_refresh: bool = False,
     page_template_url: Optional[str] = None,
     include_decision_map: bool = True,
+    notes: Optional[str] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
@@ -426,6 +427,8 @@ async def generate_page(
         ) or render_reference_structure(structures.get("location"), "location")
         if reference:
             payload["reference_page_structure"] = reference
+    if (notes or "").strip():
+        payload["notes"] = notes.strip()  # per-page writing guidance the writer follows
     serp = await _get_or_compute_analysis(
         keyword, location, location_code, force_refresh, user_id, required=False
     )
