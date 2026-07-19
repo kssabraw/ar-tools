@@ -16,6 +16,7 @@ from services.slug_rules import (
     build_slug,
     collision_suffix,
     compose_path,
+    family_for_page_type,
     location_segment,
 )
 
@@ -182,6 +183,41 @@ def test_page_path_separator_override():
 
 def test_page_path_no_trailing_slash():
     assert build_page_path("product", product="BPC 157", trailing_slash=False) == "/shop/bpc-157"
+
+
+# ── max_depth clamp (auto-adapt nesting to an imported site) ─────────────────
+def test_build_page_slug_clamps_depth():
+    # a site whose location pages are flat (depth 1) → collapse city/service
+    assert (
+        build_page_slug("local_landing", location="Los Angeles", service="Plumbing", max_depth=1)
+        == "los-angeles-plumbing"
+    )
+    # depth 2 (or None) keeps the nesting
+    assert (
+        build_page_slug("local_landing", location="Los Angeles", service="Plumbing", max_depth=2)
+        == "los-angeles/plumbing"
+    )
+    assert build_page_slug("local_landing", location="Los Angeles", service="Plumbing") == "los-angeles/plumbing"
+
+
+def test_build_page_path_clamps_depth():
+    assert (
+        build_page_path("local_landing", location="Los Angeles", service="Plumbing", max_depth=1)
+        == "/los-angeles-plumbing/"
+    )
+
+
+def test_clamp_depth_with_underscore_separator():
+    assert (
+        build_page_slug("local_landing", location="Los Angeles", service="Plumbing", separator="_", max_depth=1)
+        == "los_angeles_plumbing"
+    )
+
+
+def test_family_for_page_type():
+    assert family_for_page_type("local_landing") == "location_page"
+    assert family_for_page_type("top_level_service") == "service_page"
+    assert family_for_page_type("blog_post") == "blog_post"
 
 
 def test_reserved_segments_present():

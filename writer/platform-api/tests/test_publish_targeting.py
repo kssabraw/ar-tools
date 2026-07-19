@@ -126,3 +126,64 @@ def test_collision_suffix_on_reserved_leaf():
     # deterministic — same target every run
     t2 = resolve_publish_target("service_page", "Services", client=_client())
     assert t2["nested_slug"] == t["nested_slug"]
+
+
+# ── 2a: auto-adapt nesting to the site's detected depth ──────────────────────
+def test_nesting_clamped_to_site_depth():
+    # the imported site's location pages are flat (depth 1)
+    client = _client(
+        business_location="Los Angeles",
+        github_inferred_patterns={"nesting": {"location_page": 1}},
+    )
+    t = resolve_publish_target("location_page", "plumbing los angeles", client=client)
+    assert t["page_type"] == "local_landing"
+    assert t["nested_slug"] == "los-angeles-plumbing"  # collapsed to depth 1
+    assert t["public_url"] == "/los-angeles-plumbing/"
+
+
+def test_nesting_default_keeps_deep():
+    # no inferred nesting → SOP deep nesting
+    client = _client(business_location="Los Angeles")
+    t = resolve_publish_target("location_page", "plumbing los angeles", client=client)
+    assert t["nested_slug"] == "los-angeles/plumbing"
+
+
+# ── 2b: reconcile against existing pages (overwrite in place) ────────────────
+def test_reconcile_overwrites_date_nested_blog():
+    client = _client(
+        github_inferred_patterns={
+            "reconcile_index": {
+                "src/content/blog": {
+                    "how-to-do-seo": {
+                        "path": "src/content/blog/2024/how-to-do-seo.md",
+                        "slug": "2024/how-to-do-seo",
+                    }
+                }
+            }
+        }
+    )
+    t = resolve_publish_target("blog_post", "How To Do SEO", client=client)
+    assert t["reconciled"] is True
+    assert t["file_path"] == "src/content/blog/2024/how-to-do-seo.md"  # overwrite, no duplicate
+    assert t["frontmatter_slug"] == "2024/how-to-do-seo"  # preserves the live URL
+
+
+def test_reconcile_slug_override_pathological():
+    client = _client(
+        github_inferred_patterns={
+            "reconcile_index": {
+                "src/content/blog": {
+                    "how-to-do-seo": {"path": "src/content/blog/p123.md", "slug": "how-to-do-seo"}
+                }
+            }
+        }
+    )
+    t = resolve_publish_target("blog_post", "How To Do SEO", client=client)
+    assert t["reconciled"] is True
+    assert t["file_path"] == "src/content/blog/p123.md"
+
+
+def test_no_reconcile_is_new_page():
+    t = resolve_publish_target("blog_post", "Brand New Post", client=_client())
+    assert t["reconciled"] is False
+    assert t["frontmatter_slug"] == t["nested_slug"] == "brand-new-post"

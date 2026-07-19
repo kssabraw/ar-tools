@@ -166,3 +166,98 @@ def infer_content_paths_from_repo_tree(paths: list[str]) -> dict[str, str]:
                 by_role.setdefault(role, Counter())[content_path] += 1
                 break  # shallowest match is the collection root
     return {role: counts.most_common(1)[0][0] for role, counts in by_role.items()}
+
+
+# A path segment that is a date part (a 4-digit year, or a 1-2 digit month/day)
+# — stripped from a slug key so date-nested files match their flat equivalent.
+_DATE_SEG_RE = re.compile(r"^(?:19|20)\d{2}$|^\d{1,2}$")
+
+
+def collection_relative_key(path: str, content_path: str, *, strip_dates: bool = True) -> str | None:
+    """The slug of a repo file relative to its collection: strip the content_path
+    prefix + file extension, optionally drop date segments, join with '/'. Returns
+    None when `path` is not under `content_path`. E.g.
+    ('src/content/blog/2024/x.md', 'src/content/blog') → 'x' (strip_dates)."""
+    cp = (content_path or "").strip("/")
+    p = (path or "").strip("/")
+    if not cp or not (p == cp or p.startswith(cp + "/")):
+        return None
+    rel = p[len(cp):].strip("/")
+    if not rel:
+        return None
+    segs = rel.split("/")
+    segs[-1] = _REPO_CONTENT_EXT_RE.sub("", segs[-1])
+    if strip_dates:
+        segs = [s for s in segs if not _DATE_SEG_RE.match(s)]
+    key = "/".join(s for s in segs if s)
+    return key or None
+
+
+def infer_nesting_from_tree(tree_paths: list[str], content_paths: dict[str, str]) -> dict[str, int]:
+    """Per content type, the modal nesting depth (segment count of the
+    date-stripped collection-relative slug) of the collection's files. Lets the
+    publish path clamp its output to the site's actual depth (a flat location
+    collection → depth 1)."""
+    out: dict[str, int] = {}
+    for family, cp in content_paths.items():
+        depths: Counter[int] = Counter()
+        for path in tree_paths:
+            if not _REPO_CONTENT_EXT_RE.search(path):
+                continue
+            key = collection_relative_key(path, cp, strip_dates=True)
+            if key:
+                depths[key.count("/") + 1] += 1
+        if depths:
+            out[family] = depths.most_common(1)[0][0]
+    return out
+
+
+def build_reconcile_index(
+    tree_paths: list[str],
+    content_paths: dict[str, str],
+    frontmatter_slugs: dict[str, str] | None = None,
+) -> dict[str, dict[str, dict[str, str]]]:
+    """Map, per collection, a match-key → {path, slug} for every existing content
+    file, so the publish path can overwrite an existing page in place instead of
+    duplicating it. A file is indexed under BOTH its date-stripped path key (so a
+    date-nested file matches its flat slug) AND its frontmatter `slug` when one is
+    given (so a page whose path doesn't reflect its slug still matches). `slug` is
+    the file's *actual* slug (frontmatter slug, else its non-date-stripped path
+    key) so overwriting preserves the live URL. Shortest path wins on a key clash."""
+    fm = frontmatter_slugs or {}
+    index: dict[str, dict[str, dict[str, str]]] = {}
+    # Deterministic: shortest path first so it registers as the canonical target.
+    for path in sorted((p for p in tree_paths if _REPO_CONTENT_EXT_RE.search(p)), key=lambda p: (len(p), p)):
+        for family, cp in content_paths.items():
+            match_key = collection_relative_key(path, cp, strip_dates=True)
+            if not match_key:
+                continue
+            fm_slug = fm.get(path)
+            actual_slug = fm_slug or collection_relative_key(path, cp, strip_dates=False) or match_key
+            entry = {"path": path, "slug": actual_slug}
+            bucket = index.setdefault(cp, {})
+            bucket.setdefault(match_key, entry)
+            if fm_slug and fm_slug != match_key:
+                bucket.setdefault(fm_slug, entry)
+            break  # a file belongs to one collection
+    return index
+
+
+def parse_frontmatter_slug(text: str) -> str | None:
+    """The `slug:` value from a Markdown file's leading YAML frontmatter, or None.
+    Tolerates quoted or bare values; only reads the first `---`…`---` block."""
+    if not text:
+        return None
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        stripped = line.strip()
+        if stripped.startswith("slug:"):
+            val = stripped[len("slug:"):].strip()
+            if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
+                val = val[1:-1]
+            return val.strip("/") or None
+    return None

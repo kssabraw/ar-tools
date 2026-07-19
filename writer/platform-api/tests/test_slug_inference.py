@@ -1,12 +1,16 @@
 """Unit tests for services/slug_inference — existing-site convention detection."""
 
 from services.slug_inference import (
+    build_reconcile_index,
+    collection_relative_key,
     infer_content_paths_from_repo_tree,
     infer_extension,
+    infer_nesting_from_tree,
     infer_separator,
     infer_slug_patterns,
     infer_trailing_slash,
     infer_url_role_prefixes,
+    parse_frontmatter_slug,
 )
 
 
@@ -129,3 +133,69 @@ def test_content_paths_no_root_lifts_restriction():
     # no content/pages/data anywhere → best-effort, the docs collection counts
     paths = ["docs/blog/a.md", "docs/blog/b.md"]
     assert infer_content_paths_from_repo_tree(paths) == {"blog_post": "docs/blog"}
+
+
+# ── collection_relative_key (2b path normalization) ──────────────────────────
+def test_collection_relative_key():
+    assert collection_relative_key("src/content/blog/2024/x.md", "src/content/blog") == "x"
+    assert collection_relative_key("src/content/blog/06/x.md", "src/content/blog") == "x"  # month
+    assert collection_relative_key("src/content/locations/la/plumbing.md", "src/content/locations") == "la/plumbing"
+    # non-date-stripped keeps the date dir (used to preserve the live URL)
+    assert (
+        collection_relative_key("src/content/blog/2024/x.md", "src/content/blog", strip_dates=False)
+        == "2024/x"
+    )
+    assert collection_relative_key("elsewhere/x.md", "src/content/blog") is None
+
+
+# ── infer_nesting_from_tree (2a) ─────────────────────────────────────────────
+def test_infer_nesting_from_tree():
+    tree = [
+        "src/content/blog/a.md",
+        "src/content/blog/2024/b.md",  # date-nested, still depth 1
+        "src/content/locations/la.md",
+        "src/content/locations/sd.md",  # flat locations → depth 1 dominant
+        "src/content/locations/la/plumbing.md",  # one nested, minority
+    ]
+    cps = {"blog_post": "src/content/blog", "location_page": "src/content/locations"}
+    nesting = infer_nesting_from_tree(tree, cps)
+    assert nesting["blog_post"] == 1
+    assert nesting["location_page"] == 1  # modal (2 flat vs 1 nested)
+
+
+# ── build_reconcile_index (2b) ───────────────────────────────────────────────
+def test_reconcile_index_date_nested_and_flat():
+    tree = ["src/content/blog/2024/06/how-to.md", "src/content/locations/la/plumbing.md"]
+    cps = {"blog_post": "src/content/blog", "location_page": "src/content/locations"}
+    idx = build_reconcile_index(tree, cps)
+    # date-nested blog: match key "how-to" → its real path, slug preserves the date path
+    assert idx["src/content/blog"]["how-to"] == {"path": "src/content/blog/2024/06/how-to.md", "slug": "2024/06/how-to"}
+    # nested location matches on the full relative key
+    assert idx["src/content/locations"]["la/plumbing"]["path"] == "src/content/locations/la/plumbing.md"
+
+
+def test_reconcile_index_frontmatter_slug_override():
+    # a page whose path doesn't reflect its slug (the pathological case)
+    tree = ["src/content/blog/p123.md"]
+    cps = {"blog_post": "src/content/blog"}
+    idx = build_reconcile_index(tree, cps, frontmatter_slugs={"src/content/blog/p123.md": "how-to"})
+    bucket = idx["src/content/blog"]
+    # matchable by BOTH the path key and the frontmatter slug; slug preserved
+    assert bucket["p123"]["path"] == "src/content/blog/p123.md"
+    assert bucket["how-to"] == {"path": "src/content/blog/p123.md", "slug": "how-to"}
+
+
+def test_reconcile_index_shortest_path_wins():
+    tree = ["src/content/blog/dup/how-to.md", "src/content/blog/how-to.md"]
+    cps = {"blog_post": "src/content/blog"}
+    idx = build_reconcile_index(tree, cps)
+    assert idx["src/content/blog"]["how-to"]["path"] == "src/content/blog/how-to.md"
+
+
+# ── parse_frontmatter_slug ───────────────────────────────────────────────────
+def test_parse_frontmatter_slug():
+    assert parse_frontmatter_slug('---\ntitle: "X"\nslug: "los-angeles/plumbing"\n---\nbody') == "los-angeles/plumbing"
+    assert parse_frontmatter_slug("---\nslug: how-to\n---\n") == "how-to"
+    assert parse_frontmatter_slug("---\ntitle: X\n---\nbody") is None  # no slug
+    assert parse_frontmatter_slug("no frontmatter here") is None
+    assert parse_frontmatter_slug("") is None
