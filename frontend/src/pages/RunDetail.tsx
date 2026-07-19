@@ -3,7 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import type { RunDetail as RunDetailType, RunStatus } from '../lib/types'
-import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, Check, RotateCcw, Repeat, Play, ExternalLink, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, Ban, CheckCircle, XCircle, Clock, Loader, Download, Copy, Check, RotateCcw, Repeat, Play, ExternalLink, AlertTriangle, GitBranch } from 'lucide-react'
 import {
   BriefCacheDecisionModal,
   type BriefCacheStatus,
@@ -296,6 +296,7 @@ export function RunDetail() {
   const [publishedUrl, setPublishedUrl] = useState<string | null>(null)
   const [wpUrl, setWpUrl] = useState<string | null>(null)
   const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
+  const [ghUrl, setGhUrl] = useState<string | null>(null)
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
   const publishMutation = useMutation({
     mutationFn: () => api.post<{ doc_url: string }>(`/runs/${id}/publish`, {}),
@@ -312,6 +313,15 @@ export function RunDetail() {
       const link = data.edit_url || data.url
       setWpUrl(link)
       if (link) window.open(link, '_blank')
+    },
+  })
+  const ghPublishMutation = useMutation({
+    mutationFn: () => api.post<{ url: string; path: string }>(
+      `/runs/${id}/publish`, { destination: 'github' },
+    ),
+    onSuccess: (data) => {
+      setGhUrl(data.url)
+      if (data.url) window.open(data.url, '_blank')
     },
   })
   const featuredImageMutation = useMutation({
@@ -651,6 +661,21 @@ export function RunDetail() {
                   </button>
                 </div>
               )}
+              {ghUrl ? (
+                <a href={ghUrl} target="_blank" rel="noreferrer"
+                  style={{ ...ghostBtn, textDecoration: 'none', color: '#16a34a', borderColor: '#bbf7d0' }}>
+                  <GitBranch size={13} /> View on GitHub
+                </a>
+              ) : (
+                <button
+                  onClick={() => ghPublishMutation.mutate()}
+                  disabled={ghPublishMutation.isPending}
+                  style={{ ...ghostBtn, color: '#334155', borderColor: '#cbd5e1' }}
+                  title="Commit this post to the client's configured GitHub repo"
+                >
+                  <GitBranch size={13} /> {ghPublishMutation.isPending ? 'Publishing…' : 'Publish to GitHub'}
+                </button>
+              )}
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid #f1f5f9' }}>
@@ -660,9 +685,9 @@ export function RunDetail() {
               onChange={(url) => featuredImageMutation.mutateAsync(url).then(() => undefined)}
             />
           </div>
-          {(publishMutation.isError || wpPublishMutation.isError) && (
+          {(publishMutation.isError || wpPublishMutation.isError || ghPublishMutation.isError) && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
-              Failed to publish: {(publishMutation.error || wpPublishMutation.error) instanceof Error ? ((publishMutation.error || wpPublishMutation.error) as Error).message : 'unknown error'}
+              Failed to publish: {(publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) instanceof Error ? ((publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) as Error).message : 'unknown error'}
             </div>
           )}
           <pre style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, overflowX: 'auto', fontSize: 13, lineHeight: 1.7, color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 600, overflowY: 'auto' }}>
