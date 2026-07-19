@@ -186,3 +186,22 @@ def test_derive_description_empty_or_structural_only_returns_none():
 def test_build_markdown_file_omits_slug_when_absent():
     md = build_markdown_file("My Title", "body text")
     assert "slug:" not in md
+
+
+# ── JSON-LD schema frontmatter (#1) ──────────────────────────────────────────
+def test_build_markdown_file_emits_schema_json_roundtrips():
+    import json
+
+    jsonld = '{"@context":"https://schema.org","@type":"Service","name":"Plumbing: 24/7"}'
+    md = build_markdown_file("T", "body", schema=jsonld)
+    # the frontmatter line is a JSON-encoded string the layout can JSON.parse
+    line = next(ln for ln in md.splitlines() if ln.startswith("schema:"))
+    value = line[len("schema:"):].strip()
+    assert json.loads(value) == jsonld  # outer decode → the JSON-LD string
+    assert json.loads(json.loads(value))["@type"] == "Service"  # inner is valid JSON-LD
+
+
+def test_build_markdown_file_omits_schema_when_absent():
+    assert "schema:" not in build_markdown_file("T", "body")
+    assert "schema:" not in build_markdown_file("T", "body", schema="")
+    assert "schema:" not in build_markdown_file("T", "body", schema="   ")

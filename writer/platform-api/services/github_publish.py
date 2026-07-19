@@ -126,6 +126,7 @@ def build_markdown_file(
     slug: str | None = None,
     pub_date: str | date | None = None,
     hero_image: str | None = None,
+    schema: str | None = None,
 ) -> str:
     """A minimal Astro-style content file: YAML frontmatter + body. Values are
     JSON-encoded so titles with quotes/colons stay valid YAML. `slug` is the
@@ -134,7 +135,9 @@ def build_markdown_file(
     schemas commonly require it): a date renders as an unquoted ISO date, a
     string is kept verbatim (the re-publish path preserves the existing file's
     scalar), absent → today. `hero_image` (the run's featured image URL) emits
-    as `heroImage` when present."""
+    as `heroImage` when present. `schema` is the page's JSON-LD (a JSON string);
+    it's emitted as a JSON-encoded frontmatter string the Astro layout parses and
+    renders in <head> — the value is written verbatim (already valid JSON)."""
     lines = ["---", f"title: {json.dumps(title or '')}"]
     if description:
         lines.append(f"description: {json.dumps(description)}")
@@ -144,6 +147,8 @@ def build_markdown_file(
         lines.append(f"heroImage: {json.dumps(hero_image)}")
     if slug:
         lines.append(f"slug: {json.dumps(slug)}")
+    if schema and schema.strip():
+        lines.append(f"schema: {json.dumps(schema)}")
     lines.append("---")
     return f"{chr(10).join(lines)}\n\n{body.rstrip()}\n"
 
@@ -158,6 +163,7 @@ async def publish_to_github(
     content_type: str | None = None,
     location: str | None = None,
     hero_image: str | None = None,
+    schema: str | None = None,
 ) -> dict:
     """Commit one piece of content to the client's repo. Returns
     {path, html_url, commit_sha}. Raises GitHubPublishError on failure."""
@@ -213,6 +219,7 @@ async def publish_to_github(
             slug=target["frontmatter_slug"],
             pub_date=existing_pub_date,
             hero_image=hero_image,
+            schema=schema,
         )
 
         payload = {
