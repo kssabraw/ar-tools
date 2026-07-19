@@ -13,8 +13,11 @@ the same slug overwrites the file rather than erroring.
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
+import re
+from datetime import date
 
 import httpx
 
@@ -78,16 +81,63 @@ def resolve_github_path(client: dict, content_type: str | None) -> str:
     return (settings.github_default_content_path or "").strip("/")
 
 
+# Description derivation: heading elements/lines, lists, tables and images are
+# structural, not prose — skip them and take the first real paragraph.
+_HTML_HEADING_RE = re.compile(r"<h[1-6][^>]*>.*?</h[1-6]>", re.IGNORECASE | re.DOTALL)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
+_MD_ORDERED_RE = re.compile(r"^\d+[.)]\s")
+_PUBDATE_RE = re.compile(r"^pubDate:\s*(.+?)\s*$", re.MULTILINE)
+
+
+def derive_description(body: str, limit: int = 160) -> str | None:
+    """First real paragraph of prose as a meta-description fallback (mirrors the
+    Fan-out convention — many collection schemas require `description`). Handles
+    Markdown and HTML bodies (Local SEO pages publish HTML): heading elements are
+    dropped with their text, remaining tags stripped, heading/list/table/quote
+    lines and images skipped, inline marks removed, and the result clipped to
+    `limit` on a word boundary."""
+    text = _HTML_HEADING_RE.sub("\n", body or "")
+    text = _HTML_TAG_RE.sub(" ", text)
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", "-", "*", "+", ">", "|", "`")):
+            continue
+        if _MD_ORDERED_RE.match(line):
+            continue
+        line = _MD_IMAGE_RE.sub("", line)
+        line = _MD_LINK_RE.sub(r"\1", line)
+        line = re.sub(r"[*_`]", "", line)
+        line = re.sub(r"\s+", " ", line).strip()
+        if not line:
+            continue
+        if len(line) <= limit:
+            return line
+        cut = line[:limit].rsplit(" ", 1)[0].rstrip(",;:")
+        return f"{cut}…"
+    return None
+
+
 def build_markdown_file(
-    title: str, body: str, description: str | None = None, slug: str | None = None
+    title: str,
+    body: str,
+    description: str | None = None,
+    slug: str | None = None,
+    pub_date: str | date | None = None,
 ) -> str:
     """A minimal Astro-style content file: YAML frontmatter + body. Values are
     JSON-encoded so titles with quotes/colons stay valid YAML. `slug` is the
     content-collection nested slug (deep nesting — the collection route supplies
-    any /blog//shop/ prefix)."""
+    any /blog//shop/ prefix). `pubDate` is always emitted (blog collection
+    schemas commonly require it): a date renders as an unquoted ISO date, a
+    string is kept verbatim (the re-publish path preserves the existing file's
+    scalar), absent → today."""
     lines = ["---", f"title: {json.dumps(title or '')}"]
     if description:
         lines.append(f"description: {json.dumps(description)}")
+    when = pub_date if isinstance(pub_date, str) else (pub_date or date.today()).isoformat()
+    lines.append(f"pubDate: {when}")
     if slug:
         lines.append(f"slug: {json.dumps(slug)}")
     lines.append("---")
@@ -123,7 +173,6 @@ async def publish_to_github(
 
     target = resolve_publish_target(content_type, slug or title, client=client, location=location)
     path = target["file_path"]
-    file_md = build_markdown_file(title, body, description, slug=target["frontmatter_slug"])
 
     url = f"{_GITHUB_API}/repos/{repo}/contents/{path}"
     headers = {
@@ -133,14 +182,32 @@ async def publish_to_github(
     }
 
     async with httpx.AsyncClient(timeout=30) as http:
-        # Look up an existing file's sha so a re-publish updates in place.
+        # Look up an existing file's sha so a re-publish updates in place —
+        # keeping its pubDate, so an updated post doesn't jump to "newest".
         sha: str | None = None
+        existing_pub_date: str | None = None
         try:
             existing = await http.get(url, headers=headers, params={"ref": branch})
             if existing.status_code == 200:
-                sha = existing.json().get("sha")
+                data = existing.json()
+                sha = data.get("sha")
+                try:
+                    decoded = base64.b64decode(data.get("content") or "").decode("utf-8", "replace")
+                    m = _PUBDATE_RE.search(decoded)
+                    if m:
+                        existing_pub_date = m.group(1)
+                except (binascii.Error, ValueError):
+                    pass
         except httpx.HTTPError:
             pass  # treat as create
+
+        file_md = build_markdown_file(
+            title,
+            body,
+            description or derive_description(body),
+            slug=target["frontmatter_slug"],
+            pub_date=existing_pub_date,
+        )
 
         payload = {
             "message": f"content: {title or path}",

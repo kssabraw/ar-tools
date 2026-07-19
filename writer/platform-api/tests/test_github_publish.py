@@ -1,8 +1,10 @@
 """Unit tests for resolve_github_path — the per-content-type repo path resolver
 (enhancement #1). Mirrors test_google_docs.py's resolve_drive_folder coverage."""
 
+from datetime import date
+
 from config import settings
-from services.github_publish import build_markdown_file, resolve_github_path
+from services.github_publish import build_markdown_file, derive_description, resolve_github_path
 
 
 def test_type_specific_path_wins():
@@ -116,6 +118,59 @@ def test_build_markdown_file_emits_slug():
     md = build_markdown_file("My Title", "body text", slug="los-angeles/plumbing")
     assert 'slug: "los-angeles/plumbing"' in md
     assert 'title: "My Title"' in md
+
+
+# ── build_markdown_file pubDate frontmatter ──────────────────────────────────
+def test_pub_date_always_emitted_defaults_to_today():
+    md = build_markdown_file("T", "body")
+    assert f"pubDate: {date.today().isoformat()}" in md
+
+
+def test_pub_date_date_renders_unquoted_iso():
+    md = build_markdown_file("T", "body", pub_date=date(2026, 3, 18))
+    assert "pubDate: 2026-03-18" in md
+    assert 'pubDate: "' not in md
+
+
+def test_pub_date_string_kept_verbatim():
+    # the re-publish path preserves the existing file's scalar, quoted or not
+    md = build_markdown_file("T", "body", pub_date='"2025-11-02"')
+    assert 'pubDate: "2025-11-02"' in md
+
+
+def test_description_emitted_before_pub_date_when_present():
+    md = build_markdown_file("T", "body", description="A summary.")
+    assert 'description: "A summary."' in md
+    frontmatter = md.split("---")[1]
+    assert frontmatter.index("description:") < frontmatter.index("pubDate:")
+
+
+# ── derive_description ───────────────────────────────────────────────────────
+def test_derive_description_skips_headings_and_lists():
+    body = "# Title\n\n- a list item\n\n1. numbered\n\nFirst real paragraph here.\n\nSecond."
+    assert derive_description(body) == "First real paragraph here."
+
+
+def test_derive_description_strips_inline_markdown():
+    body = "This has **bold**, *italic*, `code` and a [link](https://x.com) inline."
+    assert derive_description(body) == "This has bold, italic, code and a link inline."
+
+
+def test_derive_description_handles_html_body():
+    # Local SEO pages publish HTML: heading text must not become the description.
+    body = "<h1>Plumber Sydney</h1>\n<h2>Why us</h2>\n<p>We fix burst pipes fast, day or night.</p>"
+    assert derive_description(body) == "We fix burst pipes fast, day or night."
+
+
+def test_derive_description_clips_long_paragraphs_on_word_boundary():
+    body = "word " * 80
+    out = derive_description(body)
+    assert out is not None and out.endswith("…") and len(out) <= 161
+
+
+def test_derive_description_empty_or_structural_only_returns_none():
+    assert derive_description("") is None
+    assert derive_description("## Heading\n\n- only\n- lists") is None
 
 
 def test_build_markdown_file_omits_slug_when_absent():
