@@ -18,6 +18,20 @@ def test_client_known_places_merges_and_dedupes():
     assert client_known_places(client) == ["Los Angeles", "Pasadena", "Glendale"]
 
 
+def test_client_known_places_bare_city_aliases():
+    # stored locations carry region/country; the bare-city alias is emitted too
+    client = {
+        "business_location": "Los Angeles,California,United States",
+        "target_cities": ["Pasadena, CA"],
+        "gbp": {"service_area_places": ["Glendale, California, USA"]},
+    }
+    places = client_known_places(client)
+    assert "Los Angeles" in places  # alias
+    assert "Los Angeles,California,United States" in places  # full retained
+    assert "Pasadena" in places
+    assert "Glendale" in places
+
+
 def test_extract_place_splits_service_and_location():
     places = ["Los Angeles", "Inner West"]
     assert extract_place("plumbing los angeles", places) == ("Los Angeles", "plumbing")
@@ -38,24 +52,28 @@ def test_blog_target_default():
     t = resolve_publish_target("blog_post", "How To Do SEO", client=_client())
     assert t["page_type"] == "blog_post"
     assert t["nested_slug"] == "how-to-do-seo"
-    assert t["content_path"] == "src/content/blog"  # server default
+    assert t["content_path"] == "src/content/blog"  # per-type server default
     assert t["file_path"] == "src/content/blog/how-to-do-seo.md"
     assert t["public_url"] == "/blog/how-to-do-seo/"
 
 
-def test_service_target():
+def test_service_target_lands_in_services_collection():
     t = resolve_publish_target("service_page", "Landscaping", client=_client())
     assert t["page_type"] == "top_level_service"
     assert t["nested_slug"] == "landscaping"
+    assert t["content_path"] == "src/content/services"  # per-type server default (not blog)
     assert t["public_url"] == "/landscaping/"  # root-level, no prefix
 
 
 def test_location_page_splits_into_local_landing():
-    t = resolve_publish_target("location_page", "plumbing los angeles", client=_client())
+    # DataForSEO-format business_location; the geo split still fires via aliases.
+    client = _client(business_location="Los Angeles,California,United States")
+    t = resolve_publish_target("location_page", "plumbing los angeles", client=client)
     assert t["page_type"] == "local_landing"
     assert t["nested_slug"] == "los-angeles/plumbing"  # deep nested
     assert t["public_url"] == "/los-angeles/plumbing/"
-    assert t["file_path"] == "src/content/blog/los-angeles/plumbing.md"
+    assert t["content_path"] == "src/content/locations"  # per-type server default (not blog)
+    assert t["file_path"] == "src/content/locations/los-angeles/plumbing.md"
 
 
 def test_location_page_without_service_is_top_level():
@@ -63,6 +81,18 @@ def test_location_page_without_service_is_top_level():
     assert t["page_type"] == "top_level_location"
     assert t["nested_slug"] == "los-angeles"
     assert t["public_url"] == "/los-angeles/"
+
+
+def test_explicit_location_local_seo_page():
+    # Local SEO pages carry an explicit location column → local_landing directly,
+    # no keyword split needed (works even if the city isn't in known_places).
+    t = resolve_publish_target(
+        "local_seo_page", "Plumbing", client=_client(business_location=""), location="San Diego"
+    )
+    assert t["page_type"] == "local_landing"
+    assert t["nested_slug"] == "san-diego/plumbing"
+    assert t["content_path"] == "src/content/locations"
+    assert t["public_url"] == "/san-diego/plumbing/"
 
 
 # ── 'site always wins': inferred content path + url conventions ───────────────

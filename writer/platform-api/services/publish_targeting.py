@@ -23,28 +23,43 @@ from services import slug_rules
 from services.github_publish import resolve_github_path
 
 
+def _expand_place(place: str) -> list[str]:
+    """A stored place plus its bare-city alias. Stored locations often carry the
+    region/country ("Los Angeles,California,United States", "Los Angeles, CA") —
+    which never appears verbatim in a keyword — so we also emit the first
+    comma-separated token ("Los Angeles"), which is what a keyword contains."""
+    p = place.strip()
+    out = [p]
+    bare = p.split(",")[0].strip()
+    if bare and bare.lower() != p.lower():
+        out.append(bare)
+    return out
+
+
 def client_known_places(client: dict) -> list[str]:
     """The client's known place names (business location + target cities + GBP
-    service-area places), de-duped case-insensitively, order preserved."""
-    places: list[str] = []
+    service-area places), each expanded to its bare-city alias, de-duped
+    case-insensitively, order preserved."""
+    raw: list[str] = []
     bl = client.get("business_location")
     if isinstance(bl, str) and bl.strip():
-        places.append(bl.strip())
+        raw.append(bl.strip())
     for c in client.get("target_cities") or []:
         if isinstance(c, str) and c.strip():
-            places.append(c.strip())
+            raw.append(c.strip())
     gbp = client.get("gbp")
     if isinstance(gbp, dict):
         for p in gbp.get("service_area_places") or []:
             if isinstance(p, str) and p.strip():
-                places.append(p.strip())
+                raw.append(p.strip())
     seen: set[str] = set()
     out: list[str] = []
-    for p in places:
-        k = p.lower()
-        if k not in seen:
-            seen.add(k)
-            out.append(p)
+    for place in raw:
+        for alias in _expand_place(place):
+            k = alias.lower()
+            if k not in seen:
+                seen.add(k)
+                out.append(alias)
     return out
 
 
@@ -75,14 +90,23 @@ def _inferred_url(client: dict) -> tuple[str, dict, bool]:
     return separator, prefixes, trailing
 
 
-def _page_type_and_parts(content_type: str | None, keyword: str, places: list[str]) -> tuple[str, dict]:
+def _page_type_and_parts(
+    content_type: str | None, keyword: str, places: list[str], *, location: str | None = None
+) -> tuple[str, dict]:
     """Map a run content_type + keyword to an SOP page type + build_page_path
-    parts. location_page splits into local_landing / top_level_location via the
-    client's known places."""
+    parts. A location/local-SEO page uses an explicit `location` when the caller
+    has one (Local SEO pages carry a location column), else splits the keyword
+    into local_landing / top_level_location via the client's known places."""
     ct = content_type or "blog_post"
     if ct == "service_page":
         return "top_level_service", {"service": keyword}
-    if ct == "location_page":
+    if ct in ("location_page", "local_seo_page"):
+        loc = (location or "").strip()
+        if loc:
+            svc = keyword.strip()
+            if svc:
+                return "local_landing", {"location": loc, "service": svc}
+            return "top_level_location", {"location": loc}
         place, remainder = extract_place(keyword, places)
         if place and remainder:
             return "local_landing", {"location": place, "service": remainder}
@@ -100,13 +124,15 @@ def resolve_publish_target(
     *,
     client: dict,
     taken: object = (),
+    location: str | None = None,
 ) -> dict[str, Any]:
     """Resolve the commit target for one piece of content. `source` is the run's
-    keyword (falls back to the title upstream)."""
+    keyword (falls back to the title upstream); `location` is an explicit place
+    for callers that carry one (e.g. Local SEO pages)."""
     keyword = (source or "").strip()
     separator, prefixes, trailing = _inferred_url(client)
     places = client_known_places(client)
-    page_type, parts = _page_type_and_parts(content_type, keyword, places)
+    page_type, parts = _page_type_and_parts(content_type, keyword, places, location=location)
 
     nested = slug_rules.build_page_slug(page_type, separator=separator, **parts)
     if not nested:  # empty source → a safe, non-empty fallback file name
@@ -120,6 +146,7 @@ def resolve_publish_target(
         segments[-1],
         identity=(page_type, keyword, content_path),
         taken=taken,
+        separator=separator,
     )
     segments[-1] = leaf
     nested = "/".join(segments)

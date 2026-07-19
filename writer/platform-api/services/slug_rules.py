@@ -114,14 +114,16 @@ def apply_collision(
     identity: tuple[str, ...],
     reserved: frozenset[str] = RESERVED_SEGMENTS,
     taken: object = (),
+    separator: str = "-",
 ) -> str:
-    """Return `slug`, or `slug-<deterministic suffix>` when it collides with a
+    """Return `slug`, or `slug<sep><deterministic suffix>` when it collides with a
     reserved structural segment or an already-taken slug. Fully automatic — no
     human intervention (SOP). `identity` is the stable tuple the suffix hashes
-    (e.g. page_type, normalized source, parent path)."""
+    (e.g. page_type, normalized source, parent path); `separator` matches the
+    site's word separator."""
     taken_set = set(taken)
     if slug in reserved or slug in taken_set:
-        return f"{slug}-{collision_suffix(*identity)}"
+        return f"{slug}{separator}{collision_suffix(*identity)}"
     return slug
 
 

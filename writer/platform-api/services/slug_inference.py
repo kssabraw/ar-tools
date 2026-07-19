@@ -131,6 +131,11 @@ def infer_slug_patterns(urls: list[str]) -> dict:
     }
 
 
+# Segments that mark a real content root, so a synonym dir under them is a page
+# collection — not e.g. a `/docs/blog/` folder of documentation.
+CONTENT_ROOT_SEGMENTS = frozenset({"content", "pages", "data"})
+
+
 def infer_content_paths_from_repo_tree(paths: list[str]) -> dict[str, str]:
     """Per content type, the repo content path a site's collections live in —
     inferred from a repo file tree (Git Trees API). Directly populates
@@ -139,7 +144,13 @@ def infer_content_paths_from_repo_tree(paths: list[str]) -> dict[str, str]:
     For each content file, the shallowest path segment matching a role synonym is
     the collection; the path up to and including it is the content path (so
     `src/content/blog/2024/x.md` → `src/content/blog`). The most frequent content
-    path per role wins."""
+    path per role wins.
+
+    When the tree has a recognizable content root (`content`/`pages`/`data`), a
+    collection only counts if it sits under one — so `docs/blog/notes.md` in a
+    doc-heavy repo can't out-vote `src/content/blog`. When no content root exists
+    (non-standard layout) the restriction is lifted (best-effort)."""
+    has_root = any(seg in CONTENT_ROOT_SEGMENTS for path in paths for seg in path.split("/"))
     by_role: dict[str, Counter[str]] = {}
     for path in paths:
         if not _REPO_CONTENT_EXT_RE.search(path):
@@ -148,6 +159,9 @@ def infer_content_paths_from_repo_tree(paths: list[str]) -> dict[str, str]:
         for i, seg in enumerate(segs[:-1]):  # exclude the file name itself
             role = _role_for_segment(seg)
             if role:
+                # Require a content-root ancestor when the tree has one.
+                if has_root and not any(a in CONTENT_ROOT_SEGMENTS for a in segs[:i]):
+                    break
                 content_path = "/".join(segs[: i + 1])
                 by_role.setdefault(role, Counter())[content_path] += 1
                 break  # shallowest match is the collection root

@@ -264,10 +264,15 @@ async def _fetch_google_indexed_urls(domain: str, location_code: int) -> list[st
     return urls
 
 
-async def discover_site_urls(website_url: str, location_code: int) -> tuple[list[str], str]:
+async def discover_site_urls(
+    website_url: str, location_code: int, *, use_paid_fallback: bool = True
+) -> tuple[list[str], str]:
     """Discover the client's site URLs. Returns ``(urls, source)`` where source is
     ``"sitemap"`` | ``"google_index"`` | ``"none"``. Never raises — a site with no
-    readable sitemap and no indexed pages yields ``([], "none")``."""
+    readable sitemap and no indexed pages yields ``([], "none")``.
+
+    ``use_paid_fallback`` (default True) gates the DataForSEO ``site:`` query used
+    when no sitemap is readable; pass False to keep discovery free (sitemap-only)."""
     base = site_base_url(website_url)
     if not base:
         return [], "none"
@@ -275,6 +280,9 @@ async def discover_site_urls(website_url: str, location_code: int) -> tuple[list
     urls = await _fetch_sitemap_urls(base)
     if urls:
         return urls, "sitemap"
+
+    if not use_paid_fallback:
+        return [], "none"
 
     from services.dataforseo_rank import extract_domain
 

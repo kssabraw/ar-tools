@@ -102,6 +102,15 @@ def test_collision_suffix_differs_by_identity():
     assert a != b
 
 
+def test_apply_collision_separator_matches_site():
+    ident = ("top_level_service", "services", "/")
+    out = apply_collision("services", identity=ident, separator="_")
+    # suffix joined with the site's separator, not a stray hyphen
+    assert "-" not in out
+    assert out.startswith("services_")
+    assert out.count("_") == 1
+
+
 def test_apply_collision_reserved_and_taken():
     ident = ("top_level_service", "services", "/")
     # a slug hitting a reserved segment gets a stable suffix

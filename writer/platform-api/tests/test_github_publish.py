@@ -53,6 +53,8 @@ def test_none_content_type_uses_single_default():
 
 
 def test_server_default_when_nothing_configured(monkeypatch):
+    # isolate the single server default by clearing the per-type map
+    monkeypatch.setattr(settings, "github_default_content_paths", {})
     monkeypatch.setattr(settings, "github_default_content_path", "src/content/blog")
     assert resolve_github_path({}, "blog_post") == "src/content/blog"
     assert resolve_github_path({"github_content_paths": {}}, "blog_post") == "src/content/blog"
@@ -61,13 +63,24 @@ def test_server_default_when_nothing_configured(monkeypatch):
 
 
 def test_server_default_is_slash_stripped(monkeypatch):
+    monkeypatch.setattr(settings, "github_default_content_paths", {})
     monkeypatch.setattr(settings, "github_default_content_path", "/src/content/blog/")
     assert resolve_github_path({}, "blog_post") == "src/content/blog"
 
 
 def test_empty_server_default_returns_repo_root(monkeypatch):
+    monkeypatch.setattr(settings, "github_default_content_paths", {})
     monkeypatch.setattr(settings, "github_default_content_path", "")
     assert resolve_github_path({}, "blog_post") == ""
+
+
+def test_per_type_server_default_beats_single_default():
+    # a service page uses the per-type server default, not the blog single default
+    assert resolve_github_path({}, "service_page") == "src/content/services"
+    assert resolve_github_path({}, "location_page") == "src/content/locations"
+    assert resolve_github_path({}, "product") == "src/content/shop"
+    # an unmapped type falls through to the single server default
+    assert resolve_github_path({}, "use_case") == "src/content/blog"
 
 
 # ── 'site always wins': inferred content path beats override + default ────────

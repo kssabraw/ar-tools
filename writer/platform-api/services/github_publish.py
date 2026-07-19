@@ -68,7 +68,13 @@ def resolve_github_path(client: dict, content_type: str | None) -> str:
     default = client.get("github_content_path")
     if isinstance(default, str) and default.strip():
         return default.strip().strip("/")
-    # 4. Server default.
+    # 4. Per-type server default (so service/location pages don't land in blog),
+    #    then the single server default.
+    server_map = settings.github_default_content_paths or {}
+    if content_type and isinstance(server_map, dict):
+        val = server_map.get(content_type)
+        if isinstance(val, str) and val.strip():
+            return val.strip().strip("/")
     return (settings.github_default_content_path or "").strip("/")
 
 
@@ -96,6 +102,7 @@ async def publish_to_github(
     slug: str | None = None,
     description: str | None = None,
     content_type: str | None = None,
+    location: str | None = None,
 ) -> dict:
     """Commit one piece of content to the client's repo. Returns
     {path, html_url, commit_sha}. Raises GitHubPublishError on failure."""
@@ -114,7 +121,7 @@ async def publish_to_github(
     # a publish_targeting ↔ github_publish import cycle.
     from services.publish_targeting import resolve_publish_target
 
-    target = resolve_publish_target(content_type, slug or title, client=client)
+    target = resolve_publish_target(content_type, slug or title, client=client, location=location)
     path = target["file_path"]
     file_md = build_markdown_file(title, body, description, slug=target["nested_slug"])
 

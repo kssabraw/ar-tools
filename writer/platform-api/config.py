@@ -136,6 +136,17 @@ class Settings(BaseSettings):
     github_publish_token: str = ""
     github_default_branch: str = "main"
     github_default_content_path: str = "src/content/blog"
+    # Per-content-type server defaults (used when a client has no inferred pattern
+    # and no per-type/single override) so a service/location page doesn't land in
+    # the blog collection. github_default_content_path remains the final fallback.
+    github_default_content_paths: dict[str, str] = {
+        "blog_post": "src/content/blog",
+        "service_page": "src/content/services",
+        "location_page": "src/content/locations",
+        "local_seo_page": "src/content/locations",
+        "product": "src/content/shop",
+        "ecom_page": "src/content/shop",
+    }
     outscraper_api_key: str = ""
     # Google Search Console — Organic Rank Tracker (Module #4).
     # The service-account key JSON (the entire downloaded key file, as a single

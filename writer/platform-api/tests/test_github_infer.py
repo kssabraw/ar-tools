@@ -22,6 +22,12 @@ def test_parse_tree_response_bad_shapes():
     assert parse_tree_response("nope") == []
 
 
+def test_parse_tree_response_truncated_still_parses():
+    # a truncated response still yields its (partial) blob list, doesn't raise
+    body = {"truncated": True, "sha": "abc", "tree": [{"path": "a.md", "type": "blob"}]}
+    assert parse_tree_response(body) == ["a.md"]
+
+
 # ── descriptor assembly ──────────────────────────────────────────────────────
 def test_assemble_repo_tree_plus_sitemap():
     tree = ["src/content/news/post.md", "src/content/services/plumbing.md"]

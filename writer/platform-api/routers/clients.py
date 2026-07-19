@@ -516,11 +516,13 @@ async def reanalyze_client(
 @router.post("/clients/{client_id}/infer-github-patterns", response_model=dict, status_code=202)
 async def infer_github_patterns(
     client_id: UUID,
+    clear: bool = Query(False),
     auth: dict = Depends(require_staff),
 ) -> dict:
     """Re-discover the client's existing-site URL/slug conventions (repo Git tree
-    + sitemap → github_inferred_patterns). Requires a configured GitHub repo or a
-    website to infer from."""
+    + sitemap → github_inferred_patterns), or ``?clear=true`` to wipe the stored
+    inference (escape hatch when the auto-detected pattern is wrong — the
+    per-client override then wins again). Discovery requires a repo or website."""
     supabase = get_supabase()
     result = (
         supabase.table("clients")
@@ -531,6 +533,11 @@ async def infer_github_patterns(
     )
     if not result.data:
         raise HTTPException(status_code=404, detail="client_not_found")
+
+    if clear:
+        supabase.table("clients").update({"github_inferred_patterns": {}}).eq("id", str(client_id)).execute()
+        return {"cleared": True}
+
     if not (result.data.get("github_repo") or result.data.get("website_url")):
         raise HTTPException(status_code=422, detail="no_repo_or_website_to_infer")
 

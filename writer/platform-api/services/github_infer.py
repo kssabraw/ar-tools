@@ -32,7 +32,21 @@ def enqueue_github_infer(client_id: str) -> None:
     try:
         from db.supabase_client import get_supabase
 
-        get_supabase().table("async_jobs").insert(
+        supabase = get_supabase()
+        # Idempotent: skip if an unstarted job for this client is already queued,
+        # so N rapid saves don't pile up N discovery jobs.
+        existing = (
+            supabase.table("async_jobs")
+            .select("id")
+            .eq("job_type", "github_infer_patterns")
+            .eq("entity_id", client_id)
+            .eq("status", "pending")
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return
+        supabase.table("async_jobs").insert(
             {
                 "job_type": "github_infer_patterns",
                 "entity_id": client_id,
@@ -44,7 +58,10 @@ def enqueue_github_infer(client_id: str) -> None:
 
 
 def parse_tree_response(body: dict) -> list[str]:
-    """The blob (file) paths from a Git Trees API response."""
+    """The blob (file) paths from a Git Trees API response. Logs a warning if the
+    response was truncated (a very large repo → partial inference)."""
+    if isinstance(body, dict) and body.get("truncated"):
+        logger.warning("github_infer.tree_truncated", extra={"sha": body.get("sha")})
     tree = body.get("tree") if isinstance(body, dict) else None
     if not isinstance(tree, list):
         return []
@@ -53,8 +70,11 @@ def parse_tree_response(body: dict) -> list[str]:
 
 async def fetch_repo_tree(repo: str, branch: str, token: str) -> list[str]:
     """Recursively list a repo branch's file paths via the Git Trees API. Returns
-    [] on any error (best-effort)."""
-    url = f"{_GITHUB_API}/repos/{repo}/git/trees/{branch}"
+    [] on any error (best-effort). The branch is path-escaped so a branch name
+    containing '/' (e.g. release/x) resolves instead of 404ing."""
+    from urllib.parse import quote
+
+    url = f"{_GITHUB_API}/repos/{repo}/git/trees/{quote(branch, safe='')}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -122,7 +142,11 @@ async def run_github_infer_job(job: dict) -> None:
             # / Supabase-backed discovery stack.
             from services.site_page_index import discover_site_urls
 
-            urls, _source = await discover_site_urls(website, settings.dataforseo_default_location_code)
+            # Sitemap-only: never auto-spend on the DataForSEO site: fallback for
+            # a background discovery job.
+            urls, _source = await discover_site_urls(
+                website, settings.dataforseo_default_location_code, use_paid_fallback=False
+            )
 
         descriptor = assemble_inferred(
             tree_paths=tree_paths,

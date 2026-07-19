@@ -112,3 +112,20 @@ def test_content_paths_alt_collection_names():
 
 def test_content_paths_empty_when_no_collections():
     assert infer_content_paths_from_repo_tree(["README.md", "package.json"]) == {}
+
+
+def test_content_paths_ignore_docs_when_content_root_present():
+    # a doc-heavy repo: /docs/blog/ must NOT out-vote the real src/content/blog
+    paths = [
+        "src/content/blog/real-post.md",
+        "docs/blog/notes-a.md",
+        "docs/blog/notes-b.md",
+        "docs/blog/notes-c.md",  # more frequent, but under docs/ (no content root)
+    ]
+    assert infer_content_paths_from_repo_tree(paths) == {"blog_post": "src/content/blog"}
+
+
+def test_content_paths_no_root_lifts_restriction():
+    # no content/pages/data anywhere → best-effort, the docs collection counts
+    paths = ["docs/blog/a.md", "docs/blog/b.md"]
+    assert infer_content_paths_from_repo_tree(paths) == {"blog_post": "docs/blog"}
