@@ -215,12 +215,13 @@ async def _stream_nlp(path: str, payload: dict) -> dict:
 
 # ── persistence ─────────────────────────────────────────────────────────────
 
-def _persist_page(client_id: str, keyword: str, location: str, run_analysis: bool, mode: str, result: dict, user_id: str) -> dict:
+def _persist_page(client_id: str, keyword: str, location: str, run_analysis: bool, mode: str, result: dict, user_id: str, notes: Optional[str] = None) -> dict:
     row = {
         "client_id": client_id,
         "keyword": keyword,
         "location": location,
         "run_analysis": run_analysis,
+        "notes": (notes or "").strip() or None,
         "content_html": result.get("content_html") or "",
         "schema_json": result.get("schema_json") or "",
         "page_title": result.get("page_title"),
@@ -394,6 +395,7 @@ async def generate_page(
     user_id: str, force_refresh: bool = False,
     page_template_url: Optional[str] = None,
     include_decision_map: bool = True,
+    notes: Optional[str] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
@@ -426,6 +428,8 @@ async def generate_page(
         ) or render_reference_structure(structures.get("location"), "location")
         if reference:
             payload["reference_page_structure"] = reference
+    if (notes or "").strip():
+        payload["notes"] = notes.strip()  # per-page writing guidance the writer follows
     serp = await _get_or_compute_analysis(
         keyword, location, location_code, force_refresh, user_id, required=False
     )
@@ -434,7 +438,7 @@ async def generate_page(
     else:
         payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
     result = await _stream_nlp("/generate-page", payload)
-    return _persist_page(client_id, keyword, location, True, "generate", result, user_id)
+    return _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
 
 
 # ── background generation (async job) ────────────────────────────────────────

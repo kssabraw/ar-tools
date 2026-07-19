@@ -9,7 +9,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-ContentType = Literal["blog_post", "service_page", "location_page", "local_seo_page"]
+ContentType = Literal["blog_post", "service_page", "location_page",
+                      "local_seo_page", "ecommerce"]
 # 'now' = create every page immediately; the rest mirror the Fanout cadence
 # vocabulary (planned by the reused fanout schedule_planner).
 Mode = Literal["now", "all_at_once", "drip", "weekly", "monthly_date",
@@ -25,6 +26,14 @@ class ContentBatchItemInput(BaseModel):
     location_code: Optional[int] = None
     services: list[str] = Field(default_factory=list)
     page_template_url: Optional[str] = None
+    # Per-row free-text writing guidance (CSV "Notes" column). Fed into
+    # generation for every content type — not just stored.
+    notes: Optional[str] = None
+    # Per-row publish date (CSV "Date" column, ISO YYYY-MM-DD). When set it
+    # overrides the batch cadence for this row: the page is held until this date
+    # (at the batch time-of-day) then generated + published. None -> follow the
+    # batch cadence / create-now.
+    scheduled_date: Optional[date] = None
 
 
 class _CadenceBody(BaseModel):

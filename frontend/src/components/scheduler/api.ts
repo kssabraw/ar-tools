@@ -1,6 +1,7 @@
 import { api } from '../../lib/api'
 
-export type ContentType = 'blog_post' | 'service_page' | 'location_page' | 'local_seo_page'
+export type ContentType =
+  | 'blog_post' | 'service_page' | 'location_page' | 'local_seo_page' | 'ecommerce'
 export type ScheduleMode =
   | 'now' | 'all_at_once' | 'drip' | 'weekly' | 'monthly_date' | 'monthly_weekday' | 'fixed'
 
@@ -9,6 +10,7 @@ export const CONTENT_TYPE_LABEL: Record<ContentType, string> = {
   service_page: 'Service pages',
   location_page: 'Location pages',
   local_seo_page: 'Local SEO pages',
+  ecommerce: 'Ecommerce',
 }
 
 export interface BatchItemInput {
@@ -17,6 +19,8 @@ export interface BatchItemInput {
   location_code?: number | null
   services?: string[]
   page_template_url?: string | null
+  notes?: string | null
+  scheduled_date?: string | null   // 'YYYY-MM-DD' — per-row publish date (overrides cadence)
 }
 
 export interface CadenceBody {

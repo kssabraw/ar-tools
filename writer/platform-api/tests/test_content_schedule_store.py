@@ -71,6 +71,52 @@ def test_normalize_accepts_dataclass_inputs():
     assert skipped == 0
 
 
+def test_normalize_carries_scheduled_date():
+    items, _ = store.normalize_items(
+        [
+            {"keyword": "plumber austin", "scheduled_date": "2026-08-15"},
+            {"keyword": "roofer dallas", "scheduled_date": date(2026, 9, 1)},
+            {"keyword": "hvac denver", "scheduled_date": "not-a-date"},   # garbage -> None
+            {"keyword": "painter miami"},                                  # absent -> None
+        ],
+        max_items=5,
+    )
+    assert items[0].scheduled_date == date(2026, 8, 15)
+    assert items[1].scheduled_date == date(2026, 9, 1)
+    assert items[2].scheduled_date is None
+    assert items[3].scheduled_date is None
+
+
+def test_combine_local_date_utc():
+    dt = store.combine_local_date(date(2026, 8, 15), time(9, 0), "UTC")
+    assert dt == datetime(2026, 8, 15, 9, 0, tzinfo=timezone.utc)
+
+
+def test_combine_local_date_respects_timezone():
+    # 09:00 in Sydney (UTC+10 in August, no DST) -> 23:00 the previous day UTC.
+    dt = store.combine_local_date(date(2026, 8, 15), time(9, 0), "Australia/Sydney")
+    assert dt == datetime(2026, 8, 14, 23, 0, tzinfo=timezone.utc)
+
+
+def test_combine_local_date_bad_tz_falls_back_to_utc():
+    dt = store.combine_local_date(date(2026, 8, 15), time(9, 0), "Not/AZone")
+    assert dt == datetime(2026, 8, 15, 9, 0, tzinfo=timezone.utc)
+
+
+def test_normalize_carries_and_trims_notes():
+    items, _ = store.normalize_items(
+        [
+            {"keyword": "plumber austin", "notes": "  Friendly DIY tone  "},
+            {"keyword": "roofer dallas", "notes": "   "},   # blank -> None
+            {"keyword": "hvac denver"},                       # absent -> None
+        ],
+        max_items=5,
+    )
+    assert items[0].notes == "Friendly DIY tone"
+    assert items[1].notes is None
+    assert items[2].notes is None
+
+
 # ── plan_item_datetimes ──────────────────────────────────────────────────────
 
 
@@ -126,6 +172,13 @@ def test_estimate_uses_per_content_type_cost():
     assert local["cost_estimate_usd"] != blog["cost_estimate_usd"]
 
 
+def test_estimate_ecommerce_is_a_known_type():
+    assert "ecommerce" in store.CONTENT_TYPES
+    est = store.estimate_batch(3, "ecommerce", "now", now_utc=NOW)
+    assert est["cost_estimate_usd"] == round(3 * store.DEFAULT_COST_PER_TYPE["ecommerce"], 2)
+    assert est["content_type"] == "ecommerce"
+
+
 def test_estimate_custom_cost_map():
     est = store.estimate_batch(4, "service_page", "now",
                                cost_per_type={"service_page": 1.25}, now_utc=NOW)
@@ -143,3 +196,28 @@ def test_estimate_reports_finish_date_for_scheduled():
 def test_estimate_now_has_no_finish_date():
     est = store.estimate_batch(4, "blog_post", "now", now_utc=NOW)
     assert "finish_date" not in est
+
+
+def test_estimate_explicit_date_sets_finish_even_in_now_mode():
+    # A create-now batch with a future-dated row surfaces that date as the finish.
+    est = store.estimate_batch(
+        4, "blog_post", "now", now_utc=NOW, explicit_finish=date(2026, 9, 1)
+    )
+    assert est["finish_date"] == "2026-09-01"
+
+
+def test_estimate_finish_is_later_of_cadence_and_explicit():
+    # 4 items 1/day from 07-11 -> cadence last is 07-14; an explicit 08-01 wins.
+    est = store.estimate_batch(
+        4, "blog_post", "drip", per_day=1, start_date=date(2026, 7, 11),
+        tz_name="UTC", now_utc=NOW, explicit_finish=date(2026, 8, 1),
+    )
+    assert est["finish_date"] == "2026-08-01"
+
+
+def test_estimate_cadence_wins_when_later_than_explicit():
+    est = store.estimate_batch(
+        4, "blog_post", "drip", per_day=1, start_date=date(2026, 7, 11),
+        tz_name="UTC", now_utc=NOW, explicit_finish=date(2026, 7, 12),
+    )
+    assert est["finish_date"] == "2026-07-14"       # cadence last beats the earlier explicit date

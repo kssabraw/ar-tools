@@ -19,11 +19,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from db.supabase_client import get_supabase
 from fanout.writer.schedule_planner import ScheduleError, plan_runs
 
-CONTENT_TYPES = ("blog_post", "service_page", "location_page", "local_seo_page")
+CONTENT_TYPES = ("blog_post", "service_page", "location_page", "local_seo_page",
+                 "ecommerce")
 
 # Per-content-type cost estimate ($/page) — the deliberate fix for the Fanout
 # scheduler's known caveat of estimating every type at the blog constant. These
@@ -33,6 +35,7 @@ DEFAULT_COST_PER_TYPE: dict[str, float] = {
     "service_page": 0.60,
     "location_page": 0.60,
     "local_seo_page": 0.90,
+    "ecommerce": 0.90,
 }
 
 _MAX_KEYWORD_LEN = 200
@@ -49,9 +52,44 @@ class BatchItemInput:
     location_code: Optional[int] = None
     services: list[str] = field(default_factory=list)
     page_template_url: Optional[str] = None
+    # Per-row free-text writing guidance (CSV "Notes" column). Fed into
+    # generation for every content type — not just stored.
+    notes: Optional[str] = None
+    # Per-row publish date (CSV "Date" column). When set it overrides the batch
+    # cadence for this row (generate + publish on this date at the batch
+    # time-of-day). None -> follow the cadence / create-now.
+    scheduled_date: Optional[date] = None
 
 
 # ── pure helpers (no DB — unit tested) ───────────────────────────────────────
+
+
+def _coerce_date(value) -> Optional[date]:
+    """Accept a date, an ISO 'YYYY-MM-DD' string, or None. Anything unparseable
+    (a typo) becomes None so the row falls back to the batch cadence rather than
+    corrupting the calendar."""
+    if value is None or isinstance(value, date) and not isinstance(value, datetime):
+        return value if isinstance(value, date) else None
+    if isinstance(value, datetime):
+        return value.date()
+    try:
+        return date.fromisoformat(str(value).strip()[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def combine_local_date(
+    d: date, tod: Optional[time], tz_name: str = "UTC"
+) -> datetime:
+    """The tz-aware UTC release datetime for an explicit per-row publish date at
+    the batch time-of-day, interpreted in the batch timezone. Falls back to UTC
+    for an unknown timezone name."""
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        tz = timezone.utc
+    local = datetime.combine(d, tod or time(9, 0)).replace(tzinfo=tz)
+    return local.astimezone(timezone.utc)
 
 
 def _clean_services(raw) -> list[str]:
@@ -82,6 +120,7 @@ def normalize_items(
             location_code=raw.get("location_code"),
             services=_clean_services(raw.get("services")),
             page_template_url=(raw.get("page_template_url") or None),
+            notes=(raw.get("notes") or None),
         )
         kw = (it.keyword or "").strip()
         loc = (it.location or "").strip() or None
@@ -92,6 +131,10 @@ def normalize_items(
         items.append(BatchItemInput(
             keyword=kw, location=loc, location_code=it.location_code,
             services=_clean_services(it.services), page_template_url=it.page_template_url,
+            notes=(it.notes or "").strip() or None,
+            scheduled_date=_coerce_date(
+                raw.get("scheduled_date") if isinstance(raw, dict) else it.scheduled_date
+            ),
         ))
     skipped = len(raw_items) - len(items)
     return items[:max_items], skipped
@@ -128,15 +171,19 @@ def estimate_batch(
     time_of_day: Optional[time] = None, tz_name: str = "UTC",
     weekday: Optional[int] = None, weekdays: Optional[list[int]] = None,
     day_of_month: Optional[int] = None, week_of_month: Optional[int] = None,
-    now_utc: Optional[datetime] = None,
+    now_utc: Optional[datetime] = None, explicit_finish: Optional[date] = None,
 ) -> dict:
     """Preview a batch without creating it: item count, per-content-type cost, and
-    the finish date (the last release datetime). Best-effort on the finish date —
-    a bad cadence just omits it (create validates for real)."""
+    the finish date (the last release date). Best-effort on the finish date — a bad
+    cadence just omits it (create validates for real). `explicit_finish` is the
+    latest per-row publish Date across the batch; the finish date is the later of
+    the cadence's last slot and that, so a dated row beyond the cadence horizon (or
+    a dated create-now batch) is reflected in the preview."""
     costs = cost_per_type or DEFAULT_COST_PER_TYPE
     cost = round(count * costs.get(content_type, DEFAULT_COST_PER_TYPE["blog_post"]), 2)
     out: dict = {"count": count, "cost_estimate_usd": cost,
                  "content_type": content_type, "mode": mode}
+    finish: Optional[date] = None
     if count and mode not in ("now", "all_at_once"):
         try:
             dts = plan_item_datetimes(
@@ -146,9 +193,13 @@ def estimate_batch(
                 week_of_month=week_of_month, now_utc=now_utc,
             )
             if dts:
-                out["finish_date"] = dts[-1].date().isoformat()
+                finish = dts[-1].date()
         except ScheduleError:
             pass
+    if explicit_finish and (finish is None or explicit_finish > finish):
+        finish = explicit_finish
+    if finish:
+        out["finish_date"] = finish.isoformat()
     return out
 
 
@@ -174,6 +225,13 @@ def create_batch(
         time_of_day=time_of_day, tz_name=tz_name, weekday=weekday, weekdays=weekdays,
         day_of_month=day_of_month, week_of_month=week_of_month, now_utc=now_utc,
     )
+    # A per-row explicit publish date overrides the cadence slot for that row
+    # (generate + publish that day at the batch time-of-day, in the batch tz).
+    dts = [
+        combine_local_date(it.scheduled_date, time_of_day, tz_name)
+        if it.scheduled_date else dt
+        for it, dt in zip(items, dts)
+    ]
     client = get_supabase()
     parent = client.table("content_batches").insert({
         "client_id": client_id, "created_by": created_by,
@@ -190,6 +248,7 @@ def create_batch(
         "batch_id": parent["id"], "client_id": client_id, "keyword": it.keyword,
         "location": it.location, "location_code": it.location_code,
         "services": it.services, "page_template_url": it.page_template_url,
+        "notes": it.notes,
         "scheduled_at": dt.isoformat(), "status": "scheduled",
     } for it, dt in zip(items, dts)]
     inserted: list[dict] = []
