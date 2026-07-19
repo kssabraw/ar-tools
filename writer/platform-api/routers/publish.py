@@ -313,7 +313,7 @@ async def publish_run(
         try:
             result = await publish_to_github(
                 client=client, title=title, body=markdown, slug=run["keyword"],
-                content_type=content_type,
+                content_type=content_type, hero_image=featured_image_url,
             )
         except GitHubPublishError as exc:
             client_errors = {"github_not_configured", "github_repo_not_set", "content_is_empty"}
