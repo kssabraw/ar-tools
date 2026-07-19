@@ -76,6 +76,7 @@ export interface Client extends ClientListItem {
   github_repo: string | null
   github_branch: string | null
   github_content_path: string | null
+  github_content_paths: Record<string, string> | null
   // WordPress direct-publish target. app_password is never returned — only the
   // boolean flag indicates whether one is stored.
   wordpress_site_url: string | null

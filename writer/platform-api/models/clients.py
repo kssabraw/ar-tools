@@ -94,6 +94,13 @@ class ClientDetail(BaseModel):
     github_repo: Optional[str] = None
     github_branch: Optional[str] = None
     github_content_path: Optional[str] = None
+    # Per-content-type repo content paths (content_type slug → path). The
+    # type-specific path wins; github_content_path is the single fallback.
+    github_content_paths: dict[str, str] = Field(default_factory=dict)
+    # Inferred conventions of the client's EXISTING site (system-populated by the
+    # pattern discovery job); SOP "site always wins" — read at publish time.
+    # Nested dict, so NOT run through the flat {str:str} folder sanitizer.
+    github_inferred_patterns: dict[str, Any] = Field(default_factory=dict)
     # WordPress direct-publish target (#3). The site URL + username are safe to
     # surface; the Application Password is a secret and is NEVER returned — only
     # `wordpress_app_password_set` indicates whether one is stored.
@@ -122,7 +129,7 @@ class ClientDetail(BaseModel):
     # the week instead of all landing on one day.
     strategist_weekday: Optional[int] = None
 
-    @field_validator("drive_folders", mode="before")
+    @field_validator("drive_folders", "github_content_paths", mode="before")
     @classmethod
     def _sanitize_drive_folders(cls, v: Any) -> dict[str, str]:
         """Coerce the stored JSONB into a clean {str: str} map so a malformed or
@@ -156,6 +163,8 @@ class ClientCreateRequest(BaseModel):
     github_repo: Optional[str] = None
     github_branch: Optional[str] = None
     github_content_path: Optional[str] = None
+    # Per-content-type repo content paths (content_type slug → path).
+    github_content_paths: Optional[dict[str, str]] = None
     # WordPress direct-publish target (#3). app_password is write-only.
     wordpress_site_url: Optional[str] = None
     wordpress_username: Optional[str] = None
@@ -194,6 +203,8 @@ class ClientUpdateRequest(BaseModel):
     github_repo: Optional[str] = None
     github_branch: Optional[str] = None
     github_content_path: Optional[str] = None
+    # Per-content-type repo content paths (content_type slug → path).
+    github_content_paths: Optional[dict[str, str]] = None
     # WordPress direct-publish target (#3). app_password is write-only; pass an
     # empty string to clear a stored password, or omit the field to leave it.
     wordpress_site_url: Optional[str] = None

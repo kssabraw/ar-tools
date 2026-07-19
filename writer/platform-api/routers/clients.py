@@ -18,7 +18,7 @@ from models.clients import (
     ClientUpdateRequest,
     PageStructureUrls,
 )
-from services import brand_voice_service, icp_service, rank_location
+from services import brand_voice_service, github_infer, icp_service, rank_location
 from services.file_parser import detect_format
 from services.gbp_service import get_business_details, resolve_business, search_businesses
 from services.page_structure_scraper import PAGE_TYPES
@@ -267,6 +267,8 @@ async def create_client(
         row["target_cities"] = body.target_cities
     if body.drive_folders is not None:
         row["drive_folders"] = body.drive_folders
+    if body.github_content_paths is not None:
+        row["github_content_paths"] = body.github_content_paths
     # Recipe Engine budget inputs (§1–§2).
     if body.retainer_monthly is not None:
         row["retainer_monthly"] = body.retainer_monthly
@@ -294,6 +296,10 @@ async def create_client(
 
     if body.website_url:
         _enqueue_website_scrape(client["id"], body.website_url)
+    # Discover the existing-site URL/slug conventions when a repo is configured
+    # (SOP "site always wins" — populates github_inferred_patterns).
+    if body.github_repo:
+        github_infer.enqueue_github_infer(client["id"])
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(client["id"], page_type, url)
     # Auto-generate the brand voice + ICP so they exist without a manual scan.
@@ -390,6 +396,8 @@ async def update_client(
         updates["github_branch"] = body.github_branch
     if body.github_content_path is not None:
         updates["github_content_path"] = body.github_content_path
+    if body.github_content_paths is not None:
+        updates["github_content_paths"] = body.github_content_paths
     if body.wordpress_site_url is not None:
         updates["wordpress_site_url"] = body.wordpress_site_url or None
     if body.wordpress_username is not None:
@@ -436,6 +444,11 @@ async def update_client(
 
     if website_changed:
         _enqueue_website_scrape(str(client_id), body.website_url)
+    # Re-discover site conventions when the repo changes, or when the website
+    # changes and a repo is already configured (sitemap-derived conventions).
+    repo_changed = body.github_repo is not None and updates.get("github_repo") != existing.get("github_repo")
+    if repo_changed or (website_changed and (updates.get("github_repo") or existing.get("github_repo"))):
+        github_infer.enqueue_github_infer(str(client_id))
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(str(client_id), page_type, url)
     # Re-derive the rank-tracking location only when the GBP actually changed
@@ -498,6 +511,38 @@ async def reanalyze_client(
 
     job_id = (job_result.data or [{}])[0].get("id", "")
     return {"job_id": job_id}
+
+
+@router.post("/clients/{client_id}/infer-github-patterns", response_model=dict, status_code=202)
+async def infer_github_patterns(
+    client_id: UUID,
+    clear: bool = Query(False),
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Re-discover the client's existing-site URL/slug conventions (repo Git tree
+    + sitemap → github_inferred_patterns), or ``?clear=true`` to wipe the stored
+    inference (escape hatch when the auto-detected pattern is wrong — the
+    per-client override then wins again). Discovery requires a repo or website."""
+    supabase = get_supabase()
+    result = (
+        supabase.table("clients")
+        .select("github_repo, website_url")
+        .eq("id", str(client_id))
+        .single()
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+
+    if clear:
+        supabase.table("clients").update({"github_inferred_patterns": {}}).eq("id", str(client_id)).execute()
+        return {"cleared": True}
+
+    if not (result.data.get("github_repo") or result.data.get("website_url")):
+        raise HTTPException(status_code=422, detail="no_repo_or_website_to_infer")
+
+    github_infer.enqueue_github_infer(str(client_id))
+    return {"enqueued": True}
 
 
 @router.post("/clients/{client_id}/page-structures/reanalyze", response_model=dict, status_code=202)

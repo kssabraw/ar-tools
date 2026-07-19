@@ -1288,9 +1288,19 @@ async def _publish_page_to_github(page: dict, client: dict, user_id: str) -> dic
 
     title = page.get("page_title") or f"{page.get('keyword', '')} — {client.get('name', '')}"
     html = page.get("content_html") or ""
-    slug = f"{page.get('keyword', '')}-{page.get('location', '')}".strip("-")
+    # Route through the per-type path + deep-nesting logic: a Local SEO page is a
+    # location landing page carrying an explicit location column, so pass both.
+    keyword = page.get("keyword", "") or ""
+    location = page.get("location", "") or ""
     try:
-        result = await publish_to_github(client=client, title=title, body=html, slug=slug)
+        result = await publish_to_github(
+            client=client,
+            title=title,
+            body=html,
+            slug=keyword,
+            content_type="local_seo_page",
+            location=location,
+        )
     except GitHubPublishError as exc:
         client_errors = {"github_not_configured", "github_repo_not_set", "content_is_empty"}
         code = 422 if str(exc) in client_errors else 502
@@ -1374,7 +1384,11 @@ async def publish_page(
     if destination == "github":
         client_res = (
             supabase.table("clients")
-            .select("name, github_repo, github_branch, github_content_path")
+            .select(
+                "name, github_repo, github_branch, github_content_path, "
+                "github_content_paths, github_inferred_patterns, "
+                "business_location, target_cities, gbp"
+            )
             .eq("id", page["client_id"])
             .single()
             .execute()

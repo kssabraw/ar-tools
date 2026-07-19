@@ -208,7 +208,8 @@ async def publish_run(
         .select(
             "name, google_drive_folder_id, drive_folders, "
             "wordpress_site_url, wordpress_username, wordpress_app_password, "
-            "github_repo, github_branch, github_content_path"
+            "github_repo, github_branch, github_content_path, github_content_paths, "
+            "github_inferred_patterns, business_location, target_cities, gbp"
         )
         .eq("id", run["client_id"])
         .single()
@@ -312,6 +313,7 @@ async def publish_run(
         try:
             result = await publish_to_github(
                 client=client, title=title, body=markdown, slug=run["keyword"],
+                content_type=content_type,
             )
         except GitHubPublishError as exc:
             client_errors = {"github_not_configured", "github_repo_not_set", "content_is_empty"}
