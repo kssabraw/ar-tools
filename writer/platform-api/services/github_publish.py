@@ -125,6 +125,7 @@ def build_markdown_file(
     description: str | None = None,
     slug: str | None = None,
     pub_date: str | date | None = None,
+    hero_image: str | None = None,
 ) -> str:
     """A minimal Astro-style content file: YAML frontmatter + body. Values are
     JSON-encoded so titles with quotes/colons stay valid YAML. `slug` is the
@@ -132,12 +133,15 @@ def build_markdown_file(
     any /blog//shop/ prefix). `pubDate` is always emitted (blog collection
     schemas commonly require it): a date renders as an unquoted ISO date, a
     string is kept verbatim (the re-publish path preserves the existing file's
-    scalar), absent → today."""
+    scalar), absent → today. `hero_image` (the run's featured image URL) emits
+    as `heroImage` when present."""
     lines = ["---", f"title: {json.dumps(title or '')}"]
     if description:
         lines.append(f"description: {json.dumps(description)}")
     when = pub_date if isinstance(pub_date, str) else (pub_date or date.today()).isoformat()
     lines.append(f"pubDate: {when}")
+    if hero_image:
+        lines.append(f"heroImage: {json.dumps(hero_image)}")
     if slug:
         lines.append(f"slug: {json.dumps(slug)}")
     lines.append("---")
@@ -153,6 +157,7 @@ async def publish_to_github(
     description: str | None = None,
     content_type: str | None = None,
     location: str | None = None,
+    hero_image: str | None = None,
 ) -> dict:
     """Commit one piece of content to the client's repo. Returns
     {path, html_url, commit_sha}. Raises GitHubPublishError on failure."""
@@ -207,6 +212,7 @@ async def publish_to_github(
             description or derive_description(body),
             slug=target["frontmatter_slug"],
             pub_date=existing_pub_date,
+            hero_image=hero_image,
         )
 
         payload = {

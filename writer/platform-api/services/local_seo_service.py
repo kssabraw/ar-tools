@@ -1304,6 +1304,7 @@ async def _publish_page_to_github(page: dict, client: dict, user_id: str) -> dic
             slug=keyword,
             content_type="local_seo_page",
             location=location,
+            hero_image=page.get("featured_image_url"),
         )
     except GitHubPublishError as exc:
         client_errors = {"github_not_configured", "github_repo_not_set", "content_is_empty"}

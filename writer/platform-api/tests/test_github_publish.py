@@ -138,6 +138,16 @@ def test_pub_date_string_kept_verbatim():
     assert 'pubDate: "2025-11-02"' in md
 
 
+def test_hero_image_emitted_when_present():
+    md = build_markdown_file("T", "body", hero_image="https://cdn.example.com/hero.png")
+    assert 'heroImage: "https://cdn.example.com/hero.png"' in md
+
+
+def test_hero_image_omitted_when_absent():
+    assert "heroImage" not in build_markdown_file("T", "body")
+    assert "heroImage" not in build_markdown_file("T", "body", hero_image="")
+
+
 def test_description_emitted_before_pub_date_when_present():
     md = build_markdown_file("T", "body", description="A summary.")
     assert 'description: "A summary."' in md
