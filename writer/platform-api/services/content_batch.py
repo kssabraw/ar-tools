@@ -85,15 +85,34 @@ def _enqueue_one(batch: dict, item: dict, index: int) -> Optional[str]:
     return job_id
 
 
+def _is_due(scheduled_at, now: datetime) -> bool:
+    """True when an item's release time has arrived (or it has none). A per-row
+    publish Date can push an item's scheduled_at into the future even in a
+    create-now batch — those must wait for the shared scheduler, not fire now."""
+    if not scheduled_at:
+        return True
+    try:
+        dt = datetime.fromisoformat(str(scheduled_at))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt <= now
+    except (ValueError, TypeError):
+        return True
+
+
 def enqueue_items(batch: dict, items: list[dict]) -> int:
-    """Release a set of just-created items immediately (create-now). Returns the
-    number of jobs enqueued."""
+    """Release the just-created items that are due NOW (create-now). Items with a
+    future per-row publish date are left 'scheduled' for the shared scheduler to
+    release when due. Returns the number of jobs enqueued."""
+    now = datetime.now(timezone.utc)
+    due = [it for it in items if _is_due(it.get("scheduled_at"), now)]
     enqueued = 0
-    for i, item in enumerate(items):
+    for i, item in enumerate(due):
         if _enqueue_one(batch, item, i):
             enqueued += 1
     logger.info("content_batch.enqueued_now",
-                extra={"batch_id": batch["id"], "enqueued": enqueued, "total": len(items)})
+                extra={"batch_id": batch["id"], "enqueued": enqueued,
+                       "due": len(due), "total": len(items)})
     return enqueued
 
 

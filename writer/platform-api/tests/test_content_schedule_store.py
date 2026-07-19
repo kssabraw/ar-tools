@@ -71,6 +71,38 @@ def test_normalize_accepts_dataclass_inputs():
     assert skipped == 0
 
 
+def test_normalize_carries_scheduled_date():
+    items, _ = store.normalize_items(
+        [
+            {"keyword": "plumber austin", "scheduled_date": "2026-08-15"},
+            {"keyword": "roofer dallas", "scheduled_date": date(2026, 9, 1)},
+            {"keyword": "hvac denver", "scheduled_date": "not-a-date"},   # garbage -> None
+            {"keyword": "painter miami"},                                  # absent -> None
+        ],
+        max_items=5,
+    )
+    assert items[0].scheduled_date == date(2026, 8, 15)
+    assert items[1].scheduled_date == date(2026, 9, 1)
+    assert items[2].scheduled_date is None
+    assert items[3].scheduled_date is None
+
+
+def test_combine_local_date_utc():
+    dt = store.combine_local_date(date(2026, 8, 15), time(9, 0), "UTC")
+    assert dt == datetime(2026, 8, 15, 9, 0, tzinfo=timezone.utc)
+
+
+def test_combine_local_date_respects_timezone():
+    # 09:00 in Sydney (UTC+10 in August, no DST) -> 23:00 the previous day UTC.
+    dt = store.combine_local_date(date(2026, 8, 15), time(9, 0), "Australia/Sydney")
+    assert dt == datetime(2026, 8, 14, 23, 0, tzinfo=timezone.utc)
+
+
+def test_combine_local_date_bad_tz_falls_back_to_utc():
+    dt = store.combine_local_date(date(2026, 8, 15), time(9, 0), "Not/AZone")
+    assert dt == datetime(2026, 8, 15, 9, 0, tzinfo=timezone.utc)
+
+
 def test_normalize_carries_and_trims_notes():
     items, _ = store.normalize_items(
         [

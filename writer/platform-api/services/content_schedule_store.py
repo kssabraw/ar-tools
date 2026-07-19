@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timezone
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from db.supabase_client import get_supabase
 from fanout.writer.schedule_planner import ScheduleError, plan_runs
@@ -54,9 +55,41 @@ class BatchItemInput:
     # Per-row free-text writing guidance (CSV "Notes" column). Fed into
     # generation for every content type — not just stored.
     notes: Optional[str] = None
+    # Per-row publish date (CSV "Date" column). When set it overrides the batch
+    # cadence for this row (generate + publish on this date at the batch
+    # time-of-day). None -> follow the cadence / create-now.
+    scheduled_date: Optional[date] = None
 
 
 # ── pure helpers (no DB — unit tested) ───────────────────────────────────────
+
+
+def _coerce_date(value) -> Optional[date]:
+    """Accept a date, an ISO 'YYYY-MM-DD' string, or None. Anything unparseable
+    (a typo) becomes None so the row falls back to the batch cadence rather than
+    corrupting the calendar."""
+    if value is None or isinstance(value, date) and not isinstance(value, datetime):
+        return value if isinstance(value, date) else None
+    if isinstance(value, datetime):
+        return value.date()
+    try:
+        return date.fromisoformat(str(value).strip()[:10])
+    except (ValueError, TypeError):
+        return None
+
+
+def combine_local_date(
+    d: date, tod: Optional[time], tz_name: str = "UTC"
+) -> datetime:
+    """The tz-aware UTC release datetime for an explicit per-row publish date at
+    the batch time-of-day, interpreted in the batch timezone. Falls back to UTC
+    for an unknown timezone name."""
+    try:
+        tz = ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        tz = timezone.utc
+    local = datetime.combine(d, tod or time(9, 0)).replace(tzinfo=tz)
+    return local.astimezone(timezone.utc)
 
 
 def _clean_services(raw) -> list[str]:
@@ -99,6 +132,9 @@ def normalize_items(
             keyword=kw, location=loc, location_code=it.location_code,
             services=_clean_services(it.services), page_template_url=it.page_template_url,
             notes=(it.notes or "").strip() or None,
+            scheduled_date=_coerce_date(
+                raw.get("scheduled_date") if isinstance(raw, dict) else it.scheduled_date
+            ),
         ))
     skipped = len(raw_items) - len(items)
     return items[:max_items], skipped
@@ -181,6 +217,13 @@ def create_batch(
         time_of_day=time_of_day, tz_name=tz_name, weekday=weekday, weekdays=weekdays,
         day_of_month=day_of_month, week_of_month=week_of_month, now_utc=now_utc,
     )
+    # A per-row explicit publish date overrides the cadence slot for that row
+    # (generate + publish that day at the batch time-of-day, in the batch tz).
+    dts = [
+        combine_local_date(it.scheduled_date, time_of_day, tz_name)
+        if it.scheduled_date else dt
+        for it, dt in zip(items, dts)
+    ]
     client = get_supabase()
     parent = client.table("content_batches").insert({
         "client_id": client_id, "created_by": created_by,

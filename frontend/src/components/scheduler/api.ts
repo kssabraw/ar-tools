@@ -20,6 +20,7 @@ export interface BatchItemInput {
   services?: string[]
   page_template_url?: string | null
   notes?: string | null
+  scheduled_date?: string | null   // 'YYYY-MM-DD' — per-row publish date (overrides cadence)
 }
 
 export interface CadenceBody {

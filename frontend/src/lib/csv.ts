@@ -84,20 +84,38 @@ function splitCsvLine(line: string): string[] {
 const _SCHED_HEADER_TOKENS = new Set([
   'keyword', 'keywords', 'term', 'terms', 'query', 'queries',
   'location', 'locations', 'service', 'services', 'product', 'products',
-  'notes', 'note',
+  'notes', 'note', 'date', 'dates',
 ])
 
 export interface SchedulerCsvRow {
   term: string          // column A (keyword / service / location / product)
   service?: string      // local_seo_page only — column B
   notes?: string        // free-text writing guidance
+  date?: string         // column D — ISO YYYY-MM-DD; when to generate + publish
+}
+
+// Validate + normalize an ISO date (YYYY-MM-DD). Returns the canonical string or
+// undefined for anything that isn't a real calendar date, so a typo in the CSV
+// silently falls back to the batch schedule instead of corrupting the calendar.
+export function parseIsoDate(raw: string): string | undefined {
+  const s = (raw || '').trim()
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
+  if (!m) return undefined
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+  const dt = new Date(Date.UTC(y, mo - 1, d))
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) {
+    return undefined  // e.g. 2026-02-30
+  }
+  return s
 }
 
 // The standardized Content Scheduler CSV. Column A is the head term (its meaning
-// depends on the page type: Keyword / Service / Location / Product). Notes is the
-// last column; Local SEO pages carry an extra Service column between them:
-//   blog_post / service_page / location_page / ecommerce : A=term,     B=Notes
-//   local_seo_page                                        : A=Location, B=Service, C=Notes
+// depends on the page type: Keyword / Service / Location / Product). Notes is
+// column B (or C for Local SEO, which adds a Service column). The optional
+// publish Date is ALWAYS column D (index 3), so column C is unused for the types
+// that have no Service column:
+//   blog_post / service_page / location_page / ecommerce : A=term,     B=Notes,             D=Date
+//   local_seo_page                                        : A=Location, B=Service, C=Notes,  D=Date
 export function parseSchedulerCsv(text: string, contentType: string): SchedulerCsvRow[] {
   const isLocalSeo = contentType === 'local_seo_page'
   const out: SchedulerCsvRow[] = []
@@ -118,6 +136,8 @@ export function parseSchedulerCsv(text: string, contentType: string): SchedulerC
       const notes = (cols[1] ?? '').trim()
       if (notes) row.notes = notes
     }
+    const date = parseIsoDate(cols[3] ?? '')  // column D — always, for every type
+    if (date) row.date = date
     // Identity: term (+ service for local SEO, since one location can host many
     // services). Case-insensitive de-dupe.
     const key = `${term}|${row.service ?? ''}`.toLowerCase()

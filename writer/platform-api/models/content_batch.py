@@ -29,6 +29,11 @@ class ContentBatchItemInput(BaseModel):
     # Per-row free-text writing guidance (CSV "Notes" column). Fed into
     # generation for every content type — not just stored.
     notes: Optional[str] = None
+    # Per-row publish date (CSV "Date" column, ISO YYYY-MM-DD). When set it
+    # overrides the batch cadence for this row: the page is held until this date
+    # (at the batch time-of-day) then generated + published. None -> follow the
+    # batch cadence / create-now.
+    scheduled_date: Optional[date] = None
 
 
 class _CadenceBody(BaseModel):

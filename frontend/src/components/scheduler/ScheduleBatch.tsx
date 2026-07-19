@@ -35,20 +35,22 @@ const TERM_PLACEHOLDER: Record<ContentType, string> = {
   local_seo_page: 'One location per line…',
   ecommerce: 'One product per line…',
 }
-// The standardized CSV column layout per page type (headers required).
-const CSV_COLUMNS: Record<ContentType, string[]> = {
-  blog_post: ['Keyword', 'Notes'],
-  service_page: ['Service', 'Notes'],
-  location_page: ['Location', 'Notes'],
-  local_seo_page: ['Location', 'Service', 'Notes'],
-  ecommerce: ['Product', 'Notes'],
+// The standardized CSV column layout per page type (headers required). The
+// optional publish Date is ALWAYS column D (index 3), so column C is unused (null)
+// for the types with no Service column.
+const CSV_COLUMNS: Record<ContentType, (string | null)[]> = {
+  blog_post: ['Keyword', 'Notes', null, 'Date'],
+  service_page: ['Service', 'Notes', null, 'Date'],
+  location_page: ['Location', 'Notes', null, 'Date'],
+  local_seo_page: ['Location', 'Service', 'Notes', 'Date'],
+  ecommerce: ['Product', 'Notes', null, 'Date'],
 }
 const CSV_EXAMPLE: Record<ContentType, string[]> = {
-  blog_post: ['how to unblock a drain', 'Friendly DIY tone; note when to call a pro'],
-  service_page: ['emergency plumbing', 'Emphasise 24/7 availability'],
-  location_page: ['Parramatta', 'Cover the whole metro area'],
-  local_seo_page: ['Newtown NSW', 'blocked drains', 'Same-day service angle'],
-  ecommerce: ['stainless steel water bottle', 'Highlight BPA-free + 24h cold'],
+  blog_post: ['how to unblock a drain', 'Friendly DIY tone; note when to call a pro', '', '2026-08-15'],
+  service_page: ['emergency plumbing', 'Emphasise 24/7 availability', '', '2026-08-15'],
+  location_page: ['Parramatta', 'Cover the whole metro area', '', '2026-08-15'],
+  local_seo_page: ['Newtown NSW', 'blocked drains', 'Same-day service angle', '2026-08-15'],
+  ecommerce: ['stainless steel water bottle', 'Highlight BPA-free + 24h cold', '', '2026-08-15'],
 }
 
 // One term per line, trimmed, blanks dropped, deduped (case-insensitive). Split
@@ -97,8 +99,10 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
   // "Service" column (a local page is "<service> in <location>").
   const [notesByTerm, setNotesByTerm] = useState<Record<string, string>>({})
   const [serviceByTerm, setServiceByTerm] = useState<Record<string, string>>({})
+  const [dateByTerm, setDateByTerm] = useState<Record<string, string>>({})
   const [allNotes, setAllNotes] = useState('')
   const [allService, setAllService] = useState('')
+  const [allDate, setAllDate] = useState('')
 
   const [notice, setNotice] = useState<string | null>(null)
 
@@ -108,12 +112,14 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
   const items: BatchItemInput[] = useMemo(() => terms.map(term => {
     const k = term.toLowerCase()
     const notes = (notesByTerm[k] || '').trim() || null
+    const scheduled_date = (dateByTerm[k] || '').trim() || null
     if (isLocalSeo) {
       // Column A is the location; the Service column becomes the page's head term.
-      return { keyword: (serviceByTerm[k] || '').trim(), location: term, notes }
+      return { keyword: (serviceByTerm[k] || '').trim(), location: term, notes, scheduled_date }
     }
-    return { keyword: term, notes }
-  }).filter(it => it.keyword.trim().length > 0), [terms, isLocalSeo, notesByTerm, serviceByTerm])
+    return { keyword: term, notes, scheduled_date }
+  }).filter(it => it.keyword.trim().length > 0),
+    [terms, isLocalSeo, notesByTerm, serviceByTerm, dateByTerm])
 
   const effectiveMode: ScheduleMode = when === 'now' ? 'now' : mode
   const isPeriodic = when === 'schedule' && PERIODIC.has(mode)
@@ -159,7 +165,8 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
           `$${res.estimate?.approval_threshold_usd} approval limit — ask a senior operator to run it.`)
         return
       }
-      setRaw(''); setNotesByTerm({}); setServiceByTerm({}); setAllNotes(''); setAllService('')
+      setRaw(''); setNotesByTerm({}); setServiceByTerm({}); setDateByTerm({})
+      setAllNotes(''); setAllService(''); setAllDate('')
       setNotice(when === 'now'
         ? `Creating ${res.count} page${res.count === 1 ? '' : 's'} now — they'll appear in Scheduled Content.`
         : `Scheduled ${res.count} page${res.count === 1 ? '' : 's'}.`)
@@ -182,6 +189,11 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
       parsed.forEach(r => { if (r.notes) next[r.term.toLowerCase()] = r.notes })
       return next
     })
+    setDateByTerm(prev => {
+      const next = { ...prev }
+      parsed.forEach(r => { if (r.date) next[r.term.toLowerCase()] = r.date })
+      return next
+    })
     if (isLocalSeo) {
       setServiceByTerm(prev => {
         const next = { ...prev }
@@ -192,9 +204,10 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
   }
 
   const downloadTemplate = () => {
+    const headers = CSV_COLUMNS[contentType].map(c => c ?? '')  // blank header for the unused column
     downloadCsv(
       `content-scheduler-${contentType}-template.csv`,
-      toCsv(CSV_COLUMNS[contentType], [CSV_EXAMPLE[contentType]]),
+      toCsv(headers, [CSV_EXAMPLE[contentType]]),
     )
   }
 
@@ -206,7 +219,11 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
 
   const canSubmit = items.length > 0 && !createMut.isPending
 
-  const cols = CSV_COLUMNS[contentType]
+  // "A = Keyword · B = Notes · D = Date" — skip the unused column, keep letters.
+  const colHint = CSV_COLUMNS[contentType]
+    .map((c, i) => (c ? `${String.fromCharCode(65 + i)} = ${c}` : null))
+    .filter(Boolean)
+    .join(' · ')
 
   return (
     <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -241,7 +258,8 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
           </span>
         </div>
         <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>
-          CSV columns (with headers): {cols.map((c, i) => `${String.fromCharCode(65 + i)} = ${c}`).join(' · ')}
+          CSV columns (with headers): {colHint}. Date is optional (YYYY-MM-DD) —
+          a dated row posts on that date, the rest follow the schedule below.
         </div>
       </div>
 
@@ -263,6 +281,10 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
               placeholder="Notes for all rows (optional)" style={input} />
             <button type="button" style={outlineBtn}
               onClick={() => applyAll(allNotes, setNotesByTerm)}>Apply notes to all</button>
+            <input type="date" value={allDate} min={new Date().toISOString().slice(0, 10)}
+              onChange={e => setAllDate(e.target.value)} style={{ ...input, maxWidth: 170 }} />
+            <button type="button" style={outlineBtn}
+              onClick={() => applyAll(allDate, setDateByTerm)}>Apply date to all</button>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 260, overflowY: 'auto' }}>
             {terms.map(term => {
@@ -270,7 +292,9 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
               return (
                 <div key={term} style={{
                   display: 'grid',
-                  gridTemplateColumns: isLocalSeo ? '1fr 1fr 1.4fr' : '1fr 1.6fr',
+                  gridTemplateColumns: isLocalSeo
+                    ? 'minmax(0,1fr) minmax(0,1fr) minmax(0,1.4fr) 160px'
+                    : 'minmax(0,1fr) minmax(0,1.6fr) 160px',
                   gap: 8,
                 }}>
                   <span style={{ fontSize: 13, color: '#0f172a', alignSelf: 'center' }}>{term}</span>
@@ -282,6 +306,10 @@ export function ScheduleBatch({ clientId, fixedType, onCreated }: {
                   <input value={notesByTerm[k] ?? ''}
                     onChange={e => setNotesByTerm(prev => ({ ...prev, [k]: e.target.value }))}
                     placeholder="notes (optional)" style={{ ...input, padding: '7px 10px' }} />
+                  <input type="date" value={dateByTerm[k] ?? ''}
+                    min={new Date().toISOString().slice(0, 10)}
+                    onChange={e => setDateByTerm(prev => ({ ...prev, [k]: e.target.value }))}
+                    style={{ ...input, padding: '7px 10px' }} />
                 </div>
               )
             })}
