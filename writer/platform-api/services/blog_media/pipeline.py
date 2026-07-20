@@ -146,7 +146,7 @@ async def run_blog_media_publish_job(job: dict) -> None:
     try:
         run = (
             supabase.table("runs")
-            .select("id, client_id, keyword, status, content_type, featured_image_url, created_at, published_at")
+            .select("id, client_id, keyword, status, content_type, featured_image_url, created_at, published_at, published_url")
             .eq("id", run_id).single().execute()
         ).data
         if not run:
@@ -182,7 +182,9 @@ async def run_blog_media_publish_job(job: dict) -> None:
             logger.info("blog_media_publish_reused", extra={"job_id": job_id, "run_id": run_id})
             supabase.table("async_jobs").update({
                 "status": "complete",
-                "result": {"reused": True, "reason": "article_unchanged"},
+                # Carry the existing publish link so the UI still shows/opens it.
+                "result": {"reused": True, "reason": "article_unchanged",
+                           "html_url": run.get("published_url")},
                 "completed_at": "now()",
             }).eq("id", job_id).execute()
             return
@@ -197,11 +199,14 @@ async def run_blog_media_publish_job(job: dict) -> None:
         slug = slugify(run["keyword"])
         base = settings.blog_media_repo_path
 
-        # Plan (best-effort — degrade to hero-only on failure).
+        # Plan (best-effort — degrade to hero-only on failure). The plain text is
+        # kept for chart-quote validation: quotes must be checked against the
+        # exact view the model copied them from.
+        plain_text = _plain_text(markdown)
         try:
             plan = await plan_media(
                 article_title=title, article_html=html_with_ids,
-                article_plain_text=_plain_text(markdown), word_count=words,
+                article_plain_text=plain_text, word_count=words,
                 brand_personality=extract_brand_personality(client.get("brand_voice")),
             )
         except Exception as exc:  # noqa: BLE001
@@ -258,8 +263,12 @@ async def run_blog_media_publish_job(job: dict) -> None:
                 continue
 
             if asset["asset_type"] == "chart":
+                # Validate against the SAME plain-text view the planner received
+                # (the model copies source_quotes from ARTICLE_PLAIN_TEXT; raw
+                # markdown carries <sup> citation HTML that would false-fail
+                # quotes spanning a citation).
                 ok, reason = validate_chart_spec(
-                    asset["chart"], article_text=markdown,
+                    asset["chart"], article_text=plain_text,
                     allow_derived=settings.blog_media_allow_derived_values,
                 )
                 if not ok:

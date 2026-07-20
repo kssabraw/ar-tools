@@ -133,3 +133,13 @@ def test_render_horizontal_bar_and_scatter():
     scatter = c.render_chart_svg(_chart("scatter", [
         {"x": 1, "y": 2, "value": 2}, {"x": 3, "y": 4, "value": 4}]))
     assert "<circle" in scatter
+
+
+def test_theme_colors_whitelisted_to_hex():
+    evil = _chart("bar", [
+        {"label": "A", "value": 5, "display_value": "5"},
+        {"label": "B", "value": 9, "display_value": "9"},
+    ], theme={"secondary_color": '#fff" onload="alert(1)', "primary_color": "#123abc"})
+    svg = c.render_chart_svg(evil)
+    assert "onload" not in svg           # injection neutralized → default color
+    assert "#123abc" in svg or "#" in svg  # valid hex kept

@@ -216,27 +216,20 @@ def build_id_index(blocks: list[Block]) -> IdIndex:
 
 
 def _excerpt_occurrence_index(markdown: str, excerpt: str, occurrence: int) -> int | None:
-    """Char offset of the Nth (1-based) verbatim occurrence of `excerpt`, or None."""
-    if not excerpt:
+    """Char offset (into the RAW markdown) of the Nth (1-based) occurrence of
+    `excerpt`, tolerating whitespace differences — the plan copies excerpts from
+    a whitespace-normalized view, while the raw paragraph may wrap across lines.
+    Matching runs on the raw text with a whitespace-flexible pattern, so the
+    returned offset is always valid for line mapping. None when absent."""
+    tokens = [re.escape(t) for t in (excerpt or "").split()]
+    if not tokens:
         return None
-    needle = re.sub(r"\s+", " ", excerpt).strip()
-    hay = markdown
-    start = 0
-    found = 0
-    # Match on a whitespace-normalized copy but map back to the raw offset by
-    # searching the raw text loosely (exact substring first, then normalized).
-    raw_pos = hay.find(excerpt)
-    if raw_pos != -1 and occurrence == 1:
-        return raw_pos
-    norm = re.sub(r"\s+", " ", hay)
-    while True:
-        p = norm.find(needle, start)
-        if p == -1:
-            return None
-        found += 1
-        if found == occurrence:
-            return p
-        start = p + 1
+    pattern = re.compile(r"\s+".join(tokens))
+    want = max(1, int(occurrence or 1))
+    for n, m in enumerate(pattern.finditer(markdown), start=1):
+        if n == want:
+            return m.start()
+    return None
 
 
 def resolve_placement(
@@ -264,8 +257,11 @@ def resolve_placement(
 
     excerpt = (placement.get("fallback_excerpt") or "").strip()
     if excerpt:
-        occ = placement.get("fallback_excerpt_occurrence") or 1
-        char_off = _excerpt_occurrence_index(markdown, excerpt, int(occ))
+        try:
+            occ = int(placement.get("fallback_excerpt_occurrence") or 1)
+        except (TypeError, ValueError):
+            occ = 1
+        char_off = _excerpt_occurrence_index(markdown, excerpt, occ)
         if char_off is not None:
             # Map the char offset to the block whose span contains that line.
             line_no = markdown[:char_off].count("\n")

@@ -71,8 +71,8 @@ def _normalize_hero(h: dict, *, hero_min: float) -> tuple[dict | None, list[str]
         "alt": (h.get("alt_text") or "").strip(),
         "caption": (h.get("caption") or "").strip() or None,
         "filename": filename,
-        "width": int(h.get("width") or 0) or None,
-        "height": int(h.get("height") or 0) or None,
+        "width": _as_int(h.get("width")),
+        "height": _as_int(h.get("height")),
         "confidence": conf,
         "concept": (h.get("concept") or "").strip(),
     }, []
@@ -130,8 +130,8 @@ def _normalize_inline(asset: dict, *, idx: IdIndex, inline_min: float, chart_min
         "alt": (gi.get("alt_text") or "").strip(),
         "caption": (gi.get("caption") or "").strip() or None,
         "filename": (gi.get("filename") or "").strip(),
-        "width": int(gi.get("width") or 0) or None,
-        "height": int(gi.get("height") or 0) or None,
+        "width": _as_int(gi.get("width")),
+        "height": _as_int(gi.get("height")),
         "confidence": _as_float(gi.get("confidence")),
         "concept": (gi.get("concept") or "").strip(),
         "placement": placement,
@@ -164,6 +164,13 @@ def validate_and_clean(
 
     raw_inline = plan.get("inline_assets")
     raw_inline = raw_inline if isinstance(raw_inline, list) else []
+    # Spec: a suitable chart takes priority over a generic image. When the model
+    # over-returns and the budget trims, consider charts first (stable sort —
+    # relative order otherwise preserved).
+    raw_inline = sorted(
+        raw_inline,
+        key=lambda a: 0 if isinstance(a, dict) and a.get("asset_type") == "chart" else 1,
+    )
 
     seen_ids: set[str] = set()
     seen_files: set[str] = set()
@@ -201,3 +208,14 @@ def _as_float(v) -> float:
         return float(v)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _as_int(v) -> int | None:
+    """Coerce a model-supplied dimension to a positive int, else None (the
+    pipeline falls back to the configured default). A malformed value must
+    degrade, never crash the publish."""
+    try:
+        n = int(float(v))
+        return n if n > 0 else None
+    except (TypeError, ValueError):
+        return None

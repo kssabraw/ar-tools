@@ -176,3 +176,31 @@ def test_parse_plan_json_handles_fences_and_prose():
     assert parse_plan_json('```json\n{"a": 1}\n```') == {"a": 1}
     assert parse_plan_json('Here is the plan:\n{"a": 2}\nDone.') == {"a": 2}
     assert parse_plan_json('{"a": 3}') == {"a": 3}
+
+
+def test_malformed_width_degrades_instead_of_crashing():
+    r = v.validate_and_clean(
+        {"hero_image": _hero(width="2048x1152"),
+         "inline_assets": [_image_asset(width="1200x900")]},
+        idx=_idx(), max_inline=2, allow_charts=False,
+        hero_min=0.75, inline_min=0.75, chart_min=0.90,
+    )
+    assert r.hero_ok and r.hero["width"] is None       # falls back to config default
+    assert len(r.inline) == 1 and r.inline[0]["width"] is None
+
+
+def test_budget_trim_prefers_chart_over_image():
+    chart_asset = {
+        "asset_id": "inline-2", "asset_type": "chart",
+        "placement": {"anchor_id": "paragraph-003"},
+        "generated_image": {"status": "skip"},
+        "chart": {"status": "create", "type": "bar", "filename": "c.svg",
+                  "confidence": 0.95, "series": []},
+    }
+    # Model returns [image, chart] but budget is 1 → the chart must win the slot.
+    r = v.validate_and_clean(
+        {"hero_image": _hero(), "inline_assets": [_image_asset("inline-1"), chart_asset]},
+        idx=_idx(), max_inline=1, allow_charts=True,
+        hero_min=0.75, inline_min=0.75, chart_min=0.90,
+    )
+    assert len(r.inline) == 1 and r.inline[0]["asset_type"] == "chart"

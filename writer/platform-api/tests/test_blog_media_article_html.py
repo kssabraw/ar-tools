@@ -157,3 +157,38 @@ def test_word_count_and_budget():
     assert ah.inline_budget(8000) == 2
     # word_count ignores markup/marks
     assert ah.word_count("## Heading\n\ntwo words") == 3
+
+
+def test_resolve_placement_excerpt_matches_wrapped_lines():
+    # The plan copies excerpts from a whitespace-normalized view; the raw
+    # paragraph wraps across lines. Must still resolve to the right block.
+    md = "## H\n\nFirst paragraph\nwraps across lines here.\n\nSecond one.\n"
+    blocks = ah.assign_ids(ah.parse_blocks(md))
+    idx = ah.build_id_index(blocks)
+    pos = ah.resolve_placement(
+        {"fallback_excerpt": "First paragraph wraps across lines here.", "fallback_excerpt_occurrence": 1},
+        blocks, idx, md,
+    )
+    assert pos is not None and blocks[pos].id == "paragraph-001"
+
+
+def test_resolve_placement_excerpt_nth_occurrence_raw_offset():
+    md = "## H\n\nrepeat me now.\n\nmiddle text.\n\nrepeat me now.\n"
+    blocks = ah.assign_ids(ah.parse_blocks(md))
+    idx = ah.build_id_index(blocks)
+    pos = ah.resolve_placement(
+        {"fallback_excerpt": "repeat me now.", "fallback_excerpt_occurrence": 2},
+        blocks, idx, md,
+    )
+    assert pos is not None and blocks[pos].id == "paragraph-003"
+
+
+def test_resolve_placement_bad_occurrence_value_defaults_to_first():
+    md = "## H\n\nonly paragraph.\n"
+    blocks = ah.assign_ids(ah.parse_blocks(md))
+    idx = ah.build_id_index(blocks)
+    pos = ah.resolve_placement(
+        {"fallback_excerpt": "only paragraph.", "fallback_excerpt_occurrence": "not-a-number"},
+        blocks, idx, md,
+    )
+    assert pos is not None and blocks[pos].id == "paragraph-001"

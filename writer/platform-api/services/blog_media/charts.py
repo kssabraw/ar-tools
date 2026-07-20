@@ -128,14 +128,25 @@ def validate_chart_spec(chart: dict, *, article_text: str, allow_derived: bool) 
 # ── rendering ────────────────────────────────────────────────────────────────
 
 
+_HEX_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
+
+
+def _safe_color(value, default: str) -> str:
+    """Whitelist a model-supplied color to a hex literal — theme values are
+    interpolated into SVG attributes, so anything non-hex (including attribute-
+    breaking strings) falls back to the default rather than being injected."""
+    v = str(value or "").strip()
+    return v if _HEX_COLOR_RE.match(v) else default
+
+
 def _theme(chart: dict) -> dict:
     t = chart.get("theme") if isinstance(chart.get("theme"), dict) else {}
     return {
-        "primary": t.get("primary_color") or _DEFAULTS["primary"],
-        "secondary": t.get("secondary_color") or _DEFAULTS["secondary"],
-        "background": t.get("background_color") or _DEFAULTS["background"],
-        "text": t.get("text_color") or _DEFAULTS["text"],
-        "grid": t.get("grid_color") or _DEFAULTS["grid"],
+        "primary": _safe_color(t.get("primary_color"), _DEFAULTS["primary"]),
+        "secondary": _safe_color(t.get("secondary_color"), _DEFAULTS["secondary"]),
+        "background": _safe_color(t.get("background_color"), _DEFAULTS["background"]),
+        "text": _safe_color(t.get("text_color"), _DEFAULTS["text"]),
+        "grid": _safe_color(t.get("grid_color"), _DEFAULTS["grid"]),
     }
 
 
