@@ -627,6 +627,20 @@ class Settings(BaseSettings):
     local_seo_structure_gate_enabled: bool = True
     local_seo_structure_min_composite: float = 85.0
     local_seo_structure_max_passes: int = 2
+    # Same structural-fidelity gate on Ecommerce PRODUCT generation, scored against
+    # the client's scraped page_structures['product'] reference (only when a house
+    # template URL is NOT set — the house template is its own explicit mirror).
+    # Collections are excluded (no reference structure). Keep-best, capped.
+    ecommerce_structure_gate_enabled: bool = True
+    ecommerce_structure_min_composite: float = 85.0
+    ecommerce_structure_max_passes: int = 2
+    # Structural-fidelity gate on SERVICE / LOCATION pages (the runs pipeline). The
+    # reference (page_structures['service'|'location']) is already injected into the
+    # brief; this scores the writer's output against it and, when it drifts, folds
+    # the corrections into the single auto-reoptimize pass as a synthetic
+    # deficiency (no extra reopt beyond the existing content-score budget).
+    service_page_structure_gate_enabled: bool = True
+    service_page_structure_min_composite: float = 85.0
     # Bulk background jobs (bulk-create / bulk-reoptimize) enqueue one async_jobs
     # row per item. The single worker claims the OLDEST pending scheduled_at and
     # has no <=now gate, so staggering each bulk item's scheduled_at this many

@@ -84,12 +84,14 @@ def _generate_payload(
     client: dict, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str],
     page_template_url: Optional[str] = None, notes: Optional[str] = None,
+    reference_page_structure: Optional[str] = None,
 ) -> dict:
     """Map a suite client row to the nlp GenerateEcommerceRequest. The converged
     brand_voice / detected_icp / differentiators assets are passed through so the
     writer targets the client's voice + customers. `page_template_url` (products
-    only) is the house PDP structure the writer mirrors. `notes` is high-priority
-    per-job editorial guidance the writer follows."""
+    only) is the house PDP structure the writer mirrors; `reference_page_structure`
+    is the pre-analyzed product reference used when no house template is set.
+    `notes` is high-priority per-job editorial guidance the writer follows."""
     return {
         "keyword": keyword,
         "page_type": page_type,
@@ -101,6 +103,7 @@ def _generate_payload(
         "detected_icp": client.get("detected_icp"),
         "differentiators": client.get("differentiators") or [],
         "page_template_url": (page_template_url or "").strip() or None,
+        "reference_page_structure": (reference_page_structure or "").strip() or None,
         "notes": (notes or "").strip() or None,
         "run_analysis": True,
     }
@@ -201,6 +204,9 @@ def _persist_page(
         "composite_score": result.get("composite_score"),
         "composite_status": result.get("composite_status"),
         "engine_scores": result.get("engine_scores"),
+        # Structural-fidelity verdict from the product generation gate. None for
+        # collections and for products driven by a house template (gate off).
+        "structure_fidelity": result.get("structure_fidelity"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -228,6 +234,7 @@ def _score_run_row(
         "composite_score": result.get("composite_score"),
         "composite_status": result.get("composite_status"),
         "engine_scores": result.get("engine_scores"),
+        "structure_fidelity": result.get("structure_fidelity"),
         "deficiencies": result.get("deficiencies") or result.get("content_gaps") or [],
         "token_usage": result.get("token_usage"),
         "created_by": user_id,
@@ -250,6 +257,28 @@ def _record_score_run(
 
 # ── core operations ──────────────────────────────────────────────────────────
 
+async def _apply_structure_gate(
+    result: dict, payload: dict, reference_analysis: Optional[dict]
+) -> dict:
+    """Keep-best structural-fidelity gate for product generation (shared helper),
+    scored against the client's scraped page_structures['product'] reference. Only
+    runs when that reference drove the page (no house template); best-effort."""
+    from services import structure_gate
+
+    async def _regenerate(corrections: str) -> Optional[dict]:
+        return await _stream_nlp("/generate-ecommerce-page", {**payload, "structure_corrections": corrections})
+
+    return await structure_gate.apply_structure_gate(
+        result,
+        reference_analysis,
+        _regenerate,
+        enabled=settings.ecommerce_structure_gate_enabled,
+        min_composite=settings.ecommerce_structure_min_composite,
+        max_passes=settings.ecommerce_structure_max_passes,
+        log_tag="ecommerce.structure_gate",
+    )
+
+
 async def generate_page(
     client_id: str, keyword: str, page_type: str,
     source_url: Optional[str], product_input: Optional[str], user_id: str,
@@ -260,18 +289,33 @@ async def generate_page(
 
     House PDP template (products only): the per-call `page_template_url` wins,
     else the client's saved default (`clients.ecommerce_page_template_url`), so
-    every product follows the client's fixed house structure. Collections ignore
-    it (they keep the default structure)."""
+    every product follows the client's fixed house structure. When no house
+    template is set, a scraped page_structures['product'] reference (if configured)
+    drives the mirror instead AND is enforced by the structural-fidelity gate.
+    Collections use neither (they keep the default structure)."""
     client = _get_client(client_id)
     page_type = _norm_page_type(page_type)
     template_url = None
+    reference_structure: Optional[str] = None
+    reference_analysis: Optional[dict] = None
     if page_type == "product":
         template_url = (page_template_url or "").strip() or client.get("ecommerce_page_template_url")
+        if not template_url:
+            # No house template — mirror + gate against the client's pre-analyzed
+            # product reference structure when one is configured.
+            from services.page_structure_render import render_reference_structure, usable_analysis
+
+            structures = client.get("page_structures") or {}
+            reference_structure = render_reference_structure(structures.get("product"), "product")
+            if reference_structure:
+                reference_analysis = usable_analysis(structures.get("product"))
     payload = _generate_payload(
         client, keyword.strip(), page_type, source_url, product_input,
         page_template_url=template_url, notes=notes,
+        reference_page_structure=reference_structure,
     )
     result = await _stream_nlp("/generate-ecommerce-page", payload)
+    result = await _apply_structure_gate(result, payload, reference_analysis)
     return _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id, notes=notes)
 
 

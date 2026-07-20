@@ -506,3 +506,38 @@ def build_structure_corrections(
         )
 
     return "\n".join(lines)
+
+
+def structure_deficiency(
+    reference: dict[str, Any],
+    generated: dict[str, Any],
+    *,
+    label: str,
+    min_composite: float,
+) -> Optional[dict[str, Any]]:
+    """Return a synthetic scorer-deficiency (`{engine, issues, recommendations}`)
+    describing structural drift of `generated` vs `reference`, or None when there's
+    no reference outline or the layout already matches (composite >= min_composite).
+
+    For generators whose reoptimize pass is driven by the scorer's deficiency list
+    (the service/location Writer) rather than a dedicated corrections field, this
+    shapes the same `build_structure_corrections` feedback as one more deficiency —
+    so no new plumbing is needed in the writer. Pure — no I/O."""
+    ref = _analysis_of(reference)
+    if not (ref.get("outline") or []):
+        return None
+    try:
+        fidelity = score_structural_fidelity(reference, generated)
+    except Exception:  # noqa: BLE001 — defensive; scoring must never raise here
+        return None
+    if (fidelity.get("composite") or 0.0) >= min_composite:
+        return None
+    corrections = build_structure_corrections(reference, generated)
+    if not corrections:
+        return None
+    recs = [ln.lstrip("- ").strip() for ln in corrections.splitlines() if ln.strip()]
+    return {
+        "engine": f"Page structure fidelity ({label})",
+        "issues": [f"the draft's layout drifted from the client's reference {label} page structure"],
+        "recommendations": recs,
+    }

@@ -360,6 +360,35 @@ def test_build_structure_corrections_consolidate_when_too_many_sections():
     assert "Consolidate sections" in corrections
 
 
+def test_structure_deficiency_shapes_a_reopt_deficiency():
+    from services.page_structure_eval import extract_outline_from_html, structure_deficiency
+
+    reference = _ref_analysis()  # 3 sections + list/table/FAQ
+    drift = extract_outline_from_html(
+        "<article><h1>Roofing</h1><h2>About Our Roofing</h2><p>just prose</p></article>"
+    )
+    d = structure_deficiency(reference, drift, label="service", min_composite=85.0)
+    assert d is not None
+    # Shaped like a scorer deficiency so the service_writer reopt directive renders it.
+    assert d["engine"].startswith("Page structure fidelity")
+    assert "service" in d["issues"][0]
+    assert isinstance(d["recommendations"], list) and d["recommendations"]
+    # Recommendations are the corrections, de-bulleted.
+    assert any("exactly 3 main H2 sections" in r for r in d["recommendations"])
+    assert not any(r.startswith("- ") for r in d["recommendations"])
+
+
+def test_structure_deficiency_none_when_matched_or_no_reference():
+    from services.page_structure_eval import structure_deficiency
+
+    reference = _ref_analysis()
+    # Matched layout → no deficiency.
+    assert structure_deficiency(reference, reference, label="service", min_composite=85.0) is None
+    # Empty reference outline → no deficiency (nothing to enforce).
+    empty = {"outline": [], "elements": {}}
+    assert structure_deficiency(empty, reference, label="service", min_composite=85.0) is None
+
+
 def test_usable_analysis_accessor():
     from services.page_structure_render import usable_analysis
 

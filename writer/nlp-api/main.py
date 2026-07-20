@@ -7671,6 +7671,13 @@ class GenerateEcommerceRequest(BaseModel):
     # wins if supplied. Ignored for collections.
     page_template_url: Optional[str] = None
     page_template_html: Optional[str] = None
+    # Pre-analyzed product reference structure (from clients.page_structures['product'])
+    # the suite renders + mirrors when no house template URL is set. Products only.
+    reference_page_structure: Optional[str] = None
+    # Corrective directives from platform-api's structural-fidelity gate (retry
+    # passes only), injected as the highest-priority last block so the retry
+    # converges on the reference layout.
+    structure_corrections: Optional[str] = None
     # Free-text writing notes from the user — high-priority editorial guidance the
     # writer must follow (e.g. "remove the Research Use Only designation",
     # "emphasize fast shipping", "write for clinics not individuals").
@@ -7825,6 +7832,32 @@ async def generate_ecommerce_page(request: Request, body: GenerateEcommerceReque
                     f"{_outline}"
                 )
                 logger.info(f"generate-ecommerce: mirroring house template ({_outline.count(chr(10)) + 1} headings)")
+        elif page_type == "product" and (body.reference_page_structure or "").strip():
+            # No house template, but the suite supplied the client's pre-analyzed
+            # product reference structure — mirror it (and it's the gate's target).
+            template_text = (
+                "STRUCTURE TO MIRROR — OVERRIDES THE DEFAULT PRODUCT-PAGE STRUCTURE:\n"
+                "Match the section layout, order, heading hierarchy, and per-section SIZE of the "
+                "client's reference product page below — adapt ALL wording to THIS product (do NOT "
+                "copy the reference's wording or its specific facts). STILL apply every ecommerce "
+                "writing rule (answer-first, features→benefits, an FAQ with 4–7 entries, a "
+                "specs/variants table where comparative, a clear CTA, trust signals) and STILL emit "
+                "the Product/Offer JSON-LD block. Client reference product structure:\n"
+                f"{body.reference_page_structure.strip()}"
+            )
+            logger.info("generate-ecommerce: mirroring client reference product structure")
+
+        # Structural corrections from platform-api's fidelity gate (retry passes
+        # only). Placed LAST (highest recency) so the concrete layout fixes are
+        # treated as non-negotiable on the re-generation.
+        corrections_text = ""
+        if (body.structure_corrections or "").strip():
+            corrections_text = (
+                "\nSTRUCTURE CORRECTIONS — HIGHEST PRIORITY. Your previous attempt drifted from the "
+                "required product-page structure above. Fix EXACTLY the following, keeping everything "
+                "else and STILL applying every ecommerce writing rule + the JSON-LD schema block:\n"
+                f"{body.structure_corrections.strip()}\n"
+            )
 
         notes_text = _ecommerce_notes_block(body.notes)
 
@@ -7844,7 +7877,8 @@ Primary keyword: {body.keyword}
 {mcs_block}
 {serp_ctx}
 
-{template_text}"""
+{template_text}
+{corrections_text}"""
 
         await q.put({"step": "progress", "progress": 65, "message": "Writing your page…"})
         try:
