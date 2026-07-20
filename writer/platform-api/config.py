@@ -81,6 +81,9 @@ class Settings(BaseSettings):
         "keyword_market", "maps_scan", "maps_analyze", "client_report",
         "notification_dispatch", "local_seo_generate",
         "local_seo_reoptimize_url", "local_seo_silo", "asana_push",
+        # User-awaited GitHub publish with image generation (minutes-long, like
+        # local_seo_generate) — must not queue behind the daily scheduler burst.
+        "blog_github_publish",
     ]
     # Freeze Protocol: daily homepage-indexation check (GSC URL Inspection with a
     # DataForSEO site: warn-only fallback) that can auto-open a deindexing freeze.
