@@ -358,14 +358,60 @@ async def run_blog_media_publish_job(job: dict) -> None:
             },
             "completed_at": "now()",
         }).eq("id", job_id).execute()
+        _notify(
+            run["client_id"],
+            kind="blog_published",
+            title=f"Blog post published to GitHub: {run['keyword']}",
+            summary=(
+                f"{len(figures)} inline visual(s), hero "
+                + ("via fallback image" if used_fallback else ("generated" if hero_site_url else "omitted"))
+                + f" — {gh.get('path')}"
+            ),
+            severity="info",
+            payload={"url": gh.get("html_url"), "run_id": str(run_id)},
+            dedupe_key=f"blog_published:{job_id}",
+        )
         logger.info("blog_media_publish_complete",
                     extra={"job_id": job_id, "run_id": run_id, "inline": len(figures), "hero_fallback": used_fallback})
     except GitHubPublishError as exc:
         logger.warning("blog_media_publish_gh_error", extra={"job_id": job_id, "run_id": run_id, "error": str(exc)})
         _fail(str(exc))
+        _notify_failure(run_id, str(exc), job_id)
     except Exception as exc:  # noqa: BLE001
         logger.error("blog_media_publish_failed", extra={"job_id": job_id, "run_id": run_id, "error": str(exc)})
         _fail(f"internal_error: {exc}")
+        _notify_failure(run_id, "internal_error", job_id)
+
+
+def _notify(client_id, **kwargs) -> None:
+    """Best-effort notification through the shared service (in-app + Slack)."""
+    try:
+        from services import notifications
+
+        notifications.emit(str(client_id) if client_id else None, **kwargs)
+    except Exception as exc:  # noqa: BLE001 — never break the publish over a ping
+        logger.warning("blog_media.notify_failed", extra={"error": str(exc)})
+
+
+def _notify_failure(run_id, code: str, job_id: str) -> None:
+    """Failure notification (best-effort; resolves client_id itself since the
+    failure may have occurred before the run row was loaded)."""
+    try:
+        supabase = get_supabase()
+        row = (
+            supabase.table("runs").select("client_id, keyword").eq("id", run_id).single().execute()
+        ).data or {}
+        _notify(
+            row.get("client_id"),
+            kind="blog_publish_failed",
+            title=f"GitHub publish failed: {row.get('keyword') or run_id}",
+            summary=f"Reason: {code}. Re-publish from the run page to retry.",
+            severity="warning",
+            payload={"run_id": str(run_id)},
+            dedupe_key=f"blog_publish_failed:{job_id}",
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("blog_media.notify_failed", extra={"error": str(exc)})
 
 
 def _asset_row(run_id: str, asset: dict, *, status: str, repo_path: str | None = None,

@@ -84,12 +84,37 @@ async def github_publish_status(
     if not rows:
         raise HTTPException(status_code=404, detail="job_not_found")
     row = rows[0]
-    return {
+    out = {
         "job_id": job_id,
         "status": row.get("status"),
         "result": row.get("result"),
         "error": row.get("error"),
     }
+    # Queue visibility: while pending, how many jobs are ahead on the
+    # interactive lane (pending earlier-scheduled + currently running).
+    # Approximate — lanes race — but enough for an honest "Queued (N ahead)".
+    if row.get("status") == "pending":
+        try:
+            job_row = (
+                supabase.table("async_jobs").select("scheduled_at").eq("id", job_id).limit(1).execute()
+            ).data or [{}]
+            sched = job_row[0].get("scheduled_at")
+            lane_types = list(settings.interactive_job_types)
+            ahead = 0
+            if sched:
+                ahead += (
+                    supabase.table("async_jobs").select("id", count="exact")
+                    .eq("status", "pending").in_("job_type", lane_types)
+                    .lt("scheduled_at", sched).execute()
+                ).count or 0
+            ahead += (
+                supabase.table("async_jobs").select("id", count="exact")
+                .eq("status", "running").in_("job_type", lane_types).execute()
+            ).count or 0
+            out["queue_ahead"] = ahead
+        except Exception:  # noqa: BLE001 — queue info is advisory
+            pass
+    return out
 
 
 @router.get("/runs/{run_id}/images", response_model=dict)

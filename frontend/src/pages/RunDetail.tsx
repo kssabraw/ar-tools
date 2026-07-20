@@ -300,6 +300,7 @@ export function RunDetail() {
   const [ghPhase, setGhPhase] = useState<'idle' | 'generating' | 'error'>('idle')
   const [ghJobId, setGhJobId] = useState<string | null>(null)
   const [ghError, setGhError] = useState<string | null>(null)
+  const [ghQueueAhead, setGhQueueAhead] = useState<number | null>(null)
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
   const publishMutation = useMutation({
     mutationFn: () => api.post<{ doc_url: string }>(`/runs/${id}/publish`, {}),
@@ -343,10 +344,11 @@ export function RunDetail() {
     let active = true
     const tick = async () => {
       try {
-        const s = await api.get<{ status: string; result?: { html_url?: string }; error?: string }>(
+        const s = await api.get<{ status: string; result?: { html_url?: string }; error?: string; queue_ahead?: number }>(
           `/runs/${id}/github-publish/status?job_id=${ghJobId}`,
         )
         if (!active) return
+        setGhQueueAhead(s.status === 'pending' ? (s.queue_ahead ?? null) : null)
         if (s.status === 'complete') {
           setGhPhase('idle')
           setGhJobId(null)
@@ -740,7 +742,10 @@ export function RunDetail() {
           </div>
           {ghPhase === 'generating' && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: '#f0fdf4', borderRadius: 6, color: '#15803d', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Loader size={14} className="spin" /> Generating hero + body images and committing to GitHub… you can leave this page; it finishes in the background.
+              <Loader size={14} className="spin" />
+              {ghQueueAhead != null && ghQueueAhead > 0
+                ? `Queued — ${ghQueueAhead} job${ghQueueAhead === 1 ? '' : 's'} ahead of this publish…`
+                : 'Generating hero + body images and committing to GitHub… you can leave this page; it finishes in the background. You\'ll get a notification when it\'s live.'}
             </div>
           )}
           {(publishMutation.isError || wpPublishMutation.isError || ghPublishMutation.isError || ghError) && (
