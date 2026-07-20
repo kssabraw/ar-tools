@@ -214,3 +214,16 @@ def test_reground_then_validate_recovers_table_sourced_value():
     fixed = c.apply_quotes(ch, {"ChatGPT": "ChatGPT ~2.62 citations"})
     ok2, _ = c.validate_chart_spec(fixed, article_text=article, allow_derived=False)
     assert ok2
+
+
+def test_section_text_and_unique_webp_helpers():
+    from services.blog_media.article_html import assign_ids, parse_blocks, section_text, unique_webp
+    md = "## Intro\n\nfirst para.\n\n## Costs\n\ncosts para one.\n\ncosts para two.\n"
+    blocks = assign_ids(parse_blocks(md))
+    costs_pos = next(i for i, b in enumerate(blocks) if b.text == "costs para one.")
+    txt = section_text(blocks, costs_pos)
+    assert "Costs" in txt and "costs para one." in txt and "costs para two." in txt
+    assert "first para." not in txt
+    files = {"public/images/blog/p/foo.webp": b""}
+    assert unique_webp("foo", files, "public/images/blog", "p") == "foo-2.webp"
+    assert unique_webp("bar", files, "public/images/blog", "p") == "bar.webp"

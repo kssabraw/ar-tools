@@ -328,6 +328,38 @@ def insert_figures(markdown: str, blocks: list[Block], figures: list[ResolvedFig
     return "\n".join(lines)
 
 
+def section_text(blocks: list[Block], pos: int) -> str:
+    """The text of the section containing block `pos` (nearest preceding heading
+    through the next heading) — grounding for a replacement image. Pure."""
+    if not blocks:
+        return ""
+    pos = max(0, min(pos, len(blocks) - 1))
+    start = pos
+    while start > 0 and blocks[start].kind != "heading":
+        start -= 1
+    parts: list[str] = []
+    if blocks[start].kind == "heading" and blocks[start].heading_text:
+        parts.append(blocks[start].heading_text)
+    for b in blocks[start + 1:]:
+        if b.kind == "heading":
+            break
+        if b.kind in ("paragraph", "list"):
+            parts.append(b.text)
+    return re.sub(r"\s+", " ", "\n".join(p for p in parts if p)).strip()[:1800]
+
+
+def unique_webp(stem: str, existing_paths, base: str, slug: str) -> str:
+    """A `.webp` filename derived from `stem`, deduped against already-committed
+    repo paths (`<base>/<slug>/<name>`). Pure."""
+    stem = (stem or "image")[:60].strip("-") or "image"
+    fn = f"{stem}.webp"
+    n = 2
+    while f"{base}/{slug}/{fn}" in existing_paths:
+        fn = f"{stem}-{n}.webp"
+        n += 1
+    return fn
+
+
 def word_count(markdown: str) -> int:
     """Readable-word count over the article body (app-owned, never trusted from
     the model). Strips HTML tags + Markdown marks first."""

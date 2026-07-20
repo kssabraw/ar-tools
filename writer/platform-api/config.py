@@ -187,6 +187,9 @@ class Settings(BaseSettings):
     # re-validated the same way, so this recovers real charts without weakening
     # the no-fabrication rule.
     blog_media_chart_reground_enabled: bool = True
+    # When a chart is ultimately rejected, fill its (already-budgeted) inline
+    # slot with a section-specific editorial image instead of leaving it empty.
+    blog_media_chart_replace_enabled: bool = True
     # Confidence gates (the app drops optional assets below threshold).
     blog_media_hero_min_confidence: float = 0.75
     blog_media_inline_min_confidence: float = 0.75
