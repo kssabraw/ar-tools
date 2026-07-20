@@ -587,41 +587,50 @@ async def _run_rubric(
         if html is None:
             return ([sig._check("page", "Posted page reachable", None,
                                 note="page unreachable/blocked")], examined, None)
-        checks = sig.check_website_page(html, fields["domain"], fields["business_name"])
-        # Structural design fit vs the stored reference (QA_Checklists §Website
-        # Pages Posted, "design fit — structural"). Page-type attribution is
-        # heuristic, so a low score reads needs_human, never an auto-bounce.
-        structural = _structural_fit(html, client)
-        if structural is not None:
-            composite, note = structural
-            ok: Optional[bool] = True if composite >= settings.qa_structural_threshold else None
-            checks.append(sig._check(
-                "structural_fit", "Design fit (structural) vs reference page", ok,
-                note=f"fidelity {composite:.0f}/100 — {note}",
-            ))
-        # Design fit — VISUAL (QA_Checklists §Website Pages Posted, the "later
-        # phase" now built). Two layers:
-        # 1. Asset integrity (free, deterministic): a 404'd stylesheet or
-        #    image breaks the render without needing a screenshot to prove it.
-        assets = sig.asset_urls_of(html, url, cap=settings.qa_asset_check_cap)
-        asset_list = assets["stylesheets"] + assets["images"]
-        if asset_list:
-            dead = await _broken_assets(asset_list)
-            checks.append(sig._check(
-                "asset_integrity", "Page assets load (CSS + images)", not dead,
-                note=("dead: " + ", ".join(dead[:3]) + (" …" if len(dead) > 3 else ""))
-                if dead else f"{len(asset_list)} asset(s) OK",
-            ))
-        # 2. Rendered screenshot judged by vision (DataForSEO capture — no
-        #    Chromium in the image; only HIGH-confidence breakage bounces,
-        #    everything uncertain is fail-open needs_human).
-        if settings.qa_visual_enabled:
-            from services import qa_visual
-
-            checks.append(await qa_visual.visual_check(url))
+        checks, composite = await _website_page_checks(html, url, fields, client)
         return (checks, examined, composite)
 
     return ([], [], None)
+
+
+async def _website_page_checks(
+    html: str, url: str, fields: dict, client: Optional[dict]
+) -> tuple[list[dict], Optional[float]]:
+    """The website-page QA checks (QA_Checklists §Website Pages Posted) for a
+    fetched page — shared by the ``website_page`` rubric (task deliverable) and
+    the bare-URL ``review_url`` path. Returns (checks, composite_or_none)."""
+    checks = sig.check_website_page(html, fields["domain"], fields["business_name"])
+    composite: Optional[float] = None
+    # Structural design fit vs the stored reference. Page-type attribution is
+    # heuristic, so a low score reads needs_human, never an auto-bounce.
+    structural = _structural_fit(html, client)
+    if structural is not None:
+        composite, note = structural
+        ok: Optional[bool] = True if composite >= settings.qa_structural_threshold else None
+        checks.append(sig._check(
+            "structural_fit", "Design fit (structural) vs reference page", ok,
+            note=f"fidelity {composite:.0f}/100 — {note}",
+        ))
+    # Design fit — VISUAL. Two layers:
+    # 1. Asset integrity (free, deterministic): a 404'd stylesheet or image
+    #    breaks the render without needing a screenshot to prove it.
+    assets = sig.asset_urls_of(html, url, cap=settings.qa_asset_check_cap)
+    asset_list = assets["stylesheets"] + assets["images"]
+    if asset_list:
+        dead = await _broken_assets(asset_list)
+        checks.append(sig._check(
+            "asset_integrity", "Page assets load (CSS + images)", not dead,
+            note=("dead: " + ", ".join(dead[:3]) + (" …" if len(dead) > 3 else ""))
+            if dead else f"{len(asset_list)} asset(s) OK",
+        ))
+    # 2. Rendered screenshot judged by vision (DataForSEO capture — no Chromium
+    #    in the image; only HIGH-confidence breakage bounces, everything
+    #    uncertain is fail-open needs_human).
+    if settings.qa_visual_enabled:
+        from services import qa_visual
+
+        checks.append(await qa_visual.visual_check(url))
+    return checks, composite
 
 
 def _structural_fit(html: str, client: Optional[dict]) -> Optional[tuple[float, str]]:
@@ -729,3 +738,108 @@ def list_reviews(task_id: str, limit: int = 20) -> list[dict]:
         get_supabase().table("qa_reviews").select("*")
         .eq("task_id", task_id).order("created_at", desc=True).limit(limit).execute()
     ).data or []
+
+
+# ---------------------------------------------------------------------------
+# Bare-URL QA (no task) — the "QA this page" path for the /qa chat surface
+# ---------------------------------------------------------------------------
+# The URL rubrics: a bare live URL can only be graded by a rubric that examines
+# an external page (the blog/GBP-post rubrics read task/run content, not a URL).
+# Ordered longest-phrase-first so "niche edit" beats "edit"-style partials.
+_URL_RUBRIC_WORDS: list[tuple[str, str]] = [
+    ("press release", sig.RUBRIC_PRESS_RELEASE),
+    ("guest post", sig.RUBRIC_GUEST_POST),
+    ("niche edit", sig.RUBRIC_NICHE_EDIT),
+    ("map embed", sig.RUBRIC_MAP_EMBEDS),
+    ("citation", sig.RUBRIC_CITATIONS),
+    ("landing page", sig.RUBRIC_PAGE),
+    ("service page", sig.RUBRIC_PAGE),
+    ("location page", sig.RUBRIC_PAGE),
+    ("website page", sig.RUBRIC_PAGE),
+    ("web page", sig.RUBRIC_PAGE),
+    ("page", sig.RUBRIC_PAGE),
+]
+_URL_RUBRICS = {
+    sig.RUBRIC_PAGE, sig.RUBRIC_GUEST_POST, sig.RUBRIC_NICHE_EDIT,
+    sig.RUBRIC_PRESS_RELEASE, sig.RUBRIC_CITATIONS, sig.RUBRIC_MAP_EMBEDS,
+}
+
+
+def resolve_url_rubric(text: Optional[str]) -> str:
+    """Pick a URL rubric from free text ("QA this page", "check the guest post").
+    Falls back to the configured default (``website_page``). Pure — accepts an
+    explicit rubric key verbatim when the caller already resolved one."""
+    t = (text or "").strip().casefold()
+    if t in _URL_RUBRICS:
+        return t
+    for needle, rubric in _URL_RUBRIC_WORDS:
+        if needle in t:
+            return rubric
+    return settings.qa_url_default_rubric
+
+
+async def review_url(
+    url: str, client: Optional[dict] = None, rubric: Optional[str] = None
+) -> dict:
+    """Run a QA review against a bare URL — no task, nothing persisted, no board
+    effects. The "QA this page" path for the /qa chat. Returns the same shape a
+    persisted ``qa_reviews`` row carries (rubric/verdict/composite/checks/issues/
+    urls/narrative) so callers format it identically.
+
+    ``client`` (optional) supplies NAP/domain/business-name for the NAP,
+    link-back, and assertion checks; without it those read "could not verify"
+    (needs_human), never a false pass. Unreachable page → needs_human."""
+    rub = rubric if rubric in _URL_RUBRICS else resolve_url_rubric(rubric)
+    fields = _client_fields(client)
+    html = await _fetch(url)
+    if html is None:
+        checks = [sig._check("page", "Page reachable", None, note="page unreachable/blocked")]
+        verdict = sig.build_verdict(checks)
+        return _url_review_payload(rub, verdict, checks, [url], None,
+                                   "The page couldn't be fetched (unreachable or bot-blocked) — "
+                                   "a human should open it directly.")
+
+    composite: Optional[float] = None
+    if rub == sig.RUBRIC_PAGE:
+        checks, composite = await _website_page_checks(html, url, fields, client)
+    elif rub in (sig.RUBRIC_GUEST_POST, sig.RUBRIC_NICHE_EDIT):
+        checks = sig.check_link_back(html, fields["domain"])
+    elif rub == sig.RUBRIC_PRESS_RELEASE:
+        checks = sig.check_press_release(
+            html, None, fields["business_name"], fields["address"],
+            fields["phone"], client_domain=fields["domain"],
+        )
+    elif rub == sig.RUBRIC_CITATIONS:
+        checks = [sig.check_citation_page(
+            sig.visible_text_of(html), fields["business_name"],
+            fields["address"], fields["phone"], url=url,
+        )]
+    elif rub == sig.RUBRIC_MAP_EMBEDS:
+        assertion_ok, assertion_note = await _judge_assertion(
+            sig.visible_text_of(html), fields["business_name"] or "", fields["service"],
+        )
+        checks = sig.check_map_embed_page(
+            html, fields["business_name"], fields["address"], fields["phone"],
+            assertion_ok=assertion_ok, assertion_note=assertion_note,
+        )
+    else:  # defensive — resolve_url_rubric only yields URL rubrics
+        checks, composite = await _website_page_checks(html, url, fields, client)
+
+    verdict = sig.build_verdict(checks)
+    narrative = sig.narrative_of(rub, verdict, [url])
+    return _url_review_payload(rub, verdict, checks, [url], composite, narrative)
+
+
+def _url_review_payload(rubric: str, verdict: dict, checks: list[dict],
+                        urls: list[str], composite: Optional[float],
+                        narrative: str) -> dict:
+    return {
+        "task_id": None,
+        "rubric": rubric,
+        "verdict": verdict["verdict"],
+        "composite": composite,
+        "checks": checks,
+        "issues": verdict["failed"],
+        "urls": urls,
+        "narrative": narrative,
+    }
