@@ -40,7 +40,7 @@ from services.deliverables_sheet import (
 )
 from services.domain_intel import run_domain_overview_job, run_keyword_gap_job, run_link_gap_job
 from services.github_infer import run_github_infer_job
-from services.blog_image_publish import run_blog_github_publish_job
+from services.blog_media.pipeline import run_blog_media_publish_job
 from services.keyword_research import run_keyword_research_job
 from services.freeze import FREEZE_GATED_JOB_TYPES, is_frozen, job_client_id, run_freeze_check_job
 from services.page_backlink_intel import run_page_backlink_job
@@ -582,7 +582,7 @@ async def _process_job(job: dict) -> None:
     elif job_type == "github_infer_patterns":
         await run_github_infer_job(job)
     elif job_type == "blog_github_publish":
-        await run_blog_github_publish_job(job)
+        await run_blog_media_publish_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
 

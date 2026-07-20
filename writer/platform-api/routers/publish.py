@@ -89,17 +89,30 @@ async def github_publish_status(
 
 @router.get("/runs/{run_id}/images", response_model=dict)
 async def list_run_images(run_id: UUID, auth: dict = Depends(require_auth)) -> dict:
-    """The images generated for a run (for the review UI)."""
+    """The media assets generated for a run (for the review UI)."""
     supabase = get_supabase()
     rows = (
-        supabase.table("run_images")
-        .select("id, role, kind, position, anchor_heading, alt, preview_url, repo_path, status")
+        supabase.table("blog_media_assets")
+        .select("id, asset_id, role, asset_type, alt_text, caption, preview_url, repo_path, status, used_fallback")
         .eq("run_id", str(run_id))
-        .order("role")
-        .order("position")
+        .order("asset_id")
         .execute()
     ).data or []
-    return {"images": rows}
+    images = [
+        {
+            "id": r.get("id"),
+            "role": r.get("role"),
+            "kind": r.get("asset_type"),
+            "alt": r.get("alt_text"),
+            "preview_url": r.get("preview_url"),
+            "status": r.get("status"),
+            "used_fallback": r.get("used_fallback"),
+        }
+        for r in rows
+        # Only surface assets that actually produced a preview/committed image.
+        if r.get("preview_url") or r.get("status") in ("inserted", "uploaded")
+    ]
+    return {"images": images}
 
 
 def _sections_to_markdown(article: list[dict]) -> str:
@@ -454,16 +467,16 @@ async def publish_run(
         # pages (no generated images) keep the synchronous single-file commit.
         use_async_images = (
             content_type == "blog_post"
-            and settings.blog_image_generation_enabled
+            and settings.blog_media_enabled
             and bool(settings.openai_api_key)
             and bool(settings.github_publish_token)
         )
         if use_async_images:
             if not (client.get("github_repo") or "").strip():
                 raise HTTPException(status_code=422, detail="github_repo_not_set")
-            from services.blog_image_publish import enqueue_blog_github_publish
+            from services.blog_media.pipeline import enqueue_blog_media_publish
 
-            job_id = enqueue_blog_github_publish(str(run_id), auth["user_id"])
+            job_id = enqueue_blog_media_publish(str(run_id), auth["user_id"])
             logger.info(
                 "github_publish_enqueued",
                 extra={"run_id": str(run_id), "job_id": job_id, "user_id": auth["user_id"]},

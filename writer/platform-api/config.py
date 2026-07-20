@@ -153,38 +153,6 @@ class Settings(BaseSettings):
     # reconcile only).
     github_infer_max_frontmatter_reads: int = 300
     github_infer_frontmatter_concurrency: int = 8
-    # ── Blog-post image generation (GitHub publish) ──────────────────────────
-    # When a blog_post run publishes to GitHub, generate a hero image + body
-    # images (illustrations and/or charts) with OpenAI and commit the bytes into
-    # the repo alongside the markdown. Gated: off unless enabled AND OPENAI_API_KEY
-    # is set. Absent either, GitHub publish falls back to markdown-only (no images).
-    blog_image_generation_enabled: bool = True
-    # OpenAI image model + render size (gpt-image-1 returns base64 PNG bytes).
-    blog_image_model: str = "gpt-image-1"
-    blog_image_hero_size: str = "1536x1024"   # landscape hero
-    blog_image_body_size: str = "1024x1024"   # square body/chart
-    # Body-image density: this many body images per 1000 words of article body,
-    # rounded, then clamped to [min, max]. Hero is always 1 and separate, so the
-    # per-post total is 1 (hero) + body. Owner cap: max 3 images/post → body_max
-    # = 2; body_min = 1 keeps every post to at least one body image.
-    blog_images_per_1000_words: float = 2.0
-    blog_images_body_min: int = 1
-    blog_images_body_max: int = 2
-    # The planning + prompt-authoring call (which sections get images, illustration
-    # vs chart, alt text, the image prompt). Anthropic with the shared fallback.
-    blog_image_plan_model: str = "claude-sonnet-4-6"
-    blog_image_plan_max_tokens: int = 2000
-    # Repo path (under the client repo) the committed image bytes live at. The
-    # post slug is appended: <path>/<slug>/hero.png, body-1.png, … . A leading '/'
-    # is stripped; the markdown references them by absolute site path ('/'+path).
-    blog_image_repo_path: str = "public/images/blog"
-    # A fixed house-style suffix appended to every image prompt for visual
-    # consistency across a client's posts (kept generic; per-client brand styling
-    # is a follow-up).
-    blog_image_style_suffix: str = (
-        "Clean, modern, professional editorial illustration. Muted, cohesive color "
-        "palette. No watermark. No embedded website UI or logos."
-    )
     # ── Media pipeline (planner-driven, GitHub/Astro) ────────────────────────
     # The production media pipeline: an LLM media plan (hero + ≤2 inline
     # images/charts) validated + placed + committed by the app. Supersedes the
