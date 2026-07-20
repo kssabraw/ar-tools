@@ -85,14 +85,23 @@ Reads placement URLs (usually from a **.txt attachment**), fetches each; bounce 
 ### Website Pages Posted (`website_page`)
 Fetches the live page URL. Blocking unless noted:
 - **Meta title present.**
-- **Meta description present.**
+- **Target keyword in the title tag** *(owner ruling 2026-07-20)*.
+- **Target keyword in the URL** *(owner ruling 2026-07-20)* — matched against the URL slug
+  with hyphens/separators normalized to spaces (`practice-management-services` matches the
+  keyword "practice management services"). A bare template name (no keyword on the task) reads
+  *could not verify*, not a fail.
+- **Target keyword in the H1** *(owner ruling 2026-07-20)*.
 - **Internal link to the client's site.**
 - **Images have alt text.**
+- **Meta description present** *(advisory — owner ruling 2026-07-20: recommended, no longer a
+  blocking requirement)*.
 - **Client name on the page** *(advisory — service pages legitimately vary)*.
 - **Design fit — structural** — layout (sections, heading order, block composition) vs the
   client's stored reference page structure (`page_structure_eval`). Below
   `qa_structural_threshold` (70) it reads *could not verify*, not a fail, because page-type
-  attribution is heuristic.
+  attribution is heuristic. **When no usable reference is on file** (none stored, or a thin one
+  with zero captured sections) the check is reported as *unavailable (advisory)* with a note to
+  add a reference page URL on the client form — rather than a meaningless ~50/100 fidelity score.
 - **Design fit — visual, layer 1: asset integrity** — every stylesheet + image (up to
   `qa_asset_check_cap`, 12) is liveness-checked; a hard **404/410** on any is a **fail** (a
   dead stylesheet breaks the render). Bot-blocks / timeouts / 5xx are fail-open.

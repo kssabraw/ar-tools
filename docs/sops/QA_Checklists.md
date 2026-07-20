@@ -90,13 +90,22 @@ Pages/blogs run through `/score-page` + R1–R7 + `On_Page_Criteria_and_Coverage
 
 - **✅ Must-haves (blocking):**
   - Internal link(s) to the correct money/service page present.
-  - Meta title + meta description filled in.
+  - Meta title filled in.
+  - **Target keyword placement (owner ruling 2026-07-20):** the target keyword
+    appears in the **title tag**, the **URL slug**, and the **H1**. Keyword source
+    is the task convention (cross-cutting #2); a bare template name ⇒ these read
+    "could not verify" ⇒ *needs-human*, never a guess.
   - Correct client info (name, contact, service area) — no stale/placeholder data.
   - Images present with alt text.
   - **Design fit for the page type** (owner: "both" — BOTH NOW BUILT):
-    - *Structural fit (blocking):* matches the expected layout for its page type
+    - *Structural fit (fail-open):* matches the expected layout for its page type
       (sections, heading order, block composition) vs the client's stored reference
-      page structure, via `page_structure_eval`. A broken/wrong structure ⇒ bounce.
+      page structure, via `page_structure_eval`. Page-type attribution is heuristic,
+      so a below-threshold score reads *needs-human*, never an auto-bounce. Requires
+      a captured reference: **with no reference on file (or a thin one with zero
+      sections) the check is reported as unavailable (advisory)** and points at the
+      fix — add a reference page URL for this page type on the client form — rather
+      than emitting a meaningless fidelity score.
     - *Visual rendering (blocking — built 2026-07-12):* the rendered page isn't
       visually broken (overlapping elements, broken/unloaded CSS, collapsed layout,
       images not loading). Two layers: a **free asset-integrity check** (every
@@ -106,7 +115,9 @@ Pages/blogs run through `/score-page` + R1–R7 + `On_Page_Criteria_and_Coverage
       the suite image) judged by a Claude vision call. Only **high-confidence**
       breakage bounces; low-confidence or capture failure ⇒ *needs-human*, never an
       auto-bounce. `qa_visual_enabled` gates the paid screenshot layer.
-- **🚫 Advisory:** brand-voice fit (noted, not blocking unless egregious).
+- **🚫 Advisory:** meta description filled in (owner ruling 2026-07-20 —
+  recommended, no longer required); brand-voice fit (noted, not blocking unless
+  egregious).
 
 ### Blog Post (Title + body)
 *(category: Content)*
