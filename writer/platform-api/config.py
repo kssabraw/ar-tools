@@ -164,10 +164,12 @@ class Settings(BaseSettings):
     blog_image_hero_size: str = "1536x1024"   # landscape hero
     blog_image_body_size: str = "1024x1024"   # square body/chart
     # Body-image density: this many body images per 1000 words of article body,
-    # rounded, then clamped to [min, max]. Hero is always 1 and separate.
+    # rounded, then clamped to [min, max]. Hero is always 1 and separate, so the
+    # per-post total is 1 (hero) + body. Owner cap: max 3 images/post → body_max
+    # = 2; body_min = 1 keeps every post to at least one body image.
     blog_images_per_1000_words: float = 2.0
-    blog_images_body_min: int = 0
-    blog_images_body_max: int = 6
+    blog_images_body_min: int = 1
+    blog_images_body_max: int = 2
     # The planning + prompt-authoring call (which sections get images, illustration
     # vs chart, alt text, the image prompt). Anthropic with the shared fallback.
     blog_image_plan_model: str = "claude-sonnet-4-6"
