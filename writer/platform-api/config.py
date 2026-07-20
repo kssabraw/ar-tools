@@ -172,11 +172,24 @@ class Settings(BaseSettings):
     blog_media_image_quality: str = "medium"          # low | medium | high
     blog_media_hero_width: int = 2048
     blog_media_hero_height: int = 1152
-    blog_media_inline_width: int = 1200
-    blog_media_inline_height: int = 900
+    # 1536x1024 — a gpt-image-2-native size. (1200x900 was rejected with 400
+    # Bad Request on the first live run; the render ladder's auto-size rung
+    # recovered, but a supported default avoids burning retry attempts.)
+    blog_media_inline_width: int = 1536
+    blog_media_inline_height: int = 1024
     # Allow transparent arithmetic derivations of chart values from explicit
     # article values (Phase 2 charts); false → only values stated verbatim.
     blog_media_allow_derived_values: bool = True
+    # When a chart is dropped ONLY because the planner left a value's
+    # source_quote blank (missing_source_quote — the data may still be in the
+    # article, e.g. inside a table), attempt one targeted re-grounding call that
+    # asks the model to supply a verbatim quote per value. The result is
+    # re-validated the same way, so this recovers real charts without weakening
+    # the no-fabrication rule.
+    blog_media_chart_reground_enabled: bool = True
+    # When a chart is ultimately rejected, fill its (already-budgeted) inline
+    # slot with a section-specific editorial image instead of leaving it empty.
+    blog_media_chart_replace_enabled: bool = True
     # Confidence gates (the app drops optional assets below threshold).
     blog_media_hero_min_confidence: float = 0.75
     blog_media_inline_min_confidence: float = 0.75

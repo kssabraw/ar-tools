@@ -300,6 +300,7 @@ export function RunDetail() {
   const [ghPhase, setGhPhase] = useState<'idle' | 'generating' | 'error'>('idle')
   const [ghJobId, setGhJobId] = useState<string | null>(null)
   const [ghError, setGhError] = useState<string | null>(null)
+  const [ghQueueAhead, setGhQueueAhead] = useState<number | null>(null)
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
   const publishMutation = useMutation({
     mutationFn: () => api.post<{ doc_url: string }>(`/runs/${id}/publish`, {}),
@@ -343,10 +344,11 @@ export function RunDetail() {
     let active = true
     const tick = async () => {
       try {
-        const s = await api.get<{ status: string; result?: { html_url?: string }; error?: string }>(
+        const s = await api.get<{ status: string; result?: { html_url?: string }; error?: string; queue_ahead?: number }>(
           `/runs/${id}/github-publish/status?job_id=${ghJobId}`,
         )
         if (!active) return
+        setGhQueueAhead(s.status === 'pending' ? (s.queue_ahead ?? null) : null)
         if (s.status === 'complete') {
           setGhPhase('idle')
           setGhJobId(null)
@@ -370,7 +372,7 @@ export function RunDetail() {
 
   const runImagesQuery = useQuery({
     queryKey: ['run-images', id],
-    queryFn: () => api.get<{ images: Array<{ id: string; role: string; kind: string; alt: string; preview_url: string | null; status?: string; used_fallback?: boolean }> }>(`/runs/${id}/images`),
+    queryFn: () => api.get<{ images: Array<{ id: string; role: string; kind: string; alt: string; preview_url: string | null; status?: string; used_fallback?: boolean }>; issues?: Array<{ id: string; asset_id: string; kind: string; status: string; reason: string | null; alt: string | null }> }>(`/runs/${id}/images`),
     enabled: run?.content_type === 'blog_post' && run?.status === 'complete',
   })
   const featuredImageMutation = useMutation({
@@ -740,7 +742,10 @@ export function RunDetail() {
           </div>
           {ghPhase === 'generating' && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: '#f0fdf4', borderRadius: 6, color: '#15803d', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Loader size={14} className="spin" /> Generating hero + body images and committing to GitHub… you can leave this page; it finishes in the background.
+              <Loader size={14} className="spin" />
+              {ghQueueAhead != null && ghQueueAhead > 0
+                ? `Queued — ${ghQueueAhead} job${ghQueueAhead === 1 ? '' : 's'} ahead of this publish…`
+                : 'Generating hero + body images and committing to GitHub… you can leave this page; it finishes in the background. You\'ll get a notification when it\'s live.'}
             </div>
           )}
           {(publishMutation.isError || wpPublishMutation.isError || ghPublishMutation.isError || ghError) && (
@@ -770,6 +775,19 @@ export function RunDetail() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+          {(runImagesQuery.data?.issues?.length ?? 0) > 0 && (
+            <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid #f1f5f9' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 6 }}>
+                Skipped media ({runImagesQuery.data!.issues!.length})
+              </div>
+              {runImagesQuery.data!.issues!.map((iss) => (
+                <div key={iss.id} style={{ fontSize: 12, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 10px', marginBottom: 6 }}>
+                  <strong>{iss.kind === 'chart' ? 'Chart' : 'Image'}</strong> {iss.status} — {iss.reason || 'unknown'}
+                  {iss.alt ? <span style={{ color: '#b45309' }}> · {iss.alt}</span> : null}
+                </div>
+              ))}
             </div>
           )}
           <pre style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, overflowX: 'auto', fontSize: 13, lineHeight: 1.7, color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 600, overflowY: 'auto' }}>
