@@ -172,8 +172,11 @@ class Settings(BaseSettings):
     blog_media_image_quality: str = "medium"          # low | medium | high
     blog_media_hero_width: int = 2048
     blog_media_hero_height: int = 1152
-    blog_media_inline_width: int = 1200
-    blog_media_inline_height: int = 900
+    # 1536x1024 — a gpt-image-2-native size. (1200x900 was rejected with 400
+    # Bad Request on the first live run; the render ladder's auto-size rung
+    # recovered, but a supported default avoids burning retry attempts.)
+    blog_media_inline_width: int = 1536
+    blog_media_inline_height: int = 1024
     # Allow transparent arithmetic derivations of chart values from explicit
     # article values (Phase 2 charts); false → only values stated verbatim.
     blog_media_allow_derived_values: bool = True
