@@ -127,6 +127,14 @@ def _usable(entry: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     return analysis
 
 
+def usable_analysis(entry: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Public accessor: the complete analysis dict for a page_structures entry, or
+    None when the entry isn't a usable (complete + non-empty) analysis. Lets the
+    generation-time structural gate score against the SAME analysis the renderer
+    turned into the prompt block, so the requirement and the measurement agree."""
+    return _usable(entry)
+
+
 def _present_flags(elements: dict[str, Any]) -> list[str]:
     return [label for key, label in _ELEMENT_FLAGS if elements.get(key)]
 
