@@ -370,7 +370,7 @@ export function RunDetail() {
 
   const runImagesQuery = useQuery({
     queryKey: ['run-images', id],
-    queryFn: () => api.get<{ images: Array<{ id: string; role: string; kind: string; alt: string; preview_url: string | null }> }>(`/runs/${id}/images`),
+    queryFn: () => api.get<{ images: Array<{ id: string; role: string; kind: string; alt: string; preview_url: string | null; status?: string; used_fallback?: boolean }> }>(`/runs/${id}/images`),
     enabled: run?.content_type === 'blog_post' && run?.status === 'complete',
   })
   const featuredImageMutation = useMutation({
@@ -765,6 +765,7 @@ export function RunDetail() {
                     )}
                     <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3 }}>
                       {img.role === 'hero' ? 'Hero' : img.kind === 'chart' ? 'Chart' : 'Body'}
+                      {img.used_fallback ? ' · fallback' : ''}
                     </div>
                   </div>
                 ))}

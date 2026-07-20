@@ -14,6 +14,7 @@ publish. Charts are deferred to Phase 2 (validation drops them).
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 from datetime import datetime, timezone
@@ -168,6 +169,24 @@ async def run_blog_media_publish_job(job: dict) -> None:
             return _fail("article_not_available")
 
         markdown = _article_markdown(article)
+
+        # Article-revision cost control: if this run was already published with
+        # media from the identical article, short-circuit — no re-render, no new
+        # paid image calls. A changed article yields a new hash → regenerate.
+        content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+        prev = (
+            supabase.table("blog_media_assets").select("content_hash")
+            .eq("run_id", run_id).eq("status", "inserted").limit(1).execute()
+        ).data or []
+        if prev and prev[0].get("content_hash") == content_hash and run.get("published_at"):
+            logger.info("blog_media_publish_reused", extra={"job_id": job_id, "run_id": run_id})
+            supabase.table("async_jobs").update({
+                "status": "complete",
+                "result": {"reused": True, "reason": "article_unchanged"},
+                "completed_at": "now()",
+            }).eq("id", job_id).execute()
+            return
+
         blocks = ah.assign_ids(ah.parse_blocks(markdown))
         idx = ah.build_id_index(blocks)
         html_with_ids = ah.render_html_with_ids(blocks)
@@ -284,6 +303,8 @@ async def run_blog_media_publish_job(job: dict) -> None:
             hero_image=hero_site_url, schema=schema,
         )
 
+        for r in asset_rows:
+            r["content_hash"] = content_hash
         _record_assets(run_id, asset_rows)
         try:
             upd = {"published_url": gh.get("html_url"), "published_at": "now()"}
