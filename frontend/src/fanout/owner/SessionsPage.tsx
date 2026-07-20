@@ -6,11 +6,13 @@ import {
   listAllSessions,
   listClientSessions,
   patchSession,
+  type CopyPlanResult,
   type SessionListItem,
 } from "../shared/api";
 import { AppShell } from "../shared/AppShell";
 import { CLIENT_SCOPE, exitClientScope } from "../shared/clientScope";
 import { statusLabel, statusClass, isLiveStatus } from "../shared/sessionStatus";
+import { CopyToClientModal } from "./CopyToClientModal";
 
 // While any session in the list is mid-run, poll so it flips to its terminal
 // status (e.g. "Ready to plan") on its own — no manual refresh needed. Stops
@@ -27,6 +29,18 @@ export function SessionsPage() {
   const qc = useQueryClient();
   const { clientId, clientName } = CLIENT_SCOPE;
   const [showArchived, setShowArchived] = useState(false);
+  // The session whose plan is being copied to another client (drives the modal).
+  const [copyTarget, setCopyTarget] = useState<SessionListItem | null>(null);
+
+  const onCopied = (result: CopyPlanResult) => {
+    setCopyTarget(null);
+    alert(
+      `Copied ${result.clusters} article${result.clusters === 1 ? "" : "s"} to ` +
+        `${result.client_name}. Opening the new plan — schedule it to choose the ` +
+        `cadence, start date, and publishing.`,
+    );
+    navigate(`/fanout/session/${result.new_session_id}`);
+  };
 
   const allSessions = useQuery({
     queryKey: ["all-sessions", showArchived],
@@ -141,9 +155,20 @@ export function SessionsPage() {
                 onOpen={() => navigate(`/fanout/session/${s.id}`)}
                 onArchive={(v) => mut.mutate(() => patchSession(s.id, { archived: v }))}
                 onDelete={() => mut.mutate(() => deleteSession(s.id))}
+                onCopy={() => setCopyTarget(s)}
               />
             ))}
           </div>
+        )}
+
+        {copyTarget && (
+          <CopyToClientModal
+            sessionId={copyTarget.id}
+            seedKeyword={copyTarget.seed_keyword}
+            clusterCount={copyTarget.cluster_count}
+            onClose={() => setCopyTarget(null)}
+            onCopied={onCopied}
+          />
         )}
       </main>
     </AppShell>
@@ -156,12 +181,14 @@ function SessionRow({
   onOpen,
   onArchive,
   onDelete,
+  onCopy,
 }: {
   session: SessionListItem;
   busy: boolean;
   onOpen: () => void;
   onArchive: (archived: boolean) => void;
   onDelete: () => void;
+  onCopy: () => void;
 }) {
   const [menu, setMenu] = useState(false);
 
@@ -194,6 +221,9 @@ function SessionRow({
         </button>
         {menu && (
           <div className="row-menu" onMouseLeave={() => setMenu(false)}>
+            <button onClick={() => { setMenu(false); onCopy(); }}>
+              Copy to another client…
+            </button>
             <button onClick={() => { setMenu(false); onArchive(!session.archived); }}>
               {session.archived ? "Unarchive" : "Archive"}
             </button>

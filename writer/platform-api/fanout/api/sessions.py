@@ -1483,6 +1483,66 @@ def list_client_sessions(
     )
 
 
+@router.get("/clients")
+def list_clients(user: AuthedUser = Depends(require_user)) -> dict:
+    """Active AR Tools clients (id + name + website), for the 'copy plan to another
+    client' picker. Suite clients are agency-level (internal tool), so any authed
+    user may target any client — the same model as creating a client-scoped run."""
+    from db.supabase_client import get_supabase
+
+    rows = (
+        get_supabase().table("clients")
+        .select("id, name, website_url")
+        .eq("archived", False)
+        .order("name")
+        .execute().data or []
+    )
+    return {"clients": rows}
+
+
+class CopyPlanBody(BaseModel):
+    target_client_id: str
+
+
+@router.post("/sessions/{session_id}/copy-to-client")
+def copy_plan_to_client(
+    session_id: str, body: CopyPlanBody, user: AuthedUser = Depends(require_user)
+) -> dict:
+    """Copy this session's content plan (topics + clusters + each cluster's primary
+    keyword) into a fresh, UNSCHEDULED session linked to `target_client_id`. The new
+    client picks cadence / start date / publishing later via the normal Schedule flow.
+    The source session (and its schedule) is untouched."""
+    from db.supabase_client import get_supabase
+    from fanout.writer.plan_copy import copy_plan_to_client as _copy
+
+    _require_session(user, session_id)
+
+    target = body.target_client_id.strip()
+    if not target:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="A target client is required.")
+    client_row = (
+        get_supabase().table("clients").select("id, name, archived")
+        .eq("id", target).limit(1).execute().data
+    )
+    if not client_row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="Target client not found.")
+    if client_row[0].get("archived"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="That client is archived — unarchive it first.")
+
+    try:
+        result = _copy(source_session_id=session_id, target_client_id=target, user_id=user.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    logger.info("plan_copy_requested",
+                extra={"event": "plan_copy_requested", "source_session_id": session_id,
+                       "target_client_id": target, **result})
+    return {"status": "copied", "client_name": client_row[0]["name"], **result}
+
+
 # ---- Pre-publish ranking check (per client) -------------------------------
 class PrepublishActionBody(BaseModel):
     cluster_ids: list[str] = Field(default_factory=list)
