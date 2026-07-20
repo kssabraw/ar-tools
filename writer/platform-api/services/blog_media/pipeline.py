@@ -171,9 +171,15 @@ async def run_blog_media_publish_job(job: dict) -> None:
         markdown = _article_markdown(article)
 
         # Article-revision cost control: if this run was already published with
-        # media from the identical article, short-circuit — no re-render, no new
-        # paid image calls. A changed article yields a new hash → regenerate.
-        content_hash = hashlib.sha256(markdown.encode("utf-8")).hexdigest()
+        # media from the identical article TO THE SAME repo/branch, short-circuit
+        # — no re-render, no new paid image calls. A changed article OR a changed
+        # publish target yields a new hash → regenerate (so a client migrating
+        # repos still gets a real commit).
+        target_repo = (client.get("github_repo") or "").strip()
+        target_branch = (client.get("github_branch") or settings.github_default_branch or "main").strip()
+        content_hash = hashlib.sha256(
+            f"{target_repo}@{target_branch}\n{markdown}".encode("utf-8")
+        ).hexdigest()
         prev = (
             supabase.table("blog_media_assets").select("content_hash")
             .eq("run_id", run_id).eq("status", "inserted").limit(1).execute()
@@ -306,10 +312,25 @@ async def run_blog_media_publish_job(job: dict) -> None:
         body_markdown = ah.insert_figures(markdown, blocks, figures)
         schema = _blog_schema(supabase, run_id, client=client, run=run, title=title, image_url=hero_preview)
 
+        # Stale-image cleanup: previously-committed asset files this republish no
+        # longer references are deleted in the same commit (best-effort inside
+        # the commit — rejected deletions never fail the publish).
+        try:
+            prior_rows = (
+                supabase.table("blog_media_assets").select("repo_path")
+                .eq("run_id", run_id).eq("status", "inserted").execute()
+            ).data or []
+        except Exception:  # noqa: BLE001 — cleanup is optional
+            prior_rows = []
+        stale_paths = [
+            r["repo_path"] for r in prior_rows
+            if r.get("repo_path") and r["repo_path"] not in image_files
+        ]
+
         gh = await publish_blog_with_images_to_github(
             client=client, title=title, body=body_markdown, image_files=image_files,
             slug=run["keyword"], content_type=run.get("content_type") or "blog_post",
-            hero_image=hero_site_url, schema=schema,
+            hero_image=hero_site_url, schema=schema, delete_paths=stale_paths,
         )
 
         for r in asset_rows:

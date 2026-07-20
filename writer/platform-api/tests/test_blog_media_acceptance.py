@@ -12,10 +12,12 @@ from services.blog_media.article_html import (
 
 def _idx():
     return IdIndex(
-        anchor_ids={"section-001", "paragraph-001", "paragraph-002"},
-        section_ids={"section-001"},
-        id_to_index={"section-001": 0, "paragraph-001": 1, "paragraph-002": 2},
-        paragraph_section={"paragraph-001": "section-001", "paragraph-002": "section-001"},
+        anchor_ids={"section-001", "section-002", "paragraph-001", "paragraph-002", "paragraph-003"},
+        section_ids={"section-001", "section-002"},
+        id_to_index={"section-001": 0, "paragraph-001": 1, "paragraph-002": 2,
+                     "section-002": 3, "paragraph-003": 4},
+        paragraph_section={"paragraph-001": "section-001", "paragraph-002": "section-001",
+                           "paragraph-003": "section-002"},
     )
 
 
@@ -125,10 +127,19 @@ def test_case_10_idempotent_insertion():
     assert twice.count('data-media-id="inline-1"') == 1
 
 
+# 16. Two inline assets selected in the same section → plan corrected (second dropped).
+def test_case_16_same_section_corrected():
+    assets = [_img("inline-1", anchor="paragraph-001", filename="a.webp"),
+              _img("inline-2", anchor="paragraph-002", filename="b.webp")]  # same section-001
+    r = _run({"hero_image": _hero(), "inline_assets": assets}, max_inline=2)
+    assert len(r.inline) == 1
+    assert any("same_section" in w for w in r.warnings)
+
+
 # 17. Model returns more assets than permitted → extras rejected before generation.
 def test_case_17_over_budget_rejected():
-    assets = [_img("inline-1", filename="a.webp"),
-              _img("inline-2", anchor="paragraph-001", filename="b.webp"),
-              _img("inline-3", filename="c.webp")]
+    assets = [_img("inline-1", anchor="paragraph-002", filename="a.webp"),
+              _img("inline-2", anchor="paragraph-003", filename="b.webp"),
+              _img("inline-3", anchor="paragraph-001", filename="c.webp")]
     r = _run({"hero_image": _hero(), "inline_assets": assets}, max_inline=2)
     assert len(r.inline) == 2

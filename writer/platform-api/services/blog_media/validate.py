@@ -25,6 +25,26 @@ def valid_filename(name: str, ext: str) -> bool:
     return name.endswith(f".{ext}")
 
 
+def asset_section(placement: dict, idx: IdIndex) -> str | None:
+    """The section a placement lands in (for the two-assets-one-section rule):
+    a paragraph anchor maps through paragraph→section containment; a heading
+    anchor or section_id is the section itself. None when undeterminable (a
+    fallback-excerpt-only placement) — the rule is then not enforced."""
+    if not isinstance(placement, dict):
+        return None
+    anchor = (placement.get("anchor_id") or "").strip()
+    if anchor in idx.paragraph_section:
+        return idx.paragraph_section[anchor]
+    if anchor in idx.section_ids:
+        return anchor
+    section = (placement.get("section_id") or "").strip()
+    if section in idx.section_ids:
+        return section
+    if section in idx.paragraph_section:
+        return idx.paragraph_section[section]
+    return None
+
+
 def placement_resolvable(placement: dict, idx: IdIndex) -> bool:
     """A placement can be resolved if its anchor_id or section_id is a real ID,
     or it supplies a non-empty fallback_excerpt (verified verbatim later)."""
@@ -174,6 +194,7 @@ def validate_and_clean(
 
     seen_ids: set[str] = set()
     seen_files: set[str] = set()
+    seen_sections: set[str] = set()
     charts_kept = 0
     for asset in raw_inline:
         if len(result.inline) >= max_inline:
@@ -195,7 +216,15 @@ def validate_and_clean(
             if charts_kept >= 1:
                 result.warnings.append("dropped_second_chart")
                 continue
+        # Spec: two inline assets never share a section (correct, don't reject).
+        section = asset_section(norm.get("placement") or {}, idx)
+        if section and section in seen_sections:
+            result.warnings.append(f"dropped_same_section:{norm['asset_id']}")
+            continue
+        if norm["asset_type"] == "chart":
             charts_kept += 1
+        if section:
+            seen_sections.add(section)
         seen_ids.add(norm["asset_id"])
         seen_files.add(norm["filename"])
         result.inline.append(norm)

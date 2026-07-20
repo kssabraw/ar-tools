@@ -69,21 +69,26 @@ async def github_publish_status(
 ) -> dict:
     """Poll a blog GitHub-publish job (image generation + atomic commit)."""
     supabase = get_supabase()
-    row = (
-        supabase.table("async_jobs")
-        .select("id, status, result, error")
-        .eq("id", job_id)
-        .eq("entity_id", str(run_id))
-        .single()
-        .execute()
-    )
-    if not row.data:
+    try:
+        rows = (
+            supabase.table("async_jobs")
+            .select("id, status, result, error")
+            .eq("id", job_id)
+            .eq("entity_id", str(run_id))
+            .limit(1)
+            .execute()
+        ).data or []
+    except Exception as exc:  # noqa: BLE001 — a bad job_id must 404, not 500
+        logger.warning("github_publish_status_failed", extra={"run_id": str(run_id), "error": str(exc)})
+        rows = []
+    if not rows:
         raise HTTPException(status_code=404, detail="job_not_found")
+    row = rows[0]
     return {
         "job_id": job_id,
-        "status": row.data.get("status"),
-        "result": row.data.get("result"),
-        "error": row.data.get("error"),
+        "status": row.get("status"),
+        "result": row.get("result"),
+        "error": row.get("error"),
     }
 
 
@@ -91,13 +96,17 @@ async def github_publish_status(
 async def list_run_images(run_id: UUID, auth: dict = Depends(require_auth)) -> dict:
     """The media assets generated for a run (for the review UI)."""
     supabase = get_supabase()
-    rows = (
-        supabase.table("blog_media_assets")
-        .select("id, asset_id, role, asset_type, alt_text, caption, preview_url, repo_path, status, used_fallback")
-        .eq("run_id", str(run_id))
-        .order("asset_id")
-        .execute()
-    ).data or []
+    try:
+        rows = (
+            supabase.table("blog_media_assets")
+            .select("id, asset_id, role, asset_type, alt_text, caption, preview_url, repo_path, status, used_fallback")
+            .eq("run_id", str(run_id))
+            .order("asset_id")
+            .execute()
+        ).data or []
+    except Exception as exc:  # noqa: BLE001 — degrade to empty (e.g. pre-migration)
+        logger.warning("run_images_read_failed", extra={"run_id": str(run_id), "error": str(exc)})
+        rows = []
     images = [
         {
             "id": r.get("id"),

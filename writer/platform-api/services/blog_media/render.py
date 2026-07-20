@@ -54,23 +54,46 @@ def _simplify(prompt: str) -> str:
 
 
 async def render_image(prompt: str, *, width: int, height: int, quality: str | None = None) -> bytes | None:
-    """Render one image with a bounded retry ladder. Returns bytes, or None if
-    every attempt fails (best-effort — never raises)."""
+    """Render one image with a bounded retry ladder. Returns WebP bytes, or None
+    if every attempt fails (best-effort — never raises).
+
+    Ladder: authored@requested-size → authored@requested-size (transient retry)
+    → authored@auto (catches an API-rejected size, which would otherwise fail
+    every identical attempt) → simplified@auto."""
     if not settings.openai_api_key or not (prompt or "").strip():
         return None
     size = f"{width}x{height}"
     q = quality or settings.blog_media_image_quality
-    # Attempt 1: as authored. Attempt 2: retry same. Attempt 3: simplified prompt.
-    attempts = [prompt, prompt, _simplify(prompt)]
-    for i, p in enumerate(attempts):
+    attempts = [(prompt, size), (prompt, size), (prompt, "auto"), (_simplify(prompt), "auto")]
+    for i, (p, s) in enumerate(attempts):
         try:
-            return await _generate(p, size, q)
+            return _ensure_webp(await _generate(p, s, q))
         except Exception as exc:  # noqa: BLE001 — best-effort per addendum
             logger.warning(
                 "blog_media.render_failed",
-                extra={"attempt": i + 1, "simplified": i == 2, "error": str(exc)},
+                extra={"attempt": i + 1, "size": s, "simplified": i == 3, "error": str(exc)},
             )
     return None
+
+
+def _ensure_webp(data: bytes) -> bytes:
+    """Normalize rendered bytes to WebP. If the API returned another format (the
+    output_format fallback path can yield PNG), convert via Pillow when available
+    (it ships with the WeasyPrint stack); otherwise return the bytes unchanged —
+    browsers content-sniff images, so a mislabeled extension still renders."""
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return data
+    try:
+        from io import BytesIO
+
+        from PIL import Image  # lazy — present via the WeasyPrint dependency
+
+        img = Image.open(BytesIO(data))
+        out = BytesIO()
+        img.save(out, format="WEBP", quality=88)
+        return out.getvalue()
+    except Exception:  # noqa: BLE001 — conversion is best-effort
+        return data
 
 
 def upload_preview(data: bytes, filename: str) -> str | None:

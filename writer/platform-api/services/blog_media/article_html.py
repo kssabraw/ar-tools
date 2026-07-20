@@ -180,8 +180,13 @@ def render_html_with_ids(blocks: list[Block]) -> str:
         elif b.kind == "paragraph" and b.id:
             inner = _inline(" ".join(line.strip() for line in b.text.split("\n")).strip())
             out.append(f'<p id="{b.id}">{inner}</p>')
+        elif b.kind == "html":
+            # Already-valid HTML from our own pipeline (e.g. the Sources Cited
+            # <ol>) — pass through verbatim so the planner sees real markup, not
+            # an entity-escaped copy.
+            out.append(b.text)
         else:
-            # Reuse the shared renderer for lists/tables/blockquote/hr/html.
+            # Reuse the shared renderer for lists/tables/blockquote/hr.
             rendered = "\n".join(_render_block_html(x) for x in _parse_blocks(b.text))
             out.append(rendered or b.text)
     return "\n".join(p for p in out if p)
@@ -308,7 +313,14 @@ def insert_figures(markdown: str, blocks: list[Block], figures: list[ResolvedFig
     # Idempotency: drop figures already present by data-media-id.
     todo = [f for f in figures if f"data-media-id=\"{_esc_attr(f.media_id)}\"" not in markdown]
     # Insert from the highest line index down so splices don't shift later ones.
-    for fig in sorted(todo, key=lambda f: blocks[f.block_index].end, reverse=True):
+    # Ties (two figures at the same block) break on the ORIGINAL list index,
+    # reversed: inserting at the same line index stacks later-inserted text
+    # first, so processing the later figure first preserves document order.
+    for _, fig in sorted(
+        enumerate(todo),
+        key=lambda t: (blocks[t[1].block_index].end, t[0]),
+        reverse=True,
+    ):
         b = blocks[fig.block_index]
         at = b.start if fig.position == "before" else b.end
         block_text = ["", fig.markup, ""]

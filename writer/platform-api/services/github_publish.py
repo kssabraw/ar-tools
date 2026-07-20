@@ -279,29 +279,36 @@ async def commit_files_to_github(
     token: str,
     files: dict[str, bytes],
     message: str,
+    delete_paths: list[str] | None = None,
 ) -> dict:
     """Commit multiple files in ONE commit via the Git Data API (blobs → tree →
     commit → ref update), so a post's markdown and all its images land together.
     Overwrites paths in place (the tree is layered on the branch's current tree).
+
+    `delete_paths` removes previously-committed files (sha=null tree entries) in
+    the same commit — used to clean up a post's stale image files on republish.
+    Deletions are best-effort: if the tree rejects them (e.g. a path already
+    removed by hand), the tree is rebuilt without deletions rather than failing
+    the publish.
+
+    The ref update retries ONCE on a non-fast-forward race (another commit landed
+    between the head read and the update): blobs are content-addressed and
+    reusable, so only the tree + commit are rebuilt on the new head.
+
     Returns {commit_sha, tree_sha}. Raises GitHubPublishError on any failure."""
     if not files:
         raise GitHubPublishError("content_is_empty")
     headers = _gh_headers(token)
     base = f"{_GITHUB_API}/repos/{repo}/git"
+    removal_entries = [
+        {"path": p.lstrip("/"), "mode": "100644", "type": "blob", "sha": None}
+        for p in (delete_paths or [])
+        if p and p.lstrip("/") not in {f.lstrip("/") for f in files}
+    ]
 
     async with httpx.AsyncClient(timeout=60) as http:
         try:
-            # 1. Branch head → base commit + base tree.
-            ref = await http.get(f"{base}/ref/heads/{branch}", headers=headers)
-            if ref.status_code != 200:
-                raise GitHubPublishError(f"github_ref_error_{ref.status_code}")
-            base_commit_sha = ref.json()["object"]["sha"]
-            commit = await http.get(f"{base}/commits/{base_commit_sha}", headers=headers)
-            if commit.status_code != 200:
-                raise GitHubPublishError(f"github_commit_read_error_{commit.status_code}")
-            base_tree_sha = commit.json()["tree"]["sha"]
-
-            # 2. One blob per file (base64-encoded so binary images survive).
+            # Blobs once — content-addressed, valid for any base commit.
             tree_entries = []
             for path, content in files.items():
                 blob = await http.post(
@@ -315,27 +322,58 @@ async def commit_files_to_github(
                     {"path": path.lstrip("/"), "mode": "100644", "type": "blob", "sha": blob.json()["sha"]}
                 )
 
-            # 3. Tree layered on the branch's current tree, 4. commit, 5. move ref.
-            tree = await http.post(
-                f"{base}/trees", headers=headers, json={"base_tree": base_tree_sha, "tree": tree_entries}
-            )
-            if tree.status_code not in (200, 201):
-                raise GitHubPublishError(f"github_tree_error_{tree.status_code}")
-            new_tree_sha = tree.json()["sha"]
+            for attempt in range(2):
+                # 1. Branch head → base commit + base tree (re-read on retry).
+                ref = await http.get(f"{base}/ref/heads/{branch}", headers=headers)
+                if ref.status_code != 200:
+                    raise GitHubPublishError(f"github_ref_error_{ref.status_code}")
+                base_commit_sha = ref.json()["object"]["sha"]
+                commit = await http.get(f"{base}/commits/{base_commit_sha}", headers=headers)
+                if commit.status_code != 200:
+                    raise GitHubPublishError(f"github_commit_read_error_{commit.status_code}")
+                base_tree_sha = commit.json()["tree"]["sha"]
 
-            new_commit = await http.post(
-                f"{base}/commits",
-                headers=headers,
-                json={"message": message, "tree": new_tree_sha, "parents": [base_commit_sha]},
-            )
-            if new_commit.status_code not in (200, 201):
-                raise GitHubPublishError(f"github_commit_error_{new_commit.status_code}")
-            new_commit_sha = new_commit.json()["sha"]
+                # 2. Tree layered on the current tree; deletions are optional.
+                tree = await http.post(
+                    f"{base}/trees", headers=headers,
+                    json={"base_tree": base_tree_sha, "tree": tree_entries + removal_entries},
+                )
+                if tree.status_code not in (200, 201) and removal_entries:
+                    logger.warning(
+                        "github.tree_deletions_rejected",
+                        extra={"repo": repo, "status": tree.status_code, "deletions": len(removal_entries)},
+                    )
+                    tree = await http.post(
+                        f"{base}/trees", headers=headers,
+                        json={"base_tree": base_tree_sha, "tree": tree_entries},
+                    )
+                if tree.status_code not in (200, 201):
+                    raise GitHubPublishError(f"github_tree_error_{tree.status_code}")
+                new_tree_sha = tree.json()["sha"]
 
-            upd = await http.patch(
-                f"{base}/refs/heads/{branch}", headers=headers, json={"sha": new_commit_sha}
-            )
-            if upd.status_code not in (200, 201):
+                # 3. Commit, 4. move the ref (fast-forward only — no force).
+                new_commit = await http.post(
+                    f"{base}/commits",
+                    headers=headers,
+                    json={"message": message, "tree": new_tree_sha, "parents": [base_commit_sha]},
+                )
+                if new_commit.status_code not in (200, 201):
+                    raise GitHubPublishError(f"github_commit_error_{new_commit.status_code}")
+                new_commit_sha = new_commit.json()["sha"]
+
+                upd = await http.patch(
+                    f"{base}/refs/heads/{branch}", headers=headers, json={"sha": new_commit_sha}
+                )
+                if upd.status_code in (200, 201):
+                    break
+                # Non-fast-forward race: someone committed between the head read
+                # and the update. Rebuild once on the fresh head.
+                if attempt == 0 and upd.status_code in (409, 422):
+                    logger.warning(
+                        "github.ref_race_retry",
+                        extra={"repo": repo, "branch": branch, "status": upd.status_code},
+                    )
+                    continue
                 raise GitHubPublishError(f"github_ref_update_error_{upd.status_code}")
         except httpx.HTTPError as exc:
             raise GitHubPublishError(f"github_request_failed: {exc}") from exc
@@ -355,6 +393,7 @@ async def publish_blog_with_images_to_github(
     location: str | None = None,
     hero_image: str | None = None,
     schema: str | None = None,
+    delete_paths: list[str] | None = None,
 ) -> dict:
     """Commit a blog post's markdown + its generated images atomically. `body` is
     the markdown (already carrying `![](/…)` body-image references); `image_files`
@@ -392,7 +431,8 @@ async def publish_blog_with_images_to_github(
     files.update(image_files)
 
     result = await commit_files_to_github(
-        repo=repo, branch=branch, token=token, files=files, message=f"content: {title or md_path}"
+        repo=repo, branch=branch, token=token, files=files,
+        message=f"content: {title or md_path}", delete_paths=delete_paths,
     )
     return {
         "path": md_path,

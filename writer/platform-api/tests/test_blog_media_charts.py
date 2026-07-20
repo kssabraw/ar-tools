@@ -143,3 +143,37 @@ def test_theme_colors_whitelisted_to_hex():
     svg = c.render_chart_svg(evil)
     assert "onload" not in svg           # injection neutralized → default color
     assert "#123abc" in svg or "#" in svg  # valid hex kept
+
+
+def test_scatter_without_xy_rejected():
+    q1, q2 = "value pair one is 2", "value pair two is 4"
+    no_xy = _chart("scatter", [_pt("a", 2, "2", q1), _pt("b", 4, "4", q2)])
+    ok, reason = c.validate_chart_spec(no_xy, article_text=_article(q1, q2), allow_derived=False)
+    assert not ok and reason == "scatter_missing_xy"
+    with_xy = _chart("scatter", [_pt("a", 2, "2", q1, x=1, y=2), _pt("b", 4, "4", q2, x=3, y=4)])
+    ok2, _ = c.validate_chart_spec(with_xy, article_text=_article(q1, q2), allow_derived=False)
+    assert ok2
+
+
+def test_render_stacked_bar_multi_series_with_legend():
+    ch = {
+        "type": "stacked_bar", "title": "T", "source_name": "X",
+        "series": [
+            {"name": "Organic", "data": [{"label": "2025", "value": 30, "display_value": "30"},
+                                          {"label": "2026", "value": 40, "display_value": "40"}]},
+            {"name": "Paid", "data": [{"label": "2025", "value": 10, "display_value": "10"},
+                                       {"label": "2026", "value": 20, "display_value": "20"}]},
+        ],
+    }
+    svg = c.render_chart_svg(ch)
+    assert svg.count("<rect") >= 5  # background + 4 stacked segments + legend chips
+    assert "Organic" in svg and "Paid" in svg
+
+
+def test_axis_labels_rendered_when_provided():
+    ch = _valid_bar()
+    ch["x_axis"] = {"label": "Year", "type": "category"}
+    ch["y_axis"] = {"label": "Share", "unit": "%", "start_at_zero": True}
+    svg = c.render_chart_svg(ch)
+    assert ">Year<" in svg
+    assert "Share (%)" in svg and "rotate(-90" in svg

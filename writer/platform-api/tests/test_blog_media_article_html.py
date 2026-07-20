@@ -192,3 +192,24 @@ def test_resolve_placement_bad_occurrence_value_defaults_to_first():
         blocks, idx, md,
     )
     assert pos is not None and blocks[pos].id == "paragraph-001"
+
+
+def test_render_html_with_ids_passes_html_block_verbatim():
+    html = ah.render_html_with_ids(_blocks())
+    # The Sources Cited <ol> is our own valid HTML — passed through, not escaped.
+    assert '<ol class="sources-cited">' in html
+    assert "&lt;ol" not in html
+
+
+def test_insert_figures_same_block_preserves_original_order():
+    blocks = _blocks()
+    idx = ah.build_id_index(blocks)
+    pos = ah.resolve_placement({"anchor_id": "paragraph-001"}, blocks, idx, ARTICLE)
+    figs = [
+        ResolvedFigure(pos, "after", "inline-1",
+                       ah.figure_markdown(media_id="inline-1", src="/a.webp", alt="a", caption=None, css_class="c")),
+        ResolvedFigure(pos, "after", "inline-2",
+                       ah.figure_markdown(media_id="inline-2", src="/b.webp", alt="b", caption=None, css_class="c")),
+    ]
+    out = ah.insert_figures(ARTICLE, blocks, figs)
+    assert out.index('data-media-id="inline-1"') < out.index('data-media-id="inline-2"')

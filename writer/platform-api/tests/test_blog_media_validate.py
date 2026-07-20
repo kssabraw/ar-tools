@@ -204,3 +204,12 @@ def test_budget_trim_prefers_chart_over_image():
         hero_min=0.75, inline_min=0.75, chart_min=0.90,
     )
     assert len(r.inline) == 1 and r.inline[0]["asset_type"] == "chart"
+
+
+def test_second_asset_in_same_section_dropped():
+    assets = [_image_asset("inline-1", anchor="paragraph-001", filename="a.webp"),
+              _image_asset("inline-2", anchor="paragraph-002", filename="b.webp")]  # both section-001
+    r = v.validate_and_clean({"hero_image": _hero(), "inline_assets": assets}, idx=_idx(),
+                             max_inline=2, allow_charts=False, hero_min=0.75, inline_min=0.75, chart_min=0.90)
+    assert len(r.inline) == 1
+    assert any("same_section" in w for w in r.warnings)

@@ -100,8 +100,14 @@ def validate_chart_spec(chart: dict, *, article_text: str, allow_derived: bool) 
             return False, "donut_values_do_not_total_100"
     if ctype == "single_stat" and len(pts) != 1:
         return False, "single_stat_requires_one_value"
-    if ctype == "scatter" and len(pts) < 2:
-        return False, "scatter_needs_multiple_observations"
+    if ctype == "scatter":
+        if len(pts) < 2:
+            return False, "scatter_needs_multiple_observations"
+        # A scatter is only honest with real paired observations — require
+        # numeric x AND y on every point (the label/value schema can't express
+        # one, so an x/y-less scatter is rejected rather than degenerately drawn).
+        if any(_num(d.get("x")) is None or _num(d.get("y")) is None for d in pts):
+            return False, "scatter_missing_xy"
 
     norm_article = _norm(article_text)
     for d in pts:
@@ -173,11 +179,35 @@ def render_chart_svg(chart: dict) -> str:
         "horizontal_bar": _render_hbar,
         "line": _render_line,
         "donut": _render_donut,
-        "stacked_bar": _render_bar,   # v1: render component sums as bars
+        "stacked_bar": _render_stacked,
         "scatter": _render_scatter,
         "single_stat": _render_single_stat,
     }.get(ctype, _render_bar)(chart, th)
     return _frame(chart, th, body)
+
+
+def _axis_labels(chart: dict, th: dict) -> str:
+    """Axis titles (x label bottom-center, y label rotated left) for the
+    cartesian chart types, when the plan provides them."""
+    x_label = str(((chart.get("x_axis") or {}).get("label")) or "").strip()
+    y_axis = chart.get("y_axis") or {}
+    y_name = str(y_axis.get("label") or "").strip()
+    y_unit = str(y_axis.get("unit") or "").strip()
+    y_label = f"{y_name} ({y_unit})" if y_name and y_unit else (y_name or y_unit)
+    parts: list[str] = []
+    if x_label:
+        cx = (_PAD_L + (_W - _PAD_R)) / 2
+        parts.append(
+            f'<text x="{cx:.0f}" y="{_H - _PAD_B + 62}" font-size="15" '
+            f'text-anchor="middle" fill="{th["text"]}" opacity="0.7">{escape(x_label)}</text>'
+        )
+    if y_label:
+        cy = (_PAD_T + (_H - _PAD_B)) / 2
+        parts.append(
+            f'<text x="26" y="{cy:.0f}" font-size="15" text-anchor="middle" '
+            f'fill="{th["text"]}" opacity="0.7" transform="rotate(-90 26 {cy:.0f})">{escape(y_label)}</text>'
+        )
+    return "".join(parts)
 
 
 def _frame(chart: dict, th: dict, body: str) -> str:
@@ -215,6 +245,55 @@ def _render_bar(chart: dict, th: dict) -> str:
         out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{bw:.1f}" height="{h:.1f}" fill="{th["secondary"]}" rx="3"/>')
         out.append(f'<text x="{x + bw/2:.1f}" y="{y - 10:.1f}" font-size="16" font-weight="600" text-anchor="middle" fill="{th["text"]}">{escape(_display(d))}</text>')
         out.append(f'<text x="{x + bw/2:.1f}" y="{y0 + 28:.1f}" font-size="15" text-anchor="middle" fill="{th["text"]}" opacity="0.8">{escape(_label(d)[:22])}</text>')
+    out.append(_axis_labels(chart, th))
+    return "".join(out)
+
+
+def _render_stacked(chart: dict, th: dict) -> str:
+    """True stacked bars: one bar per label, one segment per series, plus a
+    series legend. Falls back to the plain bar renderer for a single series."""
+    series = [s for s in chart.get("series") or [] if isinstance(s, dict) and s.get("data")]
+    if len(series) < 2:
+        return _render_bar(chart, th)
+    labels: list[str] = []
+    for s in series:
+        for d in s.get("data") or []:
+            lab = _label(d)
+            if lab not in labels:
+                labels.append(lab)
+    by_series = [
+        {(_label(d)): (_num(d.get("value")) or 0.0) for d in (s.get("data") or []) if isinstance(d, dict)}
+        for s in series
+    ]
+    totals = {lab: sum(vals.get(lab, 0.0) for vals in by_series) for lab in labels}
+    vmax = max(list(totals.values()) + [1.0])
+    palette = [th["secondary"], th["primary"], "#64748b", "#94a3b8", "#0ea5e9", "#334155"]
+
+    x0, y0 = _PAD_L, _H - _PAD_B
+    plot_w, plot_h = _W - _PAD_L - _PAD_R, y0 - _PAD_T
+    slot = plot_w / max(1, len(labels))
+    bw = slot * 0.6
+    out = [_baseline(x0, y0, plot_w, th)]
+    for i, lab in enumerate(labels):
+        x = x0 + i * slot + (slot - bw) / 2
+        cursor = y0
+        for si, vals in enumerate(by_series):
+            v = vals.get(lab, 0.0)
+            if v <= 0:
+                continue
+            h = (v / vmax) * plot_h
+            cursor -= h
+            out.append(
+                f'<rect x="{x:.1f}" y="{cursor:.1f}" width="{bw:.1f}" height="{h:.1f}" '
+                f'fill="{palette[si % len(palette)]}"/>'
+            )
+        out.append(f'<text x="{x + bw/2:.1f}" y="{y0 + 28:.1f}" font-size="15" text-anchor="middle" fill="{th["text"]}" opacity="0.8">{escape(lab[:22])}</text>')
+    # Series legend (top-right).
+    for si, s in enumerate(series):
+        ly = _PAD_T + 4 + si * 26
+        out.append(f'<rect x="{_W - _PAD_R - 220}" y="{ly - 12}" width="14" height="14" fill="{palette[si % len(palette)]}" rx="3"/>')
+        out.append(f'<text x="{_W - _PAD_R - 200}" y="{ly}" font-size="14" fill="{th["text"]}">{escape(str(s.get("name") or f"Series {si + 1}")[:26])}</text>')
+    out.append(_axis_labels(chart, th))
     return "".join(out)
 
 
@@ -236,6 +315,7 @@ def _render_hbar(chart: dict, th: dict) -> str:
         out.append(f'<text x="{x0 - 12:.1f}" y="{y + bh/2 + 5:.1f}" font-size="15" text-anchor="end" fill="{th["text"]}" opacity="0.8">{escape(_label(d)[:24])}</text>')
         out.append(f'<rect x="{x0:.1f}" y="{y:.1f}" width="{w:.1f}" height="{bh:.1f}" fill="{th["secondary"]}" rx="3"/>')
         out.append(f'<text x="{x0 + w + 8:.1f}" y="{y + bh/2 + 5:.1f}" font-size="16" font-weight="600" fill="{th["text"]}">{escape(_display(d))}</text>')
+    out.append(_axis_labels(chart, th))
     return "".join(out)
 
 
@@ -260,6 +340,7 @@ def _render_line(chart: dict, th: dict) -> str:
     for x, y, d in coords:
         out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" fill="{th["secondary"]}"/>')
         out.append(f'<text x="{x:.1f}" y="{y0 + 28:.1f}" font-size="14" text-anchor="middle" fill="{th["text"]}" opacity="0.8">{escape(_label(d)[:12])}</text>')
+    out.append(_axis_labels(chart, th))
     return "".join(out)
 
 
@@ -312,6 +393,7 @@ def _render_scatter(chart: dict, th: dict) -> str:
         cx = x0 + ((xv - xmin) / xs_span) * plot_w
         cy = y0 - ((yv - ymin) / ys_span) * plot_h
         out.append(f'<circle cx="{cx:.1f}" cy="{cy:.1f}" r="6" fill="{th["secondary"]}" opacity="0.8"/>')
+    out.append(_axis_labels(chart, th))
     return "".join(out)
 
 
