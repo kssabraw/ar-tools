@@ -319,6 +319,9 @@ class LocalSeoPageDetail(BaseModel):
     composite_status: Optional[str] = None
     # Full per-engine scoring verdict (nlp surfaces it on generate/reoptimize).
     engine_scores: Optional[dict[str, Any]] = None
+    # Structural-fidelity verdict from the generation gate ({composite, dimensions,
+    # notes}). None when no reference structure drove the page.
+    structure_fidelity: Optional[dict[str, Any]] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None

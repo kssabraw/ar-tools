@@ -231,6 +231,9 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         # Full per-engine verdict (nlp surfaces this on generate/reoptimize). None
         # on older nlp builds that don't emit it — the column is nullable.
         "engine_scores": result.get("engine_scores"),
+        # Structural-fidelity verdict from the generation gate ({composite,
+        # dimensions, notes}). None when no reference structure drove the page.
+        "structure_fidelity": result.get("structure_fidelity"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -273,6 +276,7 @@ def _score_run_row(
         "composite_score": result.get("composite_score"),
         "composite_status": result.get("composite_status"),
         "engine_scores": result.get("engine_scores"),
+        "structure_fidelity": result.get("structure_fidelity"),
         "deficiencies": result.get("deficiencies") or result.get("content_gaps") or [],
         "token_usage": result.get("token_usage"),
         "created_by": user_id,
