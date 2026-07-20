@@ -433,3 +433,76 @@ def _all_block_types(outline: list[dict[str, Any]]) -> set[str]:
         if isinstance(it, dict):
             out |= block_types_of(it)
     return out
+
+
+# ── corrective feedback (drives the generation retry loop) ───────────────────
+# Human-readable label per element flag the reference can require. Drives the
+# "you dropped these blocks" correction. `has_intro` is omitted — it's true for
+# any non-empty page, so it's never a meaningful miss.
+_FLAG_LABELS = {
+    "has_faq": "an FAQ section",
+    "has_cta": "a call-to-action",
+    "has_table": "a comparison/data table",
+    "has_lists": "a bulleted/numbered list",
+    "has_key_takeaways": "a key-takeaways block",
+}
+
+# Below this ordered-level similarity, the generated heading hierarchy has
+# drifted enough to correct (reordered / wrong H2-vs-H3 nesting).
+_ORDER_CORRECTION_RATIO = 0.75
+
+
+def _levels_desc(levels: list[str]) -> str:
+    h2 = levels.count("H2")
+    h3 = levels.count("H3")
+    if h3:
+        return f"{h2} H2 sections with {h3} H3 sub-points"
+    return f"{h2} H2 sections, no H3 nesting"
+
+
+def build_structure_corrections(
+    reference: dict[str, Any], generated: dict[str, Any]
+) -> str:
+    """Return imperative, layout-focused corrections for regenerating a page that
+    drifted from the reference structure — or "" when the layout already matches.
+
+    Deliberately scoped to the layout dimensions that drive real drift (section
+    count, dropped structural blocks, heading-hierarchy order) rather than exact
+    word counts, so the retry directive stays concrete and short. Both args are
+    structure analyses or full page_structures entries. Pure — no I/O."""
+    ref = _analysis_of(reference)
+    gen = _analysis_of(generated)
+    lines: list[str] = []
+
+    ref_n = _section_count(ref)
+    gen_n = _section_count(gen)
+    if ref_n and gen_n != ref_n:
+        verb = "Add sections" if gen_n < ref_n else "Consolidate sections"
+        lines.append(
+            f"- Produce exactly {ref_n} main H2 sections — you produced {gen_n}. "
+            f"{verb} to match, preserving the reference's section order and purpose."
+        )
+
+    ref_el = ref.get("elements") or {}
+    gen_el = gen.get("elements") or {}
+    missing = [
+        label
+        for flag, label in _FLAG_LABELS.items()
+        if ref_el.get(flag) and not gen_el.get(flag)
+    ]
+    if missing:
+        lines.append(
+            "- Include these blocks the reference has and your draft dropped: "
+            + ", ".join(missing)
+            + " — place each where the reference uses it."
+        )
+
+    ref_levels = _level_sequence(ref.get("outline") or [])
+    gen_levels = _level_sequence(gen.get("outline") or [])
+    if ref_levels and SequenceMatcher(None, ref_levels, gen_levels).ratio() < _ORDER_CORRECTION_RATIO:
+        lines.append(
+            f"- Match the reference's heading hierarchy ({_levels_desc(ref_levels)}) — "
+            "same H2/H3 nesting depth and section order."
+        )
+
+    return "\n".join(lines)

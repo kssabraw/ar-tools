@@ -390,6 +390,77 @@ def set_page_template_default(client_id: str, page_template_url: Optional[str]) 
     return {"local_seo_page_template_url": url}
 
 
+async def _apply_structure_gate(
+    result: dict, payload: dict, reference_analysis: Optional[dict]
+) -> dict:
+    """Score the generated page's structural fidelity against the client's stored
+    reference outline and, when it drifted on layout (wrong section count/order,
+    dropped FAQ/CTA/table/list blocks), regenerate with the specific corrections
+    fed back — keep-best by structural composite, capped at
+    `settings.local_seo_structure_max_passes`.
+
+    This turns the reference structure from prompt guidance the model can ignore
+    into a measured requirement. Runs ONLY when a reference structure actually
+    drove this generation. Deterministic (no LLM in the scoring) and best-effort:
+    any scoring/regeneration failure returns the best result so far, never
+    breaking the generation the user asked for. Attaches `structure_fidelity` to
+    the returned result for observability."""
+    if not settings.local_seo_structure_gate_enabled or not reference_analysis:
+        return result
+
+    from services.page_structure_eval import (
+        build_structure_corrections,
+        extract_outline_from_html,
+        score_structural_fidelity,
+    )
+
+    def _fidelity(res: dict) -> Optional[dict]:
+        try:
+            generated = extract_outline_from_html(res.get("content_html") or "")
+            return score_structural_fidelity(reference_analysis, generated)
+        except Exception:  # noqa: BLE001 — scoring must never break the run
+            logger.warning("local_seo.structure_gate_score_failed")
+            return None
+
+    best = result
+    best_fid = _fidelity(result)
+    if best_fid is None:
+        return result
+    best_score = best_fid.get("composite") or 0.0
+    min_composite = settings.local_seo_structure_min_composite
+
+    for pass_num in range(1, settings.local_seo_structure_max_passes + 1):
+        if best_score >= min_composite:
+            break
+        gen_outline = extract_outline_from_html(best.get("content_html") or "")
+        corrections = build_structure_corrections(reference_analysis, gen_outline)
+        if not corrections:
+            break  # nothing concrete to correct — don't spend a pass
+        retry_payload = dict(payload)
+        retry_payload["structure_corrections"] = corrections
+        try:
+            candidate = await _stream_nlp("/generate-page", retry_payload)
+        except HTTPException:
+            logger.warning("local_seo.structure_gate_regen_failed", extra={"pass": pass_num})
+            break
+        cand_fid = _fidelity(candidate)
+        cand_score = (cand_fid or {}).get("composite") or 0.0
+        logger.info(
+            "local_seo.structure_gate_pass",
+            extra={"pass": pass_num, "prev_score": best_score, "cand_score": cand_score},
+        )
+        if cand_fid is not None and cand_score > best_score:
+            best, best_fid, best_score = candidate, cand_fid, cand_score
+
+    logger.info(
+        "local_seo.structure_gate_final",
+        extra={"composite": best_score, "passed": best_score >= min_composite},
+    )
+    best = dict(best)
+    best["structure_fidelity"] = best_fid
+    return best
+
+
 async def generate_page(
     client_id: str, keyword: str, location: str, location_code: Optional[int],
     user_id: str, force_refresh: bool = False,
@@ -414,20 +485,24 @@ async def generate_page(
     )
     # Page template: per-page value wins; otherwise the client's saved default.
     template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
+    reference_analysis: Optional[dict] = None
     if template_url:
         payload["page_template_url"] = template_url
     else:
         # No explicit template — mirror the client's own local page layout from
         # the pre-analyzed reference structures (local landing preferred, else
-        # location). Avoids re-scraping a template URL at generate time.
-        from services.page_structure_render import render_reference_structure
+        # location). Avoids re-scraping a template URL at generate time. Hold onto
+        # the winning entry's analysis so the structural gate can score the output
+        # against the same outline the prompt was told to mirror.
+        from services.page_structure_render import render_reference_structure, usable_analysis
 
         structures = client.get("page_structures") or {}
-        reference = render_reference_structure(
-            structures.get("local_landing"), "local_landing"
-        ) or render_reference_structure(structures.get("location"), "location")
-        if reference:
-            payload["reference_page_structure"] = reference
+        for page_type in ("local_landing", "location"):
+            rendered = render_reference_structure(structures.get(page_type), page_type)
+            if rendered:
+                payload["reference_page_structure"] = rendered
+                reference_analysis = usable_analysis(structures.get(page_type))
+                break
     if (notes or "").strip():
         payload["notes"] = notes.strip()  # per-page writing guidance the writer follows
     serp = await _get_or_compute_analysis(
@@ -438,6 +513,7 @@ async def generate_page(
     else:
         payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
     result = await _stream_nlp("/generate-page", payload)
+    result = await _apply_structure_gate(result, payload, reference_analysis)
     return _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
 
 

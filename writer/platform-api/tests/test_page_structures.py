@@ -306,6 +306,73 @@ def test_extract_detailed_blocks_and_word_counts():
     assert any(b["type"] == "cta" for b in contact["blocks"])
 
 
+# ── structural-fidelity gate: corrections builder + usable_analysis ──────────
+
+def _ref_analysis():
+    """A reference outline with 3 H2 sections, a list, a table and an FAQ."""
+    from services.page_structure_eval import extract_outline_from_html
+
+    return extract_outline_from_html(
+        "<article><h1>Roof Restoration in Denver</h1><p>Direct answer.</p>"
+        "<h2>Our Services</h2><ul><li>Repair</li><li>Replace</li></ul>"
+        "<h2>Pricing</h2><table><tr><td>Service</td><td>Cost</td></tr></table>"
+        "<h2>Frequently Asked Questions</h2><p>A question and its answer.</p></article>"
+    )
+
+
+def test_build_structure_corrections_flags_drift():
+    from services.page_structure_eval import build_structure_corrections, extract_outline_from_html
+
+    reference = _ref_analysis()
+    # Drifted output: only 1 H2 section, no list/table/FAQ.
+    generated = extract_outline_from_html(
+        "<article><h1>Roofing</h1><h2>About Our Roofing</h2><p>just one long paragraph of prose</p></article>"
+    )
+    corrections = build_structure_corrections(reference, generated)
+    assert corrections  # non-empty → the gate will retry
+    # Section-count miss is named with the exact target + what was produced.
+    assert "exactly 3 main H2 sections" in corrections
+    assert "you produced 1" in corrections
+    # Dropped structural blocks are called out.
+    assert "an FAQ section" in corrections
+    assert "a bulleted/numbered list" in corrections
+    assert "a comparison/data table" in corrections
+
+
+def test_build_structure_corrections_empty_when_matched():
+    from services.page_structure_eval import build_structure_corrections
+
+    reference = _ref_analysis()
+    # Scoring a page against itself: no layout drift → no corrections.
+    assert build_structure_corrections(reference, reference) == ""
+
+
+def test_build_structure_corrections_consolidate_when_too_many_sections():
+    from services.page_structure_eval import build_structure_corrections, extract_outline_from_html
+
+    reference = _ref_analysis()  # 3 sections
+    generated = extract_outline_from_html(
+        "<article><h1>T</h1><h2>A</h2><p>x</p><h2>B</h2><p>y</p>"
+        "<h2>C</h2><p>z</p><h2>D</h2><p>w</p><h2>E</h2><p>v</p></article>"  # 5 sections
+    )
+    corrections = build_structure_corrections(reference, generated)
+    assert "exactly 3 main H2 sections" in corrections
+    assert "Consolidate sections" in corrections
+
+
+def test_usable_analysis_accessor():
+    from services.page_structure_render import usable_analysis
+
+    complete = _complete_entry()
+    analysis = usable_analysis(complete)
+    assert analysis is not None
+    assert analysis is complete["analysis"]
+    # Non-usable entries return None (mirrors the renderer's gate).
+    assert usable_analysis({"status": "pending"}) is None
+    assert usable_analysis(None) is None
+    assert usable_analysis({"status": "complete", "analysis": {"outline": [], "structure_summary": ""}}) is None
+
+
 def test_extract_does_not_double_count_nested_content():
     from services.page_structure_eval import extract_outline_from_html
 
