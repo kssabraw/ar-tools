@@ -61,6 +61,47 @@ async def set_run_featured_image(
     return {"featured_image_url": body.url or None}
 
 
+@router.get("/runs/{run_id}/github-publish/status", response_model=dict)
+async def github_publish_status(
+    run_id: UUID,
+    job_id: str,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Poll a blog GitHub-publish job (image generation + atomic commit)."""
+    supabase = get_supabase()
+    row = (
+        supabase.table("async_jobs")
+        .select("id, status, result, error")
+        .eq("id", job_id)
+        .eq("entity_id", str(run_id))
+        .single()
+        .execute()
+    )
+    if not row.data:
+        raise HTTPException(status_code=404, detail="job_not_found")
+    return {
+        "job_id": job_id,
+        "status": row.data.get("status"),
+        "result": row.data.get("result"),
+        "error": row.data.get("error"),
+    }
+
+
+@router.get("/runs/{run_id}/images", response_model=dict)
+async def list_run_images(run_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The images generated for a run (for the review UI)."""
+    supabase = get_supabase()
+    rows = (
+        supabase.table("run_images")
+        .select("id, role, kind, position, anchor_heading, alt, preview_url, repo_path, status")
+        .eq("run_id", str(run_id))
+        .order("role")
+        .order("position")
+        .execute()
+    ).data or []
+    return {"images": rows}
+
+
 def _sections_to_markdown(article: list[dict]) -> str:
     """Reconstruct markdown from the sources_cited enriched_article sections."""
     if not isinstance(article, list):
@@ -407,6 +448,33 @@ async def publish_run(
         }
 
     if body.destination == "github":
+        # Blog posts publish through an async job that generates a hero + body
+        # images with gpt-image-1 and commits the markdown + image bytes to the
+        # repo in one commit — too slow to hang the request. Service/location
+        # pages (no generated images) keep the synchronous single-file commit.
+        use_async_images = (
+            content_type == "blog_post"
+            and settings.blog_image_generation_enabled
+            and bool(settings.openai_api_key)
+            and bool(settings.github_publish_token)
+        )
+        if use_async_images:
+            if not (client.get("github_repo") or "").strip():
+                raise HTTPException(status_code=422, detail="github_repo_not_set")
+            from services.blog_image_publish import enqueue_blog_github_publish
+
+            job_id = enqueue_blog_github_publish(str(run_id), auth["user_id"])
+            logger.info(
+                "github_publish_enqueued",
+                extra={"run_id": str(run_id), "job_id": job_id, "user_id": auth["user_id"]},
+            )
+            return {
+                "success": True,
+                "destination": "github",
+                "status": "generating",
+                "job_id": job_id,
+            }
+
         markdown = _resolve_markdown(supabase, run_id, content_type)
         if not markdown.strip():
             raise HTTPException(status_code=422, detail="content_is_empty")
