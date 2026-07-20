@@ -587,7 +587,7 @@ Section 12 — FAQ (min 4, max 7 entries — 40–80 words each)
 
 Section 13 — Schema (delivered AFTER </article> as a separate <script> block)
 Generate 3 schema blocks as a single JSON-LD array inside one <script type="application/ld+json"> tag:
-1. LocalBusiness (subtype from category: Plumber/HVACBusiness/Electrician etc.)
+1. Organization (@type "Organization" — the business entity. Do NOT use LocalBusiness or any LocalBusiness subtype such as Plumber/HVACBusiness/Electrician on these pages; represent the business as an Organization only. You may still include name, url, logo, telephone, and address when that data is provided.)
 2. Service
 3. FAQPage (auto-extracted from Section 12)
 
