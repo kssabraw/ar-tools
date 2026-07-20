@@ -1,7 +1,14 @@
 # GBP Posts Module — PRD v1.0
 
-**Status:** Proposed (not built). Authoritative for the GBP Posts module when built.
+**Status:** Approved for build (owner, 2026-07-20). The first build ships **Phases 0–2** (connection activation + manual compose/publish/history + AI drafting/scheduling); Phase 3 (insights + suite integration) is a follow-up. Authoritative for the GBP Posts module.
 **Owner ask (2026-07-20):** "I have access to the Google Business Profile API. I want to add the ability to post GBP posts via this API."
+**Access state:** GCP quota confirmed at **300 QPM** in the console (2026-07-20) — the project is approved. The §3 verify script still gates Phase 0 (proves API enablement incl. the v4 API specifically, SA-as-Manager grants, and the posts surface end-to-end).
+
+**Locked decisions (owner, 2026-07-20):**
+1. **Build scope:** Phases 1+2 together in the first build; Phase 3 later.
+2. **Auto-publish:** opt-in per schedule; default is draft-for-approval (§5 stands as written).
+3. **Images:** manual upload per post **plus** a picker over the client's existing suite-generated images (public-bucket featured images) — §8.
+4. **Content tie-in:** **manual trigger only** — a "Draft a GBP post about this" action on published content (completed runs / Local SEO pages) that opens the composer with an AI draft seeded from that page. **No automatic** draft-on-publish producer in v1.
 **Depends on:** the existing (dormant) GBP API connection layer — `services/gbp_performance_service.py`, `gbp_locations` (migration `20260707080000_gbp_metrics.sql`), the agency service account in `GOOGLE_SERVICE_ACCOUNT_KEY`.
 **Sibling docs:** `docs/modules/client-reporting-prd-v1_0.md` (Phase 2 — GBP Performance metrics, same connection), `docs/sops/` GBP Authority SOPs, `docs/modules/maps-geogrid-strategy-prd-v1_0.md`.
 
@@ -51,7 +58,7 @@ This is the suite's first **write** integration with Google Business Profile. Ev
 
 ## 3. Permissions & activation checklist (do this before/with Phase 0)
 
-The app-side check tool is **`writer/platform-api/scripts/verify_gbp_api_access.py`** (ships with this PRD). Run it wherever `GOOGLE_SERVICE_ACCOUNT_KEY` is available (Railway PLATFORM shell, or locally with the key exported). It proves, in order, each layer below and prints an actionable diagnosis per failure. As of 2026-07-20 the production state is: key present on PLATFORM; `GBP_METRICS_ENABLED` **not set** (connection layer dormant); **no live GBP API call has been made by the app yet** — so every item below is unverified until the script runs green.
+The app-side check tool is **`writer/platform-api/scripts/verify_gbp_api_access.py`** (ships with this PRD). Run it wherever `GOOGLE_SERVICE_ACCOUNT_KEY` is available (Railway PLATFORM shell, `railway run`, or locally with the key exported). It proves, in order, each layer below and prints an actionable diagnosis per failure. As of 2026-07-20 the production state is: key present on PLATFORM; **item 3 confirmed** — the GCP console shows **300 QPM** (project approved); `GBP_METRICS_ENABLED` **not set** (connection layer dormant) and **no live GBP API call has been made by the app yet** — so items 1–2 and 4–5 remain unverified until the script runs green.
 
 | # | Layer | What "correct" looks like | How to fix |
 |---|---|---|---|
@@ -82,7 +89,8 @@ The script's step 4/5 output also yields the `accounts/{id}` + `locations/{id}` 
 
 ### Phase 2 — AI drafting + scheduling
 - **AI draft** (`gbp_post_generate` job): Claude drafts a post from the client's stored context — brand voice, ICP/differentiators, services (`clients` + silo/keyword data), recent review themes (the strategist's `review_snippets` raw material), recent published content (completed runs / local_seo_pages — "announce the new page" is a first-class draft mode), target keyword or theme supplied by the user. Guardrails in the prompt: never invent offers/prices/dates; no phone numbers in body text (rejection trigger); no medical/regulated claims; ≤1,500 chars with the CTA carrying the link. Output = a **draft** for human review, never direct to publish.
-- **Recurring schedules** (`gbp_post_schedules`): per client+location cadence (weekly/biweekly/monthly, weekday + hour) and a theme/rotation note; each tick AI-drafts a post. Two modes per schedule: **draft-for-approval** (default — creates a draft + in-app notification; a human approves → publish) and **auto-publish** (opt-in per schedule, for clients/owners who accept it). Self-clocked `next_run_at` rows on the shared `gsc_scheduler` loop — the `brand_scan_schedules` pattern verbatim; no new infra.
+- **"Draft a GBP post about this" (manual content trigger — locked decision 4):** an action on published content surfaces (a completed run's article view, a Local SEO page's saved/published view) that opens the composer with an AI draft pre-seeded from that page (title, URL as the CTA link, summary from the content). Manual only — no automatic draft-on-publish producer in v1.
+- **Recurring schedules** (`gbp_post_schedules`): per client+location cadence (weekly/biweekly/monthly, weekday + hour) and a theme/rotation note; each tick AI-drafts a post. Two modes per schedule: **draft-for-approval** (default — creates a draft + in-app notification; a human approves → publish) and **auto-publish** (opt-in per schedule, for clients/owners who accept it — locked decision 2). Self-clocked `next_run_at` rows on the shared `gsc_scheduler` loop — the `brand_scan_schedules` pattern verbatim; no new infra.
 - Model config: `gbp_post_model` (default `claude-sonnet-4-6` — same family as other client-facing copy; Haiku rejected for brand-voice fidelity, consistent with the Local SEO service-page ruling).
 
 ### Phase 3 — Measurement + suite integration
@@ -162,19 +170,23 @@ Config (`config.py`): `gbp_api_enabled` (False), `gbp_posts_enabled` (False), `g
 
 ---
 
-## 8. Media handling (v1: simple)
+## 8. Media handling (locked decision 3)
 
-An optional single image per post, uploaded through the existing file-upload path into a **public** bucket (reuse `wordpress_images` or add `gbp-post-images`), validated app-side against Google's floor (≥250×250, ≥10 KB; Pillow is already a dependency). The stored public URL goes into `media[].sourceUrl`. Google fetches at publish time — a private/signed URL will fail, hence public bucket only. AI-generated imagery is out of scope v1.
+An optional single image per post, from either source:
+- **Upload** through the existing file-upload path into a **public** bucket (reuse `wordpress_images` or add `gbp-post-images`), validated app-side against Google's floor (≥250×250, ≥10 KB; Pillow is already a dependency).
+- **Pick from the client's existing suite images** — a picker over the client's already-public generated assets (blog featured images in `wordpress_images`), so the "announce this content" flow can reuse the piece's own image with zero extra work.
+
+The stored public URL goes into `media[].sourceUrl`. Google fetches at publish time — a private/signed URL will fail, hence public buckets only. AI-generated-on-demand imagery is out of scope v1.
 
 ---
 
 ## 9. Risks / open questions
 
 1. **v4 legacy risk** — posts sit on a deprecated-family API Google has kept alive for years without a successor. Mitigation: the API wrapper is one thin file; a future v1 posts API would be a swap inside `gbp_posts_api.py`. Monitor the deprecation schedule; nothing else in the suite couples to v4.
-2. **Approval reality** — until §3's checklist runs green we don't actually know the project is approved (the app has never called the API). The verify script is the gate; if step 3 fails, the module is blocked on Google, not on us.
+2. **Approval reality** — ~~unknown~~ **quota confirmed at 300 QPM in the GCP console (2026-07-20)**; the project is approved. The verify script remains the Phase 0 gate for the layers the console can't show (v4 API enablement, SA-as-Manager grants, live posts-surface access).
 3. **Service-account manager onboarding** — one more "add this email" step per client (same friction as GSC; the UI already surfaces the SA email via `/gbp/service-account-email`).
 4. **Content-policy rejections** — expected occasionally; the sync job + notification make them visible, and the draft prompt avoids the known triggers. Track rejection rate in Phase 3.
-5. **Open (ask the owner):** (a) default posting cadence for the Baseline Stack (weekly?); (b) should auto-publish exist at all in v1, or approval-only until trust is built? PRD default: exists, opt-in, off. (c) test-post location for verify `--post-test` (use the agency's own listing, not a client's).
+5. **Open (ask the owner):** (a) default posting cadence for the Baseline Stack (weekly?); (b) ~~auto-publish in v1?~~ **resolved 2026-07-20: exists, opt-in per schedule, off by default** (locked decision 2). (c) test-post location for verify `--post-test` (use the agency's own listing, not a client's).
 
 ## 10. Success metrics
 
