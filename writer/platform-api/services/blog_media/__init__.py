@@ -14,3 +14,4 @@ Submodules:
 from __future__ import annotations
 
 from services.blog_media import article_html  # noqa: F401
+from services.blog_media import validate  # noqa: F401

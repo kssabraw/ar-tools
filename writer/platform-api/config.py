@@ -185,6 +185,33 @@ class Settings(BaseSettings):
         "Clean, modern, professional editorial illustration. Muted, cohesive color "
         "palette. No watermark. No embedded website UI or logos."
     )
+    # ── Media pipeline (planner-driven, GitHub/Astro) ────────────────────────
+    # The production media pipeline: an LLM media plan (hero + ≤2 inline
+    # images/charts) validated + placed + committed by the app. Supersedes the
+    # simple blog_image_* path above as it lands. Gated: off unless enabled AND
+    # OPENAI_API_KEY set.
+    blog_media_enabled: bool = True
+    # The media-planning model (proposes the plan; the app validates + owns
+    # counts/IDs/placement). Anthropic with the shared fallback.
+    blog_media_planner_model: str = "claude-sonnet-4-6"
+    blog_media_planner_max_tokens: int = 8000
+    # Image rendering — gpt-image-2 (reasoning image model; reads the article),
+    # WebP output at configured dimensions.
+    blog_media_image_model: str = "gpt-image-2"
+    blog_media_image_quality: str = "medium"          # low | medium | high
+    blog_media_hero_width: int = 2048
+    blog_media_hero_height: int = 1152
+    blog_media_inline_width: int = 1200
+    blog_media_inline_height: int = 900
+    # Allow transparent arithmetic derivations of chart values from explicit
+    # article values (Phase 2 charts); false → only values stated verbatim.
+    blog_media_allow_derived_values: bool = True
+    # Confidence gates (the app drops optional assets below threshold).
+    blog_media_hero_min_confidence: float = 0.75
+    blog_media_inline_min_confidence: float = 0.75
+    blog_media_chart_min_confidence: float = 0.90
+    # Repo path the committed media lives under (post slug appended).
+    blog_media_repo_path: str = "public/images/blog"
     outscraper_api_key: str = ""
     # Google Search Console — Organic Rank Tracker (Module #4).
     # The service-account key JSON (the entire downloaded key file, as a single
