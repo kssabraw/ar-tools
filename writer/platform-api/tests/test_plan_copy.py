@@ -127,7 +127,7 @@ def test_build_primary_backfill_wires_cluster_to_new_keyword():
     ]
     cmap = {"c1": "C1", "c2": "C2"}
     pkmap = {"k1": "K1"}
-    backfill = plan_copy.build_primary_backfill([], clusters, cmap, pkmap)
+    backfill = plan_copy.build_primary_backfill(clusters, cmap, pkmap)
     assert backfill == [{"id": "C1", "primary_keyword_id": "K1"}]
 
 
@@ -141,7 +141,7 @@ def test_end_to_end_ids_are_consistent(id_fn):
     _, tmap = plan_copy.build_topic_rows(topics, "S", id_fn=id_fn)
     _, cmap, pkmap = plan_copy.build_cluster_rows(clusters, tmap, id_fn=id_fn)
     kw_rows = plan_copy.build_keyword_rows(keywords, "S", tmap, cmap, pkmap)
-    backfill = plan_copy.build_primary_backfill([], clusters, cmap, pkmap)
+    backfill = plan_copy.build_primary_backfill(clusters, cmap, pkmap)
 
     new_kw_id = kw_rows[0]["id"]
     assert backfill[0]["primary_keyword_id"] == new_kw_id
