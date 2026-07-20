@@ -269,22 +269,40 @@ async def run_blog_media_publish_job(job: dict) -> None:
                 continue
 
             if asset["asset_type"] == "chart":
+                chart = asset["chart"]
                 # Validate against the SAME plain-text view the planner received
                 # (the model copies source_quotes from ARTICLE_PLAIN_TEXT; raw
                 # markdown carries <sup> citation HTML that would false-fail
                 # quotes spanning a citation).
                 ok, reason = validate_chart_spec(
-                    asset["chart"], article_text=plain_text,
+                    chart, article_text=plain_text,
                     allow_derived=settings.blog_media_allow_derived_values,
                 )
+                # Targeted recovery: a chart dropped ONLY because a value's quote
+                # was left blank (e.g. a number stated only in a table) gets one
+                # re-grounding pass, then is re-validated the same way — never a
+                # weakened rule, just a second chance to cite existing data.
+                if not ok and reason == "missing_source_quote" and settings.blog_media_chart_reground_enabled:
+                    regrounded = await _reground_chart(chart, plain_text)
+                    if regrounded is not None:
+                        ok2, reason2 = validate_chart_spec(
+                            regrounded, article_text=plain_text,
+                            allow_derived=settings.blog_media_allow_derived_values,
+                        )
+                        if ok2:
+                            chart, ok, reason = regrounded, True, None
+                        else:
+                            reason = f"{reason}>reground:{reason2}"
                 if not ok:
-                    asset_rows.append(_asset_row(run_id, asset, status="skipped", skip_reason=f"chart:{reason}"))
+                    asset_rows.append(_asset_row(
+                        run_id, {**asset, "chart": chart}, status="skipped", skip_reason=f"chart:{reason}"))
                     continue
-                svg = render_chart_svg(asset["chart"])
+                svg = render_chart_svg(chart)
                 repo_path = f"{base}/{slug}/{asset['filename']}"
                 image_files[repo_path] = svg.encode("utf-8")
                 preview = upload_svg_preview(svg, asset["filename"])
                 css_class = "article-chart"
+                asset = {**asset, "chart": chart}  # persist the grounded spec
             else:
                 data = await render_image(
                     asset["prompt"], width=asset.get("width") or settings.blog_media_inline_width,
@@ -383,6 +401,52 @@ async def run_blog_media_publish_job(job: dict) -> None:
         _notify_failure(run_id, "internal_error", job_id)
 
 
+async def _reground_chart(chart: dict, article_plain: str) -> dict | None:
+    """One targeted re-grounding pass for a chart dropped on `missing_source_quote`.
+
+    Asks the planner model to return the EXACT verbatim article sentence/table row
+    that states each unquoted value. The result is merged back (pure `apply_quotes`)
+    and RE-VALIDATED by the caller — so a fabricated or wrong quote is still
+    rejected. Returns the updated chart, or None on any failure (caller keeps the
+    original skip). Never raises."""
+    from services import report_llm
+    from services.blog_media.charts import apply_quotes, missing_quote_labels, points
+    from services.blog_media.planner import parse_plan_json
+
+    labels = set(missing_quote_labels(chart))
+    if not labels:
+        return None
+    value_lines = [
+        f'- "{str(d.get("label") or d.get("date") or "")}": value {d.get("display_value") or d.get("value")}'
+        for d in points(chart)
+        if str(d.get("label") or d.get("date") or "") in labels
+    ]
+    system = (
+        "You attach source evidence to chart values. For each value, return the "
+        "EXACT verbatim sentence or table row from the article that states that "
+        "value — quoted character-for-character, never paraphrased or invented. "
+        "If the article does not state a value anywhere, return an empty string for it."
+    )
+    user = (
+        f"ARTICLE:\n{article_plain}\n\nVALUES NEEDING A VERBATIM SOURCE QUOTE:\n"
+        + "\n".join(value_lines)
+        + '\n\nReturn ONLY JSON mapping each label to its verbatim quote: '
+        '{"<label>": "<verbatim quote>", ...}'
+    )
+    try:
+        raw = await report_llm.generate_text(
+            provider="anthropic", model=settings.blog_media_planner_model,
+            system=system, user=user, max_tokens=1500, log_tag="blog_media_chart_reground",
+        )
+        quotes = parse_plan_json(raw)
+        if not isinstance(quotes, dict):
+            return None
+        return apply_quotes(chart, {str(k): str(v) for k, v in quotes.items() if v})
+    except Exception as exc:  # noqa: BLE001 — best-effort recovery
+        logger.warning("blog_media.chart_reground_failed", extra={"error": str(exc)})
+        return None
+
+
 def _notify(client_id, **kwargs) -> None:
     """Best-effort notification through the shared service (in-app + Slack)."""
     try:
@@ -438,4 +502,7 @@ def _asset_row(run_id: str, asset: dict, *, status: str, repo_path: str | None =
         "used_fallback": used_fallback,
         "error": error,
         "skip_reason": skip_reason,
+        # Audit trail: the chart spec (values + the source_quotes the model
+        # supplied) so a skip is inspectable without re-running the planner.
+        "plan": asset.get("chart"),
     }

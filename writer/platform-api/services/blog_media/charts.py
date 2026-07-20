@@ -56,6 +56,38 @@ def points(chart: dict) -> list[dict]:
     return out
 
 
+def missing_quote_labels(chart: dict) -> list[str]:
+    """Labels of non-derived data points whose `source_quote` is blank — the
+    values a `missing_source_quote` skip is caused by. Pure."""
+    out: list[str] = []
+    for d in points(chart):
+        if d.get("derived"):
+            continue
+        if not str(d.get("source_quote") or "").strip():
+            out.append(str(d.get("label") or d.get("date") or ""))
+    return out
+
+
+def apply_quotes(chart: dict, quotes: dict[str, str]) -> dict:
+    """Return a copy of `chart` with each blank-quote value's `source_quote`
+    filled from `quotes` (keyed by the value's label). A label absent from
+    `quotes` is left blank — the caller re-validates, so an unfilled value simply
+    fails again (never bypasses the source rule). Pure."""
+    import copy
+
+    out = copy.deepcopy(chart)
+    for s in out.get("series") or []:
+        if not isinstance(s, dict):
+            continue
+        for d in s.get("data") or []:
+            if not isinstance(d, dict) or d.get("derived"):
+                continue
+            label = str(d.get("label") or d.get("date") or "")
+            if not str(d.get("source_quote") or "").strip() and quotes.get(label):
+                d["source_quote"] = quotes[label]
+    return out
+
+
 def _number_in_quote(d: dict, quote: str) -> bool:
     """Whether the value's number appears in its supporting quote (tolerant of
     thousands separators + a formatted display value)."""

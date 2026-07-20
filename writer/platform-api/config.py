@@ -180,6 +180,13 @@ class Settings(BaseSettings):
     # Allow transparent arithmetic derivations of chart values from explicit
     # article values (Phase 2 charts); false → only values stated verbatim.
     blog_media_allow_derived_values: bool = True
+    # When a chart is dropped ONLY because the planner left a value's
+    # source_quote blank (missing_source_quote — the data may still be in the
+    # article, e.g. inside a table), attempt one targeted re-grounding call that
+    # asks the model to supply a verbatim quote per value. The result is
+    # re-validated the same way, so this recovers real charts without weakening
+    # the no-fabrication rule.
+    blog_media_chart_reground_enabled: bool = True
     # Confidence gates (the app drops optional assets below threshold).
     blog_media_hero_min_confidence: float = 0.75
     blog_media_inline_min_confidence: float = 0.75

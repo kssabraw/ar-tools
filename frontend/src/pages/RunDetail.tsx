@@ -372,7 +372,7 @@ export function RunDetail() {
 
   const runImagesQuery = useQuery({
     queryKey: ['run-images', id],
-    queryFn: () => api.get<{ images: Array<{ id: string; role: string; kind: string; alt: string; preview_url: string | null; status?: string; used_fallback?: boolean }> }>(`/runs/${id}/images`),
+    queryFn: () => api.get<{ images: Array<{ id: string; role: string; kind: string; alt: string; preview_url: string | null; status?: string; used_fallback?: boolean }>; issues?: Array<{ id: string; asset_id: string; kind: string; status: string; reason: string | null; alt: string | null }> }>(`/runs/${id}/images`),
     enabled: run?.content_type === 'blog_post' && run?.status === 'complete',
   })
   const featuredImageMutation = useMutation({
@@ -775,6 +775,19 @@ export function RunDetail() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+          {(runImagesQuery.data?.issues?.length ?? 0) > 0 && (
+            <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid #f1f5f9' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 6 }}>
+                Skipped media ({runImagesQuery.data!.issues!.length})
+              </div>
+              {runImagesQuery.data!.issues!.map((iss) => (
+                <div key={iss.id} style={{ fontSize: 12, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 6, padding: '6px 10px', marginBottom: 6 }}>
+                  <strong>{iss.kind === 'chart' ? 'Chart' : 'Image'}</strong> {iss.status} — {iss.reason || 'unknown'}
+                  {iss.alt ? <span style={{ color: '#b45309' }}> · {iss.alt}</span> : null}
+                </div>
+              ))}
             </div>
           )}
           <pre style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, overflowX: 'auto', fontSize: 13, lineHeight: 1.7, color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 600, overflowY: 'auto' }}>

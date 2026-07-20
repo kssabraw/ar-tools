@@ -124,7 +124,8 @@ async def list_run_images(run_id: UUID, auth: dict = Depends(require_auth)) -> d
     try:
         rows = (
             supabase.table("blog_media_assets")
-            .select("id, asset_id, role, asset_type, alt_text, caption, preview_url, repo_path, status, used_fallback")
+            .select("id, asset_id, role, asset_type, alt_text, caption, preview_url, "
+                    "repo_path, status, used_fallback, error, skip_reason, plan")
             .eq("run_id", str(run_id))
             .order("asset_id")
             .execute()
@@ -146,7 +147,23 @@ async def list_run_images(run_id: UUID, auth: dict = Depends(require_auth)) -> d
         # Only surface assets that actually produced a preview/committed image.
         if r.get("preview_url") or r.get("status") in ("inserted", "uploaded")
     ]
-    return {"images": images}
+    # Auditability: assets the pipeline dropped (a chart with an unsupported
+    # value, an unplaceable image, a render failure) with the reason + the raw
+    # chart spec, so "why is there no chart?" is answerable without a DB dig.
+    issues = [
+        {
+            "id": r.get("id"),
+            "asset_id": r.get("asset_id"),
+            "kind": r.get("asset_type"),
+            "status": r.get("status"),
+            "reason": r.get("skip_reason") or r.get("error"),
+            "alt": r.get("alt_text"),
+            "spec": r.get("plan"),
+        }
+        for r in rows
+        if r.get("status") in ("skipped", "failed")
+    ]
+    return {"images": images, "issues": issues}
 
 
 def _sections_to_markdown(article: list[dict]) -> str:

@@ -177,3 +177,40 @@ def test_axis_labels_rendered_when_provided():
     svg = c.render_chart_svg(ch)
     assert ">Year<" in svg
     assert "Share (%)" in svg and "rotate(-90" in svg
+
+
+def test_missing_quote_labels_flags_blank_and_ignores_derived():
+    ch = {"type": "bar", "series": [{"data": [
+        {"label": "Perplexity", "value": 6.61, "source_quote": "Perplexity averages 6.61"},
+        {"label": "ChatGPT", "value": 2.62, "source_quote": ""},
+        {"label": "Remainder", "value": 30, "derived": True, "formula": "x"},
+    ]}]}
+    assert c.missing_quote_labels(ch) == ["ChatGPT"]
+
+
+def test_apply_quotes_fills_only_blank_values_and_is_pure():
+    ch = {"type": "bar", "series": [{"data": [
+        {"label": "Perplexity", "value": 6.61, "source_quote": "existing quote"},
+        {"label": "ChatGPT", "value": 2.62, "source_quote": ""},
+    ]}]}
+    out = c.apply_quotes(ch, {"ChatGPT": "ChatGPT ~2.62 citations", "Perplexity": "SHOULD NOT OVERWRITE"})
+    assert out["series"][0]["data"][1]["source_quote"] == "ChatGPT ~2.62 citations"
+    assert out["series"][0]["data"][0]["source_quote"] == "existing quote"  # not overwritten
+    assert ch["series"][0]["data"][1]["source_quote"] == ""  # original untouched (pure)
+
+
+def test_reground_then_validate_recovers_table_sourced_value():
+    # The "What Is AEO" case: two values quotable in prose, ChatGPT's only in a
+    # table row. Regrounding supplies the table-row quote; re-validation passes.
+    article = ("Perplexity averages 6.61 citations per answer and Google Gemini averages 6.1. "
+               "ChatGPT ~2.62 citations Training data plus Bing index.")
+    ch = {"type": "bar", "source_name": "Evergreen", "series": [{"data": [
+        {"label": "Perplexity", "value": 6.61, "display_value": "6.61", "source_quote": "Perplexity averages 6.61 citations per answer", "source_name": "Evergreen"},
+        {"label": "Gemini", "value": 6.1, "display_value": "6.1", "source_quote": "Google Gemini averages 6.1", "source_name": "Evergreen"},
+        {"label": "ChatGPT", "value": 2.62, "display_value": "2.62", "source_quote": "", "source_name": "Evergreen"},
+    ]}]}
+    ok, reason = c.validate_chart_spec(ch, article_text=article, allow_derived=False)
+    assert not ok and reason == "missing_source_quote"
+    fixed = c.apply_quotes(ch, {"ChatGPT": "ChatGPT ~2.62 citations"})
+    ok2, _ = c.validate_chart_spec(fixed, article_text=article, allow_derived=False)
+    assert ok2
