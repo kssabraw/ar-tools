@@ -587,7 +587,9 @@ async def _run_rubric(
         if html is None:
             return ([sig._check("page", "Posted page reachable", None,
                                 note="page unreachable/blocked")], examined, None)
-        checks = sig.check_website_page(html, fields["domain"], fields["business_name"])
+        checks = sig.check_website_page(
+            html, fields["domain"], fields["business_name"], keyword=keyword, url=url,
+        )
         # Structural design fit vs the stored reference (QA_Checklists §Website
         # Pages Posted, "design fit — structural"). Page-type attribution is
         # heuristic, so a low score reads needs_human, never an auto-bounce.
@@ -598,6 +600,19 @@ async def _run_rubric(
             checks.append(sig._check(
                 "structural_fit", "Design fit (structural) vs reference page", ok,
                 note=f"fidelity {composite:.0f}/100 — {note}",
+            ))
+        else:
+            # No usable reference page structure on file (none stored, or a thin
+            # one with zero captured sections — scoring against which yields a
+            # meaningless ~50/100 artifact). Report the real situation and the
+            # fix, as an ADVISORY so it never bounces the page. Capturing a
+            # reference page URL for this page type on the client form enables
+            # the structural design-fit check.
+            checks.append(sig._check(
+                "structural_fit", "Design fit (structural) vs reference page", None,
+                blocking=False,
+                note="no reference page structure on file for this page type — add a "
+                     "reference page URL on the client form to enable this check",
             ))
         # Design fit — VISUAL (QA_Checklists §Website Pages Posted, the "later
         # phase" now built). Two layers:
@@ -634,6 +649,13 @@ def _structural_fit(html: str, client: Optional[dict]) -> Optional[tuple[float, 
         structures = (client or {}).get("page_structures") or {}
         ref = structures.get("service") or structures.get("local_landing") or structures.get("location")
         if not ref:
+            return None
+        # A reference with zero captured sections is not a usable baseline:
+        # scoring against it produces a meaningless ~50/100 (the section &
+        # heading-order dimensions score 0 for lack of anything to compare, the
+        # rest default to full credit). Treat it as "no reference" so QA reports
+        # the real situation (capture a reference) rather than a phantom score.
+        if pse._section_count(pse._analysis_of(ref)) <= 0:
             return None
         outline = pse.extract_outline_from_html(html)
         result = pse.score_structural_fidelity(ref, outline)

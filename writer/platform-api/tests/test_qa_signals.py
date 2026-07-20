@@ -240,18 +240,83 @@ def test_blog_markdown_long_paragraph_is_advisory_not_blocking():
 def test_website_page_checks():
     html = """<html><head><title>Roof Repair Springfield | Acme</title>
     <meta name="description" content="Expert roof repair."></head>
-    <body><img src="x.jpg" alt="roof"><a href="https://acme.com/contact">contact</a>
+    <body><h1>Roof Repair Springfield</h1>
+    <img src="x.jpg" alt="roof"><a href="https://acme.com/contact">contact</a>
     <p>Acme Roofing serves Springfield.</p></body></html>"""
-    v = sig.build_verdict(sig.check_website_page(html, "acme.com", "Acme Roofing"))
+    v = sig.build_verdict(sig.check_website_page(
+        html, "acme.com", "Acme Roofing",
+        keyword="roof repair springfield",
+        url="https://acme.com/roof-repair-springfield/",
+    ))
     assert v["verdict"] == sig.PASS
 
 
-def test_website_page_missing_meta_fails():
+def test_website_page_missing_meta_title_fails_but_description_is_advisory():
+    # No title, no meta description, no H1. Meta title is still blocking (fails);
+    # meta description is now advisory (owner ruling) — it must NOT appear as a
+    # blocking failure.
     html = "<html><body><a href='https://acme.com/x'>x</a><img src='a.jpg' alt='a'></body></html>"
-    v = sig.build_verdict(sig.check_website_page(html, "acme.com", "Acme"))
+    checks = sig.check_website_page(html, "acme.com", "Acme",
+                                    keyword="roofing", url="https://acme.com/x")
+    v = sig.build_verdict(checks)
     assert v["verdict"] == sig.FAIL
     labels = " ".join(v["failed"]).lower()
-    assert "meta title" in labels and "meta description" in labels
+    assert "meta title" in labels
+    assert "meta description" not in labels
+    md = next(c for c in checks if c["key"] == "meta_description")
+    assert md["blocking"] is False and md["ok"] is False
+
+
+def test_website_page_meta_description_optional():
+    # Everything present except the meta description → still passes (advisory).
+    html = """<html><head><title>Practice Management Coral Springs</title></head>
+    <body><h1>Practice Management Coral Springs</h1>
+    <img src="x.jpg" alt="x"><a href="https://myihbs.com/contact">contact</a></body></html>"""
+    checks = sig.check_website_page(
+        html, "myihbs.com", None,
+        keyword="practice management coral springs",
+        url="https://www.myihbs.com/coral-springs/practice-management-coral-springs/",
+    )
+    assert sig.build_verdict(checks)["verdict"] == sig.PASS
+
+
+def test_website_page_keyword_placement_blocking():
+    # Keyword in title + H1 but NOT in the URL slug → blocking fail on the URL.
+    html = """<html><head><title>Emergency Plumber Miami</title></head>
+    <body><h1>Emergency Plumber Miami</h1><a href="https://acme.com/x">x</a>
+    <img src="a.jpg" alt="a"></body></html>"""
+    checks = sig.check_website_page(
+        html, "acme.com", None,
+        keyword="emergency plumber miami", url="https://acme.com/services/plumbing/",
+    )
+    by = {c["key"]: c for c in checks}
+    assert by["keyword_in_title"]["ok"] is True
+    assert by["keyword_in_h1"]["ok"] is True
+    assert by["keyword_in_url"]["ok"] is False
+    assert sig.build_verdict(checks)["verdict"] == sig.FAIL
+
+
+def test_website_page_keyword_unknown_needs_human():
+    # No keyword on the task → the three placement checks read 'could not verify'
+    # → needs_human (never a guess), everything else being fine.
+    html = """<html><head><title>Some Page</title></head>
+    <body><h1>Some Page</h1><a href="https://acme.com/x">x</a>
+    <img src="a.jpg" alt="a"></body></html>"""
+    checks = sig.check_website_page(html, "acme.com", None, keyword=None, url="https://acme.com/x")
+    by = {c["key"]: c for c in checks}
+    assert by["keyword_in_title"]["ok"] is None
+    assert by["keyword_in_url"]["ok"] is None
+    assert by["keyword_in_h1"]["ok"] is None
+    assert sig.build_verdict(checks)["verdict"] == sig.NEEDS_HUMAN
+
+
+def test_keyword_in_url():
+    assert sig.keyword_in_url(
+        "https://x.com/practice-management-services-in-coral-springs/",
+        "practice management services") is True
+    assert sig.keyword_in_url("https://x.com/about/", "roof repair") is False
+    assert sig.keyword_in_url("https://x.com/x", None) is None
+    assert sig.keyword_in_url(None, "roofing") is None
 
 
 # ---------------------------------------------------------------------------

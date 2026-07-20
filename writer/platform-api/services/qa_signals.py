@@ -132,6 +132,22 @@ def keyword_present(text: Optional[str], keyword: Optional[str]) -> Optional[boo
     return kw in normalize_ws(text).casefold()
 
 
+def keyword_in_url(url: Optional[str], keyword: Optional[str]) -> Optional[bool]:
+    """Whether the target keyword appears in the URL's path slug, with hyphens
+    and other separators normalized to spaces (so a slug like
+    'practice-management-services-in-coral-springs' matches the keyword
+    'practice management services'). Case-insensitive. None when the keyword or
+    URL is unknown → the check reads 'could not verify'. Pure."""
+    from urllib.parse import unquote, urlparse
+
+    kw = normalize_ws(re.sub(r"[^0-9a-z]+", " ", (keyword or "").casefold()))
+    if not kw or not (url or "").strip():
+        return None
+    path = unquote(urlparse(url).path or "")
+    slug = normalize_ws(re.sub(r"[^0-9a-z]+", " ", path.casefold()))
+    return kw in slug
+
+
 def has_emoji(text: Optional[str]) -> bool:
     return bool(_EMOJI_RE.search(text or ""))
 
@@ -540,24 +556,42 @@ def asset_urls_of(html: str, base_url: str, cap: int = 12) -> dict[str, list[str
 
 # --- Website page checks (the extras the 8-engine scorer can't see) ---------
 def check_website_page(html: str, client_domain: str,
-                       business_name: Optional[str]) -> list[dict]:
-    """QA_Checklists §Website Pages Posted, deterministic subset: meta title +
-    description, internal link, images-with-alt (blocking); client name present
-    (advisory — service pages legitimately vary). Structural fidelity + the
-    8-engine score are attached by qa_service where available."""
+                       business_name: Optional[str],
+                       keyword: Optional[str] = None,
+                       url: Optional[str] = None) -> list[dict]:
+    """QA_Checklists §Website Pages Posted, deterministic subset.
+
+    Blocking: meta title present; the target keyword in the <title> tag, the
+    URL slug and the H1 (on-page keyword placement — owner ruling 2026-07-20);
+    an internal link back to the client site; images have alt text. Advisory:
+    meta description present (owner ruling 2026-07-20 — recommended, no longer
+    required); client name present (service pages legitimately vary).
+    Structural fidelity + the visual layers are attached by qa_service where
+    available."""
     soup = BeautifulSoup(html or "", "html.parser")
     title = (soup.title.string or "").strip() if soup.title and soup.title.string else ""
     desc_tag = soup.find("meta", attrs={"name": "description"})
     desc = (desc_tag.get("content") or "").strip() if desc_tag else ""
+    h1_tag = soup.find("h1")
+    h1_text = h1_tag.get_text(" ", strip=True) if h1_tag else ""
     imgs = soup.find_all("img")
     missing_alt = [i for i in imgs if not (i.get("alt") or "").strip()]
     internal = links_to_domain(extract_anchors(html), client_domain) if client_domain else []
     name_ok: Optional[bool] = None
     if normalize_ws(business_name):
         name_ok = normalize_ws(business_name).casefold() in visible_text_of(html).casefold()
+    kw_note = f'keyword: “{keyword}”' if keyword else "no target keyword found on the task"
     return [
         _check("meta_title", "Meta title present", bool(title)),
-        _check("meta_description", "Meta description present", bool(desc)),
+        _check("meta_description", "Meta description present", bool(desc), blocking=False),
+        _check("keyword_in_title", "Target keyword in the title tag",
+               keyword_present(title, keyword), note=kw_note),
+        _check("keyword_in_url", "Target keyword in the URL",
+               keyword_in_url(url, keyword),
+               note=kw_note if keyword else "no target keyword found on the task"),
+        _check("keyword_in_h1", "Target keyword in the H1",
+               keyword_present(h1_text, keyword),
+               note=("no H1 found on the page" if not h1_text else kw_note)),
         _check("internal_link", "Internal link to the client's site",
                bool(internal) if client_domain else None,
                note="" if client_domain else "client has no website on file"),
