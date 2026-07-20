@@ -64,19 +64,57 @@ def faqs_from_article(article: list[dict]) -> list[dict[str, str]]:
     return faqs
 
 
+def _build_organization(
+    *,
+    name: str,
+    url: str = "",
+    logo_url: Optional[str] = None,
+    same_as: Optional[list[str]] = None,
+    telephone: Optional[str] = None,
+) -> dict[str, Any]:
+    """The client's brand as a schema.org Organization node.
+
+    Carries an `@id` (derived from the site URL) so the post can reference the
+    same entity from author + publisher instead of duplicating it, a `logo`
+    (ImageObject — Google's Article guidance wants the publisher to have one),
+    and `sameAs` links (e.g. the Google Business Profile) that tie the brand to
+    known profiles. Returns {} when there's no name (nothing to describe)."""
+    if not name or not name.strip():
+        return {}
+    org: dict[str, Any] = {"@type": "Organization"}
+    url = (url or "").strip()
+    if url:
+        org["@id"] = f"{url.rstrip('/')}#organization"
+    org["name"] = name.strip()
+    if url:
+        org["url"] = url
+    if logo_url and logo_url.strip():
+        org["logo"] = {"@type": "ImageObject", "url": logo_url.strip()}
+    sa = [s.strip() for s in (same_as or []) if isinstance(s, str) and s.strip()]
+    if sa:
+        org["sameAs"] = sa
+    if telephone and telephone.strip():
+        org["telephone"] = telephone.strip()
+    return org
+
+
 def build_blog_jsonld(
     *,
     title: str,
     faqs: Optional[list[dict[str, str]]] = None,
     brand_name: str = "",
     site_url: str = "",
+    logo_url: Optional[str] = None,
+    same_as: Optional[list[str]] = None,
+    telephone: Optional[str] = None,
     image_url: Optional[str] = None,
     date_published: Optional[str] = None,
     date_modified: Optional[str] = None,
     description: Optional[str] = None,
     url: Optional[str] = None,
 ) -> str:
-    """Return a JSON-LD string with a BlogPosting node and (if FAQs) a FAQPage.
+    """Return a JSON-LD string with a BlogPosting node, the brand Organization,
+    and (if FAQs) a FAQPage.
 
     All fields beyond `title` are optional and emitted only when present, so a
     thin post still yields a valid (if minimal) BlogPosting. Returns "" when
@@ -89,11 +127,23 @@ def build_blog_jsonld(
 
     graph: list[dict[str, Any]] = []
 
-    org: dict[str, Any] = {}
-    if brand_name and brand_name.strip():
-        org = {"@type": "Organization", "name": brand_name.strip()}
-        if site_url and site_url.strip():
-            org["url"] = site_url.strip()
+    org = _build_organization(
+        name=brand_name,
+        url=site_url,
+        logo_url=logo_url,
+        same_as=same_as,
+        telephone=telephone,
+    )
+    # No author byline flows through the pipeline — the client/brand Organization
+    # is the best available author + publisher. When it has a stable @id (a site
+    # URL), emit it once as its own node and reference it by @id; otherwise inline.
+    org_ref: Optional[dict[str, Any]] = None
+    if org:
+        if org.get("@id"):
+            graph.append(org)
+            org_ref = {"@id": org["@id"]}
+        else:
+            org_ref = org
 
     posting: dict[str, Any] = {"@type": "BlogPosting", "headline": headline}
     if description and description.strip():
@@ -104,11 +154,9 @@ def build_blog_jsonld(
         posting["datePublished"] = date_published
     if date_modified:
         posting["dateModified"] = date_modified
-    if org:
-        # No author byline flows through the pipeline — the client/brand
-        # Organization is the best available author + publisher.
-        posting["author"] = org
-        posting["publisher"] = org
+    if org_ref:
+        posting["author"] = org_ref
+        posting["publisher"] = org_ref
     if url and url.strip():
         posting["mainEntityOfPage"] = {"@type": "WebPage", "@id": url.strip()}
     posting["inLanguage"] = "en"

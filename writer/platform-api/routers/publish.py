@@ -242,11 +242,19 @@ def _resolve_blog_schema(
 
     today = datetime.now(timezone.utc).date().isoformat()
     date_published = _iso_date(run.get("published_at")) or _iso_date(run.get("created_at")) or today
+    gbp = client.get("gbp") if isinstance(client.get("gbp"), dict) else {}
+    # sameAs: link the brand to its known profiles (the Google Business Profile).
+    same_as = [u for u in [gbp.get("google_maps_uri")] if u and str(u).strip()]
     return build_blog_jsonld(
         title=title,
         faqs=_resolve_blog_faqs(supabase, run_id),
         brand_name=client.get("name") or "",
-        site_url=client.get("wordpress_site_url") or "",
+        # Prefer the client's canonical website; the WP site is only a fallback, so
+        # a post published to Astro/GitHub (no WP URL) still gets a brand URL/@id.
+        site_url=client.get("website_url") or client.get("wordpress_site_url") or "",
+        logo_url=client.get("logo_url") or gbp.get("logo") or None,
+        same_as=same_as or None,
+        telephone=gbp.get("phone") or None,
         image_url=image_url,
         date_published=date_published,
         date_modified=today,
@@ -279,7 +287,7 @@ async def publish_run(
     client_result = (
         supabase.table("clients")
         .select(
-            "name, google_drive_folder_id, drive_folders, "
+            "name, google_drive_folder_id, drive_folders, website_url, logo_url, "
             "wordpress_site_url, wordpress_username, wordpress_app_password, "
             "github_repo, github_branch, github_content_path, github_content_paths, "
             "github_inferred_patterns, business_location, target_cities, gbp"

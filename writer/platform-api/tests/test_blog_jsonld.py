@@ -1,4 +1,4 @@
-"""Unit tests for the blog JSON-LD builder (BlogPosting + FAQPage)."""
+"""Unit tests for the blog JSON-LD builder (Organization + BlogPosting + FAQPage)."""
 
 import json
 
@@ -16,6 +16,10 @@ def _graph(schema: str) -> list[dict]:
     return parsed["@graph"]
 
 
+def _nodes(graph: list[dict], type_: str) -> list[dict]:
+    return [n for n in graph if n.get("@type") == type_]
+
+
 def test_minimal_blogposting_with_only_title():
     schema = build_blog_jsonld(title="How to Fix a Leaky Roof")
     graph = _graph(schema)
@@ -24,9 +28,10 @@ def test_minimal_blogposting_with_only_title():
     assert posting["@type"] == "BlogPosting"
     assert posting["headline"] == "How to Fix a Leaky Roof"
     assert posting["inLanguage"] == "en"
-    # No brand/faqs → no author/publisher/FAQPage.
+    # No brand/faqs → no Organization node, no author/publisher/FAQPage.
     assert "author" not in posting
     assert "publisher" not in posting
+    assert _nodes(graph, "Organization") == []
 
 
 def test_empty_title_returns_empty_string():
@@ -36,7 +41,7 @@ def test_empty_title_returns_empty_string():
 
 def test_headline_clipped_to_110_chars():
     long_title = "Roof " * 40  # 200 chars
-    posting = _graph(build_blog_jsonld(title=long_title))[0]
+    posting = _nodes(_graph(build_blog_jsonld(title=long_title)), "BlogPosting")[0]
     assert len(posting["headline"]) <= 110
 
 
@@ -49,26 +54,25 @@ def test_full_graph_with_brand_dates_image_and_faqs():
         ],
         brand_name="Acme Plumbing",
         site_url="https://acme.example",
+        logo_url="https://cdn.example/logo.png",
+        same_as=["https://maps.google.com/?cid=123"],
+        telephone="+1-555-0100",
         image_url="https://cdn.example/hero.jpg",
         date_published="2026-07-01",
         date_modified="2026-07-20",
     )
     graph = _graph(schema)
-    assert len(graph) == 2
-    posting, faqpage = graph[0], graph[1]
+    assert len(graph) == 3  # Organization + BlogPosting + FAQPage
 
-    assert posting["@type"] == "BlogPosting"
+    posting = _nodes(graph, "BlogPosting")[0]
     assert posting["image"] == "https://cdn.example/hero.jpg"
     assert posting["datePublished"] == "2026-07-01"
     assert posting["dateModified"] == "2026-07-20"
-    assert posting["author"] == {
-        "@type": "Organization",
-        "name": "Acme Plumbing",
-        "url": "https://acme.example",
-    }
+    # author + publisher reference the shared Organization node by @id.
+    assert posting["author"] == {"@id": "https://acme.example#organization"}
     assert posting["publisher"] == posting["author"]
 
-    assert faqpage["@type"] == "FAQPage"
+    faqpage = _nodes(graph, "FAQPage")[0]
     assert len(faqpage["mainEntity"]) == 2
     first = faqpage["mainEntity"][0]
     assert first["@type"] == "Question"
@@ -76,19 +80,45 @@ def test_full_graph_with_brand_dates_image_and_faqs():
     assert first["acceptedAnswer"] == {"@type": "Answer", "text": "Within an hour."}
 
 
+def test_brand_organization_node_carries_id_logo_sameas_telephone():
+    schema = build_blog_jsonld(
+        title="X",
+        brand_name="Acme Plumbing",
+        site_url="https://acme.example/",  # trailing slash normalized in @id
+        logo_url="https://cdn.example/logo.png",
+        same_as=["https://maps.google.com/?cid=123", "", "  "],
+        telephone="+1-555-0100",
+    )
+    org = _nodes(_graph(schema), "Organization")[0]
+    assert org["@id"] == "https://acme.example#organization"
+    assert org["name"] == "Acme Plumbing"
+    assert org["url"] == "https://acme.example/"
+    assert org["logo"] == {"@type": "ImageObject", "url": "https://cdn.example/logo.png"}
+    assert org["sameAs"] == ["https://maps.google.com/?cid=123"]  # blanks filtered
+    assert org["telephone"] == "+1-555-0100"
+
+
 def test_no_faqpage_when_faqs_empty_or_incomplete():
     schema = build_blog_jsonld(
         title="No FAQ Here",
         faqs=[{"question": "Q only"}, {"answer": "A only"}, {}],
     )
-    graph = _graph(schema)
-    assert len(graph) == 1
-    assert graph[0]["@type"] == "BlogPosting"
+    assert _nodes(_graph(schema), "FAQPage") == []
 
 
-def test_brand_without_site_url_omits_url():
-    posting = _graph(build_blog_jsonld(title="X", brand_name="Acme"))[0]
-    assert posting["author"] == {"@type": "Organization", "name": "Acme"}
+def test_brand_without_site_url_is_inlined_without_id():
+    # No site URL → no stable @id → the Organization is inlined on the post
+    # (not emitted as its own node) and carries no url/@id.
+    graph = _graph(build_blog_jsonld(title="X", brand_name="Acme", logo_url="https://c/l.png"))
+    assert _nodes(graph, "Organization") == []  # no standalone node
+    posting = _nodes(graph, "BlogPosting")[0]
+    assert posting["author"] == {
+        "@type": "Organization",
+        "name": "Acme",
+        "logo": {"@type": "ImageObject", "url": "https://c/l.png"},
+    }
+    assert "@id" not in posting["author"]
+    assert posting["publisher"] == posting["author"]
 
 
 def test_markdown_to_plain_strips_formatting_links_and_citations():
