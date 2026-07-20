@@ -297,6 +297,9 @@ export function RunDetail() {
   const [wpUrl, setWpUrl] = useState<string | null>(null)
   const [wpStatus, setWpStatus] = useState<'draft' | 'publish'>('draft')
   const [ghUrl, setGhUrl] = useState<string | null>(null)
+  const [ghPhase, setGhPhase] = useState<'idle' | 'generating' | 'error'>('idle')
+  const [ghJobId, setGhJobId] = useState<string | null>(null)
+  const [ghError, setGhError] = useState<string | null>(null)
   const [fmt, setFmt] = useState<'markdown' | 'html'>('markdown')
   const publishMutation = useMutation({
     mutationFn: () => api.post<{ doc_url: string }>(`/runs/${id}/publish`, {}),
@@ -316,13 +319,59 @@ export function RunDetail() {
     },
   })
   const ghPublishMutation = useMutation({
-    mutationFn: () => api.post<{ url: string; path: string }>(
+    mutationFn: () => api.post<{ url?: string; path?: string; status?: string; job_id?: string }>(
       `/runs/${id}/publish`, { destination: 'github' },
     ),
     onSuccess: (data) => {
-      setGhUrl(data.url)
-      if (data.url) window.open(data.url, '_blank')
+      setGhError(null)
+      // Blog posts return { status: 'generating', job_id } — the images are
+      // generated + committed by an async job we poll below. Other content
+      // returns the committed URL directly (synchronous single-file commit).
+      if (data.status === 'generating' && data.job_id) {
+        setGhJobId(data.job_id)
+        setGhPhase('generating')
+      } else if (data.url) {
+        setGhUrl(data.url)
+        window.open(data.url, '_blank')
+      }
     },
+  })
+
+  // Poll the async GitHub-publish job (image generation + atomic commit).
+  useEffect(() => {
+    if (ghPhase !== 'generating' || !ghJobId) return
+    let active = true
+    const tick = async () => {
+      try {
+        const s = await api.get<{ status: string; result?: { html_url?: string }; error?: string }>(
+          `/runs/${id}/github-publish/status?job_id=${ghJobId}`,
+        )
+        if (!active) return
+        if (s.status === 'complete') {
+          setGhPhase('idle')
+          setGhJobId(null)
+          setGhUrl(s.result?.html_url ?? null)
+          queryClient.invalidateQueries({ queryKey: ['run', id] })
+          queryClient.invalidateQueries({ queryKey: ['run-images', id] })
+          if (s.result?.html_url) window.open(s.result.html_url, '_blank')
+        } else if (s.status === 'failed') {
+          setGhPhase('error')
+          setGhJobId(null)
+          setGhError(s.error || 'github_publish_failed')
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+    }
+    const h = setInterval(tick, 4000)
+    tick()
+    return () => { active = false; clearInterval(h) }
+  }, [ghPhase, ghJobId, id, queryClient])
+
+  const runImagesQuery = useQuery({
+    queryKey: ['run-images', id],
+    queryFn: () => api.get<{ images: Array<{ id: string; role: string; kind: string; alt: string; preview_url: string | null; status?: string; used_fallback?: boolean }> }>(`/runs/${id}/images`),
+    enabled: run?.content_type === 'blog_post' && run?.status === 'complete',
   })
   const featuredImageMutation = useMutation({
     mutationFn: (url: string | null) =>
@@ -669,11 +718,15 @@ export function RunDetail() {
               ) : (
                 <button
                   onClick={() => ghPublishMutation.mutate()}
-                  disabled={ghPublishMutation.isPending}
+                  disabled={ghPublishMutation.isPending || ghPhase === 'generating'}
                   style={{ ...ghostBtn, color: '#334155', borderColor: '#cbd5e1' }}
-                  title="Commit this post to the client's configured GitHub repo"
+                  title="Generate images and commit this post to the client's configured GitHub repo"
                 >
-                  <GitBranch size={13} /> {ghPublishMutation.isPending ? 'Publishing…' : 'Publish to GitHub'}
+                  <GitBranch size={13} /> {
+                    ghPhase === 'generating'
+                      ? 'Generating images…'
+                      : ghPublishMutation.isPending ? 'Publishing…' : 'Publish to GitHub'
+                  }
                 </button>
               )}
             </div>
@@ -685,9 +738,38 @@ export function RunDetail() {
               onChange={(url) => featuredImageMutation.mutateAsync(url).then(() => undefined)}
             />
           </div>
-          {(publishMutation.isError || wpPublishMutation.isError || ghPublishMutation.isError) && (
+          {ghPhase === 'generating' && (
+            <div style={{ marginBottom: 12, padding: '10px 12px', background: '#f0fdf4', borderRadius: 6, color: '#15803d', fontSize: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Loader size={14} className="spin" /> Generating hero + body images and committing to GitHub… you can leave this page; it finishes in the background.
+            </div>
+          )}
+          {(publishMutation.isError || wpPublishMutation.isError || ghPublishMutation.isError || ghError) && (
             <div style={{ marginBottom: 12, padding: '10px 12px', background: '#fef2f2', borderRadius: 6, color: '#dc2626', fontSize: 12 }}>
-              Failed to publish: {(publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) instanceof Error ? ((publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) as Error).message : 'unknown error'}
+              Failed to publish: {ghError || ((publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) instanceof Error ? ((publishMutation.error || wpPublishMutation.error || ghPublishMutation.error) as Error).message : 'unknown error')}
+            </div>
+          )}
+          {(runImagesQuery.data?.images?.length ?? 0) > 0 && (
+            <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: '1px solid #f1f5f9' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#475569', marginBottom: 8 }}>
+                Generated images ({runImagesQuery.data!.images.length})
+              </div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {runImagesQuery.data!.images.map((img) => (
+                  <div key={img.id} style={{ width: 140 }}>
+                    {img.preview_url ? (
+                      <a href={img.preview_url} target="_blank" rel="noreferrer">
+                        <img src={img.preview_url} alt={img.alt} style={{ width: 140, height: 90, objectFit: 'cover', borderRadius: 6, border: '1px solid #e2e8f0' }} />
+                      </a>
+                    ) : (
+                      <div style={{ width: 140, height: 90, borderRadius: 6, border: '1px dashed #cbd5e1', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#94a3b8', fontSize: 11 }}>no preview</div>
+                    )}
+                    <div style={{ fontSize: 10, color: '#94a3b8', marginTop: 3 }}>
+                      {img.role === 'hero' ? 'Hero' : img.kind === 'chart' ? 'Chart' : 'Body'}
+                      {img.used_fallback ? ' · fallback' : ''}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
           <pre style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 20, overflowX: 'auto', fontSize: 13, lineHeight: 1.7, color: '#374151', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 600, overflowY: 'auto' }}>
