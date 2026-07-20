@@ -22,8 +22,9 @@ from config import settings
 from db.supabase_client import get_supabase
 from services.blog_jsonld import build_blog_jsonld, faqs_from_article
 from services.blog_media import article_html as ah
+from services.blog_media.charts import render_chart_svg, validate_chart_spec
 from services.blog_media.planner import plan_media
-from services.blog_media.render import render_image, upload_preview
+from services.blog_media.render import render_image, upload_preview, upload_svg_preview
 from services.blog_media.validate import validate_and_clean
 from services.blog_media.visual_profile import extract_brand_personality
 from services.github_publish import (
@@ -189,7 +190,7 @@ async def run_blog_media_publish_job(job: dict) -> None:
             plan = {}
 
         vr = validate_and_clean(
-            plan, idx=idx, max_inline=budget, allow_charts=False,
+            plan, idx=idx, max_inline=budget, allow_charts=True,
             hero_min=settings.blog_media_hero_min_confidence,
             inline_min=settings.blog_media_inline_min_confidence,
             chart_min=settings.blog_media_chart_min_confidence,
@@ -227,32 +228,49 @@ async def run_blog_media_publish_job(job: dict) -> None:
                                          repo_path=None, preview_url=hero_preview, used_fallback=used_fallback,
                                          error=None if fallback else "hero_render_failed_no_fallback"))
 
-        # ── Inline images ─────────────────────────────────────────────────────
+        # ── Inline assets (images + charts) ───────────────────────────────────
         figures: list[ah.ResolvedFigure] = []
         for asset in vr.inline:
-            if asset["asset_type"] != "image":
-                continue  # charts deferred (Phase 2)
-            data = await render_image(
-                asset["prompt"], width=asset.get("width") or settings.blog_media_inline_width,
-                height=asset.get("height") or settings.blog_media_inline_height,
-            )
-            if not data:
-                asset_rows.append(_asset_row(run_id, asset, status="failed", error="render_failed"))
-                continue
+            # Resolve placement first — never pay to render/build an asset that
+            # cannot be inserted (addendum: verify anchor before generation).
             pos = ah.resolve_placement(asset["placement"], blocks, idx, markdown)
             if pos is None:
                 asset_rows.append(_asset_row(run_id, asset, status="skipped", skip_reason="placement_unresolved"))
                 continue
-            repo_path = f"{base}/{slug}/{asset['filename']}"
-            image_files[repo_path] = data
-            preview = upload_preview(data, asset["filename"])
+
+            if asset["asset_type"] == "chart":
+                ok, reason = validate_chart_spec(
+                    asset["chart"], article_text=markdown,
+                    allow_derived=settings.blog_media_allow_derived_values,
+                )
+                if not ok:
+                    asset_rows.append(_asset_row(run_id, asset, status="skipped", skip_reason=f"chart:{reason}"))
+                    continue
+                svg = render_chart_svg(asset["chart"])
+                repo_path = f"{base}/{slug}/{asset['filename']}"
+                image_files[repo_path] = svg.encode("utf-8")
+                preview = upload_svg_preview(svg, asset["filename"])
+                css_class = "article-chart"
+            else:
+                data = await render_image(
+                    asset["prompt"], width=asset.get("width") or settings.blog_media_inline_width,
+                    height=asset.get("height") or settings.blog_media_inline_height,
+                )
+                if not data:
+                    asset_rows.append(_asset_row(run_id, asset, status="failed", error="render_failed"))
+                    continue
+                repo_path = f"{base}/{slug}/{asset['filename']}"
+                image_files[repo_path] = data
+                preview = upload_preview(data, asset["filename"])
+                css_class = "article-inline-image"
+
             figures.append(ah.ResolvedFigure(
                 block_index=pos,
                 position=(asset["placement"].get("position") or "after"),
                 media_id=asset["asset_id"],
                 markup=ah.figure_markdown(
                     media_id=asset["asset_id"], src=_site_url(repo_path),
-                    alt=asset["alt"], caption=asset["caption"], css_class="article-inline-image",
+                    alt=asset["alt"], caption=asset["caption"], css_class=css_class,
                 ),
             ))
             asset_rows.append(_asset_row(run_id, asset, status="inserted", repo_path=repo_path, preview_url=preview))

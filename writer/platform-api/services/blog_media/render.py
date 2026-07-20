@@ -91,3 +91,24 @@ def upload_preview(data: bytes, filename: str) -> str | None:
     except Exception as exc:  # noqa: BLE001 — preview is non-fatal
         logger.warning("blog_media.preview_upload_failed", extra={"error": str(exc)})
         return None
+
+
+def upload_svg_preview(svg: str, filename: str) -> str | None:
+    """Upload a rendered chart SVG to the content bucket for a preview URL. The
+    committed repo `.svg` is the real artifact; this is just for the review UI.
+    Best-effort."""
+    import uuid as _uuid
+
+    from db.supabase_client import get_supabase
+
+    supabase = get_supabase()
+    safe = filename if filename.endswith(".svg") else f"{filename}.svg"
+    key = f"blog/{_uuid.uuid4().hex}-{safe}"
+    try:
+        supabase.storage.from_(_CONTENT_BUCKET).upload(
+            key, svg.encode("utf-8"), {"content-type": "image/svg+xml", "upsert": "true"}
+        )
+        return supabase.storage.from_(_CONTENT_BUCKET).get_public_url(key).rstrip("?")
+    except Exception as exc:  # noqa: BLE001 — preview is non-fatal
+        logger.warning("blog_media.svg_preview_upload_failed", extra={"error": str(exc)})
+        return None
