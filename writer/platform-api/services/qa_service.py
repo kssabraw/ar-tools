@@ -789,6 +789,8 @@ _READINESS_LABELS = {
     sig.RUBRIC_SKIP: "Not QA-checked", sig.RUBRIC_HANDOFF: "SerMaStr territory",
     sig.RUBRIC_GENERIC: "No checklist for this type",
 }
+# Public alias — the plain-English name of a rubric, reused by the /qa persona.
+RUBRIC_LABELS = _READINESS_LABELS
 _URL_RUBRICS = {
     sig.RUBRIC_PAGE, sig.RUBRIC_CITATIONS, sig.RUBRIC_GUEST_POST,
     sig.RUBRIC_NICHE_EDIT, sig.RUBRIC_PRESS_RELEASE, sig.RUBRIC_MAP_EMBEDS,
@@ -952,7 +954,8 @@ def resolve_url_rubric(text: Optional[str]) -> str:
 
 
 async def review_url(
-    url: str, client: Optional[dict] = None, rubric: Optional[str] = None
+    url: str, client: Optional[dict] = None, rubric: Optional[str] = None,
+    keyword: Optional[str] = None,
 ) -> dict:
     """Run a QA review against a bare URL — no task, nothing persisted, no board
     effects. The "QA this page" path for the /qa chat. Returns the same shape a
@@ -961,7 +964,9 @@ async def review_url(
 
     ``client`` (optional) supplies NAP/domain/business-name for the NAP,
     link-back, and assertion checks; without it those read "could not verify"
-    (needs_human), never a false pass. Unreachable page → needs_human."""
+    (needs_human), never a false pass. ``keyword`` (optional) enables the
+    keyword-placement checks on the website-page/press-release rubrics.
+    Unreachable page → needs_human."""
     rub = rubric if rubric in _URL_RUBRICS else resolve_url_rubric(rubric)
     fields = _client_fields(client)
     html = await _fetch(url)
@@ -974,12 +979,12 @@ async def review_url(
 
     composite: Optional[float] = None
     if rub == sig.RUBRIC_PAGE:
-        checks, composite = await _website_page_checks(html, url, fields, client)
+        checks, composite = await _website_page_checks(html, url, fields, client, keyword=keyword)
     elif rub in (sig.RUBRIC_GUEST_POST, sig.RUBRIC_NICHE_EDIT):
         checks = sig.check_link_back(html, fields["domain"])
     elif rub == sig.RUBRIC_PRESS_RELEASE:
         checks = sig.check_press_release(
-            html, None, fields["business_name"], fields["address"],
+            html, keyword, fields["business_name"], fields["address"],
             fields["phone"], client_domain=fields["domain"],
         )
     elif rub == sig.RUBRIC_CITATIONS:

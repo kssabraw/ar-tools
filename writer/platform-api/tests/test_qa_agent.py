@@ -127,3 +127,136 @@ def test_review_url_website_page_runs_checks():
     labels = {c["key"] for c in review["checks"]}
     assert "meta_title" in labels and "internal_link" in labels
     assert review["verdict"] in (sig.PASS, sig.NEEDS_HUMAN, sig.FAIL)
+
+
+def test_review_url_threads_keyword_to_page_checks():
+    # keyword present in <title> + an <h1> → the keyword-placement checks pass;
+    # this proves review_url wires the keyword through to the website-page rubric.
+    html = (
+        "<html><head><title>Emergency Plumber Coral Springs</title>"
+        "<meta name='description' content='24/7 emergency plumbing.'></head>"
+        "<body><h1>Emergency Plumber Coral Springs</h1>"
+        "<a href='https://client.com/contact'>Contact</a>"
+        "<img src='/a.jpg' alt='plumber'></body></html>"
+    )
+
+    async def fake_fetch(url):
+        return html
+
+    async def no_broken(urls):
+        return []
+
+    client = {"website_url": "https://client.com", "name": "Client Co", "gbp": {}}
+    with patch.object(qa_service, "_fetch", fake_fetch), \
+         patch.object(qa_service, "_broken_assets", no_broken), \
+         patch.object(qa_service.settings, "qa_visual_enabled", False):
+        review = _run(qa_service.review_url(
+            "https://client.com/plumber", client, sig.RUBRIC_PAGE,
+            keyword="emergency plumber coral springs",
+        ))
+    kw_checks = [c for c in review["checks"] if "keyword" in c["key"]]
+    assert kw_checks, "keyword was not threaded into the page checks"
+    assert any(c["ok"] for c in kw_checks)
+
+
+# ---------------------------------------------------------------------------
+# resolve_client_by_url (mocked DB)
+# ---------------------------------------------------------------------------
+class _FakeTable:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def select(self, *_a, **_k):
+        return self
+
+    def execute(self):
+        class _R:
+            pass
+        r = _R()
+        r.data = self._rows
+        return r
+
+
+class _FakeSupabase:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def table(self, _name):
+        return _FakeTable(self._rows)
+
+
+def test_resolve_client_by_url_matches_domain():
+    rows = [
+        {"id": "1", "name": "Other Co", "website_url": "https://other.com"},
+        {"id": "2", "name": "Client Co", "website_url": "https://www.client.com"},
+    ]
+    with patch.object(qa_agent, "get_supabase", lambda: _FakeSupabase(rows)):
+        got = qa_agent.resolve_client_by_url("https://client.com/some/posted-page/")
+    assert got is not None and got["id"] == "2"
+
+
+def test_resolve_client_by_url_no_match_returns_none():
+    rows = [{"id": "1", "name": "Other Co", "website_url": "https://other.com"}]
+    with patch.object(qa_agent, "get_supabase", lambda: _FakeSupabase(rows)):
+        assert qa_agent.resolve_client_by_url("https://unknown.example/x") is None
+    # A URL with no parseable domain never matches.
+    with patch.object(qa_agent, "get_supabase", lambda: _FakeSupabase(rows)):
+        assert qa_agent.resolve_client_by_url("not a url") is None
+
+
+# ---------------------------------------------------------------------------
+# maybe_handle_web: external-page rubrics ask for the client up front
+# ---------------------------------------------------------------------------
+from services.pace_auth import ActionContext  # noqa: E402
+
+
+def _handle(message, *, page_kind, scope_client=None, url_client=None, sticky_client=None):
+    """Drive one maybe_handle_web turn with the LLM + DB reads mocked, returning
+    (reply_dict, review_url_called)."""
+    called = {"review": False}
+
+    async def fake_interpret(*_a, **_k):
+        return "url", {"url": "https://someblog.com/guest/post", "page_kind": page_kind}
+
+    def fake_resolve_scope(_msg, _sticky):
+        return ("client" if scope_client else "global"), (scope_client or {}), {}
+
+    async def fake_review_url(*_a, **_k):
+        called["review"] = True
+        return {"verdict": sig.NEEDS_HUMAN, "rubric": sig.RUBRIC_GUEST_POST,
+                "composite": None, "checks": [], "issues": [], "urls": [], "narrative": ""}
+
+    actor = ActionContext(profile_id="p1", role="admin")
+    with patch.object(qa_agent, "interpret_qa", fake_interpret), \
+         patch.object(qa_agent, "_resolve_scope", fake_resolve_scope), \
+         patch.object(qa_agent, "resolve_client_by_url", lambda _u: url_client), \
+         patch.object(qa_agent, "_client_row", lambda _c: sticky_client), \
+         patch.object(qa_service, "review_url", fake_review_url):
+        out = _run(qa_agent.maybe_handle_web(message, [], None, None, actor))
+    return out, called["review"]
+
+
+def test_guest_post_with_no_client_asks_first():
+    # No conversation client, URL is a third-party blog, no sticky client →
+    # the bot asks which client and never runs the (meaningless) check.
+    out, review_called = _handle("QA this guest post https://someblog.com/guest/post",
+                                 page_kind="guest post")
+    assert review_called is False
+    assert "which client" in out["reply"].lower()
+
+
+def test_guest_post_with_sticky_client_runs():
+    # A known (sticky) client → the link-back check runs; no up-front question.
+    sticky = {"id": "9", "name": "Acme", "website_url": "https://acme.com", "gbp": {}}
+    out, review_called = _handle("QA this guest post https://someblog.com/guest/post",
+                                 page_kind="guest post", sticky_client=sticky)
+    assert review_called is True
+
+
+def test_website_page_with_no_client_still_runs():
+    # The website-page rubric is NOT client-required: it still runs client-less
+    # (meta/keyword checks are useful) and appends the "which client" nudge.
+    out, review_called = _handle("QA https://someblog.com/guest/post",
+                                 page_kind="page")
+    assert review_called is True
+    assert "which client" in out["reply"].lower()

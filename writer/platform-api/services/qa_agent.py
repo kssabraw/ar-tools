@@ -205,6 +205,7 @@ _QA_TOOLS = [
             "properties": {
                 "url": {"type": "string", "description": "The page URL to QA."},
                 "page_kind": {"type": "string", "description": "What kind of page: 'page' (website/landing/service/location), 'guest post', 'niche edit', 'press release', 'citation', or 'map embed'. Defaults to a website page."},
+                "keyword": {"type": "string", "description": "The target keyword the page should rank for, if the teammate mentioned one (enables the keyword-placement checks). Omit if not given — don't invent one."},
             },
             "required": ["url"],
         },
@@ -226,28 +227,54 @@ _QA_SYSTEM = (
     "You are QA, the quality reviewer for an SEO agency — the gate between "
     "\"a VA marked it done\" and \"it goes to the client.\" You judge deliverables "
     "against the agency's QA checklists; you never invent a standard.\n\n"
+    "WHO YOU'RE TALKING TO: often an untrained VA who may not know the jargon. Be "
+    "warm, plain-spoken, and patient. Explain in everyday words. Never make them "
+    "feel they asked wrong.\n\n"
     "WHAT YOU DO:\n"
-    "• QA a live page on demand. When the teammate gives you a URL (or says \"QA "
-    "this page / guest post / citation / press release / map embed\"), call "
-    "`qa_url` with the URL and the page kind. It runs the real deterministic "
-    "checks (meta, internal link, NAP, assets, rendered screenshot) and returns a "
-    "verdict — read-only, nothing on the board changes.\n"
+    "• QA a live page. When the teammate gives you a URL (or says \"QA this page / "
+    "guest post / citation / press release / map embed\"), call `qa_url` with the "
+    "URL, the page kind, and — IF they mentioned it — the target keyword. It runs "
+    "the real checks (meta, keyword placement, business name, links, images, "
+    "rendered screenshot) and returns a verdict. Read-only; nothing changes.\n"
     "• QA a board task's deliverable. When they name a task (\"QA the Inner West "
-    "page\"), call `run_qa_review` — this runs the full review and can bounce the "
-    "task with rework items, so the system asks for a confirmation first. Don't "
-    "ask permission before calling the tool; the confirm step IS the permission.\n"
-    "• Report recent QA. Answer \"how did QA go on X\", \"what failed QA\" from the "
-    "QA data you're given — LIST the actual tasks, their verdict, and the open "
-    "issues. Never re-judge a deliverable yourself; cite the recorded verdict.\n\n"
-    "VOICE: concrete, first-pass reviewer. State the verdict plainly (pass / fail "
-    "/ needs a human), then the blocking issues to fix, then offer the next step. "
-    "Don't hedge and don't soften a fail.\n\n"
-    "GROUNDING: only state verdicts, tasks, and issues present in the data or "
-    "returned by a check you ran. The pass/fail is computed deterministically — "
-    "you phrase it, you never change it.\n\n"
+    "page\"), call `run_qa_review` — the system confirms before running. Don't ask "
+    "permission first; the confirm step IS the permission.\n"
+    "• Report recent QA. Answer \"how did QA go on X\" / \"what failed QA\" from the "
+    "QA data you're given — LIST the actual tasks, verdicts, and open issues. Cite "
+    "the recorded verdict; never re-judge a deliverable yourself.\n\n"
+    "ASK WHEN YOU'RE MISSING SOMETHING (this is the important part):\n"
+    "• If they clearly want a page QA'd but gave NO url, ask for it plainly: "
+    "\"Paste the link to the page and I'll check it.\" Don't call any tool yet.\n"
+    "• If they reference a task/page too vaguely to identify, ask which one (the "
+    "system will also list close matches).\n"
+    "• Ask ONE focused question at a time — never a checklist of questions. If you "
+    "have enough to run a useful check, RUN IT, then ask for anything that would "
+    "make it more complete (e.g. the keyword) as a friendly follow-up.\n"
+    "• For a page ON THE CLIENT'S OWN SITE you do NOT need them to name the client "
+    "— the system auto-detects it from the web address.\n"
+    "• But a guest post, niche edit, press release, citation, or map embed lives on "
+    "ANOTHER site (a blog, a PR wire, a directory), so the link can't reveal the "
+    "client and the whole check (link back to the client, name/address/phone "
+    "matches the client) needs one. If you don't already know the client for those, "
+    "the system will ask which client — that's expected, not an error.\n"
+    "• Pick the right page kind when you call qa_url: 'guest post', 'niche edit', "
+    "'press release', 'citation', or 'map embed' when they say so or the link is "
+    "clearly on a third-party site; otherwise a website page. If it's genuinely "
+    "unclear what kind of deliverable it is, ask.\n\n"
+    "EXPLAIN RESULTS FOR A BEGINNER: after the verdict, say in plain words what (if "
+    "anything) needs fixing and the exact next step (\"add the business name to the "
+    "page, then repost and send me the link again\"). A 'needs a human' verdict "
+    "isn't a failure on their part — explain it means you couldn't be sure and a "
+    "teammate should glance at it.\n\n"
+    "VOICE: clear and encouraging. State the verdict plainly (pass / fix these "
+    "things / needs a human), then the specific items, then the next step. Don't "
+    "hedge, but don't be harsh.\n\n"
+    "GROUNDING: only state verdicts and issues present in the data or returned by a "
+    "check you ran. The pass/fail is computed deterministically — you phrase it, "
+    "you never change it.\n\n"
     "NOT THE STRATEGIST OR THE PM: campaign strategy is SerMaStr's; chasing rework "
-    "and moving board work is PACE's. If asked those, say so and offer the handoff "
-    "— but judging whether a deliverable is good is yours."
+    "and moving board work is PACE's. If asked those, say so warmly and point them "
+    "there — but judging whether a deliverable is good is yours."
 )
 
 _QA_TOOL_ROUNDS = 2
@@ -364,6 +391,27 @@ def _client_row(client_id: Optional[str]) -> Optional[dict]:
     return rows[0] if rows else None
 
 
+def resolve_client_by_url(url: str) -> Optional[dict]:
+    """Match a page URL's domain against the clients' own website domains, so a
+    VA can paste a link and QA figures out which client it belongs to (enabling
+    the business-name / NAP / internal-link checks) without naming them. None
+    when no client's domain matches — the bot then asks. Best-effort DB read."""
+    dom = sig.domain_of(url)
+    if not dom:
+        return None
+    try:
+        rows = (
+            get_supabase().table("clients")
+            .select("id, name, website_url, gbp, page_structures").execute()
+        ).data or []
+    except Exception:
+        return None
+    for c in rows:
+        if sig.domain_of(c.get("website_url")) == dom:
+            return c
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Web entry (the /qa surface — force=True, never returns None)
 # ---------------------------------------------------------------------------
@@ -427,13 +475,61 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
         if kind == "url":
             url = qa_service_first_url(payload.get("url"), message)
             if not url:
-                return {**base, "reply": "Give me the full page URL (starting with http) and I'll QA it."}
+                return {**base, "reply": "Paste the link to the page (starting with http) and I'll check it."}
             rubric = qa_service.resolve_url_rubric(payload.get("page_kind"))
+            keyword = (payload.get("keyword") or "").strip() or None
+            # Figure out the client for a bare URL so the business-name / NAP /
+            # link-back checks can run: the conversation's client → the URL's own
+            # domain (only works when the page is on the client's own site) → the
+            # sticky client.
+            client_row = (
+                client
+                or await run_in_threadpool(resolve_client_by_url, url)
+                or await run_in_threadpool(_client_row, sticky_client_id)
+            )
+            # External-page rubrics (guest post, niche edit, press release,
+            # citation, map embed) live on someone else's site, so the URL can't
+            # name the client and EVERY check they run needs one. Ask which
+            # client first rather than returning a useless "could not verify".
+            if not client_row and rubric in sig.CLIENT_REQUIRED_URL_RUBRICS:
+                what = sig.URL_RUBRIC_WHAT.get(rubric, "the client's details")
+                label = qa_service.RUBRIC_LABELS.get(rubric, "this")
+                return {**base, "reply": (
+                    f"Happy to check that {label.lower()} — but it's on another "
+                    "website, so I can't tell which client it's for from the link "
+                    f"alone. To check {what}, I need to know the client.\n\n"
+                    "**Which client is this for?** Just reply with the name."
+                )}
             if on_event:
                 await on_event({"type": "status", "label": "Fetching and checking the page"})
-            client_row = client or await run_in_threadpool(_client_row, sticky_client_id)
-            review = await qa_service.review_url(url, client_row, rubric)
-            return {**base, "reply": format_review(review, url)}
+            review = await qa_service.review_url(url, client_row, rubric, keyword)
+            reply = format_review(review, url)
+            if client_row and not client:
+                reply = f"_QA'd for **{client_row.get('name')}** (matched from the web address)._\n\n" + reply
+            extras: list[str] = []
+            if not client_row:  # only reachable for the website-page rubric now
+                extras.append(
+                    "I couldn't tell which client this page belongs to, so the "
+                    "business-name, phone/address, and internal-link checks were skipped. "
+                    "**Which client is this for?** Reply with the name and I'll re-run the full check."
+                )
+            if not keyword and rubric == sig.RUBRIC_PAGE:
+                extras.append(
+                    "Want me to also check the keyword? Tell me the phrase this page "
+                    "should rank for and I'll re-check it's in the title, address, and heading."
+                )
+            elif not keyword and rubric == sig.RUBRIC_PRESS_RELEASE:
+                extras.append(
+                    "Want me to also check the keyword? Tell me the phrase this "
+                    "release targets and I'll re-check it's in the title and body."
+                )
+            if extras:
+                reply += "\n\n" + "\n\n".join(extras)
+            out = {"reply": reply}
+            if client_row:  # make the resolved client sticky for follow-ups
+                out["client_id"] = client_row["id"]
+                out["client_name"] = client_row.get("name")
+            return out
 
         # A task review — resolve, then confirm-gate (actor-bound).
         task, reply = await run_in_threadpool(_resolve_task, payload.get("task_name", ""))
